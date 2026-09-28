@@ -4,38 +4,9 @@
 """
 Tekken tokenizer + Voxtral-TTS prompt assembly, reimplemented from `tekken.json`.
 
-Replaces `mistral_common` (which needs the whole mistral-common dep tree) with the same trick
-the XTTS-v2 reference used for coqui's tokenizer: read the vocab file directly and reimplement
-the algorithm. Validated by EXACT TOKEN-ID MATCH against `mistral_common`'s
-`encode_speech_request` output — see tests/test_tokenizer_ref.py.
-
-DEPENDENCY NOTE: this is the only file in reference/ that imports anything beyond torch, and it
-needs exactly one thing — `regex` (not stdlib `re`). tekken's split pattern uses Unicode
-property classes (\\p{L}, \\p{Lu}, \\p{N}, \\p{M} ...) which stdlib `re` cannot parse at all.
-Approximating them with ASCII classes would tokenize this English test sentence identically and
-then silently diverge on anything accented, which is worse than a small dependency.
-
-FORMAT (tekken.json v7):
-  config.pattern              tiktoken-style split regex
-  config.default_vocab_size   131072 total ids
-  config.default_num_special_tokens  1000 -> ids 0..999 are special, regular ids are rank + 1000
-  vocab[]                     150000 entries {rank, token_bytes(base64)}; only the first
-                              (131072 - 1000) = 130072 are in the released vocabulary
-  special_tokens[]            1000 entries {rank, token_str}
-  audio.voice_num_audio_tokens per-voice reference length in FRAMES
-
-PROMPT LAYOUT (reverse-engineered from mistral_common output, then confirmed by round-trip):
-
-    <s>              1
-    [BEGIN_AUDIO]    25
-    [AUDIO] x N      24     N = voice_num_audio_tokens[voice] -- the voice's reference length;
-                            the pipeline substitutes the preset's N rows over these
-    [NEXT_AUDIO_TEXT] 36
-    <text ids>              tekken BPE of the raw text, no normalization
-    [REPEAT_AUDIO_TEXT] 35
-    [BEGIN_AUDIO]    25     generation starts after this
-
-Reads naturally: "here is a reference voice; NEXT is the text; REPEAT it; now begin audio."
+Replaces `mistral_common`; validated by exact token-id match against its `encode_speech_request`
+(tests/test_tokenizer_ref.py). Needs `regex` (see VOXTRAL_TTS_TOKENIZER.md [tok-01]); file format
+and prompt layout: VOXTRAL_TTS_TOKENIZER.md [tok-02], [tok-03].
 
 Run to check against the shipped ground-truth prompts:
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_tokenizer_ref.py
@@ -58,9 +29,7 @@ REPEAT_AUDIO_TEXT = "[REPEAT_AUDIO_TEXT]"
 
 def _bpe(ranks, piece):
     """Classic tiktoken byte-pair merge: repeatedly merge the adjacent pair with the LOWEST rank.
-
-    Pieces are short (the split regex keeps them to roughly a word), so the naive O(n^2) scan is
-    fine and matches the reference implementation's result exactly."""
+    see VOXTRAL_TTS_TOKENIZER.md [tok-01]"""
     if piece in ranks:
         return [ranks[piece]]
     parts = [bytes([b]) for b in piece]
@@ -87,7 +56,7 @@ class TekkenTokenizer:
     the full TTS prompt including the audio placeholders."""
 
     def __init__(self, path=DEFAULT_TEKKEN):
-        import regex  # only dependency beyond stdlib; see module docstring
+        import regex  # only dependency beyond stdlib. see VOXTRAL_TTS_TOKENIZER.md [tok-01]
 
         if not os.path.exists(path):
             raise FileNotFoundError(
@@ -102,8 +71,8 @@ class TekkenTokenizer:
         self.vocab_size = cfg["default_vocab_size"]
         self.pattern = regex.compile(cfg["pattern"])
 
-        # Only the first (vocab_size - n_special) vocab entries are in the released vocabulary;
-        # tekken.json ships 150000 but the model's embedding table is 131072 wide.
+        # Only the first (vocab_size - n_special) entries are in the released vocabulary.
+        # see VOXTRAL_TTS_TOKENIZER.md [tok-02]
         n_regular = self.vocab_size - self.n_special
         self.ranks = {}
         self.by_rank = {}
@@ -119,8 +88,7 @@ class TekkenTokenizer:
 
     # -- ids <-> bytes -----------------------------------------------------------------
     def encode(self, text):
-        """Raw text -> token ids. NO normalization: tekken is byte-level and case/space
-        sensitive, and mistral_common does not pre-clean TTS input either."""
+        """Raw text -> token ids, with no normalization. see VOXTRAL_TTS_TOKENIZER.md [tok-01]"""
         out = []
         for m in self.pattern.findall(text):
             out.extend(r + self.n_special for r in _bpe(self.ranks, m.encode("utf-8")))

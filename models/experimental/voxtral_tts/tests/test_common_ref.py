@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the shared reference layer — chiefly the hand-written safetensors reader.
+"""Tests for the shared reference layer, chiefly the hand-written safetensors reader.
 
-The reader replaces the `safetensors` package, so nothing else in the suite exercises it: the
-block tests all build weights from the vendored manifest. If it is wrong, every block silently
-loads garbage the first time a real checkpoint is used. These tests write safetensors files BY
-HAND (stdlib struct + json only, no safetensors dependency) and read them back.
+Nothing else in the suite exercises the reader (block tests build weights from the manifest), so
+these write safetensors files by hand (struct + json, no safetensors package) and read them back.
 
     pytest -svv models/experimental/voxtral_tts/tests/test_common_ref.py
 """

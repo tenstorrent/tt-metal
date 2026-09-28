@@ -2,50 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end CPU reference pipeline for Voxtral TTS: prompt ids + voice preset -> 24 kHz WAV.
+End-to-end CPU reference for Voxtral TTS: text (or prompt ids) + voice preset -> 24 kHz WAV.
 
-Chains the three reference blocks and is the golden the TTNN pipeline must reproduce. All three
-blocks are ours (torch-only); nothing here imports vllm / mistral_common / einops.
-
-    prompt_ids ──┬──[tok_embeddings]────────────┐
-    voice preset ┴──[substitute at id==24]──────┴─► inputs_embeds [1,P,3072]
-                                                      │
-                    ┌── [Block 1: AR backbone] ◄───────┘   prefill -> h, then one step per frame
-                    │            │
-                    │            ▼ h [1,3072]
-                    │   [Block 2: flow matching, 7 Euler steps + CFG] ─► 37 codes
-                    │            │
-                    └── embed_frame(37 codes) ◄┘        (feedback; stop on [END_AUDIO])
-                                 │
-                        codes [1,37,T] ─► [Block 3: codec decoder] ─► wav [1,1,T*1920] @ 24 kHz
-
-TOKENIZER IS OUT OF SCOPE (host-side, exactly as in the XTTS-v2 reference). The prompt layout
-produced by mistral_common's `encode_speech_request` is:
-
-    [1]  BOS
-    [25] begin_audio
-    [24] x 169          <- audio placeholders, REPLACED IN ORDER by the voice preset's 169 rows
-    [35] <text ids> [35]
-    [25] begin_audio    <- generation starts after this
-
-so `--prompt-ids` takes a JSON dump of `tokenized.tokens` (see `dump_prompt_ids.py` in the bringup
-repo's `voxtral_tts/tools/`).
-The only thing this pipeline needs from the tokenizer is that rule: every `audio_token_id`
-position consumes one row of the preset, everything else is a `tok_embeddings` lookup.
-
-THE PLACEHOLDER COUNT IS VOICE-SPECIFIC. The tokenizer emits one `audio_token_id` per frame of
-*that voice's* reference clip, and the presets differ a lot — ar_male 67 frames (5.4 s) up to
-neutral_female 218 (17.4 s). So a prompt dumped for one voice cannot be reused with another;
-re-run the dump script per voice. `--voice` therefore only overrides which preset FILE is
-loaded, and `build_inputs_embeds` asserts the counts agree rather than silently misaligning the
-conditioning.
-
-VOICE CLONING FROM YOUR OWN AUDIO IS NOT POSSIBLE with the public checkpoint (the codec encoder
-is not shipped) — only the 20 presets. See PROVENANCE.md finding 1.
+Chains the three fp32 reference blocks and is the golden the TTNN pipeline must reproduce.
+Data flow, prompt layout, voice-specific placeholder count: see VOXTRAL_TTS_BRINGUP.md [ref-03].
 
 Run:
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_pipeline_ref.py \
-        --prompt-ids prompt_ids.json --voice neutral_male --max-frames 150
+        --text "Hello." --voice neutral_male --max-frames 150
+    (or --prompt-ids prompt_ids.json, a dump from tools/dump_prompt_ids.py in the bringup repo)
 """
 
 import argparse
@@ -76,11 +41,8 @@ SAMPLES_PER_FRAME = 1920  # 240-sample patch x 8 upsample
 
 
 def load_prompt(path):
-    """JSON dump of mistral_common's tokenized.tokens (+ the special ids it used).
-
-    Kept as an alternative to --text so a prompt produced by the real mistral_common can be
-    replayed byte-for-byte; --text uses our own tekken reimplementation, which is validated to
-    produce identical ids (tests/test_tokenizer_ref.py)."""
+    """JSON dump of mistral_common's tokenized.tokens (+ the special ids it used), replayed
+    byte-for-byte as an alternative to --text."""
     with open(path) as f:
         d = json.load(f)
     aid = d.get("audio_token_id", AUDIO_TOKEN_ID)
@@ -98,8 +60,8 @@ def build_prompt_from_text(text, voice):
 
 
 def load_voice(name, voice_dir=VOICE_DIR):
-    """A preset is [T_ref, 3072] bf16 — reference speech ALREADY embedded into the backbone's
-    space (it bypasses both the absent codec encoder and the 37-codebook embedding)."""
+    """Voice preset [T_ref, 3072], already in the backbone's embedding space, as fp32.
+    see VOXTRAL_TTS_PROVENANCE.md finding 12"""
     p = os.path.join(voice_dir, f"{name}.pt")
     if not os.path.exists(p):
         avail = sorted(f[:-3] for f in os.listdir(voice_dir)) if os.path.isdir(voice_dir) else []
@@ -124,7 +86,8 @@ def build_inputs_embeds(ids, voice, w):
 
 @torch.no_grad()
 def generate(ids, voice, wb, wf, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
-    """Blocks 1+2 autoregressive loop -> frames [T, 37] (offset applied, EOA excluded)."""
+    """The backbone + flow model autoregressive loop -> frames [T, 37] (offset applied, [END_AUDIO]
+    excluded)."""
     if seed is not None:
         torch.manual_seed(seed)
     embeds = build_inputs_embeds(ids, voice, wb)
@@ -205,7 +168,7 @@ def main():
           f"(voice {tuple(voice.shape)})")
 
     frames, t_prefill, t_gen = generate(ids, voice, wb, wf, args.max_frames, args.cfg_alpha, args.seed)
-    del wb, wf  # ~15 GB; free before the codec runs
+    del wb, wf  # free the backbone and flow model before the codec runs
 
     t0 = time.perf_counter()
     codes = codec.strip_offset_and_trim(frames)  # [1, 37, T]

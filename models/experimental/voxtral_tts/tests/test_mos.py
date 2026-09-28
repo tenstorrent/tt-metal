@@ -3,23 +3,10 @@
 
 """Naturalness, per language, as a pytest gate against fixed floors.
 
-WER says whether the words are right and nothing about whether the audio sounds human. MOS was the
-only naturalness signal on this branch, and it lived only in the quality report (now in the bringup
-repo's `voxtral_tts/tools/`), which compares one tagged run against another -- so a plain test run
-said nothing about how the audio sounds. This is the absolute version: fixed per-language floors.
-
-The predictor is DistillMOS, which needs torchaudio, which breaks transformers in the main venv
-(BUG-6) -- so `tests/mos_score.py` runs in `/tmp/mosvenv` as a subprocess. The clips come from
-`write_language_set` below, which the report's generator also calls, so both score the same set: 20
-voices x their language's sentences of ~20 words and up.
-
-A MISSING VENV FAILS, it does not skip. A skip reads as a pass in a summary, and this box's
-environment evaporates (graphviz and /tmp/mosvenv both need reinstalling after a reset), which is
-exactly how a gate goes quiet. Run `tests/mos_setup.sh` once.
-
-The floors are set from the measured SEED spread, not from one draw: a numerics change reshuffles
-every trajectory the way a new seed does, so a floor tighter than the seed spread fails healthy
-builds. See MOS_FLOOR.
+Generates the per-language clip set (`write_language_set`) on the device and scores it with
+DistillMOS via `tests/mos_score.py` in `/tmp/mosvenv` (build it once with `tests/mos_setup.sh`).
+A missing venv FAILS rather than skips. Why, and how the floors were derived:
+see VOXTRAL_TTS_GATES.md [mos-01] to [mos-05].
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_mos.py      # ~15 min, device + CPU
@@ -42,36 +29,15 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(MODEL)))
 MOSVENV = "/tmp/mosvenv/bin/python"
 SCORE = os.path.join(HERE, "mos_score.py")
 SEED = 0
-MIN_WORDS = 19          # the shortest medium-band sentence; below this MOS is noise (STATUS 6.7)
+MIN_WORDS = 19          # the shortest medium-band sentence; see VOXTRAL_TTS_GATES.md [mos-01]
 
-# Per-language floor on the MEAN MOS of that language's clips, and a floor for any single clip (a
-# mean over twelve clips barely moves when one turns to noise).
-#
-# From a three-seed sweep of the language set (360 clips, 2026-09-28, STATUS 6.78), by a rule fixed
-# before the data existed: floor = the lowest of the three seed means - 0.05, which is wider than
-# every language's measured seed spread (widest: hi 0.046, fr 0.037). A numerics change reshuffles
-# trajectories the way a new seed does, so a floor inside the seed spread would fail healthy builds.
-#
-#   lang   seed 0   seed 1   seed 2   spread   floor
-#   ar     4.6743   4.6639   4.6699   0.011    4.61
-#   de     4.7057   4.7073   4.7199   0.014    4.66
-#   en     4.7018   4.6941   4.6911   0.011    4.64
-#   es     4.7201   4.7260   4.7218   0.006    4.67
-#   fr     4.7026   4.6807   4.7176   0.037    4.63
-#   hi     4.5878   4.5785   4.5423   0.046    4.49
-#   it     4.6709   4.6693   4.6665   0.004    4.62
-#   nl     4.7511   4.7609   4.7572   0.010    4.70
-#   pt     4.6801   4.6727   4.6672   0.013    4.62
-#
-# The gate runs seed 0. These are comparable to THEMSELVES over time, not to each other: DistillMOS
-# is trained mostly on English, so hi's lower level may be partly the predictor (STATUS 6.76).
+# Floor on each language's MEAN MOS, and on any single clip. Rule and the three-seed table:
+# see VOXTRAL_TTS_GATES.md [mos-03] (and VOXTRAL_TTS_STATUS.md §6.78).
 MOS_FLOOR = {"ar": 4.61, "de": 4.66, "en": 4.64, "es": 4.67, "fr": 4.63, "hi": 4.49, "it": 4.62,
              "nl": 4.70, "pt": 4.62}
-# The worst single clip over all 360 (4.221, hi_male, seed 2) minus 0.25.
 CLIP_FLOOR = 3.97
 
-# The predictor's own calibration, measured 2026-09-28 on the ASR calibration fixture decoded by the
-# fp32 codec: speech 4.706-4.738 (all four clips), silence 1.969, noise at speech RMS 1.198.
+# The predictor's own calibration bounds; see VOXTRAL_TTS_GATES.md [mos-04]
 SPEECH_MIN, NON_SPEECH_MAX, SEPARATION_MIN = 4.0, 2.5, 2.0
 
 pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
@@ -109,7 +75,7 @@ def _score(clip_dir):
 
 
 def _frame_budget(text):
-    """A CAP, not a cost: generation stops on [END_AUDIO]. ~18 chars/s at 12.5 frames/s, x2.2."""
+    """Frame cap, same rule as the WER gate; see VOXTRAL_TTS_GATES.md [wer-12]"""
     return max(320, int(math.ceil(len(text) / 18.0 * 12.5 * 2.2)))
 
 
@@ -126,8 +92,7 @@ def _save_wav(wav, path, sr=24000):
 
 def write_language_set(pipe, out, seed=SEED, langs=None, verbose=False):
     """One clip per (language, voice, sentence of >= MIN_WORDS words) into `out`, plus manifest.json
-    carrying the language label, so the scorer -- which runs in the MOS venv and cannot import ttnn
-    -- needs no model knowledge. The bringup repo's generate_language_set.py is a CLI over this."""
+    carrying the language label for the scorer, which cannot import ttnn."""
     from models.experimental.voxtral_tts.tests.reference_helpers import all_voices, corpus_embeds
     from models.experimental.voxtral_tts.tests.sentence_corpus import lang_of, wer_band
 
@@ -173,7 +138,7 @@ def scored(tmp_path_factory):
 @pytest.mark.slow
 @pytest.mark.timeout(7200)
 def test_every_language_was_scored(scored):
-    """Coverage asserted, not assumed: every corpus language produced clips and a mean."""
+    """Every corpus language produced clips and a mean."""
     got = set(scored["means"])
     assert got == set(WER_SENTENCES), f"scored {sorted(got)}, expected {sorted(WER_SENTENCES)}"
     per = {l: sum(1 for c in scored["clips"] if c["lang"] == l) for l in got}
@@ -204,8 +169,8 @@ def test_no_clip_collapses(scored):
 @pytest.mark.slow
 @pytest.mark.timeout(1800)
 def test_predictor_separates_speech_from_noise(tmp_path):
-    """The predictor, calibrated before it gates: fp32-reference speech must score far above silence
-    and noise. No device -- the speech is the ASR calibration fixture decoded by the fp32 codec."""
+    """fp32-reference speech must score far above silence and noise. No device: the speech is the
+    ASR calibration fixture decoded by the fp32 codec."""
     import wave
 
     import torch

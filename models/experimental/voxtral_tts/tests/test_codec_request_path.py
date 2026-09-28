@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device PCC for the TTNN codec decoder (Block 3) vs the CPU reference.
+"""Request-path invariants of the TTNN codec decoder (codec), on device.
 
-The reference is itself validated against upstream (30/30, all 8 decoder stages bit-exact or
-PCC ~1.0), so matching it here is a real correctness statement, not a self-comparison.
-
+Chunked attention == unchunked, bucketing trims back to T and pads with the last frame, the bias
+and prepared-weight caches stay bounded, and the slab is tile-aligned.
 Skips cleanly without ttnn, a device, or the checkpoint.
 
     pytest -svv models/experimental/voxtral_tts/tests/test_codec_request_path.py
@@ -20,16 +19,15 @@ from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, pcc
 
 ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
-# Every test here opens a device, so `slow` joins the checkpoint guard: `-m "not slow"` is
-# meant to be the host-only subset, and it used to still run these.
+# Every test here opens a device, so it is `slow`: `-m "not slow"` is the host-only subset.
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT),
                        reason=f"no checkpoint at {DEFAULT_CKPT}"),
 ]
 
-WAVE_PCC = 0.999  # the gate XTTS-v2's HiFi-GAN port shipped at (0.99946)
-STAGE_PCC = 0.996  # per-stage; the final window-16 stage amplifies inherited error (see below)
+WAVE_PCC = 0.999  # same gate as tests/pcc/test_codec_pcc.py; see VOXTRAL_TTS_CODEC.md [codec-51]
+STAGE_PCC = 0.996  # per-stage gate, as in tests/pcc/test_codec_pcc.py
 
 
 @pytest.fixture(scope="module")
@@ -48,9 +46,8 @@ def pair(device):
 
 @pytest.mark.parametrize("n_frames", [64, 469])
 def test_chunked_matches_unchunked(device, n_frames):
-    """Chunking must be EXACT, not an approximation: attention is causal AND windowed, so a slab
-    starting `window` positions early has all the context its kept rows need. Compares the two
-    paths directly rather than both against the reference, so a shared error cannot hide."""
+    """Chunking must be EXACT (see VOXTRAL_TTS_CODEC.md [codec-14]). Compares the two paths
+    directly rather than both against the reference."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     codes = ref.make_synthetic_codes(n_frames)
@@ -60,12 +57,8 @@ def test_chunked_matches_unchunked(device, n_frames):
 
 
 def test_bias_cache_does_not_grow_with_utterance_length(device):
-    """Every chunk is padded to `slab`, so above the threshold the cache holds exactly ONE bias
-    per window no matter how many different lengths are decoded. Before this, first/last chunk
-    lengths varied (the last with S mod C), so each new length added biases AND a kernel compile.
-
-    Stages whose S <= slab still run unchunked and get an SxS bias, so a few length-specific
-    entries remain -- that is the conv-side bucketing work, tracked separately."""
+    """Every chunk is padded to `slab`, so chunked stages hold ONE bias per window whatever the
+    length; stages with S <= slab keep an SxS bias. see VOXTRAL_TTS_CODEC.md [codec-55]"""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     gen = TtVoxtralCodecDecoder(device)
@@ -78,9 +71,8 @@ def test_bias_cache_does_not_grow_with_utterance_length(device):
 
 @pytest.mark.parametrize("n_frames", [64, 65, 130, 469])
 def test_bucketing_preserves_length_and_accuracy(device, n_frames):
-    """Bucketing pads T up to a grid so the 5 convs stop recompiling per length (each distinct T
-    otherwise costs 5 new conv programs, measured 1-5 s each). The output must still be trimmed to
-    exactly T frames and match the reference."""
+    """Bucketed output is trimmed to exactly T frames and matches the reference.
+    see VOXTRAL_TTS_CODEC.md [codec-05]"""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     w = ref.load_codec_state()
@@ -92,9 +84,8 @@ def test_bucketing_preserves_length_and_accuracy(device, n_frames):
 
 
 def test_bucketing_pads_with_last_frame_not_zeros(device):
-    """The pad repeats the final frame rather than zero-filling: zeros are a hard edge to the
-    causal convs, and the transposed convs overlap, so a pathological tail could in principle
-    reach the kept region. Checks the two agree, i.e. the choice is not load-bearing but is safe."""
+    """Bucketed (last-frame padded) and unbucketed decodes agree, so the pad does not leak into
+    kept audio. see VOXTRAL_TTS_CODEC.md [codec-19], VOXTRAL_TTS_BUGS.md BUG-4"""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     codes = ref.make_synthetic_codes(70)  # 70 -> bucket 128, so 58 frames of padding
@@ -104,15 +95,8 @@ def test_bucketing_pads_with_last_frame_not_zeros(device):
 
 
 def test_prepared_weights_are_deduplicated(device):
-    """Prepared conv layouts change at only ONE length threshold per conv (and never for up6), so
-    keying the cache by length alone stored up to 12 BYTE-IDENTICAL copies: 730 MB for 8 distinct
-    layouts. Content dedup brings it to 98 MB with no accuracy question, since the tensors are
-    bit-identical.
-
-    Guards the memory ceiling, which matters once the 3.4B backbone shares the device.
-
-    FOUR convs are prepared, not five: `out` left ttnn.conv1d when its halo_gather kernel turned out
-    to hang the card (STATUS.md 6.13), so the expected count went 5x4 = 20 -> 4x4 = 16."""
+    """Content dedup keeps the prepared-weight cache at <= 8 layouts for 4 convs x 4 buckets.
+    see VOXTRAL_TTS_CODEC.md [codec-10], [codec-56]"""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     gen = TtVoxtralCodecDecoder(device)
@@ -125,8 +109,8 @@ def test_prepared_weights_are_deduplicated(device):
 
 
 def test_slab_is_tile_aligned():
-    """TILE_LAYOUT pads every dim to 32. A slab of 272 (= 256 chunk + 16 window) silently becomes
-    288, wasting a row and a column of tiles — pick the SLAB aligned and derive the chunk from it."""
+    """TILE_LAYOUT pads every dim to 32, so an unaligned slab silently wastes tiles.
+    see VOXTRAL_TTS_CODEC.md [codec-03]"""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import SLAB
 
     assert SLAB % 32 == 0, f"slab {SLAB} is not tile-aligned"

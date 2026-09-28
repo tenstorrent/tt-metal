@@ -3,17 +3,8 @@
 
 """The traced frame loop against the eager one, on real prompts, over FULL utterances.
 
-The traced loop is what ships. It feeds itself, so it cannot be teacher-forced, and a free-running
-comparison against the reference would compare diverging trajectories. Eager is the right reference
-because the per-block tests already gate eager against fp32, so traced == eager chains to fp32.
-
-The noise draws line up: both loops draw the same count from the same seeded generator and frame 0
-is eager in both, so any difference is the trace itself.
-
-Full utterances, not a window. A trace fault that only appears late -- once the cache crosses the
-sdpa chunk boundary, or after a few hundred replays -- passes a 24-frame run by construction, and a
-long utterance is ~450 frames. So every fixture prompt runs to its own [END_AUDIO] at three seeds,
-and the sweep asserts it actually reached that depth rather than assuming it did.
+Eager is the reference because the per-block tests gate eager against fp32; every fixture prompt
+runs to its own [END_AUDIO] at three seeds. see VOXTRAL_TTS_BRINGUP.md [test-02]
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_traced_frame_loop.py
@@ -32,10 +23,9 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
 )
 
 SEEDS = (0, 1, 2)
-# A cap, not a budget: generation stops on [END_AUDIO]. The longest natural utterance in the fixture
-# is ~490 frames; hitting this means the model never closed the utterance, which is reported.
+# A cap, not a budget: generation stops on [END_AUDIO], and hitting the cap is reported.
 MAX_FRAMES = 1024
-WAVEFORM_CASE = 3            # a ~470-frame utterance, so the codec sees a full-length input
+WAVEFORM_CASE = 3            # runs long, so the codec sees a full-length input
 
 # What the sweep must reach to mean anything -- asserted, not assumed.
 SDPA_CHUNK = gpt._SDPA_PRG.k_chunk_size       # 512: sdpa_decode walks the cache in these chunks

@@ -3,11 +3,8 @@
 
 """Sentences per language, as data, tokenized at test time by the in-repo tokenizer.
 
-`prompt_fixture.json` stores text WITH the token ids it produced and is the bit-exactness oracle;
-this module is plain text, so breadth costs nothing.
-
-Conventions: no digits in either form (the cleaner expands them and a recogniser writes them back as
-numerals), ordinary prose, Arabic undiacritized, and sentences long enough to gate on.
+Plain text, unlike `prompt_fixture.json`, so breadth costs nothing. Conventions (no digits, plain
+prose, Arabic undiacritized) and the WER bands: see VOXTRAL_TTS_GOLDENS.md [test-03].
 """
 
 # Keyed by the language prefix of a voice name; "en" covers the unprefixed voices
@@ -67,12 +64,8 @@ def first_sentence_for(voice):
     return sentences_for(voice)[0]
 
 
-# Longer sentences, five per language of growing length, for the WER gate. Kept apart from
-# SENTENCES because that set is deliberately short -- these have to be long enough that one wrong
-# word does not dominate the rate, and the gate is a per-language mean over speakers x sentences.
-#
-# Identical text to the sibling xtts_v2 port's `language_corpus.WER_SENTENCES`, deliberately: the
-# same sentences through both models make the two WER numbers directly comparable.
+# Five per language, growing in length, for the WER gate; same text as the xtts_v2 port's
+# WER_SENTENCES. see VOXTRAL_TTS_GOLDENS.md [test-03]
 WER_SENTENCES = {
     "en": [
         "The old map showed three islands that no sailor had ever found, and nobody wanted to be the "
@@ -196,10 +189,8 @@ def wer_sentences_for(voice):
     return WER_SENTENCES[lang_of(voice)]
 
 
-# The SHORT band: one sentence of five to seven words per language, ~20-30 frames. Taken from the
-# sibling port's `language_corpus.SENTENCES`, so it is text that has already been driven through a
-# model and transcribed. Short utterances quantise coarsely -- at five words one wrong word is WER
-# 0.20 -- so this band carries its own ceilings rather than being pooled with the others.
+# The short band: one five-to-seven-word sentence per language, with its own WER ceilings.
+# see VOXTRAL_TTS_GOLDENS.md [test-03]
 WER_SHORT = {
     "en": "The winter market opened early today.",
     "de": "Der Wintermarkt öffnete heute früh.",
@@ -213,20 +204,16 @@ WER_SHORT = {
 }
 
 
-# How many of a language's WER_SENTENCES are joined to make the LONG band. Four gives 84-117 words
-# and 322-449 frames, which brackets the 469-frame fixture utterance the decode and codec
-# full-length tests use -- so the WER gate now reaches the same lengths they do.
+# How many of a language's WER_SENTENCES are joined to make the long band.
+# see VOXTRAL_TTS_GOLDENS.md [test-03]
 LONG_BAND_PARTS = 4
 
 BANDS = ("short", "medium", "long")
 
 
 def wer_band(lang, band):
-    """-> the list of sentences for one (language, band).
-
-    The long band is JOINED from that language's own WER_SENTENCES rather than newly written: every
-    part already scores near zero on its own, so a regression in the long band is length-dependent
-    behaviour and not unvetted text.
+    """-> the list of sentences for one (language, band). The long band is joined from the
+    language's own WER_SENTENCES. see VOXTRAL_TTS_GOLDENS.md [test-03]
     """
     if band == "short":
         return [WER_SHORT[lang]]

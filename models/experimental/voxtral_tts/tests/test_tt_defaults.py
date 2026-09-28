@@ -3,17 +3,8 @@
 
 """The shipped TTNN configuration, pinned.
 
-THIS IS THE BLACKHOLE p150 FORK, and most of what it pins is the OPPOSITE of the parent branch.
-Six N150 decisions reversed here (STATUS.md 6.39-6.45) and the guards below exist so that
-re-introducing any of them fails loudly rather than quietly costing 4-7 ms/frame. The one-line
-reason is with each; the measurement is in the STATUS section named.
-
-There are no runtime toggles left -- every alternative that was measured and rejected has been
-deleted rather than parked behind a flag, so what the code does is what it does. What survives is
-a handful of CONSTANTS, and each one encodes a measurement that is expensive to rediscover. This
-test is what makes an accidental edit to one of them fail loudly instead of quietly changing the
-model. The reason for each lives in the module that owns it; the one-liners here are pointers.
-
+Each test guards one constant or source-level invariant of the p150 fork so an accidental edit fails
+loudly; its docstring names where the measurement lives. see VOXTRAL_TTS_BRINGUP.md [test-05]
 Needs no device and no checkpoint -- it only imports the modules.
 
     pytest -svv models/experimental/voxtral_tts/tests/test_tt_defaults.py
@@ -28,32 +19,17 @@ from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_pipeline as pipeline  # noqa: E402
 
 
-def test_block1_weights_are_bfp8_except_w2():
-    """Block 1 is BFP8 everywhere except w2. Decode is bandwidth-limited on weight bytes, so dtype
-    is the single biggest speed lever, and every matrix worth halving has been.
-
-    W2 IS bf16 FOR ACCURACY, NOT FOR THE HANG -- and this test exists mostly to keep those two apart,
-    because they were conflated for months. BFP8 on w2 used to wedge the card; that was ttnn's conv
-    `halo_gather` kernel reached via the CODEC (STATUS.md 6.12-6.13), it is fixed, and BFP8 here is
-    now safe. It is simply a bad trade: measured on all 15 prompts it costs 0.24 pp of mean
-    worst-sample and 0.40 pp of p90 for 2.5 ms/step -- 77% of the precision stack's whole accuracy
-    cost for 15% of its speed, and 8x the worst ratio of the other two (STATUS.md 6.16).
-
-    If you flip it back, expect mean/p90 1.17%/1.75% instead of 0.93%/1.35%, and note the codec test
-    below becomes load-bearing again."""
+def test_backbone_weights_are_bfp8_except_w2():
+    """The backbone is BFP8 except w2, which is bf16 for ACCURACY, not for the old hang.
+    see VOXTRAL_TTS_STATUS.md §6.16 (the trade) and §6.12-§6.13 (the hang)"""
     assert gpt.WEIGHT_DTYPE == ttnn.bfloat16        # w2 -- accuracy, see above
-    assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b    # FF1, FF3 -- 11.1 ms for 0.04 pp, best trade
-    assert gpt.ATTN_WEIGHT_DTYPE == ttnn.bfloat8_b  # wqkv, wo -- 3.3 ms for 0.04 pp
+    assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b    # FF1, FF3 -- see §6.16
+    assert gpt.ATTN_WEIGHT_DTYPE == ttnn.bfloat8_b  # wqkv, wo -- see §6.16
 
 
 def test_codec_output_projection_does_not_use_conv1d():
-    """The codec's output projection must NOT call ttnn.conv1d: its halo_gather kernel issues an
-    out-of-range NOC write on the second execution of that shape and hangs the card.
-
-    This no longer pairs with the w2 test -- w2 is bf16 again, so nothing in the shipped config
-    triggers that kernel. It stands on its own two feet: the matmul form is FASTER than the conv it
-    replaced (3.45 vs 4.29 ms, STATUS.md 6.14), and it is what makes w2-in-BFP8 survivable for anyone
-    who flips that line. STATUS.md 6.12-6.14."""
+    """The codec's output projection must not call ttnn.conv1d, whose halo_gather hangs the card.
+    see VOXTRAL_TTS_STATUS.md §6.12-§6.14 and VOXTRAL_TTS_CODEC.md [codec-17]"""
     import inspect
 
     from models.experimental.voxtral_tts.tt import ttnn_voxtral_codec as codec
@@ -62,43 +38,40 @@ def test_codec_output_projection_does_not_use_conv1d():
     init = inspect.getsource(codec.TtVoxtralCodecDecoder.__init__)
     assert '_conv1d(x, "out"' not in src, "the output projection is back on ttnn.conv1d -- see 6.13"
     assert "_out_taps" in init
-    # And its prefix must come from ttnn.gather, not _pad_causal's six single-row slices: one such
-    # slice of the 16 MiB input costs 0.381 ms, so the six of them were 2.28 of the op's 6.26 ms.
-    # Bit-identical either way, so only the clock catches a revert. STATUS.md 6.14.
+    # Its prefix comes from ttnn.gather, not _pad_causal's slices; only the clock catches a revert.
+    # see VOXTRAL_TTS_STATUS.md §6.14
     assert "self._pad_causal(" not in src, "the projection is back on the slice-built pad -- see 6.14"
     assert "ttnn.gather(" in src and "_out_prefix_idx" in init
 
 
-def test_block1_math_config_keeps_fp32_accumulation():
-    """RMSNorm's mean-of-squares needs it. Dropping the compute config makes that op 2.4x faster
-    and takes model decode PCC from 0.99991 to 0.992, worst sample 1.7% -> 18.9%."""
+def test_backbone_math_config_keeps_fp32_accumulation():
+    """RMSNorm's mean-of-squares needs fp32 accumulation. see VOXTRAL_TTS_BACKBONE.md [gpt-12]"""
     assert gpt.COMPUTE_CONFIG.fp32_dest_acc_en is True
     assert gpt.COMPUTE_CONFIG.math_fidelity == ttnn.MathFidelity.HiFi4
 
 
-def test_block2_weights_are_bfp8_but_fidelity_stays_high():
-    """BFP8 weights are 1.23x for one extra differing code in 222. Lowering the MATH fidelity is
-    the opposite trade -- ~4 ms for 10-20x the code errors."""
+def test_flow_model_weights_are_bfp8_but_fidelity_stays_high():
+    """The flow model takes BFP8 weights but keeps HiFi4 + fp32 accumulation.
+    see VOXTRAL_TTS_FLOW.md [flow-05] (weights) and [flow-03] (fidelity)"""
     assert flow.WEIGHT_DTYPE == ttnn.bfloat8_b
     assert flow.COMPUTE_CONFIG.math_fidelity == ttnn.MathFidelity.HiFi4
     assert flow.COMPUTE_CONFIG.fp32_dest_acc_en is True
 
 
 def test_prefill_padding_stays_on_the_tile_grid():
-    """Prefill's causal mask is cut at this boundary; a ragged value would misalign it silently
-    rather than raise. 128 itself is a kernel-shape-churn choice, not a hardware limit."""
+    """Prefill's causal mask is cut at this boundary; a ragged value misaligns it silently.
+    see VOXTRAL_TTS_BACKBONE.md [gpt-02]"""
     assert gpt.PREFILL_MULTIPLE % gpt.TILE == 0
 
 
-def test_block2_semantic_head_stays_fp32():
-    """It produces an INDEX, not a value. Measured over 64 hidden states, bf16 weights pick a
-    DIFFERENT index on 4 of them; fp32 matches the host answer on all 64, for 0.2 ms."""
+def test_flow_model_semantic_head_stays_fp32():
+    """The semantic head produces an index, so it stays fp32. see VOXTRAL_TTS_FLOW.md [flow-08]"""
     assert flow.SEMANTIC_DTYPE == ttnn.float32
 
 
 def test_fused_qkv_width_matches_the_head_config():
-    """Decode's head op reads ONE fused projection and splits it by head count; a mismatch would
-    mis-slice q/k/v rather than raise."""
+    """The fused q/k/v projection is split by head count; a mismatch mis-slices silently.
+    see VOXTRAL_TTS_BACKBONE.md [gpt-10]"""
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
         HEAD_DIM,
         N_HEADS,
@@ -113,19 +86,12 @@ if __name__ == "__main__":
 
 
 # ---------------------------------------------------------------------------------------
-# p150 REVERSALS. Each of these was the SHIPPED choice on the N150 and is wrong here.
+# p150 reversals of N150 choices. see VOXTRAL_TTS_BRINGUP.md [test-05]
 # ---------------------------------------------------------------------------------------
 def test_sharded_norm_is_decode_only_and_legally_shaped():
-    """The decode RMSNorm is width-sharded AGAIN, worth +5.399 ms/frame. 6.39/6.40 rejected it at
-    +4.4 ms WORSE, and were right eagerly: the cost was the RESHARD, which 6.65's trace removed.
-    Fifth stale rejection of the same kind. STATUS.md 6.67.
-
-    Two invariants, both load-bearing:
-      * DECODE ONLY. The shard spec fixes the height at one tile, so prefill -- [1, Sp, 3072] for
-        any Sp -- fails outright with "Shard height 32 must match physical height 384".
-        sharded_norm falls back to interleaved above one tile of rows.
-      * cores * block_w == 96. 3072 wide is 96 tiles and a tile is indivisible (6.39's rule, which
-        is a property of the TENSOR and did not change)."""
+    """The width-sharded decode norm: decode only (prefill falls back to interleaved), and
+    cores * block_w == 96 tiles. see VOXTRAL_TTS_STATUS.md §6.67 and
+    VOXTRAL_TTS_BACKBONE.md [gpt-28]"""
     nc = gpt._NORM_GRID[0] * gpt._NORM_GRID[1]
     assert nc * gpt._NORM_PRG.block_w == gpt.DIM // gpt.TILE, (
         f"{nc} cores x block_w {gpt._NORM_PRG.block_w} != {gpt.DIM // gpt.TILE} tiles")
@@ -137,23 +103,16 @@ def test_sharded_norm_is_decode_only_and_legally_shaped():
 
 
 def test_wo_does_not_get_the_n150_hand_tuned_config_back():
-    """6.25 hand-tuned _WO_PRG for the N150 (+0.196 ms/frame); 6.43 found it buys nothing here and
-    deleted it. wo DOES now carry a program config again, but not that one -- it takes the shared
-    11x7 decode config (6.52's 12x6, re-gridded in 6.78), whose reason is the reduction-depth collapse, not wo's shape.
-    Keep the two claims apart: the N150 constant stays dead."""
+    """The N150's hand-tuned _WO_PRG stays deleted; wo takes the shared decode config instead.
+    see VOXTRAL_TTS_STATUS.md §6.43, §6.52, §6.78 and VOXTRAL_TTS_BACKBONE.md [gpt-20]"""
     assert not hasattr(gpt, "_WO_PRG"), "the N150's hand-tuned wo config is back -- 6.43"
     assert not hasattr(gpt, "_WO_GRID")
     assert gpt.DECODE_PRG["wo"] is gpt._PRG_WO
 
 
 def test_decode_matmul_grid_fits_the_smaller_card_and_keeps_the_12x6_split():
-    """_MM_GRID moved 12x6 -> 11x7 when the reservation landed on a p150b with two Tensix columns
-    fused off (11x10). The move is only free because every shape keeps the per_core_N it had on
-    12x6: each output tile is still reduced over the full K on one core, so the output is
-    bit-identical -- frame counts 26/194/499 reproduced exactly. STATUS.md 6.78.
-
-    A grid that changes any per_core_N changes which core reduces what, and so the numerics:
-    that is a model change needing the full quality gate, not a tidy-up."""
+    """_MM_GRID fits the 11x10 card and keeps 12x6's per_core_N, so the output stays bit-identical;
+    changing any per_core_N is a model change. see VOXTRAL_TTS_STATUS.md §6.78, [gpt-29]"""
     import math
 
     assert gpt._MM_GRID[0] <= 11 and gpt._MM_GRID[1] <= 10, (
@@ -169,10 +128,8 @@ def test_decode_matmul_grid_fits_the_smaller_card_and_keeps_the_12x6_split():
 
 
 def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
-    """activation="silu" is NOT fused on this chip: 98.8 us against a plain matmul's 85.5, the
-    same +14.9 as a separate ttnn.silu, and UnaryWithParam/UnaryOpType behave identically. Only a
-    program config's fused_activation folds it in (88.1). Worth 2.42 ms/frame over the 47 w1 calls
-    across both blocks, and slightly MORE accurate (PCC 0.9999984 vs 0.9999970). STATUS.md 6.52."""
+    """SiLU is fused only by the program config's fused_activation; the activation kwarg is not
+    fused on this chip. see VOXTRAL_TTS_STATUS.md §6.52, VOXTRAL_TTS_BACKBONE.md [gpt-26]"""
     import inspect
 
     assert gpt._PRG_W1.fused_activation is not None, "w1 lost its fused silu -- 6.52"
@@ -185,17 +142,8 @@ def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
 
 
 def test_out_subblock_w_is_the_largest_legal_one():
-    """The helper's comment says "biggest that fits" and for a while the code did not do that: the
-    candidate tuple was (4, 2, 1), which skips 3. ttnn's own SUBBLOCK_HW_CHOICES lists {3,1}
-    explicitly, so wqkv's per_core_N=3 fell all the way to out_subblock_w=1 -- three passes through
-    the destination registers where one would do. It measured perf-neutral (59.3 vs 59.2 us,
-    because subblock width is compute-side and the ALUs are ~99.6% idle at batch 1, §6.53) and the
-    paired gate was clean, so it is fixed for correctness of intent rather than for speed. A future
-    shape with per_core_N of 3, 9 or 15 would otherwise silently drop to 1 with no indication.
-
-    The two rules, both enforced by ttnn as hard errors:
-      out_subblock_h * out_subblock_w <= 4   (8 normally; fp32_dest_acc_en halves the dest file)
-      per_core_N % out_subblock_w == 0
+    """out_subblock_w is the largest legal width: h * w <= 4 (fp32_dest_acc_en) and
+    per_core_N % w == 0. see VOXTRAL_TTS_STATUS.md §6.61
     """
     for name, cfg in gpt.DECODE_PRG.items():
         w, n, h = cfg.out_subblock_w, cfg.per_core_N, cfg.out_subblock_h
@@ -208,15 +156,8 @@ def test_out_subblock_w_is_the_largest_legal_one():
 
 
 def test_residual_rides_in_as_bias_on_the_decode_path_only():
-    """A matmul bias is a ROW VECTOR broadcast across rows, so it equals the residual only when
-    there is exactly one row. Decode has one; PREFILL HAS MANY, each with its own residual, and
-    would be silently wrong -- no error, just a broadcast of row 0 over everything. Block 2 is the
-    same hazard (3 or 6 CFG-folded rows), which is why it keeps the explicit add.
-
-    Worth 1.918 ms/step against a 0.190 noise floor, at unchanged accuracy (min PCC 0.999771 vs
-    0.999799, worst relative error 1.11% vs 1.24%). 6.47 REJECTED this at +0.069 ms, correctly at
-    the time: the wo matmul then took 92.7 us and the separate add hid in its shadow. 6.52 made it
-    40.3 us and exposed the add at +53.5. STATUS.md 6.62."""
+    """Residual-as-bias is valid only at one row, so decode takes it and prefill must not.
+    see VOXTRAL_TTS_STATUS.md §6.62, VOXTRAL_TTS_BACKBONE.md [gpt-27]"""
     import inspect
 
     step = inspect.getsource(gpt.TtVoxtralGPT._layer_step)
@@ -230,15 +171,9 @@ def test_residual_rides_in_as_bias_on_the_decode_path_only():
 
 
 def test_trace_capture_aims_the_cache_write_at_the_first_frames_slot():
-    """_trace_capture runs graph() TWICE (warm-up + capture) and each run WRITES K/V through
-    paged_update_cache at whatever `pos` holds. Left at its initial 0 that destroys the prefilled
-    prompt's position 0, every later attention reads the wreckage, and the audio is garbage --
-    measured as WER 1 -> 1320 of 596 words, MOS 4.63 -> 1.98, 32822 clicks. Aiming it at pos0
-    puts those writes where the first real frame overwrites them moments later.
-
-    IT PASSED A SINGLE-FRAME BIT-EXACT CHECK. A trace exists to be REPLAYED, so verifying one
-    replay verifies nothing about replay -- the corruption only shows once a frame reads back
-    through the damaged slot. Verify traces over several frames. STATUS.md 6.65."""
+    """Both graph() runs in _trace_capture write K/V at `pos`, so it must be aimed at pos0 first,
+    and the trace released in a finally. see VOXTRAL_TTS_STATUS.md §6.65 and
+    VOXTRAL_TTS_BRINGUP.md [pipe-05]"""
     import inspect
 
     src = inspect.getsource(pipeline.TtVoxtralPipeline._trace_capture)
@@ -254,9 +189,8 @@ def test_trace_capture_aims_the_cache_write_at_the_first_frames_slot():
 
 
 def test_decode_matmul_configs_assume_one_tile_of_rows():
-    """per_core_M=1 and fuse_batch=True are only valid for a single tile of rows -- Block 1's 1 and
-    Block 2's 3-or-6. Prefill has many, so _mlp must reach it WITHOUT these configs. STATUS.md
-    6.52."""
+    """Decode program configs assume one tile of rows, so prefill's _mlp must not get them.
+    see VOXTRAL_TTS_STATUS.md §6.52, VOXTRAL_TTS_BACKBONE.md [gpt-26]"""
     import inspect
 
     for p in gpt.DECODE_PRG.values():
@@ -268,10 +202,8 @@ def test_decode_matmul_configs_assume_one_tile_of_rows():
 
 
 def test_kv_cache_uses_two_writes_not_the_fused_one():
-    """paged_fused_update_cache is +0.454 ms/frame on the N150 (6.20/6.22) and 0.687 ms/step
-    SLOWER here. _V_SHARD existed only to let it accept K and V on different cores, so it goes
-    too -- and with it the failure mode where RoPE on a core whose cos/sin table lives elsewhere
-    returns 3.4e38 from uninitialised L1 instead of raising. STATUS.md 6.44."""
+    """Two paged_update_cache writes, not the fused one, and no _V_SHARD.
+    see VOXTRAL_TTS_STATUS.md §6.44, VOXTRAL_TTS_BACKBONE.md [gpt-19]"""
     import inspect
 
     src = inspect.getsource(gpt.TtVoxtralGPT._layer_step)
@@ -280,16 +212,9 @@ def test_kv_cache_uses_two_writes_not_the_fused_one():
     assert not hasattr(gpt, "_V_SHARD"), "_V_SHARD is back; it has no consumer without the fused op"
 
 
-def test_block2_hand_rolls_the_head_split_and_keeps_sdpa():
-    """Block 2 splits heads with NINE ops and attends with sdpa.
-
-    6.45 shipped the fused `nlp_create_qkv_heads` because a small op cost 67.7 us; 6.65 traced
-    that launch cost away, and traced the fused op is 90.5 us against the hand-roll's 48.6 --
-    -0.775 ms/frame, bit-exact over 45 utterances. sdpa is untouched by that and stays. 6.72.
-
-    THE memory_config IS PART OF THE CHANGE, not decoration: without it the slices and permutes
-    land in DRAM, which measures 58.2 us/split against 48.6 and moves q/k/v out of L1 with no
-    error. 6.31 is the session that got a head-split A/B backwards on exactly this."""
+def test_flow_model_hand_rolls_the_head_split_and_keeps_sdpa():
+    """The flow model splits heads with nine L1-pinned ops and attends with sdpa.
+    see VOXTRAL_TTS_STATUS.md §6.72, VOXTRAL_TTS_FLOW.md [flow-10]"""
     import inspect
 
     blk = inspect.getsource(flow.TtVoxtralFlow._block)
@@ -299,9 +224,8 @@ def test_block2_hand_rolls_the_head_split_and_keeps_sdpa():
         "sdpa MUST take scale=1.0 -- SCALE is folded into wqkv's q rows ([flow-09]), so the "
         "default applies 1/sqrt(d) twice: 3.8e-01 relative error (6.37)")
 
-    # ast, not a `#`-strip: this function NAMES the op it does not call, in its docstring, and the
-    # elsewhere-idiomatic comment strip leaves docstrings behind. Dropping the docstring node and
-    # unparsing leaves executable code only.
+    # ast, not a `#`-strip: _split_heads names the op it does not call in its docstring, and
+    # dropping the docstring node before unparsing leaves executable code only.
     import ast, textwrap
 
     fn = ast.parse(textwrap.dedent(inspect.getsource(flow._split_heads))).body[0]
@@ -317,9 +241,7 @@ def test_block2_hand_rolls_the_head_split_and_keeps_sdpa():
 
 
 def test_sdpa_decode_keeps_its_program_config():
-    """The one N150 program config that DID survive. k=512 on 8x2 is 1.751x over the default and
-    is the only candidate exact at all 13 probe positions -- k=128 is faster still and degrades at
-    pos 128 and 1000. 6.27's rule reproduced on new hardware: a position sweep, not a gate run, is
-    what makes an sdpa config safe. STATUS.md 6.46."""
+    """sdpa_decode keeps its N150 program config (k_chunk 512), chosen by a position sweep.
+    see VOXTRAL_TTS_STATUS.md §6.46, VOXTRAL_TTS_BACKBONE.md [gpt-21]"""
     assert gpt._SDPA_PRG.k_chunk_size == 512
     assert gpt._SDPA_PRG.q_chunk_size == gpt.TILE

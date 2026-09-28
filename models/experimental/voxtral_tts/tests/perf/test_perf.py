@@ -3,13 +3,8 @@
 
 """Where a request spends its time, per stage, across utterance lengths.
 
-Warm figures: warmup is one-time and excluded, so this is what a caller waits for from the second
-request onward. `decode_ms_per_frame` includes the one-time trace capture, so short utterances read
-higher; the per-frame ceiling is therefore asserted on the long case.
-
-Ceilings are loose smoke checks. This runs on a shared card, and the regression detector is the
-paired comparison the bringup repo's `tools/quality_report.py --compare` performs against
-measured noise floors.
+Warm figures (warmup excluded). Ceilings are loose smoke checks; the regression detector is the
+bringup repo's `tools/quality_report.py --compare`. see VOXTRAL_TTS_BRINGUP.md [test-04]
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/perf/test_perf.py
@@ -32,8 +27,8 @@ REPEATS = 2  # best of, so one noisy run on a shared card does not decide the re
 MAX_FRAMES = 520
 
 MAX_PREFILL_S = 2.0
-MAX_DECODE_MS_PER_FRAME_LONG = 40.0   # long-case measured ~28; capture is amortised there
-MAX_DECODE_MS_PER_FRAME_ANY = 70.0    # short case carries the whole capture
+MAX_DECODE_MS_PER_FRAME_LONG = 40.0   # capture amortised. see VOXTRAL_TTS_BRINGUP.md [test-04]
+MAX_DECODE_MS_PER_FRAME_ANY = 70.0    # the short case carries the whole capture
 MAX_CODEC_S = 2.0
 MIN_RTF = 1.2                         # short utterances pay prefill+capture over little audio
 

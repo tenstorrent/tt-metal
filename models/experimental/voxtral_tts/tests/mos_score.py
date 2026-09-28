@@ -1,8 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-language DistillMOS over a directory of clips. Runs in the MOS venv, NOT the main one.
 
-Test infrastructure for `test_mos.py` (and the quality report in the bringup repo calls it too):
-DistillMOS needs torchaudio, which breaks transformers in the main venv (BUG-6), so it runs as a
-subprocess of `/tmp/mosvenv/bin/python` -- built once by `tests/mos_setup.sh`.
+Used by `test_mos.py` and the bringup repo's quality report. Why a separate venv:
+see VOXTRAL_TTS_GATES.md [mos-01].
 
     /tmp/mosvenv/bin/python tests/mos_score.py /path/to/clip_dir     # a dir with manifest.json
     /tmp/mosvenv/bin/python tests/mos_score.py base                  # = generated/lang_base

@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Voxtral-TTS on device: text ids + voice preset -> 24 kHz waveform.
+"""End-to-end Voxtral-TTS on device: prompt embeds + voice preset -> 24 kHz waveform.
 
-See NOTES.md [pipe-01].
+The backbone, flow model and codec on TTNN, with the per-frame loop traced; mirrors
+reference/voxtral_pipeline_ref.py.
+What stays on the host and why: see VOXTRAL_TTS_BRINGUP.md [pipe-01].
 """
 
 import time
@@ -22,27 +24,27 @@ FRAME_RATE = 12.5
 
 # L1 scratch every caller needs: the codec's convs fail with "bank size is 0 B" without it.
 L1_SMALL_SIZE = 65536
-# NOTES.md [pipe-05] -- the frame loop is TRACED. 0 falls back to eager.
+# Trace region for the frame loop; 0 falls back to eager. see VOXTRAL_TTS_BRINGUP.md [pipe-05]
 TRACE_REGION_SIZE = 250 * 1024 * 1024
 
 
 def open_device(device_id=0, trace_region_size=TRACE_REGION_SIZE):
-    """Open a device configured the way every entry point here needs it. See NOTES.md [pipe-05]."""
+    """Open a device with the L1 scratch and trace region every entry point here needs."""
     return ttnn.open_device(device_id=device_id, l1_small_size=L1_SMALL_SIZE,
                             trace_region_size=trace_region_size)
 
 
-# NOTES.md [pipe-02] -- A HANG THAT SHAPED THE SHIPPED CONFIG, recorded because...
+# The halo_gather hang that shaped the shipped config: see VOXTRAL_TTS_BRINGUP.md [pipe-02]
 
 
 class TtVoxtralPipeline:
     """All three blocks on device. generate(embeds) -> frames; decode(frames) -> waveform."""
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq_len=2048):
-        """`max_seq_len` holds prompt + generated frames TOGETHER and is the only cap on utterance
-        length -- 2048 is ~136 s of audio. Raising it costs DRAM and nothing per frame (§6.69)."""
+        """`max_seq_len` caps prompt + generated frames together; it is the only utterance-length
+        cap. see VOXTRAL_TTS_STATUS.md §6.69"""
         self.device = device
-        # NOTES.md [pipe-03] -- embed_frame is a host gather, so it needs the backbone's...
+        # Loaded once and shared with the backbone. see VOXTRAL_TTS_BRINGUP.md [pipe-03]
         self.wb = backbone.load_backbone_state(ckpt_path)
         self.backbone = TtVoxtralGPT(device, state=self.wb, max_seq_len=max_seq_len)
         self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
@@ -54,10 +56,10 @@ class TtVoxtralPipeline:
         self.warmed = {}
 
     # ------------------------------------------------------------------
-    # TRACED FRAME LOOP -- NOTES.md [pipe-05], STATUS.md 6.65
+    # TRACED FRAME LOOP -- see VOXTRAL_TTS_BRINGUP.md [pipe-05]
     # ------------------------------------------------------------------
     def _trace_capture(self, cfg_alpha, n_steps):
-        """Capture the WHOLE per-frame device graph. See NOTES.md [pipe-05]."""
+        """Capture the whole per-frame device graph. see VOXTRAL_TTS_BRINGUP.md [pipe-05]"""
         import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
         from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM, HEAD_DIM
         from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
@@ -75,7 +77,7 @@ class TtVoxtralPipeline:
         }
 
         def graph():
-            # resharded here, not on the host -- NOTES.md [pipe-05]
+            # resharded inside the trace, not on the host. see VOXTRAL_TTS_BRINGUP.md [pipe-05]
             cos = ttnn.to_memory_config(buf["cos"], gpt._ROPE_SHARD)
             sin = ttnn.to_memory_config(buf["sin"], gpt._ROPE_SHARD)
             x = ttnn.clone(buf["xin"])
@@ -90,8 +92,8 @@ class TtVoxtralPipeline:
             return lg, fl._solve(buf["x0"], pair, B, n_steps, cfg_alpha)
 
         pos0 = bb.pos
-        # AIM THE CAPTURE'S CACHE WRITES AT pos0 -- NOTES.md [pipe-05]. Left at 0 this corrupts the
-        # prompt and the audio is garbage.
+        # Aim the capture's K/V writes at pos0; at 0 they corrupt the prompt.
+        # see VOXTRAL_TTS_BRINGUP.md [pipe-05]
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([pos0], dtype=torch.int32)), buf["pos"])
         graph()                                   # populate the program cache before capturing
@@ -113,7 +115,8 @@ class TtVoxtralPipeline:
             self._tr = None
 
     def _traced_frame(self, codes):
-        """One frame through the trace. NOTHING here may allocate -- NOTES.md [pipe-05]."""
+        """One frame through the trace; nothing here may allocate.
+        see VOXTRAL_TTS_BRINGUP.md [pipe-05]"""
         import models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt as gpt
         from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM, HEAD_DIM
         from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow
@@ -142,22 +145,8 @@ class TtVoxtralPipeline:
         return torch.cat([sem, ac + flow.N_AUDIO_SPECIAL], dim=1)
 
     def warmup(self, max_frames=640, capture_trace=True, verbose=False):
-        """Compile every program the request path can reach, then capture the frame-loop trace.
-
-        Prefill compiles per padded length and the codec per frame bucket, so without this the first
-        request at each new length pays a compile. Everything that allocates is compiled BEFORE the
-        trace capture, since a program compiled afterwards can land where the trace keeps its
-        intermediates.
-
-        Zero inputs are enough: this builds kernels and asserts nothing. The codec stage synthesises
-        its own codes, because Block 2 on zeros emits [END_AUDIO] and the trim would leave nothing.
-
-        Args:
-            max_frames: how many frames of codec bucket to compile for.
-            capture_trace: also capture and release the per-frame trace.
-            verbose: per-stage timings.
-
-        Sets `self.warmed` to what was compiled.
+        """Compile every program the request path can reach, then capture (and release) the
+        frame-loop trace. Sets `self.warmed`. see VOXTRAL_TTS_BRINGUP.md [pipe-06]
         """
         import time as _time
 
@@ -178,12 +167,12 @@ class TtVoxtralPipeline:
         log(f"prefill: {len(shapes)} shapes ({shapes[0]}..{shapes[-1]}) in "
             f"{_time.perf_counter() - t0:.1f}s")
 
-        # 2) Block 2 once -- one shape, it is per-frame and length-independent.
+        # 2) the flow model once -- one shape, it is per-frame and length-independent.
         t0 = _time.perf_counter()
         h = self.backbone.prefill_last(torch.zeros(1, step, DIM))
         codes = self.flow(h[:, 0])
         self.backbone.reset()
-        log(f"block 2: 1 shape in {_time.perf_counter() - t0:.1f}s")
+        log(f"Flow model: 1 shape in {_time.perf_counter() - t0:.1f}s")
 
         # 3) Codec, at every length bucket a request can reach.
         t0 = _time.perf_counter()
@@ -233,7 +222,7 @@ class TtVoxtralPipeline:
         if seed is not None:
             torch.manual_seed(seed)
         t0 = time.perf_counter()
-        # NOTES.md [pipe-04] -- Only the last position conditions the first frame...
+        # Only the last position conditions the first frame. see VOXTRAL_TTS_BRINGUP.md [pipe-04]
         h = self.backbone.prefill_last(embeds)   # [1,1,3072]
         t_prefill = time.perf_counter() - t0
         if verbose:
@@ -241,10 +230,10 @@ class TtVoxtralPipeline:
 
         frames, t0 = [], time.perf_counter()
         stopped = False
-        # NOTES.md [pipe-05] -- frame 0 is EAGER and must come BEFORE the capture
+        # Frame 0 is eager and must come before the capture. see VOXTRAL_TTS_BRINGUP.md [pipe-05]
         codes = self.flow(h[:, 0], cfg_alpha=cfg_alpha)
-        # NOTES.md [pipe-05] -- try to trace, fall back to eager. The decision cannot come from
-        # TRACE_REGION_SIZE: a caller may have opened the device with a different one.
+        # Try to trace, fall back to eager: the caller may have opened the device with a different
+        # trace region than TRACE_REGION_SIZE. see VOXTRAL_TTS_BRINGUP.md [pipe-05]
         traced = False
         if TRACE_REGION_SIZE > 0:
             try:
@@ -294,7 +283,7 @@ class TtVoxtralPipeline:
 
     @torch.no_grad()
     def decode(self, frames):
-        """frames [T,37] -> waveform torch [1,1,T*1920] @ 24 kHz, via Block 3."""
+        """frames [T,37] -> waveform torch [1,1,T*1920] @ 24 kHz, via the codec."""
         from models.experimental.voxtral_tts.reference.voxtral_codec_ref import strip_offset_and_trim
 
         t0 = time.perf_counter()

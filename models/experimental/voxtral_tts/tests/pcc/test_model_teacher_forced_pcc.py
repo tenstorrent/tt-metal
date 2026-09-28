@@ -1,37 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blocks 1+2 end to end: do device and reference emit the same integer codes?
+"""The backbone and flow model end to end: do device and reference emit the same integer codes?
 
-Teacher-forced -- both loops are fed the REFERENCE's codes each step, so every frame is an
-independent measurement and a single divergence cannot compound. Feeding each loop its own codes
-would compare two diverging sequences instead.
-
-WHY THIS RUNS 64 FRAMES ON EVERY PROMPT AND NOT 8 ON THREE. The 8-frame version asserted that the
-semantic code never differs and that acoustic codes are never more than one FSQ level apart. Both
-are false, and the horizon is why: semantic flips occur on ~2% of frames, so 24 frames expects 0.4
-of them and observing none proved nothing. Over 960 frames there are 16, and acoustic deltas reach
-19 of 21 levels. The absolutes are replaced by measured RATES.
-
-What the longer horizon also established, and it is the reassuring half: nothing accumulates. Over a
-full utterance the figures are as good as or better than over 64 frames -- case 2 reads 5.12% across
-447 frames against 6.47% across its first 64 -- so Block 1's error does not compound through Block 2
-across a real request.
-
-A "delta" is how many of the 21 FSQ levels separate a device acoustic code from the reference's.
-Delta 1 is the smallest possible disagreement and is what boundary rounding looks like; a delta of 7
-is a third of the range and means the two computed different values. The rate of frames carrying any
-delta above 1 is therefore gated separately from the overall mismatch percentage.
-
-SEMANTIC AND ACOUSTIC DIVERGE INDEPENDENTLY. It is tempting to assume a big acoustic delta is the
-downstream effect of a flipped semantic code, since both come from one frame. Measured, it is not:
-there are frames whose semantic code matches while 25 of 36 acoustic codes differ by up to 7, and
-frames whose semantic code flips while every acoustic code is exact. Do not fold these two gates
-into one.
+Teacher-forced (both loops advance on the reference's codes), 64 frames on every prompt plus two
+full utterances, gated on measured rates rather than absolutes.
+see VOXTRAL_TTS_BRINGUP.md [test-01] and VOXTRAL_TTS_STATUS.md §6.76
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
-    pytest -svv ... -k "not full_utterance"      # the 64-frame breadth alone, ~18 min
+    pytest -svv ... -k "not full_utterance"      # the 64-frame breadth alone
 """
 
 from collections import Counter
@@ -55,16 +33,13 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: 
     open_device,
 )
 
-N_FRAMES = 64          # reaches frames 40 and 55, the two the decode work found hardest
-LONG_CASES = (2, 3)    # the two prompts whose natural utterance is ~450 frames
+N_FRAMES = 64          # reaches frames 40 and 55. see VOXTRAL_TTS_BRINGUP.md [test-01]
+LONG_CASES = (2, 3)    # the two prompts with a full-length natural utterance
 LONG_CAP = 480
 
-# MEASURED over 960 frames (15 prompts x 64), then 3x with a floor, the same rule the WER ceilings
-# use. Rates, not absolutes: see the module docstring for why the absolutes were wrong.
-MAX_SEMANTIC_FLIP_PCT = 5.0   # measured 1.67% (16 of 960 frames)
-MAX_BIG_DELTA_FRAME_PCT = 7.5   # measured 2.50% (24 of 960 frames)
-# Unchanged from the 8-frame version and still generous: measured 6.43% over 64 frames and 5.12% /
-# 5.29% over the two full utterances.
+# Rate ceilings, 3x measured with a floor. see VOXTRAL_TTS_STATUS.md §6.76
+MAX_SEMANTIC_FLIP_PCT = 5.0
+MAX_BIG_DELTA_FRAME_PCT = 7.5
 MAX_ACOUSTIC_MISMATCH_PCT = 15.0
 
 
@@ -77,11 +52,8 @@ def pipe():
 
 
 def _chain(pipe, embeds, n_frames, cfg_alpha=CFG_ALPHA, stop_on_end=False):
-    """Teacher-forced chain -> dict of counts. Shared by the breadth and full-utterance tests.
-
-    `stop_on_end` matters for the long case: the reference GENERATES the codes here rather than
-    replaying a capture, so running past its [END_AUDIO] would measure the model beyond the end of
-    its own utterance, which is off-distribution.
+    """Teacher-forced chain -> dict of counts. `stop_on_end` stops at the reference's [END_AUDIO],
+    beyond which it would be off-distribution. see VOXTRAL_TTS_BRINGUP.md [test-01]
     """
     wf = fref.load_flow_state()
     ref_dec = bref.IncrementalBackbone(pipe.wb)
@@ -116,8 +88,8 @@ def _chain(pipe, embeds, n_frames, cfg_alpha=CFG_ALPHA, stop_on_end=False):
 
 
 def _assert_rates(label, tot):
-    """The three measured rates. Max delta is REPORTED, never asserted: we have observed 19 of 21
-    levels, and there is no defensible bound on the magnitude -- only on how often it happens."""
+    """Assert the three rates. Max delta is reported, never asserted: only its frequency has a
+    defensible bound. see VOXTRAL_TTS_STATUS.md §6.76"""
     n_frames, n_ac = tot["frames"], tot["frames"] * 36
     sem_pct = tot["sem_bad"] / max(n_frames, 1) * 100
     ac_pct = tot["ac_bad"] / max(n_ac, 1) * 100
@@ -159,11 +131,7 @@ def test_model_teacher_forced_codes(pipe):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("ci", LONG_CASES)
 def test_model_teacher_forced_full_utterance(pipe, ci):
-    """One whole utterance, ~450 frames: the horizon a request actually runs.
-
-    Held separately from the breadth test because it answers a different question -- not "what are
-    the rates" but "do they grow over 36 s". They do not.
-    """
+    """One whole utterance, the horizon a request actually runs: do the rates grow with length?"""
     embeds, case = fixture_embeds(ci, pipe.wb)
     r = _chain(pipe, embeds, LONG_CAP, stop_on_end=True)
     assert r["frames"] > 300, f"case {ci} ended at {r['frames']} frames -- too short to be a horizon test"

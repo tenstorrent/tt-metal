@@ -2,41 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CPU reference for the Voxtral Codec DECODER — BLOCK 3 (~150M): audio codes -> 24 kHz waveform.
+CPU reference for the Voxtral Codec DECODER — THE CODEC (~150M): audio codes -> 24 kHz waveform.
 
 Self-contained (torch only) op-for-op reference for the decode half of upstream
-`VoxtralTTSAudioTokenizer` (vllm_omni/model_executor/models/voxtral_tts/
-voxtral_tts_audio_tokenizer.py). See ../reference/PROVENANCE.md.
-
-BLOCK BOUNDARY:
-
-    codes [B, 37, T]  (12.5 Hz frames, as emitted by Block 2, WITHOUT the special-token offset)
-      -> quantizer.decode : semantic lookup (256D) ++ acoustic FSQ rescale (36D) = [B, 292, T]
-      -> decoder_blocks.0 : CausalConv1d(292->1024, k3, s1, replicate)
-      -> blocks 1/3/5/7   : Transformer(2 layers) at sliding windows 2 / 4 / 8 / 16
-      -> blocks 2/4/6     : CausalConvTranspose1d(1024->1024, k4, s2)   = 8x upsample -> 100 Hz
-      -> output_proj      : CausalConv1d(1024->240, k7, reflect)
-      -> unpatch [B,240,T'] -> [B, 1, T'*240]                           = waveform @ 24 kHz
-
-WHY THE ENCODER IS NOT HERE: the released checkpoint ships ZERO encoder tensors (no
-`input_proj.*`, no `encoder_blocks.*` — verified against the 386-tensor manifest). Upstream
-raises `RuntimeError: encode_waveforms requires encoder weights which are not available in the
-open-source checkpoint.` So cloning a voice from arbitrary reference audio is IMPOSSIBLE with
-public weights; only the 20 shipped `voice_embedding/*.pt` presets work. There is nothing to
-port and nothing to validate on the encoder side.
-
-DETAILS THAT WILL BITE A TTNN PORT:
-  * norm_eps is 1e-2 for the codec's RMSNorms (params.json "norm_eps": 0.01) — three orders
-    off the usual 1e-5, and load-bearing.
-  * q_norm / k_norm are RMSNorm over the FULL 1024-wide projection, applied BEFORE the head
-    split — not per-head.
-  * LayerScale: each residual branch is scaled by a learned [1024] vector (init 0.01).
-  * ALiBi bias slope*(j-i), plus causal mask, plus a sliding window that DOUBLES per upsample
-    stage (2, 4, 8, 16). All three collapse into one additive pre-softmax bias.
-  * Causal convs left-pad by (k-1) with reflect/replicate, never centre-pad; the transposed
-    convs trim (k-stride) samples off the RIGHT.
-  * weight_norm is stored as a parametrization (original0=g, original1=v) and folded at dim=0
-    for both Conv1d [out,in,k] and ConvTranspose1d [in,out,k].
+`VoxtralTTSAudioTokenizer`; see VOXTRAL_TTS_PROVENANCE.md. The encoder is absent from the
+released checkpoint. Block boundary and port details: see VOXTRAL_TTS_CODEC.md [codec-27].
 
 Run (regenerates goldens; needs the checkpoint — only ~0.6 GB of it is read):
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_codec_ref.py
@@ -90,11 +60,8 @@ PREFIX = "audio_tokenizer."
 def decoder_window_sizes():
     """Sliding-window size per decoder transformer stage -> (2, 4, 8, 16).
 
-    Derived rather than hard-coded because the derivation is the surprising part: upstream
-    threads ONE `cur_window_size` variable through encoder construction and then decoder
-    construction. The encoder halves it on each of its three stride-2 downsamples
-    (16 -> 8 -> 4 -> 2), and the decoder inherits the final value (2) and DOUBLES it after each
-    stride-2 upsample. So the decoder's first stage runs the narrowest window, not the widest."""
+    Derived from upstream's encoder-then-decoder window threading, so stage 0 is the NARROWEST.
+    see VOXTRAL_TTS_CODEC.md [codec-28]"""
     w = CODEC_ATTN_WINDOW
     for s in (2, 2, 2, 1):  # encoder strides, in order
         if s > 1:
@@ -134,7 +101,7 @@ def quantizer_decode(codes, w):
     """codes [B, 37, T] ints (NO special-token offset) -> latents [B, 292, T].
 
     Semantic: a table lookup. Acoustic: pure arithmetic (FSQ has no parameters) —
-    code -> code*2/(levels-1) - 1, the exact inverse of Block 2's quantization."""
+    code -> code*2/(levels-1) - 1, the exact inverse of the flow model's quantization."""
     sem = F.embedding(codes[:, 0, :], w["semantic_embedding"])  # [B, T, 256]
     sem = sem.permute(0, 2, 1)  # [B, 256, T]
     ac = codes[:, 1:, :].to(torch.float32) * 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1) - 1.0  # [B, 36, T]
@@ -242,7 +209,8 @@ def reference_decode(codes, w):
     windows = decoder_window_sizes()
     for stage, (tf_idx, n_layers) in enumerate(zip(DEC_TF_BLOCKS, DEC_TF_LENGTHS)):
         x = codec_transformer(x.permute(0, 2, 1), w, tf_idx, n_layers, windows[stage]).permute(0, 2, 1)
-        if stage < len(DEC_CONV_BLOCKS) - 1:  # blocks 2, 4, 6 — one upsample after each of the first 3
+        # decoder blocks 2, 4, 6: one upsample after each of the first three stages
+        if stage < len(DEC_CONV_BLOCKS) - 1:
             ci = DEC_CONV_BLOCKS[stage + 1]
             x = causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"],
                                         DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1])
@@ -252,7 +220,7 @@ def reference_decode(codes, w):
 
 
 def strip_offset_and_trim(codes):
-    """Turn Block 2's emitted frames [T, 37] into the decoder's input [1, 37, T'].
+    """Turn the flow model's emitted frames [T, 37] into the decoder's input [1, 37, T'].
 
     Mirrors upstream decode_helper_batch_async: cut at the first [END_AUDIO] in codebook 0,
     then subtract the special-token offset."""
@@ -294,7 +262,7 @@ def main():
           f"(peak {wav.abs().max():.4f}); upsample {wav.shape[-1] // args.n_frames}x per frame")
     assert wav.shape[-1] == args.n_frames * PATCH_SIZE * 8, "expected 240*8 = 1920 samples/frame"
 
-    # FSQ round-trip: quantizer_decode must invert Block 2's quantization exactly.
+    # FSQ round-trip: quantizer_decode must invert the flow model's quantization exactly.
     lvl = ACOUSTIC_CODEBOOK_SIZE
     probe = torch.arange(lvl).view(1, 1, lvl).expand(1, NUM_CODEBOOKS - 1, lvl)
     rt = probe.to(torch.float32) * 2.0 / (lvl - 1) - 1.0

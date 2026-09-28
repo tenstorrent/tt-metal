@@ -1,9 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN port of the Voxtral-TTS flow-matching acoustic transformer (BLOCK 2, 390M).
+"""TTNN port of the Voxtral-TTS flow-matching acoustic transformer (FLOW MODEL, 390M).
 
-See NOTES.md [flow-01].
+Mirrors reference/voxtral_flow_ref.py op for op. Per frame: h [B,3072] -> semantic code [B,1]
+(device fp32 matmul, host mask + argmax) and 36 acoustic codes from an Euler solve of a 3-layer
+bidirectional transformer over a 3-token sequence, CFG batched to 2B. Design notes and the
+measurements behind them: VOXTRAL_TTS_FLOW.md, "Code notes" ([flow-01] for the overview).
+
+    pytest models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py   # on device
 """
 
 import torch
@@ -15,8 +20,8 @@ from models.experimental.voxtral_tts.reference.voxtral_flow_ref import (
     time_embedding,
 )
 
-# Block 2 has Block 1's dims exactly, so the decode matmul program configs are shared rather
-# than duplicated -- NOTES.md [flow-23]. gpt does not import flow, so this cannot cycle.
+# Same dims as the backbone, so the decode matmul program configs are shared (gpt does not import
+# flow, so no cycle). see VOXTRAL_TTS_FLOW.md [flow-23]
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import DECODE_PRG, sharded_norm
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     DEFAULT_CKPT,
@@ -36,28 +41,24 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
-# Fused q++k++v width, GQA-aware. The sub-widths are _split_heads' slice offsets, and every
-# boundary is a multiple of 32, so all three slices land on tile boundaries -- NOTES.md [flow-10].
+# Fused q++k++v width. The sub-widths are _split_heads' slice offsets, all tile-aligned.
+# see VOXTRAL_TTS_FLOW.md [flow-10]
 _Q_WIDTH = FM_N_HEADS * FM_HEAD_DIM
 _KV_WIDTH = FM_N_KV_HEADS * FM_HEAD_DIM
 _QKV_WIDTH = _Q_WIDTH + 2 * _KV_WIDTH
 
-# NOTES.md [flow-02] -- EVERY INTERMEDIATE INSIDE `_block` LIVES IN L1, not DRAM...
+# Every intermediate inside _block lives in L1. see VOXTRAL_TTS_FLOW.md [flow-02]
 _L1 = ttnn.L1_MEMORY_CONFIG
 
 
 def _split_heads(qkv, B):
-    """[1,B*3,6144] -> q [B,32,3,128], k/v [B,8,3,128]. NOTES.md [flow-10].
-
-    Nine ops, not the fused `nlp_create_qkv_heads`: traced, that op costs 90.5 us against this
-    form's 48.6, worth -0.775 ms/frame BIT-EXACT. STATUS.md 6.72.
-    """
+    """[1,B*3,6144] -> q [B,32,3,128], k/v [B,8,3,128], by slice/reshape/permute rather than the
+    fused `nlp_create_qkv_heads`. see VOXTRAL_TTS_FLOW.md [flow-10]"""
     t = ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH])
 
     def take(lo, hi, nh):
-        # memory_config IS LOAD-BEARING on both. Dropping it lands q/k/v in DRAM, which measures
-        # 58.2 us/split against 48.6 -- and 6.31 is the session that read a head-split A/B wrong
-        # by comparing default-mc slices against a fused op given L1.
+        # memory_config=_L1 on both is load-bearing: without it q/k/v land in DRAM.
+        # see VOXTRAL_TTS_FLOW.md [flow-10]
         s = ttnn.slice(t, [0, 0, 0, lo], [B, 1, 3, hi], memory_config=_L1)
         return ttnn.permute(ttnn.reshape(s, [B, 3, nh, FM_HEAD_DIM]), (0, 2, 1, 3),
                             memory_config=_L1)
@@ -66,26 +67,26 @@ def _split_heads(qkv, B):
             take(_Q_WIDTH, _Q_WIDTH + _KV_WIDTH, FM_N_KV_HEADS),
             take(_Q_WIDTH + _KV_WIDTH, _QKV_WIDTH, FM_N_KV_HEADS))
 
-# NOTES.md [flow-03] -- Math fidelity for the VELOCITY NETWORK...
+# HiFi4 + fp32 accumulation for the velocity network. see VOXTRAL_TTS_FLOW.md [flow-03]
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
-# NOTES.md [flow-04] -- Activation dtype. Every ttnn op here inherits its input's...
+# Activation dtype; every op inherits it from its input. see VOXTRAL_TTS_FLOW.md [flow-04]
 DTYPE = ttnn.bfloat16
 
-# NOTES.md [flow-05] -- MATMUL weight storage, independent of the activation...
+# Matmul weight storage, independent of the activation dtype. see VOXTRAL_TTS_FLOW.md [flow-05]
 WEIGHT_DTYPE = ttnn.bfloat8_b
 
-# NOTES.md [flow-06] -- The SEMANTIC head is the one thing here that is not...
+# The semantic head emits an index, so it stays fp32. see VOXTRAL_TTS_FLOW.md [flow-06]
 SEMANTIC_DTYPE = ttnn.float32
 
-# The norm IS width-sharded -- _norm below calls Block 1's shared `sharded_norm`. NOTES.md
-# [gpt-28] / STATUS.md 6.67 is the current answer; [flow-07] is the superseded N150 record.
+# The norm is width-sharded: _norm calls the backbone's shared `sharded_norm`.
+# see VOXTRAL_TTS_FLOW.md [flow-07]
 
 
 class TtVoxtralFlow:
-    """Block 2 on device. __call__(h) -> audio_codes torch [B,37] int64."""
+    """The flow model on device. __call__(h) -> audio_codes torch [B,37] int64."""
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT):
         self.device = device
@@ -97,18 +98,18 @@ class TtVoxtralFlow:
 
         up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
                                          device=device)
-        # RMSNorm gammas stay at the ACTIVATION dtype: 3072 values is no bandwidth, and a per-block
-        # shared exponent is a poor fit for a 1-D scale vector. Only matmuls take WEIGHT_DTYPE.
+        # RMSNorm gammas stay at the activation dtype; only matmul weights take WEIGHT_DTYPE.
+        # see VOXTRAL_TTS_FLOW.md [flow-24]
         vec = lambda t: up(t.reshape(1, 1, -1), DTYPE)
         lin = lambda t: up(t.t(), WEIGHT_DTYPE)  # torch [out,in] -> ttnn.linear wants [in,out]
 
-        # NOTES.md [flow-08] -- SEMANTIC HEAD, ON DEVICE AND IN FP32...
+        # Semantic head: device matmul in fp32. see VOXTRAL_TTS_FLOW.md [flow-08]
         self.semantic_dev = up(w["semantic_codebook_output.weight"].float().t(), SEMANTIC_DTYPE)
         _vocab = w["semantic_codebook_output.weight"].shape[0]
         _mask = torch.zeros(1, 1, _vocab)
         _mask[:, :, EMPTY_AUDIO_ID] = -1e9
         _mask[:, :, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -1e9
-        # HOST, not device -- the mask add and the reduce both moved off chip, NOTES.md [flow-08a].
+        # The mask add and the argmax run on the host. see VOXTRAL_TTS_FLOW.md [flow-08a]
         self.semantic_mask_host = _mask.reshape(-1).float()
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
@@ -121,7 +122,8 @@ class TtVoxtralFlow:
             self.layers.append({
                 "an": vec(w[p + "attention_norm.weight"]),
                 "fn": vec(w[p + "ffn_norm.weight"]),
-                # NOTES.md [flow-09] -- q, k and v fused into ONE weight -> one matmul instead of...
+                # q, k, v fused into one weight, SCALE folded into the q rows.
+                # see VOXTRAL_TTS_FLOW.md [flow-09]
                 "wqkv": lin(torch.cat([w[p + "attention.wq.weight"] * SCALE,
                                        w[p + "attention.wk.weight"],
                                        w[p + "attention.wv.weight"]], dim=0)),
@@ -135,34 +137,31 @@ class TtVoxtralFlow:
     # One bidirectional block over the 3-token sequence
     # ----------------------------------------------------------------------------------
     def _norm(self, x, gamma):
-        """RMSNorm, width-sharded on the decode path -- NOTES.md [flow-07], [gpt-28]."""
+        """RMSNorm, width-sharded. see VOXTRAL_TTS_FLOW.md [flow-07]"""
         return sharded_norm(x, gamma, FM_NORM_EPS, _L1)
 
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
         h = self._norm(x, w["an"])
-        # q, k and v share one weight and one matmul -- see NOTES.md [flow-09] for the fusion.
-        # NOTES.md [flow-23] -- same dims as Block 1, one tile of rows, so its configs apply
+        # q, k and v in one matmul, on the backbone's program config.
+        # see VOXTRAL_TTS_FLOW.md [flow-09], [flow-23]
         qkv = ttnn.linear(h, w["wqkv"], program_config=DECODE_PRG["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
-        # NOTES.md [flow-10] -- HAND-ROLLED 9-op split. 6.45 replaced it with the fused op on the
-        # grounds that ops cost 67.7 us each; 6.65 traced that launch cost away, and traced the
-        # fused op is 90.5 us against nine ops' 48.6. -0.775 ms/frame, bit-exact. 6.72.
+        # hand-rolled head split. see VOXTRAL_TTS_FLOW.md [flow-10]
         qh, kh, vh = _split_heads(qkv, B)
-        # NOTES.md [flow-11] -- sdpa for the interior: 4 ops -> 1, worth 2.555 ms/frame. It handles
-        # GQA natively, so the row fold and REP are unnecessary. scale=1.0 IS MANDATORY -- SCALE is
-        # folded into wqkv's q rows ([flow-09]), and the default would apply 1/sqrt(d) twice.
+        # sdpa handles GQA natively. scale=1.0 is mandatory: SCALE is already folded into wqkv's
+        # q rows. see VOXTRAL_TTS_FLOW.md [flow-11]
         a = ttnn.transformer.scaled_dot_product_attention(
             qh, kh, vh, is_causal=False, scale=1.0, compute_kernel_config=COMPUTE_CONFIG)
         # back to folded rows so wo and the MLP get the single-weight-read layout too
         a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
-        # NOTES.md [flow-22] -- in place. Only safe because the residual stream is born in L1
-        # in _trunk: add_ writes where x already lives, so a DRAM x would silently undo
-        # [flow-02]'s L1 residency and move a code. STATUS.md 6.48.
+        # In place; safe only because _trunk puts the residual stream in L1.
+        # see VOXTRAL_TTS_FLOW.md [flow-22]
         x = ttnn.add_(x, ttnn.linear(a, w["wo"], program_config=DECODE_PRG["wo"],
                                      compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1))
         h = self._norm(x, w["fn"])
-        # NOTES.md [flow-12] -- SiLU fuses only via the program config, never activation="silu"
+        # SiLU is fused by DECODE_PRG["w1"], not by an activation kwarg.
+        # see VOXTRAL_TTS_FLOW.md [flow-12]
         g = ttnn.linear(h, w["w1"], program_config=DECODE_PRG["w1"],
                         compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], program_config=DECODE_PRG["w3"],
@@ -179,17 +178,17 @@ class TtVoxtralFlow:
     def _trunk(self, p0, p1, p2, B):
         """three [B,1,3072] projections -> velocity [B,1,36]. The 3-token sequence, reference order.
 
-        B is the CFG-doubled batch; the caller supplies [B,1,3072]. See NOTES.md [flow-19].
+        B is the CFG-doubled batch. see VOXTRAL_TTS_FLOW.md [flow-19]
         """
-        # memory_config is load-bearing, not tidiness: it puts the RESIDUAL STREAM in L1 so
-        # _block's add_ inherits it. Drop it and in-place silently reverts [flow-02]. [flow-22].
+        # memory_config is load-bearing: it puts the residual stream in L1 for _block's add_.
+        # see VOXTRAL_TTS_FLOW.md [flow-22]
         seq = ttnn.concat([p0, p1, p2], dim=1, memory_config=_L1)
-        # NOTES.md [flow-13] -- FOLD THE CFG BATCH INTO ROWS -- worth 2.23x...
+        # Fold the CFG batch into rows. see VOXTRAL_TTS_FLOW.md [flow-13]
         seq = ttnn.reshape(seq, [1, B * 3, FM_INPUT_DIM])
         for w in self.layers:
             seq = self._block(seq, w, B)
         seq = self._norm(seq, self.norm)
-        # NOTES.md [flow-14] -- PROJECT FIRST, THEN NARROW -- worth 1.09 ms/frame...
+        # Project all rows first, then narrow to position 0. see VOXTRAL_TTS_FLOW.md [flow-14]
         out = ttnn.linear(seq, self.proj["acoustic_codebook_output"],
                           compute_kernel_config=COMPUTE_CONFIG)
         out = ttnn.reshape(out, [B, 3, N_ACOUSTIC_CODEBOOK])
@@ -198,7 +197,7 @@ class TtVoxtralFlow:
     def _cfg_input(self, B, llm_hidden):
         """-> [2B, 3072] = llm_hidden (cond) over zeros (uncond), in a buffer reused per batch.
 
-        See NOTES.md [flow-15].
+        see VOXTRAL_TTS_FLOW.md [flow-15]
         """
         buf = self._cfgbuf.get(B)
         if buf is None:
@@ -209,7 +208,7 @@ class TtVoxtralFlow:
     def _schedule(self, B, n_steps):
         """-> (time-conditioning tokens on device, per-step dt). Built once per (batch, n_steps).
 
-        See NOTES.md [flow-16].
+        see VOXTRAL_TTS_FLOW.md [flow-16]
         """
         key = (B, n_steps)
         if key not in self._sched:
@@ -228,10 +227,9 @@ class TtVoxtralFlow:
         return self._sched[key]
 
     def _predict_velocity(self, x_t, llm_h, t_emb):
-        """torch [B,36], [B,3072], [B,64] -> velocity torch [B,36]. Position 0 only.
+        """torch [B,36], [B,3072], [B,3072] -> velocity torch [B,36]. Position 0 only.
 
-        Kept as a torch-in/torch-out entry point for the reference comparison in main(); the Euler
-        solve in decode_frame does NOT go through it, because it keeps everything on device."""
+        Torch-in/torch-out entry point for the PCC tests; the solve in decode_frame bypasses it."""
         B = x_t.shape[0]
         p0 = ttnn.linear(self._up(x_t), self.proj["input_projection"],
                          compute_kernel_config=COMPUTE_CONFIG)
@@ -248,7 +246,7 @@ class TtVoxtralFlow:
     # ----------------------------------------------------------------------------------
     def semantic_code(self, llm_hidden):
         """h [B,3072] -> [B,1]. Greedy argmax: the fp32 matmul on device, the mask and the reduce
-        on the HOST. See NOTES.md [flow-08a].
+        on the host. see VOXTRAL_TTS_FLOW.md [flow-08a]
         """
         B = llm_hidden.shape[0]
         h = ttnn.from_torch(llm_hidden.reshape(1, B, -1).float().contiguous(),
@@ -260,10 +258,10 @@ class TtVoxtralFlow:
     def _solve(self, x, h, B, n_steps, cfg_alpha):
         """(x0 fp32 [B,1,36], cond++uncond [2B,3072]) -> x fp32 [B,1,36]. PURE DEVICE GRAPH.
 
-        See NOTES.md [flow-17].
+        No host ops in here, so it stays traceable. see VOXTRAL_TTS_FLOW.md [flow-17]
         """
         B2 = 2 * B
-        # NOTES.md [flow-21] -- project AND reshape p2 once per frame, not once per step...
+        # project and reshape p2 once per frame, not per step. see VOXTRAL_TTS_FLOW.md [flow-21]
         p2 = ttnn.reshape(ttnn.linear(h, self.proj["llm_projection"],
                                       compute_kernel_config=COMPUTE_CONFIG),
                           [B2, 1, FM_INPUT_DIM])
@@ -286,7 +284,7 @@ class TtVoxtralFlow:
                      n_steps=N_DECODING_STEPS, x_0=None):
         """[B,1], [B,3072] -> acoustic codes [B,36] int64, offset applied.
 
-        See NOTES.md [flow-18].
+        Solver state and the CFG combine stay fp32. see VOXTRAL_TTS_FLOW.md [flow-18]
         """
         B = sem_code.shape[0]
         should = (sem_code != END_AUDIO_ID).reshape(B)
