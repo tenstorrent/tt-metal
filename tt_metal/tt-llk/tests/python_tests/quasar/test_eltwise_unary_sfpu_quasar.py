@@ -414,10 +414,10 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Softplus:
-        # Span both signs and past the linear threshold (20) so the kernel's polynomial region, the
-        # negative saturation region, and the linear passthrough (t > threshold -> softplus ~= x) are
-        # all covered (mirrors sfpu_domains' Softplus spec).
-        min_val = -8.0
+        # Span the negative tail (t < -5, toward the bf16 floor), both signs, and past the
+        # linear threshold (20). -80 keeps exp(-|x|) a normal fp32 so the golden does not
+        # underflow ahead of bf16 (mirrors sfpu_domains' Softplus spec).
+        min_val = -80.0
         max_val = 30.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
@@ -1078,7 +1078,7 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     so both the input and the output permutation are load-bearing: an untilized row-major
     reading of Dest cannot satisfy this oracle.
     """
-    (formats, dest_acc) = cumsum_formats_dest_acc[0]
+    formats, dest_acc = cumsum_formats_dest_acc[0]
 
     input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     src_A = _cumsum_detector_stimulus().to(format_dict[formats.input_format])

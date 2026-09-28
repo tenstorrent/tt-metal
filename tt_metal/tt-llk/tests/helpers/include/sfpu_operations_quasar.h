@@ -45,9 +45,9 @@
 // 2. Add the enumerator to ckernel::BinaryOp (tt_llk_quasar/common/inc/ckernel_defs.h) if it is not there.
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
-#include "llk_sfpu/ckernel_sfpu_add.h"            // calculate_add_int (int add)
-#include "llk_sfpu/ckernel_sfpu_atan2.h"          // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
-#include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_add.h"              // calculate_add_int (int add)
+#include "llk_sfpu/ckernel_sfpu_atan2.h"            // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
+#include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
@@ -132,6 +132,12 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
         cumsum_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        // Loads vConstFloatPrgm0/1/2 for the bf16 path. The fp32-dest instantiation
+        // leaves them untouched.
+        softplus_init<is_fp32_dest_acc_en>();
     }
 }
 
