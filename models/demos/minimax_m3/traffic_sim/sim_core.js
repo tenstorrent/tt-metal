@@ -305,7 +305,7 @@
     slotLen: M3.maxCtx, unaligned: false, copyOverlap: true, copyContention: 0.25,
     hostTier: false, hostGBPerGalaxy: 1024, pcieGBsPerGalaxy: 64,
     reserveGB: 3, expertImb: IMB0, maxInflight: 0,
-    concurrency: 64, decodeTps: 60, duration: 1800, seed: 1, idleCap: 10, startMin: 0, startMax: 1, maxWarmup: 1e6,
+    concurrency: 64, decodeTps: 180, duration: 1800, seed: 1, idleCap: 10, startMin: 0, startMax: 1, maxWarmup: 1e6,
     gapCap: Infinity,      // AgentX forbids capping recorded idle gaps (only the 10 s system-idle cap applies)
     srptMaxWait: 30,
   };
@@ -426,7 +426,7 @@
     } else if (cfg.cache === 'paging') poolTok = capTok;
     else poolTok = Infinity;
     if (cfg.cache === 'slots' && nSlots < 1) errors.push('no 1M slot fits in memory');
-    const hostTok = cfg.hostTier && cfg.cache === 'pool' ? cfg.hostGBPerGalaxy * GB * (cfg.galaxies / cfg.replicas) / (M3.L * kvbL) : 0;
+    const hostTok = cfg.hostTier && (cfg.cache === 'pool' || cfg.cache === 'paging') ? cfg.hostGBPerGalaxy * GB * (cfg.galaxies / cfg.replicas) / (M3.L * kvbL) : 0;
     const gran = 32 * sp;
     return {
       cfg, sp, tp, P, S, counts, stages, eff, lat, layer, stageOv, embedMs, blockMs, hopMs, errors,

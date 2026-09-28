@@ -116,7 +116,7 @@ async function main() {
       ['inf cache', { cache: 'inf', hostTier: false }], ['seed 2', { seed: 2 }], ['seed 3', { seed: 3 }],
       ['host 0.5 TB/gx', { hostGBPerGalaxy: 512 }], ['host 2 TB/gx', { hostGBPerGalaxy: 2048 }],
       ['PCIe 16 GB/s/gx', { pcieGBsPerGalaxy: 16 }], ['PCIe 256 GB/s/gx', { pcieGBsPerGalaxy: 256 }],
-      ['decode 30 tok/s', { decodeTps: 30 }], ['decode 120 tok/s', { decodeTps: 120 }],
+      ['decode 90 tok/s', { decodeTps: 90 }], ['decode 360 tok/s', { decodeTps: 360 }],
       ['reserve 6 GB/chip', { reserveGB: 6 }], ['SLO-free peak', {}],
       ['TP=4 mesh only', sc.base.galaxies === 4 ? { mesh: [2, 4], stages: 16 } : { mesh: [2, 4], stages: 32 }],
     ];

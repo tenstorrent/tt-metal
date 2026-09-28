@@ -22,6 +22,7 @@ function parseArgs(argv) {
     const k = argv[i];
     if (k === '--data') a.data = argv[++i];
     else if (k === '--preset') a.preset = argv[++i];
+    else if (k === '--study-preset') a.studyPreset = argv[++i]; // e.g. g4_k0 -> best grid config of that scenario
     else if (k === '--conc') a.conc = argv[++i].split(',').map(Number);
     else if (k === '--json') a.json = true;
     else if (k === '--set') { const [key, ...v] = argv[++i].split('='); const s = v.join('='); try { a.set[key] = JSON.parse(s); } catch (e) { a.set[key] = s; } }
@@ -38,7 +39,13 @@ function fmt(r) {
 if (require.main === module) {
   const a = parseArgs(process.argv);
   const { TR, cal } = loadAll(a.data);
-  const base = Object.assign({}, a.preset ? PRESETS.byName(a.preset).cfg : {}, a.set);
+  let sp = {};
+  if (a.studyPreset) {
+    const { withFeatures } = require('./study.js');
+    const R = JSON.parse(fs.readFileSync('/data/philei/m3_traffic_sim/results/study.json')).scenarios[a.studyPreset];
+    sp = Object.assign(withFeatures(R.base, R.bestKeys), R.grid[0].extra);
+  }
+  const base = Object.assign({}, a.preset ? PRESETS.byName(a.preset).cfg : {}, sp, a.set);
   const concs = a.conc || [base.concurrency || SIM.DEFAULTS.concurrency];
   const plan = SIM.planSummary(SIM.makePlan(base, cal));
   if (!a.json) console.log('plan', JSON.stringify(plan));

@@ -137,6 +137,7 @@ table.prio tr.fdetail > td { background: var(--surface-2); padding: 12px 14px; }
 .prose { display: flex; flex-direction: column; gap: 10px; max-width: 80ch; }
 .prose ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .callout { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; }
+.callout.bad { border-left-color: var(--bad); background: var(--bad-soft); color: var(--ink); margin-bottom: 10px; }
 details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -187,6 +188,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
     <legend>Chunking &amp; batching</legend>
     <div class="row"><label for="layout">KV layout</label><select id="layout"><option value="fixed">fixed chunk (block-cyclic)</option><option value="var">variable chunk (a2a KV write)</option></select></div>
     <div class="row"><label for="chunk">Chunk size</label><select id="chunk"><option>1024</option><option>2048</option><option>4096</option><option>5120</option><option>8192</option></select></div>
+    <div class="hint" id="chunkHint" hidden>Not used: with batching on a variable layout, the token budget below is the chunk size.</div>
     <div class="row check"><input id="batch" type="checkbox"><label for="batch">Batch several requests per chunk</label></div>
     <div class="row"><label for="budget">Token budget</label><select id="budget"><option>4096</option><option>8192</option><option>16384</option><option>32768</option></select></div>
     <div class="row"><label for="attn">Attention</label><select id="attn"><option value="seq">sequential per request</option><option value="fused">fused multi-user</option></select></div>
@@ -227,6 +229,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <h2 id="resTitle">Results</h2>
       <div class="status"><span id="statusTxt">Loading traffic…</span><div class="prog" style="width:120px"><span id="progBar"></span></div></div>
     </div>
+    <div class="callout bad" id="cfgErr" hidden></div>
     <div class="tiles" id="tiles"></div>
   </div>
   <div class="panel">
@@ -384,7 +387,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <li><b>Primers and warmup.</b> Every conversation active at t* first re-sends its last request before t* as a primer: a full prefill with max_tokens=1. That warms the cache the way the benchmark does. Measurement starts when all primers are done.</li>
       <li><b>Think time.</b> Each next request waits for its predecessor to end, then for the recorded gap: <span class="mono">max(0, t<sub>k</sub> − t<sub>k−1</sub> − api_time<sub>k−1</sub>)</span>. The gaps are <b>not capped</b>, as AgentX requires. Main-agent gaps have a median of 4.9 s but a mean of 395 s (p99 54 min), because humans think and tools run. The only cap is AIPerf's rule that if the whole system is idle, the next request fires within 10 s.</li>
       <li><b>Sub-agents.</b> A sub-agent starts when the main-agent turn that spawned it returns. The main agent's next dependent turn fires as soon as the last sub-agent in its group finishes.</li>
-      <li><b>End of a request.</b> Prefill finishes, then decode runs for the recorded output length at a fixed decode speed (default 60 tok/s). The output's KV is not reused: the benchmark sends synthetic assistant text in the next turn, which is prefilled like any other new text.</li>
+      <li><b>End of a request.</b> Prefill finishes, then decode runs for the recorded output length at a fixed decode speed (default 180 tok/s). The output's KV is not reused: the benchmark sends synthetic assistant text in the next turn, which is prefilled like any other new text.</li>
       <li><b>Recycle.</b> When a session's whole tree is finished, the lane moves to the next session in the corpus and starts at turn 0 with a fresh cache-bust marker, so different lanes never share cache.</li>
       <li><b>Window.</b> 1800 s of profiling (the AgentX default). Goodput counts requests whose prefill ends inside the window.</li>
     </ul>
@@ -443,7 +446,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
           <li><b>AgentX cap.</b> The methodology caps host DRAM at 3 TB per system, except for a few standard rack systems, and a configuration may use only the share of host DRAM proportional to its accelerator allocation. A compliant submission may therefore have less than the default (4 TB at 4 galaxies). The sensitivity table shows 0.5 and 2 TB per galaxy.</li>
         </ul>
       </li>
-      <li><b>Full paging (ideal).</b> Kernels read paged KV directly: no lanes, no copies.</li>
+      <li><b>Full paging (ideal).</b> Kernels read paged KV directly: no lanes, no copies. It can have the host-DRAM tier behind it, like the pool; compare paging and pool with the same host setting.</li>
       <li><b>Infinite cache.</b> Nothing is ever evicted.</li>
     </ul>
 
@@ -467,7 +470,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
     <ul>
       <li><b>Slot lanes + paged pool:</b> replaces static slots (see KV cache): 4 fixed 1M lanes per stage.</li>
       <li><b>Variable-size lanes (arena):</b> lanes allocated at the request's actual length from a contiguous arena (2-8M tokens) instead of 1M each.</li>
-      <li><b>Host-DRAM KV tier:</b> see KV cache. It requires the pool.</li>
+      <li><b>Host-DRAM KV tier:</b> see KV cache. It requires the paged pool or full paging.</li>
       <li><b>Bounded dense gather:</b> the dense layers' ring-joint attention scans only the valid prefix <span class="mono">[0, kv_len)</span> instead of the whole lane capacity. The MSA layers already do this. Request-sized lanes (arena) remove the same cost, so the two are substitutes.</li>
       <li><b>index_k stored once:</b> the index-key cache is kept on one TP column instead of all four, and gathered when needed. This cuts KV size from 2112 to 1344 B per token per layer.</li>
       <li><b>index_k bf8:</b> the index-key cache in bf8 instead of bf16. It is the runner's default dtype, but the measured runs used bf16, and it needs an accuracy check.</li>
@@ -499,7 +502,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
           <li>other seeds (about ±5% noise);</li>
           <li>0.5 or 2 TB host RAM per galaxy;</li>
           <li>16 or 256 GB/s PCIe per galaxy;</li>
-          <li>decode at 30 or 120 tok/s;</li>
+          <li>decode at 90 or 360 tok/s;</li>
           <li>a 6 GB reserve per chip;</li>
           <li>a TP=4-only mesh.</li>
         </ul>
@@ -641,12 +644,27 @@ function getCfg() {
 function syncUi() {
   $('opEffV').textContent = Number($('opEff').value).toFixed(1);
   $('splitRow').hidden = $('split').value !== 'custom';
-  const pool = $('cache').value === 'pool';
-  for (const id of ['lanes', 'laneArena', 'hostTier', 'hostGBPerGalaxy', 'pcieGBsPerGalaxy']) $(id).disabled = !pool;
+  const pool = $('cache').value === 'pool', paged = pool || $('cache').value === 'paging';
+  for (const id of ['lanes', 'laneArena']) $(id).disabled = !pool;
+  for (const id of ['hostTier', 'hostGBPerGalaxy', 'pcieGBsPerGalaxy']) $(id).disabled = !paged;
   $('arenaTokens').disabled = !pool || !$('laneArena').checked;
   $('lanes').disabled = !pool || $('laneArena').checked;
   $('budget').disabled = !$('batch').checked; $('attn').disabled = !$('batch').checked;
   $('unaligned').disabled = $('layout').value === 'var';
+  // with batching on a variable layout the token budget is the chunk size; the chunk field is unused
+  const chunkUnused = $('batch').checked && $('layout').value === 'var';
+  $('chunk').disabled = chunkUnused; $('chunkHint').hidden = !chunkUnused;
+}
+// keep the pipeline valid when the hardware changes: fill each replica with stages, and drop a custom split
+// whose length no longer matches the stage count
+function fitStages(changed) {
+  const gal = Number($('galaxies').value), rep = Number($('replicas').value);
+  const [sp, tp] = $('mesh').value.split('x').map(Number);
+  if (changed !== 'stages') $('stages').value = String(Math.max(1, Math.floor(32 * gal / rep / (sp * tp))));
+  if ($('split').value === 'custom') {
+    const n = $('splitCustom').value.split(',').filter((x) => x.trim()).length;
+    if (n !== Number($('stages').value)) $('split').value = 'auto';
+  }
 }
 function presetOptions() {
   const sel = $('preset');
@@ -656,6 +674,7 @@ function presetOptions() {
 document.querySelector('aside.rail').addEventListener('input', (e) => {
   if (e.target.id === 'preset') return;
   if (FIELDS.includes(e.target.id) || e.target.id === 'splitCustom') { $('preset').value = '-1'; $('presetDesc').textContent = 'Custom configuration.'; }
+  if (['galaxies', 'replicas', 'mesh', 'stages'].includes(e.target.id)) fitStages(e.target.id);
   syncUi(); updatePlan();
 });
 
@@ -663,7 +682,14 @@ document.querySelector('aside.rail').addEventListener('input', (e) => {
 function updatePlan() {
   const cfg = getCfg();
   let plan;
-  try { plan = SIM.makePlan(cfg, CAL); } catch (e) { $('planNote').textContent = String(e); return; }
+  try { plan = SIM.makePlan(cfg, CAL); } catch (e) { plan = { errors: [String(e)] }; }
+  const fatal = plan.errors.filter((x) => !x.startsWith('no profile'));
+  $('cfgErr').hidden = !fatal.length; $('runBtn').disabled = !!fatal.length || $('runBtn').dataset.busy === '1';
+  if (fatal.length) {
+    $('cfgErr').innerHTML = `<b>This configuration cannot run:</b> ${esc(fatal.join('; '))}. Adjust galaxies, replicas, mesh or stages (stages × chips per stage must fit in 32 × galaxies / replicas chips), or set the layer split to auto.`;
+    $('planKv').innerHTML = ''; $('planStages').innerHTML = ''; $('planNote').textContent = '';
+    return;
+  }
   const T = cfg.batch ? cfg.budget : cfg.chunk;
   const kv = 140000;
   const o = new Float64Array(plan.S);
@@ -799,7 +825,7 @@ function startRun() {
   run = { name, cfg, real: [], inf: [] };
   const jobs = [{ id: 'real', cfg }];
   if ($('compareInf').checked && cfg.cache !== 'inf') jobs.push({ id: 'inf', cfg: Object.assign({}, cfg, { cache: 'inf', hostTier: false }) });
-  $('runBtn').disabled = true; $('pinBtn').disabled = true;
+  $('runBtn').disabled = true; $('runBtn').dataset.busy = '1'; $('pinBtn').disabled = true;
   let pending = jobs.length; const total = concs.length * jobs.length; let got = 0; const t0 = performance.now();
   $('statusTxt').textContent = 'Simulating…'; $('progBar').style.width = '0%';
   $('resTitle').textContent = 'Results: ' + name;
@@ -808,7 +834,7 @@ function startRun() {
     w.onmessage = (e) => {
       const m = e.data; if (m.ready) return;
       if (m.point) { run[m.id].push(m.point); got++; $('progBar').style.width = (100 * got / total) + '%'; render(); }
-      if (m.done) { if (--pending === 0) { $('runBtn').disabled = false; $('pinBtn').disabled = false; $('progBar').style.width = '100%'; $('statusTxt').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(1)} s`; render(); } }
+      if (m.done) { if (--pending === 0) { $('runBtn').dataset.busy = '0'; $('runBtn').disabled = false; $('pinBtn').disabled = false; $('progBar').style.width = '100%'; $('statusTxt').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(1)} s`; render(); } }
     };
     w.postMessage({ job: { id: j.id, cfg: j.cfg, concs, slo } });
   });
