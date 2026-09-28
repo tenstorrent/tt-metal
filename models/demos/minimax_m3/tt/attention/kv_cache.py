@@ -47,10 +47,13 @@ class MiniMaxKVCache(KvCaches):
     device_slot: bool = False
 
     def deallocate(self) -> None:
-        """Free the three device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
-        model stays resident). The handle is dead afterwards; do not pass it into the runtime again."""
-        for t in (self.k, self.v, self.index_k):
-            ttnn.deallocate(t)
+        """Free the three device caches and the device-slot scalars (e.g. to re-allocate at a different
+        ``max_seq_len`` while the model stays resident). Release any trace that binds the scalars first. The
+        handle is dead afterwards; do not pass it into the runtime again."""
+        for t in (self.k, self.v, self.index_k, self._slot, *self._kv_actual.values()):
+            if t is not None:
+                ttnn.deallocate(t)
+        self._slot, self._kv_actual = None, {}
 
     # Device-valued slot metadata for request-mode tracing (PREFILL_DEVICE_SLOT_SLICE=1). A captured trace
 

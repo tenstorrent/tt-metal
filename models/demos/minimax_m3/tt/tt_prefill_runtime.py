@@ -228,6 +228,8 @@ class TtPrefillRuntime:
         # The CCL scratch (ring-gather / high_bw-gather) is keyed by shape and the cache-read entries are
         # capacity-sized: drop them so re-targets do not accumulate dead DRAM (~0.7 GB/chip per capacity at 1M).
         self.model.ccl_manager.release_scratch_buffers()
+        # The trace pool has one bucket per chunk of the OLD capacity and binds the old cache's slot scalars.
+        self.release_trace()
         self.compiled = False
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
@@ -621,16 +623,16 @@ class TtPrefillRuntime:
 
     def gather_slot(self, kv_cache, slot_id: int, n_tokens: int):
         """Every layer's (k, v, index_k) of one slot, same convention and shapes as gather_layer, from ONE
-        slot readback: read_slot_kv moves the whole slot host-side (~100 s on 8x4 at 56k tokens), so
-        calling gather_layer per layer multiplies that by num_layers."""
+        slot readback bounded to the written prefix (read_slot_kv / read_seq_len): a full 56k-token slot is
+        ~100 s host-side on 8x4, so calling gather_layer per layer multiplies that by num_layers."""
         from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
 
         cfg = self.config
-        blocks = self.read_slot_kv(kv_cache, slot_id)
+        blocks = self.read_slot_kv(kv_cache, slot_id, n_tokens)
+        seq = self.read_seq_len(n_tokens)
         return [
             tuple(
-                naturalize_kv_block(blk[L], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(0)
-                for blk in blocks
+                naturalize_kv_block(blk[L], n_tokens, cfg.sp_factor, cfg.chunk_size, seq).unsqueeze(0) for blk in blocks
             )
             for L in range(cfg.num_layers)
         ]
