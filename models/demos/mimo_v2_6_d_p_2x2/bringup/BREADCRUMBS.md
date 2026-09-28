@@ -442,3 +442,9 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - reference: PCC 0.999998, rel 0.0019, ratio [0.9992, 1.0008], coef 1.0, rel 0 -> pass. stub: PCC 0 -> fail.
 - Default (device) gate: PCC 0.999997, rel 0.0023, ratio [0.9988, 1.0014], coef 1.0016, experts rel 0.0194 -> pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_residual.py`
+
+## S.full_moe.07.test.1 (test review, swap 07 ffn_residual, layer 5)
+- Replaced the rendered template with the 1x4 prior's frozen test (models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_07_ffn_residual.py); only the docstring differs. Step limits match this run's frozen full_moe swap 06 (full attention has no sink, so the owner-widened sliding limits do not apply). Every check runs on the gathered [2048, 4096] tensors, so none depends on the mesh.
+- 2x2 results: BRINGUP_IMPL=reference passes (golden rel 0.0025 / first 128 rows 0.0023; 1993 matched rows [0.9990, 1.0010], 55 flipped rows [0.9947, 1.0106]; iso 0; coef 1.0). BRINGUP_IMPL=stub fails every check.
+- Device, all 7 steps: pcc_swap_out 0.999987, rel 0.0052 / 0.0046; 1885 matched rows [0.9993, 1.0058], 163 flipped rows [0.9948, 1.0274] (limit [0.9, 1.1]); iso rel 0.0013, ratio [0.9995, 1.0010], worst row 0.0021; experts coef 1.0017, rel 0.0193. PASS.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_07_ffn_residual.py`
