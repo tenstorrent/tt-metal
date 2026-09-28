@@ -20,6 +20,7 @@ Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward
 """
 
 import json
+import os
 
 import torch
 from loguru import logger
@@ -423,12 +424,13 @@ class TtMiniMaxMoE(LightweightModule):
 
         with zone("combine"):
             if self.combine_version == "v2":
-                # combine_fabric2d takes BF16 only and the fused expert op emits bfp8 TILE with no dtype
-                # option. bfp8 -> bf16 is exact; the op untilizes TILE input itself.
-                with zone("combine_v2_prep", FINE):
-                    expert_outputs_bf16 = ttnn.typecast(expert_outputs, ttnn.bfloat16)
-                    ttnn.deallocate(expert_outputs)
-                    expert_outputs = expert_outputs_bf16
+                # combine_fabric2d reads the fused expert op's bfp8 TILE output directly and untilizes it
+                # to bf16 itself. M3_MOE_COMBINE_V2_CAST=1 restores the explicit bf16 typecast (A/B only).
+                if os.getenv("M3_MOE_COMBINE_V2_CAST", "0") == "1":
+                    with zone("combine_v2_prep", FINE):
+                        expert_outputs_bf16 = ttnn.typecast(expert_outputs, ttnn.bfloat16)
+                        ttnn.deallocate(expert_outputs)
+                        expert_outputs = expert_outputs_bf16
                 combined_output = self.combine_module(
                     expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets, all_expert_offsets
                 )
