@@ -105,7 +105,7 @@ def reduce_implied_math_formats(formats, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
     if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
@@ -273,10 +273,6 @@ def test_reduce_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(

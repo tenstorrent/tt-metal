@@ -80,7 +80,7 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
     if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
@@ -206,7 +206,6 @@ def test_eltwise_binary_broadcast_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

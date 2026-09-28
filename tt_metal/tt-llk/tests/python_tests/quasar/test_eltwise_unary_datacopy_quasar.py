@@ -59,7 +59,7 @@ def datacopy_implied_math_formats(format, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
     if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
 
 
@@ -198,13 +198,6 @@ def test_eltwise_unary_datacopy_quasar(
         tile_dimensions,
     ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
 
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -284,10 +277,6 @@ def test_eltwise_unary_datacopy_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(

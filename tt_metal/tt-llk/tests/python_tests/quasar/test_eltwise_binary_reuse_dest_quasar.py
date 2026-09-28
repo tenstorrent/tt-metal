@@ -90,8 +90,7 @@ def reuse_dest_mathops(formats, *, is_perf=False):
 
 
 def reuse_dest_implied_math_format(formats, *, is_perf=False):
-    use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    if is_perf or use_mx:
+    if is_perf:
         return ImpliedMathFormat.Yes
     return ImpliedMathFormat.No
 
@@ -169,7 +168,6 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     implied_math_format = reuse_dest_implied_math_format(formats, is_perf=is_perf)
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    disable_format_inference = use_mx
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -385,7 +383,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": DestAccumulation.No,
-        "disable_format_inference": disable_format_inference,
     }
 
     configuration = create_test_or_perf_config(
