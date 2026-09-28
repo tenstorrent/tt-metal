@@ -842,6 +842,13 @@ tasks:
     kind: residual
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-09-28T06:35:48'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_residual.py: 8bfe21f63c6ce9123202230f8fcee61a6fe4ce474c95412d18b8a698ebc00e27
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.sliding_moe.07
   title: 'sliding_moe block with steps 1-7 on device (last: ffn_residual)'
   step: implement
