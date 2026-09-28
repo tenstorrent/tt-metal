@@ -556,11 +556,13 @@ def main():
                     certain and not inferred,
                 )
             )
-        elif not guarded:
+        else:
             overlap = {t: b & bits for t, b in others.items() if b & bits}
-            if overlap:
-                v = ", ".join(f"{t} (0x{b:08x})" for t, b in sorted(overlap.items()))
-                srcs, certain = conflict(bits)
+            if not overlap:
+                continue
+            v = ", ".join(f"{t} (0x{b:08x})" for t, b in sorted(overlap.items()))
+            srcs, certain = conflict(bits)
+            if not guarded:
                 findings.append(
                     (
                         path,
@@ -571,6 +573,46 @@ def main():
                         f"{th} RMWs bits also written by {v}, no mutex::REG_RMW",
                         srcs,
                         certain and not inferred,
+                    )
+                )
+                continue
+            # Guarded: mutex::REG_RMW stops a multi-byte RMW from tearing, but two threads writing
+            # the same field still race on its VALUE. That is sound only when the writer is a
+            # thread that consumes the field (it sets what it is about to use). A writer that does
+            # not consume it is reported: blocking when the consumer table records every field
+            # the shared bits cover, advisory when any of them is unrecorded.
+            shared = 0
+            for b in overlap.values():
+                shared |= b
+            fields = [
+                fn
+                for fn, (fw, _fs, fm) in defs.items()
+                if fw == word and fm & shared and fn not in per_thread
+            ]
+            table = consumers or {}
+            foreign = [fn for fn in fields if fn in table and th not in table[fn]]
+            unknown = not fields or any(fn not in table for fn in fields)
+            if foreign or unknown:
+                read_by = "; ".join(
+                    f"{fn} read by {', '.join(sorted(table[fn]))}" for fn in foreign
+                )
+                how = (
+                    f"does not consume them ({read_by})"
+                    if foreign
+                    else "may not consume them (no reader recorded for "
+                    + (", ".join(fields) or "these bits")
+                    + ")"
+                )
+                findings.append(
+                    (
+                        path,
+                        ln,
+                        "SAME-FIELD",
+                        field,
+                        word,
+                        f"{th} RMWs bits also written by {v} under mutex::REG_RMW, but {th} {how}",
+                        srcs,
+                        bool(foreign) and certain and not inferred,
                     )
                 )
 

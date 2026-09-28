@@ -188,8 +188,10 @@ def test_mutex_is_tracked_by_state_not_by_line_distance(tree):
             """,
         )
     r = run(tmp)
-    assert "SAME-FIELD" not in r.stdout, r.stdout
-    assert r.returncode == 0
+    # The guard 30 lines up is seen: MATH consumes the field, so its guarded write is sound and
+    # not reported; UNPACK does not consume it, so its guarded write is -- as a guarded one.
+    assert "llk_math_x.h" not in r.stdout, r.stdout
+    assert "llk_unpack_x.h" in r.stdout and "under mutex::REG_RMW" in r.stdout, r.stdout
 
 
 def test_mutex_on_only_one_side_is_not_protection(tree):
@@ -721,4 +723,59 @@ def test_masked_write_at_a_variable_offset_is_advisory(tree):
     r = run(tmp)
     assert (
         r.returncode == 0 and "UNRESOLVED" in r.stdout and "advisory" in r.stdout
+    ), r.stdout
+
+
+# --- a guarded write is sound only when its thread consumes the field ------------------------------
+def _guarded_pair(d):
+    for fn, th in (("llk_math_x.h", "math"), ("llk_unpack_x.h", "unpack")):
+        write(
+            d,
+            fn,
+            f"""
+            inline void _llk_{th}_a_() {{
+                t6_mutex_acquire(mutex::REG_RMW);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                t6_mutex_release(mutex::REG_RMW);
+            }}
+            """,
+        )
+
+
+def _consumers(tmp, readers):
+    y = tmp.parent / f"{tmp.name}_consumers.yaml"
+    body = "".join(f"  - {t}\n" for t in readers)
+    y.write_text(
+        "wormhole_b0:\n"
+        + (
+            f"  ALU_ACC_CTRL_Zero_Flag_disabled_src:\n{body}"
+            if readers
+            else "  Unrelated_Field:\n  - MATH\n"
+        )
+    )
+    return ["--consumers", str(y)]
+
+
+def test_guarded_write_by_a_non_consumer_is_blocking(tree):
+    tmp, d = tree
+    _guarded_pair(d)
+    r = run(tmp, extra=_consumers(tmp, ["MATH"]))
+    assert r.returncode == 1 and "llk_unpack_x.h" in r.stdout, r.stdout
+    assert "llk_math_x.h:" not in r.stdout, "the consuming writer is sound"
+
+
+def test_guarded_writes_by_consumers_are_not_reported(tree):
+    tmp, d = tree
+    _guarded_pair(d)
+    r = run(tmp, extra=_consumers(tmp, ["MATH", "UNPACK"]))
+    assert r.returncode == 0 and "SAME-FIELD" not in r.stdout, r.stdout
+
+
+def test_guarded_write_with_no_recorded_reader_is_advisory(tree):
+    """An unrecorded field is UNKNOWN, not 'safe' and not 'violated': shown, never blocking."""
+    tmp, d = tree
+    _guarded_pair(d)
+    r = run(tmp, extra=_consumers(tmp, []))
+    assert (
+        r.returncode == 0 and "advisory" in r.stdout and "may not consume" in r.stdout
     ), r.stdout
