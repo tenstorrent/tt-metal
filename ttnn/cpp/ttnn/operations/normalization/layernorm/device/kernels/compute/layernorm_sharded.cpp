@@ -525,13 +525,10 @@ void kernel_main() {
                 dfb_ex2pe.push_back(1);
                 tile_regs_release();
             }
-        }
-        if (!use_two_stage_reduce || is_second_stage_reader) {
-            // This kernel reads dfb_ex2 back for the rsqrt above. Under two-stage reduction the
-            // receiver kernel also waits dfb_ex2, as its first-stage reduce buffer, and pops it on
-            // the cores that are not the second-stage reader, because the second-stage reader is
-            // the one that gathers dfb_ex2 over the NOC. Exactly one pop may happen, so this
-            // condition is the complement of the receiver kernel's.
+            // Pop what the rsqrt loop above waited. enable_sqrt is the complement of the receiver
+            // kernel's condition for popping dfb_ex2, which the receiver kernel waits as its
+            // first-stage reduce buffer on the cores that are not the second-stage reader, so
+            // exactly one of the two kernels releases it.
             dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }
