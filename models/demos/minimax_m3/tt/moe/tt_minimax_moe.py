@@ -244,11 +244,20 @@ class TtMiniMaxMoE(LightweightModule):
         else:
             indices, scores = topk_indices, topk_weights
         with zone("routing_setup", FINE):
-            tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+            routing = self.routing_setup(
                 ttnn_top_k_experts_indices=indices,
                 num_routed_experts=self.num_routed_experts,
                 num_experts_per_tok=self.num_experts_per_tok,
             )
+            tt_expert_offsets = routing.global_dispatch_offsets
+            tt_expert_token_counts = routing.total_counts_per_expert
+            tt_expert_region_offsets = routing.expert_region_offsets
+            # (dispatch_group_size, E), row k = device k's global_dispatch_offsets, replicated along
+            # axis 0: the table combine_fabric2d takes as expert_offsets. Only v2 reads it.
+            all_expert_offsets = routing.all_global_dispatch_offsets
+            if self.combine_version != "v2":
+                ttnn.deallocate(all_expert_offsets)
+            del routing
             indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
             scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
             b, s = x.shape[0], x.shape[1]
@@ -298,15 +307,6 @@ class TtMiniMaxMoE(LightweightModule):
                     expert_outputs_bf16 = ttnn.typecast(expert_outputs, ttnn.bfloat16)
                     ttnn.deallocate(expert_outputs)
                     expert_outputs = expert_outputs_bf16
-                    # Every chip needs every origin chip's per-expert run starts: gather this chip's
-                    # (1, E) offsets over the dispatch axis into (dispatch_group_size, E).
-                    all_expert_offsets = ttnn.all_gather(
-                        tt_expert_offsets,
-                        dim=0,
-                        cluster_axis=0,
-                        num_links=self.routing_setup.num_links,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
                 combined_output = self.combine_module(
                     expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets, all_expert_offsets
                 )
