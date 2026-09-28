@@ -1194,3 +1194,68 @@ def test_erfinv_bf16_compiled_contract(device):
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.erfinv(device_input, **{})).to(torch.bfloat16)
     assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))
+
+
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
+)
+def test_multigammaln_bf16_compiled_contract(device):
+    import importlib
+    import numpy as np
+
+    _REFERENCE_MODULE = "torch.special"
+    _REFERENCE_FUNCTION = "multigammaln"
+    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
+        "blackhole": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "pos_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "pos_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "pos_inf",
+            "neg_nan": "pos_inf",
+        },
+        "wormhole_b0": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "neg_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "neg_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "nan",
+            "neg_nan": "nan",
+        },
+    }
+    _REAL_DOMAIN_BOUNDS = (("min", 1.5, True),)
+
+    def _raw_to_reference_input():
+        if is_blackhole():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
+        if is_wormhole_b0():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
+        raise AssertionError("no compiled ingress contract for current architecture")
+
+    def _reference(values):
+        module = importlib.import_module(_REFERENCE_MODULE)
+        if _REFERENCE_MODULE == "numpy":
+            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{"p": 4})
+            return torch.from_numpy(np.asarray(result, dtype=np.float64))
+        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{"p": 4})
+
+    def _real_domain_mask(values):
+        selected = np.ones(values.shape, dtype=bool)
+        for direction, bound, exclusive in _REAL_DOMAIN_BOUNDS:
+            if direction == "min":
+                selected &= values > bound if exclusive else values >= bound
+            else:
+                selected &= values < bound if exclusive else values <= bound
+        return selected
+
+    host = generate_all_bfloat16_bitpatterns()
+    assert host.numel() == 65536
+    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.multigammaln(device_input, **{})).to(torch.bfloat16)
+    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _raw_to_reference_input(), ((), ()))
