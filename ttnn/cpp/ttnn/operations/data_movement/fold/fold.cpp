@@ -539,12 +539,17 @@ Tensor fold(
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
-        // Tile-native factory only supports interleaved TILE; W/B-sharded TILE inputs and shapes whose
-        // row-scratch overflows L1 go through untilize→RM so prim::fold takes the 1-stick RM path.
-        if (processed_tensor.layout() == Layout::TILE &&
-            (processed_tensor.is_sharded() ||
-             !operations::data_movement::tile_native_fold_scratch_fits_l1(processed_tensor, stride_h, stride_w))) {
-            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        // Tile-native factory's writer hits the NoC self-copy path only when c_bytes is 16B-aligned; sub-16B
+        // c_bytes fall to per-pixel CPU memmove which loses ~2x to untilize→RM for small C. W/B-sharded TILE
+        // and scratch-overflow shapes route the same way (RM path is 1-stick and fits any capacity).
+        if (processed_tensor.layout() == Layout::TILE) {
+            const uint32_t out_elem_bytes = tt::datum_size(datatype_to_dataformat_converter(
+                operations::data_movement::fold_output_dtype(processed_tensor.dtype())));
+            const uint32_t c_bytes = processed_tensor.logical_shape()[-1] * out_elem_bytes;
+            if (processed_tensor.is_sharded() || c_bytes % 16 != 0 ||
+                !operations::data_movement::tile_native_fold_scratch_fits_l1(processed_tensor, stride_h, stride_w)) {
+                processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+            }
         }
 
         result = ttnn::prim::fold(processed_tensor, stride_h, stride_w, collapse_output);
