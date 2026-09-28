@@ -198,7 +198,9 @@ enum class InitReconfigOwner {
 /// `PerTile + Col` denotes a streamed column: the chain waits for one tile at each grid-row boundary,
 /// reuses the current front tile across that row, then pops it. `Upfront + Col` instead stages an
 /// Ht-tile window and indexes it by row. Output `PerTile` remains literal: one output tile is reserved
-/// and pushed per grid cell. `PerOuter` exists only for output DEST-row accumulation.
+/// and pushed per grid cell. `PerOuter` opens one output window per grid row: direct pack reserves
+/// and pushes Wt tiles, while PerRow DEST accumulation publishes its single reduced tile. WholeShape
+/// DEST accumulation instead uses the one-tile `OneUpfront` / `OneAtEnd` lifecycle.
 /// On a partial final block, `BlockTailSync` selects whether synchronization covers the valid
 /// remainder or the full `block_size`.
 
@@ -420,7 +422,7 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 // 3. Block size — `IterationShape::block_size` semantics
 // =============================================================================
 //
-// Op-struct template-param enums (Approx / Legacy) live in op_params.hpp — they
+// Op-struct template-param enums (Approx) live in op_params.hpp — they
 // are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
 /// Block size. Configured with `IterationShape::tiles(n).block_size(blk)` or
@@ -434,8 +436,8 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 /// `block_size * chain_lane_width` always fits DEST (`DEST_AUTO_LIMIT`): an oversized value can't
 /// overflow DEST, it only costs extra outer iterations. Streaming CB-reader chains consume one
 /// tile per iter, so block_size is clamped to 1 for them. A shape using `FullBlock` mode instead
-/// describes a physical CB contract and must already fit; the chain
-/// asserts rather than changing it.
+/// describes a physical CB contract and callers must supply a block size that fits DEST.
+/// FullBlock with Upfront reserve and PerBlockSize push is unsupported (debug assertion).
 
 // =============================================================================
 // 4. Operation selectors

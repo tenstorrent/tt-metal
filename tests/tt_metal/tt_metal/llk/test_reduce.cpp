@@ -372,10 +372,20 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -403,10 +413,20 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -421,19 +441,11 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .fpu_math_fidelity = test_config.math_fidelity,
+        .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = get_compute_kernel_name(test_config.reduce_dim),

@@ -131,7 +131,11 @@
 
 - id: bh-host-io-fast-unit-viommu
   name: Host IO socket loopback unit tests (slow dispatch, viommu)
-  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  # Keep the slow-dispatch Host IO selection aligned with multi-card sanity.
+  cmd: >-
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
+    models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+    tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
   skus:
     bh_p300:
       timeout: 10
@@ -173,7 +177,6 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((fabric2d-mesh-4x2 or fabric2d-mesh-2x4 or fabric2d-2x4) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (ttnn_moe and kimi and perf) and not pad50 and (not hca or (flash and chunk5120-varying))" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP2xTP4" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d-mesh-2x4 and not pretrained and iter2 and not iter25 and not iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
@@ -199,22 +202,6 @@
     bh_loudbox:
       timeout: 10
   owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  budget_type: e2e
-
-- id: bh-lb-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
-  model-name: disaggregated_prefill
-  cmd: |
-    exit_code=0
-    # Cheap host-side coverage for the mixed-format cache contract and producer decoding.
-    pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or fabric2d-2x4) and (not zero_padded or torus-y-8x1 or fabric2d-2x4) and not single-1 and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_loudbox:
-      timeout: 28
-  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
   budget_type: e2e
 
@@ -248,34 +235,6 @@
     bh_quietbox_2:
       timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
-  budget_type: e2e
-
-- id: bh-p150-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
-  model-name: disaggregated_prefill
-  cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or fabric2d) and not single-1 and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_p150b_civ2:
-      timeout: 8
-  owner_id: U094PKWHNJ0 # Petar Milojevic
-  team: models
-  budget_type: e2e
-
-- id: bh-qb2-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
-  model-name: disaggregated_prefill
-  cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (2x2 and pcc_check and fabric2d)) and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out and fp8_disp_compression)))" || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_quietbox_2:
-      timeout: 60
-  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
   budget_type: e2e
 

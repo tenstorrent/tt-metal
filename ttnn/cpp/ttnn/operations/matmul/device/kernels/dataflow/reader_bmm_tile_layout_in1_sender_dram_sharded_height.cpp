@@ -5,8 +5,8 @@
 // Batch-sharded DRAM matmul - in1 reader and output writer kernel
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Each worker handles B/num_workers batches independently
-// Input B (weights) is DRAM sharded by batch - each bank has B/12 complete [N, K] matrices
-// Output is NOC written to OUTPUT STORAGE CORES (different from worker cores)
+// Input B (weights) is DRAM sharded by batch - each bank has B/num_workers complete [K, N] matrices
+// Output is NOC written to the output storage cores, which are the worker cores themselves
 
 #include <stdint.h>
 
@@ -15,61 +15,66 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // RUNTIME ARGS
-    const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
+    const bool is_worker_core = get_arg(args::is_worker_core) == 1;
     if (not is_worker_core) {
         return;
     }
 
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(1);
-#ifdef FUSE_BIAS
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(2);
-#endif
-    const uint32_t dram_bank_id = get_arg_val<uint32_t>(3);
-    const uint32_t vc = get_arg_val<uint32_t>(4);
+    const uint32_t in1_tensor_addr = TensorAccessor(tensor::in1).get_bank_base_address();
+    const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
+    const uint32_t vc = get_arg(args::vc);
 
     // Output storage core coordinates and L1 address (where to NOC write output)
-    const uint32_t output_storage_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t output_storage_noc_y = get_arg_val<uint32_t>(6);
-    const uint32_t output_shard_l1_addr = get_arg_val<uint32_t>(7);
+    const uint32_t output_storage_noc_x = get_arg(args::output_storage_noc_x);
+    const uint32_t output_storage_noc_y = get_arg(args::output_storage_noc_y);
+    const uint32_t output_shard_l1_addr = TensorAccessor(tensor::output).get_bank_base_address();
 
     // COMPILE TIME ARGS
-    constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
-    constexpr uint32_t in1_num_pages = get_compile_time_arg_val(1);
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(2);                    // K tiles per block
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(3);            // in0_block_w * K
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(4);                     // N / in0_block_w
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(5);            // M * K
-    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(6);           // B / num_cores
-    constexpr uint32_t in1_tensor_stride_batch_bytes = get_compile_time_arg_val(7);  // bytes per batch in in1
-    constexpr uint32_t out_tensor_stride_batch_bytes = get_compile_time_arg_val(8);  // bytes per batch in output
-    constexpr uint32_t out_shard_size_bytes = get_compile_time_arg_val(9);           // full output shard size
+    constexpr auto in1_page_size = get_arg(args::in1_page_size);
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);    // in0_block_w * per_core_N
+    constexpr auto num_blocks = get_arg(args::num_blocks);                      // K / in0_block_w
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);    // per_core_M * per_core_N
+    constexpr auto num_batches_per_core = get_arg(args::num_batches_per_core);  // B / num_cores
+    constexpr auto in1_tensor_stride_batch_bytes =
+        get_arg(args::in1_tensor_stride_batch_bytes);  // bytes per batch in in1
+    constexpr auto out_tensor_stride_batch_bytes =
+        get_arg(args::out_tensor_stride_batch_bytes);  // bytes per batch in output
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t in3_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(11);
-    constexpr uint32_t in3_block_tiles = get_compile_time_arg_val(12);  // K tiles for bias
-    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr auto in3_block_tiles = get_arg(args::in3_block_tiles);  // per_core_N tiles for bias
 #endif
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");  // Local output CB (compute writes here)
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
-    constexpr uint32_t out_single_tile_size_bytes = get_tile_size(dfb_id_out);
+    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb::in1);
+    constexpr uint32_t out_single_tile_size_bytes = get_tile_size(dfb::out);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
     constexpr uint32_t out_block_size_bytes = out_block_num_tiles * out_single_tile_size_bytes;
 
     const Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);  // Local output buffer (compute writes here)
     // DRAM read setup
     const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     // Output reshard setup - build NOC address for remote output storage core
     const UnicastEndpoint remote;
 #ifdef FUSE_BIAS
-    DataflowBuffer dfb_in3(dfb_id_in3);
+    // Push [1, N] bias once (broadcast over this core's batches).
+    // TensorAccessor: bias is interleaved DRAM; dram_bank_id is the HEIGHT_SHARDED in1 bank.
+    DataflowBuffer dfb_in3(dfb::bias);
+    const auto s3 = TensorAccessor(tensor::bias);
+    const uint32_t bias_tile_bytes = dfb_in3.get_tile_size();
+    dfb_in3.reserve_back(in3_block_tiles);
+    uint32_t in3_write_offset = 0;
+    for (uint32_t t = 0; t < in3_block_tiles; ++t) {
+        noc.async_read(s3, dfb_in3, bias_tile_bytes, {.page_id = t}, {.offset_bytes = in3_write_offset});
+        in3_write_offset += bias_tile_bytes;
+    }
+    noc.async_read_barrier();
+    dfb_in3.push_back(in3_block_tiles);
 #endif
 
     // Process each batch
@@ -77,7 +82,7 @@ void kernel_main() {
         const uint32_t in1_batch_offset = batch * in1_tensor_stride_batch_bytes;
         uint32_t l1_read_addr_in1 = 0;
 
-        // Read all N blocks of weights for this batch
+        // Read all K blocks of weights for this batch
         for (uint32_t block = 0; block < num_blocks; ++block) {
             dfb_in1.reserve_back(in1_block_num_tiles);
 
@@ -104,24 +109,11 @@ void kernel_main() {
             l1_read_addr_in1 += in1_block_size_bytes;
         }
 
-#ifdef FUSE_BIAS
-        // Read bias for this batch (if fused)
-        dfb_in3.reserve_back(in3_block_tiles);
-        noc.async_read(
-            dram_bank,
-            dfb_in3,
-            in3_block_tiles * dfb_in3.get_tile_size(),
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
-        dfb_in3.push_back(in3_block_tiles);
-#endif
-
         // Wait for compute to finish this batch
         dfb_out.wait_front(out_block_num_tiles);
 
 #ifdef OUT_SHARDED
-        // NOC write output to remote output storage core (CB6)
+        // NOC write output into the output tensor's own L1 shard on the remote output storage core
         const uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
         noc.async_write(
             dfb_out,

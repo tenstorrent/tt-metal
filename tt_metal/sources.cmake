@@ -4,6 +4,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
+    api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -28,6 +29,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/allocation_context.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
+    api/tt-metalium/experimental/trace_allocation_tracker.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
@@ -70,6 +72,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
+    api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/program.hpp
     api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
@@ -92,6 +95,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp
     api/tt-metalium/experimental/profiler.hpp
+    api/tt-metalium/experimental/streaming_profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
@@ -178,6 +182,13 @@ set(TT_METAL_SOURCES
     impl/host_api/tt_metal.cpp
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
+    impl/streaming_profiler/streaming_profiler_api.cpp
+    impl/streaming_profiler/streaming_profiler_device.cpp
+    impl/streaming_profiler/streaming_profiler_ops_csv.cpp
+    impl/streaming_profiler/streaming_profiler_receiver.cpp
+    impl/streaming_profiler/streaming_profiler_service.cpp
+    impl/streaming_profiler/streaming_profiler_tracy.cpp
+    impl/streaming_profiler/streaming_profiler_zone_csv.cpp
     hal.cpp
 )
 
@@ -231,6 +242,7 @@ set(JITAPI_FILES
     tools/profiler/noc_debugging_profiler.hpp
     tools/profiler/noc_debugging_metadata.hpp
     tools/profiler/cpp_device_analyses.json
+    tools/profiler/kernels/streaming_profiler_relay.cpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp

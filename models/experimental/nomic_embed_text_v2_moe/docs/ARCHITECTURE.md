@@ -142,6 +142,9 @@ make this list a property of the host rather than of the model.
 | `aten._to_copy.default` | `[2, 1, 1, 16]` | `[2, 1, 1, 16]` |
 | `aten.rsub.Scalar` | `[2, 1, 1, 16]` | `[2, 1, 1, 16]` |
 
+[`OPERATOR_MAPPING.md`](OPERATOR_MAPPING.md) maps every operator below onto TTNN and records
+the PCC each one reaches.
+
 `aten.nonzero`, `aten.index`, `aten.index_add_` and `aten._local_scalar_dense` come from
 upstream's ragged expert loop, which gathers each expert's tokens by value. Being
 data-dependent, the model is not `torch.fx`-traceable.

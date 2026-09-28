@@ -7,6 +7,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <stack>
 #include <type_traits>
@@ -1195,21 +1196,32 @@ bool write_to_device_buffer(
             const uint8_t* src_region_start = src_ptr + region.offset;
             const uint8_t* src_region_end = src_region_start + region.size;
             // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
-            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) != 0) {
-                log_info(
-                    tt::LogMetal,
-                    "Pinned source memory start address {:#x} must be aligned {} B",
-                    reinterpret_cast<uintptr_t>(src_region_start),
-                    hal.get_read_alignment(HalMemType::HOST));
+            const uint32_t pinned_src_alignment = hal.get_read_alignment(HalMemType::L1);
+            if (reinterpret_cast<uintptr_t>(src_region_start) % pinned_src_alignment != 0) {
+                // Once per process: buffer writes run inside per-step model loops.
+                static std::once_flag unaligned_pinned_src_warned;
+                std::call_once(unaligned_pinned_src_warned, [&] {
+                    log_info(
+                        tt::LogMetal,
+                        "Pinned source memory start address {:#x} must be aligned to {} B to be read directly by the "
+                        "device; copying through the command queue instead. This message is emitted once per process.",
+                        reinterpret_cast<uintptr_t>(src_region_start),
+                        pinned_src_alignment);
+                });
             } else if ((src_region_start < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
-                log_info(
-                    tt::LogMetal,
-                    "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
-                    "start:{:#X} end:{:#X}",
-                    reinterpret_cast<uintptr_t>(pinned_host_base),
-                    reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
-                    reinterpret_cast<uintptr_t>(src_region_start),
-                    reinterpret_cast<uintptr_t>(src_region_end));
+                // Once per process: buffer writes run inside per-step model loops.
+                static std::once_flag pinned_src_out_of_region_warned;
+                std::call_once(pinned_src_out_of_region_warned, [&] {
+                    log_info(
+                        tt::LogMetal,
+                        "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} "
+                        "src start:{:#X} end:{:#X}; copying through the command queue instead. This message is "
+                        "emitted once per process.",
+                        reinterpret_cast<uintptr_t>(pinned_host_base),
+                        reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
+                        reinterpret_cast<uintptr_t>(src_region_start),
+                        reinterpret_cast<uintptr_t>(src_region_end));
+                });
             } else {
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
                 pinned_src_addr = pinned_noc_base + src_offset_base;
