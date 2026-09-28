@@ -1,0 +1,217 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""One GPU-trace comparison with six allocated KV slots; optional loopback copy."""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+import ttnn
+from models.common.weight_cache import weight_cache_is_complete
+from models.demos.gemma4_d_p.tt.common import weight_cache_identity
+from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.kv_validation import (
+    PREPARED_GPU_TRACE_LAYOUT,
+    check_table_samples,
+    compare_slot_cache,
+    read_cache_tensor,
+)
+
+GPU_PCC_THRESHOLD = 0.91
+
+
+def verify_inputs(adapter, trace_dir):
+    metadata = json.loads((trace_dir / "metadata.json").read_text())
+    assert metadata["model_id"] == adapter.hf_model_id
+    assert metadata["layout"] in ("chunked_group_a_v1", PREPARED_GPU_TRACE_LAYOUT)
+    assert metadata["n_layers"] == Gemma4ServiceConfig.NUM_LAYERS
+    assert len(metadata["token_ids"]) >= Gemma4ServiceConfig.MAX_SEQ_LEN
+    for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
+        if metadata["layout"] == PREPARED_GPU_TRACE_LAYOUT:
+            files = [trace_dir / "kv_cache" / f"layer_{layer}.safetensors"]
+        else:
+            files = sorted(
+                (trace_dir / "kv_cache" / f"layer_{layer}").glob("rows_*.safetensors"),
+                key=lambda path: int(path.stem.split("_")[1]),
+            )
+            position = 0
+            for shard in files:
+                start, end = map(int, shard.stem.split("_")[1:])
+                assert start == position and end > start, f"Noncontiguous GPU capture: {shard}"
+                position = end
+            assert position >= Gemma4ServiceConfig.MAX_SEQ_LEN, f"Incomplete GPU capture for layer {layer}: {trace_dir}"
+        for file in files:
+            with file.open("rb") as tensor_file:
+                assert len(tensor_file.read(8)) == 8, f"Empty or truncated GPU capture: {file}"
+
+    adapter.load_hf_config()
+    cache = adapter.weight_cache_path(Gemma4ServiceConfig.MESH_SHAPE)
+    identity = weight_cache_identity(
+        adapter.hf_model_id,
+        Gemma4ServiceConfig.NUM_LAYERS,
+        Gemma4ServiceConfig.MESH_SHAPE,
+        Gemma4Precision.load(adapter.hf_model_id),
+    )
+    assert weight_cache_is_complete(cache, **identity), f"Missing or incompatible TT weight cache: {cache}"
+
+
+@pytest.fixture(params=["mock", "loopback"])
+def migration_environment(request, tmp_path):
+    gate = request.param
+    if gate == "loopback" and os.getenv("GEMMA4_TEST_LOOPBACK") != "1":
+        pytest.skip("Start the migration endpoint and set GEMMA4_TEST_LOOPBACK=1")
+    adapter = Gemma4PrefillAdapter()
+    trace_dir = Path(os.getenv("PREFILL_TRACE_DIR", adapter.prefill_trace_default))
+    verify_inputs(adapter, trace_dir)
+
+    output_dir = tmp_path
+    if summaries := os.getenv("PREFILL_SUMMARIES"):
+        output_dir = Path(summaries) / "gemma4_mock256k" / request.node.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Migration test results: {output_dir}", flush=True)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PREFILL_")}
+    env.setdefault("OMP_NUM_THREADS", "16")
+    env.update(
+        {
+            key: os.environ[key]
+            for key in (
+                "PREFILL_TTNN_CACHE",
+                "PREFILL_MIGRATION_CLIENT_DIR",
+                "PREFILL_MIGRATION_CMD_QUEUE",
+                "PREFILL_MIGRATION_TABLE_QUEUE",
+                "PREFILL_MIGRATION_RESP_QUEUE",
+            )
+            if key in os.environ
+        }
+    )
+    env.update(
+        PREFILL_MANIFEST=str(Path(__file__).parents[1] / "tt/runners/manifest.json"),
+        PREFILL_MODEL="gemma4_d_p",
+        PREFILL_SP="8",
+        PREFILL_TP="4",
+        PREFILL_NUM_LAYERS="60",
+        PREFILL_MAX_SEQ_LEN="262144",
+        PREFILL_CHUNK_SIZE="8192",
+        PREFILL_NUM_USERS=str(Gemma4ServiceConfig.MAX_USER_SLOTS),
+        PREFILL_LAYER_ACK_D2H="1",
+        PREFILL_H2D_SERVICE_ID=f"gemma4_migration_{gate}_{os.getpid()}",
+        PREFILL_MIGRATION_TABLE_PATH=str(tmp_path / "table.pb"),
+        PREFILL_MIGRATION_DEVICE_MAP_PATH=str(output_dir / "device_map.json"),
+        PREFILL_MOCK_MIGRATION="1" if gate == "mock" else "0",
+        PREFILL_ENABLE_MIGRATION="1" if gate == "loopback" else "0",
+        PREFILL_MIGRATION_EXPORT_TO_FILE="0",
+        PREFILL_MIGRATION_ATTACH_WAIT_S="120",
+        PREFILL_MIGRATION_WAIT_READY_MS="120000",
+        PREFILL_MIGRATION_CMD_QUEUE=env.get("PREFILL_MIGRATION_CMD_QUEUE", "/mig_ep1_cmd"),
+        PREFILL_MIGRATION_TABLE_QUEUE=env.get("PREFILL_MIGRATION_TABLE_QUEUE", "/mig_ep1_table"),
+        PREFILL_MIGRATION_RESP_QUEUE=env.get("PREFILL_MIGRATION_RESP_QUEUE", "/mig_ep1_resp"),
+        PREFILL_TRACE_DIR=str(trace_dir),
+    )
+    return gate, env, output_dir
+
+
+@pytest.mark.timeout(14400)
+@pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
+def test_prefill_migration(migration_environment, context_len):
+    gate, env, output_dir = migration_environment
+    env["PREFILL_PCC_SUMMARY_DIR"] = str(output_dir)
+    with (output_dir / "runner.log").open("w") as log:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "models.demos.gemma4_d_p.tests.test_prefill_migration",
+                gate,
+                str(context_len),
+                str(output_dir),
+            ],
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            timeout=10800,
+        )
+    assert result.returncode == 0, (output_dir / "runner.log").read_text()
+    report = json.loads((output_dir / "gemma4_slot0.json").read_text())
+    assert report["slot"] == 0 and report["tokens"] == context_len
+    assert len(report["measurements"]) == 1640
+    assert min(report["minima"].values()) >= GPU_PCC_THRESHOLD
+    metrics = report["error_metrics"]
+    print(f"\n{'Layer':>7} {'PCC':>12} {'Relative RMSE':>16} {'RMSE':>12}")
+    for entry in metrics["layers"]:
+        print(f"{entry['layer']:>7} {entry['pcc']:>12.6f} {entry['relative_rmse']:>16.6f} {entry['rmse']:>12.6f}")
+    overall = metrics["overall"]
+    print(f"{'Overall':>7} {overall['pcc']:>12.6f} {overall['relative_rmse']:>16.6f} {overall['rmse']:>12.6f}")
+    if gate == "loopback":
+        assert "[migration] WORKER_READY:" in (output_dir / "runner.log").read_text()
+        assert "verify bytes PASSED" in (output_dir / "producer.log").read_text()
+
+
+def run_migration_case(gate, context_len, output_dir):
+    env = dict(os.environ)
+    from models.demos.common.prefill.runners import prefill_producer, prefill_runner
+
+    client_env = dict(env)
+    client_env.update(
+        PREFILL_NUM_USERS="1",
+        PREFILL_PRODUCER_MAX_REQUESTS="1",
+        PREFILL_PRODUCER_CHUNKS=str(context_len // Gemma4ServiceConfig.CHUNK_SIZE),
+        PREFILL_PRODUCER_INTERLEAVE="round_robin",
+        PREFILL_PRODUCER_CHECK_PCC="0",
+        PREFILL_SEND_SHUTDOWN="1",
+        PREFILL_H2D_CONNECT_TIMEOUT="120",
+        PREFILL_MIGRATION_DEST_ENDPOINT_ID="1",
+        PREFILL_MIGRATION_SRC_ENDPOINT_ID="1",
+        PREFILL_MIGRATION_PAIRS=f"0:{Gemma4ServiceConfig.MAX_USER_SLOTS - 1}",
+        MIGRATION_DONE_FILE=str(output_dir / "migration_done"),
+    )
+    module = "prefill_producer" if gate == "mock" else "migration_driver"
+    command = [sys.executable, "-m", f"models.demos.common.prefill.runners.{module}"]
+    if gate == "loopback":
+        command += ["--verify-migration", "dst-bytes"]
+    original_loop = prefill_runner.run_request_loop
+    failures = []
+
+    def checked_loop(runtime, kv_cache, *args, **kwargs):
+        with (output_dir / "producer.log").open("w") as log:
+            producer = subprocess.Popen(command, env=client_env, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                original_loop(runtime, kv_cache, *args, **kwargs)
+                assert producer.wait(timeout=120) == 0, (output_dir / "producer.log").read_text()
+                assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
+                table = ttnn.experimental.disaggregation.import_from_protobuf_file(env["PREFILL_MIGRATION_TABLE_PATH"])
+                device_map = prefill_producer._read_device_map(timeout_s=10)
+
+                def read_heads(layer):
+                    cache = kv_cache.layers[layer]
+                    tensors = ((0, cache.kv),) if hasattr(cache, "kv") else ((4, cache.k), (20, cache.v))
+                    for config_start, tensor in tensors:
+                        heads = read_cache_tensor(tensor, 0, context_len)
+                        for head, actual in enumerate(heads):
+                            config_id = config_start + head
+                            check_table_samples(table, device_map, layer, 0, config_id, actual)
+                            yield config_id, actual
+
+                scores = compare_slot_cache(read_heads, 0, context_len, env["PREFILL_TRACE_DIR"])
+                assert min(scores.values()) >= GPU_PCC_THRESHOLD, scores
+            except BaseException as error:
+                failures.append(error.with_traceback(None))
+            finally:
+                if producer.poll() is None:
+                    producer.terminate()
+                    producer.wait(timeout=30)
+
+    with patch.object(prefill_runner, "run_request_loop", checked_loop):
+        prefill_runner.main()
+    if failures:
+        raise failures[0]
+
+
+if __name__ == "__main__":
+    run_migration_case(sys.argv[1], int(sys.argv[2]), Path(sys.argv[3]))
