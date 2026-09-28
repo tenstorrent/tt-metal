@@ -35,9 +35,6 @@ uint32_t compute_geometry(
         // last_dim * elem_size; for WIDTH/BLOCK_SHARDED it equals shard_width * elem_size.
         const uint32_t phys_page_bytes = input.buffer()->page_size();
         const uint32_t elements_per_page = phys_page_bytes / input.element_size();
-        // Use num_dev_pages() directly: avoids recomputing from volume/page_size and correctly
-        // handles any rounding the allocator may apply.
-        const uint32_t num_pages = input.buffer()->num_dev_pages();
         // Use the buffer's allocator-aligned page size for the NOC transfer and interleaved
         // TensorAccessor stride, matching the buffer's actual per-page footprint in DRAM/L1.
         const uint32_t aligned_page_size = input.buffer()->aligned_page_size();
@@ -59,8 +56,10 @@ uint32_t compute_geometry(
         // grid_h = number of core rows in the shard grid.
         // For COL_MAJOR sharding the bank formula is: core_col * grid_h + core_row_idx.
         // For non-sharded / HEIGHT_SHARDED grid_w=1 so grid_h is never used in the hot path.
-        const uint32_t total_rows = num_pages / grid_w;
-        const uint32_t grid_h = (pages_per_bank > 0) ? (total_rows / pages_per_bank) : 1;
+        // num_dev_pages() includes shard padding: use it for grid_h, but scan only real rows.
+        const uint32_t padded_rows = input.buffer()->num_dev_pages() / grid_w;
+        const uint32_t grid_h = (pages_per_bank > 0) ? (padded_rows / pages_per_bank) : 1;
+        const uint32_t num_pages = lshape[0] * lshape[1] * lshape[2] * grid_w;
 
         geom_args = {
             aligned_output_bytes,
