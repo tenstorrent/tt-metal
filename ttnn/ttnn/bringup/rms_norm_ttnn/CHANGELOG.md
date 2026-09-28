@@ -66,3 +66,53 @@
    - Files: `device/rms_norm_ttnn_program_factory.cpp`, `rms_norm_ttnn_program_descriptor.py`,
      `tests/unit/test_rms_norm_ttnn_fp32_stats.py` (the format test for the new rule, a float64 precision test,
      scale-bias cases re-picked where the chunking moved), `tests/unit/test_rms_norm_ttnn_dataflow_knobs.py`.
+5. bug fix, the weight and bias are applied in DEST at `fp32_dest_acc_en=True`, so y is rounded once (refines 4).
+   Changes the default `fp32_dest_acc_en=True` program for calls with a weight or bias, so it is not behind an
+   option (like 3). The `fp32_dest_acc_en=False` program is unchanged (same kernels' code path, CBs and blocking;
+   the 16-bit-DEST outputs of every case in the precision probe are identical).
+   - What: pass B is one DEST window when `PC_IN_DEST = DST_ACCUM_MODE && (HAS_G || HAS_B)`: x * (1/rms) on the FPU
+     (the same `BinaryFpu<Mul, Col>` as before) into D0; gamma and bias unpacked with their Row broadcast into D1 /
+     D2 (`UnaryBcast`, so only the L1 per-channel values pass through a source register); then `PcRowBcast`, an
+     SFPU body that computes D0 = D0 * gamma + bias in fp32 and packs y once. `PcRowBcast` is not the stock
+     `MulBinary` / `AddBinary`: a Row-broadcast tile's vector k in a face equals vector k & 1 (column parity is the
+     SFPU's inner walk axis), so it loads the two operand vectors once per face into LREGs, reads one DEST vector
+     per output vector instead of two, and does gamma and bias in one SFPMAD. It covers every mode the fork has:
+     gamma, bias, both, with or without a residual (and `return_residual_sum`), TILE and ROW_MAJOR, all four
+     placements, the cross-core combine (which no longer takes the D44 gamma-first order at fp32 DEST), partial
+     last tile, multi-row blocks, bf16 / fp32 / bfp8 inputs and mixed per-channel formats. No mode keeps
+     `cb_normalized` at fp32 DEST. The DEST block is `PASS_B_PC_BLK`, the largest divisor of WT_CHUNK within
+     `DEST_AUTO_LIMIT / (1 + gamma + bias)`. `cb_normalized` is not allocated and the L1 solve does not price it
+     (`norm_cb_depth` / `_norm_cb_depth` take `pc_in_dest`, the host mirror of the kernel predicate, on both
+     builders). The program-cache hash needs nothing new: the predicate is a function of the hashed config.
+   - Candidates, measured vs float64: (a) the stock SFPU `MulBinary` / `AddBinary` after `UnaryBcast`: rel L2 0.00168
+     (random inputs, MiMo's shape), norm 0.233 ms; (b) `PcRowBcast`: 0.00168, 0.230 ms, taken as the most accurate
+     and the faster of the two; (c) an FPU multiply with DEST reuse: rejected. `DestReuseBinary` has no broadcast
+     (gamma needs Row), so it needs raw LLK, and it moves the fp32 DEST value into srcA at the source register's
+     format: emulated on the same inputs rel L2 0.0037 at bf16, 0.0017 with a -3.4e-4 scale bias at truncated
+     tf32. Neither DEST-side candidate is as fast as CHANGELOG 4's program: the SFPU pass is MATH-thread work
+     (about 90 cycles per tile, measured by ablation) where the old second stage was an unpack/pack traversal that
+     overlapped. An fp16 `cb_normalized` would round as little (emulated 0.00169) at CHANGELOG 4's speed, but keeps
+     the CB; not taken, since the point of the change is to drop it.
+   - Why: CHANGELOG 4 put `cb_normalized` back in bf16, so y was rounded twice with a weight. MiMo golden layer 1,
+     chunk 1 input with its attn_norm weight, vs float64, rel L2 / row-norm ratio: 0.00232 / 1.00006 before, now
+     0.00188 / 1.00015 (the bf16 rounding floor of that output is 0.00186; native 0.00205 / 0.99945; CHANGELOG 3
+     0.00197 / 0.99968). Unit weight and no weight unchanged (0.00167). Random inputs with a random weight
+     (test_precision_against_float64 / the precision probe): 0.00236 -> 0.00168 without a residual, 0.00287 ->
+     0.00235 with one (the rest is t's own bf16 rounding; native 0.00191 / 0.00200).
+   - L1 and blocking at MiMo's (5120, 4096) bf16 weight shape, fp32 DEST: blocking unchanged (norm 64 x 2, fused
+     residual 43 x 3); CBs per core norm 1206272 -> 1075200 B, residual 1243136 -> 1155072 B. Other shapes re-solve
+     to wider chunks where the freed L1 allows (2048x5120 40 x 4 -> 54 x 3, 2048x4022 42 x 3 -> 63 x 2).
+   - Perf (1x4 mesh, 20 calls, device max): norm 0.211 -> 0.230 ms, fused residual 0.413 -> 0.429 ms.
+   - Models: MiMo 1x4 and 2x2 chunk device time unchanged, 204.9 -> 204.9 ms (1x4), 250.0 -> 249.9 ms (2x2); ladder
+     rung last 1x4 L00-L05 0.998575 / 0.998449 / 0.998425 / 0.998511 / 0.998791 / 0.998424, state_min 0.999281
+     (2x2 worst layer 0.998414, state 0.999280). Norm component tests: rel L2 0.0028-0.0034 -> 0.0010-0.0029. All
+     swap tests pass on both meshes, including 1x4 sliding_moe swaps 03-07 that failed before on the sliding
+     attention's per-token norm ratio upper bound 1.05: [0.9553, 1.0691] -> [0.9627, 1.0461]. Model cases: norm
+     pcc 0.9999972 -> 0.9999986, residual-sum max rel 0.0109 -> 0.0086 (limit 0.012).
+   - Needed by: owner review of change 4.
+   - Files: `kernels/rms_norm_ttnn_compute.cpp`, `device/rms_norm_ttnn_program_factory.cpp`,
+     `rms_norm_ttnn_program_descriptor.py`, the new `tests/unit/test_rms_norm_ttnn_pc_in_dest.py` (CB presence on
+     both builders; y vs float64 for every mode above at both DEST widths, limit 0.0021 at fp32 DEST with bf16,
+     which the double-rounded program fails; mixed per-channel formats; a check that the cases reach multi-row
+     blocks and several chunks), `tests/unit/test_rms_norm_ttnn_fp32_stats.py` (no `cb_normalized` at fp32 DEST,
+     precision limits tightened to 0.0021 / 0.0028).
