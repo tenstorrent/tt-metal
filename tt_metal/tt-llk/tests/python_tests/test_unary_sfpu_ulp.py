@@ -230,17 +230,10 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
-    if contract.metric != Metric.ULP and not ulp_sweep.EMIT:
-        # Nothing to gate, so the cell is not swept here at all: neither the step count
-        # nor the non-finite check runs on it. Its safe domain is the functional driver's
-        # (test_eltwise_unary_sfpu.py, tolerance arm); the whole-format tail is measured
-        # only by an emit run, which is what wrote the row's comment. The nightly sweep
-        # that measures every cell and holds a tolerance row to its recorded maximum
-        # arrives with the headroom report (#57527).
-        pytest.skip(
-            f"{cell}: on the tolerance metric, so unswept at gate time; its safe "
-            "domain is the functional driver's, the full-format tail only an emit's"
-        )
+    # A tolerance cell has no budget to gate, but is measured anyway: its row records the
+    # last sweep's worst lane, and the nightly's headroom report fails a run that exceeds
+    # it. Skipping it made a demoted cell's regressions and recoveries invisible.
+    gated = contract.metric == Metric.ULP
 
     # No OverflowError skip: every golden goes through torch now (cosh/sinh were the
     # last on `math.*`), so an exception from the reference fails the cell loudly
@@ -273,8 +266,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
     # Before the emit return: an empty mask reports `max: 0` and would be recorded as
-    # bit-exact. A gate fails, since an unmeasurable budget is a gate not running; an
-    # emit run records the reason as the cell's verdict, so the op's grid stays whole.
+    # bit-exact. A gated cell fails, since an unmeasurable budget is a gate not running.
+    # An emit run records the reason as the cell's verdict, so the op's grid stays
+    # whole; a tolerance cell skips, having no budget to hold.
     if lanes == 0:
         reason = "no lane a step count can describe"
         unmeasurable = reason
@@ -289,16 +283,20 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     else:
         unmeasurable = None
     if unmeasurable:
-        if not ulp_sweep.EMIT:
-            raise AssertionError(f"{cell}: {unmeasurable}")
-        ulp_sweep.record_unmeasurable(mathop.name, key, reason)
-        return
+        if ulp_sweep.EMIT:
+            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+            return
+        if not gated:
+            pytest.skip(f"{cell}: not measurable -- {unmeasurable}")
+        raise AssertionError(f"{cell}: {unmeasurable}")
 
-    if ulp_sweep.EMIT:
-        ulp_sweep.record(mathop.name, key, int(stats["max"]))
-        # Also the JSONL row `--ulp-measure` writes from inside passed_test, which this
-        # branch returns before.
+    if ulp_sweep.EMIT or not gated:
+        # Measured, not gated. The JSONL row is what `--ulp-measure` would have written
+        # from inside passed_test, which this branch returns before; a tolerance cell is
+        # held against its row's "max N ULP" by the headroom report.
         _record_ulp_measurement(distance, mask=mask)
+        if ulp_sweep.EMIT:
+            ulp_sweep.record(mathop.name, key, int(stats["max"]))
         return
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
