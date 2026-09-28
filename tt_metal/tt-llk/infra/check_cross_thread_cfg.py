@@ -486,8 +486,8 @@ def main():
     # Findings are computed over the whole tree, then scoped to what the commit is responsible for.
     # Each carries `sources` (the conflicting owner writes) and `blocking`: a finding fails a commit
     # only when both sides are certain -- the writer's thread and at least one conflicting owner's
-    # thread are named, not inferred -- and the write itself was resolved. Everything else is
-    # printed as advisory, so an inference can never block someone's PR.
+    # thread are named, not inferred -- and the write itself was resolved. Everything else,
+    # including every UNRESOLVED write, is printed as advisory, so a guess never blocks a PR.
     findings, unclassified = [], []
     for path, ln, th, kind, field, word, bits, guarded, inferred in every:
         if th is None:
@@ -506,14 +506,14 @@ def main():
             return {p for p, _ in srcs}, any(not inf for _, inf in srcs)
 
         if kind in ("addr-unresolved", "mask-unresolved", "masked-addr-unresolved"):
-            srcs, certain = conflict()
+            srcs, _certain = conflict()
             why = (
                 "mask could not be resolved; review by hand"
                 if kind == "mask-unresolved"
                 else "offset is not a compile-time constant; review by hand"
             )
-            # a masked write at a variable offset was invisible before; it is surfaced, not enforced
-            enforce = kind != "masked-addr-unresolved"
+            # The checker cannot tell whether this write conflicts, so it never blocks a commit:
+            # it is surfaced for review, and blocking stays reserved for what is certain.
             findings.append(
                 (
                     path,
@@ -523,7 +523,7 @@ def main():
                     word,
                     why,
                     srcs,
-                    enforce and certain and not inferred,
+                    False,
                 )
             )
         elif kind == "whole-word":

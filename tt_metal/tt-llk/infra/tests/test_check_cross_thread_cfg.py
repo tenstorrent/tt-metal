@@ -326,6 +326,8 @@ def test_variable_offset_is_reported_unresolved(tree):
     )
     r = run(tmp)
     assert "UNRESOLVED" in r.stdout, f"a variable offset must be reported:\n{r.stdout}"
+    # ...but the checker cannot tell whether it conflicts, so it must not block a commit
+    assert r.returncode == 0 and "advisory" in r.stdout, r.stdout
 
 
 # --- write mechanisms ----------------------------------------------------------------------------
