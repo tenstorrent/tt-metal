@@ -25,13 +25,16 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @parametrize(
+    # Float32 and Int32 are the formats ttnn routes to the SFPU row reduce (Int32 always, Float32 with
+    # accurate fp32 mode); MAX covers the compare-and-swap horizontal reduce (MIN differs only by the
+    # SFPCONFIG direction bit) and SUM the add-based one.
     formats=input_output_formats(
-        [DataFormat.Float32],
+        [DataFormat.Float32, DataFormat.Int32],
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes],
     mathop=[MathOperation.ReduceRow],
-    reduce_pool=[ReducePool.Max],
+    reduce_pool=[ReducePool.Max, ReducePool.Sum],
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce(
