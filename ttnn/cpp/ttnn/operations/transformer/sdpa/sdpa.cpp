@@ -6,8 +6,10 @@
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
@@ -46,7 +48,35 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink,
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor) {
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        namespace numeric = operations::transformer::sdpa::detail;
+        TT_FATAL(input_tensor_q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+        TT_FATAL(
+            !is_causal && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
+                windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor,
+            "Named SDPA recipes currently support dense noncausal attention with an optional additive attn_mask only");
+        TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        // Same mask contract as legacy SDPA below: the recipe kernels fold the softmax scale into
+        // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
+        // FP32-state recipes (BALANCED/ACCURATE) hold FP32 scores, so their mask is pre-scaled in FP32
+        // (and added exactly); BF16-score recipes keep the legacy mask-dtype pre-scale.
+        std::optional<ttnn::Tensor> recipe_mask = attn_mask;
+        if (attn_mask) {
+            // Reject an unsupported mask before the pre-scale dispatches anything.
+            numeric::validate_recipe_mask(input_tensor_q, input_tensor_k, *attn_mask, policy);
+            const float recipe_scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
+            recipe_mask = ttnn::multiply(
+                policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32
+                    ? ttnn::typecast(*attn_mask, DataType::FLOAT32)
+                    : *attn_mask,
+                1.0f / recipe_scale);
+        }
+        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, program_config, recipe_mask);
+    }
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -182,7 +212,23 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        namespace numeric = operations::transformer::sdpa::detail;
+        TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        return numeric::run_joint_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            joint_tensor_q,
+            joint_tensor_k,
+            joint_tensor_v,
+            policy,
+            program_config);
+    }
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
