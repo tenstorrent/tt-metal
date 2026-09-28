@@ -1287,6 +1287,16 @@ void py_module(nb::module_& mod) {
         ttnn.CONFIG.matmul_auto_config_v2 was set, because the new selector doesn't handle those inputs yet.
     )doc");
 
+    mod.def(
+        "matmul_last_auto_config_fallback_reason",
+        []() { return ttnn::operations::matmul::last_auto_program_config_fallback_reason(); },
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        Why the new selector didn't handle the inputs of the last auto-selected config (empty unless
+        matmul_last_auto_config_fell_back is True).
+    )doc");
+
     // Bind create_matmul_attributes helper
     mod.def(
         "create_matmul_attributes",

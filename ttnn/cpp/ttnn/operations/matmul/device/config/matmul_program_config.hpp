@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
@@ -46,5 +47,8 @@ std::optional<MatmulProgramConfig> get_last_auto_program_config(bool reset = fal
 // Testing/benchmark only: whether that config came from the legacy selection although
 // ttnn.CONFIG.matmul_auto_config_v2 was set (the new selector doesn't handle those inputs yet).
 bool last_auto_program_config_fell_back();
+
+// Testing/benchmark only: why the new selector didn't handle those inputs (empty unless it fell back).
+const std::string& last_auto_program_config_fallback_reason();
 
 }  // namespace ttnn::operations::matmul

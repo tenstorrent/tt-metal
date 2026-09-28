@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -30,8 +31,8 @@
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores)
 //    or Reuse would read ONE_D_CORE_ADVANTAGE times as much input (splitting batch matrices re-reads B);
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
-//    (MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES, MAX_SELF_READ_TILES_PER_K_STEP) that yields only to precision: partial
-//    sums never go through a block-float format, using a single K block if nothing shallower avoids it. 1D
+//    (MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES, MAX_SELF_READ_TILES_PER_K_STEP). Precision is left to the compute
+//    kernel config: the blocking doesn't change with the output format or packer L1 accumulation. 1D
 //    blocks keep the full per-core extent along the multicast dimension unless that forces single-tile K steps,
 //    and 1D in0-mcast splits a wide output block into subblock-wide blocks;
 //  - subblocks are the largest that fit DST, two tiles or more on each side unless B's tiles are smaller
@@ -74,6 +75,8 @@ constexpr uint32_t MIN_IN0_BLOCK_W = 2;
 struct HardwareDesc {
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     CoreCoord grid;                // worker grid available to this matmul
+    CoreCoord origin{0, 0};        // its first core (a sub-device's worker grid need not start at (0, 0))
+    bool pinned_origin = false;    // the configs must name the grid's cores (a sub-device's) explicitly
     uint32_t l1_cb_budget = 0;     // per-core bytes available for circular buffers
     uint32_t dram_alignment = 32;  // bytes; tiles read from DRAM are padded to this
 
@@ -97,13 +100,18 @@ struct Placement {
     bool sharded() const { return layout != Layout::Interleaved; }
 };
 
-// The matmul as the selector sees it. Dimensions are in 32x32 tiles, after transposes.
+// The matmul as the selector sees it. Dimensions are in tiles, after transposes: M in A's tiles (in0_tile_h
+// rows), N in B's (in1_tile_w columns), K in 32-wide tiles.
 struct Problem {
     uint32_t batch_a = 1;  // product of A's leading dims
     uint32_t batch_b = 1;  // product of B's leading dims
     uint32_t Mt = 0;       // per batch
     uint32_t Kt = 0;
     uint32_t Nt = 0;
+    uint32_t in0_tile_h = 32;  // A's tiles are in0_tile_h x 32, B's 32 x in1_tile_w
+    uint32_t in1_tile_w = 32;
+    uint32_t out_tile_h = 32;  // the output tile (in0_tile_h rows; possibly wider than in1_tile_w)
+    uint32_t out_tile_w = 32;
     tt::DataFormat in0_format = tt::DataFormat::Float16_b;
     tt::DataFormat in1_format = tt::DataFormat::Float16_b;
     tt::DataFormat out_format = tt::DataFormat::Float16_b;
@@ -118,6 +126,7 @@ struct Problem {
     Placement b;
     Placement out;
     bool b_shard_matches_a = false;  // B sharded with A's layout, grid and orientation (Reuse only)
+    bool no_mcast_1d = false;        // the 1D factories can't run it (a global CB without a gather config)
 };
 
 enum class Family { Mcast2D, Mcast1DIn0, Mcast1DIn1, Reuse };
@@ -156,13 +165,14 @@ std::optional<Candidate> choose_candidate(const Problem& problem, const Hardware
 std::optional<MatmulProgramConfig> select_program_config(const Problem& problem, const HardwareDesc& hw);
 
 // Builds the Problem and HardwareDesc from matmul's inputs and selects a config. Returns nullopt for inputs
-// the new selector does not handle yet (DRAM- or ND-sharded tensors, non-32x32 tiles, global CBs, ...).
+// the new selector does not handle, with the reason in `unsupported` when given.
 std::optional<MatmulProgramConfig> select_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool transpose_a,
     bool transpose_b,
     uint32_t bias_single_tile_size,
-    const ttnn::prim::MatmulParams& attributes);
+    const ttnn::prim::MatmulParams& attributes,
+    std::string* unsupported = nullptr);
 
 }  // namespace ttnn::operations::matmul::auto_config

@@ -215,9 +215,6 @@ TEST(MatmulAutoConfig, TransposeAFitsL1) {
     for (const auto& arch : kArchs) {
         const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
         for (const auto& s : shapes()) {
-            if (s.batch_b == 1 && s.batch_a > 1) {
-                continue;  // not selected: transpose_a can't fuse batch into M
-            }
             const auto p = make_problem(
                 s.batch_a, s.batch_b, s.M, s.K, s.N, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
             const auto config = select_program_config(p, hw);
@@ -246,30 +243,24 @@ TEST(MatmulAutoConfig, UsesWholeGridForLargeMatmul) {
     }
 }
 
-// With several K blocks and no packer L1 accumulation, partial sums go through the output format; a block-float
-// output must not be used that way (the 2D factory with exactly two K blocks loses precision in bfp4).
-TEST(MatmulAutoConfig, NoBlockFloatPartials) {
+// Precision is the compute config's call: the blocking doesn't change with the output format or packer L1
+// accumulation (they only change the L1 cost of the partials buffer)
+TEST(MatmulAutoConfig, BlockingIgnoresOutputPrecision) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    for (auto out : {tt::DataFormat::Bfp4_b, tt::DataFormat::Bfp8_b}) {
-        auto p = make_problem(1, 1, 64, 128, 64, tt::DataFormat::Bfp4_b);
-        p.in0_format = tt::DataFormat::Bfp4_b;
-        p.out_format = out;
-        const auto chosen = choose_candidate(p, hw);
-        ASSERT_TRUE(chosen.has_value());
-        const uint32_t num_k_blocks = p.Kt / chosen->blocking.in0_block_w;
-        if (chosen->family == Family::Mcast2D || chosen->family == Family::Mcast1DIn1) {
-            EXPECT_NE(num_k_blocks, 2u) << "k=" << chosen->blocking.in0_block_w;
+    for (auto [M, K, N] : {std::tuple{64u, 128u, 64u}, std::tuple{1024u, 160u, 256u}, std::tuple{32u, 1024u, 1000u}}) {
+        auto base = make_problem(1, 1, M, K, N, tt::DataFormat::Bfp8_b);
+        const auto reference = choose_candidate(base, hw);
+        ASSERT_TRUE(reference.has_value());
+        for (auto out : {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp4_b}) {
+            for (bool l1_acc : {true, false}) {
+                auto p = base;
+                p.out_format = out;
+                p.packer_l1_acc = l1_acc;
+                const auto chosen = choose_candidate(p, hw);
+                ASSERT_TRUE(chosen.has_value());
+                EXPECT_EQ(chosen->blocking.in0_block_w, reference->blocking.in0_block_w) << M << "x" << K << "x" << N;
+            }
         }
-    }
-    // Without packer L1 accumulation every split of K rounds partials through the output format: one K block,
-    // even beyond the K depth limit (traced 1024x160x256 and 1x1024x1000 linears)
-    for (auto [M, K, N] : {std::tuple{1024u, 160u, 256u}, std::tuple{32u, 1024u, 1000u}}) {
-        auto p = make_problem(1, 1, M, K, N, tt::DataFormat::Bfp8_b);
-        p.out_format = tt::DataFormat::Bfp8_b;
-        p.packer_l1_acc = false;
-        const auto chosen = choose_candidate(p, hw);
-        ASSERT_TRUE(chosen.has_value()) << M << "x" << K << "x" << N;
-        EXPECT_EQ(chosen->blocking.in0_block_w, p.Kt) << M << "x" << K << "x" << N;
     }
 }
 
@@ -470,6 +461,136 @@ TEST(MatmulAutoConfig, FamilyChoice) {
         ASSERT_TRUE(chosen.has_value());
         EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(e.family))
             << "b=" << s.batch_a << "/" << s.batch_b << " M=" << s.M << " K=" << s.K << " N=" << s.N;
+    }
+}
+
+// Inputs the legacy selection covered that v2 must too (no fallback): tiny tiles, broadcast A, transpose_a
+// over a batch, sub-device grids, global CBs, block-sharded A on one row or column, and output shard specs
+// whose grid doesn't match the output.
+TEST(MatmulAutoConfig, TinyTiles) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (uint32_t tile_h : {1u, 2u, 4u, 8u, 16u, 32u}) {
+            for (uint32_t tile_w : {16u, 32u}) {
+                for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
+                    for (const auto& s :
+                         std::vector<Shape>{{1, 1, 1024, 64, 512}, {4, 4, 128, 256, 256}, {1, 1, 32, 4096, 4096}}) {
+                        auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
+                        p.in0_tile_h = p.out_tile_h = tile_h;
+                        p.in1_tile_w = p.out_tile_w = tile_w;
+                        p.Mt = s.M / tile_h;
+                        p.Nt = s.N / tile_w;
+                        const auto label = fmt::format(
+                            "{} tile {}x{} in1={} M={}", arch.name, tile_h, tile_w, static_cast<int>(in1), s.M);
+                        const auto chosen = choose_candidate(p, hw);
+                        const bool reuse_only = in1 == tt::DataFormat::Bfp8_b && tile_h < 16;
+                        if (!chosen.has_value()) {
+                            // Only possible when no factory can run it: Reuse is the only one, and its single K
+                            // block of B (all of K by all of N) doesn't fit L1
+                            Blocking one_row{1, p.Nt, p.Kt, 1, p.Nt, 1, 1};
+                            EXPECT_TRUE(
+                                reuse_only && circular_buffer_bytes(p, hw, Family::Reuse, one_row) > hw.l1_cb_budget)
+                                << label;
+                            continue;
+                        }
+                        const auto& b = chosen->blocking;
+                        EXPECT_LE(b.out_subblock_h * b.out_subblock_w, 8u) << label;
+                        EXPECT_LE(circular_buffer_bytes(p, hw, chosen->family, b), hw.l1_cb_budget) << label;
+                        if (reuse_only) {
+                            // the mcast kernels can't unpack these, and Reuse only computes them with one K block
+                            EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse)) << label;
+                            EXPECT_EQ(b.in0_block_w, p.Kt) << label;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(MatmulAutoConfig, BroadcastA) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    for (const auto& s : std::vector<Shape>{{1, 7, 128, 2048, 256}, {1, 5, 64, 768, 192}, {1, 8, 2048, 4096, 1024}}) {
+        const auto p = make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N);
+        const auto chosen = choose_candidate(p, hw);
+        ASSERT_TRUE(chosen.has_value()) << s.M;
+        // Only 1D in1-mcast reuses a single A across B's batches, looping over them
+        EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn1)) << s.M;
+        EXPECT_FALSE(chosen->blocking.fuse_batch) << s.M;
+        EXPECT_EQ(chosen->blocking.per_core_N, p.Nt) << s.M;
+        // A's rows stay resident across the batch loop
+        EXPECT_GE(
+            circular_buffer_bytes(p, hw, Family::Mcast1DIn1, chosen->blocking),
+            chosen->blocking.per_core_M * p.Kt * tt::tile_size(p.in0_format))
+            << s.M;
+        const auto config = select_program_config(p, hw);
+        ASSERT_TRUE(config.has_value());
+        EXPECT_FALSE(std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(*config).fused_activation.has_value());
+    }
+}
+
+TEST(MatmulAutoConfig, TransposeAOverBatchIsNotFused) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    const auto p = make_problem(8, 1, 512, 256, 512, tt::DataFormat::Float16_b, false, false, /*transpose_a=*/true);
+    const auto chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_NE(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));  // Reuse can't broadcast B
+    EXPECT_FALSE(chosen->blocking.fuse_batch);
+}
+
+TEST(MatmulAutoConfig, NoOneDWhenExcluded) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_problem(1, 1, 32, 4096, 14336);  // decode: 1D in0-mcast otherwise
+    p.no_mcast_1d = true;
+    for (const auto& c : candidates(p, hw)) {
+        EXPECT_TRUE(c.family == Family::Mcast2D || c.family == Family::Reuse);
+    }
+    EXPECT_TRUE(choose_candidate(p, hw).has_value());
+}
+
+TEST(MatmulAutoConfig, SubDeviceGrid) {
+    auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 7), kL1Budget);
+    hw.origin = CoreCoord(0, 1);
+    hw.pinned_origin = true;
+    for (const auto& s : std::vector<Shape>{{1, 1, 128, 512, 512}, {1, 1, 32, 4096, 4096}, {48, 48, 256, 256, 64}}) {
+        const auto config = select_program_config(make_problem(s.batch_a, s.batch_b, s.M, s.K, s.N), hw);
+        ASSERT_TRUE(config.has_value()) << s.M;
+        std::visit(
+            [&](const auto& c) {
+                using T = std::decay_t<decltype(c)>;
+                if constexpr (requires { c.allowed_worker_cores; }) {
+                    ASSERT_TRUE(c.allowed_worker_cores.has_value()) << s.M;
+                    const auto bbox = c.allowed_worker_cores->bounding_box();
+                    EXPECT_EQ(bbox.start_coord, CoreCoord(0, 1)) << s.M;
+                    EXPECT_EQ(bbox.end_coord, CoreCoord(7, 7)) << s.M;
+                } else {
+                    ADD_FAILURE() << "unexpected config type " << typeid(T).name();
+                }
+            },
+            *config);
+    }
+}
+
+TEST(MatmulAutoConfig, ShardedEdgeLayouts) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    {  // block-sharded A on one column of cores, column-major: 2D with transposed mcast
+        auto p = make_problem(1, 1, 4096, 32, 128);
+        p.a = sharded(Layout::BlockSharded, CoreCoord(8, 1), 16, 1, /*col_major=*/true);
+        const auto chosen = choose_candidate(p, hw);
+        ASSERT_TRUE(chosen.has_value());
+        EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
+        EXPECT_TRUE(chosen->transpose_mcast);
+        EXPECT_EQ(chosen->blocking.per_core_M, 16u);
+        EXPECT_EQ(chosen->blocking.per_core_N, 4u);
+    }
+    {  // one-core block shard spec for a 5-batch output: keep the shard shape, derive the grid
+        auto p = make_problem(5, 1, 416, 32, 416);
+        p.out = sharded(Layout::BlockSharded, CoreCoord(1, 1), 13, 13);
+        const auto chosen = choose_candidate(p, hw);
+        ASSERT_TRUE(chosen.has_value());
+        EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
+        EXPECT_EQ(chosen->blocking.per_core_M, 13u);
+        EXPECT_EQ(chosen->blocking.per_core_N, 13u);
     }
 }
 
