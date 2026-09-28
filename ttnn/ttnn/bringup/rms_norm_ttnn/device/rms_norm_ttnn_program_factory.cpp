@@ -343,8 +343,10 @@ int64_t x_squared_wt_of(int64_t wt_chunk, int64_t partial_w) {
     return wt_chunk / g;
 }
 
-int64_t norm_cb_depth(bool has_gamma, bool has_bias, int64_t block_rows) {
-    if (!(has_gamma || has_bias)) {
+// CHANGELOG 5: at fp32_dest_acc_en (`pc_in_dest`) the compute kernel applies gamma / bias to x * (1/rms) in DEST
+// and packs y once (PC_IN_DEST there), so cb_normalized is not allocated and the solve does not price it.
+int64_t norm_cb_depth(bool has_gamma, bool has_bias, int64_t block_rows, bool pc_in_dest) {
+    if (!(has_gamma || has_bias) || pc_in_dest) {
         return 0;
     }
     if (!(has_gamma && has_bias)) {
@@ -365,8 +367,10 @@ int64_t cb_block_bytes(
     bool has_bias,
     bool has_residual,
     int64_t depth_r,
-    int64_t block_rows) {
-    int64_t total = depth_x * bt + qt + norm_cb_depth(has_gamma, has_bias, block_rows) * it + depth_out * bt;
+    int64_t block_rows,
+    bool pc_in_dest) {
+    int64_t total =
+        depth_x * bt + qt + norm_cb_depth(has_gamma, has_bias, block_rows, pc_in_dest) * it + depth_out * bt;
     if (has_residual) {
         total += depth_r * bt + it;
     }
@@ -1296,6 +1300,8 @@ ProgramDescriptor create_program_descriptor(
     // intermediate_dtype and the price the conservative full width, i.e. the solve is the one it was.
     const bool fp32_dest = compute_config.fp32_dest_acc_en;
     const bool sq_exact = CB_SQ_EXACT && fp32_dest;
+    // CHANGELOG 5: gamma / bias applied in DEST (the compute kernel's PC_IN_DEST): no cb_normalized.
+    const bool pc_in_dest = fp32_dest && (has_gamma || has_bias);
     auto sq_dtype_for = [&](int64_t wtc) { return sq_dtype_of(input.dtype(), fp32_dest, wtc, kernel_partial_w); };
     auto sq_row_bytes = [&](int64_t wtc) -> int64_t {
         return (sq_exact ? x_squared_wt_of(wtc, kernel_partial_w) : wtc) * tile_bytes(sq_dtype_for(wtc));
@@ -1385,7 +1391,8 @@ ProgramDescriptor create_program_descriptor(
                 has_bias,
                 has_residual,
                 residual_depth(dr0.value_or(depth)),
-                block_rows);
+                block_rows,
+                pc_in_dest);
             const auto [per_row_bytes, combine_fixed] = f32_terms(compact);
             const int64_t fixed = per_channel_bytes(wt_core, wt_core, narrow_pc) +
                                   (!is_tile ? rm_stage_rings * rm_depth * wt_core * bt : 0) + scaler_bytes +
@@ -1460,7 +1467,7 @@ ProgramDescriptor create_program_descriptor(
             };
             // cb_x_squared is priced per candidate chunk (sq_row_bytes), not per tile.
             const int64_t per_chunk_tile =
-                it * norm_cb_depth(has_gamma, has_bias, 1) + bt * depth_out +
+                it * norm_cb_depth(has_gamma, has_bias, 1, pc_in_dest) + bt * depth_out +
                 (has_residual ? bt * (depth_x + residual_depth(depth_x)) : 0) + per_channel_bytes(0, 1, false) +
                 (!is_tile ? rm_stage_rings * CB_RM_STAGE_DEPTH * bt : 0) +
                 (compact ? PC_RING_CHUNKS * ((has_gamma ? gt : 0) + (has_bias ? bit : 0)) : 0);
@@ -1549,8 +1556,8 @@ ProgramDescriptor create_program_descriptor(
         // STREAM.
         const int64_t depth = depth_candidates[0];
         // qt = 0: cb_x_squared is priced per candidate chunk (sq_row_bytes).
-        const int64_t mult =
-            cb_block_bytes(bt, it, 0, depth, depth, has_gamma, has_bias, has_residual, residual_depth(depth), 1);
+        const int64_t mult = cb_block_bytes(
+            bt, it, 0, depth, depth, has_gamma, has_bias, has_residual, residual_depth(depth), 1, pc_in_dest);
         const int64_t per_chunk_tile_bytes =
             mult + per_channel_bytes(1, 1, false) + (!is_tile ? rm_stage_rings * CB_RM_STAGE_DEPTH * bt : 0);
         const auto [stream_per_row, stream_combine_fixed] = f32_terms(false);
@@ -1735,7 +1742,7 @@ ProgramDescriptor create_program_descriptor(
                 make_cb(CB_BIAS_COMPACT, 2 * TILE_DIM * bias_elem_bytes, pc_hold_wt, bias->dtype(), all_cores));
         }
     }
-    const int64_t norm_depth = norm_cb_depth(has_gamma, has_bias, block_rows);
+    const int64_t norm_depth = norm_cb_depth(has_gamma, has_bias, block_rows, pc_in_dest);
     if (norm_depth) {
         cbs.push_back(make_cb(CB_NORMALIZED, it, norm_depth * block_rows * wt_chunk, interm_dtype, all_cores));
     }
