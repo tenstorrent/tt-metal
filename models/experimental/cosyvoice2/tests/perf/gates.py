@@ -72,16 +72,16 @@ class Misses:
 
 # Wormhole: N150, the board every figure so far comes from (docs/VALIDATION.md).
 WORMHOLE: dict = {
-    # Stage 1 protocol, 2026-09-28: warmup_buckets() first (542 s on a warm kernel cache), then the six distinct
-    # corpus utterances. RTF 0.428-0.633 each, aggregate 0.481. Before bucketing, a distinct utterance ran at RTF
-    # 21-75 on a cold kernel cache.
+    # Stage 1 protocol, 2026-09-28, chunked HiFT: warmup_buckets() first (195 s on a warm kernel cache), then the
+    # six distinct corpus utterances. RTF 0.433-0.628 each, aggregate 0.479; the perf test's own run, worst 0.621.
+    # Before bucketing, a distinct utterance ran at RTF 21-75 on a cold kernel cache.
     "rtf_nonstreaming": Meets(),
     # Teacher-forced top-1 (tests/e2e/test_token_accuracy.py), fp32-logit head: 95.94 % over 5,003 positions of
     # 27 sequences, 4 speakers (the corpus plus its token-accuracy extension); 96.37 % on the first seven (bf16
     # logits: 90.66 %). A bf16 PyTorch run of the same model reaches 96.45 %, or 98.58 % with an fp32 head.
     "token_accuracy": Meets(),
-    # scripts/eval_wer_sim.py in the reference venv, on the bucketed Stage 1 audio (2026-09-28): corpus WER 0.68 %
-    # and WavLM-base-plus-sv SIM 95.88 (cosine x 100), the PyTorch reference 0.68 % and 95.21. Recorded, not
+    # scripts/eval_wer_sim.py in the reference venv, on the Stage 1 audio (2026-09-28, chunked HiFT): corpus WER
+    # 0.68 % and WavLM-base-plus-sv SIM 95.87 (cosine x 100), the PyTorch reference 0.68 % and 95.21. Recorded, not
     # enforced by a device test.
     "wer": Meets(),
     "speaker_similarity": Meets(),

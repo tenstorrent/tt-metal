@@ -8,7 +8,7 @@ Non-streaming only; streaming (Stages 2 and 3) is not built. Every figure here c
 - Device: Wormhole N150 (one chip). Host: AMD EPYC 7352 (24 cores, 96 threads).
 - KMD 2.3.0, firmware 19.11.0, tt-metal merge-base `1f29f312fa`.
 - Configuration: `CosyVoice2Config.reported()`. It is bucketed, has an fp32-logit LLM head and the LLM decode trace,
-  and uses HiFT fp32.
+  and uses HiFT fp32, in 512-frame chunks for a mel of 512 frames or more.
 - Date: 2026-09-28.
 
 ## Commands
@@ -23,26 +23,28 @@ COSYVOICE2_INPUTS=<dir> pytest models/experimental/cosyvoice2/tests/perf/test_pi
 
 ## Start-up
 
-At start-up the pipeline runs every flow and HiFT bucket once (`warmup_buckets()`), so no request compiles.
+At start-up the pipeline runs every flow and HiFT bucket once (`warmup_buckets()`), so no request compiles:
+8 LLM prefill lengths and a decode, 17 flow buckets, and 2 HiFT buckets, which chunked HiFT reuses.
 
-| start | warm-up | kernels compiled |
-|---|---|---|
-| cold: empty kernel cache | **76 min** (4,561 s), after a 17 s build | 19,068 |
-| warm: kernels on disk | **9.6 min** (577 s), after a 13 s build | 0 |
+| start | warm-up | kernels compiled | before chunked HiFT (12 HiFT buckets) |
+|---|---|---|---|
+| cold: empty kernel cache | **30.5 min** (1,831 s), after a 16 s build | 9,959 | 76 min (4,561 s), 19,068 kernels |
+| warm: kernels on disk | **3.2 min** (195 s), after a 13 s build | 0 | 9.6 min (577 s) |
 
 - **The warm start, split:**
-  - conv safety checks: 182 s (32 %);
-  - conv weight preparation: 23 s (4 %);
-  - each geometry's first run: 372 s (64 %).
+  - conv safety checks: 21.5 s (11 %);
+  - conv weight preparation: 7.9 s (4 %);
+  - each geometry's first run: 165 s (85 %).
 
-  By stage: LLM 2.5 s, flow 96 s, HiFT 443 s (77 %). The Stage 1 demo and perf test, later warm starts on the same
-  cache, warmed in 542 s and 534 s.
-- **The cold start is mostly kernel compilation:** the 3,984 s it adds is 87 % of it.
+  By stage: LLM 2.4 s, flow 157 s (81 %), HiFT 20 s. The Stage 1 demo and perf test, later warm starts on the same
+  cache, warmed in 179 s and 176 s.
+- **The cold start is mostly kernel compilation:** the 1,636 s it adds is 89 % of it.
 - **Any change** to the code, the configuration, the checkpoint or the warm-up sequence costs one cold start. Some
   conv kernels carry DRAM addresses in their compile-time arguments, so a cached binary is reused only when a
   process allocates exactly as the one that compiled it.
-- **Cold first request, no warm-up** (`demo.py --warmup none`, one utterance, fresh process): 277.2 s for 8.52 s of
-  audio, **RTF 32.5**, with 706 kernels compiled. That is the cost the warm-up moves to start-up.
+- **Cold first request, no warm-up** (`demo.py --warmup none`, one utterance, fresh process; measured before chunked
+  HiFT): 277.2 s for 8.52 s of audio, **RTF 32.5**, with 706 kernels compiled. That is the cost the warm-up moves to
+  start-up.
 
 ## Requests after start-up (Stage 1)
 
@@ -50,8 +52,11 @@ Six distinct LibriSpeech test-clean utterances of 3.0–13.9 s, each synthesized
 
 | | RTF |
 |---|---|
-| per utterance | 0.428–0.633 |
-| aggregate | **0.481** |
+| per utterance | 0.433–0.628 |
+| aggregate | **0.479** |
 
-- LLM decode is 44–60 % of each request, at 90–98 tokens/s.
-- The CFM (10 Euler steps) takes 0.70–1.38 s, and HiFT 0.15–0.47 s.
+- The perf test, in its own process: worst 0.621, aggregate 0.490.
+- LLM decode is 44–60 % of each request, at 90–97 tokens/s.
+- The CFM (10 Euler steps) takes 0.69–1.38 s.
+- HiFT takes 0.15–0.28 s in one pass, and 0.70–0.71 s for the two long utterances, which run as two 512-frame
+  chunks.
