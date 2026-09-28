@@ -220,6 +220,7 @@ def run_workflow(
     app_cmd = ["stdbuf", "-oL", "-eL", str(app_exe), *app_args]
 
     with paths.launcher_log_file.open("w", encoding="utf-8") as log_f:
+
         def log(msg: str) -> None:
             print(msg)
             print(msg, file=log_f)
