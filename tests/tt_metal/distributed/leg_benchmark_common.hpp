@@ -47,6 +47,18 @@ struct LatencySummary {
     uint64_t max_cycles = 0;
 };
 
+// Linear interpolation, not nearest-rank: sorted[(n*99)/100] equals n-1 for every n below
+// 100, so p99 and max printed one number and the tail column carried nothing.
+inline double percentile_of(const std::vector<double>& sorted, double p) {
+    if (sorted.empty()) {
+        return 0.0;
+    }
+    const double h = (static_cast<double>(sorted.size()) - 1.0) * p;
+    const size_t lo = static_cast<size_t>(h);
+    const size_t hi = lo + 1 < sorted.size() ? lo + 1 : lo;
+    return sorted[lo] + (h - static_cast<double>(lo)) * (sorted[hi] - sorted[lo]);
+}
+
 // Zeroed rather than fatal on an empty input: a case that measured nothing reports zeros.
 inline LatencySummary summarize_latency_cycles(const std::vector<uint64_t>& cycles, double cycles_per_us) {
     if (cycles.empty() || cycles_per_us <= 0.0) {
@@ -61,12 +73,16 @@ inline LatencySummary summarize_latency_cycles(const std::vector<uint64_t>& cycl
     avg_c /= static_cast<double>(cycles.size());
 
     auto to_us = [&](double c) { return c / cycles_per_us; };
+    std::vector<double> us(sorted.size());
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        us[i] = to_us(static_cast<double>(sorted[i]));
+    }
     return {
         .avg_us = to_us(avg_c),
         .min_us = to_us(static_cast<double>(sorted.front())),
         .max_us = to_us(static_cast<double>(sorted.back())),
         .median_us = to_us(static_cast<double>(sorted[sorted.size() / 2])),
-        .p99_us = to_us(static_cast<double>(sorted[(sorted.size() * 99) / 100])),
+        .p99_us = percentile_of(us, 0.99),
         .avg_cycles = avg_c,
         .min_cycles = sorted.front(),
         .max_cycles = sorted.back(),
@@ -92,7 +108,7 @@ inline LatencySummary summarize_latency_us(const std::vector<double>& us_values,
         .min_us = sorted.front(),
         .max_us = sorted.back(),
         .median_us = sorted[sorted.size() / 2],
-        .p99_us = sorted[(sorted.size() * 99) / 100],
+        .p99_us = percentile_of(sorted, 0.99),
         .avg_cycles = avg_us * cycles_per_us,
         .min_cycles = static_cast<uint64_t>(sorted.front() * cycles_per_us),
         .max_cycles = static_cast<uint64_t>(sorted.back() * cycles_per_us),

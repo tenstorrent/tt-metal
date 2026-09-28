@@ -79,6 +79,7 @@ public:
         // Why a pass posted nothing. These want opposite policies: no supply means batch
         // harder, no room means flush sooner, since our flush is what frees the peer's ring.
         uint64_t starved_credit = 0;  // a destination ring was full
+        uint64_t starved_window = 0;  // in_flight hit window_cap: flush sooner, do not batch
         uint64_t starved_empty = 0;   // nothing was queued to send
         uint64_t posts = 0;           // FRAMES posted, not puts: coalescing adds `run` at once
         uint64_t payload_puts = 0;    // the operations those frames cost, one per run
@@ -92,7 +93,7 @@ public:
         uint64_t flushes_held = 0;    // withheld: below the watermark and more was coming
         uint64_t pending_sum = 0;     // bytes covered, summed over every flush
         uint64_t pending_max = 0;     // most bytes a single flush ever covered
-        uint64_t flush_ns = 0;        // time inside flush_dirty(); zero unless collect_timing
+        uint64_t flush_ns = 0;        // time inside flush_dirty() ONLY; 0 unless collect_timing
         // Occupancy, time-integrated: in_flight sampled once per pass. A level that is only
         // incremented and decremented cannot yield a mean, and L = lambda*W needs one.
         uint64_t in_flight_sum = 0;

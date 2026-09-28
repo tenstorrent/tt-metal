@@ -95,7 +95,12 @@ void init_counters(benchmark::State& state) {
     state.counters["tiny_flush_pct"] = 0;
     state.counters["held_pct"] = 0;
     state.counters["starved_credit_pct"] = 0;
+    // The middle bucket: the window was full, which wants a sooner flush, not more batching.
+    state.counters["starved_window_pct"] = 0;
     state.counters["starved_empty_pct"] = 0;
+    // h2h_poll_pct CONTAINS the retire and publish callbacks; this is the leg's own share.
+    state.counters["h2h_own_pct"] = 0;
+    state.counters["h2h_cb_pct"] = 0;
     state.counters["puts_per_frame"] = 0;
     state.counters["credit_puts_per_frame"] = 0;
     state.counters["done_puts_per_frame"] = 0;
@@ -112,7 +117,6 @@ void init_counters(benchmark::State& state) {
     state.counters["rx_d2h_poll_pct"] = 0;
     state.counters["rx_poll_calls"] = 0;
     state.counters["rx_flushes"] = 0;
-    state.counters["rx_starved_pass_pct"] = 0;
     for (const char* p : {"d2h_issue_", "d2h_stall_", "h2h_put_credit_", "h2d_publish_drained_"}) {
         set_latency_counters(state, LatencySummary{}, 0, p);
     }
@@ -153,7 +157,10 @@ struct RankReport {
     double tiny_flush_pct = 0.0;
     double held_pct = 0.0;
     double starved_credit_pct = 0.0;
+    double starved_window_pct = 0.0;
     double starved_empty_pct = 0.0;
+    double h2h_own_pct = 0.0;
+    double h2h_cb_pct = 0.0;
     double puts_per_frame = 0.0;
     double credit_puts_per_frame = 0.0;
     double done_puts_per_frame = 0.0;
@@ -383,7 +390,6 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             const auto& ps = sock_->h2h().pass_stats();
             const auto& tm = sock_->timing();
             if (ps.passes != 0) {
-                local.posts_per_flush = static_cast<double>(ps.posts) / static_cast<double>(ps.passes);
                 local.starved_pass_pct = 100.0 * static_cast<double>(ps.starved) / static_cast<double>(ps.passes);
             }
             if (tm.h2h_poll_ns != 0) {
@@ -395,6 +401,11 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
                 local.d2h_poll_pct = 100.0 * static_cast<double>(tm.d2h_poll_ns) / legs;
                 local.h2h_poll_pct = 100.0 * static_cast<double>(tm.h2h_poll_ns) / legs;
                 local.h2d_drain_pct = 100.0 * static_cast<double>(tm.h2d_drain_ns) / legs;
+                // h2h_poll_ns contains the retire and publish callbacks, so it overstates the
+                // h2h leg and the other two are understated by whatever it absorbed.
+                const double cb = static_cast<double>(tm.h2h_cb_ns);
+                local.h2h_cb_pct = 100.0 * cb / legs;
+                local.h2h_own_pct = 100.0 * (static_cast<double>(tm.h2h_poll_ns) - cb) / legs;
             }
             local.poll_calls = tm.poll_calls;
 
@@ -430,6 +441,8 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             if (ps.starved != 0) {
                 local.starved_credit_pct =
                     100.0 * static_cast<double>(ps.starved_credit) / static_cast<double>(ps.starved);
+                local.starved_window_pct =
+                    100.0 * static_cast<double>(ps.starved_window) / static_cast<double>(ps.starved);
                 local.starved_empty_pct =
                     100.0 * static_cast<double>(ps.starved_empty) / static_cast<double>(ps.starved);
             }
@@ -538,7 +551,10 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["tiny_flush_pct"] = tx.tiny_flush_pct;
         state.counters["held_pct"] = tx.held_pct;
         state.counters["starved_credit_pct"] = tx.starved_credit_pct;
+        state.counters["starved_window_pct"] = tx.starved_window_pct;
         state.counters["starved_empty_pct"] = tx.starved_empty_pct;
+        state.counters["h2h_own_pct"] = tx.h2h_own_pct;
+        state.counters["h2h_cb_pct"] = tx.h2h_cb_pct;
         state.counters["puts_per_frame"] = tx.puts_per_frame;
         // Credits flow the other way, so they are the RECEIVER's puts on the same wire.
         state.counters["credit_puts_per_frame"] = rx.credit_puts_per_frame;
@@ -555,7 +571,6 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["rx_d2h_poll_pct"] = rx.d2h_poll_pct;
         state.counters["rx_poll_calls"] = static_cast<double>(rx.poll_calls);
         state.counters["rx_flushes"] = rx.flushes;
-        state.counters["rx_starved_pass_pct"] = rx.starved_pass_pct;
         set_latency_counters(state, tx.d2h_issue, tx.d2h_samples, "d2h_issue_");
         set_latency_counters(state, tx.d2h_stall, tx.d2h_samples, "d2h_stall_");
         set_latency_counters(state, tx.h2h_put_credit, tx.h2h_samples, "h2h_put_credit_");
