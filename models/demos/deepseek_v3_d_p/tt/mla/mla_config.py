@@ -800,7 +800,7 @@ def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | Non
     """Raw matmul entry for a given weight and local sequence length (per-device).
 
     Returns None if there is no entry. **A slot may hold a LIST of candidates** (one per model
-    flavour sharing this seq_len — e.g. Kimi-K2.6 and Kimi-K3 both at 640), and this accessor does
+    flavour sharing this seq_len — e.g. Kimi-K2.7 and Kimi-K3 both at 640), and this accessor does
     NOT apply the gating tags. ``ttMLA`` deliberately reads the dicts directly and resolves through
     ``_select_cfg`` / ``_cfg_matches``, which is the only place that knows the live model's head
     count, q_lora_rank and chunked mode. Any new caller should do the same rather than assume the

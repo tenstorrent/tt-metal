@@ -227,3 +227,7 @@
 #ifdef SFPU_OP_BINARY_MAX_MIN_INCLUDE
 #include "api/compute/binary_max_min.h"
 #endif
+
+#ifdef SFPU_OP_COPY_DEST_INCLUDE
+#include "api/compute/copy_dest_values.h"
+#endif

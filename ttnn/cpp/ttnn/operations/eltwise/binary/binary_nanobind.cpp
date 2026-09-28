@@ -61,6 +61,9 @@ constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, 
 constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kFloatOnlyDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
+// NEXTAFTER steps one ULP of the destination format, which a block-float tile packed against a
+// shared exponent cannot represent: the step rounds away and the op returns its input.
+constexpr auto kUlpStepFloatDtypes = "BFLOAT16, FLOAT32";
 constexpr auto kBitwiseShiftDtypes = "INT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
 constexpr auto kLogicalRightShiftDtypes = "INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kMultiplyInplaceDtypes =
@@ -2341,7 +2344,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_right_shift">(
         mod,
-        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Int32 uses an arithmetic shift; uint32 uses a logical shift. For uint32, shift counts >= 32 saturate to 31 for both scalar and tensor counts, matching scalar `right_shift_tile`. For int32, counts outside [0, 31] produce 0.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_right_shift),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_right_shift),
@@ -2361,7 +2364,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation<"logical_right_shift">(
         mod,
-        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
+        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Vacated bits are filled with zeros. Shift counts outside [0, 31] produce 0. Equivalent to integer division by 2^shift_amt for in-range counts.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_right_shift),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_right_shift),
@@ -2395,7 +2398,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
         &ttnn::nextafter,
-        detail::kFloatOnlyDtypes);
+        detail::kUlpStepFloatDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,

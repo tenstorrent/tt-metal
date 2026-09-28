@@ -117,22 +117,8 @@ Tensor restore_scalar_output_layout(
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::hal::get_eps();
-    Tensor result(input_a);
-    {
-        Tensor eps_gt(input_a);
-        {
-            eps_gt = ttnn::where(
-                ttnn::gt(input_a, input_b, std::nullopt, output_mem_config),
-                ttnn::add(input_a, eps, std::nullopt, output_mem_config),
-                input_a);
-        }
-        result = ttnn::where(
-            ttnn::lt(input_a, input_b, std::nullopt, output_mem_config),
-            ttnn::subtract(input_a, eps, std::nullopt, output_mem_config),
-            eps_gt);
-    }
-    return result;
+    return ttnn::detail::invoke_binary_ng(
+        input_a, input_b, binary::BinaryOpType::NEXTAFTER, std::nullopt, output_mem_config, std::nullopt, {}, {}, {});
 }
 
 Tensor minimum(
@@ -670,16 +656,15 @@ Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optio
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor prelu(
-    const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor prelu(const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& output_mem_config) {
     float weight_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, weight);
-    return ttnn::prelu_sfpu(input, weight_f);
+    return ttnn::prelu_sfpu(input, weight_f, output_mem_config);
 }
 
 Tensor prelu(
-    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& output_mem_config) {
     float scalar_weight = weight[0];
-    return ttnn::prelu_sfpu(input, scalar_weight);
+    return ttnn::prelu_sfpu(input, scalar_weight, output_mem_config);
 }
 
 Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -1008,12 +993,12 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
 Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
+    TT_FATAL(!coeffs.empty(), "polyval requires at least one coefficient");
     if (coeffs.size() == 1) {
         return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = ttnn::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = ttnn::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = ttnn::multiply(input_a, result, std::nullopt, output_mem_config);
     }

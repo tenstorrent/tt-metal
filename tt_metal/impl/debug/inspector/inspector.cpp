@@ -11,6 +11,7 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -360,7 +361,9 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         return;
     }
     try {
-        const distributed::SocketSenderSize sender_size;
+        auto* mesh_device = socket->get_mesh_device();
+        const distributed::SocketSenderSize sender_size(
+            mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
         auto config_buffer = socket->get_config_buffer();
         const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
 
@@ -372,7 +375,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
         socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
 
-        auto* mesh_device = socket->get_mesh_device();
         const auto local_ep = socket->get_socket_endpoint_type();
         const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
         // One entry per local core; a sender core feeding several downstreams collects several peers.
