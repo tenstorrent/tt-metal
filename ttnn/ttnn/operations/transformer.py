@@ -26,6 +26,7 @@ from ttnn.operations.transformer_golden import (
 )
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
+SDPAPrecision = ttnn._ttnn.operations.transformer.SDPAPrecision
 PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
 SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 
