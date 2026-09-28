@@ -327,7 +327,12 @@ def run_eval(
     return parsed
 
 
-def _save_comparison(output_base: Path, hf_results: dict[str, float], tt_results: dict[str, float]) -> None:
+def _save_comparison(
+    output_base: Path,
+    hf_results: dict[str, float],
+    tt_results: dict[str, float],
+    filename: str = "comparison.json",
+) -> None:
     comparison = {}
     for task in sorted(set(hf_results) | set(tt_results)):
         hf_score = hf_results.get(task)
@@ -348,7 +353,7 @@ def _save_comparison(output_base: Path, hf_results: dict[str, float], tt_results
         else:
             logger.info(f"[COMPARE] {task}: HF={hf_score} TT={tt_score}")
 
-    with open(output_base / "comparison.json", "w") as f:
+    with open(output_base / filename, "w") as f:
         json.dump({"hf": hf_results, "tt": tt_results, "comparison": comparison}, f, indent=2)
     logger.info(f"Scoring saved under {output_base}")
 
@@ -387,6 +392,10 @@ def main() -> None:
     if args.mode in ("both", "hf"):
         logger.info("Loading HF reference model on CPU")
         hf_model = mteb.get_model(MODEL_NAME, device="cpu")
+        if args.batch:
+            # mteb's loader uses 8194 tokens. The single-chip TT path runs S512, so
+            # truncate the reference to the same length for a fair comparison.
+            hf_model.model.max_seq_length = SINGLE_CHIP_SEQ_LEN
         hf_results = run_eval(hf_model, task_names, output_base / "hf", "HF/CPU", args.smoke_samples)
         del hf_model
         gc.collect()
@@ -408,6 +417,8 @@ def main() -> None:
             finally:
                 if mesh_device is not None:
                     ttnn.close_mesh_device(mesh_device)
+            if args.mode == "both":
+                _save_comparison(output_base, hf_results, tt_results[label], filename=f"comparison_b{b}.json")
         with open(output_base / "tt_single_chip_scores.json", "w") as f:
             json.dump(tt_results, f, indent=2)
         for label, scores in tt_results.items():
