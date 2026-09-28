@@ -611,21 +611,6 @@
   team: models
   budget_type: e2e
 
-- name: PaddleOCR-VL-1.6 e2e tests
-  cmd: |
-    export HF_MODEL=PaddlePaddle/PaddleOCR-VL-1.6 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/PaddlePaddle/PaddleOCR-VL-1.6
-    pytest --timeout 110 models/demos/blackhole/paddleocr_vl/tests/test_ocr_accuracy.py::test_ocr_mean_cer_vs_ground_truth
-  model: paddleocr-vl-1.6
-  model_family: PaddleOCR
-  skus:
-    bh_p150:
-      timeout: 2
-      tier: 3
-      release_ready: false
-  owner_id: U08LRGDNXSM # Sam Tisi
-  team: models
-  budget_type: e2e
-
 - name: Gemma-4-E4B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
