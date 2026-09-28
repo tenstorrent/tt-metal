@@ -96,6 +96,9 @@ def build_bash_command(
     return (
         f"source {shlex.quote(str(activate_script))} && "
         f"export TT_METAL_RUNTIME_ROOT={shlex.quote(str(runtime_root))} && "
+        # The app resolves programming-example kernel paths through TT_METAL_HOME; the venv
+        # activation script does not set it.
+        f"export TT_METAL_HOME={shlex.quote(str(runtime_root))} && "
         f"cd {shlex.quote(str(workdir))} && "
         f"{cmd_str}"
     )
@@ -206,6 +209,11 @@ def run_workflow(
 ) -> int:
     paths = build_run_paths(output_root, subdir)
 
+    # tt-umd's telemetry tool takes -f as a polling PERIOD in microseconds, not a frequency in
+    # Hz (see `telemetry --help`). --telemetry-freq is in Hz, so convert: 50 Hz -> 20000 us.
+    # Passing the Hz value through unconverted polls every 50 us (20 kHz) instead.
+    telemetry_period_us = max(1, round(1_000_000 / telemetry_freq_hz))
+
     telemetry_cmd = [
         "stdbuf",
         "-oL",
@@ -214,7 +222,7 @@ def run_workflow(
         "-o",
         str(paths.telemetry_file),
         "-f",
-        str(telemetry_freq_hz),
+        str(telemetry_period_us),
     ]
 
     app_cmd = ["stdbuf", "-oL", "-eL", str(app_exe), *app_args]
@@ -367,7 +375,7 @@ def main() -> int:
         "--telemetry-freq",
         type=int,
         default=50,
-        help="Telemetry frequency in Hz. Default: 50",
+        help="Telemetry sampling frequency in Hz; converted to the polling period the telemetry tool expects. Default: 50",
     )
 
     parser.add_argument(
