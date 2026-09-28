@@ -136,17 +136,12 @@ std::pair<uint32_t, uint32_t> choose_subblock(
     return best;
 }
 
-bool packer_l1_acc_enabled(const Problem& p, Family family, uint32_t num_k_blocks) {
+bool packer_l1_acc_enabled(const Problem& p, Family /*family*/, uint32_t num_k_blocks) {
     if (!p.packer_l1_acc) {
         return false;
     }
-    switch (family) {
-        case Family::Mcast1DIn0: return num_k_blocks > 1;
-        case Family::Reuse: return num_k_blocks > 2;
-        case Family::Mcast2D:
-        case Family::Mcast1DIn1: return (p.bias_tile_bytes != 0 && num_k_blocks > 1) || num_k_blocks > 2;
-    }
-    return false;
+    // Every factory accumulates in L1 whenever partials are kept between K blocks (#58178)
+    return num_k_blocks > 1;
 }
 
 // Format partial sums are kept in between K blocks
