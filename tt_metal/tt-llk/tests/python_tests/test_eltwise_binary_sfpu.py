@@ -1888,6 +1888,25 @@ def _tt_poly_declared_erf_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_gelu_bw(x):
+    def _declared_derivative(x):
+        import math
+
+        erfc = np.vectorize(math.erfc, otypes=[np.float64])
+        exp = np.exp
+        pi = np.pi
+        sqrt = np.sqrt
+        return np.broadcast_to(
+            np.asarray(
+                0.5 * erfc(-x / sqrt(2)) + x * exp(-(x**2) / 2) / sqrt(2 * pi),
+                dtype=np.float64,
+            ),
+            x.shape,
+        )
+
+    return _declared_derivative(x)
+
+
 def _tt_poly_declared_hardshrink_bw(x):
     raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
     result = np.zeros(raw.shape, dtype=bool)
@@ -2060,6 +2079,7 @@ def _tt_poly_declared_tanhshrink_bw(x):
         ("celu_bw", False, _tt_poly_declared_celu_bw, ()),
         ("elu_bw", False, _tt_poly_declared_elu_bw, ()),
         ("erf_bw", False, _tt_poly_declared_erf_bw, ()),
+        ("gelu_bw", False, _tt_poly_declared_gelu_bw, ()),
         ("hardshrink_bw", True, _tt_poly_declared_hardshrink_bw, ()),
         ("hardsigmoid_bw", False, _tt_poly_declared_hardsigmoid_bw, ()),
         ("hardswish_bw", False, _tt_poly_declared_hardswish_bw, (-3.0, -1.5, 3.0)),

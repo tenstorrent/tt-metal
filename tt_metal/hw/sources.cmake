@@ -426,6 +426,11 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_gelu_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_zone_affine_even_decay.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_zone_affine_even_decay_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_replay_init.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_square_affine_contract.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_square_affine_replay.inc
+    inc/api/compute/eltwise_unary/gelu_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
     inc/api/compute/eltwise_unary/hardshrink_bw_tt_poly_bf16.h
@@ -441,7 +446,6 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_root_native_log_core.h
     inc/api/compute/eltwise_unary/lgamma_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc
     inc/api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_normalized_log_odds.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_normalized_log_odds_core.h
