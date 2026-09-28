@@ -166,25 +166,24 @@ def test_optimizer_gemma4_perf(monkeypatch):
                 first = out[0] if isinstance(out, tuple) else out
                 return first.long().reshape(1, 1)
 
-            def decode(first_token, steps):
-                current_pos = torch.tensor([INPUT_TOKENS], dtype=torch.int64)
-                for index in range(steps):
-                    generator.decode_forward(
-                        first_token,
-                        current_pos,
-                        page_table=page_table,
-                        kv_cache=tt_kv_cache,
-                        enable_trace=enable_trace,
-                        read_from_device=False,
-                        sampling_params=sampling_params,
-                        reset_batch=(index == 0),
-                    )
-                    current_pos += 1
+            def decode_step(out_tok, current_pos):
+                # The demo's loop (demo/text_demo_v2.py): each step's sampled token comes back to the
+                # host and is fed to the next.
+                decode_out, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    enable_trace=enable_trace,
+                    sampling_params=sampling_params,
+                )
+                return decode_out.long().view(1, 1)
 
-            # Warm-up: one prefill and one decode step, so both traces are captured before timing.
-            warmup_token = prefill()
-            if not PREFILL_ONLY:
-                decode(warmup_token, 1)
+            # Warm-up: one prefill, so the prefill trace is captured before timing. The decode trace is
+            # captured by the first decode step after the timed prefills (the demo's order); capturing
+            # it before them and replaying it after three prefill replays never completed on QB2
+            # (2026-09-28), while the demo's prefill-then-decode order ran.
+            prefill()
             ttnn.synchronize_device(mesh_device)
 
             signpost("start", profiling and not DECODE_ONLY)
@@ -202,10 +201,18 @@ def test_optimizer_gemma4_perf(monkeypatch):
 
             decode_seconds = 0.0
             if not PREFILL_ONLY:
+                # Step 0 compiles and captures the decode trace; it is not timed (the demo excludes it
+                # the same way). The timed steps follow it.
+                current_pos = torch.tensor([INPUT_TOKENS], dtype=torch.int64)
+                out_tok = decode_step(first_token, current_pos)
+                current_pos += 1
+                ttnn.synchronize_device(mesh_device)
                 signpost("start", profiling and DECODE_ONLY)
                 signpost("stage:decode", profiling)
                 decode_start = time.perf_counter()
-                decode(first_token, decode_tokens)
+                for _ in range(decode_tokens):
+                    out_tok = decode_step(out_tok, current_pos)
+                    current_pos += 1
                 ttnn.synchronize_device(mesh_device)
                 decode_seconds = time.perf_counter() - decode_start
                 signpost("stage:decode:end", profiling)

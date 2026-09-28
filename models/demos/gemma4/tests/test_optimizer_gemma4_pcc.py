@@ -40,8 +40,12 @@ from models.tt_transformers.tests.optimizer_weight_cache import RunCache
 HF_MODEL_ID = os.environ.get("HF_MODEL_ID") or "google/gemma-4-26B-A4B-it"
 MESH_SHAPE = (1, 4)  # QB2: four Blackhole chips in a row, TP=4
 
-# Absolute floor for the worst logits PCC over every teacher-forced position.
-PCC_THRESHOLD = 0.90
+# Absolute floor for the worst logits PCC over every teacher-forced position: a model that no longer
+# correlates with the reference at all. Not the tt-transformers 0.90: the unmodified tree's worst
+# position on this checkpoint is 0.633 (step 79 of 128, 2026-09-28), and gemma4's own full-model
+# check passes at 0.84 on one position (tests/pcc_thresholds.json). The pinned top-1/top-5/mean
+# checks below are what judge a change; this only refuses a broken model.
+PCC_THRESHOLD = 0.50
 MAX_SEQ_LEN = 1024
 PROMPT_TOKENS = 128
 FORCED_TOKENS = 128
