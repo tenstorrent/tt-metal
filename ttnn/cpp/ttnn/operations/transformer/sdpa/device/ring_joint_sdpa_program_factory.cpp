@@ -1404,6 +1404,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             1u,
             std::min({ksplit_requested, uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount}));
     }
+    // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
+    // restore CBs, on single-Q-chunk cores that do not split K.
+    const bool seg_accum = args.program_config.has_value() && args.program_config->segmented_accumulation &&
+                           ksplit_count == 1 && !has_sliding_window && kernel_chunked && !args.is_balanced &&
+                           use_streaming_compute && B == 1 && L == 0 && max_q_per_core == 1;
+    log_debug(tt::LogOp, "ring_joint segmented accumulation: {}", seg_accum);
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -2585,6 +2591,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
         remainder_changes_owner && build_kv_chains && ksplit_count == 1 &&
+        // Segmented accumulation keeps one Q chunk's state per core across ring iterations.
+        !seg_accum &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
         // Only streaming compute consumes rotated IDs. The reader loads a sink for the
@@ -3036,6 +3044,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"ksplit_count", ksplit_count},
         {"ksplit_sem_id", ksplit_sem_id},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
+        {"seg_accum", seg_accum ? 1u : 0u},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;

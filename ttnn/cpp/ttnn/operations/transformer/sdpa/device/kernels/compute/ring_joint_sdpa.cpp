@@ -217,10 +217,19 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+    // Segmented accumulation: each ring iteration accumulates into a fresh sum and output (its max seeded from the
+    // long-term state), merged into the long-term state (the restore CBs) afterwards, so no bf16 running sum spans
+    // more than one shard's K chunks. A single running sum over a long prefix loses the late chunks' contribution.
+    constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
+    static_assert(!(ksplit_enabled && seg_accum_enabled));
+    static_assert(
+        !(ksplit_enabled || seg_accum_enabled) ||
+        (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
     // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
+    const bool seg_active = seg_accum_enabled && q_per_core == 1;
+    bool seg_state_valid = false;
     // Largest valid K chunk count over the ring iterations: a slice is non-empty on some iteration iff it is non-empty
     // at the largest count, so the reducer knows which senders have state.
     [[maybe_unused]] uint32_t ksplit_max_valid = 0;
@@ -295,6 +304,44 @@ void kernel_main() {
     RingAccumulatorState acc_state = {
         {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
+    };
+
+    // acc_state.prev = exp(prev.max - m) * prev + exp(other.max - m) * other via the K loop's SALAD correction, where
+    // m is the row max of both; consumes both states. The K-split reducer and segmented accumulation merge with it.
+    [[maybe_unused]] auto merge_into_prev = [&](const AccumulatorHalf& other) {
+        constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+        constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+        constexpr uint32_t qktv_h =
+            ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, dst_size, Sq_chunk_t);
+        // kernel_main is not a template, so this is checked even for configs that never merge.
+        static_assert(
+            !(ksplit_enabled || seg_accum_enabled) || Sq_chunk_t % qktv_h == 0, "merges walk whole SALAD row groups");
+        const AccumulatorHalf& a = acc_state.prev;
+        const AccumulatorHalf& merged = acc_state.cur;
+        max_block_sfpi(a.max, other.max, merged.max, Sq_chunk_t);
+        CircularBuffer(merged.out).reserve_back(out_tiles);
+        CircularBuffer(merged.sum).reserve_back(Sq_chunk_t);
+        exp_packthread_tile_init<EXP_APPROX_MODE>();
+        for (uint32_t group = 0; group < Sq_chunk_t / qktv_h; ++group) {
+            for (uint32_t side = 0; side < 2; ++side) {
+                const AccumulatorHalf& src = side == 0 ? a : other;
+                CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
+                sub_exp_first_col_blocks<false, scale_fp32>(src.max, merged.max, cb_exp_max_diff, group, qktv_h);
+                CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+                pack_reconfig_l1_acc(side);
+                salad_correct_fused<qktv_h, vDHt, dst_size>(
+                    src.out, src.sum, cb_exp_max_diff, merged.out, merged.sum, 0, group, group);
+                pack_reconfig_l1_acc(0);
+                sdpa_cb_pop_front_out_of_line(cb_exp_max_diff, qktv_h);
+                sdpa_cb_pop_front_out_of_line(src.out, qktv_h * vDHt);
+            }
+        }
+        CircularBuffer(merged.out).push_back(out_tiles);
+        CircularBuffer(merged.sum).push_back(Sq_chunk_t);
+        for (uint32_t cb : {a.sum, a.max, other.sum, other.max}) {
+            sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
+        }
+        std::swap(acc_state.prev, acc_state.cur);
     };
 
     const uint32_t ring_index =
@@ -473,9 +520,9 @@ void kernel_main() {
             lw_mask.joint_n_padded_tiles = joint_n_padded_tiles_iter;
         }
 
-        // K-split cores normalize after the merge, not in the ring loop.
-        const bool is_last_ring_iter =
-            !ksplit_active && (has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
+        // K-split and segmented cores normalize after the merge, not in the ring loop.
+        const bool is_last_ring_iter = !ksplit_active && !seg_active &&
+                                       (has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -576,12 +623,31 @@ void kernel_main() {
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
-                is_first_active_iter,
+                seg_active ? !seg_state_valid : is_first_active_iter,
                 logical_lt,
                 /*q_base_tiles=*/0,
                 rotated_slots,
                 ksplit_k_range.begin,
                 ksplit_k_range.end);
+            if constexpr (seg_accum_enabled) {
+                // Fold this iteration's state (acc_state.prev) into the long-term state held in the restore CBs.
+                if (seg_active && acc_state.last_call_k_chunks > 0) {
+                    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+                    const AccumulatorHalf long_term = {cb_sum_in, cb_max_in, cb_prev_out};
+                    if (seg_state_valid) {
+                        merge_into_prev(long_term);
+                    }
+                    copy_block(acc_state.prev.max, long_term.max, Sq_chunk_t);
+                    copy_block(acc_state.prev.sum, long_term.sum, Sq_chunk_t);
+                    copy_block(acc_state.prev.out, long_term.out, out_tiles);
+                    seg_state_valid = true;
+                    // Seed the next segment: long-term max, zero sum and output. Starting from -inf instead would
+                    // make a fully masked segment (e.g. a later shard at chunk 0) poison the merge.
+                    move_block<false>(long_term.max, acc_state.prev.max, Sq_chunk_t);
+                    zero_block(long_term.sum, acc_state.prev.sum, Sq_chunk_t);
+                    zero_block(long_term.out, acc_state.prev.out, out_tiles);
+                }
+            }
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
@@ -654,6 +720,28 @@ void kernel_main() {
         }
     }
 
+    if constexpr (seg_accum_enabled) {
+        if (seg_active) {
+            // The reader pushes Q with this core's first K chunk; no ring iteration popped it.
+            if (seen_active_iter) {
+                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+            }
+            ASSERT(seg_state_valid);
+            constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+            normalize_row_streaming<
+                false,
+                vDHt,
+                dst_size,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_out,
+                scale_fp32,
+                use_attention_sink,
+                cb_attention_sink>(cb_sum_in, cb_prev_out, Sq_chunk_t, cb_max_in);
+            sdpa_cb_pop_front_out_of_line(cb_max_in, Sq_chunk_t);
+        }
+    }
+
     // cb_sum_in exists only on the streaming path; alias a live CB so the other modes still compile.
     [[maybe_unused]] constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // K split epilogue: acc_state.prev holds this core's unnormalized state. Only primitives the K loop already
@@ -682,11 +770,6 @@ void kernel_main() {
                 // Reducer: its slice holds the diagonal chunk, so its own state always exists.
                 ASSERT(seen_active_iter);
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
-                constexpr uint32_t qktv_h =
-                    ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, dst_size, Sq_chunk_t);
-                // kernel_main is not a template, so a discarded if-constexpr branch is still checked.
-                static_assert(
-                    !ksplit_enabled || Sq_chunk_t % qktv_h == 0, "K split merge walks whole SALAD row groups");
                 const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
                     if (ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count).empty()) {
@@ -698,34 +781,7 @@ void kernel_main() {
                         sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
                         continue;
                     }
-                    const AccumulatorHalf& a = acc_state.prev;
-                    const AccumulatorHalf& merged = acc_state.cur;
-                    max_block_sfpi(a.max, incoming.max, merged.max, Sq_chunk_t);
-                    // merged = exp(a.max - m) * a + exp(in.max - m) * in, via the K loop's SALAD correction.
-                    CircularBuffer(merged.out).reserve_back(out_tiles);
-                    CircularBuffer(merged.sum).reserve_back(Sq_chunk_t);
-                    exp_packthread_tile_init<EXP_APPROX_MODE>();
-                    for (uint32_t group = 0; group < Sq_chunk_t / qktv_h; ++group) {
-                        for (uint32_t side = 0; side < 2; ++side) {
-                            const AccumulatorHalf& src = side == 0 ? a : incoming;
-                            CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                            sub_exp_first_col_blocks<false, scale_fp32>(
-                                src.max, merged.max, cb_exp_max_diff, group, qktv_h);
-                            CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
-                            pack_reconfig_l1_acc(side);
-                            salad_correct_fused<qktv_h, vDHt, dst_size>(
-                                src.out, src.sum, cb_exp_max_diff, merged.out, merged.sum, 0, group, group);
-                            pack_reconfig_l1_acc(0);
-                            sdpa_cb_pop_front_out_of_line(cb_exp_max_diff, qktv_h);
-                            sdpa_cb_pop_front_out_of_line(src.out, qktv_h * vDHt);
-                        }
-                    }
-                    CircularBuffer(merged.out).push_back(out_tiles);
-                    CircularBuffer(merged.sum).push_back(Sq_chunk_t);
-                    for (uint32_t cb : {a.sum, a.max, incoming.sum, incoming.max}) {
-                        sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
-                    }
-                    std::swap(acc_state.prev, acc_state.cur);
+                    merge_into_prev(incoming);
                 }
                 normalize_row_streaming<
                     false,
