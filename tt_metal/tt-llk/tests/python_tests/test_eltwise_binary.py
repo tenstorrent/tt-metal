@@ -218,10 +218,7 @@ def _get_valid_formats(dest_acc):
         if not is_format_combination_outlier(
             formats.input_format, formats.output_format, dest_acc
         )
-        and not (
-            formats.input_format == DataFormat.Float16
-            and formats.output_format == DataFormat.Bfp4_b
-        )
+        and formats != InputOutputFormat(DataFormat.Float16, DataFormat.Bfp4_b)
     ]
 
 

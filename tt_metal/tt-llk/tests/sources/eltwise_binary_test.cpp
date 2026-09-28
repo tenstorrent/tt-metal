@@ -87,24 +87,42 @@ inline void perf_binary_source_handshakes(
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+#ifdef SPEED_OF_LIGHT
+    constexpr ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    constexpr ckernel::Transpose transpose  = UNPACK_TRANSPOSE_FACES ? (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
+                                                                     : (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
+    constexpr std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
+#else
+#ifdef RUNTIME_FORMATS
     const FormatConfig& formats = params.formats;
 #endif
+    const std::uint32_t TEST_FACE_R_DIM          = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM          = params.TEST_FACE_C_DIM;
+    const int num_faces_r_dim_A                  = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A                  = params.num_faces_c_dim_A;
+    const bool UNPACK_TRANSPOSE_FACES            = params.UNPACK_TRANSPOSE_FACES;
+    const bool UNPACK_TRANSPOSE_WITHIN_FACE      = params.UNPACK_TRANSPOSE_WITHIN_FACE;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const int INPUT_NUM_BLOCKS                   = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
+    const std::uint32_t TILE_SIZE_UNPACK_A       = params.TILE_SIZE_UNPACK_A;
+    const std::uint32_t TILE_SIZE_UNPACK_B       = params.TILE_SIZE_UNPACK_B;
+    const Operand& buffer_A                      = params.buffer_A;
+    const Operand& buffer_B                      = params.buffer_B;
     // Cache volatile values to local variables first
-    const std::uint8_t face_r_dim           = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM);
-    const std::uint8_t face_c_dim           = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM);
-    const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
-    const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
-    const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-    const ckernel::Transpose transpose      = params.UNPACK_TRANSPOSE_FACES
-                                                  ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
-                                                  : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
-#ifdef EN_DEST_REUSE
-    const std::uint32_t num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
-#else
-    const std::uint32_t num_total_tiles = params.INPUT_NUM_TILES_IN_BLOCK * params.INPUT_NUM_BLOCKS;
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    const ckernel::Transpose transpose  = UNPACK_TRANSPOSE_FACES ? (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
+                                                                 : (UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
+    const std::uint32_t num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
 #endif
-    const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
     {
         START_PERF_MEASURE("INIT")
@@ -117,8 +135,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tensor_shape.face_r_dim,
             tensor_shape.total_num_faces(),
             tensor_shape.total_num_faces(),
-            params.TILE_SIZE_UNPACK_A,
-            params.TILE_SIZE_UNPACK_B);
+            TILE_SIZE_UNPACK_A,
+            TILE_SIZE_UNPACK_B);
 
         // Must follow HW configure, which overwrites the ALU stoch-rnd bits.
         _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
@@ -132,15 +150,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            perf_binary_source_handshakes<true, BROADCAST_TYPE>(loop_factor, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_source_handshakes<true, BROADCAST_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t i = 0; i < num_total_tiles; ++i)
                 {
-                    _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[i]));
+                    _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
                 }
             }
         }
@@ -160,22 +178,41 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+#ifdef SPEED_OF_LIGHT
+    constexpr TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    constexpr std::uint32_t input_tiles_in_block   = INPUT_NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t output_tiles_in_block  = OUTPUT_NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t num_blocks             = INPUT_NUM_BLOCKS;
+    constexpr std::uint32_t num_input_tiles        = input_tiles_in_block * num_blocks;
+    constexpr std::uint32_t tiles_per_accumulation = input_tiles_in_block / output_tiles_in_block;
+#else
+#ifdef RUNTIME_FORMATS
     const FormatConfig& formats = params.formats;
 #endif
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
+    const int num_faces_r_dim_A                   = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A                   = params.num_faces_c_dim_A;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const int INPUT_NUM_BLOCKS                    = params.INPUT_NUM_BLOCKS;
     // Cache volatile values to local variables first
-    const std::uint8_t face_r_dim      = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM);
-    const std::uint8_t face_c_dim      = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM);
-    const std::uint8_t num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
-    const std::uint8_t num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
-    const TensorShape tensor_shape     = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-    constexpr bool ACCUMULATE_TO_DEST =
-#ifdef EN_DEST_REUSE
-        false;
-#else
-        ACC_TO_DEST;
+    const TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    const std::uint32_t input_tiles_in_block   = INPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t output_tiles_in_block  = OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks             = INPUT_NUM_BLOCKS;
+    const std::uint32_t num_input_tiles        = input_tiles_in_block * num_blocks;
+    const std::uint32_t tiles_per_accumulation = input_tiles_in_block / output_tiles_in_block;
 #endif
-    const std::uint32_t loop_factor = params.LOOP_FACTOR;
 
     {
         START_PERF_MEASURE("INIT")
@@ -183,7 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 #ifndef EN_DEST_REUSE
         constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::NONE;
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACCUMULATE_TO_DEST);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
 #endif
         PROFILER_SYNC();
     }
@@ -191,23 +228,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 #ifdef EN_DEST_REUSE
-        const std::uint32_t tiles_in_block          = params.OUTPUT_NUM_TILES_IN_BLOCK;
-        const std::uint32_t num_tiles_accumulations = params.INPUT_NUM_TILES_IN_BLOCK / tiles_in_block;
-        const std::uint32_t num_blocks              = params.INPUT_NUM_BLOCKS;
-        const std::uint32_t num_input_tiles         = params.INPUT_NUM_TILES_IN_BLOCK * num_blocks;
-
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(loop_factor, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
             // Seed each accumulation group without reuse, then fold the
             // remaining input tiles through the selected destination source.
-            for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
@@ -217,8 +249,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
 
                     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-                        tensor_shape, ACCUMULATE_TO_DEST);
-                    for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
+                        tensor_shape, ACC_TO_DEST);
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -232,10 +264,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile, false /* clear_fp32_dst_acc */);
                     }
 
-                    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACCUMULATE_TO_DEST);
-                    for (std::uint32_t n = 1; n < num_tiles_accumulations; ++n)
+                    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+                    for (std::uint32_t n = 1; n < tiles_per_accumulation; ++n)
                     {
-                        for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
+                        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                         {
                             LLK_ASSERT(
                                 (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -253,25 +285,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 #else
-        const std::uint32_t input_tiles_in_block  = params.INPUT_NUM_TILES_IN_BLOCK;
-        const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-        const std::uint32_t num_blocks            = params.INPUT_NUM_BLOCKS;
-        const std::uint32_t num_input_tiles       = input_tiles_in_block * num_blocks;
         LLK_ASSERT(output_tiles_in_block > 0, "Output block must contain at least one tile");
         LLK_ASSERT(input_tiles_in_block % output_tiles_in_block == 0, "Input tiles must divide evenly among accumulated output tiles");
-        const std::uint32_t tiles_per_accumulation = input_tiles_in_block / output_tiles_in_block;
-        constexpr auto REUSE_DEST_TYPE             = ckernel::EltwiseBinaryReuseDestType::NONE;
+        constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::NONE;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            perf_binary_source_handshakes<false, BROADCAST_TYPE>(loop_factor, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
+            perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
@@ -312,26 +339,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+#ifdef SPEED_OF_LIGHT
+    constexpr ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    constexpr std::uint32_t tile_size             = tensor_shape.total_tensor_size();
+    constexpr std::uint32_t num_faces             = tensor_shape.total_num_faces();
+    constexpr bool partial_face                   = tensor_shape.face_r_dim < FACE_R_DIM;
+    constexpr bool narrow_tile                    = tensor_shape.num_faces_c_dim == 1;
+    constexpr std::uint32_t output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t output_num_blocks     = OUTPUT_NUM_BLOCKS;
+#else
+#ifdef RUNTIME_FORMATS
     const FormatConfig& formats = params.formats;
 #endif
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
+    const int num_faces_r_dim_A                   = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A                   = params.num_faces_c_dim_A;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const int OUTPUT_NUM_BLOCKS                   = params.OUTPUT_NUM_BLOCKS;
+    const Operand& buffer_Res                     = params.buffer_Res;
     // Cache volatile values to local variables first
-    const std::uint8_t face_r_dim           = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM);
-    const std::uint8_t face_c_dim           = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM);
-    const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
-    const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
-    const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
-
-    const std::uint32_t tile_size = tensor_shape.total_tensor_size();
-
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
-
-    const bool narrow_tile          = (tensor_shape.num_faces_c_dim == 1);
-    const std::uint32_t loop_factor = params.LOOP_FACTOR;
-
-    const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(num_faces_r_dim_A),
+        static_cast<std::uint8_t>(num_faces_c_dim_A)};
+    const std::uint32_t tile_size             = tensor_shape.total_tensor_size();
+    const std::uint32_t num_faces             = tensor_shape.total_num_faces();
+    const bool partial_face                   = tensor_shape.face_r_dim < FACE_R_DIM;
+    const bool narrow_tile                    = tensor_shape.num_faces_c_dim == 1;
+    const std::uint32_t output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t output_num_blocks     = OUTPUT_NUM_BLOCKS;
+#endif
 
     {
         START_PERF_MEASURE("INIT")
@@ -351,7 +395,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; ++block)
                 {
@@ -365,7 +409,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
