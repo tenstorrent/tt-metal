@@ -7,9 +7,10 @@ description: |
   workflow (issue-monster.md) and the Copilot coding agent.
   Ported from github/gh-aw's dogfooded squad-plan.md; the external Squad CLI
   dependency was dropped (see the PR that introduced this file). Operates for real:
-  the safety mechanism is the human trigger (write+ role), the fan-out cap
-  (`create-issue.max: 8`), exact-title dedup, and the `noop` rules in the body —
-  not a dry-run flag.
+  the safety mechanism is the human trigger (write+ role), a deterministic
+  pre-activation gate that refuses bounty / model-bringup issues before any agent
+  starts, the fan-out cap (`create-issue.max: 8`), exact-title dedup, and the `noop`
+  rules in the body — not a dry-run flag.
 
 on:
   # Inline strategy (same as repo-assist.md / test-command.md in this repo). tt-metal has
@@ -24,6 +25,51 @@ on:
   # invoking human is the approval step for everything the plan produces.
   roles: [admin, maintainer, write]
   reaction: "eyes"
+  # Pre-activation job permissions: the bounty gate below re-reads the issue's labels
+  # from the API (authoritative, not the event snapshot). Read-only.
+  permissions:
+    issues: read
+  steps:
+    # Deterministic bounty gate (plain code, runs before any agent). CONTRIBUTING.md
+    # ("Bug Bounty Program - AI Tool Restrictions") bans automated engagement with
+    # bounty issues under threat of a permanent account ban. The prompt-level `noop`
+    # rule further down is NOT sufficient on its own because the triggering issue body
+    # is admitted with `min-integrity: none` and could be prompt-injected. This step
+    # sets `bounty_blocked`; the workflow-level `if` only lets the agent start when it
+    # is exactly 'false' (fail closed: an API error also blocks). Deliberately posts
+    # nothing on the issue — a bot comment on a bounty issue is itself the kind of
+    # automated post the policy forbids; the refusal is visible in the run log.
+    - name: Refuse bounty / model-bringup issues (CONTRIBUTING.md AI restrictions)
+      id: bounty_gate
+      # Only evaluate for a genuine, authorized /squad-plan invocation.
+      if: steps.check_command_position.outputs.command_position_ok == 'true' && steps.check_membership.outputs.is_team_member == 'true'
+      uses: actions/github-script@v9.0.0
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+          // Must match issue-monster.md's `excludeLabelPrefixes`.
+          const NEVER_AUTOMATE_PREFIXES = ['bounty', 'model bringup'];
+          const issueNumber = context.payload.issue?.number;
+          let labels;
+          try {
+            if (!issueNumber) throw new Error('event payload has no issue number');
+            const { data } = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+            labels = (data.labels || []).map(l => (typeof l === 'string' ? l : l.name || '').toLowerCase());
+          } catch (error) {
+            core.setOutput('bounty_blocked', 'unknown');
+            core.setFailed(`Bounty gate: could not read labels of issue #${issueNumber ?? '?'} (${error.message}); refusing to plan (fail closed)`);
+            return;
+          }
+          const hits = labels.filter(l => NEVER_AUTOMATE_PREFIXES.some(p => l.startsWith(p)));
+          if (hits.length > 0) {
+            core.setOutput('bounty_blocked', 'true');
+            const msg = `Bounty gate: issue #${issueNumber} carries never-automate label(s) [${hits.join(', ')}]; /squad-plan refused per CONTRIBUTING.md "Bug Bounty Program - AI Tool Restrictions". Nothing was posted on the issue.`;
+            core.warning(msg);
+            await core.summary.addHeading('Squad Plan refused', 3).addRaw(msg).write();
+            return;
+          }
+          core.setOutput('bounty_blocked', 'false');
+          core.info(`Bounty gate: issue #${issueNumber} has no bounty / model-bringup label (${labels.length} label(s) checked)`);
 
 # One in-flight plan per issue. `issue_comment` events all carry `github.ref == main`,
 # so the default workflow+ref group would serialize planning across unrelated issues
@@ -82,6 +128,17 @@ tools:
     - "tail:*"
     - "wc:*"
 
+# Deterministic bounty gate (see `on.steps`): the agent starts only when the
+# pre-activation step positively confirmed the issue has no bounty / model-bringup
+# label. Any other value ('true', 'unknown', or empty because the step was skipped)
+# blocks activation.
+if: needs.pre_activation.outputs.bounty_blocked == 'false'
+
+jobs:
+  pre-activation:
+    outputs:
+      bounty_blocked: ${{ steps.bounty_gate.outputs.bounty_blocked }}
+
 safe-outputs:
   mentions: false
   create-issue:
@@ -109,6 +166,11 @@ safe-outputs:
   noop:
     report-as-issue: false
   report-incomplete: false
+  # The three keys above do NOT cover gh-aw's separate failure reporter (agent failure,
+  # timeout, credential errors, missing safe outputs); without this key the compiled
+  # workflow sets GH_AW_FAILURE_REPORT_AS_ISSUE=true and files a diagnostic issue in
+  # tt-metal whenever a run fails. Failures stay visible in the Actions tab instead.
+  report-failure-as-issue: false
 ---
 
 # Squad Plan (tt-metal)
@@ -175,8 +237,14 @@ removal date (label `deprecation-reaper`, body marker
 - If the triggering issue **is** the reaper tracking issue, plan one sub-issue per
   overdue manifest `id` (each shim removal is already a natural unit). Split an `id`
   further only when its call-site count is large enough that one PR would be
-  unreviewable. Every such sub-issue must end with "remove the entry from
-  `.github/deprecations.json`" in its acceptance criteria.
+  unreviewable.
+- **Manifest entries are removed exactly once, in the final part.** For each `id`,
+  only the sub-issue that deletes the deprecated definition / compatibility shim
+  (the last part in the dependency order — or the single sub-issue, if the `id` was
+  not split) ends with "remove the `<id>` entry from `.github/deprecations.json`" in
+  its acceptance criteria. Caller-migration-only parts must **not** touch
+  `.github/deprecations.json`, and must say so explicitly ("do not edit the manifest;
+  part M/M does that"): the reaper needs the entry until the shim is actually gone.
 - If the deprecated API is **not** in the manifest, still plan the removal, and add
   one line to the plan comment recommending the maintainer add a manifest entry so
   the reaper tracks it. Do not create a sub-issue just for that.
@@ -204,7 +272,8 @@ Rules:
   ordering (typically only the final "delete the definition" step depends on the
   others).
 - The final "delete the deprecated definition / shim / manifest entry" step is its
-  own sub-issue, marked as depending on all the others.
+  own sub-issue, marked as depending on all the others. It is the **only** part that
+  edits `.github/deprecations.json` (see "Deprecations" above).
 
 ### Worked example (shape, not content)
 
@@ -300,7 +369,9 @@ Call `noop` (with a one-paragraph explanation) instead of filing anything when:
   (say what information is missing),
 - the issue carries any `bounty*` or `model bringup` label — bounty work is reserved
   for human contributors (see CONTRIBUTING.md, "Bug Bounty Program - AI Tool
-  Restrictions"); never plan or automate it,
+  Restrictions"); never plan or automate it. (The pre-activation bounty gate already
+  refuses such issues before you start; this rule is the backstop in case a label was
+  added between the gate and now.)
 - the whole issue is a single small task (no split adds value),
 - you cannot ground the plan in the code (grep finds nothing, symbol renamed, etc.).
 
@@ -315,6 +386,16 @@ Never file a partial or speculative plan.
 - Re-running `/squad-plan` on an already-planned issue is safe: the agent must `noop`
   when sub-issues already cover the work, and `deduplicate-by-title` drops any
   identical title it tries to file anyway.
+- **Labels are a hard prerequisite.** `create-issue` applies `automation` and
+  `copilot-ready`; the GitHub API silently ignores label names that do not exist in
+  the repository, so `copilot-ready` (and issue-monster.md's `copilot-retry-blocked`
+  / `copilot-retry-approved`) must be created before these workflows are enabled or
+  the sub-issues will never enter Issue Monster's queue.
+- **Bounty / model-bringup issues are refused deterministically** by the
+  pre-activation `bounty_gate` step (labels starting with `bounty`, or `model
+  bringup`): the agent never starts, nothing is posted on the issue, and the refusal
+  is recorded in the run log / job summary. This is the enforcement of CONTRIBUTING.md
+  "Bug Bounty Program - AI Tool Restrictions"; the prompt rule is only a backstop.
 - Edit this `.md` and recompile with `gh aw compile squad-plan` using gh-aw v0.86.2
   (the version every lock file in this repo is compiled with; see
   copilot-setup-steps.yml).

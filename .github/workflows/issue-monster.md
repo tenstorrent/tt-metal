@@ -11,8 +11,13 @@ description: |
   and existing Copilot automation (copilot-autofix-clangsa.yaml, copilot-setup-steps.yml).
   Operates for real: the safety mechanism is the opt-in label, the deterministic
   exclusions, the per-run cap and the open-Copilot-PR back-pressure — not a dry-run
-  flag. Requires the `GH_AW_AGENT_TOKEN` repository secret (see the frontmatter
-  comment on `assign-to-agent`).
+  flag. Every safety check fails closed: a candidate whose metadata could not be read
+  is dropped, and the run fails (dispatching nothing) if the retry history cannot be
+  built. Retry-blocked issues are labeled `copilot-retry-blocked` and get one human
+  checkpoint comment from the pre-activation script itself (deterministic, no agent);
+  a maintainer approves one more attempt with `copilot-retry-approved`. Requires the
+  `GH_AW_AGENT_TOKEN` repository secret (see the frontmatter comment on
+  `assign-to-agent`) and the three labels listed under "Operator notes".
 
 on:
   workflow_dispatch:
@@ -37,8 +42,12 @@ on:
   # and scheduled hardware pipelines are red on main often enough that a name-based gate
   # would starve the queue rather than protect it. Candidate for a follow-up once there is
   # a single authoritative "main is buildable" check to key on.
+  # `issues: write` is for the pre-activation script only (plain code, no agent): it
+  # applies `copilot-retry-blocked` and posts the human-checkpoint comment when the
+  # retry heuristic fires. Doing that here rather than through the agent makes the
+  # blocked state deterministic and visible even on runs where no agent starts.
   permissions:
-    issues: read
+    issues: write
     pull-requests: read
   steps:
     - name: Search for candidate issues
@@ -56,6 +65,18 @@ on:
           // labels its PRs `copilot-autofix`; exclude them from every Copilot-PR heuristic
           // below (rate-limit scan, retry-block history, open-PR back-pressure).
           const COPILOT_PR_EXCLUDE = '-label:copilot-autofix';
+          // Retry-block state labels (both introduced by this workflow; must exist in the
+          // repo). BLOCKED is applied by this script when the retry heuristic fires and is
+          // a hard exclusion (also honoured when a maintainer applies it by hand).
+          // APPROVED is the maintainer override: with it present the retry heuristic is
+          // skipped for that issue, so one more Copilot attempt can be dispatched.
+          const RETRY_BLOCKED_LABEL = 'copilot-retry-blocked';
+          const RETRY_APPROVED_LABEL = 'copilot-retry-approved';
+          // Single source of truth for "is this actor the Copilot coding agent?". Used for
+          // both PR authors (`copilot-swe-agent`, search: `app/copilot-swe-agent`) and
+          // issue assignees (login `Copilot`). Keep the two call sites on this helper so
+          // they cannot drift if GitHub renames the bot or adds a second identity.
+          const isCopilotActor = (login) => /^copilot/i.test(login || '');
           // Labels that mean "do not auto-assign". All exist in tenstorrent/tt-metal today
           // except `copilot-retry-blocked`, which this workflow introduces.
           const excludeLabels = [
@@ -69,9 +90,10 @@ on:
             'XFN',            // cross-functional dependency == blocked on another team
             'VIOLATION',
             '🚩.',            // "Issue is blocked."
-            // Topics where repeated Copilot attempts were closed without merging.
-            // A maintainer must remove this label before a new attempt is dispatched.
-            'copilot-retry-blocked'
+            // Topics where repeated Copilot attempts were closed without merging (applied
+            // by this script, see RETRY_BLOCKED_LABEL). To dispatch one more attempt a
+            // maintainer removes it AND adds `copilot-retry-approved`.
+            RETRY_BLOCKED_LABEL
           ];
           // Label PREFIXES that mean "never automate". CONTRIBUTING.md ("Bug Bounty
           // Program - AI Tool Restrictions") forbids any automated claiming of bounty
@@ -89,10 +111,41 @@ on:
           // tt-metal has well over a hundred closed Copilot PRs from other flows; an
           // unbounded history would block topics for reasons nobody remembers.
           const RETRY_HISTORY_DAYS = 90;
+          // One closed-unmerged Copilot PR on a topic is normal (a human often lands the
+          // fix instead); two means the approach itself keeps failing and a full agent
+          // session per retry is wasted. 1 would block after any single miss; 3+ burns
+          // at least three sessions on the same problem before anyone looks.
           const RETRY_BLOCK_THRESHOLD = 2;
+          // Normalized titles shorter than this ("fix build", "update docs") are generic
+          // enough that the substring matching in findRetryBlock/findSupersedingIssue
+          // would block or dedupe unrelated issues. Squad-plan titles
+          // ("<verb> <thing> — <scope> (part N/M of #X)") are always far longer.
           const MIN_TOPIC_LENGTH = 20;
+          // Equal to squad-plan's `create-issue.max` (8): the agent can see body excerpts
+          // for every part of one whole plan. It only ever selects 2, so more bodies only
+          // inflate the prompt (and the 1 MB GitHub step-output limit) for issues it will
+          // never reach.
           const MAX_ISSUES_WITH_BODY_CONTEXT = 8;
+          // Covers the `## Objective` and start of `## Context` of the squad-plan body
+          // template, which is what the agent needs to judge topic overlap. 8 x 600 chars
+          // is ~1.5K tokens of untrusted text in the prompt; larger only adds injection
+          // surface and cost, smaller cuts the objective mid-sentence.
           const BODY_SNIPPET_MAX_LENGTH = 600;
+          // Candidate-search pagination cap. Every candidate costs 2 API calls (REST get +
+          // GraphQL details) and the pre-activation GITHUB_TOKEN has 1000 requests/hour;
+          // 500 keeps headroom for the sibling/retry queries. The search API itself stops
+          // at 1000 results. Sorted oldest-first so that if the cap is ever hit, the
+          // longest-waiting issues are the ones serviced (no starvation by new arrivals).
+          const MAX_CANDIDATES = 500;
+          // Per-issue detail fetches run in batches of this size so a large queue does
+          // not trip GitHub's secondary (burst) rate limit the way an unbounded
+          // Promise.all over hundreds of issues would.
+          const DETAIL_FETCH_BATCH_SIZE = 10;
+          // At most this many retry-blocked issues get labeled + commented per run, so a
+          // sudden burst (e.g. a whole plan's parts all matching one failed topic) does
+          // not post dozens of comments at once. The rest are still excluded from
+          // dispatch this run and are labeled on the next tick (every 2h).
+          const MAX_RETRY_CHECKPOINTS_PER_RUN = 10;
           // ------------------------------------------------------------------------------
 
           const emptyOutputs = () => {
@@ -147,18 +200,44 @@ on:
 
             // 2. Candidate search: open issues with the pickup label and none of the
             //    excluded labels (prefix exclusions are applied after fetching labels).
+            //    Paginated (oldest first) up to MAX_CANDIDATES so the whole queue is
+            //    scored, not just the newest page.
             const query = `is:issue is:open repo:${owner}/${repo} label:${PICKUP_LABEL} -label:"${excludeLabels.join('" -label:"')}"`;
             core.info(`Searching: ${query}`);
-            const response = await github.rest.search.issuesAndPullRequests({
-              q: query, per_page: 100, sort: 'created', order: 'desc'
-            });
-            core.info(`Found ${response.data.total_count} total issues matching basic criteria`);
+            let searchTotal = null;
+            let fetchedSoFar = 0;
+            const candidates = await github.paginate(
+              github.rest.search.issuesAndPullRequests,
+              { q: query, per_page: 100, sort: 'created', order: 'asc' },
+              (response, done) => {
+                // octokit normalizes search pages to the items array (total_count is kept
+                // as a property on it); each callback sees ONE page, so count across pages.
+                if (searchTotal === null) searchTotal = response.data.total_count ?? null;
+                fetchedSoFar += response.data.length;
+                if (fetchedSoFar >= MAX_CANDIDATES) done();
+                return response.data;
+              }
+            );
+            const searchItems = candidates.slice(0, MAX_CANDIDATES);
+            core.info(`Found ${searchTotal ?? searchItems.length} total issues matching basic criteria; fetched ${searchItems.length}`);
+            if (searchTotal !== null && searchTotal > searchItems.length) {
+              core.warning(`Candidate queue (${searchTotal}) exceeds MAX_CANDIDATES (${MAX_CANDIDATES}); only the ${searchItems.length} oldest are considered this run`);
+            }
 
             // 3. Per-issue details: full labels/assignees, sub-issue count, parent issue,
             //    and linked PRs. Integrity-filtered issues (403/451) are skipped one by one.
+            //    FAIL CLOSED: a candidate whose safety metadata could not be read is dropped
+            //    from this run rather than treated as "no parent, no sub-issues, no PRs".
+            const mapInBatches = async (items, size, fn) => {
+              const out = [];
+              for (let i = 0; i < items.length; i += size) {
+                out.push(...await Promise.all(items.slice(i, i + size).map(fn)));
+              }
+              return out;
+            };
             const integrityFilteredIssues = [];
             const openCopilotPR = (pr) => pr.state === 'OPEN'
-              && (pr.author === 'copilot-swe-agent' || (pr.author || '').includes('copilot'))
+              && isCopilotActor(pr.author)
               && !pr.labels.includes('copilot-autofix');
             const extractLinkedPRs = (timelineNodes) => (timelineNodes || [])
               .filter(item => item?.source?.__typename === 'PullRequest')
@@ -169,8 +248,7 @@ on:
                 author: item.source.author?.login,
                 labels: item.source.labels?.nodes?.map(l => l.name.toLowerCase()) || []
               }));
-            const issuesWithDetails = (await Promise.all(
-              response.data.items.map(async (issue) => {
+            const issuesWithDetails = (await mapInBatches(searchItems, DETAIL_FETCH_BATCH_SIZE, async (issue) => {
                 let fullIssue;
                 try {
                   fullIssue = await github.rest.issues.get({ owner, repo, issue_number: issue.number });
@@ -208,14 +286,18 @@ on:
                         }
                       }
                     }`, { owner, repo, number: issue.number });
-                  subIssuesCount = res?.repository?.issue?.subIssues?.totalCount || 0;
-                  parentNumber = res?.repository?.issue?.parent?.number ?? null;
-                  linkedPRs = extractLinkedPRs(res?.repository?.issue?.timelineItems?.nodes);
+                  const node = res?.repository?.issue;
+                  if (!node) throw new Error('GraphQL response has no issue node');
+                  subIssuesCount = node.subIssues?.totalCount || 0;
+                  parentNumber = node.parent?.number ?? null;
+                  linkedPRs = extractLinkedPRs(node.timelineItems?.nodes);
                 } catch (error) {
-                  core.warning(`Could not check details for #${issue.number}: ${error.message}`);
+                  // Fail closed: unchecked is not the same as safe.
+                  core.warning(`Skipping issue #${issue.number}: could not check sub-issues/parent/linked PRs (${error.message})`);
+                  return null;
                 }
                 return { ...fullIssue.data, subIssuesCount, parentNumber, linkedPRs };
-              })
+              }
             )).filter(Boolean);
             if (integrityFilteredIssues.length > 0) {
               core.warning(`Integrity filter: ${integrityFilteredIssues.length} issue(s) skipped: #${integrityFilteredIssues.join(', #')}`);
@@ -229,16 +311,18 @@ on:
             //    to Copilot or has an open Copilot PR. Human-assigned siblings do not block:
             //    plans are batched so that parts are independent, and a human owning part 3
             //    is not a reason to withhold part 1 from the agent.
-            const isCopilotAssignee = (login) => /^copilot/i.test(login || '');
-            const busyParents = new Map(); // parent -> reason
-            const distinctParents = [...new Set(issuesWithDetails.map(i => i.parentNumber).filter(Boolean))];
-            for (const parent of distinctParents) {
-              try {
+            // Fetch EVERY sub-issue of a parent (cursor pagination); any page error throws
+            // so the caller fails closed for that parent.
+            const fetchAllSubIssues = async (parent) => {
+              const nodes = [];
+              let cursor = null;
+              do {
                 const res = await github.graphql(`
-                  query($owner: String!, $repo: String!, $number: Int!) {
+                  query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
                     repository(owner: $owner, name: $repo) {
                       issue(number: $number) {
-                        subIssues(first: 64) {
+                        subIssues(first: 50, after: $cursor) {
+                          pageInfo { hasNextPage endCursor }
                           nodes {
                             number state
                             assignees(first: 10) { nodes { login } }
@@ -260,10 +344,23 @@ on:
                         }
                       }
                     }
-                  }`, { owner, repo, number: parent });
-                for (const sub of res?.repository?.issue?.subIssues?.nodes || []) {
+                  }`, { owner, repo, number: parent, cursor });
+                const conn = res?.repository?.issue?.subIssues;
+                if (!conn) throw new Error('GraphQL response has no subIssues connection');
+                nodes.push(...(conn.nodes || []));
+                cursor = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+              } while (cursor);
+              return nodes;
+            };
+            const busyParents = new Map(); // parent -> reason
+            const distinctParents = [...new Set(issuesWithDetails.map(i => i.parentNumber).filter(Boolean))];
+            for (const parent of distinctParents) {
+              try {
+                const siblings = await fetchAllSubIssues(parent);
+                core.info(`Parent #${parent}: inspected ${siblings.length} sub-issue(s)`);
+                for (const sub of siblings) {
                   if (sub.state !== 'OPEN') continue;
-                  if ((sub.assignees?.nodes || []).some(a => isCopilotAssignee(a?.login))) {
+                  if ((sub.assignees?.nodes || []).some(a => isCopilotActor(a?.login))) {
                     busyParents.set(parent, `sibling #${sub.number} is assigned to Copilot`);
                     break;
                   }
@@ -305,7 +402,11 @@ on:
               const blocked = [...closedTopicCounts.values()].filter(v => v.count >= RETRY_BLOCK_THRESHOLD).length;
               core.info(`Retry pre-flight: ${closedTopicCounts.size} closed-unmerged Copilot topics in the last ${RETRY_HISTORY_DAYS}d, ${blocked} at/above threshold ${RETRY_BLOCK_THRESHOLD}`);
             } catch (error) {
-              core.warning(`Could not build retry-blocked topic map: ${error.message}`);
+              // FAIL CLOSED: with the retry history unknown, every candidate would look like
+              // a first attempt. Dispatch nothing and fail the run so the outage is visible.
+              emptyOutputs();
+              core.setFailed(`Could not build retry-blocked topic map (${error.message}); dispatching nothing this run`);
+              return;
             }
             const findRetryBlock = (title) => {
               const topic = normalizeTopic(title);
@@ -366,6 +467,11 @@ on:
               if (superseding) {
                 core.info(`Skipping #${issue.number}: superseded by newer issue #${superseding.number} with the same topic`); return false;
               }
+              if (issueLabels.includes(RETRY_APPROVED_LABEL.toLowerCase())) {
+                // Maintainer override: they reviewed the prior PRs and approved one more try.
+                core.info(`#${issue.number}: carries ${RETRY_APPROVED_LABEL}; retry-block heuristic skipped`);
+                return true;
+              }
               const retryBlock = findRetryBlock(issue.title);
               if (retryBlock) {
                 core.warning(`Skipping #${issue.number}: retry-blocked topic - ${retryBlock.count} prior Copilot PR(s) closed without merging (#${retryBlock.prs.join(', #')}). Human review required.`);
@@ -374,6 +480,38 @@ on:
               }
               return true;
             });
+
+            // 7b. Retry-block bookkeeping (deterministic, no agent involved): label each
+            //     newly retry-blocked issue and post ONE human checkpoint comment. The label
+            //     is in the search exclusions, so the issue does not come back next run and
+            //     the comment is never repeated. This also runs when no dispatchable
+            //     candidate is left, so blocked issues are never silent.
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const checkpointBody = (b) => [
+              '🛑 **Retry blocked — human review required.**',
+              '',
+              `This topic already has ${b.count} Copilot pull request(s) that were closed without merging in the last ${RETRY_HISTORY_DAYS} days (#${b.prs.join(', #')}). Automatic dispatch is paused to avoid spending another agent session on the same problem, and the \`${RETRY_BLOCKED_LABEL}\` label has been applied.`,
+              '',
+              'A maintainer should review the prior PRs and clarify the requirements in this issue. Then:',
+              `- to allow **one more** Copilot attempt: add \`${RETRY_APPROVED_LABEL}\` and remove \`${RETRY_BLOCKED_LABEL}\` (removing the block label alone is not enough — the title-history check would fire again and re-apply it);`,
+              `- to keep this issue with a human: leave the labels as they are, or remove \`${PICKUP_LABEL}\`.`,
+              '',
+              `> 🍪 *Posted by the [Issue Monster](${runUrl}) pre-activation check — automated; no agent was involved in this decision.*`
+            ].join('\n');
+            for (const b of retryBlockedIssues.slice(0, MAX_RETRY_CHECKPOINTS_PER_RUN)) {
+              try {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: b.number, labels: [RETRY_BLOCKED_LABEL] });
+                await github.rest.issues.createComment({ owner, repo, issue_number: b.number, body: checkpointBody(b) });
+                core.info(`#${b.number}: applied ${RETRY_BLOCKED_LABEL} and posted the checkpoint comment`);
+              } catch (error) {
+                // Not fatal for dispatch (the issue is already excluded this run); it will be
+                // retried on the next tick because the label is still missing.
+                core.warning(`Could not label/comment retry-blocked issue #${b.number}: ${error.message}`);
+              }
+            }
+            if (retryBlockedIssues.length > MAX_RETRY_CHECKPOINTS_PER_RUN) {
+              core.warning(`${retryBlockedIssues.length - MAX_RETRY_CHECKPOINTS_PER_RUN} further retry-blocked issue(s) will be labeled on the next run (cap ${MAX_RETRY_CHECKPOINTS_PER_RUN}/run)`);
+            }
 
             // 8. One sibling per parent per run: among surviving children of the same parent,
             //    keep only the oldest (lowest number) so plan parts are dispatched in order.
@@ -429,7 +567,7 @@ on:
 
             core.info(`Total candidate issues after filtering: ${scoredIssues.length}`);
             if (scoredIssues.length > 0) core.info(`Top candidates:\n${issueList.split('\n').slice(0, 10).join('\n')}`);
-            if (retryBlockedIssues.length > 0) core.warning(`${retryBlockedIssues.length} issue(s) retry-blocked:\n${retryBlockedList}`);
+            if (retryBlockedIssues.length > 0) core.warning(`${retryBlockedIssues.length} issue(s) retry-blocked (labeled + checkpoint comment posted above):\n${retryBlockedList}`);
 
             core.setOutput('issue_count', scoredIssues.length);
             core.setOutput('issue_numbers', scoredIssues.map(i => i.number).join(','));
@@ -438,9 +576,20 @@ on:
             core.setOutput('retry_blocked_list', retryBlockedList);
             core.setOutput('has_issues', scoredIssues.length > 0 ? 'true' : 'false');
           } catch (error) {
-            core.error(`Error searching for issues: ${error.message}`);
+            // FAIL CLOSED: dispatch nothing and mark the run failed so the error is visible
+            // in the Actions tab instead of looking like an empty queue.
             emptyOutputs();
+            core.setFailed(`Error searching for issues: ${error.message}`);
           }
+
+# One dispatcher at a time. Without this the compiler's default group falls back to
+# `github.run_id` for schedule/workflow_dispatch, so a manual run could overlap a
+# scheduled one, both would select from the same pre-assignment snapshot, and together
+# they could exceed the 2-assignments-per-run cap or double-comment. Queued, not
+# cancelled: a manual run should still happen after the scheduled one finishes.
+concurrency:
+  group: "gh-aw-issue-monster-dispatch"
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -472,7 +621,10 @@ tools:
     min-integrity: approved
     approval-labels: [copilot-ready]
 
-# Only start the agent when the pre-activation script found at least one candidate.
+# Only start the agent when the pre-activation script found at least one dispatchable
+# candidate. Retry-blocked issues do NOT need the agent: the pre-activation script has
+# already labeled them and posted their human-checkpoint comment (step 7b), so a
+# "retry-only" queue is fully handled without spending an agent session.
 if: needs.pre_activation.outputs.has_issues == 'true'
 
 jobs:
@@ -503,12 +655,18 @@ safe-outputs:
     # so a missing secret is visible on the issue, not silent.
     github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
   add-comment:
-    max: 4                # 2 "selected for Copilot" + up to 2 retry-blocked checkpoints
-    target: "*"
+    max: 2                # one "selected for Copilot" comment per assignment; retry
+    target: "*"           # checkpoints are posted by the pre-activation script, not here
   missing-tool: false
   noop:
     report-as-issue: false
   report-incomplete: false
+  # `report-incomplete: false` above does NOT cover gh-aw's separate failure reporter
+  # (agent failure, timeout, missing safe outputs, credential errors such as an
+  # unprovisioned GH_AW_AGENT_TOKEN). Without this key the compiled workflow sets
+  # GH_AW_FAILURE_REPORT_AS_ISSUE=true and would file a diagnostic issue in tt-metal
+  # on every failing scheduled run. Failures stay visible in the Actions tab instead.
+  report-failure-as-issue: false
   messages:
     footer: "> 🍪 *Dispatched by [{workflow_name}]({run_url}) — automated; remove the `copilot-ready` label to opt an issue out.*{ai_credits_suffix}{history_link}"
 ---
@@ -529,21 +687,26 @@ pre-activation job. Your job is selection and bookkeeping; keep it short.
 ### What the pre-activation job already did
 
 - Skipped the run entirely if a Copilot PR from the last hour mentions rate limiting.
-- Kept only open issues labeled `copilot-ready`.
+- Kept only open issues labeled `copilot-ready` (whole queue, oldest first).
+- Dropped any candidate whose sub-issue/parent/linked-PR metadata could not be read
+  (unchecked is not safe).
 - Excluded: assigned issues; issues with sub-issues (parents); issues with any
   closed/merged linked PR; issues with an open Copilot PR; issues labeled `wontfix`,
   `duplicate`, `question`, `support`, `Spike`, `idea`, `parent-issue`, `XFN`,
   `VIOLATION`, `🚩.` (blocked), `copilot-retry-blocked`; **any `bounty*` or
   `model bringup` label** (bug-bounty work is never automated, per CONTRIBUTING.md);
   sub-issues whose parent already has a sibling assigned to Copilot or with an open
-  Copilot PR;
+  Copilot PR (every sibling inspected, fail-closed);
   all but the oldest surviving sub-issue per parent; stale duplicates by normalized
   title; and **retry-blocked topics** (two or more Copilot PRs on the same normalized
-  topic closed without merging in the last 90 days).
+  topic closed without merging in the last 90 days, unless the issue carries the
+  maintainer override `copilot-retry-approved`).
+- Labeled every newly retry-blocked issue `copilot-retry-blocked` and posted its human
+  checkpoint comment itself. **Those issues are fully handled — take no action on them.**
 - Scored survivors (community +60, good-first-issue +50, CVE +45, bug +40, docs +35,
   feature +30, perf +25, tech-debt/cleanup +20, any priority label +10, age up to +20).
 
-**Retry-blocked (excluded — human review required):**
+**Retry-blocked this run (already labeled and commented — for your information only):**
 ```
 ${{ needs.pre_activation.outputs.retry_blocked_list }}
 ```
@@ -602,17 +765,8 @@ safeoutputs/add_comment(item_number=<number>, body="🍪 **Issue Monster selecte
 
 `item_number` is required — this workflow has no triggering issue.
 
-## Step 4 — Retry-blocked checkpoints
-
-For each issue in the retry-blocked list (at most two per run, and only if no
-identical comment from this workflow is already on it — check with `issue_read`
-`get_comments` only for those issues), post:
-
-```
-safeoutputs/add_comment(item_number=<number>, body="🛑 **Retry blocked — human review required.**\n\nThis topic already has two or more Copilot pull requests that were closed without merging in the last 90 days. Automatic dispatch is paused to avoid spending another agent session on the same problem.\n\nA maintainer should review the prior PRs, clarify the requirements in this issue, and then remove the `copilot-retry-blocked` label (or leave this comment as the record if the issue should stay with a human).")
-```
-
-Skip this step entirely when the list is empty.
+Do **not** comment on retry-blocked issues: the pre-activation script already labeled
+them and posted their checkpoint comment before you started.
 
 ## Budget
 
@@ -634,14 +788,29 @@ failures.
 - **Secret**: `GH_AW_AGENT_TOKEN` (repository secret) must hold the PAT described in
   the frontmatter comment on `assign-to-agent`. Without it the workflow still runs,
   comments "selected for Copilot", and logs a failed assignment on every candidate.
-- **Labels**: `copilot-ready` (opt-in pickup; also applied automatically by
-  squad-plan.md) and `copilot-retry-blocked` (human checkpoint). The GitHub API creates
-  a label on first use when an issue is created with it, but create both up front so
-  they carry a description and a colour.
+- **Labels — hard prerequisite, create them BEFORE enabling either workflow.** The
+  GitHub API does *not* create labels on demand: an unknown label name in an issue
+  create/label call is silently ignored, so without these labels squad-plan's
+  sub-issues never enter the queue and the retry-block state cannot be recorded.
+  - `copilot-ready` — opt-in pickup label (also applied by squad-plan.md's `create-issue`).
+  - `copilot-retry-blocked` — applied by this workflow's pre-activation script when the
+    retry heuristic fires; hard exclusion (also honoured if applied by hand).
+  - `copilot-retry-approved` — maintainer override: skips the retry-block heuristic for
+    that issue so one more Copilot attempt can be dispatched.
+- **Retry-block recovery (what actually works)**: when two or more Copilot PRs on the
+  same normalized title were closed unmerged in the last 90 days, the pre-activation
+  script labels the issue `copilot-retry-blocked` and posts one checkpoint comment,
+  deterministically, whether or not the agent runs. To approve one more attempt, add
+  `copilot-retry-approved` **and** remove `copilot-retry-blocked`. Removing the block
+  label alone does nothing useful: the title-history heuristic is independent of the
+  label and will re-apply it (with a fresh comment) on the next run.
 - **Emergency stop**: disable the workflow in the Actions tab, or remove the
   `copilot-ready` label from the affected issues. `skip-if-no-match` makes an empty
   queue cost nothing.
+- **Failure visibility**: the run is marked failed (and nothing is dispatched) when
+  the candidate search or the retry-history query errors; `report-failure-as-issue:
+  false` keeps those failures in the Actions tab rather than filing issues here.
 - **Tuning knobs**: `schedule` (every 2h), `assign-to-agent.max` (2),
-  `skip-if-match.max` (3 open Copilot drafts), `RETRY_HISTORY_DAYS` (90) and the
-  label lists at the top of the pre-activation script. Edit this `.md` and recompile
-  with `gh aw compile issue-monster` using gh-aw v0.86.2.
+  `skip-if-match.max` (3 open Copilot drafts), `RETRY_HISTORY_DAYS` (90),
+  `MAX_CANDIDATES` (500) and the label lists at the top of the pre-activation script.
+  Edit this `.md` and recompile with `gh aw compile issue-monster` using gh-aw v0.86.2.
