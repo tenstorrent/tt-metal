@@ -7,6 +7,7 @@
 // derived from flash-linear-attention `naive_chunk_gated_delta_rule`.
 
 #include "chunk_gated_delta_rule_program_factory.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
 #include <set>
@@ -178,8 +179,7 @@ tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descri
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
-    compute.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
+    compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(BH);
 
     auto* q_buf = in.q.buffer();

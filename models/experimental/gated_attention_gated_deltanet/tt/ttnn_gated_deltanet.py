@@ -22,6 +22,7 @@ from .ttnn_delta_rule_ops import (
 from .ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
 _L1_SEQ_THRESHOLD = 512
+_C2_LOGGED = set()  # C2 items whose one-time "[C2] ... active" line was printed
 
 
 def _l1_seq_threshold():
@@ -95,9 +96,9 @@ _mm_grid_cache = {}
 
 
 def _get_mm_grid(device):
-    """Per-device ttnn.CoreCoord from compute_with_storage_grid_size(), cached by device identity
-    (mirrors _get_mega_split_weights' id()-keyed cache below -- `device` is a fixed object for the
-    process lifetime)."""
+    """Per-device ttnn.CoreCoord from compute_with_storage_grid_size(), cached by id(device). A
+    reused id (a new device after a close) is harmless here: the value is a plain CoreCoord that
+    holds no device resource, and it is the same grid on the same hardware."""
     key = id(device)
     grid = _mm_grid_cache.get(key)
     if grid is None:
@@ -107,20 +108,38 @@ def _get_mm_grid(device):
     return grid
 
 
-def _get_mega_split_weights(mega_fused_weight, mega_qkv_dim, mega_g_dim, mega_a_dim, mega_b_dim):
-    """Derive (w_qkv, w_gab) from the mega-fused [qkv|g|a|b] weight, cached by tensor identity.
+def _mega_split_entry_live(entry, mega_fused_weight):
+    """A cache entry (src, w_qkv, w_gab) is reusable only for the same source tensor object and while
+    its slices are still allocated."""
+    src, w_qkv, w_gab = entry
+    return src is mega_fused_weight and w_qkv.is_allocated() and (w_gab is None or w_gab.is_allocated())
 
-    mega_fused_weight is a fixed per-layer device weight (never reallocated for the process
-    lifetime), so caching by id() is safe and keeps this to one slice pair per layer.
+
+def _get_mega_split_weights(mega_fused_weight, mega_qkv_dim, mega_g_dim, mega_a_dim, mega_b_dim, need_gab=True):
+    """Derive (w_qkv, w_gab) from the mega-fused [qkv|g|a|b] weight, cached per source tensor.
+
+    Keyed by id(mega_fused_weight). id() alone is not safe: a new model object (e.g. per-test
+    pytest devices) can get the id of a freed weight and would receive that weight's deallocated
+    slices. So each entry holds the source tensor itself (the id cannot be reused while the entry
+    lives) and a hit must be the same object with its slices still allocated; otherwise the slices
+    are made again. Entries whose slices are no longer allocated (closed device) are dropped when a
+    new entry is added, so the cache does not grow across devices.
+    need_gab=False (a separate prefill [g|a|b] weight is used): w_gab is not sliced (returned None
+    unless an earlier call already made it).
     """
     key = id(mega_fused_weight)
     cached = _mega_split_cache.get(key)
-    if cached is not None:
-        return cached
+    if cached is not None and not _mega_split_entry_live(cached, mega_fused_weight):
+        cached = None
+    if cached is not None and (cached[2] is not None or not need_gab):
+        return cached[1], cached[2]
+    if cached is None:
+        for k in [k for k, e in _mega_split_cache.items() if not (e[1].is_allocated() and e[0].is_allocated())]:
+            del _mega_split_cache[k]
     gab_dim = mega_g_dim + mega_a_dim + mega_b_dim
-    w_qkv = mega_fused_weight[:, :mega_qkv_dim]
-    w_gab = mega_fused_weight[:, mega_qkv_dim : mega_qkv_dim + gab_dim]
-    _mega_split_cache[key] = (w_qkv, w_gab)
+    w_qkv = cached[1] if cached is not None else mega_fused_weight[:, :mega_qkv_dim]
+    w_gab = mega_fused_weight[:, mega_qkv_dim : mega_qkv_dim + gab_dim] if need_gab else None
+    _mega_split_cache[key] = (mega_fused_weight, w_qkv, w_gab)
     return w_qkv, w_gab
 
 
@@ -500,6 +519,10 @@ def gated_deltanet_forward_ttnn(
     prefill_progcfg_fn=None,
     decode_progcfg_fn=None,
     native_conv1d_fn=None,
+    prefill_gab_pad_weight=None,
+    prefill_gab_a_off=None,
+    prefill_gab_b_off=None,
+    m3_qkv_zero_bias=None,
 ):
     """Gated DeltaNet forward. mode: recurrent (decode T=1) or chunk (prefill T>1).
 
@@ -517,6 +540,15 @@ def gated_deltanet_forward_ttnn(
 
     native_conv1d_fn: optional (x [B,T,C] TILE, conv_state [B,K-1,C]|None) -> (silu(conv(x))
     [B,T,C] TILE DRAM, new_state [B,K-1,C]) used for chunk prefill when valid_len is None.
+
+    prefill_gab_pad_weight: optional PREFILL-only (T > 1, split-projection path) [g | a | 0 | b | 0]
+    weight whose a and b column blocks are each padded to a whole tile; a/b are then the
+    tile-aligned slices at prefill_gab_a_off / prefill_gab_b_off of its output (no untilize).
+    Same values as the [g|a|b] columns of mega_fused_weight. Decode (T == 1) never uses it.
+
+    m3_qkv_zero_bias: optional (QWEN36_M3_ZB, qwen36 tp_common M3 table) bf16 TILE [1, N] DRAM zero
+    bias, allocated once at model load and shared across layers. When the M1 S3 program applies, the
+    q|k|v in-proj runs as ttnn.linear with this bias (bit-identical to minimal_matmul). None = unchanged.
     """
     if num_v_heads is None:
         num_v_heads = num_heads
@@ -537,6 +569,8 @@ def gated_deltanet_forward_ttnn(
     mc_outproj = ttnn.L1_MEMORY_CONFIG if (_post_outproj and _post_ok) else mc
 
     ckc = compute_kernel_config
+    # C2 SGRN: the L1 z|a|0|b|0 in-proj output kept alive for sigmoid_gated_rms_norm (None = flag off / n.a.).
+    _c2_gab = None
 
     def _pc(x_in, w_in):
         if T == 1 and decode_progcfg_fn is not None:
@@ -566,6 +600,8 @@ def gated_deltanet_forward_ttnn(
     )
 
     if use_mega_fused:
+        # M1 S3: True when the q|k|v in-proj output below is L1 (freed right after the conv).
+        _m1_qkv_l1 = False
         # F6-B: T>1 (chunk prefill) can run two matmuls off the same x instead of one mega matmul
         # + 3 slices of the full [*, D_total] output — qkv comes back tile-native at full width
         # (no slicing at all) and gate/a/b are sliced from a ~2080-wide tensor instead of the full
@@ -573,34 +609,175 @@ def gated_deltanet_forward_ttnn(
         # is a bigger win there — one matmul beats two at M=1), matching today's behavior exactly;
         # QWEN36_GDN_SPLIT_PROJ=0 also restores the legacy path at any T.
         if T > 1 and os.environ.get("QWEN36_GDN_SPLIT_PROJ", "1") != "0":
-            w_qkv, w_gab = _get_mega_split_weights(mega_fused_weight, mega_qkv_dim, mega_g_dim, mega_a_dim, mega_b_dim)
-            qkv = ttnn.experimental.minimal_matmul(
-                hidden_states,
-                w_qkv,
-                config=tpc.prefill_minimal_matmul_config(
-                    T, hidden_states.shape[-1], w_qkv.shape[-1], _get_mm_grid(device)
-                ),
-                compute_kernel_config=ckc,
-                memory_config=mc,
+            _gab_pad = prefill_gab_pad_weight is not None
+            w_qkv, w_gab = _get_mega_split_weights(
+                mega_fused_weight, mega_qkv_dim, mega_g_dim, mega_a_dim, mega_b_dim, need_gab=not _gab_pad
             )
-            gab = ttnn.linear(
-                hidden_states,
-                w_gab,
-                memory_config=mc,
-                compute_kernel_config=ckc,
-                program_config=_pc(hidden_states, w_gab),
+            if _gab_pad:
+                w_gab = prefill_gab_pad_weight
+            # M1 S3 / S4 (QWEN36_M1_S3 / _S4 = 1; tp_common M1 table): unmasked T == 2048 chunk only.
+            # S3: q|k|v in-proj as the H V2_bw8 2D-mcast ttnn.matmul, output L1 interleaved (the
+            # tiled KDA conv reads it; freed right after the conv). S4: z|a|0|b|0 in-proj as the same
+            # program family, output L1; its slices keep today's DRAM placement. With S3 or S4 on,
+            # layer.py writes the attention_norm output (hidden_states) to L1: `_m1_x_l1`. A call that
+            # M1 does not switch then keeps its current DRAM output placement (minimal_matmul would
+            # otherwise inherit in0's L1 placement), and hidden_states is freed after its last
+            # consumer (the z|a|0|b|0 matmul) instead of after the layer (layer.py; that deallocate
+            # is then a no-op). All None / False when the flags are off -> the calls below unchanged.
+            _m1_ok = mode == "chunk" and valid_len is None
+            _m1_grid = _get_mm_grid(device)
+            _m1_qkv_pc = (
+                tpc.m1_prefill_2d_progcfg("S3", T, hidden_states.shape[-1], w_qkv.shape[-1], _m1_grid)
+                if _m1_ok and native_conv1d_fn is not None
+                else None
             )
-            # gab is laid out g|a|b (columns mega_qkv_dim..end of the original mega weight); g_dim
-            # is a tile-width multiple so this begin lands on a tile boundary (tile-native, no
-            # untilize). a/b are half a tile each, pulled out together as before.
-            gate_raw = gab[:, :, :mega_g_dim]
-            ab_raw = gab[:, :, mega_g_dim : mega_g_dim + mega_a_dim + mega_b_dim]
-            a_raw = ab_raw[:, :, :mega_a_dim]
-            a_raw = ttnn.to_layout(a_raw, ttnn.TILE_LAYOUT)
-            b_raw = ab_raw[:, :, mega_a_dim : mega_a_dim + mega_b_dim]
-            b_raw = ttnn.to_layout(b_raw, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(ab_raw)
-            ttnn.deallocate(gab)
+            _m1_gab_pc = (
+                tpc.m1_prefill_2d_progcfg("S4", T, hidden_states.shape[-1], w_gab.shape[-1], _m1_grid)
+                if _m1_ok and _gab_pad
+                else None
+            )
+            _m1_x_l1 = (
+                _m1_ok
+                and tpc.m1_gdn_norm_l1(T, _m1_grid)
+                and hidden_states.memory_config().buffer_type == ttnn.BufferType.L1
+            )
+            # I-2 S3 (QWEN36_I2_S3=1, T <= 2048): 2D-mcast ttnn.linear (T2 S3-D008) instead of the
+            # minimal_matmul; the output placement is unchanged (mc, or in0's placement when mc is
+            # None, as minimal_matmul inherits it). None -> the pre-I-2 minimal_matmul.
+            _i2_qkv_pc = tpc.i2_prefill_2d_progcfg(
+                "S3", T, hidden_states.shape[-1], w_qkv.shape[-1], _get_mm_grid(device)
+            )
+            if _m1_qkv_pc is not None and m3_qkv_zero_bias is not None:
+                # M3 ZB (QWEN36_M3_ZB=1): the same M1 S3 program via ttnn.linear + the shared zero bias
+                # (FUSE_BIAS path; N1 N-f: bit-identical to minimal_matmul). Allocated at model load.
+                assert (
+                    m3_qkv_zero_bias.shape[-1] == w_qkv.shape[-1]
+                ), f"M3 ZB: zero bias width {m3_qkv_zero_bias.shape[-1]} != q|k|v in-proj N {w_qkv.shape[-1]}"
+                qkv = ttnn.linear(
+                    hidden_states,
+                    w_qkv,
+                    bias=m3_qkv_zero_bias,
+                    program_config=_m1_qkv_pc,
+                    compute_kernel_config=ckc,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+                _m1_qkv_l1 = True
+            elif _m1_qkv_pc is not None:
+                assert not tpc.m3_enabled("ZB"), (
+                    "QWEN36_M3_ZB=1 but the M1 S3 zero bias was not passed (Qwen36Model allocates it at "
+                    "model load; the forward never allocates it)"
+                )
+                qkv = ttnn.matmul(
+                    hidden_states,
+                    w_qkv,
+                    program_config=_m1_qkv_pc,
+                    compute_kernel_config=ckc,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+                _m1_qkv_l1 = True
+            elif _i2_qkv_pc is not None:
+                qkv = ttnn.linear(
+                    hidden_states,
+                    w_qkv,
+                    compute_kernel_config=ckc,
+                    memory_config=(
+                        mc
+                        if mc is not None
+                        else (ttnn.DRAM_MEMORY_CONFIG if _m1_x_l1 else hidden_states.memory_config())
+                    ),
+                    program_config=_i2_qkv_pc,
+                )
+            else:
+                qkv = ttnn.experimental.minimal_matmul(
+                    hidden_states,
+                    w_qkv,
+                    config=tpc.prefill_minimal_matmul_config(
+                        T, hidden_states.shape[-1], w_qkv.shape[-1], _get_mm_grid(device)
+                    ),
+                    compute_kernel_config=ckc,
+                    memory_config=mc if (mc is not None or not _m1_x_l1) else ttnn.DRAM_MEMORY_CONFIG,
+                )
+            # C2 SGRN (QWEN36_C2_SGRN=1; tp_common C2 table): only where M1 S4 applies (unmasked chunk,
+            # T == 2048) on the fused FLA path with the fused SILU gate. gab (z = columns
+            # 0..mega_g_dim-1) is then read in place by sigmoid_gated_rms_norm after ChunkGdnFused: no
+            # z slice here and gab stays alive until that op (freed right after it).
+            _c2_sgrn = (
+                _m1_gab_pc is not None
+                and tpc.c2_enabled("SGRN")
+                and chunk_delta_fn is not None
+                and use_gate
+                and g_proj_weight is not None
+                and os.environ.get("QWEN36_GDN_GATE_FUSED", "1") != "0"
+                and os.environ.get("QWEN36_GDN_GATE_CLIP", "0") != "1"
+            )
+            # C4 (tp_common.c2_sgrn_gab_dram): with SGRN and QWEN36_LAYER_RESID_L1=1, "variant b": the M1 S4
+            # program writes gab DRAM interleaved (an L1 gab alive through ChunkGdnFused clashes with its
+            # static CBs when the residual stream is also L1). Otherwise gab L1 as before ("variant a").
+            _c2_gab_dram = _c2_sgrn and tpc.c2_sgrn_gab_dram()
+            if _m1_gab_pc is not None:
+                gab = ttnn.matmul(
+                    hidden_states,
+                    w_gab,
+                    program_config=_m1_gab_pc,
+                    compute_kernel_config=ckc,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG if _c2_gab_dram else ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+            else:
+                gab = ttnn.linear(
+                    hidden_states,
+                    w_gab,
+                    memory_config=mc,
+                    compute_kernel_config=ckc,
+                    program_config=_pc(hidden_states, w_gab),
+                )
+            if _m1_x_l1:
+                # M1: last consumer of the L1 norm output -> free it now (not after the layer).
+                ttnn.deallocate(hidden_states)
+            if _m1_gab_pc is not None:
+                # M1 S4: gab is L1 ([g | a | 0 | b | 0], _gab_pad is True here; DRAM in C2 SGRN variant b);
+                # the three slices go to DRAM, the placement they have without M1 (gab DRAM, slices
+                # inherit it).
+                _gs = list(gab.shape)
+                _dram = ttnn.DRAM_MEMORY_CONFIG
+                if _c2_sgrn:
+                    gate_raw = None
+                    _c2_gab = gab
+                else:
+                    gate_raw = ttnn.slice(gab, [0, 0, 0], [_gs[0], _gs[1], mega_g_dim], memory_config=_dram)
+                a_raw = ttnn.slice(
+                    gab,
+                    [0, 0, prefill_gab_a_off],
+                    [_gs[0], _gs[1], prefill_gab_a_off + mega_a_dim],
+                    memory_config=_dram,
+                )
+                b_raw = ttnn.slice(
+                    gab,
+                    [0, 0, prefill_gab_b_off],
+                    [_gs[0], _gs[1], prefill_gab_b_off + mega_b_dim],
+                    memory_config=_dram,
+                )
+                if not _c2_sgrn:
+                    ttnn.deallocate(gab)
+            else:
+                # gab is laid out g|a|b (columns mega_qkv_dim..end of the original mega weight); g_dim
+                # is a tile-width multiple so this begin lands on a tile boundary (tile-native, no
+                # untilize). a/b are half a tile each, pulled out together as before.
+                gate_raw = gab[:, :, :mega_g_dim]
+                if _gab_pad:
+                    # [g | a | 0 | b | 0]: a and b each start on a tile boundary -> tile-native slices.
+                    a_raw = gab[:, :, prefill_gab_a_off : prefill_gab_a_off + mega_a_dim]
+                    b_raw = gab[:, :, prefill_gab_b_off : prefill_gab_b_off + mega_b_dim]
+                else:
+                    ab_raw = gab[:, :, mega_g_dim : mega_g_dim + mega_a_dim + mega_b_dim]
+                    a_raw = ab_raw[:, :, :mega_a_dim]
+                    a_raw = ttnn.to_layout(a_raw, ttnn.TILE_LAYOUT)
+                    b_raw = ab_raw[:, :, mega_a_dim : mega_a_dim + mega_b_dim]
+                    b_raw = ttnn.to_layout(b_raw, ttnn.TILE_LAYOUT)
+                    ttnn.deallocate(ab_raw)
+                ttnn.deallocate(gab)
         else:
             mega_out = ttnn.linear(
                 hidden_states,
@@ -634,7 +811,17 @@ def gated_deltanet_forward_ttnn(
                 # this model: Qwen3.5 GDN has no conv1d bias — see gdn/weights.py). May return qkv
                 # as a (q, k, v) tuple directly (conv1d_native.py's n_cc=3 fast path, only taken
                 # when chunk width == q_dim == k_dim == v_dim) — see "Split QKV after conv" below.
-                qkv, new_fused_conv_state_raw = native_conv1d_fn(qkv, fused_conv_state)
+                if _m1_qkv_l1:
+                    # M1 S3: free the L1 in-proj output right after the conv (the DRAM one is freed at
+                    # the same point, when `qkv` is rebound). Skipped if a conv output shares its buffer.
+                    _m1_qkv_in = qkv
+                    qkv, new_fused_conv_state_raw = native_conv1d_fn(_m1_qkv_in, fused_conv_state)
+                    _m1_addr = _m1_qkv_in.buffer_address()
+                    if all(o.buffer_address() != _m1_addr for o in (qkv if isinstance(qkv, tuple) else (qkv,))):
+                        ttnn.deallocate(_m1_qkv_in)
+                    del _m1_qkv_in
+                else:
+                    qkv, new_fused_conv_state_raw = native_conv1d_fn(qkv, fused_conv_state)
             else:
                 # Prefill FIR conv
                 qkv, new_fused_conv_state_raw = _causal_conv1d_fir(
@@ -896,10 +1083,13 @@ def gated_deltanet_forward_ttnn(
     # it to DRAM alongside q/k/v removes it from that budget entirely. Scoped to `_use_chunk_fn`
     # only -- decode (T==1) and the seq-adapter path keep beta/g in L1 (mc_small), unaffected,
     # since their own kernel CBs are smaller and don't clash (see conv1d_kda.py's flag docstring).
+    # R3 FLA_IN_L1 (qwen36 tp_common R3 table): unmasked T == R3_T chunks keep the chain in mc_small (L1).
+    _r3_fla_in_l1 = _use_chunk_fn and valid_len is None and T == tpc.R3_T and tpc.r3_enabled("FLA_IN_L1")
     if (
         _use_chunk_fn
         and os.environ.get("QWEN36_GDN_FLA_INPUTS_DRAM", "1" if os.environ.get("QWEN_GDN_PATH") == "fused" else "0")
         != "0"
+        and not _r3_fla_in_l1
     ):
         mc_small = ttnn.DRAM_MEMORY_CONFIG
 
@@ -1062,7 +1252,44 @@ def gated_deltanet_forward_ttnn(
         )
 
     # Output norm + projection (clip before o_proj to avoid sparse overflow)
-    if _o_head_major:
+    if _c2_gab is not None:
+        # C2 SGRN (QWEN36_C2_SGRN=1): the post-scan chain (z slice, typecast, per-head rms_norm,
+        # nlp_concat_heads, multiply with SILU gate) as ONE op: rms_norm(o per head; fp32 in) * weight *
+        # silu(z), z read in place from gab columns [0, Nv*Dv) (gate_col_offset_tiles 0); bf16 out in the
+        # placement the gate multiply wrote (mc_scan); gab freed right after.
+        assert _o_head_major and mega_g_dim == num_v_heads * head_v_dim, (
+            f"C2 SGRN: expected the head-major fused FLA output and z width {mega_g_dim} == Nv*Dv "
+            f"{num_v_heads * head_v_dim}"
+        )
+        if len(o.shape) != 3:
+            o = ttnn.reshape(o, [B * num_v_heads, T, head_v_dim])  # metadata only
+        if "SGRN" not in _C2_LOGGED:
+            _C2_LOGGED.add("SGRN")
+            print(
+                f"[C2] QWEN36_C2_SGRN=1 active: sigmoid_gated_rms_norm(o {list(o.shape)} {o.dtype} "
+                f"{o.memory_config().buffer_type}, gab {list(_c2_gab.shape)} {_c2_gab.dtype} "
+                f"{_c2_gab.memory_config().buffer_type}, weight {list(o_norm_weight.shape)} {o_norm_weight.dtype} "
+                f"{o_norm_weight.layout}, H={num_v_heads}, epsilon={norm_eps}, silu, gate_col_offset_tiles=0, "
+                f"out bf16 {mc_scan}, HiFi4 approx=F fp32_dest=T packer_l1_acc=F) gab placement variant "
+                f"{'b (DRAM)' if _c2_gab.memory_config().buffer_type == ttnn.BufferType.DRAM else 'a (L1)'}",
+                flush=True,
+            )
+        o = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            o,
+            _c2_gab,
+            o_norm_weight,
+            num_v_heads,
+            epsilon=norm_eps,
+            memory_config=mc_scan,
+            compute_kernel_config=tpc.C2_SGRN_CKC,
+            output_dtype=ttnn.bfloat16,
+            gate_activation="silu",
+            gate_col_offset_tiles=0,
+        )
+        ttnn.deallocate(_c2_gab)
+        _c2_gab = None
+        # already [B, T, Nv*Dv]; skip the reshape below
+    elif _o_head_major:
         # Fused-chunk output is head-major [B*Nv, T, Dv]: norm per head in place, fold heads with the
         # TILE-native concat, and gate on the flat [B, T, Nv*Dv] tensor. Same math as
         # rms_norm_gated_ttnn without the token<->head relayouts and the two copying reshapes.

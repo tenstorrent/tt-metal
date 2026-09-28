@@ -14,6 +14,31 @@ from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, restore_split_conv_from_fused
 from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 
+# QWEN36_GDN_PCFG (PR #57440 port, 2026-09-26): program_config for the fused chunk-prefill op
+# (ttnn.transformer.chunk_gated_delta_rule), passed through gdn/decode.py. It replaces the removed
+# QWEN_GDN_NP / QWEN_GDN_NV / QWEN_GDN_PLACEMENT C++ env knobs (#57440 ignores them).
+#   unset / "auto" -> None: the op's cost model picks fused/phased and the fused geometry.
+#   "nv1np6"       -> NV=1, NP=6, row-major (the pre-#57440 geometry; like-for-like A/B).
+#   "nv1np5"       -> NV=1, NP=5, row-local (the cost-model pick on P150 13x10 at BH=16, NC=64).
+#   "nv2np4"       -> NV=2, NP=4, row-local.
+#   "nv2np6"       -> NV=2, NP=6, row-major.
+_GDN_PCFG_GEOMETRIES = {
+    "nv1np6": dict(num_producers=6, num_receivers=1, row_local=False),
+    "nv1np5": dict(num_producers=5, num_receivers=1, row_local=True),
+    "nv2np4": dict(num_producers=4, num_receivers=2, row_local=True),
+    "nv2np6": dict(num_producers=6, num_receivers=2, row_local=False),
+}
+
+
+def gdn_program_config_from_env():
+    """QWEN36_GDN_PCFG -> ttnn.ChunkGdnFusedProgramConfig, or None for the op's cost-model default."""
+    name = os.environ.get("QWEN36_GDN_PCFG", "auto").strip().lower()
+    if name in ("", "auto"):
+        return None
+    if name not in _GDN_PCFG_GEOMETRIES:
+        raise ValueError(f"QWEN36_GDN_PCFG={name!r}: expected auto or one of {sorted(_GDN_PCFG_GEOMETRIES)}")
+    return ttnn.ChunkGdnFusedProgramConfig(**_GDN_PCFG_GEOMETRIES[name])
+
 
 class Qwen36GatedDeltaNet:
     """Gated DeltaNet (linear attention) layer for Qwen3.5-9B.
@@ -93,6 +118,10 @@ class Qwen36GatedDeltaNet:
             #     read inside conv1d_kda.py. Default 0 (op's own fp32_dest_acc_en=False default):
             #     measured to win on whole-model logits PCC despite fp32acc=1 winning the isolated
             #     op-level PCC comparison — see conv1d_kda.py's docstring for the numbers.
+            #   QWEN36_GDN_CONV_KDA_TILED=1/0 (default 1, INT-3) — the op's tiled kernel takes the TILE
+            #     in-proj output and TILE conv state directly and returns new_state (no untilize/
+            #     zeros/slice/tilize glue); 0 = the ROW_MAJOR KDA path. Bit-identical; read inside
+            #     conv1d_kda.py.
             if os.environ.get("QWEN36_GDN_CONV_KDA", "1") != "0" and config.conv_kernel_size == 4:
                 from models.demos.blackhole.qwen36.tt.gdn.conv1d_kda import make_kda_conv1d_fn
 
@@ -112,7 +141,11 @@ class Qwen36GatedDeltaNet:
         if os.environ.get("QWEN36_GDN_FUSED_PREFILL", "1") != "0":
             from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import build_fused_const_tiles
 
-            self._fused_const_tiles = build_fused_const_tiles(mesh_device)
+            # HV: only used to build the gb_flat head selector when QWEN_GDN_FLAT_GB=1 (T7).
+            self._fused_const_tiles = build_fused_const_tiles(mesh_device, HV=self.num_v_heads)
+        # program_config for the fused chunk-prefill op (QWEN36_GDN_PCFG, see the top of this file);
+        # gdn/decode.py passes it to chunk_gated_delta_rule_fused_adapter. None = the op's cost model.
+        self.gdn_program_config = gdn_program_config_from_env()
 
         self._prefill_progcfg_fn = tpc.make_prefill_progcfg_fn(mesh_device)
         # Decode (T==1) 1D matmul progcfg (see tp_common measured table): GDN out-proj and the
@@ -137,6 +170,45 @@ class Qwen36GatedDeltaNet:
         # execute_trace() replays (each replay re-runs the same baked buffer addresses).
         # Eager prefill keeps the reassign path. See Qwen36Model.capture_prefill_trace_chunked.
         self._chunk_inplace_state = False
+
+        # QWEN36_GDN_DECODE_FUSED=2 (default on; 0 = composite): T == 1 decode runs mega linear ->
+        # ttnn.experimental.kda.gdn_decode_step -> out-proj (gdn/decode_fused.py). Needs an FP32
+        # recurrent state (allocated FP32 everywhere while this is on), the packed conv taps (host
+        # pack, once, here) and the packed conv history `conv_hist` (rebuilt on device from
+        # fused_conv_state by refresh_conv_hist after prefill / restore / reset). Flag 0: nothing
+        # below is created and every path is the pre-T8 one.
+        self._decode_fused = False
+        self.conv_taps_packed = None
+        self.conv_hist = None
+        from models.demos.blackhole.qwen36.tt.gdn import decode_fused as _df
+
+        if _df.decode_fused_enabled():
+            ok, why = _df.fused_supported(config, self.weights)
+            if ok:
+                self._decode_fused = True
+                self.conv_taps_packed = _df.pack_conv_taps(config, self.weights.fused_conv_weight_taps, mesh_device)
+            else:
+                _df.warn_unsupported(why)
+
+    def ensure_conv_hist(self):
+        """Allocate the packed conv history once (outside any trace; its address is baked into the decode trace)."""
+        from models.demos.blackhole.qwen36.tt.gdn import decode_fused as _df
+
+        if self._decode_fused and self.conv_hist is None:
+            self.conv_hist = _df.alloc_conv_hist(self.cfg, self.device)
+        return self.conv_hist
+
+    def refresh_conv_hist(self):
+        """Rebuild conv_hist from fused_conv_state on device (eager, trace safe: no host reads)."""
+        from models.demos.blackhole.qwen36.tt.gdn import decode_fused as _df
+
+        if not self._decode_fused:
+            return
+        self.ensure_conv_hist()
+        if self.fused_conv_state is None:
+            ttnn.copy(ttnn.zeros_like(self.conv_hist), self.conv_hist)
+            return
+        _df.repack_conv_hist(self.fused_conv_state, self.conv_hist, self.cfg)
 
     def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):
         return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)

@@ -44,7 +44,11 @@ void kernel_main() {
 
     // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt.
     for (uint32_t c = 0; c < NC; c++) {
-        cbout.wait_front(cv);
+        {
+            DeviceZoneScopedN("ow_wait_cb");
+            cbout.wait_front(cv);
+        }
+        DeviceZoneScopedN("ow_write");
         const uint32_t row_base = (h * NC + c) * Ct * Vt_full;
         auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
         for (uint32_t r = 0; r < Ct; r++) {

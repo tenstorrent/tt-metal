@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Part-level tests for the phased GDN prims (F0 test pyramid, tier 2).
+"""Part-level tests for the phased GDN prims
 
-ttnn.transformer.chunk_gdn_prep produces the seven per-(head,chunk) fp32 intermediates
-{v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}; ttnn.transformer.chunk_gdn_scan consumes them
-plus the initial state and carries the recurrence. Each prim is asserted against torch formulas
+chunk_gdn_prep produces the seven per-(head,chunk) fp32 intermediates
+{v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}; chunk_gdn_scan consumes them plus the initial
+state and carries the recurrence. Both are bound privately (ttnn._ttnn.operations.transformer, not
+registered as ttnn.transformer operations): they are test surfaces of the public op's phased path. Each prim is asserted against torch formulas
 inlined from models/experimental/gated_attention_gated_deltanet/torch_functional/
 delta_rule_ops.py:170-238 (tests must not import models/), and the composition prep->scan is
 asserted BIT-IDENTICAL to the public op on the phased path — the seven intermediates are rounded
@@ -17,6 +18,11 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+_t = ttnn._ttnn.operations.transformer  # the prims are not registered as ttnn.transformer operations
+
+pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the phased chunk_gated_delta_rule prims are Blackhole-only")
 
 CHUNK = 32  # Ct=1: the production chunk size; the prims' in-kernel WY inverse is exact here
 KDIM = 128
@@ -106,7 +112,9 @@ def _prep_reference(q, k, v, g, beta):
     intra = (q @ k.transpose(-1, -2) * l_mask).masked_fill(mask_causal, 0)  # :222
     # :237 — k * exp(decay_last - decay), transposed to [K,C]
     k_dec_t = (k * (decay[..., -1:] - decay).exp().unsqueeze(-1)).transpose(-1, -2)
-    dl = decay[..., -1].exp().reshape(*decay.shape[:2], 1, 1)  # exp(g_sum): the scan's state decay
+    # dl*I: exp(g_sum) on the diagonal of one 32x32 tile (the scan decays each state tile as (dl*I) @ S_tile,
+    # so the tile is a single 32x32 identity block whatever C or K are)
+    dl = decay[..., -1].exp()[..., None, None] * torch.eye(32, dtype=torch.float32)
     return v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv
 
 
@@ -120,23 +128,12 @@ def _scan_reference(v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv, s0):
     for c in range(nc):
         v_new = t_inv[:, c] @ (v_beta[:, c] - kd[:, c] @ S)
         o[:, c] = q_decay[:, c] @ S + intra[:, c] @ v_new  # :229-232
-        S = S * dl[:, c] + k_dec_t[:, c] @ v_new  # :235-238
+        S = S * dl[:, c, 0, 0][:, None, None] + k_dec_t[:, c] @ v_new  # :235-238 (dl = the diagonal value)
     return o, S
 
 
 def _dev(device, t, dtype):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-
-def _clean_env(monkeypatch):
-    # Neutralize ambient GDN debug/perf knobs that fork the kernel topology or corrupt outputs.
-    monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
-    monkeypatch.delenv("QWEN_GDN_PREP_SERIAL", raising=False)
-    # Mcast on/off is documented bit-exact, but pin the shipped default topology anyway.
-    monkeypatch.delenv("QWEN_GDN_SCAN_MCAST", raising=False)
-    # QWEN_GDN_DUMP is read once via a function-local static; delenv helps only if the op has not
-    # run yet in this process — kept for hygiene.
-    monkeypatch.delenv("QWEN_GDN_DUMP", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +144,11 @@ def _clean_env(monkeypatch):
 # (16, 8) = 128 (head, chunk) work-items: exercises the multi-core fan-out of distribute_prep
 # (fills a full 8x8+ grid); (4, 4) is the small-shape smoke.
 @pytest.mark.parametrize("bh, nc", [(4, 4), (16, 8)])
-def test_prep_outputs_vs_torch(device, monkeypatch, bh, nc):
-    _clean_env(monkeypatch)
+def test_prep_outputs_vs_torch(device, bh, nc):
     scale = KDIM**-0.5
     q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale)
 
-    outs = ttnn.transformer.chunk_gdn_prep(
+    outs = _t.chunk_gdn_prep(
         _dev(device, q, ttnn.bfloat16),
         _dev(device, k, ttnn.bfloat16),
         _dev(device, v, ttnn.bfloat16),
@@ -173,8 +169,8 @@ def test_prep_outputs_vs_torch(device, monkeypatch, bh, nc):
     #   intra   1e-3: |q@k^T| <= scale (Cauchy-Schwarz on L2-normalized rows), L_mask <= 1;
     #                 128-term fp32 accumulation + one exp in the mask
     #   k_dec_t 5e-3: |k| <= 1 elementwise, decay factor exp(<=0) <= 1; one exp
-    #   dl      1e-4: exp(sum g) <= 1; device forms it as exp(gsum-d0)*exp(d0) (two exps + a mul)
-    #                 vs torch's single exp — pure relative error on a value <= 1
+    #   dl      1e-4: dl*I tile; exp(sum g) <= 1 on the diagonal, exact zeros elsewhere; device forms dl as
+    #                 exp(gsum-d0)*exp(d0) (two exps + a mul) vs torch's single exp — pure relative error
     #   t_inv   2.5e-3: both sides are mathematically exact inverses of the same matrix (device:
     #                 quadrant-split bounded Horner; golden: forward substitution); the device's
     #                 exp-derived L_mask feeds the matrix being inverted, so its ~1e-3 input error
@@ -200,14 +196,13 @@ def test_prep_outputs_vs_torch(device, monkeypatch, bh, nc):
 # ---------------------------------------------------------------------------
 
 
-def test_scan_vs_torch(device, monkeypatch):
-    _clean_env(monkeypatch)
+def test_scan_vs_torch(device):
     bh, nc = 4, 4
     q, k, v, g, beta, s0 = _make_inputs(bh, nc, seed=20260821, scale=KDIM**-0.5)
     seven = _prep_reference(q.float(), k.float(), v.float(), g, beta)
 
     dev_seven = [_dev(device, t, ttnn.float32) for t in seven]
-    o_d, fs_d = ttnn.transformer.chunk_gdn_scan(
+    o_d, fs_d = _t.chunk_gdn_scan(
         *dev_seven,
         initial_state=_dev(device, s0, ttnn.float32),
         chunk_size=CHUNK,
@@ -230,11 +225,11 @@ def test_scan_vs_torch(device, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_composition_bit_exact(device, monkeypatch):
-    """prep->scan on head-major inputs must be BYTE-IDENTICAL to the public op on the equivalent
-    token-major inputs: the op's preprocessing is all bit-reproducible data movement (typecasts
-    skipped for already-bf16/fp32 inputs; permute/reshape; pad==0 since T % 32 == 0), except the
-    on-device q*scale multiply — neutralized here by passing scale=1.0, which is a numerical
+def test_composition_bit_exact(device):
+    """prep->scan on head-major inputs must be BYTE-IDENTICAL to the public op on the phased path with
+    the equivalent token-major inputs: the op's preprocessing is all bit-reproducible data movement
+    (typecasts skipped for already-bf16/fp32 inputs; permute/reshape; pad==0 since T % 32 == 0), except
+    the on-device q*scale multiply — neutralized here by passing scale=1.0, which is a numerical
     identity in bf16 (x*1.0 repacks to the same bits for the normal values randn+l2norm makes).
     G=1 (H==HV) so the GQA repeat_interleave is not in the path either."""
     torch.manual_seed(20260822)
@@ -243,9 +238,6 @@ def test_composition_bit_exact(device, monkeypatch):
     grid = device.compute_with_storage_grid_size()
     if BH > grid.x * grid.y:
         pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} compute grid (scan needs a core per head)")
-
-    monkeypatch.setenv("QWEN_GDN_PHASED", "1")
-    _clean_env(monkeypatch)
 
     # Token-major op inputs (bf16 q/k/v so the op's typecast is a no-op; q/k host-normalized).
     q = F.normalize(torch.randn(B, T, H, KDIM), dim=-1).to(torch.bfloat16)
@@ -269,6 +261,7 @@ def test_composition_bit_exact(device, monkeypatch):
         output_final_state=True,
         chunk_size=CHUNK,
         output_head_major=True,
+        program_config=ttnn.ChunkGdnPhasedProgramConfig(),
         eye=const_tiles[0],
         tril=const_tiles[1],
         ones=const_tiles[2],
@@ -286,7 +279,7 @@ def test_composition_bit_exact(device, monkeypatch):
     def headvec_major(x):
         return x.permute(0, 2, 1).reshape(BH, NC, CHUNK, 1).contiguous()
 
-    prep = ttnn.transformer.chunk_gdn_prep(
+    prep = _t.chunk_gdn_prep(
         _dev(device, head_major(q), ttnn.bfloat16),
         _dev(device, head_major(k), ttnn.bfloat16),
         _dev(device, head_major(v), ttnn.bfloat16),
@@ -295,7 +288,7 @@ def test_composition_bit_exact(device, monkeypatch):
         *const_tiles,
         chunk_size=CHUNK,
     )
-    o_pr_d, fs_pr_d = ttnn.transformer.chunk_gdn_scan(
+    o_pr_d, fs_pr_d = _t.chunk_gdn_scan(
         *prep,
         initial_state=_dev(device, s0.reshape(BH, KDIM, VDIM), ttnn.float32),
         chunk_size=CHUNK,
@@ -310,3 +303,93 @@ def test_composition_bit_exact(device, monkeypatch):
     assert torch.equal(
         fs_pr, fs_op.reshape(BH, KDIM, VDIM)
     ), "prep->scan composition changed final_state (must be bit-identical)"
+
+
+# ---------------------------------------------------------------------------
+# (4) the WY-inverse methods (wy_inverse) through the prep prim
+# ---------------------------------------------------------------------------
+
+
+def _tinv_inputs(regime, bh, nc, seed):
+    """Prep inputs whose WY matrix N = tril(beta_i (k_i . k_j) exp(g-cumsum diff), -1) spans the
+    conditioning range: `typical` random keys; `hard` correlated keys (mean cosine ~0.8), beta ~0.9 and
+    slow decay, so |N| approaches 1 across the whole chunk; `adversarial` identical keys, beta = 0.999
+    and no decay, so N ~ tril(ones, -1) (its inverse is bidiagonal-bounded, but powers of N are ~1e8)."""
+    torch.manual_seed(seed)
+    shape = (bh, nc, CHUNK, KDIM)
+    if regime == "typical":
+        k = F.normalize(torch.randn(shape), dim=-1)
+        beta = torch.sigmoid(torch.randn(bh, nc, CHUNK))
+        g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.5
+    elif regime == "hard":
+        shared = F.normalize(torch.randn(bh, nc, 1, KDIM), dim=-1)
+        k = F.normalize(2.0 * shared + 0.5 * F.normalize(torch.randn(shape), dim=-1), dim=-1)
+        beta = torch.sigmoid(torch.randn(bh, nc, CHUNK) * 0.5 + 2.2)
+        g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.002
+    else:
+        k = F.normalize(torch.randn(bh, nc, 1, KDIM), dim=-1).expand(shape).contiguous()
+        beta = torch.full((bh, nc, CHUNK), 0.999)
+        g = torch.zeros(bh, nc, CHUNK)
+    q = (F.normalize(torch.randn(shape), dim=-1) * KDIM**-0.5).to(torch.bfloat16)
+    v = (0.5 * torch.randn(bh, nc, CHUNK, VDIM)).to(torch.bfloat16)
+    return q, k.to(torch.bfloat16), v, g, beta
+
+
+def _tinv_fp64(k, g, beta):
+    """(I + N)^-1 in fp64 from the exact (bf16-rounded) inputs fed to the device."""
+    k, g, beta = k.double(), g.double(), beta.double()
+    decay = g.cumsum(-1)
+    l_mask = (decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().tril()
+    n = ((k * beta.unsqueeze(-1)) @ k.transpose(-1, -2) * l_mask).tril(-1)
+    eye = torch.eye(CHUNK, dtype=torch.float64)
+    return torch.linalg.solve_triangular(eye + n, eye.expand_as(n), upper=False)
+
+
+# T_inv max-abs error vs the fp64 inverse, per (method, regime), at ~2x the value measured on QB2
+# (Blackhole p300c, 2026-09-22; measured in the comment). Both methods share the error of the device's
+# own N (tf32-class matmul operands, SFPU exp in L_mask), which is the ~1e-3 floor.
+_TINV_BOUNDS = {
+    ("horner", "typical"): 2.1e-3,  # 1.04e-3
+    ("horner", "hard"): 7.3e-3,  # 3.65e-3
+    ("horner", "adversarial"): 3.4e-3,  # 1.67e-3
+    ("sfpu", "typical"): 2.0e-3,  # 0.98e-3
+    ("sfpu", "hard"): 6.1e-3,  # 3.04e-3
+    ("sfpu", "adversarial"): 3.4e-3,  # 1.67e-3
+}
+_WY = {"horner": ttnn.ChunkGdnWyInverse.HORNER, "sfpu": ttnn.ChunkGdnWyInverse.SFPU}
+
+
+@pytest.mark.parametrize("regime", ["typical", "hard", "adversarial"])
+def test_prep_tinv_methods(device, regime):
+    """The two WY-inverse methods on the same device-built N: each T_inv within its bound of the fp64
+    inverse (finite, even where powers of N reach ~1e8), the SFPU solve no less accurate than the Horner
+    reference, the six other prep outputs bit-identical across methods — the inverse is the only thing
+    the method changes — and wy_inverse=AUTO resolving to the solve on this device."""
+    q, k, v, g, beta = _tinv_inputs(regime, 12, 8, seed=20260922)
+    ref = _tinv_fp64(k.float(), g, beta)
+    tensors = (
+        _dev(device, q, ttnn.bfloat16),
+        _dev(device, k, ttnn.bfloat16),
+        _dev(device, v, ttnn.bfloat16),
+        _dev(device, g.unsqueeze(-1), ttnn.float32),
+        _dev(device, beta.unsqueeze(-1), ttnn.float32),
+    )
+    const_tiles = _const_tiles(device)
+
+    def prep(wy_inverse):
+        outs = _t.chunk_gdn_prep(*tensors, *const_tiles, chunk_size=CHUNK, wy_inverse=wy_inverse)
+        return [ttnn.to_torch(o) for o in outs]
+
+    outs, errs = {}, {}
+    for method in ("horner", "sfpu"):
+        got = prep(_WY[method])
+        assert torch.isfinite(got[6]).all(), f"{method}/{regime}: non-finite T_inv"
+        errs[method] = (got[6].double() - ref).abs().max().item()
+        outs[method] = got
+        bound = _TINV_BOUNDS[(method, regime)]
+        assert errs[method] <= bound, f"{method}/{regime}: T_inv max-abs error {errs[method]:.3e} > {bound:.1e}"
+    assert errs["sfpu"] <= 1.05 * errs["horner"], f"{regime}: SFPU solve less accurate than Horner: {errs}"
+    for i, name in enumerate(["v_beta", "kd", "q_decay", "intra", "k_dec_t", "dl"]):
+        assert torch.equal(outs["sfpu"][i], outs["horner"][i]), f"{name} changed (only T_inv may differ)"
+    auto = prep(ttnn.ChunkGdnWyInverse.AUTO)
+    assert torch.equal(auto[6], outs["sfpu"][6]), f"{regime}: wy_inverse=AUTO did not resolve to the SFPU solve"

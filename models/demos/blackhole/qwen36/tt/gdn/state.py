@@ -12,7 +12,8 @@ import ttnn
 
 
 def init_recurrent_state(gdn, batch_size):
-    """Initialize recurrent state to zeros [B, num_v_heads, head_k_dim, head_v_dim]."""
+    """Initialize recurrent state to zeros [B, num_v_heads, head_k_dim, head_v_dim].
+    FP32 when the fused decode op is on (QWEN36_GDN_DECODE_FUSED=2, B = 1), else BF16 (unchanged)."""
     state = torch.zeros(
         batch_size,
         gdn.num_v_heads,
@@ -20,7 +21,8 @@ def init_recurrent_state(gdn, batch_size):
         gdn.head_v_dim,
         dtype=torch.bfloat16,
     )
-    gdn.recurrent_state = ttnn.from_torch(state, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=gdn.device)
+    dtype = ttnn.float32 if (getattr(gdn, "_decode_fused", False) and batch_size == 1) else ttnn.bfloat16
+    gdn.recurrent_state = ttnn.from_torch(state, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=gdn.device)
 
 
 def split_fused_conv_state(gdn):

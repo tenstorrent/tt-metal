@@ -32,6 +32,9 @@ struct LayerNormInputs {
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
     std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
+    // Caller-allocated h = input + residual_input_tensor. When set, the fused RMSNorm writes the
+    // pre-add sum here as well as normalizing it (interleaved, RMSNORM, no beta only).
+    std::optional<Tensor> residual_output;
 };
 
 }  // namespace ttnn::prim

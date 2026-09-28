@@ -14,6 +14,10 @@ constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
 // Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
 constexpr uint32_t cb_mask = 17;
+// gb_flat (Option B, fused path only): this core's one-hot head selector is loaded ONCE as tile 3
+// of cb_mask (the fused u slot holds max(cv,3)+1 tiles with the credit tile last, so tile 3 is free
+// when cv >= 4) — no extra CB, so the CB region does not grow. Valid
+// because every fused producer core serves exactly one head (wi = h*NC + j + i*NP).
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -29,9 +33,14 @@ void kernel_main() {
     constexpr auto tril_a = TensorAccessorArgs<eye_a.next_compile_time_args_offset()>();
     constexpr auto ones_a = TensorAccessorArgs<tril_a.next_compile_time_args_offset()>();
     constexpr auto mask_a = TensorAccessorArgs<ones_a.next_compile_time_args_offset()>();
-    // OPT-A: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor FLAT token-major.
-    constexpr uint32_t V_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset());
-    constexpr uint32_t QK_FLAT = get_compile_time_arg_val(mask_a.next_compile_time_args_offset() + 1);
+    // gb_flat: sel's accessor is ALWAYS present (a null-buffer stub when gb_flat is off — see the
+    // program factory), so this offset never shifts between gb_flat on/off.
+    constexpr auto sel_a = TensorAccessorArgs<mask_a.next_compile_time_args_offset()>();
+    // OPT-A/gb_flat: trailing compile args (after all TensorAccessorArgs). 1 => read that tensor
+    // FLAT token-major (V_FLAT/QK_FLAT) or select head h's column in-kernel (GB_FLAT).
+    constexpr uint32_t V_FLAT = get_compile_time_arg_val(sel_a.next_compile_time_args_offset());
+    constexpr uint32_t QK_FLAT = get_compile_time_arg_val(sel_a.next_compile_time_args_offset() + 1);
+    constexpr uint32_t GB_FLAT = get_compile_time_arg_val(sel_a.next_compile_time_args_offset() + 2);
 
     // Chunk-parallel: this core handles the contiguous work-item slice [wi_start, wi_start+wi_count).
     // A work-item is a flat (head, chunk) index; it is exactly the DRAM tile-group index (h*NC + c).
@@ -54,6 +63,9 @@ void kernel_main() {
     // split, where producer p of head h owns the interleaved chunks c = p, p+NP, ... (wi stays the
     // flat h*NC + c, so every DRAM index below is unchanged).
     const uint32_t wi_stride = get_arg_val<uint32_t>(14);
+    // gb_flat only (garbage/unused otherwise): the one-hot head-selector tensor's address. Appended
+    // last so it never shifts the indices above.
+    const uint32_t sel_addr = get_arg_val<uint32_t>(15);
 
     // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
     const uint32_t tb_io = get_tile_size(cb_q);
@@ -67,6 +79,7 @@ void kernel_main() {
     const auto tril_acc = TensorAccessor(tril_a, tril_addr, tb_f);
     const auto ones_acc = TensorAccessor(ones_a, ones_addr, tb_f);
     const auto mask_acc = TensorAccessor(mask_a, mask_addr, tb_f);
+    const auto sel_acc = TensorAccessor(sel_a, sel_addr, tb_f);  // gb_flat only; unused otherwise
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -89,6 +102,11 @@ void kernel_main() {
     read_into(tril_acc, cb_tril, 0, cc, tb_f);
     read_into(ones_acc, cb_ones, 0, cc, tb_f);
     read_into(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    if constexpr (GB_FLAT) {
+        // Selector tile hv (page hv of the single-tile-row [1,1,32,32*HV] tensor) -> cb_mask tile 3.
+        const uint32_t hv = (wi_start / NC) % HV;
+        read_into(sel_acc, cb_mask, hv, 1, tb_f);
+    }
 
     // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
     // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into
@@ -137,6 +155,26 @@ void kernel_main() {
         cb.push_back(ck);
     };
 
+    // gb_flat (Option B) raw read: fetch Ct tiles of the model's native [B,T,HV] g/beta tensor at
+    // this work item's chunk (tile-col 0 — HV<=32 is asserted host-side, so the tensor is exactly
+    // one tile wide). Every head sharing this (batch, chunk) reads the IDENTICAL Ct pages (no head
+    // index in the addressing at all) — the per-head selection happens in compute via the
+    // selector in cb_mask tile 3. Mirrors read_v_flat's page-range technique, minus the head offset.
+    auto read_gb_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
+        const uint32_t bh = hc / NC;
+        const uint32_t c = hc % NC;
+        const uint32_t b = bh / HV;
+        const uint32_t batch_base = b * NC * Ct;  // Wt=1 tile-col => row stride is 1 tile
+        CircularBuffer cb(cb_id);
+        cb.reserve_back(Ct);
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            const uint32_t page = batch_base + c * Ct + rt;
+            noc.async_read(acc, cb, tb_f, {.page_id = page}, {.offset_bytes = rt * tb_f});
+        }
+        noc.async_read_barrier();
+        cb.push_back(Ct);
+    };
+
     for (uint32_t i = 0; i < wi_count; i++) {
         const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
         if constexpr (QK_FLAT) {
@@ -151,7 +189,12 @@ void kernel_main() {
         } else {
             read_into(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
-        read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        if constexpr (GB_FLAT) {
+            read_gb_flat(g_acc, cb_g, hc);
+            read_gb_flat(b_acc, cb_beta, hc);
+        } else {
+            read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
+            read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        }
     }
 }

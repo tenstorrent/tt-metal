@@ -75,6 +75,11 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb(dfb_inb_id);
 #endif
+#ifdef RESIDUAL_OUT
+    // h = a + b for the writer. Same format as dfb_x (the host sets XMM to h's dtype).
+    constexpr auto dfb_h_out_id = dfb::h_out;
+    DataflowBuffer dfb_h_out(dfb_h_out_id);
+#endif
     DataflowBuffer dfb_out(dfb_out_id);
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
@@ -200,19 +205,36 @@ void kernel_main() {
             dfb_inb.pop_front(block.full_block_size());
 
             dfb_x.reserve_back(block.full_block_size());
+#ifdef RESIDUAL_OUT
+            dfb_h_out.reserve_back(block.full_block_size());
+#endif
 
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, dfb_x_id);
             }
+#ifdef RESIDUAL_OUT
+            // Same packer format as dfb_x, so no pack reconfig between the two copies of the sum.
+            for (auto i : block.local()) {
+                pack_tile(i, dfb_h_out_id);
+            }
+#endif
             tile_regs_release();
 
             dfb_x.push_back(block.full_block_size());  // push the sum into the same buffer
+#ifdef RESIDUAL_OUT
+            dfb_h_out.push_back(block.full_block_size());
+#endif
         }
 #ifndef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_scaler_id);
 #else
         reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_x_id);
+#ifdef RESIDUAL_OUT
+        // dfb_x holds bf16 h, not the fp32 intermediate, so the packer moves to xmm2's format here,
+        // as the plain RMSNORM path does before its square.
+        pack_reconfig_data_format(dfb_xmm2_id);
+#endif
 #endif
         // by the end of this loop we should end up with Wt tiles in dfb_x
 #else
@@ -326,8 +348,8 @@ void kernel_main() {
             dfb_im_or_out.reserve_back(static_cast<uint16_t>(block.full_block_size()));
             // Restore SrcA to the deviation buffer's format after the previous iteration's
             // gamma/beta step left it on the streaming intermediate. With neither gamma nor beta
-            // there is no such step to undo.
-#if defined RMSNORM and not defined FUSE_PRE_ADD
+            // there is no such step to undo. RESIDUAL_OUT keeps the deviation buffer in bf16 as well.
+#if (defined RMSNORM and not defined FUSE_PRE_ADD) or defined RESIDUAL_OUT
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
             reconfig_data_format_srca(dfb_fusion_id, dfb_xmm_id);
 #endif
@@ -358,7 +380,7 @@ void kernel_main() {
                 block.full_block_size()));  // if no gamma/beta are provided, this will be passed on to the writer
 
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
-#if defined RMSNORM and not defined FUSE_PRE_ADD
+#if (defined RMSNORM and not defined FUSE_PRE_ADD) or defined RESIDUAL_OUT
             reconfig_data_format_srca(dfb_xmm_id, dfb_fusion_id);
 #endif
 #endif

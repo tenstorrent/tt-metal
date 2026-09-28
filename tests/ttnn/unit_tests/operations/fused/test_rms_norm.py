@@ -143,3 +143,75 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("h, w", [(32, 2048), (2048, 2048), (64, 96), (24, 42)])
+@pytest.mark.parametrize("weight_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_rms_norm_residual_output(device, h, w, weight_layout, fp32_dest_acc_en, buffer_type):
+    """residual_output_tensor: one op writes h = x + y and n = rms_norm(h) * gamma, bit-identical to
+    ttnn.add followed by ttnn.rms_norm with the same compute config."""
+    if weight_layout == ttnn.ROW_MAJOR_LAYOUT and w % 32 != 0:
+        pytest.skip("ROW_MAJOR gamma is built as [1, 1, w // 32, 32]")
+    torch.manual_seed(0)
+    torch_x = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
+    torch_y = torch.randn((1, 1, h, w), dtype=torch.bfloat16) * 0.3
+    torch_weight = torch.randn((w,), dtype=torch.bfloat16) * 0.1 + 1
+    mem_config = ttnn.L1_MEMORY_CONFIG if buffer_type == ttnn.BufferType.L1 else ttnn.DRAM_MEMORY_CONFIG
+
+    x = ttnn.from_torch(torch_x, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    y = ttnn.from_torch(torch_y, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    if weight_layout == ttnn.ROW_MAJOR_LAYOUT:
+        weight = ttnn.from_torch(
+            torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )
+    else:
+        weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+    eps = 1e-6
+
+    h_ref = ttnn.add(x, y, memory_config=mem_config)
+    n_ref = ttnn.rms_norm(
+        h_ref, epsilon=eps, weight=weight, memory_config=mem_config, compute_kernel_config=compute_config
+    )
+
+    for _ in range(2):  # the second call is a program cache hit with a new residual output
+        h_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, h, w]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem_config
+        )
+        n_out = ttnn.rms_norm(
+            x,
+            epsilon=eps,
+            weight=weight,
+            residual_input_tensor=y,
+            memory_config=mem_config,
+            compute_kernel_config=compute_config,
+            residual_output_tensor=h_out,
+        )
+        assert torch.equal(ttnn.to_torch(h_out), ttnn.to_torch(h_ref))
+        assert torch.equal(ttnn.to_torch(n_out), ttnn.to_torch(n_ref))
+
+
+def test_rms_norm_residual_output_validation(device, expect_error):
+    torch.manual_seed(0)
+    x = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    y = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT)
+    h_bad_shape = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 64, 64]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    h_out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 64]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(RuntimeError, "residual_output_tensor requires residual_input_tensor"):
+        ttnn.rms_norm(x, residual_output_tensor=h_out)
+    with expect_error(RuntimeError, "shapes must match the input"):
+        ttnn.rms_norm(x, residual_input_tensor=y, residual_output_tensor=h_bad_shape)
+    with expect_error(RuntimeError, "must not alias"):
+        ttnn.rms_norm(x, residual_input_tensor=y, residual_output_tensor=y)

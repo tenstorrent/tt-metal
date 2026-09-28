@@ -3,8 +3,6 @@
 
 #include "chunk_gdn_phased.hpp"
 
-#include <cstdlib>
-
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -24,6 +22,42 @@ void check(const Tensor& t, const char* name, DataType dt) {
 // ---------------------------------------------------------------------------
 // PREP
 // ---------------------------------------------------------------------------
+namespace {
+bool gdn_tinv_sfpu_supported(uint32_t chunk_size, const Tensor& any_input) {
+    // The solve is a single-tile routine on Blackhole's SFPU (chunk_gdn_tinv_sfpu.hpp).
+    return chunk_size == tt::constants::TILE_HEIGHT && any_input.device()->arch() == tt::ARCH::BLACKHOLE;
+}
+}  // namespace
+
+uint32_t gdn_tinv_resolve(
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse, uint32_t chunk_size, const Tensor& any_input) {
+    using ttnn::transformer::ChunkGdnWyInverse;
+    switch (wy_inverse) {
+        case ChunkGdnWyInverse::HORNER: return static_cast<uint32_t>(GdnTinv::HORNER);
+        case ChunkGdnWyInverse::SFPU:
+            return static_cast<uint32_t>(GdnTinv::SFPU_FP32);  // validate FATALs if unsupported
+        case ChunkGdnWyInverse::AUTO:
+            return static_cast<uint32_t>(
+                gdn_tinv_sfpu_supported(chunk_size, any_input) ? GdnTinv::SFPU_FP32 : GdnTinv::HORNER);
+    }
+    TT_FATAL(false, "chunk_gdn: unknown wy_inverse {}", static_cast<uint32_t>(wy_inverse));
+    return 0;  // unreachable
+}
+
+void validate_gdn_tinv(uint32_t tinv, uint32_t chunk_size, const Tensor& any_input) {
+    TT_FATAL(tinv <= static_cast<uint32_t>(GdnTinv::SFPU_FP32), "chunk_gdn: unknown tinv method {}", tinv);
+    if (tinv == static_cast<uint32_t>(GdnTinv::HORNER)) {
+        return;
+    }
+    TT_FATAL(
+        chunk_size == tt::constants::TILE_HEIGHT,
+        "chunk_gdn: the SFPU WY-inverse solve (wy_inverse=SFPU) needs chunk_size == 32 (got {})",
+        chunk_size);
+    TT_FATAL(
+        any_input.device()->arch() == tt::ARCH::BLACKHOLE,
+        "chunk_gdn: the SFPU WY-inverse solve (wy_inverse=SFPU) is Blackhole-only");
+}
+
 ChunkGdnPrepOperation::program_factory_t ChunkGdnPrepOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return ChunkGdnPrepProgramFactory{};
@@ -55,9 +89,13 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
     check(in.tril_c, "tril_c", DataType::FLOAT32);
     check(in.ones_c, "ones_c", DataType::FLOAT32);
     check(in.masks_c, "masks_c", DataType::FLOAT32);
+    // gb_flat (Option B) is fused-path only: its zero-CB-growth selector is loaded once per
+    // producer core, which needs one head per core — phased prep cores span several heads.
+    TT_FATAL(!attrs.gb_flat, "gb_flat (sel) is supported on the fused path only, not phased prep");
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
 }
 
 ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output_specs(
@@ -67,14 +105,15 @@ ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output
             s, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
     };
     const uint32_t BH = attrs.BH, NC = attrs.num_chunks, C = attrs.chunk_size, K = attrs.key_dim, V = attrs.val_dim;
+    const uint32_t TT = tt::constants::TILE_HEIGHT;  // dl*I is one 32x32 tile whatever C and K are
     return {
-        f32(ttnn::Shape({BH, NC, C, V})),  // v_beta
-        f32(ttnn::Shape({BH, NC, C, K})),  // kd
-        f32(ttnn::Shape({BH, NC, C, K})),  // q_decay
-        f32(ttnn::Shape({BH, NC, C, C})),  // intra
-        f32(ttnn::Shape({BH, NC, K, C})),  // k_dec_t
-        f32(ttnn::Shape({BH, NC, 1, 1})),  // dl (1 tile per chunk)
-        f32(ttnn::Shape({BH, NC, C, C})),  // t_inv
+        f32(ttnn::Shape({BH, NC, C, V})),    // v_beta
+        f32(ttnn::Shape({BH, NC, C, K})),    // kd
+        f32(ttnn::Shape({BH, NC, C, K})),    // q_decay
+        f32(ttnn::Shape({BH, NC, C, C})),    // intra
+        f32(ttnn::Shape({BH, NC, K, C})),    // k_dec_t
+        f32(ttnn::Shape({BH, NC, TT, TT})),  // dl*I: exp(g_sum) on the diagonal
+        f32(ttnn::Shape({BH, NC, C, C})),    // t_inv
     };
 }
 
@@ -108,7 +147,11 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool prep_serial,
+    bool gb_flat,
+    const std::optional<Tensor>& sel,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -129,6 +172,9 @@ std::vector<Tensor> chunk_gdn_prep(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .prep_serial = prep_serial,
+        .gb_flat = gb_flat,
+        .tinv = gdn_tinv_resolve(wy_inverse, chunk_size, q),
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -141,7 +187,8 @@ std::vector<Tensor> chunk_gdn_prep(
         .eye_c = eye_c,
         .tril_c = tril_c,
         .ones_c = ones_c,
-        .masks_c = masks_c};
+        .masks_c = masks_c,
+        .sel = sel};
     return ttnn::device_operation::launch<ChunkGdnPrepOperation>(attrs, tensor_args);
 }
 
@@ -207,11 +254,11 @@ std::vector<Tensor> chunk_gdn_scan(
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_mcast,
+    bool force_serial) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
-    const char* mcast_env = std::getenv("QWEN_GDN_SCAN_MCAST");
-    const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
         .BH = vb_shape[0],
         .num_chunks = vb_shape[1],
@@ -220,8 +267,8 @@ std::vector<Tensor> chunk_gdn_scan(
         .val_dim = vb_shape[3],
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
-        .use_mcast = !(mcast_env && mcast_env[0] == '0'),
-        .force_serial = serial_env && serial_env[0] == '1',
+        .use_mcast = use_mcast,
+        .force_serial = force_serial,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

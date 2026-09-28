@@ -25,14 +25,18 @@ Notes:
 * GVA (Nk<Nv) head expansion is done inside the fused op; we pass q/k with Nk heads.
 """
 
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import l2_norm_ttnn
 
 # The chunk size the fused op runs at (same math as 128, different internal tiling).
 _FUSED_CHUNK_SIZE = 32
+_r3_logged_o = [False]  # one "[R3] ..." line per process
 
 
 def fused_chunk_enabled():
@@ -54,8 +58,22 @@ def flat_qkv_enabled():
 _logged_path = False
 
 
-def build_fused_const_tiles(device, chunk_size=_FUSED_CHUNK_SIZE):
-    """Mesh-replicated fused-op constant tiles (eye/tril/ones + quadrant masks). Owned by the GDN layer."""
+def build_fused_const_tiles(device, chunk_size=_FUSED_CHUNK_SIZE, HV=None):
+    """Mesh-replicated fused-op constant tiles (eye/tril/ones + quadrant masks). Owned by the GDN layer.
+
+    HV (value-head count): only needed to build `sel`, the gb_flat one-hot head selector
+    (QWEN_GDN_FLAT_GB=1, Option B — see chunk_gated_delta_rule.cpp's make_head_selectors). `sel` is
+    None (and HV unused) unless that env var is set, so existing callers that don't pass HV are
+    unaffected as long as they also don't turn gb_flat on.
+
+    gb_flat precondition: the g/beta tiles handed to the op must be finite in EVERY column, incl. the
+    tile-padding columns Nv..31 (the one-hot select multiplies them by 0; NaN/Inf -> NaN in every
+    head; finite padding is bit-exact, see test_chunk_gated_delta_rule_gb_flat_padding). The model
+    path meets it by construction: beta = sigmoid(b) and g = A_neg * softplus(a + dt_bias) are
+    eltwise ops on in-projection outputs, whose padding holds zeros or other finite projection
+    values. The padding is NOT zeroed here: ttnn.fill_implicit_tile_padding on g and beta would add
+    2 ops per GDN layer per chunk to the prefill trace.
+    """
     C = chunk_size
     eye = torch.eye(C, dtype=torch.float32)
     tril = torch.tril(torch.ones(C, C, dtype=torch.float32))
@@ -79,7 +97,16 @@ def build_fused_const_tiles(device, chunk_size=_FUSED_CHUNK_SIZE):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
-    return (_up(eye), _up(tril), _up(ones), _up(masks))
+    sel = None
+    if os.environ.get("QWEN_GDN_FLAT_GB", "0") == "1":
+        assert HV is not None, "QWEN_GDN_FLAT_GB=1 needs HV to build the gb_flat head selector"
+        assert HV <= 32, f"gb_flat needs HV <= 32 (one tile wide), got HV={HV}"
+        sel_t = torch.zeros(32, 32 * HV, dtype=torch.float32)
+        for h in range(HV):
+            sel_t[h, h * 32] = 1.0  # tile h: row h, col 0 (matches make_head_selectors)
+        sel = _up(sel_t)
+
+    return (_up(eye), _up(tril), _up(ones), _up(masks), sel)
 
 
 def chunk_gated_delta_rule_fused_adapter(
@@ -96,15 +123,19 @@ def chunk_gated_delta_rule_fused_adapter(
     valid_len=None,  # scalar: zero padded positions >= valid_len (masked-bucket prefill)
     qkv_head_dims=None,  # (Nk, Dk, Nv, Dv) when q/k/v are flat
     return_o_bh=False,  # True: return o as [B*Nv, T, V]; else [B, T, Nv, V]
-    const_tiles=None,  # (eye, tril, ones, masks) device tensors built once by the caller (layer);
+    const_tiles=None,  # (eye, tril, ones, masks, sel) device tensors built once by the caller (layer);
     # passed to the op so it stays stateless. Required under trace (the op's internal build does a
     # host upload, illegal under trace); if None, the op builds them eagerly.
+    program_config=None,  # ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMono...:
+    # None: the op's own dispatch — fused or phased depending on the cost model.
+    wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / SFPU / AUTO: the WY-inverse arithmetic. None = the
+    # op's AUTO (the SFPU solve on Blackhole at chunk 32, Horner elsewhere).
 ):
     global _logged_path
     if not _logged_path:
         logger.info(
             "[GDN] fused chunk_gated_delta_rule active: "
-            f"path={'PHASED (chunk-parallel prep + V-block scan)' if phased_enabled() else 'monolithic'}, "
+            f"program_config={program_config if program_config is not None else 'None (the op picks fused/phased by its cost model)'}, "
             f"chunk_size={_FUSED_CHUNK_SIZE}, flat_qkv={flat_qkv_enabled()}, "
             f"input q/k/v dtype={q.dtype}/{k.dtype}/{v.dtype}"
         )
@@ -134,7 +165,7 @@ def chunk_gated_delta_rule_fused_adapter(
     beta = ttnn.reshape(beta, [B, T, Nv])
     g = ttnn.reshape(g, [B, T, Nv])
 
-    # Host L2-norm q/k (skipped when in-kernel norm via QWEN_GDN_QK_NORM / flat QKV — required for flat).
+    # Host L2-norm q/k; with flat QKV the prep kernel normalizes in-kernel instead (required for flat).
     if not flat_qkv_enabled():
         q = l2_norm_ttnn(q, dim=-1)
         k = l2_norm_ttnn(k, dim=-1)
@@ -173,8 +204,17 @@ def chunk_gated_delta_rule_fused_adapter(
         if s0.dtype != ttnn.float32:
             s0 = ttnn.typecast(s0, ttnn.float32)
 
+    # R3 O_L1 (tp_common R3 table): o and the final state in L1 on unmasked T == R3_T calls (masked / other
+    # buckets keep the op default, DRAM). Not passed at all when off (call unchanged).
+    _r3_o_kw = {}
+    if tpc.r3_enabled("O_L1") and not _is_per_row and (valid_len is None or valid_len >= T) and T == tpc.R3_T:
+        _r3_o_kw = {"memory_config": ttnn.L1_MEMORY_CONFIG}
+        if not _r3_logged_o[0]:
+            _r3_logged_o[0] = True
+            print(f"[R3] QWEN36_R3_O_L1=1 active: ChunkGdnFused o + final state out L1 (T={T})", flush=True)
+
     # output_head_major=return_o_bh: skip token<->head permute when caller wants [BH,T,V].
-    _eye, _tril, _ones, _masks = const_tiles if const_tiles is not None else (None, None, None, None)
+    _eye, _tril, _ones, _masks, _sel = const_tiles if const_tiles is not None else (None, None, None, None, None)
     o, final_state = ttnn.transformer.chunk_gated_delta_rule(
         q,
         k,
@@ -186,10 +226,14 @@ def chunk_gated_delta_rule_fused_adapter(
         output_final_state=True,
         chunk_size=_FUSED_CHUNK_SIZE,
         output_head_major=return_o_bh,
+        program_config=program_config,
         eye=_eye,
         tril=_tril,
         ones=_ones,
         masks=_masks,
+        sel=_sel,
+        **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
+        **_r3_o_kw,
     )
 
     if return_o_bh:

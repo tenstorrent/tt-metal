@@ -14,15 +14,29 @@ Recon: /local/ttuser/atupe/qwen35_2b_handoff/scripts/step2/kda_conv_probe.py and
 recon note this integration follows (op signature/constraints, reference math, tap-order
 convention, channel_chunk_size legality/L1-footprint sweep).
 
-The op does not return an updated history (the caller owns history updates — see the op's own
-docstring, ttnn.experimental.kda.qkv_causal_conv1d_silu), so `new_state` is still computed here
-exactly as conv1d_native.py does it: the last `kernel_size - 1` rows of `x`, row-major-sliced off
-the same `x_rm` used as the op's `input`, then tilized back to TILE/DRAM (the persistent
-`fused_conv_state` buffer's format).
+ROW_MAJOR path (QWEN36_GDN_CONV_KDA_TILED=0): the op does not return an updated history, so
+`new_state` is computed here exactly as conv1d_native.py does it: the last `kernel_size - 1` rows of
+`x`, row-major-sliced off the same `x_rm` used as the op's `input`, then tilized back to TILE/DRAM
+(the persistent `fused_conv_state` buffer's format).
+
+TILE path (INT-3, QWEN36_GDN_CONV_KDA_TILED=1, default): the op's tiled kernel (T6,
+qwen35_2b_handoff/plan_0925/T6/design.md, S10) reads the in-projection output `x` (TILE) and the
+conv state (TILE [1,3,C], or None = zeros for the first chunk) directly, with
+channel_chunk_size=128 (B=4), and returns new_state itself (return_conv_state=True: TILE [1,3,C]
+DRAM, rows 3-31 zero). This removes the 4 glue ops of the ROW_MAJOR path (untilize x, zeros or
+untilize history, slice, tilize new_state). q/k/v and new_state are bit-identical to the ROW_MAJOR
+path (op tests AC1/AC3), so the caller's state handling (gdn/decode.py in-place copy into the
+persistent fused_conv_state, T8's conv_hist refresh from fused_conv_state) is unchanged. The op
+allocates only its outputs (q/k/v, new_state) and program-local L1 (DFBs + scratchpad), so it adds
+no persistent buffer that must exist before a trace capture. The masked-tail / T % 32 != 0 / T < 32
+fallback to native_fn stays first; any other input the tiled kernel does not take (not bf16, not
+interleaved, not rank 3, or a conv state that is not TILE bf16 interleaved [1,3,C]) uses the
+ROW_MAJOR path.
 """
 import os
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
 _L1 = ttnn.L1_MEMORY_CONFIG
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
@@ -58,6 +72,7 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 # unrelated fused-KDA call's static CBs to clash by as little as 1024 B -- the exact
 # "chunk1_tail1500_b2048" failure this flag's fallback plumbing fixes (test_prefill.py -k tail).
 _FLA_INPUTS_DRAM_DEFAULT = "1" if os.environ.get("QWEN_GDN_PATH") == "fused" else "0"
+_R3_LOGGED = set()  # one "[R3] ..." line per process
 
 # Measured (kda_conv_probe.py K1-K5 sweep, T=2048/Q=K=V=2048/C=6144 on P150): channel_chunk_size
 # must be tile-aligned and evenly divide C=6144. 2048 (block_ct=64) is ~5 KB/core over the
@@ -66,6 +81,34 @@ _FLA_INPUTS_DRAM_DEFAULT = "1" if os.environ.get("QWEN_GDN_PATH") == "fused" els
 # leaves a comfortable margin and was the fastest legal width measured in the probe. Override with
 # QWEN36_GDN_CONV_KDA_CCS for a different device/shape.
 _DEFAULT_CCS = 768
+
+# INT-3 TILE path (QWEN36_GDN_CONV_KDA_TILED, default "1"): channel_chunk_size of the tiled kernel =
+# 32 * B with B = 4 (design.md section 4.5: 184 KB of DFBs per core; T6d: 150 us at T=2048 vs 510.6 us
+# for the ROW_MAJOR op + its glue). B = 8 (256) is legal but uses 2x the L1 for ~-11% op time.
+_TILED_CCS = 128
+
+# Python-side call counts per path (diagnostics for the bench/validation; a traced replay does not
+# run Python, so only eager calls and trace captures count). Keys: tiled, row_major, native_fallback.
+_PATH_COUNTS = {"tiled": 0, "row_major": 0, "native_fallback": 0}
+
+
+def path_counts():
+    """Copy of the per-path call counts of every kda conv fn built in this process."""
+    return dict(_PATH_COUNTS)
+
+
+def _tiled_accepts(x, conv_state, C, K):
+    """True if the tiled kernel takes these inputs as they are (else the ROW_MAJOR path runs)."""
+    if len(x.shape) != 3 or x.layout != ttnn.TILE_LAYOUT or x.dtype != ttnn.bfloat16 or x.is_sharded():
+        return False
+    if conv_state is None:
+        return True
+    return (
+        tuple(conv_state.shape) == (1, K - 1, C)
+        and conv_state.layout == ttnn.TILE_LAYOUT
+        and conv_state.dtype == ttnn.bfloat16
+        and not conv_state.is_sharded()
+    )
 
 
 def make_kda_conv1d_fn(
@@ -124,6 +167,10 @@ def make_kda_conv1d_fn(
     is the DEFAULT here, despite losing the isolated-op-level comparison. Set to "1" only to
     re-run/re-examine the fp32-accumulate variant.
 
+    QWEN36_GDN_CONV_KDA_TILED (default "1", read here): 1 = the TILE path (module docstring; the
+    tiled kernel with channel_chunk_size=_TILED_CCS, no glue ops, new_state from the op); 0 = the
+    ROW_MAJOR path below (untilize x -> op -> slice + tilize new_state). Bit-identical results.
+
     Returns fn(x, conv_state, valid_len=None) -> ((q, k, v), new_state) — the SAME call contract
     as conv1d_native.make_native_conv1d_fn's fn (ttnn_gated_deltanet.py:636 calls it positionally
     as `native_conv1d_fn(qkv, fused_conv_state)`; `valid_len` is accepted only as an optional
@@ -160,6 +207,12 @@ def make_kda_conv1d_fn(
     )
     program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=ccs)
     tap0, tap1, tap2, tap3 = weight_taps
+
+    # INT-3 TILE path (see the module docstring). _TILED_CCS must divide C in tiles (B | Ct).
+    _tiled_enabled = os.environ.get("QWEN36_GDN_CONV_KDA_TILED", "1") != "0"
+    _tiled_block_tiles = _TILED_CCS // 32
+    assert (C // 32) % _tiled_block_tiles == 0, f"channels={C}: {_tiled_block_tiles}-tile blocks must divide C tiles"
+    tiled_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_TILED_CCS)
 
     # See QWEN36_GDN_CONV_KDA_FP32ACC docstring above: fp32_dest_acc_en is unrestricted by the
     # op's validate() (only math_approx_mode/packer_l1_acc are rejected), so this accumulate-in-
@@ -204,7 +257,43 @@ def make_kda_conv1d_fn(
         # call's static CBs to clash by as little as 1024 B. See conv1d_native.py's `qkv_out_mc`
         # docstring for the full mechanism.
         if valid_len is not None or C_in != C or T < 32 or T % 32 != 0:
+            _PATH_COUNTS["native_fallback"] += 1
             return native_fn(x, conv_state, qkv_out_mc=qkv_out_mc)
+
+        # INT-3 TILE path: x (TILE, the in-proj output as it is) and the conv state (TILE [1,3,C] or
+        # None = zero history) go straight into the tiled kernel, which also returns new_state
+        # (TILE [1,3,C] DRAM; rows 0-2 = x[T-3..T-1], rows 3-31 zero). No untilize, zeros, slice or
+        # tilize. x and conv_state are not modified; new_state is a new tensor, so the caller's
+        # in-place ttnn.copy into the persistent fused_conv_state (traced prefill) stays race free.
+        if _tiled_enabled and _tiled_accepts(x, conv_state, C, K):
+            _PATH_COUNTS["tiled"] += 1
+            # R3 FLA_IN_L1 (tp_common R3 table): q/k/v stay L1 (glue_mc) on T == R3_T chunks. This fn only
+            # sees unmasked chunks (the caller routes valid_len calls elsewhere); the fallback above keeps DRAM.
+            if tpc.r3_enabled("FLA_IN_L1") and T == tpc.R3_T and glue_mc is _L1:
+                _tiled_out_mc = _L1
+                if "FLA_IN_L1" not in _R3_LOGGED:
+                    _R3_LOGGED.add("FLA_IN_L1")
+                    print(f"[R3] QWEN36_R3_FLA_IN_L1=1 active: tiled KDA conv q/k/v out L1 (T={T})", flush=True)
+            else:
+                _tiled_out_mc = qkv_out_mc
+            q, k, v, new_state = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                x,
+                conv_state,
+                tap0,
+                tap1,
+                tap2,
+                tap3,
+                q_dim,
+                k_dim,
+                v_dim,
+                program_config=tiled_program_config,
+                memory_config=_tiled_out_mc,
+                compute_kernel_config=_kda_ckc,
+                return_conv_state=True,
+            )
+            return (q, k, v), new_state
+
+        _PATH_COUNTS["row_major"] += 1
 
         # a) The one full-size relayout: TILE (any memory) -> ROW_MAJOR (L1 or DRAM per glue_mc).
         # Same op/mc convention as conv1d_native.fn's step 1 — the op's `input` requires

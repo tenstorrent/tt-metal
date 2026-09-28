@@ -52,6 +52,9 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): Defaults to `None`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None` (same dtype as :attr:`input_tensor`).
+            residual_output_tensor (ttnn.Tensor, optional): a preallocated tensor that receives :attr:`input_tensor` + `residual_input_tensor`
+                (the pre-norm sum) from the same op. Needs `residual_input_tensor`; interleaved BFLOAT16 TILE tensors of the input's
+                shape; no bias; default program config. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -118,7 +121,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("dtype") = nb::none());
+        nb::arg("dtype") = nb::none(),
+        nb::arg("residual_output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::normalization::detail

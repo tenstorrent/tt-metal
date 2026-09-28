@@ -5,6 +5,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor.h"
@@ -44,9 +46,15 @@ void kernel_main() {
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
     constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
+    // Causal K/V chains (kv chain mode 2): this writer forwards the K/V slots the reader queues on the ctrl CB.
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(26);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(27);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(28);
+    constexpr uint32_t fwd_done_semaphore_id = get_compile_time_arg_val(29);
+    constexpr bool causal_chain = get_compile_time_arg_val(30) == 3;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<31>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
@@ -83,6 +91,16 @@ void kernel_main() {
         q_tok_offset_addr = get_arg_val<uint32_t>(13);
     }
 
+    // Causal chain tail, pushed by the host only when kv chain mode is 2.
+    uint32_t is_chain_participant = 0;
+    uint32_t next_physical_x = 0;
+    uint32_t next_physical_y = 0;
+    if constexpr (causal_chain) {
+        is_chain_participant = get_arg_val<uint32_t>(14);
+        next_physical_x = get_arg_val<uint32_t>(15);
+        next_physical_y = get_arg_val<uint32_t>(16);
+    }
+
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
@@ -97,6 +115,8 @@ void kernel_main() {
     // Dedicated 1-tile CB for the per-device Q-offset tensor; allocated only when that tensor is passed
     // (q_in otherwise, same fallback rule as cb_cu_window_in), and only touched behind the runtime guard.
     constexpr uint32_t cb_windowed_q_offset = get_compile_time_arg_val(cb_arg_offset + 6);
+    // Causal chains: reader -> writer forward requests (see post_kv_forward in the reader).
+    constexpr uint32_t cb_id_kv_fwd_ctrl = get_compile_time_arg_val(cb_arg_offset + 7);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
@@ -225,6 +245,42 @@ void kernel_main() {
                 k_num_chunks,
                 cu_window_seqlens_eles,
                 q_tok_offset);
+
+            // Causal chains: serve this Q chunk's forwards before draining its output. Compute pushes cb_out only after
+            // every K/V chunk of the Q chunk landed, by which point the reader has queued all forward entries, so this
+            // never blocks on the ctrl CB while compute waits for a drain; the reader waits only on slots freed here.
+            if constexpr (causal_chain) {
+                if (is_chain_participant) {
+                    CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);
+                    cb_kv_fwd.wait_front(1);
+                    const uint32_t fwd_entries =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_read_ptr());
+                    cb_kv_fwd.pop_front(1);
+                    Semaphore<> sender_sem(sender_semaphore_id);
+                    for (uint32_t n = 0; n < fwd_entries; ++n) {
+                        cb_kv_fwd.wait_front(1);
+                        volatile tt_l1_ptr uint32_t* entry =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_read_ptr());
+                        const uint32_t src_address = entry[0];
+                        const uint32_t bytes = entry[1];
+                        cb_kv_fwd.pop_front(1);
+                        // the receiver posts its slot address as the ready signal
+                        sender_sem.wait_min(1);
+                        const uint32_t dst_address = sender_sem.value();
+                        sender_sem.set(0);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(src_address),
+                            UnicastEndpoint{},
+                            bytes,
+                            {},
+                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = dst_address});
+                        noc.async_writes_flushed();
+                        Semaphore<>(valid_semaphore_id)
+                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        Semaphore<>(fwd_done_semaphore_id).up(1);
+                    }
+                }
+            }
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

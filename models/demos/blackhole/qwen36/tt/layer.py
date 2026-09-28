@@ -13,8 +13,97 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
+from models.demos.blackhole.qwen36.tt.tp_common import M5_ADDNORM_T
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
+
+_TILE = 32
+
+
+def make_decode_norm_sharded_config(dim, num_cores=8):
+    """I-1 D3 (QWEN36_I1_D3): WIDTH-sharded L1 memory config + sharded rms_norm program config for
+    the single-device DECODE decoder norms ([1,1,dim] input = one tile row). The interleaved
+    rms_norm runs that one tile row on 1 core (~33 us); 8 cores, shard (32, dim/8), run it in ~5 us
+    (T5b D3: 16/32/64 cores are slower than 8). Returns (memory_config, program_config), or None if
+    dim does not split into whole tiles on num_cores cores."""
+    if dim % (num_cores * _TILE) != 0:
+        return None
+    shard_w = dim // num_cores
+    mem_cfg = ttnn.create_sharded_memory_config(
+        shape=(_TILE, shard_w),
+        core_grid=ttnn.CoreGrid(y=1, x=num_cores),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    block_w = shard_w // _TILE
+    subblock_w = max(i for i in (1, 2, 3, 4) if block_w % i == 0)
+    prog_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores, 1],
+        subblock_w=subblock_w,
+        block_h=1,
+        block_w=block_w,
+        inplace=False,
+    )
+    return mem_cfg, prog_cfg
+
+
+def _m5_add_norm(norm, a, b, h_mc, n_mc):
+    """M5 ADDNORM (tp_common M5 table): h = a + b and n = rmsnorm(h) * gamma in ONE op (the R6 stage-1
+    ttnn.rms_norm residual_output_tensor path). h is allocated here (bf16 TILE, a's shape, memory config h_mc =
+    where the plain ttnn.add(a, b) writes); n goes to n_mc. Same eps / weight / HiFi2 compute config /
+    program_config=None as RMSNorm.forward, so h and n are bit-identical to ttnn.add + ttnn.rms_norm (R6 T1/T3).
+    Returns (h, n)."""
+    h = ttnn.allocate_tensor_on_device(a.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, a.device(), h_mc)
+    n = ttnn.rms_norm(
+        a,
+        epsilon=norm.eps,
+        weight=norm.weight,
+        residual_input_tensor=b,
+        program_config=None,
+        memory_config=n_mc,
+        compute_kernel_config=norm.compute_kernel_config_hifi2,
+        residual_output_tensor=h,
+    )
+    return h, n
+
+
+def decode_norm_sharded_applies(x):
+    """D3 applies to an interleaved TILE decode input with one logical row ([1,1,dim] or [1,1,1,dim])."""
+    shape = list(x.shape)
+    return (
+        len(shape) in (3, 4)
+        and all(d == 1 for d in shape[:-1])
+        and x.layout == ttnn.TILE_LAYOUT
+        and not x.memory_config().is_sharded()
+    )
+
+
+def decode_norm_sharded_out(norm, x, cfg):
+    """D3 without the final S2I: I2S(x) -> sharded rms_norm; returns the 8-core WIDTH_SHARDED L1 output
+    (M4: the I-3 A3 LM head reshards it to its own in0 layout)."""
+    mem_cfg, prog_cfg = cfg
+    xs = ttnn.to_memory_config(x, mem_cfg)
+    y = ttnn.rms_norm(
+        xs,
+        epsilon=norm.eps,
+        weight=norm.weight,
+        program_config=prog_cfg,
+        memory_config=mem_cfg,
+        compute_kernel_config=norm.compute_kernel_config_hifi2,
+    )
+    ttnn.deallocate(xs)
+    return y
+
+
+def decode_norm_sharded(norm, x, cfg, out_memory_config):
+    """D3: I2S(x) -> sharded rms_norm (same eps / weight / HiFi2 ckc as RMSNorm.forward) -> S2I to
+    out_memory_config. Not routed through RMSNorm.forward(in_sharded=True): its sharded_to_interleaved
+    takes no memory_config (models/common/rmsnorm.py, shared file)."""
+    y = decode_norm_sharded_out(norm, x, cfg)
+    out = ttnn.sharded_to_interleaved(y, out_memory_config)
+    ttnn.deallocate(y)
+    return out
 
 
 class Qwen36DecoderLayer:
@@ -68,6 +157,18 @@ class Qwen36DecoderLayer:
         # MoE layers gather in the norm (the sparse MoE + shared expert need full/replicated
         # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
         self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
+        # I-1 D3 (QWEN36_I1_D3, single device): 8-core width-sharded decode norms; None = pre-I-1 path.
+        self._decode_norm_cfg = (
+            make_decode_norm_sharded_config(args.dim) if self.num_devices == 1 and tpc.i1_enabled("D3") else None
+        )
+        # M1 S3 / S4 (QWEN36_M1_S3 / _S4, single device, GDN layers): tp_common.m1_gdn_norm_l1 decides per
+        # call whether the prefill attention_norm output goes to L1 (see forward()); None = never.
+        self._m1_norm_l1_fn = None
+        self._m1_grid = None
+        if self.num_devices == 1 and not self.is_full_attention:
+            _g = mesh_device.compute_with_storage_grid_size()
+            self._m1_grid = ttnn.CoreCoord(_g.x, _g.y)
+            self._m1_norm_l1_fn = tpc.m1_gdn_norm_l1
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,
@@ -178,7 +279,46 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
         gdn_collect=False,
+        last_row_only=False,
+        last_row_tile_slices=False,
+        last_row_pos_tensor=None,
+        m5_addnorm=False,
+        pending=None,
+        defer_out=False,
     ):
+        # last_row_tile_slices (M4 R4A) / last_row_pos_tensor (M4 R4B), with last_row_only only (tp_common M4
+        # table): R4A = the one-row reads (residual row here; gate input + SDPA output in the attention) are a
+        # tile-aligned [T-32:T] block slice + row 31 of the block (bit-exact); R4B = the attention's SDPA is the
+        # paged decode SDPA for row T - 1 at the absolute position held by last_row_pos_tensor (int32 [1]).
+        assert last_row_only or (
+            not last_row_tile_slices and last_row_pos_tensor is None
+        ), "last_row_tile_slices / last_row_pos_tensor (M4) need last_row_only (M2 LASTROW)"
+        # M5 ADDNORM (tp_common M5 table; Qwen36Model._forward_prefill_chunk passes m5_addnorm=True for its
+        # T == M5_ADDNORM_T chunks): fused residual add + RMSNorm (_m5_add_norm) for full-T pairs.
+        #   pending=(h_prev, mlp_prev): x is None; this layer makes its input x = h_prev + mlp_prev (the previous
+        #     layer's MLP residual add, which that layer deferred) together with its attention_norm, frees
+        #     h_prev and mlp_prev, owns x and frees it after its last reader (the attention residual add).
+        #   defer_out=True: skip the MLP residual add and return (h, ff_output) for the next layer's pending.
+        assert m5_addnorm or (pending is None and not defer_out), "pending / defer_out need m5_addnorm (M5 ADDNORM)"
+        assert (x is None) == (pending is not None), "M5 ADDNORM: pass exactly one of x and pending"
+        assert not (defer_out and last_row_only), "M5 ADDNORM: a last_row_only layer cannot defer its output"
+        own_x = pending is not None
+        xs = x if x is not None else pending[0]  # shape / memory reference until x exists
+        # last_row_only (M2 LASTROW, tp_common; single device, full-attention layer, paged prefill with a
+        # chunk page table): keep the K/V cache fill and the full SDPA, then compute the rest of the layer
+        # (gate, head concat, gate multiply, o_proj, residual, ffn_norm, MLP, residual) for the last row
+        # only. Returns [1, 1, dim] = row T - 1 of the full output.
+        if last_row_only:
+            assert (
+                self.num_devices == 1
+                and self.is_full_attention
+                and mode == "prefill"
+                and chunk_page_table is not None
+                and valid_len is None
+                and not gdn_collect
+                and len(xs.shape) == 3
+                and xs.shape[0] == 1
+            ), "last_row_only: single-device full-attention paged chunk prefill, B == 1, 3D input only"
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -246,14 +386,69 @@ class Qwen36DecoderLayer:
                 _attn_norm_config = _ff_norm_config = {"output_mem_config": ttnn.L1_MEMORY_CONFIG}
             else:
                 _layer_l1_max_t = int(os.environ.get("QWEN36_LAYER_L1_MAX_T", "0"))
-                _T = x.shape[1] if len(x.shape) >= 3 else 1
+                _T = xs.shape[1] if len(xs.shape) >= 3 else 1
                 if _T <= _layer_l1_max_t:
                     _attn_norm_config = _ff_norm_config = {"output_mem_config": ttnn.L1_MEMORY_CONFIG}
                 else:
                     _attn_norm_config = _ff_norm_config = None
                 if os.environ.get("QWEN36_LAYER_RESID_L1", "0") == "1" and _T <= 2048:
                     _residual_mc = ttnn.L1_MEMORY_CONFIG
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        # I-1 D3: single-device decode norms run width-sharded on 8 cores; the output is the same
+        # interleaved L1 tensor as the output_mem_config=L1 path above.
+        _d3 = self._decode_norm_cfg is not None and mode == "decode"
+        # M1 S3 / S4 (tp_common M1 table): GDN layer, unmasked T == 2048 prefill chunk -> the attention_norm
+        # output is written to L1 interleaved by the rms_norm op itself (same eps / weight / HiFi2 ckc and
+        # program_config=None as RMSNorm.forward; no extra copy op). The GDN in-proj frees it after its last
+        # consumer (ttnn_gated_deltanet.py), so the deallocate below is then a no-op.
+        _m1_norm_l1 = (
+            self._m1_norm_l1_fn is not None
+            and mode == "prefill"
+            and valid_len is None
+            and not gdn_collect
+            and _attn_norm_config is None
+            and len(xs.shape) == 3
+            and self._m1_norm_l1_fn(xs.shape[1], self._m1_grid)
+        )
+        # M5 ADDNORM: the fused op applies to a full-T (M5_ADDNORM_T rows) single-device prefill pair whose norm has
+        # no extra output config (the norm output then lands where the plain norm writes it); else the plain ops.
+        _m5 = (
+            m5_addnorm
+            and self.num_devices == 1
+            and mode == "prefill"
+            and valid_len is None
+            and not gdn_collect
+            and len(xs.shape) == 3
+            and xs.shape[1] == M5_ADDNORM_T
+            and xs.dtype == ttnn.bfloat16
+        )
+        attn_input = None
+        if pending is not None:
+            # M5 ADDNORM cross-layer pair: x = h_prev + mlp_prev (the add the previous layer deferred, written where
+            # that add writes today) + this layer's attention_norm (L1 on the M1 path, else x's placement).
+            h_prev, mlp_prev = pending
+            x_mc = _residual_mc if _residual_mc is not None else h_prev.memory_config()
+            if _m5 and _attn_norm_config is None:
+                x, attn_input = _m5_add_norm(
+                    self.attention_norm, h_prev, mlp_prev, x_mc, ttnn.L1_MEMORY_CONFIG if _m1_norm_l1 else x_mc
+                )
+            else:
+                x = ttnn.add(h_prev, mlp_prev, memory_config=_residual_mc)
+            ttnn.deallocate(h_prev)
+            ttnn.deallocate(mlp_prev)
+        if attn_input is None:
+            if _d3 and decode_norm_sharded_applies(x):
+                attn_input = decode_norm_sharded(self.attention_norm, x, self._decode_norm_cfg, ttnn.L1_MEMORY_CONFIG)
+            elif _m1_norm_l1:
+                attn_input = ttnn.rms_norm(
+                    x,
+                    epsilon=self.attention_norm.eps,
+                    weight=self.attention_norm.weight,
+                    program_config=None,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.attention_norm.compute_kernel_config_hifi2,
+                )
+            else:
+                attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -304,6 +499,12 @@ class Qwen36DecoderLayer:
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
+                last_row_only=last_row_only,
+                **(
+                    dict(last_row_tile_slices=last_row_tile_slices, last_row_pos_tensor=last_row_pos_tensor)
+                    if last_row_only
+                    else {}
+                ),
             )
         else:
             deltanet_mode = "chunk" if mode == "prefill" else "recurrent"
@@ -312,14 +513,47 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output, memory_config=_residual_mc)
+        if last_row_only:
+            # M2 LASTROW: attn_output is row T - 1 only ([1, 1, dim]); take the same row of the residual
+            # (same slice + to_layout as Qwen36Model's exact-multiple last-row read). The 1-row ffn_norm
+            # writes L1 interleaved, as in decode, so the MLP runs its T == 1 (decode) path.
+            _T_full = x.shape[1]
+            if last_row_tile_slices:
+                # M4 R4A: tile-aligned 32-row block (TILE path), then its row 31 (small untilize path).
+                _x_blk = x[:, _T_full - 32 : _T_full, :]
+                x_res = ttnn.to_layout(_x_blk[:, 31:32, :], ttnn.TILE_LAYOUT)
+                ttnn.deallocate(_x_blk)
+            else:
+                x_res = ttnn.to_layout(x[:, _T_full - 1 : _T_full, :], ttnn.TILE_LAYOUT)
+            h = ttnn.add(x_res, attn_output, memory_config=_residual_mc)
+            ttnn.deallocate(x_res)
+            _ff_norm_config = {"output_mem_config": ttnn.L1_MEMORY_CONFIG}
+            ff_input = None
+        elif _m5 and _ff_norm_config is None:
+            # M5 ADDNORM intra-layer pair: h = x + attn_output (where the residual add writes today) + ffn_norm
+            # (the plain ffn_norm writes h's placement, as here).
+            h_mc = _residual_mc if _residual_mc is not None else x.memory_config()
+            h, ff_input = _m5_add_norm(self.ffn_norm, x, attn_output, h_mc, h_mc)
+        else:
+            h = ttnn.add(x, attn_output, memory_config=_residual_mc)
+            ff_input = None
         ttnn.deallocate(attn_output)
+        if own_x:
+            # M5 ADDNORM: this layer made x (pending); the residual add above was its last reader.
+            ttnn.deallocate(x)
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+        if ff_input is None:  # (M5 ADDNORM: the fused op above made it)
+            if _d3 and decode_norm_sharded_applies(h):
+                ff_input = decode_norm_sharded(self.ffn_norm, h, self._decode_norm_cfg, ttnn.L1_MEMORY_CONFIG)
+            else:
+                ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
 
+        if defer_out:
+            # M5 ADDNORM: the next layer fuses this residual add with its attention_norm (pending).
+            return (h, ff_output)
         output = ttnn.add(h, ff_output, memory_config=_residual_mc)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)

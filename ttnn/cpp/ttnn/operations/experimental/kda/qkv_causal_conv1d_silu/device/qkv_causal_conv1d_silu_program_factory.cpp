@@ -29,7 +29,8 @@ constexpr uint32_t tap_count = 4;
 ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
     const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
     const auto& input = in.input.mesh_tensor();
-    const auto& history = in.history.mesh_tensor();
+    TT_FATAL(in.history.has_value(), "qkv_causal_conv1d_silu: ROW_MAJOR program needs a history tensor");
+    const auto& history = in.history->mesh_tensor();
     const auto& tap0 = in.tap0.mesh_tensor();
     const auto& tap1 = in.tap1.mesh_tensor();
     const auto& tap2 = in.tap2.mesh_tensor();

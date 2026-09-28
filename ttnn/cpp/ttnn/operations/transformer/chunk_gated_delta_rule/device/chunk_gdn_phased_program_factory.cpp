@@ -13,9 +13,9 @@
 //         multicasts the head's shared V-independent inputs to its siblings (see distribute_scan).
 
 #include "chunk_gdn_phased.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
@@ -76,11 +76,6 @@ constexpr uint32_t scan_vnew = decayfac;  // 11: scan's v_new scratch
 }  // namespace pcb
 
 namespace {
-
-ComputeConfigDescriptor compute_cfg() {
-    return ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
-}
 
 // Chunk-parallel work distribution for PREP: split `total` independent (head, chunk) work-items
 // as evenly as possible across the compute grid. Work-item wi in [0,total) maps directly to the
@@ -146,8 +141,8 @@ struct ScanWorkDist {
 ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool force_serial) {
     const uint32_t ncores = grid.x * grid.y;
     TT_FATAL(BH <= ncores, "num_heads {} exceeds compute cores {}", BH, ncores);
-    // force_serial (QWEN_GDN_SCAN_SERIAL=1, hashed into ChunkGdnScanParams) pins NV=1 — full V on
-    // 1 core/head, the old layout — for perf A/B only.
+    // force_serial (ChunkGdnPhasedProgramConfig::scan_serial, hashed into ChunkGdnScanParams) pins
+    // NV=1 — full V on 1 core/head, the old layout — for perf A/B only.
     // Row-aligned placement: each head's NV v-block cores must form a 1xNV NoC RECTANGLE (the
     // shared-input multicast targets it), so the effective row width is padded down to a multiple
     // of NV — HPR = grid.x/NV heads per row, grid.x mod NV columns idle per used row. Feasibility
@@ -200,16 +195,18 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
 
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
+    // Packed WY-inverse quadrant masks the prep reader always loads into the cb_u/cb_mask slot.
+    constexpr uint32_t kPrepMaskTiles = 3;
     uint32_t scr = std::max({cc, ck, cv, kv, kc});
 
     const tt::DataFormat df_io = tt::DataFormat::Float16_b;  // bf16 q/k/v
 
     auto* device = in.q.device();
     // Fan the BH*NC independent (head, chunk) prep work-items across the whole grid.
-    // QWEN_GDN_PREP_SERIAL=1 caps to BH cores (old 1-core/head layout) for perf A/B only.
+    // prep_serial (ChunkGdnPhasedProgramConfig, hashed) caps to BH cores — the old 1-core/head
+    // layout — for perf A/B only.
     const uint32_t total_work = BH * NC;
-    const char* serial_env = std::getenv("QWEN_GDN_PREP_SERIAL");
-    const uint32_t core_cap = (serial_env && serial_env[0] == '1') ? BH : ~0u;
+    const uint32_t core_cap = attrs.prep_serial ? BH : ~0u;
     auto dist = distribute_prep(device->compute_with_storage_grid_size(), total_work, core_cap);
     const CoreRangeSet& cores = dist.core_set;
     const uint32_t n_used = static_cast<uint32_t>(dist.cores.size());
@@ -242,8 +239,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::Tinv, cc);
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
-    add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, cv);
+    // c16 is the prep kernel's ck-sized fp32 scratch (GdnPrepCbs::sck: q^2, k^2, k*decayfac), so scr1 sees
+    // only same-size pushes. max(cv, ck) fp32 tiles == the old cv x2 bf16 bytes when Kt == Vt.
+    add_cb(pcb::out, std::max(cv, ck));
+    // Take the max so the aliased cb_u always fits both users: v_beta or masks_c.
+    add_cb(pcb::u, std::max(cv, kPrepMaskTiles));
     add_cb(pcb::w, ck);
     add_cb(pcb::qdecay, ck);
     add_cb(pcb::intra, cc);
@@ -272,9 +272,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.tril_c.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.ones_c.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.masks_c.buffer()).append_to(reader_ct);
+    // gb_flat: sel's accessor is appended unconditionally (like initial_state's pattern in the scan
+    // factory) so the compile-time-arg offsets never shift between gb_flat on/off — a null buffer
+    // still emits a fixed 2-word (non-sharded) accessor via TensorAccessorArgs' documented
+    // null-buffer contract. Must come right after masks_c and before the OPT-A trailing flags below
+    // (that ordering is mirrored exactly by the reader kernel's TensorAccessorArgs<> chain).
+    TensorAccessorArgs(attrs.gb_flat ? in.sel->buffer() : nullptr).append_to(reader_ct);
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
+    reader_ct.push_back(attrs.gb_flat ? 1u : 0u);
 
     std::vector<uint32_t> writer_ct = ct_args;
     for (auto& t : outputs) {
@@ -312,8 +319,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(attrs.qk_norm ? 1u : 0u);
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
+    compute_ct.push_back(attrs.gb_flat ? 1u : 0u);
     compute.compile_time_args = compute_ct;
-    compute.config = compute_cfg();
+    if (attrs.tinv == static_cast<uint32_t>(GdnTinv::SFPU_FP32)) {
+        compute.defines.emplace_back("GDN_TINV_SFPU", "1");
+    }
+    compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* q_buf = in.q.buffer();
@@ -325,6 +336,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     auto* tril_buf = in.tril_c.buffer();
     auto* ones_buf = in.ones_c.buffer();
     auto* masks_buf = in.masks_c.buffer();
+    auto* sel_buf = attrs.gb_flat ? in.sel->buffer() : nullptr;
     auto* vb_buf = outputs[0].buffer();    // v_beta
     auto* kd_buf = outputs[1].buffer();    // kd = k_beta*decay_exp
     auto* qd_buf = outputs[2].buffer();    // q_decay
@@ -340,7 +352,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
         const uint32_t wi_start = dist.wi_start[i];
         const uint32_t wi_count = dist.wi_count[i];
         // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches (V_FLAT/QK_FLAT);
-        // the final 1 is the work-item stride (contiguous here; the fused NP>1 split strides by NP).
+        // the next 1 is the work-item stride (contiguous here; the fused NP>1 split strides by NP);
+        // sel_buf is last (only read when GB_FLAT — appended at the end so it never shifts the
+        // existing V_FLAT/QK_FLAT runtime-arg indices).
         reader.emplace_runtime_args(
             core,
             {wi_start,
@@ -357,7 +371,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
              NC,
              attrs.HV,
              attrs.Hk,
-             1u});
+             1u,
+             sel_buf});
         writer.emplace_runtime_args(
             core, {wi_start, wi_count, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
         compute.emplace_runtime_args(core, {wi_count});
@@ -407,17 +422,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). Double-buffered ONLY in the deep-fan-out multicast
-    // regime (NV >= 4): there the reader's chunk-c+1 prefetch (receivers reserve+ready early,
-    // the sender stages ahead) overlaps the multicast convoy and measures +17% on the scan op
-    // (BH=12/NV=4, T=4096: 708 -> 604 us). At NV=2 with twice the active cores (BH=48: 96 cores)
-    // the same prefetch ADDS 6% — DRAM is already saturated and the extra outstanding reads only
-    // queue — and on the plain (no-mcast) path it measures dead neutral at every shape, so both
-    // keep nbuf=1. Costs (cv + 2ck + 2cc + kc + 1) extra fp32 tiles (~64KB at Ct=1/Kt=4/Vtl=1)
-    // when enabled. The multicast lockstep argument survives nbuf=2: both roles reserve+push
-    // exactly one slot per chunk per CB, so write pointers ping-pong in unison and the sender's
-    // reserve-time address still names the receivers' reserved slot; the alternating ready/valid
-    // handshake keeps at most one multicast outstanding, which nbuf=2 fully absorbs.
+    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1: the
+    // deep-fan-out nbuf=2 prefetch of PR #53804 is deliberately NOT carried in this tree, so the
+    // phased path's performance stays identical to main and is a fixed reference for the
+    // fused-vs-phased A/Bs built on top of it.
     // Per-head multicast of the shared V-independent inputs (kd, q_decay, intra, k_dec_t, dl,
     // t_inv): the head's v-block-0 core (leftmost of its 1xNV row rectangle) reads them from DRAM
     // once and multicasts into the sibling cores' CBs — the siblings would otherwise re-read
@@ -430,14 +438,13 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     constexpr uint32_t sem_ready_id = 0;
     constexpr uint32_t sem_valid_id = 1;
 
-    const uint32_t nbuf_in = (do_mcast && sdist.NV >= 4) ? 2u : 1u;
-    add_cb(pcb::vbeta, cv, nbuf_in);
-    add_cb(pcb::w, ck, nbuf_in);  // kd (prep's w slot)
-    add_cb(pcb::qdecay, ck, nbuf_in);
-    add_cb(pcb::intra, cc, nbuf_in);
-    add_cb(pcb::kdec_t, kc, nbuf_in);
-    add_cb(pcb::dl, 1, nbuf_in);
-    add_cb(pcb::Tinv, cc, nbuf_in);  // t_inv (WY inverse)
+    add_cb(pcb::vbeta, cv, 1);  // v_beta (prep's vbeta slot, 14)
+    add_cb(pcb::w, ck, 1);      // kd (prep's w slot)
+    add_cb(pcb::qdecay, ck, 1);
+    add_cb(pcb::intra, cc, 1);
+    add_cb(pcb::kdec_t, kc, 1);
+    add_cb(pcb::dl, 1, 1);
+    add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);
@@ -448,8 +455,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     // Scratch.
     add_cb(pcb::scan_vnew, cv);
     add_cb(pcb::ointer, cv);
-    add_cb(pcb::supd, kv);
-    add_cb(pcb::stmp, kv);
     add_cb(pcb::scr1, scr);
 
     CoreRangeSet sender_set, receiver_set;
@@ -547,7 +552,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
-    compute.config = compute_cfg();
+    compute.config = gdn_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();

@@ -9,18 +9,18 @@
 //   v_beta = v*beta ; k_beta = k*beta
 //   decay = cumsum(g) = tril @ g ; decay_exp = exp(decay)
 //   L_mask = tril( exp(decay_i - decay_j) )
-//   N = strictly_lower(k_beta@k^T * L_mask) ; T_inv = (I+N)^-1  (Horner)
+//   N = strictly_lower(k_beta@k^T * L_mask) ; T_inv = (I+N)^-1  (Horner quadrants, or the SFPU
+//                                             forward substitution under GDN_TINV_SFPU)
 //   u = T_inv @ v_beta ; w = T_inv @ (k_beta*decay_exp)
 //   intra = (q@k^T) * L_mask
 //   q_decay = q*decay_exp ; k_dec_t = transpose(k * exp(decay_last - decay))
 //   v_prime = w@S ; v_new = u - v_prime ; o = q_decay@S + intra@v_new
 //   S = S*exp(decay_last) + k_dec_t@v_new
 //
-// The math bodies live in chunk_gdn_math.hpp (shared with the scan kernel); this file is just
-// the CB map and the work-item loop calling prep_chunk().
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "chunk_gdn_math.hpp"
 
 namespace {
@@ -37,6 +37,7 @@ constexpr uint32_t cb_scr1 = 28, cb_scr2 = 29, cb_scr3 = 30, cb_s3 = 31;
 constexpr uint32_t cb_dl = cb_vnew;
 // WY-inverse quadrant masks (3 tiles: 0=Qtl, 1=Qbr, 2=Q10). Reuses the cb_u slot (unused in
 // the stable-form prep); the reader loads them once. Used only by invert_block.
+// gb_flat (fused path only): the reader also loads this core's one-hot head selector as tile 3.
 constexpr uint32_t cb_mask = cb_u;
 
 constexpr GdnPrepCbs CBS{
@@ -70,7 +71,8 @@ constexpr GdnPrepCbs CBS{
     .scr3 = cb_scr3,
     .s3 = cb_s3,
     .dl = cb_dl,
-    .mask = cb_mask};
+    .mask = cb_mask,
+    .sck = cb_out};  // cb_out (16) is otherwise unused in prep: fp32, >= ck tiles (both prep factories)
 
 }  // namespace
 
@@ -84,6 +86,9 @@ void kernel_main() {
     constexpr uint32_t QK_NORM = get_compile_time_arg_val(3);
     constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(4);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(5);
+    // gb_flat (Option B, fused path only): 1 => select head h's column out of the reader's raw
+    // [B,T,HV]-tile g/beta via the one-hot selector in cb_mask tile 3 (see chunk_gdn_math.hpp).
+    constexpr uint32_t GB_FLAT = get_compile_time_arg_val(6);
     // Chunk-parallel: NC here is this core's local work-item count (chunks assigned to it), NOT the
     // sequence-wide chunk count. Each work-item is an independent (head, chunk) prep — no cross-item
     // state — so the loop just processes `NC` items regardless of which (h, c) they map to.
@@ -97,12 +102,27 @@ void kernel_main() {
     WAIT(cb_eye, cc);
     WAIT(cb_tril, cc);
     WAIT(cb_ones, cc);
-    WAIT(cb_mask, 3);  // Qtl, Qbr, Q10 (used by invert_block)
+    WAIT(cb_mask, GB_FLAT ? 4 : 3);  // Qtl, Qbr, Q10 (invert_block) [+ gb_flat head selector]
 
     // PHASE A (prep): state-independent per-chunk quantities. No recurrent state here; the
     // sequential state scan lives in the separate scan kernel. Outputs (per chunk) u, w, k_dec_t,
     // q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
     for (uint32_t c = 0; c < NC; c++) {
-        prep_chunk(CBS, Ct, Kt, Vt, QK_NORM != 0, SCALE_BITS, EPS_BITS);
+#if defined(PROFILE_KERNEL)
+        {
+            // Diagnostic only (Tracy device runs): wait for the item's inputs up front so the zone
+            // below measures pure prep math (w_p). Idempotent waits; absent from production binaries.
+            DeviceZoneScopedN("prep_wait_in");
+            WAIT(cb_q, Ct * Kt);
+            WAIT(cb_k, Ct * Kt);
+            WAIT(cb_v, Ct * Vt);
+            WAIT(cb_g, Ct);
+            WAIT(cb_beta, Ct);
+        }
+#endif
+        {
+            DeviceZoneScopedN("prep_item");
+            prep_chunk<Ct, Kt, Vt, QK_NORM != 0, GB_FLAT != 0>(CBS, SCALE_BITS, EPS_BITS);
+        }
     }
 }

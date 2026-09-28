@@ -19,8 +19,27 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
 
 namespace ttnn::prim {
+
+// WY-inverse method of the prep compute (the `tinv` attr of the prep and fused prims): the op's
+// ChunkGdnWyInverse with AUTO resolved for this device and chunk size.
+//   HORNER    : invert_block — quadrant split, two 15-term Horner inverses and an exact off-diagonal on
+//               the matrix engine (~60 LLK calls per chunk). Runs on every architecture at every chunk
+//               size; the reference the SFPU method is validated against.
+//   SFPU_FP32 : one SFPU forward-substitution solve reading negN as fp32 in place
+//               (kernels/compute/chunk_gdn_tinv_sfpu.hpp). Blackhole-only, chunk_size == 32. PCC-class
+//               against HORNER — T_inv error no larger in any measured regime — for about a quarter less
+//               producer time per chunk.
+enum class GdnTinv : uint32_t { HORNER = 0, SFPU_FP32 = 1 };
+// The method for one call, resolved at attrs construction (hashed): HORNER / SFPU as requested (an
+// explicit SFPU the device or chunk size cannot honor FATALs in validate_gdn_tinv rather than falling
+// back); AUTO is SFPU_FP32 wherever that is supported and HORNER elsewhere.
+uint32_t gdn_tinv_resolve(
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse, uint32_t chunk_size, const Tensor& any_input);
+// FATAL unless the method is supported for this chunk size on this device.
+void validate_gdn_tinv(uint32_t tinv, uint32_t chunk_size, const Tensor& any_input);
 
 // ---------------------------------------------------------------------------
 // PREP
@@ -31,7 +50,7 @@ struct ChunkGdnPrepParams {
     uint32_t chunk_size;
     uint32_t key_dim;
     uint32_t val_dim;
-    // OPT-A (QWEN_GDN_FLAT_QKV): when v_flat, `v` is the FLAT token-major tensor [B, T, HV*V] and the
+    // Flat v: when v_flat, `v` is the FLAT token-major tensor [B, T, HV*V] and the
     // prep reader tile-addresses head hv's chunk c directly out of it (no head-split/permute/pad
     // materialization on the host). HV is the value-head count (needed for the flat row stride).
     // Only the v INPUT read changes; the prep still WRITES head-major v_beta, so the scan and every
@@ -46,6 +65,20 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    // ChunkGdnPhasedProgramConfig::prep_serial: BH cores (one per head) instead of fanning the BH*NC
+    // work-items over the whole grid. Measurement only. Hashed, like every field here.
+    bool prep_serial = false;
+    // gb_flat (Option B, enabled by passing `sel`): `g`/`beta` are the RAW [B,T,HV] fp32 tensors (one
+    // tile wide, HV<=32) instead of [BH,NC,C,1]; the prep reader/compute select head h's column with a
+    // one-hot matmul against `sel`. Consumed by the FUSED producer only (chunk_gdn_fused.hpp);
+    // phased prep rejects it (validate_on_program_cache_miss) — its cores span several heads, and
+    // the zero-CB-growth selector is loaded once per core. The field stays so both factories share
+    // one reader/compute CT-arg layout.
+    bool gb_flat = false;
+    // WY-inverse method (GdnTinv): Horner quadrants on the matrix engine or the SFPU forward-substitution
+    // solve — the op's wy_inverse kwarg resolved by gdn_tinv_resolve at attrs construction (hashed); the
+    // fused prim carries the same field, so fused == phased stays bit-exact for any given method.
+    uint32_t tinv = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -54,12 +87,15 @@ struct ChunkGdnPrepInputs {
     Tensor q;        // [BH, NC, C, K] bf16
     Tensor k;        // [BH, NC, C, K] bf16
     Tensor v;        // [BH, NC, C, V] bf16  (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [BH, NC, C, 1] fp32 (column)
-    Tensor beta;     // [BH, NC, C, 1] fp32 (column)
+    Tensor g;        // [BH, NC, C, 1] fp32 (column) (or FLAT [B, T, HV] fp32 when params.gb_flat)
+    Tensor beta;     // [BH, NC, C, 1] fp32 (column) (or FLAT [B, T, HV] fp32 when params.gb_flat)
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
     Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10)
+    // gb_flat one-hot head selector [1,1,32,32*HV] fp32 TILE (tile h = one-hot, row h col 0 = 1).
+    // Absent unless params.gb_flat (mirrors initial_state's optional-tensor pattern below).
+    std::optional<Tensor> sel;
 };
 
 struct ChunkGdnPrepProgramFactory {
@@ -101,7 +137,11 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool prep_serial = false,
+    bool gb_flat = false,
+    const std::optional<Tensor>& sel = std::nullopt,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -114,17 +154,8 @@ struct ChunkGdnScanParams {
     uint32_t val_dim;
     bool has_initial_state;
     bool output_final_state;
-    // Per-head NoC multicast of the shared V-independent scan inputs (kd, q_decay, intra, k_dec_t,
-    // dl, t_inv): the head's v-block-0 core reads them from DRAM once and multicasts into the
-    // sibling V-block cores' CBs, instead of every sibling re-reading identical DRAM pages
-    // (NV-fold read amplification). Bit-exact: identical bytes land in identical CB slots.
-    // Kill switch QWEN_GDN_SCAN_MCAST=0 (read where params are built, NOT in the factory, so the
-    // flag participates in the program-cache key and in-process A/B toggling is safe).
-    // The factory still falls back to the plain reader when NV==1 (nothing to share).
+    // ChunkGdnPhasedProgramConfig::use_mcast / scan_serial (see chunk_gated_delta_rule_config.hpp).
     bool use_mcast = true;
-    // QWEN_GDN_SCAN_SERIAL=1 pins NV=1 (perf A/B only). Hashed here for the same reason as
-    // use_mcast: it changes the placement AND the kernel topology (mcast on/off), so a
-    // factory-local env read would silently serve a stale cached program on in-process toggles.
     bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -136,7 +167,7 @@ struct ChunkGdnScanInputs {
     Tensor q_decay;                       // [BH, NC, C, K] fp32
     Tensor intra;                         // [BH, NC, C, C] fp32
     Tensor k_dec_t;                       // [BH, NC, K, C] fp32
-    Tensor dl;                            // [BH, NC, 1, 1] fp32 (scalar per chunk in tile [0,0])
+    Tensor dl;                            // [BH, NC, 32, 32] fp32: dl*I, dl = exp(g_sum) of the chunk on the diagonal
     Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
 };
@@ -174,6 +205,8 @@ std::vector<Tensor> chunk_gdn_scan(
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_mcast = true,
+    bool force_serial = false);
 
 }  // namespace ttnn::prim

@@ -15,9 +15,18 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.layer import (
+    Qwen36DecoderLayer,
+    decode_norm_sharded,
+    decode_norm_sharded_applies,
+    decode_norm_sharded_out,
+    make_decode_norm_sharded_config,
+)
+from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import flexible_sdpa_q_chunk
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -93,6 +102,9 @@ class Qwen36Model:
         for i in tqdm(self.layer_indices, desc="Loading layers"):
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
+        # M3 ZB (tp_common M3 table): the M1 S2 / S3 zero biases, allocated once here (weight load,
+        # before any trace capture) and shared by all layers. Empty when QWEN36_M3_ZB=0.
+        self._m3_zero_biases = self._m3_alloc_zero_biases(mesh_device)
 
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
         # 27B TP: hidden is sharded -> pass is_distributed + tt_ccl or use DistributedNorm.
@@ -116,6 +128,11 @@ class Qwen36Model:
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
             self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
+        # I-1 D3 (QWEN36_I1_D3, single device): the decode final norm runs width-sharded on 8 cores
+        # (see _final_norm_decode); None = pre-I-1 path.
+        self._decode_norm_cfg = (
+            make_decode_norm_sharded_config(args.dim) if self.num_devices == 1 and tpc.i1_enabled("D3") else None
+        )
 
         # LM head [in,out]. Mesh: vocab-sharded (dim=-1); _lm_head all-gathers logits.
         # M=1 decode is weight-read-bound (~1.3GB/token), so sharding cuts bandwidth;
@@ -145,10 +162,19 @@ class Qwen36Model:
             cache_file_name=lm_cache,
             **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
         )
+        # I-3 LM head "A3" (QWEN36_I3_LMHEAD=A3, M4; single device, 13x10 grid): the 10 DRAM width-sharded
+        # column chunks are built ONCE here from the weight just loaded, and the unsplit weight is freed
+        # (see _a3_build_lm_chunks). None = every other LMHEAD value (lm_head_weight stays).
+        self._a3_lm_chunks = None
+        if self.num_devices == 1 and tpc.i3_value("LMHEAD") == "A3" and tpc.i3_grid_ok(mesh_device):
+            self._a3_lm_chunks = self._a3_build_lm_chunks(mesh_device)
 
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
         self._ondev_argmax = False
+        # True (1x1 greedy only; see set_greedy_token_output): prefill + non-sampling decode return a
+        # uint32 greedy token computed on device instead of the logits. Default off.
+        self._greedy_token_out = False
         self._paged_kv_caches = None
         # Positions in self.layers of full-attn layers (not checkpoint indices); drives KV cache bind.
         self._attention_layer_indices = [pos for pos, layer in enumerate(self.layers) if layer.is_full_attention]
@@ -156,11 +182,32 @@ class Qwen36Model:
         # Shared zero buffers for in-place DN reset between traced replays.
         self._dn_zero_recurrent = None
         self._dn_zero_conv = None
+        self._dn_zero_hist = None  # QWEN36_GDN_DECODE_FUSED=2 only
         # Chunk-outer trace: one all-layer chunk captured, replayed per chunk via DMA inputs.
         # Persistent buffers below; addresses baked into trace.
         self._chunked_trace_id = None
         self._chunked_trace_output = None
         self._chunked_chunk_size = None
+        # M2 (tp_common M2_FLAG_DEFAULTS), fixed per prepare in _prepare_prefill_trace_chunked_setup so the
+        # warm-up forward, the captured trace and prefill_traced_chunked agree. False = current path.
+        self._m2_nowhere = False  # NOWHERE: the traced chunk has no vision-splice where (text-only model)
+        self._m2_lastrow = False  # LASTROW: the traced chunk returns only row chunk_size - 1 ([1, 1, dim])
+        self._m2_repack_pending = False  # REPACK_LATE: a conv-history repack still has to run
+        # M3 REPACK_TRACE (tp_common M3 table): the captured GDN conv-history repack trace and the
+        # (fused_conv_state, conv_hist) tensor pairs it bakes in. None = eager repack (current path).
+        self._m3_repack_trace_id = None
+        self._m3_repack_pairs = None
+        # M4 (tp_common M4_FLAG_DEFAULTS), fixed per prepare with M2 LASTROW. False / None = current path.
+        self._m4_r4a = False  # R4A: tile-aligned [T-32:T] block slices for the last layer's one-row reads
+        self._m4_r4b = False  # R4B: the last layer's SDPA = decode SDPA for row chunk_size - 1
+        self._chunk_last_pos_tensor = None  # R4B: persistent int32 [1] = cs + chunk_size - 1 (trace input)
+        self._m4_last_pos_host = None  # R4B: the value the host last wrote into _chunk_last_pos_tensor
+        # M5 (tp_common M5_FLAG_DEFAULTS), fixed per prepare. False / None = current path.
+        self._m5_tail = False  # TAIL_TRACE: the exact-multiple tail runs as its own trace (prepared order only)
+        self._m5_tail_out = None  # TAIL_TRACE: persistent DRAM output (uint32 token or logits), made in prepare
+        self._m5_tail_trace_id = None  # TAIL_TRACE: the captured tail trace
+        self._m5_tail_refs = None  # TAIL_TRACE: the tensors the tail trace bakes in (checked at every replay)
+        self._m5_addnorm = False  # ADDNORM: fused residual add + RMSNorm in the T == 2048 traced chunk forward
         self._chunk_token_buf = None
         self._chunk_start_idx_tensor = None
         self._chunk_page_table_buf = None
@@ -491,10 +538,248 @@ class Qwen36Model:
         return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
 
     def switch_mode(self, mode):
-        """Generator mode-change hook; no-op (no prefetcher)."""
+        """Generator mode-change hook (no prefetcher). Generator.decode_forward calls it first, before
+        any decode trace replay or eager decode: M2 REPACK_LATE runs a pending conv-history repack here."""
+        self._m2_flush_pending_repack()
         return None
 
-    def _lm_head(self, x):
+    def _m2_flush_pending_repack(self):
+        """M2 REPACK_LATE: enqueue the conv-history repack that prefill_traced_chunked deferred (no-op when
+        none is pending). Called by every model entry that uses GDN state after a prefill (switch_mode,
+        prepare_decode_inputs_host, decode, GDN reset / save / restore), so the repack runs on CQ 0 before
+        any of them; _forward_decode asserts that nothing is pending."""
+        if self._m2_repack_pending:
+            self._gdn_refresh_conv_hist()  # clears _m2_repack_pending
+
+    def _m3_alloc_zero_biases(self, mesh_device):
+        """M3 ZB (QWEN36_M3_ZB=1, single device; tp_common M3 table): allocate the zero bias of each enabled
+        M1 item (S2: MLP down projection [1, 2048]; S3: GDN q|k|v in-proj [1, 6144]) ONCE, here at model
+        load (before any trace capture), and share it across all layers (Qwen36MLP._m3_zero_bias,
+        Qwen36GatedDeltaNet._m3_qkv_zero_bias). The forwards only read it. Returns {item: tensor}; empty
+        when the flag is off, on TP, or when neither M1 item is on."""
+        out = {}
+        if self.num_devices != 1 or not tpc.m3_enabled("ZB"):
+            return out
+        if tpc.m1_enabled("S2"):
+            mlps = [l.feed_forward for l in self.layers if isinstance(l.feed_forward, Qwen36MLP)]
+            if mlps:
+                out["S2"] = tpc.m3_zero_bias("S2", mesh_device)
+                for mlp in mlps:
+                    mlp._m3_zero_bias = out["S2"]
+        if tpc.m1_enabled("S3"):
+            gdns = [l.attention for l in self.layers if not l.is_full_attention]
+            if gdns:
+                out["S3"] = tpc.m3_zero_bias("S3", mesh_device)
+                for gdn in gdns:
+                    gdn._m3_qkv_zero_bias = out["S3"]
+        logger.info(
+            f"[M3] ZB: zero biases allocated at load (shared by all layers): "
+            f"{ {k: list(v.shape) for k, v in out.items()} }"
+        )
+        return out
+
+    def _m3_repack_live(self):
+        """M3 REPACK_TRACE: [(dn, fused_conv_state, conv_hist)] of every fused-decode GDN layer, when
+        _gdn_refresh_conv_hist would run the plain repack on all of them with no allocation (single device,
+        every layer bound to a B = 1 conv state, conv_hist already allocated); else None."""
+        if self.num_devices > 1:
+            return None
+        dns = [
+            l.attention for l in self.layers if not l.is_full_attention and getattr(l.attention, "_decode_fused", False)
+        ]
+        if not dns:
+            return None
+        for dn in dns:
+            if dn.fused_conv_state is None or dn.fused_conv_state.shape[0] != 1 or dn.conv_hist is None:
+                return None
+        return [(dn, dn.fused_conv_state, dn.conv_hist) for dn in dns]
+
+    def _m3_capture_repack_trace(self, device):
+        """M3 REPACK_TRACE: capture the GDN conv-history repack (the eager ops of _gdn_refresh_conv_hist) into
+        its own trace. capture_prefill_trace_chunked(prepared=True) calls it right after the chunk-trace
+        capture (the decode trace is already primed). Every buffer the repack reads or writes exists
+        already: the persistent GDN conv state (external buffers bound in prepare) and conv_hist (allocated
+        by the prepare warm-ups); intermediates are freed at capture end. Its programs compiled in prepare
+        (masked-bucket warm-up + the M3 warm-up there). An eager warm-up runs first; the warm-up and the
+        capture must add no program-cache entry (a compile after a trace is parked puts a kernel binary in
+        parked-trace scratch). No-op (eager path kept) when there is no plain repack to capture."""
+        live = self._m3_repack_live()
+        if live is None:
+            logger.warning(
+                "[M3] REPACK_TRACE: no plain conv-history repack to capture (TP, fused GDN decode off, or a "
+                "GDN layer without conv state / conv_hist); prefill_traced_chunked keeps the eager repack"
+            )
+            return
+        n0 = device.num_program_cache_entries()
+        self._gdn_refresh_conv_hist()  # eager warm-up (all programs already compiled in prepare)
+        ttnn.synchronize_device(device)
+        n1 = device.num_program_cache_entries()
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._gdn_refresh_conv_hist()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        n2 = device.num_program_cache_entries()
+        same = all(dn.fused_conv_state is fcs and dn.conv_hist is hist for dn, fcs, hist in live)
+        if n1 != n0 or n2 != n0 or not same:
+            ttnn.release_trace(device, trace_id)
+            raise RuntimeError(
+                f"M3 REPACK_TRACE: program cache entries {n0} -> {n1} (warm-up) -> {n2} (capture), buffers "
+                f"unchanged={same}: the repack compiled or rebound state after the chunk trace was parked"
+            )
+        self._m3_repack_trace_id = trace_id
+        self._m3_repack_pairs = live
+        from models.demos.blackhole.qwen36.tt.gdn import decode_fused as _df
+
+        logger.info(
+            f"[M3] REPACK_TRACE: captured the conv-history repack of {len(live)} GDN layers "
+            f"(QWEN36_GDN_CONV_REPACK={_df.repack_variant()}); program cache entries {n0} -> {n1} (warm-up) "
+            f"-> {n2} (capture): 0 new compiles"
+        )
+
+    def _m3_replay_repack_trace(self):
+        """M3 REPACK_TRACE: enqueue the captured conv-history repack (CQ 0, non-blocking), in place of the
+        eager _gdn_refresh_conv_hist. The trace bakes the buffer addresses, so every GDN layer must still
+        point at the captured conv-state / conv_hist tensors."""
+        for dn, fcs, hist in self._m3_repack_pairs:
+            assert dn.fused_conv_state is fcs and dn.conv_hist is hist, (
+                "M3 REPACK_TRACE: a GDN layer's conv state / conv_hist was rebound after the repack trace "
+                "capture; prepare + capture again"
+            )
+        self._m2_repack_pending = False
+        ttnn.execute_trace(self.device, self._m3_repack_trace_id, cq_id=0, blocking=False)
+
+    def _m3_release_repack_trace(self, device=None):
+        """M3 REPACK_TRACE: release the repack trace (re-prepare, free_kv_caches). No-op when none."""
+        if self._m3_repack_trace_id is not None:
+            ttnn.release_trace(device if device is not None else self.device, self._m3_repack_trace_id)
+            self._m3_repack_trace_id = None
+            self._m3_repack_pairs = None
+
+    def _m5_tail_trace_refs(self):
+        """M5 TAIL_TRACE: the tensors whose buffer addresses the tail trace bakes in: the chunk-trace output it
+        reads, its persistent output, the final-norm weight and the LM-head weights of every mode (only the active
+        mode's are read; the others are None)."""
+        return (
+            self._chunked_trace_output,
+            self._m5_tail_out,
+            self.norm.weight,
+            self.lm_head_weight,
+            getattr(self, "_lm_head_split_chunks", None),
+            getattr(self, "_i3_lm_chunks_cache", None),
+            self._a3_lm_chunks,
+        )
+
+    def _m5_tail_body(self):
+        """M5 TAIL_TRACE: the exact-multiple tail (_exact_multiple_tail_device, the code of the eager tail) on the
+        chunk-trace output, then one ttnn.copy of its result into the persistent output. Every intermediate is
+        freed before this returns (so none outlives a capture)."""
+        out = self._exact_multiple_tail_device(self._chunked_trace_output, self._chunked_chunk_size)
+        ttnn.copy(out, self._m5_tail_out)
+        ttnn.deallocate(out)
+
+    def _m5_capture_tail_trace(self, device):
+        """M5 TAIL_TRACE: capture the exact-multiple tail into its own trace. capture_prefill_trace_chunked(
+        prepared=True) calls it right after the chunk-trace capture (and the M3 repack capture). Every buffer the
+        tail reads or writes exists already: the chunk-trace output, the norm / LM-head weights and the persistent
+        output (allocated in prepare, before the decode trace was primed); intermediates are freed at capture
+        end. Its programs (and the copy into the persistent output) compiled in prepare
+        (_warm_exact_multiple_tail). An eager warm-up runs first; the warm-up and the capture must add no
+        program-cache entry (a compile after a trace is parked puts a kernel binary in parked-trace scratch).
+        No-op (eager tail kept) when prepare made no persistent output (max_prompt_len < chunk_size)."""
+        if self._m5_tail_out is None:
+            logger.warning(
+                "[M5] TAIL_TRACE: prepare made no persistent tail output (max_prompt_len < chunk_size, so the "
+                "exact-multiple tail was not warmed); prefill_traced_chunked keeps the eager tail"
+            )
+            return
+        n0 = device.num_program_cache_entries()
+        self._m5_tail_body()  # eager warm-up (all programs already compiled in prepare)
+        ttnn.synchronize_device(device)
+        n1 = device.num_program_cache_entries()
+        refs = self._m5_tail_trace_refs()
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._m5_tail_body()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        n2 = device.num_program_cache_entries()
+        same = all(a is b for a, b in zip(refs, self._m5_tail_trace_refs()))
+        if n1 != n0 or n2 != n0 or not same:
+            ttnn.release_trace(device, trace_id)
+            raise RuntimeError(
+                f"M5 TAIL_TRACE: program cache entries {n0} -> {n1} (warm-up) -> {n2} (capture), baked tensors "
+                f"unchanged={same}: the tail compiled or rebound a tensor after the chunk trace was parked"
+            )
+        self._m5_tail_trace_id = trace_id
+        self._m5_tail_refs = refs
+        _mode = (
+            tpc.i3_value("LMHEAD") if tpc.i3_enabled("LMHEAD") else f"split{os.environ.get('QWEN36_LMHEAD_SPLIT', '8')}"
+        )
+        logger.info(
+            f"[M5] TAIL_TRACE: captured the exact-multiple tail (LASTROW={int(self._m2_lastrow)}, LM head {_mode}, "
+            f"greedy token={int(self._greedy_token_out)}; output {list(self._m5_tail_out.shape)} "
+            f"{self._m5_tail_out.dtype} DRAM); program cache entries {n0} -> {n1} (warm-up) -> {n2} (capture): "
+            f"0 new compiles"
+        )
+
+    def _m5_replay_tail_trace(self):
+        """M5 TAIL_TRACE: enqueue the captured tail (CQ 0, non-blocking), in place of the eager tail. The trace
+        bakes the buffer addresses, so every baked tensor must still be the captured one."""
+        now = self._m5_tail_trace_refs()
+        assert all(a is b for a, b in zip(self._m5_tail_refs, now)), (
+            "M5 TAIL_TRACE: the chunk-trace output, the persistent tail output or a norm / LM-head weight was "
+            "rebound after the tail trace capture; prepare + capture again"
+        )
+        ttnn.execute_trace(self.device, self._m5_tail_trace_id, cq_id=0, blocking=False)
+
+    def _m5_release_tail_trace(self, device=None):
+        """M5 TAIL_TRACE: release the tail trace and free the persistent output (re-prepare, free_kv_caches).
+        No-op when none."""
+        if self._m5_tail_trace_id is not None:
+            ttnn.release_trace(device if device is not None else self.device, self._m5_tail_trace_id)
+            self._m5_tail_trace_id = None
+            self._m5_tail_refs = None
+        if self._m5_tail_out is not None:
+            ttnn.deallocate(self._m5_tail_out)
+            self._m5_tail_out = None
+
+    def set_greedy_token_output(self, enabled):
+        """Greedy on-device argmax (single device only). When enabled, prefill_masked_bucket,
+        prefill_traced_chunked and the non-sampling decode (ttnn_decode_forward) return a uint32
+        token tensor (the first max index, same as torch.argmax on the bf16 logits) instead of the
+        logits; process_output_decode passes it through as token ids. Default off, so vLLM and all
+        other callers are unchanged. Call before prepare_prefill_trace_chunked (or the one-call
+        capture_prefill_trace_chunked) and before the first decode_forward / prime_decode_trace: the
+        token ops must compile before any trace is parked (#48536). Needs the split LM head
+        (QWEN36_LMHEAD_SPLIT > 1, the default); see _lm_head."""
+        enabled = bool(enabled)
+        if enabled == self._greedy_token_out:
+            return
+        assert self.num_devices == 1, "greedy token output is single-device (1x1) only"
+        assert self._chunked_trace_id is None, "call set_greedy_token_output before capture_prefill_trace_chunked"
+        if enabled:
+            self._check_greedy_token_lm_head_split()
+        self._greedy_token_out = enabled
+
+    @staticmethod
+    def _check_greedy_token_lm_head_split():
+        """want_token is implemented (and op-tested, plan_0925/T1/op_test.py) on the split LM head
+        only. The unsplit LM head (QWEN36_LMHEAD_SPLIT <= 1) + want_token raises instead.
+        Every I-3 LM head (QWEN36_I3_LMHEAD = A / B / C, see _lm_head_i3) implements want_token."""
+        if tpc.i3_enabled("LMHEAD"):
+            return
+        split_n = int(os.environ.get("QWEN36_LMHEAD_SPLIT", "8") or "0")
+        if split_n <= 1:
+            raise NotImplementedError(
+                f"greedy on-device token output (set_greedy_token_output / QWEN36_ONDEV_ARGMAX=1) needs the "
+                f"split LM head (QWEN36_LMHEAD_SPLIT > 1), got QWEN36_LMHEAD_SPLIT={split_n}; the unsplit "
+                "want_token path is not implemented. Set QWEN36_ONDEV_ARGMAX=0 or QWEN36_LMHEAD_SPLIT=8."
+            )
+
+    def _lm_head_token(self, x):
+        """LM head -> greedy token on device: uint32 [..., 1] (single device, one logical row)."""
+        assert self.num_devices == 1, "greedy token output is single-device (1x1) only"
+        assert x.shape[-2] == 1, f"greedy token output needs one logical row, got shape {x.shape}"
+        return self._lm_head(x, want_token=True)
+
+    def _lm_head(self, x, want_token=False):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
         Single device: minimal_matmul's default config measured 2.46ms vs ttnn-auto's 3.28ms;
         every swept 1D/DRAM-sharded progcfg overflows L1 at this N (248320), so no explicit
@@ -511,8 +796,35 @@ class Qwen36Model:
         split); traced_4k demo TTFT 0.164s, no regression (see
         patches/step1_f10c_kvbf8_qknorm_lmhead.patch). Set to "0" to restore the single unsplit
         minimal_matmul below.
+
+        want_token=True (single device, via _lm_head_token): return the greedy token (uint32 [..., 1])
+        instead of the logits. Split path: untilize each split to its one logical row, concat the
+        rows, one ttnn.argmax. This skips the TILE concat (T1b op test: 149 us vs 171 us for TILE
+        concat + untilize + argmax). The unsplit path (QWEN36_LMHEAD_SPLIT <= 1) + want_token raises
+        NotImplementedError (untested; see _check_greedy_token_lm_head_split).
+
+        QWEN36_I3_LMHEAD (I-3, single device; tp_common I-3 table): A / B / C replace the path above
+        for a one-tile-row input on the 13x10 grid (see _lm_head_i3); QWEN36_LMHEAD_SPLIT is then
+        ignored. "0" keeps the path above.
         """
         _split_n = int(os.environ.get("QWEN36_LMHEAD_SPLIT", "8") or "0")
+        if want_token:
+            assert self.num_devices == 1, "want_token (greedy token output) is single-device (1x1) only"
+            self._check_greedy_token_lm_head_split()
+        _i3 = tpc.i3_value("LMHEAD") if self.num_devices == 1 else "0"
+        if _i3 != "0" and tpc.i3_one_tile_row(x) and tpc.i3_grid_ok(self.mesh_device):
+            return self._lm_head_i3(x, _i3, want_token)
+        if want_token and _i3 != "0":
+            raise NotImplementedError(
+                f"QWEN36_I3_LMHEAD={_i3} + want_token needs a one-tile-row input on the 13x10 grid "
+                f"(got shape {list(x.shape)})"
+            )
+        if self.lm_head_weight is None:
+            # I-3 A3 freed the unsplit weight at load (_a3_build_lm_chunks): only its one-tile-row path exists.
+            raise NotImplementedError(
+                f"QWEN36_I3_LMHEAD=A3 (set at model load) serves one-tile-row inputs on the 13x10 grid only "
+                f"(the unsplit LM-head weight was freed); got shape {list(x.shape)} with QWEN36_I3_LMHEAD={_i3}"
+            )
         if self.num_devices == 1 and _split_n > 1:
             cached = getattr(self, "_lm_head_split_chunks", None)
             if cached is None or cached[0] != _split_n:
@@ -533,6 +845,16 @@ class Qwen36Model:
                 self._lm_head_split_chunks = cached
             _, chunks = cached
             partials = [ttnn.experimental.minimal_matmul(x, w, memory_config=ttnn.DRAM_MEMORY_CONFIG) for w in chunks]
+            if want_token:
+                rows = [ttnn.to_layout(p, ttnn.ROW_MAJOR_LAYOUT) for p in partials]
+                for p in partials:
+                    ttnn.deallocate(p)
+                row = ttnn.concat(rows, dim=-1)
+                for r in rows:
+                    ttnn.deallocate(r)
+                token = ttnn.argmax(row, dim=-1, keepdim=True)
+                ttnn.deallocate(row)
+                return token
             logits = ttnn.concat(partials, dim=-1)
         elif self.num_devices == 1 and os.environ.get("QWEN36_LMHEAD_MINIMAL", "1") != "0":
             logits = ttnn.experimental.minimal_matmul(x, self.lm_head_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -551,18 +873,248 @@ class Qwen36Model:
             )
         return logits
 
-    def _final_norm_decode(self, x):
+    # I-3 LM head configs (tp_common I-3 table; T4 sweep D8-R006 / D8-O062 / D8-M016 family).
+    # mode -> (column splits, DRAM-sharded chunk: shard width tiles per bank (None = interleaved chunk),
+    #          DRAM-sharded per_core_N). 7760 vocab tiles: split 4 = 1940 tiles/chunk, split 8 = 970.
+    # A2 uses 8 splits: at 4 splits its fp32 CBs (~260 KB/core) clashed with live L1 buffers on the
+    # eager prefill_paged path (T=512/1024); 8 splits halve them.
+    _I3_LM_CFG = {"A": (4, 244, 31), "A2": (8, 122, 16), "C": (4, None, None)}
+    _I3_LM_A_IN0_GRID = (8, 8)  # K = 64 tiles -> 1 tile per core
+
+    def _i3_lm_chunks(self, mode):
+        """Column chunks of lm_head_weight for I-3 LM head A / A2 (DRAM width-sharded) / C (interleaved),
+        sliced once on device and cached. Built on the first _lm_head call, which is eager (model
+        warmup / prefill-trace prepare), before any trace is captured."""
+        split, shard_w, _ = self._I3_LM_CFG[mode]
+        key = (split, shard_w)
+        cached = getattr(self, "_i3_lm_chunks_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        if cached is not None:
+            for c in cached[1]:
+                ttnn.deallocate(c)
+        rows, vocab = self.lm_head_weight.shape[0], self.lm_head_weight.shape[1]
+        total_tiles = vocab // 32
+        assert vocab % 32 == 0 and total_tiles % split == 0, f"vocab {vocab} not split-{split}"
+        cols = (total_tiles // split) * 32
+        chunks = []
+        for i in range(split):
+            c = ttnn.slice(self.lm_head_weight, (0, i * cols), (rows, (i + 1) * cols))
+            if shard_w is not None:
+                assert cols // 32 <= 8 * shard_w
+                cw = ttnn.to_memory_config(c, tpc.i3_dram_width_memcfg(rows, shard_w))
+                ttnn.deallocate(c)
+                c = cw
+            chunks.append(c)
+        self._i3_lm_chunks_cache = (key, chunks)
+        return chunks
+
+    @staticmethod
+    def _dram_allocated_per_bank(device):
+        """DRAM bytes allocated per bank (allocator view), or None if the view is unavailable."""
+        try:
+            return int(ttnn.get_memory_view(device, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _a3_build_lm_chunks(self, device):
+        """I-3 LM head A3 (M4): build the 10 column chunks of lm_head_weight ([2048, 248320] bfp8), each
+        DRAM WIDTH_SHARDED over the 8 banks (shard [2048, 98 * 32]; 8 x 98 = 784 >= 776 tiles, the last
+        bank holds 90 valid tiles), with ttnn.slice + to_memory_config on device (the same bfp8 tiles as
+        the loaded weight), then free the unsplit weight: the model keeps one copy (+1% shard padding).
+        Called once from __init__ (eager, before any trace). Logs the build time and the DRAM use."""
+        import time
+
+        c = tpc.I3_A3_LM_CFG
+        rows, vocab = int(self.lm_head_weight.shape[0]), int(self.lm_head_weight.shape[1])
+        vt = vocab // 32
+        assert vocab % 32 == 0 and vt % c["split"] == 0, f"A3: vocab {vocab} is not {c['split']} whole-tile chunks"
+        nt = vt // c["split"]
+        shard_w = tpc.i3_a3_shard_w_tiles(vt)
+        assert nt <= tpc.DRAM_CORES * shard_w and tpc.DRAM_CORES * shard_w - nt < shard_w, (nt, shard_w)
+        cols = nt * 32
+        mc = tpc.i3_dram_width_memcfg(rows, shard_w)
+        dram0 = self._dram_allocated_per_bank(device)
+        t0 = time.perf_counter()
+        chunks = []
+        for i in range(c["split"]):
+            s = ttnn.slice(self.lm_head_weight, (0, i * cols), (rows, (i + 1) * cols))
+            chunks.append(ttnn.to_memory_config(s, mc))
+            ttnn.deallocate(s)
+        ttnn.synchronize_device(device)
+        dt = time.perf_counter() - t0
+        dram1 = self._dram_allocated_per_bank(device)
+        ttnn.deallocate(self.lm_head_weight)
+        self.lm_head_weight = None
+        dram2 = self._dram_allocated_per_bank(device)
+        mb = lambda b: None if b is None else round(b * tpc.DRAM_CORES / 2**20, 1)  # noqa: E731
+        logger.info(
+            f"[M4] QWEN36_I3_LMHEAD=A3: built {c['split']} DRAM width-sharded LM-head chunks [{rows}, {cols}] "
+            f"({nt} tiles, {shard_w} tiles/bank) from the loaded weight in {dt:.3f} s; unsplit weight freed. "
+            f"DRAM allocated (all banks, MiB): {mb(dram0)} before -> {mb(dram1)} with chunks -> {mb(dram2)} after free"
+        )
+        return chunks
+
+    def _lm_head_a3(self, x, want_token):
+        """I-3 LM head A3 (M4; single device, one tile row, 13x10 grid). x: the final-norm output, either
+        interleaved (prefill, the non-traced decode paths) or the D3 8-core width-sharded decode norm
+        output (_forward_decode). One to_memory_config puts it in the 8x8 in0 layout (I2S or reshard).
+        Per chunk: DRAM-sharded linear (tp_common.i3_a3_lm_progcfg, HiFi2 / fp32 dest / packer L1 acc) into
+        L1 WIDTH_SHARDED, then at once (so its L1 shard frees early) either the untilize to one RM row in
+        L1 interleaved (want_token) or the S2I to DRAM (logits). Then RM concat + argmax (uint32 [..., 1],
+        first max index) or TILE concat (logits, DRAM, [..., vocab])."""
+        chunks = self._a3_lm_chunks
+        assert (
+            chunks is not None
+        ), "QWEN36_I3_LMHEAD=A3 must be set when the model is built (the A3 chunks are made at load)"
+        gx, gy = tpc.I3_A3_LM_CFG["in0_grid"]
+        in0_mc = tpc.i3_l1_width_memcfg(int(x.shape[-1]), gx, gy)
+        same = x.memory_config() == in0_mc
+        xs = x if same else ttnn.to_memory_config(x, in0_mc)
+        pc = tpc.i3_a3_lm_progcfg()
+        ck = self._i3_lm_ckc_hifi2()
+        outs = []
+        for c in chunks:
+            p = ttnn.linear(
+                xs, c, compute_kernel_config=ck, program_config=pc, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            )
+            if want_token:
+                outs.append(ttnn.to_layout(p, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG))
+            else:
+                outs.append(ttnn.sharded_to_interleaved(p, ttnn.DRAM_MEMORY_CONFIG))
+            ttnn.deallocate(p)
+        if not same:
+            ttnn.deallocate(xs)
+        out = ttnn.concat(outs, dim=-1)
+        for o in outs:
+            ttnn.deallocate(o)
+        if not want_token:
+            return out
+        token = ttnn.argmax(out, dim=-1, keepdim=True)
+        ttnn.deallocate(out)
+        return token
+
+    def _lm_head_i3(self, x, mode, want_token):
+        """I-3 LM head (QWEN36_I3_LMHEAD; single device, one tile row, 13x10 grid). Returns the logits
+        (DRAM, TILE, [..., vocab]) or, with want_token, the greedy uint32 token [..., 1] (first max index).
+        A: 4 x DRAM-sharded linear (in0 resharded to L1 width 8x8, LoFi, fp32 dest off) -> S2I.
+        A2: A with the current path's compute config (HiFi2, fp32 dest), 8 splits (per_core_N 16).
+        B: one 1D-mcast linear on 13x10 (bw 2, per_core_N 65, subblock 1x5, LoFi, fp32 dest off).
+        C: 4 x minimal_matmul on 13x2 (M/K/N block 1/16/16, subblock 1x4, op-default compute config).
+        Token: split outputs -> untilize each (one row) -> RM concat -> argmax (T1 B2b with 4 / 8 splits);
+        B: untilize the unsplit logits to one row -> argmax.
+        A3 (M4): see _lm_head_a3 (chunks built at load)."""
+        if mode == "A3":
+            return self._lm_head_a3(x, want_token)
+        if self.lm_head_weight is None:
+            raise NotImplementedError(
+                f"QWEN36_I3_LMHEAD={mode}: the unsplit LM-head weight was freed at load by QWEN36_I3_LMHEAD=A3"
+            )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        if mode == "B":
+            # in0_block_w 2: bw 8 needs 1.41 MB of CBs, which clashed with live L1 buffers on the eager
+            # prefill_paged path (T=512/1024); bw 2 is also faster in the op probe (1447 vs 1503 us).
+            pc = tpc._i3_1d_progcfg(13, 10, 2, 65, 5)
+            logits = ttnn.linear(
+                x,
+                self.lm_head_weight,
+                compute_kernel_config=self._i3_lm_ckc_lofi(),
+                program_config=pc,
+                memory_config=dram,
+            )
+            if not want_token:
+                return logits
+            row = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(logits)
+            token = ttnn.argmax(row, dim=-1, keepdim=True)
+            ttnn.deallocate(row)
+            return token
+        chunks = self._i3_lm_chunks(mode)
+        if mode in ("A", "A2"):
+            xs = ttnn.to_memory_config(x, tpc.i3_l1_width_memcfg(int(x.shape[-1]), *self._I3_LM_A_IN0_GRID))
+            pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=1,
+                per_core_M=1,
+                per_core_N=self._I3_LM_CFG[mode][2],
+                fused_activation=None,
+                num_workers_per_dram_bank=2,
+            )
+            parts = [
+                ttnn.linear(
+                    xs,
+                    c,
+                    compute_kernel_config=self._i3_lm_ckc_lofi() if mode == "A" else self._i3_lm_ckc_hifi2(),
+                    program_config=pc,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                for c in chunks
+            ]
+            ttnn.deallocate(xs)
+            out_mc = ttnn.L1_MEMORY_CONFIG if want_token else dram
+            inter = [ttnn.sharded_to_interleaved(p, out_mc) for p in parts]
+            for p in parts:
+                ttnn.deallocate(p)
+            parts = inter
+        else:  # "C"
+            cfg = ttnn.MinimalMatmulConfig(
+                M_block_size=1,
+                K_block_size=16,
+                N_block_size=16,
+                subblock_h=1,
+                subblock_w=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(13, 2),
+            )
+            parts = [ttnn.experimental.minimal_matmul(x, c, config=cfg, memory_config=dram) for c in chunks]
+        if want_token:
+            rows = [ttnn.to_layout(p, ttnn.ROW_MAJOR_LAYOUT) for p in parts]
+            for p in parts:
+                ttnn.deallocate(p)
+            row = ttnn.concat(rows, dim=-1)
+            for r in rows:
+                ttnn.deallocate(r)
+            token = ttnn.argmax(row, dim=-1, keepdim=True)
+            ttnn.deallocate(row)
+            return token
+        logits = ttnn.concat(parts, dim=-1)
+        for p in parts:
+            ttnn.deallocate(p)
+        return logits
+
+    @staticmethod
+    def _i3_lm_ckc_hifi2():
+        """I-3 LM head A2 compute config = the minimal_matmul op default of the current path (HiFi2,
+        fp32 dest, packer L1 acc, approx off)."""
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+    @staticmethod
+    def _i3_lm_ckc_lofi():
+        """I-3 LM head A / B compute config as swept (T4 D8-R006 / D8-O062): LoFi, fp32 dest off."""
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=True, fp32_dest_acc_en=False, packer_l1_acc=True
+        )
+
+    def _final_norm_decode(self, x, lm_in0_sharded=False):
         """Final RMSNorm before the LM head (TP decode).
 
         The bare `self.norm(x, DECODE)` runs plain ttnn.rms_norm on a DRAM-interleaved [32,dim]
         tensor -> single tile-row -> 1 core (~80us/token). Passing the framework's 'lm_head' norm
         config runs the sharded multi-core norm across lm_head_core_grid instead; output_mem_config
         is forced back to DRAM so the LM-head matmul input is byte-identical (layout-only change).
+
+        lm_in0_sharded (M4, I-3 LM head A3; single device with D3): return the 8-core width-sharded norm
+        output itself (no S2I to DRAM); the A3 LM head reshards it to its in0 layout in one op.
         """
         if self.num_devices > 1:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
             return self.norm(x, mode=Mode.DECODE, norm_config=nc)
+        if self._decode_norm_cfg is not None and decode_norm_sharded_applies(x):
+            if lm_in0_sharded:
+                return decode_norm_sharded_out(self.norm, x, self._decode_norm_cfg)
+            # I-1 D3: 8-core width-sharded norm; S2I back to DRAM (the LM-head input stays DRAM-interleaved).
+            return decode_norm_sharded(self.norm, x, self._decode_norm_cfg, ttnn.DRAM_MEMORY_CONFIG)
         return self.norm(x, mode=Mode.DECODE)
 
     @classmethod
@@ -828,7 +1380,9 @@ class Qwen36Model:
         self._build_request_rope(token_ids, vision_tokens)
 
         if T > 1024:
-            return self.prefill_layer_chunked(token_ids, chunk_size=2048, vision_tokens=vision_tokens)
+            logits = self.prefill_layer_chunked(token_ids, chunk_size=2048, vision_tokens=vision_tokens)
+            self._gdn_refresh_conv_hist()
+            return logits
 
         # Short sequences (<=1024)
         self.reset_state(batch_size=B)
@@ -846,6 +1400,7 @@ class Qwen36Model:
 
         x_last = x[:, -1:, :]
         logits = self._lm_head(x_last)
+        self._gdn_refresh_conv_hist()
 
         return logits
 
@@ -944,6 +1499,7 @@ class Qwen36Model:
         return logits
 
     def decode(self, token_ids, current_pos):
+        self._m2_flush_pending_repack()  # M2 REPACK_LATE (no-op unless a repack is pending)
         B = token_ids.shape[0]
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
@@ -977,12 +1533,28 @@ class Qwen36Model:
 
         return logits
 
-    def _forward_decode(self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False):
+    def _forward_decode(
+        self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False, want_token=False
+    ):
         """Trace-safe paged decode. All inputs are device tensors.
 
         sharded_lm_head=True: return the pre-gather vocab-sharded logits (no all-gather)
         for the on-device sampler, which does its own cross-device top-k + gather.
+        want_token=True (single device): return the greedy uint32 token (_lm_head_token), not logits.
+        want_token cannot combine with the pre-gather vocab-sharded logits (sharded_lm_head or the
+        mesh _ondev_argmax), which would silently return logits.
         """
+        assert not (want_token and (sharded_lm_head or self._ondev_argmax)), (
+            "want_token (greedy token output) cannot combine with sharded_lm_head / _ondev_argmax "
+            f"(sharded_lm_head={sharded_lm_head}, _ondev_argmax={self._ondev_argmax})"
+        )
+        # M2 REPACK_LATE: the deferred conv-history repack must run before this forward, and not inside
+        # a trace capture (it would be baked into the decode trace). The decode entries (switch_mode,
+        # prepare_decode_inputs_host, decode) run it first; any other path fails loudly here.
+        assert not self._m2_repack_pending, (
+            "M2 REPACK_LATE: a conv-history repack is pending; call switch_mode / prepare_decode_inputs_host "
+            "(or _m2_flush_pending_repack) before the decode forward"
+        )
         x = self.embd(token_ids_buf)
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
@@ -992,10 +1564,14 @@ class Qwen36Model:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
             else:
                 x = layer.forward(x, mode="decode")
-        x = self._final_norm_decode(x)
+        # M4 (I-3 LM head A3): the final norm hands its 8-core width-sharded output straight to the A3 LM head.
+        _a3_in0 = self._a3_lm_chunks is not None and not (sharded_lm_head or self._ondev_argmax)
+        x = self._final_norm_decode(x, lm_in0_sharded=_a3_in0)
         if sharded_lm_head or self._ondev_argmax:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
             logits = ttnn.linear(x, self.lm_head_weight)
+        elif want_token:
+            logits = self._lm_head_token(x)
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
@@ -1005,7 +1581,8 @@ class Qwen36Model:
         self, token_buf, cos_buf, sin_buf, chunk_start_idx_tensor, full_page_table, chunk_page_table
     ):
         """Trace-safe single-chunk prefill. Updates paged KV + GDN state in place.
-        Returns last-layer hidden [1, chunk_size, hidden_size]."""
+        Returns last-layer hidden [1, chunk_size, hidden_size], or [1, 1, hidden_size] (row
+        chunk_size - 1 only) with M2 LASTROW (self._m2_lastrow, fixed at prepare)."""
         x = self.embd(token_buf)
         # F10B (item A): keep the post-embedding tensor -- the inter-layer residual stream -- in L1
         # when T <= 2048, under QWEN36_LAYER_RESID_L1 (same flag/threshold as layer.py's residual-add
@@ -1024,22 +1601,48 @@ class Qwen36Model:
         # Trace-safe vision splice (fixed-shape where over persistent buffers; identity when the
         # mask buffer is zero, which is the case for every text-only chunk and request). The caller
         # stages the buffers before replaying chunk 0 of a multimodal prompt; chunks>0 are cleared.
-        x = self._apply_vision_merge(x, length=x.shape[1])
-        for layer in self.layers:
+        # M2 NOWHERE (self._m2_nowhere, fixed at prepare for a text-only model): no where at all.
+        if not self._m2_nowhere:
+            x = self._apply_vision_merge(x, length=x.shape[1])
+        last = len(self.layers) - 1
+        # M5 ADDNORM (fixed at prepare; T == M5_ADDNORM_T chunks): every layer but the last defers its MLP residual
+        # add (returns (h, mlp_out)); the next layer fuses it with its attention_norm (pending) and owns that x.
+        _m5 = self._m5_addnorm and self.num_devices == 1 and x.shape[1] == tpc.M5_ADDNORM_T
+        pending = None
+        for li, layer in enumerate(self.layers):
+            _m5_kw = dict(m5_addnorm=True, pending=pending, defer_out=li < last) if _m5 else {}
+            x_in = x if pending is None else None
             if layer.is_full_attention:
+                _lastrow = self._m2_lastrow and li == last
+                # M4 R4A / R4B (fixed at prepare, only with LASTROW): the last layer's one-row variants.
+                _m4 = {}
+                if _lastrow and self._m4_r4a:
+                    _m4["last_row_tile_slices"] = True
+                if _lastrow and self._m4_r4b:
+                    _m4["last_row_pos_tensor"] = self._chunk_last_pos_tensor
                 x_new = layer.forward(
-                    x,
+                    x_in,
                     cos=cos_buf,
                     sin=sin_buf,
                     mode="prefill",
                     page_table=full_page_table,
                     chunk_page_table=chunk_page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    # M2 LASTROW: the last layer computes its output for row chunk_size - 1 only.
+                    last_row_only=_lastrow,
+                    **_m4,
+                    **_m5_kw,
                 )
             else:
-                x_new = layer.forward(x, mode="prefill", chunk_size=layer.attention.long_prefill_chunk_size)
-            ttnn.deallocate(x)
-            x = x_new
+                x_new = layer.forward(
+                    x_in, mode="prefill", chunk_size=layer.attention.long_prefill_chunk_size, **_m5_kw
+                )
+            if pending is None:
+                ttnn.deallocate(x)  # (M5 ADDNORM with pending: the layer made and freed its own x)
+            if _m5 and li < last:
+                pending, x = x_new, None  # M5 ADDNORM: (h, mlp_out) for the next layer
+            else:
+                pending, x = None, x_new
         return x
 
     def _rope_tp_cos_sin_torch(self, start, length):
@@ -1089,7 +1692,13 @@ class Qwen36Model:
         return x
 
     def capture_prefill_trace_chunked(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
+        self,
+        device,
+        page_table,
+        chunk_size=2048,
+        warmup_masked_buckets=True,
+        capture_chunk_trace=True,
+        prepared=False,
     ):
         """Capture one chunk's all-layer prefill as a trace; replayed per chunk.
 
@@ -1099,8 +1708,15 @@ class Qwen36Model:
         capture_chunk_trace=False warms the masked-bucket programs but skips parking the chunk trace.
         The batched (B>1) vLLM path passes capture_chunk_trace=True with the PERSISTENT B=1 prefill
         scratch bound (_bind_gdn_prefill_scratch), so the trace bakes that scratch's addresses and
-        long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch)."""
+        long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch).
+
+        prepared=True (single device only): the caller already ran prepare_prefill_trace_chunked, so
+        only the capture runs here. That is the parked-trace-safe order used by bench_e2e_p150.py and
+        text_demo.py: prepare (all prefill programs/buffers) -> prime the decode trace (all decode
+        programs/buffers) -> capture this trace. prepared=False (default) keeps the original one-call
+        behaviour (setup + warmups + capture), e.g. for the vLLM path."""
         if self.num_devices > 1:
+            assert not prepared, "prepared=True is single-device only"
             return self._capture_prefill_trace_chunked_tp(
                 device,
                 page_table,
@@ -1108,6 +1724,152 @@ class Qwen36Model:
                 warmup_masked_buckets=warmup_masked_buckets,
                 capture_chunk_trace=capture_chunk_trace,
             )
+        if prepared:
+            assert self._chunk_token_buf is not None and self._chunked_chunk_size == chunk_size, (
+                "capture_prefill_trace_chunked(prepared=True) needs prepare_prefill_trace_chunked "
+                f"(chunk_size={chunk_size}) first"
+            )
+            assert self._chunked_trace_id is None, "a chunk trace is already parked; prepare again first"
+        else:
+            self._prepare_prefill_trace_chunked_setup(device, page_table, chunk_size, warmup_masked_buckets)
+
+        # Capture trace.
+        # M2 NOWHERE was fixed at prepare for a text-only model; a vision tower attached since then would
+        # need the where, which the warm-up did not compile.
+        assert not (
+            self._m2_nowhere and self.vision_model is not None
+        ), "M2 NOWHERE: init_vision_model() ran after prepare; prepare again before capture"
+        self._reset_dn_state_inplace()
+        self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        self._chunked_trace_output = self._forward_prefill_chunk(
+            self._chunk_token_buf,
+            self._chunk_cos_buf,
+            self._chunk_sin_buf,
+            self._chunk_start_idx_tensor,
+            self._chunk_full_page_table_buf,
+            self._chunk_page_table_buf,
+        )
+        ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        if prepared:
+            # ACKNOWLEDGED CORRUPTIBLE (trace-allocation tracker): in the prepared order the decode
+            # trace is already parked, so this trace output lands in memory the decode replay may
+            # overwrite. Safe: every prefill replay rewrites it, and prefill_traced_chunked consumes it
+            # (last-row slice -> norm -> LM head -> host) before any decode replay runs. Nothing else is
+            # allocated here that outlives the capture (intermediates are freed at capture end).
+            from ttnn.tools.trace_allocation_tracker import acknowledge_corruptible
+
+            acknowledge_corruptible(self._chunked_trace_output)
+        logger.info("Chunked prefill trace captured successfully!")
+        if prepared and tpc.m3_enabled("REPACK_TRACE"):
+            # M3 REPACK_TRACE: the conv-history repack that prefill_traced_chunked runs after the last
+            # chunk replay gets its own trace, captured now (prepare -> prime decode -> chunk capture ->
+            # this), after an eager warm-up; no buffer is allocated that outlives the capture.
+            self._m3_capture_repack_trace(device)
+        if prepared and self._m5_tail:
+            # M5 TAIL_TRACE: the exact-multiple tail (final norm + LM head [+ argmax]) gets its own trace, captured
+            # now, after an eager warm-up; its persistent output was allocated in prepare.
+            self._m5_capture_tail_trace(device)
+
+    def prepare_prefill_trace_chunked(
+        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, max_prompt_len=None
+    ):
+        """Single-device phase 1 of the parked-trace-safe order (T7, 2026-09-25): everything
+        capture_prefill_trace_chunked does before begin_trace_capture (persistent chunk buffers, GDN
+        external-state binding, zero buffers, chunk + masked-bucket compile warmups), PLUS the eager
+        programs prefill_traced_chunked runs around each replay: the rope-table slice at every chunk
+        offset up to max_prompt_len, the copy into the persistent cos/sin buffers, and the last-token
+        norm + LM-head path of an exact-multiple prompt (the greedy token ops instead when
+        set_greedy_token_output(True), T1), and the tail's rope-table slice at every
+        (full-chunk offset, masked bucket) pair (with I-1 ROPEWARM on, _warm_rope_table_slices warms
+        these slices for every offset up to rope.max_seq_len instead). Then call prime_decode_trace (the decode
+        trace compiles and allocates everything it needs while NO trace is parked), and last
+        capture_prefill_trace_chunked(..., prepared=True).
+
+        Why: a program compiled after a trace is parked gets its kernel-binary buffer in memory the
+        parked trace uses as scratch, and the next replay overwrites it (#48536 class). The old order
+        (capture prefill -> prime decode) put ~100 decode kernel binaries, 12 decode constants and
+        the decode-trace inputs there; the next prefill replay corrupted them and the decode trace
+        hung, depending on layout (TT_METAL_TRACE_ALLOC_TRACKING=1 names such buffers).
+
+        max_prompt_len: longest prompt this process serves (default: the page_table's coverage)."""
+        assert self.num_devices == 1, "prepare_prefill_trace_chunked is single-device only"
+        if max_prompt_len is None:
+            max_prompt_len = int(page_table.shape[1]) * get_block_size(self._paged_kv_caches)
+        self._prepare_prefill_trace_chunked_setup(
+            device, page_table, chunk_size, warmup_masked_buckets, request_warm_len=max_prompt_len
+        )
+
+    def _warm_prefill_request_programs(self, hidden_chunk, chunk_size, max_prompt_len):
+        """Compile the per-request eager programs of prefill_traced_chunked's full-chunk path (see
+        prepare_prefill_trace_chunked). Run only while no trace is parked."""
+        n_full = max_prompt_len // chunk_size
+        # I-1 ROPEWARM (default on) runs later in this same prepare step and warms a superset of
+        # these slices (every reachable pair up to rope.max_seq_len), so this loop covers ROPEWARM=0.
+        if not tpc.i1_enabled("ROPEWARM") and self.rope.rope_device_table_enabled() and self.rope._req_cos is None:
+            n_full_rope = min(n_full, self.rope.max_seq_len // chunk_size)
+            for c in range(n_full_rope):
+                cos_slice, sin_slice = self.rope.get_prefill_rot_mats_table_slice(c * chunk_size, chunk_size)
+                ttnn.copy(cos_slice, self._chunk_cos_buf)
+                ttnn.copy(sin_slice, self._chunk_sin_buf)
+                ttnn.deallocate(cos_slice)
+                ttnn.deallocate(sin_slice)
+            # Tail of a non-multiple prompt: prefill_masked_bucket slices the table at
+            # [cs, cs + bucket) with cs = k * chunk_size (k >= 1). The slice program is keyed on its
+            # bounds, so warm every (full-chunk offset, bucket) pair a prompt <= max_prompt_len hits
+            # (the masked-bucket warmup only covers chunk_start = 0).
+            for c in range(1, n_full + 1):
+                cs = c * chunk_size
+                for bucket in self._PREFILL_MASK_BUCKETS:
+                    if bucket > chunk_size or cs + bucket > self.rope.max_seq_len:
+                        continue
+                    cos_t, sin_t = self.rope.get_prefill_rot_mats_table_slice(cs, bucket)
+                    ttnn.deallocate(cos_t)
+                    ttnn.deallocate(sin_t)
+        if n_full >= 1:
+            self._warm_exact_multiple_tail(hidden_chunk, chunk_size)
+        ttnn.synchronize_device(self.device)
+
+    def _exact_multiple_tail_device(self, hidden_chunk, chunk_size):
+        """Device ops of prefill_traced_chunked's exact-multiple return path: last row (chunk_size - 1) of the
+        last full chunk -> TILE -> DRAM -> final norm -> LM head, or -> the greedy token (_lm_head_token) when
+        set_greedy_token_output(True) (T1). Returns the device result (logits or uint32 token). Shared by the
+        request path (eager tail), its prepare warm-up (_warm_exact_multiple_tail) and M5 TAIL_TRACE
+        (_m5_tail_body), so all of them run the same ops."""
+        pos = chunk_size - 1
+        if self._m2_lastrow:
+            # M2 LASTROW: the chunk forward returns row chunk_size - 1 only (same code as the request path).
+            assert hidden_chunk.shape[1] == 1, f"M2 LASTROW: chunk output {tuple(hidden_chunk.shape)} is not one row"
+            x_last = hidden_chunk
+        else:
+            x_last = hidden_chunk[:, pos : pos + 1, :]
+        x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
+        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
+        return self._lm_head_token(x_last) if self._greedy_token_out else self._lm_head(x_last)
+
+    def _warm_exact_multiple_tail(self, hidden_chunk, chunk_size):
+        """Compile prefill_traced_chunked's exact-multiple return path (_exact_multiple_tail_device).
+        pos_in_chunk is always chunk_size - 1 there, so this one program set covers every such prompt length.
+        Run only while no trace is parked.
+
+        M5 TAIL_TRACE (self._m5_tail, prepared order): also allocate the tail trace's persistent output here
+        (DRAM, the result's shape / dtype / layout; before the decode trace is primed and before any trace is
+        captured) and compile the ttnn.copy into it, so the tail capture compiles nothing."""
+        out = self._exact_multiple_tail_device(hidden_chunk, chunk_size)
+        _ = out.cpu()
+        if self._m5_tail:
+            if self._m5_tail_out is not None:
+                ttnn.deallocate(self._m5_tail_out)
+            self._m5_tail_out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(list(out.shape)), out.dtype, out.layout, self.device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.copy(out, self._m5_tail_out)
+        ttnn.deallocate(out)
+
+    def _prepare_prefill_trace_chunked_setup(
+        self, device, page_table, chunk_size, warmup_masked_buckets, request_warm_len=0
+    ):
+        """Setup + compile warmups of capture_prefill_trace_chunked (single device), no capture."""
         assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
@@ -1117,8 +1879,45 @@ class Qwen36Model:
         if self._chunked_trace_id is not None:
             ttnn.release_trace(device, self._chunked_trace_id)
             self._chunked_trace_id = None
+        self._m3_release_repack_trace(device)  # M3 REPACK_TRACE (no-op when none is captured)
+        self._m5_release_tail_trace(device)  # M5 TAIL_TRACE: trace + persistent output (no-op when none)
 
         self._chunked_chunk_size = chunk_size
+
+        # M2 (tp_common M2_FLAG_DEFAULTS): fix the traced-chunk variants once, here, so the warm-up
+        # forward below, the capture and prefill_traced_chunked all use the same program list.
+        #   NOWHERE: only for a text-only model (no vision tower attached at prepare time).
+        #   LASTROW: single device (this function) and a full-attention last layer with the dense MLP.
+        self._m2_nowhere = tpc.m2_enabled("NOWHERE") and self.vision_model is None
+        self._m2_lastrow = (
+            tpc.m2_enabled("LASTROW")
+            and self.layers[-1].is_full_attention
+            and isinstance(self.layers[-1].feed_forward, Qwen36MLP)
+        )
+        self._m2_repack_pending = False
+        if self._m2_nowhere or self._m2_lastrow or tpc.m2_enabled("REPACK_LATE"):
+            logger.info(
+                f"[M2] traced chunk: NOWHERE={int(self._m2_nowhere)} LASTROW={int(self._m2_lastrow)} "
+                f"REPACK_LATE={int(tpc.m2_enabled('REPACK_LATE'))}"
+            )
+        # M4 (tp_common M4_FLAG_DEFAULTS): the last-layer LASTROW variants, only with LASTROW active.
+        self._m4_r4a = self._m2_lastrow and tpc.m4_enabled("R4A")
+        self._m4_r4b = self._m2_lastrow and tpc.m4_enabled("R4B")
+        if tpc.m4_enabled("R4A") or tpc.m4_enabled("R4B"):
+            logger.info(
+                f"[M4] traced chunk last layer: R4A={int(self._m4_r4a)} R4B={int(self._m4_r4b)} "
+                f"(LASTROW={int(self._m2_lastrow)}; M4 applies only with LASTROW)"
+            )
+        # M5 (tp_common M5_FLAG_DEFAULTS): TAIL_TRACE only in the prepared order (request_warm_len > 0: the
+        # exact-multiple tail is warmed below and its persistent output made there); ADDNORM for the T == 2048
+        # traced chunk forward (warm-up below, capture, replays).
+        self._m5_tail = tpc.m5_enabled("TAIL_TRACE") and bool(request_warm_len)
+        self._m5_addnorm = tpc.m5_enabled("ADDNORM")
+        if tpc.m5_enabled("TAIL_TRACE") or self._m5_addnorm:
+            logger.info(
+                f"[M5] traced chunk: TAIL_TRACE={int(self._m5_tail)} (prepared order only) "
+                f"ADDNORM={int(self._m5_addnorm)} (T == {tpc.M5_ADDNORM_T} chunks)"
+            )
 
         # Allocate the vision-splice buffers BEFORE warmup so the fixed-shape ttnn.where in
         # _forward_prefill_chunk / _forward_prefill_chunk_masked compiles in the warmup pass (and
@@ -1135,6 +1934,19 @@ class Qwen36Model:
         self._chunk_start_idx_tensor = ttnn.from_torch(
             torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
+        # M4 R4B: absolute position of the chunk's last row (decode-SDPA cur_pos), next to the chunk start.
+        # chunk_size - 1 matches the chunk start 0 above (warm-up / capture); prefill_traced_chunked writes
+        # cs + chunk_size - 1 before every replay.
+        self._chunk_last_pos_tensor = None
+        self._m4_last_pos_host = None
+        if self._m4_r4b:
+            self._m4_last_pos_host = chunk_size - 1
+            self._chunk_last_pos_tensor = ttnn.from_torch(
+                torch.tensor([chunk_size - 1], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
         self._chunk_full_page_table_buf = ttnn.from_torch(
             page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
@@ -1182,27 +1994,69 @@ class Qwen36Model:
             self._chunk_full_page_table_buf,
             self._chunk_page_table_buf,
         )
+        if request_warm_len:
+            # Prepared order (T7): every per-request eager program of prefill_traced_chunked,
+            # including the exact-multiple tail (T1's greedy token ops when enabled).
+            self._warm_prefill_request_programs(warmup_out, chunk_size, request_warm_len)
+        elif self._greedy_token_out:
+            # One-call order (T1): compile the exact-multiple return path of prefill_traced_chunked
+            # (last chunk row -> norm -> _lm_head_token) now: an eager compile after the trace is
+            # parked clobbers it (#48536).
+            self._warm_exact_multiple_tail(warmup_out, chunk_size)
         ttnn.deallocate(warmup_out)
         ttnn.synchronize_device(device)
 
         # Warmup masked-bucket programs outside trace (same GDN mode as serving).
-        # Dummy prefills dirty state/KV; reset below before capture.
+        # Dummy prefills dirty state/KV; reset before capture.
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
 
-        # Capture trace.
-        self._reset_dn_state_inplace()
-        self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._chunked_trace_output = self._forward_prefill_chunk(
-            self._chunk_token_buf,
-            self._chunk_cos_buf,
-            self._chunk_sin_buf,
-            self._chunk_start_idx_tensor,
-            self._chunk_full_page_table_buf,
-            self._chunk_page_table_buf,
-        )
-        ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace captured successfully!")
+        # I-1 ROPEWARM (QWEN36_I1_ROPEWARM): compile, NOW, the text-only RoPE table slices that
+        # prefill_traced_chunked runs after the chunk trace is parked, plus its cos/sin ttnn.copy into
+        # the persistent buffers. Otherwise they compile on request 0 after the trace is parked
+        # (#48536 class). The slice program hash includes slice_start/slice_end, so every reachable
+        # (start, length) pair needs its own warm call: chunk replays (c*chunk_size, chunk_size) and
+        # masked tails (c*chunk_size, bucket), bounded by the RoPE table length (max_seq_len).
+        if tpc.i1_enabled("ROPEWARM") and self.rope.rope_device_table_enabled() and self.rope._req_cos is None:
+            self._warm_rope_table_slices(device, chunk_size)
+
+        # M3 REPACK_TRACE: compile the conv-history repack programs (and allocate conv_hist) now, while no
+        # trace is parked; the repack trace is captured after the chunk trace (capture_prefill_trace_chunked,
+        # prepared=True). The capture resets the GDN state, so the repacked contents do not matter.
+        if tpc.m3_enabled("REPACK_TRACE") and self.num_devices == 1:
+            self._gdn_refresh_conv_hist()
+            ttnn.synchronize_device(device)
+
+    def _warm_rope_table_slices(self, device, chunk_size):
+        """I-1 ROPEWARM helper (single device, text-only RoPE, before the chunk trace capture).
+
+        Runs every rope.get_prefill_rot_mats_table_slice(start, length) that prefill_traced_chunked
+        can reach for a prompt that fits the RoPE table (max_seq_len), so none compiles after the
+        trace is parked: full-chunk replays (c*chunk_size, chunk_size) and the masked tail at
+        chunk_start = c*chunk_size (c >= 1; c == 0 is warmed by warmup_prefill_masked_buckets) for
+        each bucket <= chunk_size. Also runs the per-chunk ttnn.copy of the cos/sin slice into
+        _chunk_cos_buf/_chunk_sin_buf once (copy programs are keyed by shape only). The copied rows
+        are rows [0, chunk_size) of the table the buffers were filled from, so their contents do not
+        change. Prompts that start at other offsets (e.g. prefix-cached starts) are not covered."""
+        max_len = self.rope.max_seq_len
+        buckets = [b for b in self._PREFILL_MASK_BUCKETS if b <= chunk_size]
+        pairs = []
+        for start in range(0, max_len, chunk_size):
+            if start + chunk_size <= max_len:
+                pairs.append((start, chunk_size))
+            if start > 0:
+                pairs.extend((start, b) for b in buckets if start + b <= max_len)
+        copied = False
+        for start, length in dict.fromkeys(pairs):
+            cos_slice, sin_slice = self.rope.get_prefill_rot_mats_table_slice(start, length)
+            if not copied and start == 0 and length == chunk_size:
+                ttnn.copy(cos_slice, self._chunk_cos_buf)
+                ttnn.copy(sin_slice, self._chunk_sin_buf)
+                copied = True
+            ttnn.deallocate(cos_slice)
+            ttnn.deallocate(sin_slice)
+        ttnn.synchronize_device(device)
+        logger.info(f"ROPEWARM: warmed {len(dict.fromkeys(pairs))} RoPE table slices (max_seq_len={max_len})")
 
     def _capture_prefill_trace_chunked_tp(
         self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
@@ -2057,6 +2911,8 @@ class Qwen36Model:
         )
         # Flexible SDPA (device chunk_start): one program per bucket for any tail position.
         # Host-int chunk_start compiles per position and can clobber parked trace.
+        # The op reads chunk_start on device and has no host check: it must be a multiple of q_chunk.
+        assert chunk_start % flexible_sdpa_q_chunk() == 0, f"chunk_start {chunk_start} % SDPA q_chunk != 0"
         csi_tensor = ttnn.from_torch(
             torch.tensor([chunk_start], dtype=torch.int32),
             dtype=ttnn.int32,
@@ -2228,6 +3084,9 @@ class Qwen36Model:
         hidden = self._forward_prefill_chunk_masked(
             token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
         )
+        # Fused GDN decode: this forward is the last fused_conv_state writer (whole short prompt or
+        # the long-prompt tail). Enqueued before the sync (overlaps the forward); no-op when off.
+        self._gdn_refresh_conv_hist()
         ttnn.synchronize_device(self.device)
 
         if self.num_devices > 1:
@@ -2241,7 +3100,7 @@ class Qwen36Model:
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = self._lm_head(x_last)
+        logits = self._lm_head_token(x_last) if self._greedy_token_out else self._lm_head(x_last)
         return logits.cpu()
 
     def _masked_bucket_logits_tp(self, hidden, actual_len, bucket):
@@ -2442,6 +3301,12 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
             )
 
+        # M2 NOWHERE: the parked chunk trace has no vision-splice where (text-only model at capture), so a
+        # multimodal request cannot be served by it.
+        assert not (self._m2_nowhere and vision_tokens is not None), (
+            "M2 NOWHERE: the chunk trace was captured without the vision-splice where (text-only model); "
+            "set QWEN36_M2_NOWHERE=0 or call init_vision_model() before prepare/capture"
+        )
         # Re-zero GDN once; carries across replays + masked tail (chunk_start>0 skips reset).
         self._reset_gdn_state_for_new_sequence()
         # Pad/clip page_table to captured buffer width (vLLM may differ). Trailing blocks unused.
@@ -2459,7 +3324,9 @@ class Qwen36Model:
         pt_host = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(pt_host, self._chunk_full_page_table_buf)
 
-        # Replay trace for each full chunk.
+        # Replay trace for each full chunk. The flexible SDPA reads the chunk start on device (no host
+        # check): every c * chunk_size must be a multiple of its q_chunk.
+        assert chunk_size % flexible_sdpa_q_chunk() == 0, f"chunk_size {chunk_size} % SDPA q_chunk != 0"
         for c in range(num_full):
             cs = c * chunk_size
             tok_host = ttnn.from_torch(
@@ -2471,6 +3338,15 @@ class Qwen36Model:
                 torch.tensor([cs], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
             ttnn.copy_host_to_device_tensor(csi_host, self._chunk_start_idx_tensor)
+            if self._m4_r4b:
+                # M4 R4B: absolute position of this chunk's last row = the decode-SDPA cur_pos of the last layer.
+                lp_host = ttnn.from_torch(
+                    torch.tensor([cs + chunk_size - 1], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.copy_host_to_device_tensor(lp_host, self._chunk_last_pos_tensor)
+                self._m4_last_pos_host = cs + chunk_size - 1
 
             blk0 = cs // block_size
             cpt_host = ttnn.from_torch(
@@ -2515,16 +3391,42 @@ class Qwen36Model:
             # clears the mask so the captured where is the identity. host->device copy only (no
             # compile), so the parked trace is untouched. Handles a large image whose placeholders
             # span multiple chunks.
-            self._set_vision_merge(
-                token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
-            )
+            # M2 NOWHERE: the trace has no where, so there is nothing to stage (text-only request; the
+            # masked tail stages its own buffers in prefill_masked_bucket).
+            if not self._m2_nowhere:
+                self._set_vision_merge(
+                    token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
+                )
 
             if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
                 print(f"[PTC] before execute_trace chunk={c}", flush=True)
+            # M4 R4B: a replay without this chunk's last-row position would attend the wrong rows silently.
+            assert (
+                not self._m4_r4b or self._m4_last_pos_host == cs + chunk_size - 1
+            ), f"M4 R4B: chunk {c}: last-row position {self._m4_last_pos_host} != {cs + chunk_size - 1} (not written)"
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
             if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
                 print(f"[PTC] after execute_trace chunk={c}", flush=True)
 
+        if tail_real == 0:
+            # Fused GDN decode (QWEN36_GDN_DECODE_FUSED=2): the last chunk replay is the last
+            # fused_conv_state writer. Enqueued before the sync so the host dispatch overlaps the
+            # replays; no-op when the flag is off. (A tail rebuilds it in prefill_masked_bucket.)
+            # M2 REPACK_LATE: defer it out of the first-token path; the next GDN-state user
+            # (switch_mode / prepare_decode_inputs_host / decode / GDN reset, save, restore) runs it
+            # first via _m2_flush_pending_repack, so it completes before the first decode step.
+            # M3 REPACK_TRACE: replay the repack trace (captured after the chunk trace) at this same point
+            # instead of the ~8 eager ops per GDN layer; same ops, same buffers.
+            if tpc.m2_enabled("REPACK_LATE"):
+                self._m2_repack_pending = True
+            elif self._m3_repack_trace_id is not None:
+                self._m3_replay_repack_trace()
+            else:
+                self._gdn_refresh_conv_hist()
+            # M5 TAIL_TRACE: replay the tail trace (final norm + LM head [+ argmax] into the persistent output)
+            # right after the repack, in place of the eager tail below; same ops as the eager tail.
+            if self._m5_tail_trace_id is not None:
+                self._m5_replay_tail_trace()
         ttnn.synchronize_device(self.device)
         if os.environ.get("QWEN36_PREFILL_DEBUG") == "1":
             print(f"[PTC] after synchronize chunk={num_full - 1}", flush=True)
@@ -2547,13 +3449,17 @@ class Qwen36Model:
             return result
         hidden = self._chunked_trace_output  # last full chunk's hidden state
         pos_in_chunk = (actual_len - 1) - (num_full - 1) * chunk_size
+        # Exact multiple: the requested row is always the last row of the last chunk, the row
+        # _exact_multiple_tail_device reads (M2 LASTROW: the trace already returns only that row, [1, 1, dim]).
+        assert pos_in_chunk == chunk_size - 1, f"exact-multiple tail: last row {pos_in_chunk} != chunk_size - 1"
+        if self._m2_lastrow:
+            assert hidden.shape[1] == 1, f"M2 LASTROW: trace output {tuple(hidden.shape)} is not one row"
+        if self._m5_tail_trace_id is not None:
+            # M5 TAIL_TRACE: the tail trace (replayed above, before the sync) wrote the result here.
+            return self._m5_tail_out.cpu()
         ttnn.synchronize_device(self.device)
-
-        x_last = hidden[:, pos_in_chunk : pos_in_chunk + 1, :]
-        x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
-        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
-        x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = self._lm_head(x_last)
+        # Same code as the prepare warm-up (_warm_exact_multiple_tail) and M5 TAIL_TRACE (_m5_tail_body).
+        logits = self._exact_multiple_tail_device(hidden, chunk_size)
         return logits.cpu()
 
     def _prefill_chunked_eager_tp(
@@ -2644,6 +3550,9 @@ class Qwen36Model:
         _overlap = os.environ.get("QWEN36_PREFILL_OVERLAP", "1") != "0"
         _SYNC_EVERY = 8 if _overlap else 1
         _host_refs = []  # keep host tensors alive until the next sync frees their DMAs
+        # M4 R4B needs the per-chunk last-row position write of the single-device loop; the TP chunk forward
+        # (_forward_prefill_chunk_tp) has no LASTROW, so R4B must never be active here.
+        assert not self._m4_r4b, "M4 R4B is single-device only (the TP chunk trace has no last-row position input)"
         for c in range(num_full):
             cs = c * chunk_size
             tok_host = ttnn.from_torch(
@@ -2736,6 +3645,7 @@ class Qwen36Model:
 
         Trace capture runs forward twice; GDN state is non-idempotent. Must re-zero before each
         real sequence. In-place buffers (_chunk_inplace_state) use _reset_dn_state_inplace."""
+        self._m2_flush_pending_repack()  # M2 REPACK_LATE: keep the old op order (repack before the reset)
         if self.num_devices > 1:
             # TP: reset_state_inplace preserves decode-trace baked addresses.
             for layer in self.layers:
@@ -2759,11 +3669,42 @@ class Qwen36Model:
             dn = layer.attention
             ttnn.copy(self._dn_zero_recurrent, dn.recurrent_state)
             ttnn.copy(self._dn_zero_conv, dn.fused_conv_state)
+            if getattr(dn, "_decode_fused", False) and dn.conv_hist is not None:
+                ttnn.copy(self._dn_zero_hist, dn.conv_hist)
             # split_conv_state rebuilt lazily on first decode.
             if dn.split_conv_state is not None:
                 for buf in dn.split_conv_state:
                     ttnn.deallocate(buf)
                 dn.split_conv_state = None
+
+    def _gdn_refresh_conv_hist(self, variant=None):
+        """QWEN36_GDN_DECODE_FUSED=2: rebuild every GDN layer's packed conv_hist from its
+        fused_conv_state, on device (no host reads -> trace safe), eager. Call after the last
+        fused_conv_state writer (end of prefill), after a state restore and on reset. No-op when
+        the flag is off, on TP, or before any fused layer exists. variant: batched | perlayer
+        (default: QWEN36_GDN_CONV_REPACK)."""
+        self._m2_repack_pending = False  # M2 REPACK_LATE: this call is the (possibly deferred) repack
+        if self.num_devices > 1:
+            return
+        dns = [
+            l.attention for l in self.layers if not l.is_full_attention and getattr(l.attention, "_decode_fused", False)
+        ]
+        if not dns:
+            return
+        from models.demos.blackhole.qwen36.tt.gdn import decode_fused as _df
+
+        variant = variant or _df.repack_variant()
+        live = [dn for dn in dns if dn.fused_conv_state is not None and dn.fused_conv_state.shape[0] == 1]
+        for dn in dns:
+            if dn not in live:
+                dn.refresh_conv_hist()  # no conv state yet -> zero history
+        if not live:
+            return
+        if variant == "batched":
+            _df.repack_conv_hist_batched([(dn.fused_conv_state, dn.ensure_conv_hist()) for dn in live], live[0].cfg)
+        else:
+            for dn in live:
+                _df.repack_conv_hist(dn.fused_conv_state, dn.ensure_conv_hist(), dn.cfg)
 
     def _init_dn_zero_buffers(self):
         """Allocate shared zero buffers for DN recurrent and conv shapes."""
@@ -2775,7 +3716,7 @@ class Qwen36Model:
         conv_shape = list(first_dn.fused_conv_state.shape)
         self._dn_zero_recurrent = ttnn.zeros(
             rec_shape,
-            dtype=ttnn.bfloat16,
+            dtype=first_dn.recurrent_state.dtype if getattr(first_dn, "_decode_fused", False) else ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -2787,6 +3728,8 @@ class Qwen36Model:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if getattr(first_dn, "_decode_fused", False):
+            self._dn_zero_hist = ttnn.zeros_like(first_dn.ensure_conv_hist())
 
     def set_paged_kv_caches(self, kv_caches):
         """Attach paged KV caches to the 8 attention layers."""
@@ -2815,12 +3758,17 @@ class Qwen36Model:
         for layer in self.layers:
             if not layer.is_full_attention:
                 dn = layer.attention
+                # Fused GDN decode (QWEN36_GDN_DECODE_FUSED=2, B = 1): FP32 state, so prefill writes
+                # FP32 directly (no per-chunk state typecasts) and the op updates it in place.
+                fused = getattr(dn, "_decode_fused", False) and batch_size == 1
                 rec = ttnn.from_torch(
                     torch.zeros(batch_size, dn.num_v_heads, dn.head_k_dim, dn.head_v_dim, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.float32 if fused else ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                 )
+                if fused:
+                    dn.ensure_conv_hist()
                 conv = ttnn.from_torch(
                     torch.zeros(
                         batch_size,
@@ -2841,6 +3789,8 @@ class Qwen36Model:
         """Release KV caches + GDN state for a fresh generation run."""
         if self._deltanet_external_states is None:
             return
+        self._m3_release_repack_trace()  # M3 REPACK_TRACE: it bakes the GDN conv-state buffers freed below
+        self._m5_release_tail_trace()  # M5 TAIL_TRACE: it reads the chunk-trace output (released below)
         if getattr(self, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
@@ -3254,6 +4204,7 @@ class Qwen36Model:
                         ttnn.copy(dn.fused_conv_state, ext_conv)
                     dn_idx += 1
 
+        self._gdn_refresh_conv_hist()
         return logits
 
     def decode_paged(self, token_ids, current_pos, page_table):
@@ -3301,8 +4252,13 @@ class Qwen36Model:
     # Generator contract — decode
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_packed, page_table_tt)."""
+        """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_packed, page_table_tt).
+
+        M2 REPACK_LATE: runs a pending conv-history repack first (always outside a trace capture: the
+        host inputs built here are copied to the device before the decode forward / trace replay)."""
         from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
+
+        self._m2_flush_pending_repack()
 
         B = tokens.shape[0]
         tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -3328,7 +4284,13 @@ class Qwen36Model:
             rope_packed = ttnn.from_torch(torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         else:
             # Single-device decode is B=1 in this port; per-user single-device rope is out of scope.
-            cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))  # HOST ttnn [1,1,rope_head_dim]
+            # I-1 D4A (QWEN36_I1_D4A, B=1): row-replicated [1,32,rope_head_dim] cos/sin (packed
+            # [2,32,rope_head_dim], same 4 tiles as [2,1,rope_head_dim]) for the head-major decode
+            # RoPE in ttnn_gated_attention (rotary_embedding_hf on [1,1,H,64], no transposes).
+            rope_rows = 32 if (B == 1 and tpc.i1_enabled("D4A")) else 1
+            cos_host, sin_host = self.rope.get_cos_sin_host(
+                int(rope_pos_vec[0]), rows=rope_rows
+            )  # HOST ttnn [1,rope_rows,rope_head_dim]
             rope_packed = pack_rope_host(cos_host, sin_host)  # torch-based (host)
         cur_pos_tt = ttnn.from_torch(pos_vec, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         page_table_tt = (
@@ -3372,13 +4334,17 @@ class Qwen36Model:
                 logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, sampler_batch - B), (0, 0)], value=0.0)
             # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
             return logits
-        logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+        # _greedy_token_out: the token ops run inside the captured decode trace; the output is a uint32 token.
+        logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, want_token=self._greedy_token_out)
         return logits, None
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Convert decode output to host torch. Host-sampling returns logits [B,S,vocab];
         on-device sampling returns sampled token ids or sampled-token log-probs.
+        A uint32 tt_out (set_greedy_token_output) holds greedy token ids: returned as [B].
         """
+        if self._greedy_token_out and not (is_tokens or is_log_probs) and tt_out.dtype == ttnn.uint32:
+            return ttnn.to_torch(tt_out).reshape(-1)[:B]
         if is_tokens or is_log_probs:
             # Sampled ids and old-path sampled-token log-probs are replicated across devices.
             if self.num_devices > 1:
@@ -3400,6 +4366,7 @@ class Qwen36Model:
 
     def _save_deltanet_states(self):
         """Snapshot GDN state to host (guard across decode-trace capture's double forward)."""
+        self._m2_flush_pending_repack()  # M2 REPACK_LATE (no-op unless a repack is pending)
         saved = []
         for layer in self.layers:
             if not layer.is_full_attention:
@@ -3414,13 +4381,18 @@ class Qwen36Model:
 
     def _restore_deltanet_states(self, saved_states, device):
         """Restore GDN state via ttnn.copy (preserves trace-baked buffer addresses)."""
+        self._m2_flush_pending_repack()  # M2 REPACK_LATE (no-op unless a repack is pending)
         idx = 0
         for layer in self.layers:
             if not layer.is_full_attention:
                 dn = layer.attention
                 saved = saved_states[idx]
                 restored = ttnn.from_torch(
-                    saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                    saved["recurrent"],
+                    # FP32 state is kept FP32 by the fused GDN decode (QWEN36_GDN_DECODE_FUSED=2); else BF16.
+                    dtype=dn.recurrent_state.dtype if getattr(dn, "_decode_fused", False) else ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
                 )
                 ttnn.copy(restored, dn.recurrent_state)
                 ttnn.deallocate(restored)
@@ -3432,3 +4404,6 @@ class Qwen36Model:
                     ttnn.deallocate(restored_conv)
                     dn._restore_split_conv_from_fused()
                 idx += 1
+        # Fused GDN decode: the decode-trace capture advanced conv_hist; rebuild it from the restored
+        # fused_conv_state (the op never writes fused_conv_state). No-op when the flag is off.
+        self._gdn_refresh_conv_hist()

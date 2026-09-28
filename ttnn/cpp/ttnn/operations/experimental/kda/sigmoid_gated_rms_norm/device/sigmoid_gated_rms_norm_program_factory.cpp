@@ -36,6 +36,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
     const uint32_t Vt = attrs.value_dim / TILE_WIDTH;
     const uint32_t total = attrs.batch * attrs.num_heads * Mt;
+    // Gate tile-row stride = the gate's padded width in tiles (H*Vt for a [B,T,H*V] gate).
+    const uint32_t gate_row_tiles = in.gate.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t gate_silu = attrs.gate_activation == SigmoidGatedRmsNormGateActivation::SILU ? 1u : 0u;
     // Use the fewest workers that preserve the all-core maximum items/worker.
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t max_items_per_core = tt::div_up(total, grid.x * grid.y);
@@ -110,7 +113,13 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::TensorBinding{GATE, "gate"},
                 m2::TensorBinding{WEIGHT, "weight"},
             },
-        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}, {"epsilon_bits", eps_bits}},
+        .compile_time_args =
+            {{"Vt", Vt},
+             {"H", attrs.num_heads},
+             {"Mt", Mt},
+             {"epsilon_bits", eps_bits},
+             {"gate_row_tiles", gate_row_tiles},
+             {"gate_col_offset", attrs.gate_col_offset_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -161,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::CONSUMER},
             },
-        .compile_time_args = {{"Vt", Vt}},
+        .compile_time_args = {{"Vt", Vt}, {"gate_silu", gate_silu}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };

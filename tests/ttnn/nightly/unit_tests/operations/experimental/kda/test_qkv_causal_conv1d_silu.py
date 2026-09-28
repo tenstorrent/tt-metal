@@ -600,3 +600,421 @@ def test_qkv_causal_conv1d_silu_rejects_sharded_output(device: ttnn.Device, expe
             channel_chunk_size=384,
             memory_config=sharded_config,
         )
+
+
+# ---------------------------------------------------------------------------
+# TILE-input (tiled) path: host plan and argument validation.
+# ---------------------------------------------------------------------------
+
+_P150_GRID = (13, 10)
+_TILED_L1_BUDGET_B4 = 190 * 1024
+
+
+def _tiled_plan(sequence: int, widths: tuple[int, int, int], **kwargs) -> dict:
+    return ttnn._ttnn.operations.experimental.kda.qkv_causal_conv1d_silu_tiled_program_plan(
+        sequence, *widths, grid_x=_P150_GRID[0], grid_y=_P150_GRID[1], **kwargs
+    )
+
+
+def test_qkv_causal_conv1d_silu_tiled_program_plan() -> None:
+    """The tiled program fits the L1 budget and uses the whole P150 grid at the model shape."""
+    plan = _tiled_plan(2048, (2048, 2048, 2048))
+    logger.info(f"\n{plan['summary']}")
+    assert plan["block_tiles"] == 4 and plan["channel_chunk_size"] == 128
+    assert [buffer["name"] for buffer in plan["dataflow_buffers"]] == ["x_in", "shift", "weights", "partial", "out"]
+    assert [buffer["num_entries"] for buffer in plan["dataflow_buffers"]] == [12, 24, 32, 8, 12]
+    assert plan["l1_bytes_per_core"] <= _TILED_L1_BUDGET_B4
+    assert plan["num_cores"] == 130
+    assert plan["num_steps"] == 48 * 64
+    assert sorted(set(plan["step_count"])) == [23, 24]
+    assert plan["step_count"].count(24) == 82
+    assert sum(plan["step_count"]) == plan["num_steps"]
+    assert all(
+        start + count == next_start
+        for start, count, next_start in zip(plan["step_start"], plan["step_count"], plan["step_start"][1:])
+    )
+    assert plan["max_tap_loads_per_core"] <= 2
+
+    plan_b8 = _tiled_plan(4096, (2048, 2048, 2048), channel_chunk_size=256, return_conv_state=True)
+    assert plan_b8["block_tiles"] == 8
+    assert plan_b8["num_cores"] == 130
+    assert plan_b8["dfb_bytes_per_core"] == 22 * 8 * 2048
+
+    # Ct = 28 is not a multiple of 8; the default block stays at 4 tiles.
+    assert _tiled_plan(32, (512, 256, 128))["block_tiles"] == 4
+    # Ct = 10: the default falls back to B = 2.
+    assert _tiled_plan(32, (128, 128, 64))["block_tiles"] == 2
+
+
+@pytest.mark.parametrize(
+    ("channel_chunk_size", "message"),
+    [
+        (384, r"TILE input needs channel_chunk_size in \{32, 64, 128, 256\}"),
+        (96, r"TILE input needs channel_chunk_size in \{32, 64, 128, 256\}"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_tiled_plan_rejects_invalid_block(
+    channel_chunk_size: int, message: str, expect_error
+) -> None:
+    with expect_error(RuntimeError, message):
+        _tiled_plan(64, (128, 128, 128), channel_chunk_size=channel_chunk_size)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("row_major_history_none", "history is required for ROW_MAJOR input"),
+        ("row_major_return_conv_state", "return_conv_state=True requires TILE input"),
+        ("row_major_program_config_none", "program_config is required for ROW_MAJOR input"),
+        ("tiled_block_size", r"TILE input needs channel_chunk_size in \{32, 64, 128, 256\}"),
+        ("tiled_history_shape", r"history must be \[1,3,Q\+K\+V\]"),
+        ("tiled_history_dtype", "history must be BFLOAT16"),
+        ("tiled_fp32_dest_block", "needs 8 dest tiles, but the compute config gives 4"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_tiled_rejects_invalid_arguments(
+    device: ttnn.Device, expect_error: Callable, case: str, message: str
+) -> None:
+    widths = (256, 256, 512) if case == "tiled_fp32_dest_block" else (128, 128, 128)
+    history_rows = 2 if case == "tiled_history_shape" else 3
+    (inputs, history, taps), (input_tt, history_tt, taps_tt) = _device_inputs(
+        device, widths=widths, sequence=32, history_rows=history_rows, seed=1207
+    )
+    kwargs = {"program_config": ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128)}
+    if case.startswith("tiled"):
+        input_tt = _to_device(inputs, device, layout=ttnn.TILE_LAYOUT)
+        history_tt = _to_device(history, device, layout=ttnn.TILE_LAYOUT)
+    if case == "row_major_history_none":
+        history_tt = None
+    elif case == "row_major_return_conv_state":
+        kwargs["return_conv_state"] = True
+    elif case == "row_major_program_config_none":
+        kwargs["program_config"] = None
+    elif case == "tiled_block_size":
+        kwargs["program_config"] = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=384)
+    elif case == "tiled_history_dtype":
+        history_tt = _to_device(history.float(), device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    elif case == "tiled_fp32_dest_block":
+        kwargs["program_config"] = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256)
+        kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.kda.qkv_causal_conv1d_silu(input_tt, history_tt, *taps_tt, *widths, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# TILE-input (tiled) path: device kernels (design.md section 7, S6). The
+# numerics contract (section 6.6) is bitwise: for the same bf16 values the
+# tiled q/k/v equal the ROW_MAJOR op, whose input comes through to_layout.
+# ---------------------------------------------------------------------------
+
+_TILED_SEQUENCES = (32, 64, 96, 2048, 4096)
+_TILED_GEOMETRIES = (
+    pytest.param((2048, 2048, 2048), 4, id="model-B4"),
+    pytest.param((2048, 2048, 2048), 8, id="model-B8"),
+    pytest.param((512, 256, 128), 1, id="asymmetric-B1"),
+    pytest.param((512, 256, 128), 4, id="asymmetric-B4"),
+)
+# Short sequences also run with return_conv_state=False (the reader variant without new_state).
+_TILED_BOTH_STATE_MODES_MAX_SEQUENCE = 96
+
+
+def _run_tiled(
+    input_tt: ttnn.Tensor,
+    history_tt: ttnn.Tensor | None,
+    taps_tt: tuple[ttnn.Tensor, ...],
+    *,
+    widths: tuple[int, int, int],
+    block_tiles: int,
+    return_conv_state: bool = False,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> tuple[ttnn.Tensor, ...]:
+    return ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        input_tt,
+        history_tt,
+        *taps_tt,
+        *widths,
+        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=32 * block_tiles),
+        memory_config=memory_config,
+        return_conv_state=return_conv_state,
+    )
+
+
+def _tiled_device_inputs(
+    device: ttnn.Device,
+    *,
+    sequence: int,
+    widths: tuple[int, int, int],
+    with_history: bool,
+    seed: int,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> tuple[
+    tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]],
+    tuple[ttnn.Tensor, ttnn.Tensor | None, tuple[ttnn.Tensor, ...]],
+]:
+    """Host values (history=None becomes three zero rows) and TILE device tensors."""
+    inputs, history, taps = _host_inputs(sequence=sequence, widths=widths, seed=seed)
+    if not with_history:
+        history = torch.zeros_like(history)
+    input_tt = _to_device(inputs, device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    history_tt = _to_device(history, device, layout=ttnn.TILE_LAYOUT) if with_history else None
+    taps_tt = tuple(_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps)
+    return (inputs, history, taps), (input_tt, history_tt, taps_tt)
+
+
+def _row_major_outputs(
+    device: ttnn.Device,
+    input_tt: ttnn.Tensor,
+    history: torch.Tensor,
+    taps_tt: tuple[ttnn.Tensor, ...],
+    widths: tuple[int, int, int],
+) -> tuple[torch.Tensor, ...]:
+    """The ROW_MAJOR op on the same bf16 values: input via to_layout, history as ROW_MAJOR."""
+    channels = sum(widths)
+    input_rm = ttnn.to_layout(input_tt, ttnn.ROW_MAJOR_LAYOUT)
+    history_rm = _to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # The model's ROW_MAJOR chunk (768 channels) where it divides the width, else one block.
+    chunk = 768 if channels % 768 == 0 else channels
+    outputs = _run(input_rm, history_rm, taps_tt, widths=widths, channel_chunk_size=chunk)
+    result = tuple(ttnn.to_torch(output) for output in outputs)
+    for tensor in (input_rm, history_rm, *outputs):
+        ttnn.deallocate(tensor)
+    return result
+
+
+def _padded_torch(tensor: ttnn.Tensor) -> torch.Tensor:
+    return tensor.cpu().to_torch_with_padded_shape()
+
+
+def _assert_new_state(new_state: ttnn.Tensor, inputs: torch.Tensor, input_tt: ttnn.Tensor, *, name: str) -> None:
+    """AC3: new_state = x[:, T-3:, :] bitwise, zero padding rows, equal to slice + to_layout (DRAM)."""
+    _, sequence, channels = inputs.shape
+    assert new_state.dtype == ttnn.bfloat16
+    assert new_state.layout == ttnn.TILE_LAYOUT
+    assert new_state.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert_bit_identical(inputs[:, sequence - 3 :, :], ttnn.to_torch(new_state), name=f"{name} new_state rows")
+    padded = _padded_torch(new_state)
+    assert tuple(padded.shape) == (1, 32, channels)
+    assert_bit_identical(torch.zeros_like(padded[:, 3:, :]), padded[:, 3:, :], name=f"{name} new_state padding rows")
+    input_rm = ttnn.to_layout(input_tt, ttnn.ROW_MAJOR_LAYOUT)
+    recipe_rm = ttnn.slice(input_rm, [0, sequence - 3, 0], [1, sequence, channels])
+    recipe = ttnn.to_layout(recipe_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert_bit_identical(_padded_torch(recipe), padded, name=f"{name} new_state vs slice + to_layout")
+    for tensor in (input_rm, recipe_rm, recipe):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("with_history", [True, False], ids=["history", "history-none"])
+@pytest.mark.parametrize(("widths", "block_tiles"), _TILED_GEOMETRIES)
+@pytest.mark.parametrize("sequence", _TILED_SEQUENCES, ids=lambda sequence: f"T{sequence}")
+def test_qkv_causal_conv1d_silu_tiled_matches_row_major(
+    device: ttnn.Device, sequence: int, widths: tuple[int, int, int], block_tiles: int, with_history: bool
+) -> None:
+    """AC1 bitwise vs the ROW_MAJOR op, AC2 accuracy vs torch, AC3 new_state."""
+    host, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=sequence, widths=widths, with_history=with_history, seed=5000 + sequence + block_tiles
+    )
+    inputs, history, taps = host
+    expected_rm = _row_major_outputs(device, input_tt, history, taps_tt, widths)
+    golden = _reference(inputs, history, taps, widths)
+    state_modes = (True, False) if sequence <= _TILED_BOTH_STATE_MODES_MAX_SEQUENCE else (True,)
+    for return_conv_state in state_modes:
+        label = f"T={sequence} B={block_tiles} history={with_history} state={return_conv_state}"
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            outputs = _run_tiled(
+                input_tt,
+                history_tt,
+                taps_tt,
+                widths=widths,
+                block_tiles=block_tiles,
+                return_conv_state=return_conv_state,
+            )
+        assert len(outputs) == (4 if return_conv_state else 3)
+        for name, width, rm, gold, output in zip(
+            ("q", "k", "v"), widths, expected_rm, golden, outputs[:3], strict=True
+        ):
+            assert output.dtype == ttnn.bfloat16
+            assert output.layout == ttnn.TILE_LAYOUT
+            assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            actual = ttnn.to_torch(output)
+            assert tuple(actual.shape) == (1, sequence, width)
+            assert_bit_identical(rm, actual, name=f"{label} {name} tiled vs ROW_MAJOR")
+            assert_accurate(gold, actual, name=f"{label} {name} vs torch", pcc_threshold=0.9999)
+            tiled_max = float((actual.float() - gold.float()).abs().max())
+            row_major_max = float((rm.float() - gold.float()).abs().max())
+            assert tiled_max <= row_major_max, f"{label} {name}: max abs diff {tiled_max} > ROW_MAJOR {row_major_max}"
+        if return_conv_state:
+            _assert_new_state(outputs[3], inputs, input_tt, name=label)
+        for output in outputs:
+            ttnn.deallocate(output)
+
+
+def test_qkv_causal_conv1d_silu_tiled_without_state_matches_row_major_t2048(device: ttnn.Device) -> None:
+    """AC1 at the model shape for the reader variant without new_state (return_conv_state=False)."""
+    sequence, widths, block_tiles = 2048, (2048, 2048, 2048), 4
+    host, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=sequence, widths=widths, with_history=True, seed=5300
+    )
+    inputs, history, taps = host
+    expected_rm = _row_major_outputs(device, input_tt, history, taps_tt, widths)
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        outputs = _run_tiled(
+            input_tt, history_tt, taps_tt, widths=widths, block_tiles=block_tiles, return_conv_state=False
+        )
+    assert len(outputs) == 3
+    for name, rm, output in zip(("q", "k", "v"), expected_rm, outputs, strict=True):
+        assert_bit_identical(rm, ttnn.to_torch(output), name=f"T={sequence} state=False {name} tiled vs ROW_MAJOR")
+    for output in outputs:
+        ttnn.deallocate(output)
+
+
+@pytest.mark.parametrize("with_history", [True, False], ids=["history", "history-none"])
+@pytest.mark.parametrize("block_tiles", [4, 8], ids=lambda block_tiles: f"B{block_tiles}")
+def test_qkv_causal_conv1d_silu_tiled_chunked_matches_single_call(
+    device: ttnn.Device, block_tiles: int, with_history: bool
+) -> None:
+    """AC4: one T=4096 call equals two T=2048 calls chained through new_state, bitwise."""
+    widths = (2048, 2048, 2048)
+    sequence = 4096
+    half = sequence // 2
+    (inputs, _, _), (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=sequence, widths=widths, with_history=with_history, seed=6100 + block_tiles
+    )
+    first_tt = _to_device(inputs[:, :half, :], device, layout=ttnn.TILE_LAYOUT)
+    second_tt = _to_device(inputs[:, half:, :], device, layout=ttnn.TILE_LAYOUT)
+
+    def run(x: ttnn.Tensor, history: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ...]:
+        return _run_tiled(x, history, taps_tt, widths=widths, block_tiles=block_tiles, return_conv_state=True)
+
+    full = run(input_tt, history_tt)
+    first = run(first_tt, history_tt)
+    second = run(second_tt, first[3])
+    for name, whole, head, tail in zip(("q", "k", "v"), full[:3], first[:3], second[:3], strict=True):
+        chained = torch.cat((ttnn.to_torch(head), ttnn.to_torch(tail)), dim=1)
+        assert_bit_identical(ttnn.to_torch(whole), chained, name=f"{name} one call vs two chained calls")
+    assert_bit_identical(_padded_torch(full[3]), _padded_torch(second[3]), name="new_state one call vs chained")
+    _assert_new_state(full[3], inputs, input_tt, name="chunked")
+
+
+@pytest.mark.parametrize(
+    ("sequence", "widths", "block_tiles", "with_history"),
+    [
+        pytest.param(96, (512, 256, 128), 4, True, id="asymmetric-T96-B4-history"),
+        pytest.param(2048, (2048, 2048, 2048), 4, False, id="model-T2048-B4-history-none"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_tiled_trace_replay_and_immutability(
+    device: ttnn.Device, sequence: int, widths: tuple[int, int, int], block_tiles: int, with_history: bool
+) -> None:
+    """AC5: trace replay is bit-identical and the op does not modify its inputs."""
+    _, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=sequence, widths=widths, with_history=with_history, seed=7300 + sequence
+    )
+    input_tensors = tuple(tensor for tensor in (input_tt, history_tt, *taps_tt) if tensor is not None)
+    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors)
+
+    def run() -> tuple[ttnn.Tensor, ...]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return _run_tiled(
+                input_tt, history_tt, taps_tt, widths=widths, block_tiles=block_tiles, return_conv_state=True
+            )
+
+    outputs = run()
+    assert all(output.buffer_address() != tensor.buffer_address() for output in outputs for tensor in input_tensors)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    traced_outputs = run()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    for _ in range(2):
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+
+    for name, output, traced in zip(("q", "k", "v", "new_state"), outputs, traced_outputs, strict=True):
+        assert_bit_identical(_padded_torch(output), _padded_torch(traced), name=f"{name} trace replay")
+    for index, (before, tensor) in enumerate(zip(snapshots, input_tensors, strict=True)):
+        assert_bit_identical(before, ttnn.to_torch(tensor), name=f"input {index} immutability")
+    ttnn.release_trace(device, trace_id)
+
+
+def test_qkv_causal_conv1d_silu_tiled_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    """AC5: a program cache hit binds the fresh input and output tensors."""
+    widths = (512, 256, 128)
+    sequence = 64
+    host_a, device_a = _tiled_device_inputs(device, sequence=sequence, widths=widths, with_history=True, seed=8101)
+    host_b, device_b = _tiled_device_inputs(device, sequence=sequence, widths=widths, with_history=True, seed=8102)
+
+    def run(device_inputs) -> tuple[ttnn.Tensor, ...]:
+        input_tt, history_tt, taps_tt = device_inputs
+        return _run_tiled(input_tt, history_tt, taps_tt, widths=widths, block_tiles=4, return_conv_state=True)
+
+    outputs_a = run(device_a)
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    outputs_b = run(device_b)
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == entries
+
+    flat_a = (device_a[0], device_a[1], *device_a[2])
+    flat_b = (device_b[0], device_b[1], *device_b[2])
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(flat_a, flat_b, strict=True))
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(outputs_a, outputs_b, strict=True))
+
+    for label, host, device_inputs, outputs in (
+        ("miss", host_a, device_a, outputs_a),
+        ("hit", host_b, device_b, outputs_b),
+    ):
+        inputs, history, _ = host
+        expected = _row_major_outputs(device, device_inputs[0], history, device_inputs[2], widths)
+        for name, rm, output in zip(("q", "k", "v"), expected, outputs[:3], strict=True):
+            assert_bit_identical(rm, ttnn.to_torch(output), name=f"cache {label} {name} tiled vs ROW_MAJOR")
+        _assert_new_state(outputs[3], inputs, device_inputs[0], name=f"cache {label}")
+    assert not torch.equal(ttnn.to_torch(outputs_a[0]), ttnn.to_torch(outputs_b[0]))
+
+
+def test_qkv_causal_conv1d_silu_tiled_program_key_includes_history_and_state(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    """history=None and return_conv_state select different reader variants, so different programs."""
+    widths = (512, 256, 128)
+    _, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=32, widths=widths, with_history=True, seed=8201
+    )
+    _run_tiled(input_tt, history_tt, taps_tt, widths=widths, block_tiles=4)
+    entries = device.num_program_cache_entries()
+    _run_tiled(input_tt, None, taps_tt, widths=widths, block_tiles=4)
+    assert device.num_program_cache_entries() == entries + 1
+    _run_tiled(input_tt, history_tt, taps_tt, widths=widths, block_tiles=4, return_conv_state=True)
+    assert device.num_program_cache_entries() == entries + 2
+    _run_tiled(input_tt, None, taps_tt, widths=widths, block_tiles=4)
+    assert device.num_program_cache_entries() == entries + 2
+
+
+def test_qkv_causal_conv1d_silu_tiled_l1_tensors_and_state_in_dram(device: ttnn.Device) -> None:
+    """L1 input and L1 q/k/v give the same values; new_state stays DRAM interleaved."""
+    widths = (512, 256, 128)
+    sequence = 96
+    host, (input_tt, history_tt, taps_tt) = _tiled_device_inputs(
+        device, sequence=sequence, widths=widths, with_history=True, seed=8301, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    inputs, history, _ = host
+    expected = _row_major_outputs(device, input_tt, history, taps_tt, widths)
+    outputs = _run_tiled(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        block_tiles=4,
+        return_conv_state=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    for name, rm, output in zip(("q", "k", "v"), expected, outputs[:3], strict=True):
+        assert output.memory_config() == ttnn.L1_MEMORY_CONFIG
+        assert_bit_identical(rm, ttnn.to_torch(output), name=f"L1 {name} tiled vs ROW_MAJOR")
+    _assert_new_state(outputs[3], inputs, input_tt, name="L1 outputs")

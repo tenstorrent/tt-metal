@@ -61,7 +61,18 @@ So, in this script:
           directly rather than reconstructed).
   E2E_model = TTFT_median + (osl - 1) * TPOT_median  (reported alongside measured E2E for sanity).
 
-Determinism check: sampling is greedy argmax on host (temperature 0), so every timed run must
+QWEN36_ONDEV_ARGMAX (default "1"; recorded in the JSON header as "ondev_argmax"): the greedy argmax
+runs ON DEVICE (Qwen36Model.set_greedy_token_output): after the LM head, each vocab split is
+untilized to its one logical row, the rows are concatenated, and one ttnn.argmax gives a uint32
+token (the first max index, the same token as the host torch.argmax of the same bf16 logits). The
+prefill returns that token, and the decode trace captures the token ops. The host reads 4 bytes
+instead of the logits, so with the flag on:
+  TTFT  = the same window as above, but the readback is the 4-byte token and there is no host argmax.
+  TPOT  = the same window as above, with the 4-byte token read instead of the logits + host argmax.
+QWEN36_ONDEV_ARGMAX=0 restores the host-argmax path above exactly (no new device ops, same traces).
+
+Determinism check: sampling is greedy argmax (temperature 0; on device, or on host with
+QWEN36_ONDEV_ARGMAX=0), so every timed run must
 generate byte-identical token ids to the (last) warmup run in the same process -- this is checked
 and printed as PASS/FAIL, and optionally compared to a --check-ref JSON
 ({"expected_first_tokens": [...]}).
@@ -181,13 +192,33 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "override the KDA conv kernel's channel-chunk-size; unset=model-computed default",
     ),
     "QWEN36_GDN_CONV_KDA_FP32ACC": ("0", "accumulate the KDA conv kernel in fp32; 1=enable"),
+    "QWEN36_GDN_CONV_KDA_TILED": (
+        "1",
+        "INT-3: KDA conv reads the TILE in-proj output + TILE conv state directly (tiled kernel, "
+        "channel_chunk_size=128, returns new_state; bit-identical); 0=untilize + ROW_MAJOR op + slice/tilize glue",
+    ),
     "QWEN36_GDN_CONV_LEGACY": ("0", "force the legacy (pre-native) conv1d implementation"),
     "QWEN36_GDN_CONV_SILU_SHARDED": ("0", "run the conv+SiLU on a sharded memory config; 1=enable"),
     "QWEN36_GDN_CONV_T3_MAX": ("0", "cap on the conv kernel's T3 tiling dimension; 0=no cap"),
+    "QWEN36_GDN_CONV_REPACK": (
+        "perlayer",
+        "fused GDN decode only: conv-history repack after prefill, perlayer (8 ops/layer) or batched",
+    ),
     "QWEN36_GDN_CONV_TILED_SPLIT": ("0", "split the conv1d input into tiles; 1=enable"),
     "QWEN36_GDN_CONV_XIN_L1_MAX_T": (
         "<unset>",
         "max token count for L1-resident conv input; unset=model-computed default (xin_l1_max_t)",
+    ),
+    "QWEN36_TRACE_GUARD": (
+        "0",
+        "trace-allocation guard: 1 = needs TT_METAL_TRACE_ALLOC_TRACKING=1 before the ttnn import (the bench "
+        "asserts it at start; execute_trace then fails on unsafe live buffers); run_bench_e2e_p150.sh pins it "
+        "from BENCH_TRACE_GUARD (runner default 1) and exports the tracker env",
+    ),
+    "QWEN36_GDN_DECODE_FUSED": (
+        "2",
+        "2 (default, user decision 2026-09-25)=GDN decode via ttnn.experimental.kda.gdn_decode_step (FP32 GDN "
+        "state, 1 device, B=1); 0=composite GDN decode (pre-T8 path)",
     ),
     "QWEN36_GDN_FLA_INPUTS_DRAM": (
         "<unset>",
@@ -199,10 +230,152 @@ ALL_QWEN_FLAG_DEFAULTS = {
     "QWEN36_GDN_GB_LAYOUT": ("0", "alternate gate/beta tensor layout for GDN; 1=enable"),
     "QWEN36_GDN_L1_MAX_T": ("0", "max token count for L1-resident GDN intermediates; 0=disabled (always DRAM)"),
     "QWEN36_GDN_NATIVE_CONV1D": ("1", "use the native fused conv1d weight path; 0=legacy"),
+    "QWEN36_GDN_PCFG": (
+        "auto",
+        "PR #57440 port: fused FLA prefill program_config (tt/gdn/gated_deltanet.py); auto=op cost model, "
+        "nv1np6|nv1np5|nv2np4|nv2np6 = pinned ChunkGdnFusedProgramConfig. run_bench_e2e_p150.sh pins it "
+        "(runner default nv1np5; nv1np6 = the pre-#57440 geometry)",
+    ),
+    "QWEN36_GDN_WYINV": (
+        "auto",
+        "PR #57445 WY-inverse selector of the fused FLA prefill (tt/gdn/decode.py): auto=not passed (op default "
+        "AUTO), horner|sfpu = ttnn.ChunkGdnWyInverse.HORNER|SFPU. run_bench_e2e_p150.sh pins it "
+        "(runner default horner)",
+    ),
     "QWEN36_GDN_POST_L1": ("1", "keep GDN post-scan tensors in L1; 0=DRAM"),
     "QWEN36_GDN_POST_L1_OUTPROJ": ("1", "keep the GDN output-projection input in L1; 0=DRAM"),
     "QWEN36_GDN_POST_L1_SCAN": ("1", "keep the GDN scan output in L1; 0=DRAM"),
     "QWEN36_GDN_SPLIT_PROJ": ("1", "split the GDN QKVBA projection matmul; 0=single matmul"),
+    # I-1 item flags (tt/tp_common.py I1_FLAG_DEFAULTS; read via tp_common.i1_enabled); 0 = pre-I-1 path.
+    "QWEN36_I1_D15": ("1", "I-1 D15: decode full-attn q|k|v via 2 matmuls (qkv_fused + gate_deint); 0=3 matmuls"),
+    "QWEN36_I1_D3": ("1", "I-1 D3: decode decoder/final RMSNorm width-sharded on 8 cores; 0=1-core norm"),
+    "QWEN36_I1_D4A": (
+        "0",
+        "I-1 D4a+D5: decode full-attn RoPE via rotary_embedding_hf on [1,1,H,64], row-replicated cos/sin, no transposes",
+    ),
+    "QWEN36_I1_D6": ("1", "I-1 D6: decode full-attn head concat via one reshape; 0=transpose + concatenate_heads"),
+    "QWEN36_I1_P5": ("1", "I-1 P5: prefill GDN [g|a|0|b|0] tile-padded weight (no a/b untilize); 0=mega slice"),
+    "QWEN36_I1_ROPEWARM": ("1", "I-1: compile the chunk RoPE slice + cos/sin copy before the prefill trace capture"),
+    # I-2 item flags (tt/tp_common.py I2_FLAG_DEFAULTS; read via tp_common.i2_value); 0 = pre-I-2 path.
+    "QWEN36_I2_PICKER": ("1", "I-2: prefill picker output-subblock area cap 8 (fp32 dest off; bit-exact); 0=cap 4"),
+    "QWEN36_I2_S1": (
+        "2",
+        "I-2 S1: fused SwiGLU minimal_matmul blocking (1=7/8/10 1x5, 2=7/8/16 1x8 bit-exact); 0=4/8/16 2x4",
+    ),
+    "QWEN36_I2_S2": ("0", "I-2 S2: MLP down-proj 2D-mcast linear 13x10 (1=in0_block_w 16, 8=bw 8); 0=minimal_matmul"),
+    "QWEN36_I2_S3": ("0", "I-2 S3: GDN qkv in-proj 2D-mcast linear 13x10 (1=in0_block_w 16, 8=bw 8); 0=minimal_matmul"),
+    # M1 item flags (tt/tp_common.py M1_FLAG_DEFAULTS; read via tp_common.m1_value); 0 = current path.
+    "QWEN36_M1_S2": (
+        "0",
+        "M1 S2: MLP down-proj 2D-mcast matmul 13x10 bw8 pcM7 pcN5 1x5 at T=2048 (numerics change); 0=minimal_matmul",
+    ),
+    "QWEN36_M1_S3": (
+        "0",
+        "M1 S3: GDN qkv in-proj 2D-mcast matmul 13x10 bw8 pcM7 pcN15 1x5 at T=2048, attention_norm output + "
+        "in-proj output in L1 (numerics change); 0=minimal_matmul, DRAM",
+    ),
+    "QWEN36_M1_S4": (
+        "0",
+        "M1 S4: GDN z|a|0|b|0 in-proj 2D-mcast matmul 13x10 bw8 pcM7 pcN6 1x6 at T=2048, attention_norm output + "
+        "in-proj output in L1; 0=picker linear, DRAM",
+    ),
+    # M2 item flags (tt/tp_common.py M2_FLAG_DEFAULTS; read via tp_common.m2_value); 0 = current path.
+    "QWEN36_M2_LASTROW": (
+        "0",
+        "M2: traced chunk computes the last layer's gate/o_proj/MLP for row chunk-1 only (1-row decode "
+        "progcfgs; trace output [1,1,dim]; numerics change); 0=all rows",
+    ),
+    "QWEN36_M2_NOWHERE": (
+        "0",
+        "M2: text-only model -> no vision-splice where in the traced chunk (bit-exact); 0=where",
+    ),
+    "QWEN36_M2_REPACK_LATE": (
+        "0",
+        "M2: exact-multiple traced prefill defers the GDN conv-history repack to the next decode entry "
+        "(after the first-token read; bit-exact); 0=repack before the LM head",
+    ),
+    # M3 item flags (tt/tp_common.py M3_FLAG_DEFAULTS; read via tp_common.m3_value); 0 = current path.
+    "QWEN36_M3_REPACK_TRACE": (
+        "0",
+        "M3: exact-multiple traced prefill replays a captured trace of the GDN conv-history repack (same "
+        "point, same ops; bit-exact); 0=eager repack",
+    ),
+    "QWEN36_M3_ZB": (
+        "0",
+        "M3: with QWEN36_M1_S2 / _S3 on, the M1 matmul runs as ttnn.linear + a zero bias allocated at load "
+        "(FUSE_BIAS; bit-identical to minimal_matmul); 0=ttnn.matmul",
+    ),
+    # C2 item flags (tt/tp_common.py C2_FLAG_DEFAULTS; read via tp_common.c2_value); 0 = current path.
+    "QWEN36_C2_SGRN": (
+        "0",
+        "C2: unmasked T=2048 GDN chunks with M1 S4: z slice + typecast + per-head rms_norm + nlp_concat_heads + "
+        "SILU gate multiply as one sigmoid_gated_rms_norm(gate_activation=silu) reading z in place from the L1 "
+        "z|a|0|b|0 in-proj output (numerics change); 0=5 ops",
+    ),
+    # R3 item flags (tt/tp_common.py R3_FLAG_DEFAULTS; read via tp_common.r3_value); 0 = current path.
+    "QWEN36_R3_FLA_IN_L1": (
+        "0",
+        "R3: unmasked T=2048 GDN chunks: tiled KDA conv q/k/v and the beta/g chain stay L1 (FLA inputs; needs "
+        "the Ct==1 ChunkGdnFused CB shrink; bit-exact); 0=DRAM (QWEN36_GDN_FLA_INPUTS_DRAM behavior)",
+    ),
+    "QWEN36_R3_O_L1": (
+        "0",
+        "R3: unmasked T=2048 GDN chunks: ChunkGdnFused writes o + final state to L1 (needs the CB shrink; "
+        "bit-exact); 0=DRAM",
+    ),
+    "QWEN36_R3_SGRN_GAB_L1": (
+        "0",
+        "R3: with QWEN36_C2_SGRN=1 and QWEN36_LAYER_RESID_L1=1, gab stays L1 (C2 variant a; needs the CB "
+        "shrink; bit-exact); 0=C4 variant b (gab DRAM)",
+    ),
+    # M4 item flags (tt/tp_common.py M4_FLAG_DEFAULTS; read via tp_common.m4_value); 0 = current path.
+    "QWEN36_M4_R4A": (
+        "0",
+        "M4: with M2 LASTROW, the last layer's 3 one-row reads use tile-aligned [T-32:T] block slices + row 31 "
+        "(no untilize of the whole tensor; bit-exact); 0=[T-1:T] slices",
+    ),
+    "QWEN36_M4_R4B": (
+        "0",
+        "M4: with M2 LASTROW, the last layer's prefill SDPA is the paged decode SDPA for the chunk's last row "
+        "(position buffer written per chunk; numerics change); 0=chunked SDPA over all rows",
+    ),
+    # M5 item flags (tt/tp_common.py M5_FLAG_DEFAULTS; read via tp_common.m5_value); 0 = current path.
+    "QWEN36_M5_TAIL_TRACE": (
+        "0",
+        "M5: exact-multiple prompts, prepared order: final norm + LM head (+ argmax) after the last chunk replay "
+        "run as one captured trace into a persistent DRAM output (same ops + 1 copy; bit-exact); 0=eager tail",
+    ),
+    "QWEN36_M5_ADDNORM": (
+        "0",
+        "M5: T=2048 traced chunks: each full-T residual add + the RMSNorm that reads it (attn add -> ffn_norm, "
+        "MLP add -> next attention_norm) as one rms_norm(residual_output_tensor=h) (bit-exact); 0=add + norm",
+    ),
+    # I-3 item flags (tt/tp_common.py I3_FLAG_DEFAULTS; read via tp_common.i3_value); 0 = pre-I-3 path.
+    "QWEN36_I3_FA_PROGCFG": (
+        "1",
+        "I-3: full-attn decode projections via swept 1D progcfgs (bit-exact); 0=ttnn auto-config",
+    ),
+    "QWEN36_I3_LMHEAD": (
+        "0",
+        "I-3 LM head: A=4x DRAM-sharded linear (LoFi), A2=A with HiFi2/fp32, A3=10x DRAM-sharded linear (HiFi2/fp32, "
+        "bw2, in0 8x8, chunks built at load, unsplit weight freed), B=unsplit 1D linear 13x10 (LoFi), "
+        "C=4x minimal 13x2 K16 (1-ulp change); all change numerics; 0=QWEN36_LMHEAD_SPLIT minimal path",
+    ),
+    "QWEN36_I3_MLP_FUSED_GU": (
+        "0",
+        "I-3: MLP decode gate|up as one DRAM-sharded matmul + slices + silu*mul (numerics change); 0=2 matmuls",
+    ),
+    "QWEN36_I3_MLP_PROGCFG": ("1", "I-3: MLP decode gate/up 1D 13x4 bw4 pcN4 progcfg (bit-exact); 0=13x3 bw8 pcN5"),
+    # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
+    "QWEN36_I4_SDPA_EXP_COMPAT": (
+        "1",
+        "INT-4: gated-attention SDPA configs pass exp_approx_mode=True = the kernel the pre-PR #57395 False ran; "
+        "0=literal False (post-PR accurate rescale exp)",
+    ),
+    "QWEN36_I4_SDPA_Q64": (
+        "1",
+        "INT-4: flexible chunked prefill SDPA q_chunk 64 / k_chunk 128, exp_approx_mode=True; 0=q/k_chunk 128",
+    ),
     "QWEN36_LAYER_L1_MAX_T": ("0", "max token count for L1-resident layer activations; 0=disabled"),
     "QWEN36_LAYER_RESID_L1": ("0", "keep the residual stream in L1 for short sequences; 1=enable"),
     "QWEN36_LMHEAD_MINIMAL": ("1", "use the minimal (narrow) LM-head matmul config; 0=default config"),
@@ -215,6 +388,10 @@ ALL_QWEN_FLAG_DEFAULTS = {
     "QWEN36_MLP_L1_OUT": ("1", "keep MLP down-proj output in L1 for T<=2048; 0=DRAM"),
     "QWEN36_MLP_LEGACY_SHORT": ("0", "force the legacy MLP path for short sequences (T<=512)"),
     "QWEN36_MLP_MINIMAL_MM": ("1", "use the minimal MLP matmul program config; 0=default"),
+    "QWEN36_ONDEV_ARGMAX": (
+        "1",
+        "bench/text_demo single-device greedy: argmax on device, read a 4-byte token; 0=read logits, host argmax",
+    ),
     "QWEN36_PREFILL_DEBUG": ("0", "print chunk-by-chunk trace-execute debug lines during prefill"),
     "QWEN36_PREFILL_MINIMAL_CFG": ("1", "use the minimal prefill matmul program config; 0=default"),
     "QWEN36_PREFILL_MM_FP32_ACC": ("0", "accumulate prefill matmuls in fp32; 1=enable"),
@@ -245,11 +422,17 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "0.25",
         "experimental fused-GDN: diagonal-inverse mixing coefficient (only used when QWEN_GDN_INV_DOUBLING is set)",
     ),
+    "QWEN_GDN_FLAT_GB": (
+        "0",
+        "fused/phased FLA op reads g/beta flat [B,T,HV] (no host permute+reshape); 1=enable. "
+        "run_bench_e2e_p150.sh pins it from BENCH_GDN_FLAT_GB (runner default 1)",
+    ),
     "QWEN_GDN_FP32_STATE": ("0", "GDN recurrent-state dtype for the experimental fused path; 1=fp32"),
     "QWEN_GDN_INV_DOUBLING": ("0", "experimental fused-GDN: use doubling-based matrix inversion; 0=default"),
     "QWEN_GDN_PATH": (
         "<unset>",
-        "select the GDN prefill implementation; fused=experimental fused FLA prim (needs the fused-prim build), unset/other=phased chunk-parallel (a different tree/branch)",
+        "model-side only since the PR #57440 port (the C++ op ignores it): fused => QWEN36_GDN_FLA_INPUTS_DRAM "
+        "defaults to 1; the FLA path/geometry comes from QWEN36_GDN_PCFG",
     ),
     "QWEN_SDPA_BF8": ("0", "experimental gated-attention: store SDPA KV in bfp8; 1=enable"),
 }
@@ -260,25 +443,62 @@ ALL_QWEN_FLAG_DEFAULTS = {
 UNSAFE_TO_EXPORT_UNSET = {name for name, (default, _meaning) in ALL_QWEN_FLAG_DEFAULTS.items() if default == "<unset>"}
 
 
+def _conv_kda_path_counts():
+    """INT-3: Python-side call counts of the KDA conv paths (tiled / row_major / native_fallback)."""
+    from models.demos.blackhole.qwen36.tt.gdn import conv1d_kda
+
+    return conv1d_kda.path_counts()
+
+
 def _header_flag_names():
     """QWEN36_*/QWEN_GDN_* subset reported in the bench header (per spec)."""
     return sorted(n for n in ALL_QWEN_FLAG_DEFAULTS if n.startswith("QWEN36_") or n.startswith("QWEN_GDN_"))
 
 
+TRACE_ALLOC_ENV_VARS = (
+    "TT_METAL_TRACE_ALLOC_TRACKING",
+    "TT_METAL_TRACE_ALLOC_TRACEBACKS",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE",
+)
+
+
+def _check_trace_guard_env():
+    """QWEN36_TRACE_GUARD=1 (T7 trace guard): make sure Metal's trace-allocation tracker will be ON.
+
+    Metal reads TT_METAL_TRACE_ALLOC_TRACKING once (first query; ttnn queries it at import) and
+    enables it only when the value starts with '1'. So this must run BEFORE `import ttnn`. Like
+    text_demo.py, a missing value is defaulted to "1"; an explicit other value fails. Returns the
+    header record {"guard", "env", "env_source"}; main() adds "tracking_effective" after the import
+    (text_demo._check_trace_guard asserts Metal's cached snapshot)."""
+    guard = os.environ.get("QWEN36_TRACE_GUARD", "0") == "1"
+    source = "caller" if "TT_METAL_TRACE_ALLOC_TRACKING" in os.environ else "unset"
+    if guard:
+        if source == "unset":
+            # Defaulting only helps before the first ttnn import (a wrapper that imported ttnn first
+            # must export the tracker env itself; main() then re-checks Metal's effective setting).
+            assert "ttnn" not in sys.modules, (
+                "QWEN36_TRACE_GUARD=1 but TT_METAL_TRACE_ALLOC_TRACKING is unset and ttnn is already "
+                "imported, so the tracker is off. Export TT_METAL_TRACE_ALLOC_TRACKING=1 before starting python."
+            )
+            os.environ["TT_METAL_TRACE_ALLOC_TRACKING"] = "1"
+            source = "bench default (QWEN36_TRACE_GUARD=1)"
+        val = os.environ["TT_METAL_TRACE_ALLOC_TRACKING"]
+        assert val.startswith("1"), (
+            f"QWEN36_TRACE_GUARD=1 but TT_METAL_TRACE_ALLOC_TRACKING={val!r}: Metal would leave the "
+            "trace-allocation tracker off (it needs a value starting with '1')"
+        )
+    env = {name: os.environ.get(name, "<unset>") for name in TRACE_ALLOC_ENV_VARS}
+    return {"guard": guard, "env": env, "env_source": source}
+
+
 def _fused_fla_available(repo_root):
-    """True iff this tree's chunk_gated_delta_rule.cpp mentions QWEN_GDN_PATH (fused prim wired in)."""
-    candidates = [
-        repo_root / "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp",
-        repo_root
-        / "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gated_delta_rule.cpp",
-    ]
-    for p in candidates:
-        try:
-            if "QWEN_GDN_PATH" in p.read_text():
-                return True
-        except OSError:
-            continue
-    return False
+    """True iff this tree's chunk_gated_delta_rule.cpp mentions ChunkGdnFusedProgramConfig (PR #57440
+    fused prim wired in; the program config, QWEN36_GDN_PCFG, selects it -- not the removed env knobs)."""
+    p = repo_root / "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp"
+    try:
+        return "ChunkGdnFusedProgramConfig" in p.read_text()
+    except OSError:
+        return False
 
 
 def _git_info(repo_root):
@@ -646,12 +866,29 @@ def main():
     print(f"  TT_METAL_HOME={os.environ.get('TT_METAL_HOME')}")
     print(f"  python={py_ver}")
     print(f"  HF_MODEL={os.environ.get('HF_MODEL')} MESH_DEVICE={os.environ.get('MESH_DEVICE')}")
-    print(f"  fused_fla_available={fused_fla_available} (QWEN_GDN_PATH=fused can take effect only if True)")
+    print(
+        f"  fused_fla_available={fused_fla_available} (ChunkGdnFusedProgramConfig in the op) "
+        f"QWEN36_GDN_PCFG={os.environ.get('QWEN36_GDN_PCFG', '<unset>')}"
+    )
     if tt_smi:
         print(f"  tt-smi: {tt_smi}")
     else:
         print("  tt-smi: not available (binary not found on PATH)")
     print(f"  isl={args.isl} osl={args.osl} chunk={args.chunk} warmup={args.warmup} runs={args.runs}")
+    ondev_argmax = os.environ.get("QWEN36_ONDEV_ARGMAX", "1") == "1"
+    print(f"  ondev_argmax={ondev_argmax} (QWEN36_ONDEV_ARGMAX={os.environ.get('QWEN36_ONDEV_ARGMAX', '<unset>')})")
+    # Trace guard self-check, part 1 (before ttnn is imported: Metal reads the tracker env once, at the
+    # first query, and ttnn queries it at import). With the tracker on, Metal does NOT log "Allocating
+    # device buffers is potentially unsafe"; execute_trace raises instead, so the check is the env.
+    trace_guard = _check_trace_guard_env()
+    print(f"  trace_guard={trace_guard['guard']} tracker_env={trace_guard['env']}")
+    gdn_decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED", "2")  # = tt/gdn/decode_fused.py default
+    gdn_conv_repack = os.environ.get("QWEN36_GDN_CONV_REPACK", "perlayer")
+    print(
+        f"  gdn_decode_fused={gdn_decode_fused} gdn_conv_repack={gdn_conv_repack} (QWEN36_GDN_DECODE_FUSED=2 = fused op)"
+    )
+    gdn_conv_kda_tiled = os.environ.get("QWEN36_GDN_CONV_KDA_TILED", "1")  # = tt/gdn/conv1d_kda.py default
+    print(f"  gdn_conv_kda_tiled={gdn_conv_kda_tiled} (QWEN36_GDN_CONV_KDA_TILED=1 = tiled KDA conv, no glue ops)")
     print("=" * 78)
 
     # ---- heavy / device-related imports (after env is settled) ----
@@ -662,10 +899,18 @@ def main():
         BLOCK_SIZE,
         SAMPLE_PROMPTS_DIR,
         _blocks_for,
+        _check_trace_guard,
         _get_prompt,
         _should_use_chunked_trace,
         _warmup_prefill,
     )
+
+    # Trace guard self-check, part 2: Metal's cached snapshot says the tracker is really on.
+    _check_trace_guard()
+    from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
+
+    trace_guard["tracking_effective"] = bool(TRACE_ALLOC_TRACKING)
+    print(f"  trace_alloc_tracking_effective={trace_guard['tracking_effective']}")
     from models.demos.blackhole.qwen36.tt import tp_common as _tp_common
     from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model
@@ -681,6 +926,46 @@ def main():
         "tp_common.PREFILL_MINIMAL_CFG": _tp_common.PREFILL_MINIMAL_CFG,
     }
     print(f"  module defaults (evaluated at import time): {module_defaults}")
+    # I-1 item flags, effective values (QWEN36_I1_<item>, default in tp_common.I1_FLAG_DEFAULTS).
+    i1_flags = {item: _tp_common.i1_enabled(item) for item in _tp_common.I1_FLAG_DEFAULTS}
+    print(f"  i1_flags (effective): {i1_flags}")
+    # I-2 item flags, effective raw values (QWEN36_I2_<item>, default in tp_common.I2_FLAG_DEFAULTS).
+    i2_flags = {item: _tp_common.i2_value(item) for item in _tp_common.I2_FLAG_DEFAULTS}
+    print(f"  i2_flags (effective): {i2_flags}")
+    # M1 item flags, effective raw values (QWEN36_M1_<item>, default in tp_common.M1_FLAG_DEFAULTS).
+    m1_flags = {item: _tp_common.m1_value(item) for item in _tp_common.M1_FLAG_DEFAULTS}
+    print(f"  m1_flags (effective): {m1_flags}")
+    # M2 item flags, effective raw values (QWEN36_M2_<item>, default in tp_common.M2_FLAG_DEFAULTS).
+    m2_flags = {item: _tp_common.m2_value(item) for item in _tp_common.M2_FLAG_DEFAULTS}
+    print(f"  m2_flags (effective): {m2_flags}")
+    # M3 item flags, effective raw values (QWEN36_M3_<item>, default in tp_common.M3_FLAG_DEFAULTS).
+    m3_flags = {item: _tp_common.m3_value(item) for item in _tp_common.M3_FLAG_DEFAULTS}
+    print(f"  m3_flags (effective): {m3_flags}")
+    # C2 item flags, effective raw values (QWEN36_C2_<item>, default in tp_common.C2_FLAG_DEFAULTS).
+    c2_flags = {item: _tp_common.c2_value(item) for item in _tp_common.C2_FLAG_DEFAULTS}
+    print(f"  c2_flags (effective): {c2_flags}")
+    # R3 item flags, effective raw values (QWEN36_R3_<item>, default in tp_common.R3_FLAG_DEFAULTS).
+    r3_flags = {item: _tp_common.r3_value(item) for item in _tp_common.R3_FLAG_DEFAULTS}
+    print(f"  r3_flags (effective): {r3_flags}")
+    # M4 item flags, effective raw values (QWEN36_M4_<item>, default in tp_common.M4_FLAG_DEFAULTS).
+    m4_flags = {item: _tp_common.m4_value(item) for item in _tp_common.M4_FLAG_DEFAULTS}
+    print(f"  m4_flags (effective): {m4_flags}")
+    # M5 item flags, effective raw values (QWEN36_M5_<item>, default in tp_common.M5_FLAG_DEFAULTS).
+    m5_flags = {item: _tp_common.m5_value(item) for item in _tp_common.M5_FLAG_DEFAULTS}
+    print(f"  m5_flags (effective): {m5_flags}")
+    # INT-4 SDPA flags, effective raw values (defaults in ttnn_gated_attention.py) + the flexible q_chunk.
+    from models.experimental.gated_attention_gated_deltanet.tt import ttnn_gated_attention as _ga
+
+    i4_flags = {
+        "SDPA_Q64": _ga.i4_sdpa_q64_value(),
+        "SDPA_EXP_COMPAT": _ga.i4_sdpa_exp_compat_value(),
+        "flexible_q_chunk": _ga.flexible_sdpa_q_chunk(),
+        "sdpa_op_env": {k: v for k, v in sorted(os.environ.items()) if k.startswith("TT_METAL_SDPA_")},
+    }
+    print(f"  i4_flags (effective): {i4_flags}")
+    # I-3 item flags, effective raw values (QWEN36_I3_<item>, default in tp_common.I3_FLAG_DEFAULTS).
+    i3_flags = {item: _tp_common.i3_value(item) for item in _tp_common.I3_FLAG_DEFAULTS}
+    print(f"  i3_flags (effective): {i3_flags}")
 
     # --demo-prompt ignores --isl for prompt content (it's always the demo's 2642-token traced_4k
     # prompt) but still needs a KV-cache budget big enough to hold it -- size against
@@ -697,6 +982,13 @@ def main():
     result = {"ok": False}
     try:
         model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=max_seq_len)
+        # Before any trace is captured: the token ops compile in the warmup passes.
+        model.set_greedy_token_output(ondev_argmax)
+        # T8: GDN layers that really run the fused decode op (0 when QWEN36_GDN_DECODE_FUSED=0 or unsupported).
+        gdn_fused_layers = sum(
+            1 for l in model.layers if not l.is_full_attention and getattr(l.attention, "_decode_fused", False)
+        )
+        print(f"  gdn_decode_fused_layers={gdn_fused_layers} (QWEN36_GDN_DECODE_FUSED={gdn_decode_fused})")
         tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
         boundary_type = None
@@ -749,12 +1041,27 @@ def main():
 
         assert _should_use_chunked_trace(model), "chunk-seq GDN prefill must be enabled"
         t_cap0 = time.perf_counter()
-        model.capture_prefill_trace_chunked(device, page_table, chunk_size=chunk_size, warmup_masked_buckets=True)
-        capture_s = time.perf_counter() - t_cap0
-        print(f"  prefill trace captured in {capture_s:.3f}s (this is NOT counted in TTFT)")
-
         gen = Generator([model], [model.args], device)
         state = {"decode_primed": False}
+        # Parked-trace-safe order (T7, 2026-09-25): (1) prepare = every prefill program and persistent
+        # buffer, incl. the per-request eager programs; (2) prime the decode trace while NO trace is
+        # parked, so all decode kernel binaries / constants / trace inputs exist first; (3) capture the
+        # prefill trace. The old order (capture prefill, then prime decode inside request 0) put decode
+        # kernel binaries in the parked prefill trace's scratch; the next prefill replay corrupted them
+        # and the decode trace hung (layout-dependent; see TT_METAL_TRACE_ALLOC_TRACKING).
+        model.prepare_prefill_trace_chunked(
+            device, page_table, chunk_size=chunk_size, warmup_masked_buckets=True, max_prompt_len=bucket_size
+        )
+        # Dummy decode input: the last prompt token at position actual_len. prime_decode_trace restores
+        # the GDN state it advances, and the first real decode step rewrites this KV slot.
+        prime_decode_trace(gen, model, token_ids[:, -1:].to(torch.long), torch.tensor([actual_len]), page_table)
+        state["decode_primed"] = True
+        model.capture_prefill_trace_chunked(device, page_table, chunk_size=chunk_size, prepared=True)
+        capture_s = time.perf_counter() - t_cap0
+        print(
+            f"  prefill prepare + decode-trace prime + prefill trace capture in {capture_s:.3f}s "
+            "(this is NOT counted in TTFT)"
+        )
 
         def run_one_request():
             t0 = time.perf_counter()
@@ -762,9 +1069,13 @@ def main():
                 logits = model.prefill_masked_bucket(token_ids, page_table, actual_len=actual_len)
             else:
                 logits = model.prefill_traced_chunked(padded_token_ids, page_table, actual_len=actual_len)
-            logits_torch = ttnn.to_torch(logits).squeeze()
-            assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
-            next_token = int(logits_torch.argmax().item())
+            if ondev_argmax:
+                next_token = int(ttnn.to_torch(logits).reshape(-1)[0])
+                assert 0 <= next_token < model.vocab_size, f"prefill token {next_token} out of range"
+            else:
+                logits_torch = ttnn.to_torch(logits).squeeze()
+                assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
+                next_token = int(logits_torch.argmax().item())
             ttft_s = time.perf_counter() - t0
 
             if not state["decode_primed"]:
@@ -786,9 +1097,14 @@ def main():
                     enable_trace=True,
                     read_from_device=True,
                 )
-                dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
-                assert not torch.isnan(dl).any(), f"NaN in decode at step {i}"
-                next_token = int(dl.argmax())
+                v = out[0] if isinstance(out, tuple) else out
+                if ondev_argmax:
+                    next_token = int(v.reshape(-1)[0])
+                    assert 0 <= next_token < model.vocab_size, f"decode token {next_token} out of range at step {i}"
+                else:
+                    dl = v.squeeze().float()
+                    assert not torch.isnan(dl).any(), f"NaN in decode at step {i}"
+                    next_token = int(dl.argmax())
                 decode_times_s.append(time.perf_counter() - t_step)
                 generated.append(next_token)
                 current_pos += 1
@@ -908,6 +1224,23 @@ def main():
                 "prompt_boundary_type": boundary_type,
                 "prompt_doc_last_200_chars": doc_included[-200:] if doc_included else None,
                 "fused_fla_available": fused_fla_available,
+                "ondev_argmax": ondev_argmax,
+                "i1_flags": i1_flags,
+                "i2_flags": i2_flags,
+                "m1_flags": m1_flags,
+                "m2_flags": m2_flags,
+                "m3_flags": m3_flags,
+                "c2_flags": c2_flags,
+                "m4_flags": m4_flags,
+                "m5_flags": m5_flags,
+                "i4_flags": i4_flags,
+                "i3_flags": i3_flags,
+                "trace_guard": trace_guard,
+                "gdn_decode_fused": gdn_decode_fused,
+                "gdn_decode_fused_layers": gdn_fused_layers,
+                "gdn_conv_repack": gdn_conv_repack,
+                "gdn_conv_kda_tiled": gdn_conv_kda_tiled,
+                "gdn_conv_kda_path_counts": _conv_kda_path_counts(),
                 "capture_s": capture_s,
             },
             "warmup_results": warmup_results,

@@ -15,6 +15,19 @@ from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, spl
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
 
 
+def _gdn_wy_inverse_kwargs():
+    """QWEN36_GDN_WYINV (PR #57445 selector for the fused FLA prefill): unset/"auto" -> wy_inverse not passed
+    (op default AUTO); "horner" -> ttnn.ChunkGdnWyInverse.HORNER; "sfpu" -> ttnn.ChunkGdnWyInverse.SFPU."""
+    name = os.environ.get("QWEN36_GDN_WYINV", "auto").strip().lower()
+    if name in ("", "auto"):
+        return {}
+    if name == "horner":
+        return {"wy_inverse": ttnn.ChunkGdnWyInverse.HORNER}
+    if name == "sfpu":
+        return {"wy_inverse": ttnn.ChunkGdnWyInverse.SFPU}
+    raise ValueError(f"QWEN36_GDN_WYINV={name!r}: expected auto, horner or sfpu")
+
+
 def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
     """Non-kernel GDN forward. mode='chunk' (prefill, may delegate to the prefill kernel) or
     'recurrent' (single-token decode). Reads weights/state/dims off the gdn instance; updates
@@ -38,6 +51,18 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         gdn.fused_conv_state = ttnn.concat([gdn.conv_state_q, gdn.conv_state_k, gdn.conv_state_v], dim=2)
         gdn.fused_conv_state = ttnn.to_layout(gdn.fused_conv_state, ttnn.TILE_LAYOUT)
         split_fused_conv_state(gdn)
+        # Fused GDN decode (INT-2): the end-of-prefill conv_hist rebuild saw no fused_conv_state (zero
+        # history); rebuild it from the conv state that exists now. Device ops only (no host reads).
+        # Eager paths only: the traced flows bind fused_conv_state, so this branch never runs there.
+        if getattr(gdn, "_decode_fused", False) and gdn.fused_conv_state.shape[0] == 1:
+            gdn.refresh_conv_hist()
+
+    # QWEN36_GDN_DECODE_FUSED=2: single-token decode through the fused op (gdn/decode_fused.py).
+    if T == 1 and mode == "recurrent" and getattr(gdn, "_decode_fused", False):
+        from models.demos.blackhole.qwen36.tt.gdn import decode_fused as _df
+
+        if _df.fused_decode_applicable(gdn, x):
+            return _df.fused_decode_forward(gdn, x)
 
     # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32, chunk_size=128).
     seq_masks = w.chunk_seq_masks_long
@@ -47,7 +72,10 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import chunk_gated_delta_rule_fused_adapter
 
         chunk_delta_fn = functools.partial(
-            chunk_gated_delta_rule_fused_adapter, const_tiles=getattr(gdn, "_fused_const_tiles", None)
+            chunk_gated_delta_rule_fused_adapter,
+            const_tiles=getattr(gdn, "_fused_const_tiles", None),
+            program_config=getattr(gdn, "gdn_program_config", None),
+            **_gdn_wy_inverse_kwargs(),
         )
 
     output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
@@ -110,6 +138,22 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         prefill_progcfg_fn=getattr(gdn, "_prefill_progcfg_fn", None),
         decode_progcfg_fn=getattr(gdn, "_decode_progcfg_fn", None),
         native_conv1d_fn=getattr(gdn, "_native_conv1d_fn", None) if mode == "chunk" else None,
+        # I-1 P5 (QWEN36_I1_P5): prefill-only tile-padded [g|a|0|b|0] weight (None = off).
+        **(
+            dict(
+                prefill_gab_pad_weight=w.prefill_gab_pad_weight,
+                prefill_gab_a_off=w.prefill_gab_a_off,
+                prefill_gab_b_off=w.prefill_gab_b_off,
+            )
+            if mode == "chunk" and getattr(w, "prefill_gab_pad_weight", None) is not None
+            else {}
+        ),
+        # M3 ZB (QWEN36_M3_ZB): shared zero bias for the M1 S3 q|k|v in-proj, set by Qwen36Model at load.
+        **(
+            dict(m3_qkv_zero_bias=gdn._m3_qkv_zero_bias)
+            if mode == "chunk" and getattr(gdn, "_m3_qkv_zero_bias", None) is not None
+            else {}
+        ),
     )
 
     if chunk_delta_fn is not None and new_state is not None:
@@ -121,6 +165,8 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             target_dtype = gdn.recurrent_state.dtype
         else:
             target_dtype = ttnn.float32 if os.environ.get("QWEN_GDN_FP32_STATE") == "1" else ttnn.bfloat16
+            if getattr(gdn, "_decode_fused", False) and new_state.shape[0] == 1:
+                target_dtype = ttnn.float32  # fused decode keeps the whole GDN state FP32
         if new_state.dtype != target_dtype:
             new_state = ttnn.typecast(new_state, target_dtype)
 
@@ -139,6 +185,15 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             ttnn.deallocate(new_fused_conv)
         return output
 
+    if (
+        mode == "chunk"
+        and chunk_delta_fn is not None
+        and new_state is not None
+        and new_state.memory_config().buffer_type == ttnn.BufferType.L1
+    ):
+        # R3 O_L1: the fused FLA op wrote the final state to L1. The in-place (traced) branch above copies it
+        # into the persistent state and frees it; here it would stay alive as gdn.recurrent_state -> DRAM.
+        new_state = ttnn.to_memory_config(new_state, ttnn.DRAM_MEMORY_CONFIG)
     gdn.recurrent_state = new_state
     if isinstance(new_fused_conv, list):
         gdn.split_conv_state = new_fused_conv

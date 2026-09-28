@@ -256,6 +256,57 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
             "Fused activation is not supported for distributed layernorm");
     }
+    if (tensor_args.residual_output.has_value()) {
+        // Fused residual add + RMSNorm with two outputs: h = a + b is written to residual_output and
+        // n = rmsnorm(h) * gamma to the op output, from the interleaved single-pass kernel only.
+        const auto& h = tensor_args.residual_output.value();
+        TT_FATAL(b.has_value(), "residual_output_tensor requires residual_input_tensor");
+        TT_FATAL(
+            operation_attributes.norm_type == LayerNormType::RMSNORM,
+            "residual_output_tensor is only supported for RMSNorm");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "residual_output_tensor is not supported for distributed norm");
+        TT_FATAL(!beta.has_value(), "residual_output_tensor is not supported with bias (beta)");
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value(),
+            "residual_output_tensor is not supported with a fused activation");
+        TT_FATAL(
+            std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config) &&
+                !std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config).use_welford,
+            "residual_output_tensor requires LayerNormDefaultProgramConfig without Welford");
+        TT_FATAL(
+            a.layout() == Layout::TILE && !a.is_sharded() && !b.value().is_sharded(),
+            "residual_output_tensor requires interleaved TILE input and residual tensors");
+        TT_FATAL(
+            a.dtype() == DataType::BFLOAT16, "residual_output_tensor requires a BFLOAT16 input, got: {}", a.dtype());
+        TT_FATAL(h.storage_type() == StorageType::DEVICE, "residual_output_tensor must be on device");
+        TT_FATAL(h.buffer() != nullptr, "residual_output_tensor must be allocated in a buffer on device");
+        TT_FATAL(a.device() == h.device(), "Input and residual_output tensors must be on same device");
+        TT_FATAL(h.layout() == Layout::TILE, "residual_output_tensor must have TILE layout, got: {}", h.layout());
+        TT_FATAL(
+            h.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "residual_output_tensor must be interleaved, got: {}",
+            h.memory_config().memory_layout());
+        TT_FATAL(
+            h.dtype() == a.dtype(),
+            "residual_output_tensor dtype ({}) must match the input dtype ({})",
+            h.dtype(),
+            a.dtype());
+        TT_FATAL(
+            h.logical_shape() == a.logical_shape() && h.padded_shape() == a.padded_shape(),
+            "residual_output_tensor logical and padded shapes must match the input, got residual_output: logical={} "
+            "padded={} vs input: logical={} padded={}",
+            h.logical_shape(),
+            h.padded_shape(),
+            a.logical_shape(),
+            a.padded_shape());
+        TT_FATAL(
+            h.tensor_spec().tile() == a.tensor_spec().tile(), "residual_output_tensor tile must match the input tile");
+        TT_FATAL(
+            h.buffer() != a.buffer() && h.buffer() != b.value().buffer(),
+            "residual_output_tensor must not alias the input or residual_input_tensor");
+    }
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -512,7 +563,8 @@ Tensor layer_norm(
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
     const std::optional<const Tensor>& recip_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const Tensor>& residual_output) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -529,6 +581,7 @@ Tensor layer_norm(
         .bias = bias,
         .stats = stats,
         .recip_tensor = recip_tensor,
+        .residual_output = residual_output,
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

@@ -9,7 +9,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 
-template <uint32_t Vt, uint32_t H, uint32_t Mt, uint32_t epsilon_bits>
+// gate_row_tiles: tiles per gate tile-row (gate padded width / 32; H*Vt for a [B,T,H*V] gate).
+// gate_col_offset: first gate tile column read (0 unless the gate is a column window of a wider tensor).
+template <
+    uint32_t Vt,
+    uint32_t H,
+    uint32_t Mt,
+    uint32_t epsilon_bits,
+    uint32_t gate_row_tiles,
+    uint32_t gate_col_offset>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto x_acc = TensorAccessor(tensor::input);
     const auto g_acc = TensorAccessor(tensor::gate);
@@ -42,7 +50,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         const uint32_t b = bh / H;
         const uint32_t h = bh % H;
         const uint32_t x_base = wi * Vt;
-        const uint32_t gate_base = (b * Mt + mt) * H * Vt + h * Vt;
+        const uint32_t gate_base = (b * Mt + mt) * gate_row_tiles + gate_col_offset + h * Vt;
         x.reserve_back(Vt);
         gate.reserve_back(Vt);
         for (uint32_t vt = 0; vt < Vt; vt++) {

@@ -4,6 +4,7 @@ set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_SRCS
     qkv_causal_conv1d_silu.cpp
     device/qkv_causal_conv1d_silu_device_operation.cpp
     device/qkv_causal_conv1d_silu_program_factory.cpp
+    device/qkv_causal_conv1d_silu_tiled_program_factory.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_NANOBIND_SRCS

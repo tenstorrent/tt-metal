@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
 
@@ -73,6 +74,12 @@ class GDNWeights:
     # Chunk-parallel prefill kernel (gated_delta_attn_seq) — always on
     use_chunk_seq_prefill: bool
     chunk_seq_masks_long: object
+    # I-1 P5 (QWEN36_I1_P5): PREFILL-only tile-padded [g | a | 0 | b | 0] projection weight and the
+    # a/b column offsets in its output. None = off (prefill slices [g|a|b] out of mega_fused_weight).
+    # The decode mega_fused_weight [qkv|g|a|b] is not changed.
+    prefill_gab_pad_weight: object = None
+    prefill_gab_a_off: object = None
+    prefill_gab_b_off: object = None
 
 
 def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_path=None) -> GDNWeights:
@@ -340,6 +347,51 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         mega_b_dim = None
         mega_g_dim = None
 
+    def _precompute_prefill_gab_pad_weight():
+        """I-1 P5 (QWEN36_I1_P5): PREFILL-only [g | a | 0 | b | 0] projection weight.
+
+        Prefill (T > 1, QWEN36_GDN_SPLIT_PROJ) runs a separate [g|a|b] matmul. With a and b each
+        padded to a whole tile width, both are tile-aligned slices of the matmul output, so the
+        prefill needs no untilize/to_layout for them (T5b P5: 7 -> 4 ops, bit-exact). Built from the
+        mega weight's own g/a/b columns: bfp8 shares one exponent per 16 consecutive columns and g
+        starts on a tile, a and b are each one 16-column group, so the re-quantized values equal the
+        mega's. The zero columns give exact zeros. The decode mega weight is unchanged (a fused
+        decode op needs its [q|k|v|z|a|b] layout). Built only on a tensor-cache miss (preprocess).
+        Returns (weight, a_offset, b_offset), or (None, None, None) when off.
+        """
+        if mega_fused_weight is None or not tpc.i1_enabled("P5"):
+            return None, None, None
+        tile = 32
+        qkv_d, g_d, a_d, b_d = mega_qkv_dim, mega_g_dim, mega_a_dim, mega_b_dim
+        a_w_pad = -(-a_d // tile) * tile
+        b_w_pad = -(-b_d // tile) * tile
+
+        def _build(_placeholder):
+            m = ttnn.to_torch(mega_fused_weight)
+            m = m.reshape(m.shape[-2], m.shape[-1])  # [dim, qkv|g|a|b]
+            k_rows = m.shape[0]
+            g = m[:, qkv_d : qkv_d + g_d]
+            a = m[:, qkv_d + g_d : qkv_d + g_d + a_d]
+            b = m[:, qkv_d + g_d + a_d : qkv_d + g_d + a_d + b_d]
+            za = torch.zeros(k_rows, a_w_pad - a_d, dtype=m.dtype)
+            zb = torch.zeros(k_rows, b_w_pad - b_d, dtype=m.dtype)
+            return torch.cat([g, a, za, b, zb], dim=1).contiguous()
+
+        w = ttnn.as_tensor(
+            torch.zeros(1),  # placeholder; _build makes the weight on a cache miss only
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=(tensor_cache_path / "linear_attn.prefill_gab_weight_tilepad")
+            if tensor_cache_path
+            else None,
+            preprocess=_build,
+        )
+        return w, g_d, g_d + a_w_pad
+
+    prefill_gab_pad_weight, prefill_gab_a_off, prefill_gab_b_off = _precompute_prefill_gab_pad_weight()
+
     # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32) is
     # the default prefill path. The kernel hardcodes Ct=4 diagonal blocks, so it
     # ONLY supports chunk_size=128 (= long_prefill_chunk_size). Precompute its
@@ -383,4 +435,7 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         mega_g_dim=mega_g_dim,
         use_chunk_seq_prefill=use_chunk_seq_prefill,
         chunk_seq_masks_long=chunk_seq_masks_long,
+        prefill_gab_pad_weight=prefill_gab_pad_weight,
+        prefill_gab_a_off=prefill_gab_a_off,
+        prefill_gab_b_off=prefill_gab_b_off,
     )

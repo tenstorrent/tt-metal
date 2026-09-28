@@ -133,18 +133,26 @@ class Qwen36RoPESetup:
         )
         return cos_ttnn, sin_ttnn
 
-    def get_cos_sin_host(self, pos):
+    def get_cos_sin_host(self, pos, rows=1):
         """Return cos/sin at position as host ttnn tensors for copy_host_to_device_tensor.
 
         Returns tensors on HOST (no device= arg) for fast DMA to pre-allocated device buffers.
-        Shape: [1, 1, rope_head_dim] — must match _trace_cos/_trace_sin device buffer shapes.
+        Shape: [1, rows, rope_head_dim] — must match _trace_cos/_trace_sin device buffer shapes.
         Layout: TILE_LAYOUT — must match device buffer layout for copy compatibility.
+
+        rows=1 (default): [1, 1, 64]. rows=32 (I-1 D4A, see Qwen36Model.prepare_decode_inputs_host):
+        the same row replicated on all 32 rows, [1, 32, 64] (the same 2 tiles as [1, 1, 64]), so the
+        decode RoPE can run rotary_embedding_hf on [1, 1, H, 64] with the heads as the "seq" rows.
 
         `pos` is the ROPE position (= KV position + rope_delta for a multimodal request); the
         caller is responsible for the offset so decode reads the absolute 1D table correctly.
         """
-        cos = self.cos_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
-        sin = self.sin_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+        if rows == 1:
+            cos = self.cos_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+            sin = self.sin_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+        else:
+            cos = self.cos_cpu[pos : pos + 1].expand(rows, -1).unsqueeze(0).contiguous()  # [1, rows, 64]
+            sin = self.sin_cpu[pos : pos + 1].expand(rows, -1).unsqueeze(0).contiguous()  # [1, rows, 64]
         cos_host = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         sin_host = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         return cos_host, sin_host

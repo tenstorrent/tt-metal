@@ -23,9 +23,10 @@ namespace ckernel::sfpu {
 //   softplus(t) = f(-t)      for t < 0
 //
 // FP32: degree-8 polynomial for f(a) on [0, 5] + inline exp + 3-term Taylor tail
-// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) + tail clamped to 0
-//       (residual < exp(-5) = 0.0067 for a > 5, below bf16 rounding vs the t>0 term,
-//        so the expensive exp tail is unnecessary at bf16 precision)
+// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) + tail:
+//       t > 5:  residual clamped to 0 (f(t) < exp(-5) = 0.0067, below bf16 rounding vs t)
+//       t < -5: residual = inline exp + 2-term Taylor (softplus(t) ~ exp(t) is the whole
+//               result there, so it cannot be dropped)
 // ======================================================================
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
@@ -138,10 +139,19 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_BF16_POLY_C5,
             SOFTPLUS_BF16_POLY_C6);
 
-        // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
-        // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
-        // bf16 rounding and avoids the ~8-op exp tail on every element.
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
+        // Tail: the degree-6 poly diverges past its [0, 5] fit domain.
+        //   t > 5:  the true residual < exp(-5) = 0.0067, below bf16 rounding next to the t
+        //           term, so clamping to 0 keeps softplus(t) = t within bf16 rounding.
+        //   t < -5: softplus(t) = f(|t|) ~ exp(t) is the whole result, so it must not be
+        //           clamped. Same inline exp as the FP32 tail (bf16-degree Taylor), with
+        //           ln(1+e) = e*(1 - e/2) (rel. err < e^2/3 < 1.5e-5 for e < exp(-5)).
+        //           The exp input is clamped at -127 (exp underflows to 0 there anyway) to
+        //           stay inside the range of the round-to-nearest-int trick.
+        v_if(t > SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
+        v_elseif(t < -SOFTPLUS_POLY_BOUNDARY) {
+            sfpi::vFloat e = softplus_exp_negative(sfpi::max(t, -127.0f));
+            residual = e * (1.0f + e * -0.5f);
+        }
         v_endif;
 #endif
 

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -19,6 +20,8 @@ ttnn::Tensor sigmoid_gated_rms_norm(
     float epsilon = 1e-5f,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    ttnn::DataType output_dtype = ttnn::DataType::FLOAT32);
+    ttnn::DataType output_dtype = ttnn::DataType::FLOAT32,
+    const std::string& gate_activation = "sigmoid",
+    uint32_t gate_col_offset_tiles = 0);
 
 }  // namespace ttnn::experimental::kda

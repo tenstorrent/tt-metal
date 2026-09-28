@@ -57,7 +57,17 @@ class Qwen36GatedAttention:
         chunk_page_table=None,
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
+        last_row_only=False,
+        last_row_tile_slices=False,
+        last_row_pos_tensor=None,
     ):
+        """last_row_only (M2 LASTROW; paged prefill, Branch A only): keep the K/V fill and the full SDPA,
+        then compute gate / head concat / gate multiply / o_proj for row T - 1 only -> [1, 1, dim].
+        last_row_tile_slices (M4 R4A) / last_row_pos_tensor (M4 R4B), with last_row_only only: see
+        gated_attention_forward_ttnn's prefill_last_row_tile_slices / prefill_last_row_pos_tensor."""
+        assert last_row_only or (
+            not last_row_tile_slices and last_row_pos_tensor is None
+        ), "last_row_tile_slices / last_row_pos_tensor (M4) need last_row_only (M2 LASTROW)"
         T = x.shape[1]
         # F3/F10A (G1): short prefills (T <= QWEN36_ATTN_L1_MAX_T, default 2048 — raised from 1024
         # for the T=2048 production chunk size, step1 task F10A) also get L1 placement for the
@@ -90,6 +100,17 @@ class Qwen36GatedAttention:
             )
         elif self.use_paged_attention and T > 1 and chunk_page_table is not None:
             # Branch A — paged prefill
+            _m2_row = {}
+            if last_row_only:
+                # M2 LASTROW: the 1-row gate / o_proj matmuls take the full-attention decode program
+                # configs (I-3 FA_PROGCFG table; None -> ttnn auto-config), never the M = T prefill config.
+                from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+                _m2_row = dict(prefill_last_row_only=True, decode_progcfg_fn=tpc.i3_fa_decode_progcfg_fn(self.device))
+                if last_row_tile_slices:
+                    _m2_row["prefill_last_row_tile_slices"] = True  # M4 R4A
+                if last_row_pos_tensor is not None:
+                    _m2_row["prefill_last_row_pos_tensor"] = last_row_pos_tensor  # M4 R4B
             return prefill_forward(
                 x=x,
                 cos=cos,
@@ -107,9 +128,11 @@ class Qwen36GatedAttention:
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 use_paged_attention=True,
                 prefill_progcfg_fn=getattr(self, "_prefill_progcfg_fn", None),
+                **_m2_row,
             )
         else:
             # Branch C — concat prefill
+            assert not last_row_only, "last_row_only needs the paged prefill branch (chunk_page_table)"
             output, new_key, new_value = prefill_forward(
                 x=x,
                 cos=cos,

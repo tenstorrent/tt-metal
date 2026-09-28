@@ -9,6 +9,10 @@ import ttnn
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
 SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
+ChunkGdnMonoProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnMonoProgramConfig
+ChunkGdnPhasedProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnPhasedProgramConfig
+ChunkGdnFusedProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnFusedProgramConfig
+ChunkGdnWyInverse = ttnn._ttnn.operations.transformer.ChunkGdnWyInverse
 
 
 def _golden_function(

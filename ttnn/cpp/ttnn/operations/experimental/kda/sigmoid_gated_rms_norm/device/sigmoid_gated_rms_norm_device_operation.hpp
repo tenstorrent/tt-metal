@@ -32,6 +32,8 @@ Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    tt::tt_metal::DataType output_dtype);
+    tt::tt_metal::DataType output_dtype,
+    SigmoidGatedRmsNormGateActivation gate_activation = SigmoidGatedRmsNormGateActivation::SIGMOID,
+    uint32_t gate_col_offset_tiles = 0);
 
 }  // namespace ttnn::experimental::prim

@@ -28,8 +28,22 @@ def prefill_forward(
     past_value=None,
     use_paged_attention=False,
     prefill_progcfg_fn=None,
+    prefill_last_row_only=False,
+    decode_progcfg_fn=None,
+    prefill_last_row_tile_slices=False,
+    prefill_last_row_pos_tensor=None,
 ):
-    """Dispatch prefill to paged (Branch A) or concat (Branch C) path."""
+    """Dispatch prefill to paged (Branch A) or concat (Branch C) path.
+
+    prefill_last_row_only / decode_progcfg_fn (M2 LASTROW, Branch A only): see
+    gated_attention_forward_ttnn; the output is then row T - 1 only ([1, 1, dim]).
+    prefill_last_row_tile_slices (M4 R4A) / prefill_last_row_pos_tensor (M4 R4B): with
+    prefill_last_row_only only (Branch A); see gated_attention_forward_ttnn."""
+    _m4 = {}
+    if prefill_last_row_tile_slices:
+        _m4["prefill_last_row_tile_slices"] = True
+    if prefill_last_row_pos_tensor is not None:
+        _m4["prefill_last_row_pos_tensor"] = prefill_last_row_pos_tensor
     if use_paged_attention and chunk_page_table is not None:
         # Branch A — paged prefill: fill K/V into paged cache + chunked SDPA.
         # memory_config=mc threads L1 placement (short prefill, F3) into the attention-layer glue
@@ -66,11 +80,17 @@ def prefill_forward(
             gate_deint_weight=weights.gate_deint,
             kv_packed_weight=weights.kv_packed,
             qkv_fused_weight=weights.qkv_fused,
+            prefill_last_row_only=prefill_last_row_only,
+            decode_progcfg_fn=decode_progcfg_fn,
+            **_m4,
         )
         return output
     else:
         # Branch C — concat path: non-paged prefill and short-sequence paged prefill.
         # Has memory_config=mc, past_key/past_value; returns new_key/new_value.
+        assert (
+            not prefill_last_row_only and not _m4
+        ), "prefill_last_row_only (M2/M4) needs the paged prefill branch (Branch A)"
         output, new_key, new_value = gated_attention_forward_ttnn(
             hidden_states=x,
             q_proj_weight=weights.q_proj,
