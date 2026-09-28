@@ -353,9 +353,7 @@ void py_module_types(nb::module_& mod) {
                ttnn::DataType data_type,
                uint32_t page_size,
                std::optional<tt::tt_metal::TileDescriptor> tile) {
-                // DataType to DataFormat conversion
-                tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(data_type);
-                new (t) tt::tt_metal::CBFormatDescriptor(buffer_index, data_format, page_size, tile);
+                new (t) tt::tt_metal::CBFormatDescriptor(buffer_index, data_type, page_size, tile);
             },
             nb::arg("buffer_index"),
             nb::arg("data_format"),
@@ -364,7 +362,7 @@ void py_module_types(nb::module_& mod) {
             R"pbdoc(
                 Initialize a CBFormatDescriptor with buffer index, TTNN data type, page size, and optional tile descriptor.
 
-                This constructor automatically converts TTNN DataType to TT-Metal DataFormat.
+                The DataType is stored as is and converted to a TT-Metal DataFormat when the circular buffer is created.
 
                 Args:
                     buffer_index: Index of the buffer within the command buffer
@@ -376,16 +374,19 @@ void py_module_types(nb::module_& mod) {
             "buffer_index",
             &tt::tt_metal::CBFormatDescriptor::buffer_index,
             "Index of the buffer within the command buffer")
-        .def_rw("data_format", &tt::tt_metal::CBFormatDescriptor::data_format, "Format of the data in the buffer")
+        .def_rw(
+            "data_format",
+            &tt::tt_metal::CBFormatDescriptor::data_format,
+            "Format of the data in the buffer: a TTNN DataType or a TT-Metal DataFormat")
         .def_prop_ro(
             "data_format_as_uint8",
             [](const tt::tt_metal::CBFormatDescriptor& self) -> uint8_t {
                 // Return the raw tt::DataFormat enum value as uint8.
                 // The tt::DataFormat enum is not bound in nanobind, so the
-                // existing .data_format getter throws TypeError in Python.
+                // .data_format getter throws TypeError in Python when it holds a DataFormat.
                 // dataformat_to_datatype_converter() only handles 8 of ~20
                 // variants, so we expose the raw value for reliable comparison.
-                return static_cast<uint8_t>(self.data_format);
+                return static_cast<uint8_t>(tt::tt_metal::resolve_data_format(self.data_format));
             },
             "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")

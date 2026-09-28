@@ -67,6 +67,10 @@
 //
 // ============================================================================
 
+namespace tt::tt_metal {
+enum class DataType;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::experimental {
 
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
@@ -93,8 +97,9 @@ struct DataflowBufferSpec {
     // Low-Level Kernel (LLK) device APIs (compute primitives).
     // (These only need to be considered for DFBs that are bound to a compute kernel.)
 
-    // The data format is required for any DFB bound to a compute kernel
-    std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
+    // The data format is required for any DFB bound to a compute kernel.
+    // A DataType is resolved with resolve_data_format() (tensor_types.hpp).
+    std::optional<std::variant<tt::DataFormat, DataType>> data_format_metadata = std::nullopt;
 
     // Optional; if unspecified, the default tile format (32x32) is assumed.
     //

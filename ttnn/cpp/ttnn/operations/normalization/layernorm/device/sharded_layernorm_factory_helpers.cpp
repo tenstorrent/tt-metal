@@ -613,8 +613,8 @@ void alias_pair(m2::ProgramSpec& spec, const m2::DFBSpecName& first, const m2::D
 
 std::optional<tt::DataFormat> data_format_of(const m2::ProgramSpec& spec, const m2::DFBSpecName& dfb) {
     for (const auto& candidate : spec.dataflow_buffers) {
-        if (candidate.unique_id == dfb) {
-            return candidate.data_format_metadata;
+        if (candidate.unique_id == dfb && candidate.data_format_metadata.has_value()) {
+            return tt::tt_metal::resolve_data_format(*candidate.data_format_metadata);
         }
     }
     return std::nullopt;

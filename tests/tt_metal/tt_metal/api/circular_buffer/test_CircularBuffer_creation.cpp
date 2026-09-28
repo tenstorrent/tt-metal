@@ -187,6 +187,27 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigBufferConstructorWithDataTypeM
     }
 }
 
+TEST_F(MeshDeviceFixture, TestCircularBufferConfigFromDescriptorWithDataTypeMatchesDataFormat) {
+    CBConfig cb_config;
+    auto make_descriptor = [&](std::variant<tt::DataFormat, DataType> format0,
+                               std::variant<tt::DataFormat, DataType> format16) {
+        return CBDescriptor{
+            .total_size = cb_config.page_size,
+            .core_ranges = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+            .format_descriptors =
+                {{.buffer_index = 0, .data_format = format0, .page_size = cb_config.page_size},
+                 {.buffer_index = 16, .data_format = format16, .page_size = cb_config.page_size}},
+        };
+    };
+
+    CircularBufferConfig config_via_data_format(make_descriptor(tt::DataFormat::Float16_b, tt::DataFormat::Int8));
+    CircularBufferConfig config_via_data_type(make_descriptor(DataType::BFLOAT16, DataType::INT8));
+
+    EXPECT_EQ(config_via_data_format, config_via_data_type);
+    EXPECT_EQ(config_via_data_type.data_formats()[0], tt::DataFormat::Float16_b);
+    EXPECT_EQ(config_via_data_type.data_formats()[16], tt::DataFormat::Int8);
+}
+
 TEST_F(MeshDeviceFixture, TestCircularBufferBuilderSetDataFormatWithDataType) {
     CBConfig cb_config;
 
