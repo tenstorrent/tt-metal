@@ -429,6 +429,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format("fmod_tile({});", idst)};
         case UnaryOpType::EXP:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
+                return {"exp_tt_poly_bf16_tile_init<false>();", fmt::format("exp_tt_poly_bf16_tile<false>({});", idst)};
+            }
+#endif
             return {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
@@ -1015,7 +1020,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
 #endif
             return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
-        case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
+        case UnaryOpType::EXP:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"exp_tt_poly_bf16_tile_init();", fmt::format("exp_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
         case UnaryOpType::SIGMOID:
 #if !defined(TT_POLY_LLK_DISABLE)
             if (input_dtype == DataType::BFLOAT16) {
