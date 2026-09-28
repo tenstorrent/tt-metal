@@ -122,7 +122,14 @@ def _report(line):
 def test_expert_precision(mesh_device, device_params, wset):
     std, pos = W_SETS[wset]
     g = torch.Generator().manual_seed(7)
-    mk = lambda *s: (torch.randn(*s, generator=g).abs() if pos else torch.randn(*s, generator=g)) * std
+    # bf16 weights (as the model's checkpoint): every op's weight upload and the reference then quantize the same values
+    # to bfp4 (from fp32, flat's upload rounds through bf16 first while the reference / unified round directly: a
+    # different bfp4 rounding of ~0.75% of the elements, which the quantized reference would charge to flat)
+    mk = (
+        lambda *s: ((torch.randn(*s, generator=g).abs() if pos else torch.randn(*s, generator=g)) * std)
+        .bfloat16()
+        .float()
+    )
     # nn.Linear layout per expert: gate / up [I, H], down [H, I]
     w = [{"gate_proj": mk(I, H), "up_proj": mk(I, H), "down_proj": mk(H, I)} for _ in range(E)]
     mc = extract_mesh_config(mesh_device)
@@ -189,7 +196,9 @@ def test_expert_precision(mesh_device, device_params, wset):
         t, dtype=dt, layout=lay, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     counts, regions = dev(c_h, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), dev(r_h, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-    silu = torch.nn.functional.silu
+    # MIMO_PREC_ACT=gate_only: the reference for the flat builder's MIMO_FL_NO_ACT debug mode (h = the raw gate)
+    gate_only = os.environ.get("MIMO_PREC_ACT") == "gate_only"
+    act = (lambda g_, u_: g_) if gate_only else (lambda g_, u_: torch.nn.functional.silu(g_) * u_)
     for case in X_CASES:
         gx = torch.Generator().manual_seed(11)
         x = torch.zeros(rows_total, H)
@@ -201,13 +210,13 @@ def test_expert_precision(mesh_device, device_params, wset):
         }
         ref_q = torch.cat(
             [
-                (silu(xq[offs[e] + torch.tensor(s)] @ qw[e][0]) * (xq[offs[e] + torch.tensor(s)] @ qw[e][1])) @ qw[e][2]
+                act(xq[offs[e] + torch.tensor(s)] @ qw[e][0], xq[offs[e] + torch.tensor(s)] @ qw[e][1]) @ qw[e][2]
                 for e, s in sel.items()
             ]
         )
         ref_f = torch.cat(
             [
-                (silu(x[offs[e] + torch.tensor(s)] @ fw[e][0]) * (x[offs[e] + torch.tensor(s)] @ fw[e][1])) @ fw[e][2]
+                act(x[offs[e] + torch.tensor(s)] @ fw[e][0], x[offs[e] + torch.tensor(s)] @ fw[e][1]) @ fw[e][2]
                 for e, s in sel.items()
             ]
         )

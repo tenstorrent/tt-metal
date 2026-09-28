@@ -1,0 +1,15 @@
+PREC	w_normal	normal	flatpy_hA	q_pcc 0.99841	q_rel 0.0576	q_norm 1.0100	q_row 0.0643	f_pcc 0.98064	f_rel 0.1995	nonfinite 0	|ref| 4.78
+PREC	w_normal	outlier_channels	flatpy_hA	q_pcc 0.99851	q_rel 0.0548	q_norm 1.0046	q_row 0.0764	f_pcc 0.98074	f_rel 0.1981	nonfinite 0	|ref| 244
+PREC	w_normal	one_hot	flatpy_hA	q_pcc 0.99854	q_rel 0.0541	q_norm 0.9985	q_row 0.0756	f_pcc 0.98104	f_rel 0.1955	nonfinite 0	|ref| 0.000961
+PREC	w_normal	sparse90	flatpy_hA	q_pcc 0.99849	q_rel 0.0555	q_norm 1.0059	q_row 0.061	f_pcc 0.98091	f_rel 0.1973	nonfinite 0	|ref| 0.475
+PREC	w_normal	row_scales	flatpy_hA	q_pcc 0.99848	q_rel 0.0560	q_norm 1.0087	q_row 0.0644	f_pcc 0.98121	f_rel 0.1958	nonfinite 0	|ref| 3.97e+06
+PREC	w_normal	normal	flatpy_hB	q_pcc 0.99823	q_rel 0.0704	q_norm 1.0360	q_row 0.0782	f_pcc 0.98047	f_rel 0.2070	nonfinite 0	|ref| 4.78
+PREC	w_normal	outlier_channels	flatpy_hB	q_pcc 0.99834	q_rel 0.0660	q_norm 1.0304	q_row 0.0902	f_pcc 0.98057	f_rel 0.2050	nonfinite 0	|ref| 244
+PREC	w_normal	one_hot	flatpy_hB	q_pcc 0.99836	q_rel 0.0629	q_norm 1.0242	q_row 0.0844	f_pcc 0.98086	f_rel 0.2015	nonfinite 0	|ref| 0.000961
+PREC	w_normal	sparse90	flatpy_hB	q_pcc 0.99831	q_rel 0.0670	q_norm 1.0317	q_row 0.0736	f_pcc 0.98075	f_rel 0.2043	nonfinite 0	|ref| 0.475
+PREC	w_normal	row_scales	flatpy_hB	q_pcc 0.99831	q_rel 0.0689	q_norm 1.0353	q_row 0.0777	f_pcc 0.98101	f_rel 0.2031	nonfinite 0	|ref| 3.97e+06
+PREC	w_normal	normal	flatpy_hC	q_pcc 0.99835	q_rel 0.0596	q_norm 1.0143	q_row 0.0659	f_pcc 0.98059	f_rel 0.2006	nonfinite 0	|ref| 4.78
+PREC	w_normal	outlier_channels	flatpy_hC	q_pcc 0.99848	q_rel 0.0562	q_norm 1.0088	q_row 0.0784	f_pcc 0.98070	f_rel 0.1991	nonfinite 0	|ref| 244
+PREC	w_normal	one_hot	flatpy_hC	q_pcc 0.99852	q_rel 0.0545	q_norm 1.0030	q_row 0.0761	f_pcc 0.98101	f_rel 0.1963	nonfinite 0	|ref| 0.000961
+PREC	w_normal	sparse90	flatpy_hC	q_pcc 0.99844	q_rel 0.0571	q_norm 1.0105	q_row 0.0622	f_pcc 0.98087	f_rel 0.1984	nonfinite 0	|ref| 0.475
+PREC	w_normal	row_scales	flatpy_hC	q_pcc 0.99845	q_rel 0.0576	q_norm 1.0131	q_row 0.0658	f_pcc 0.98118	f_rel 0.1967	nonfinite 0	|ref| 3.97e+06

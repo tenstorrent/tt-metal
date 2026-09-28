@@ -439,6 +439,12 @@ class FlatExpert:
         GU_ACC = _gu_acc(NSG)
         assert GU_ACC in ("fp32", "l1acc", "bf16"), GU_ACC
         GU_FP32 = GU_ACC == "fp32"
+        # h (gate/up -> down) tile format: bfp8 (default) or bf16 (MIMO_FL_H_BF16=1: 2 KB tiles, twice the h traffic /
+        # buffers)
+        H_BF16 = bool(int(os.environ.get("MIMO_FL_H_BF16", "0")))
+        # matmul fidelity of the gate/up and down computes (MIMO_FL_FIDELITY: LoFi default, HiFi2, HiFi4)
+        MM_FID = getattr(ttnn.MathFidelity, os.environ.get("MIMO_FL_FIDELITY", "LoFi"))
+        H_TILE, H_FMT = (2048, ttnn.bfloat16) if H_BF16 else (BF8_TILE, ttnn.bfloat8_b)
         # down projection accumulation (MIMO_FL_DN_ACC): bf16 DEST (all of K = I in DEST: ties-away gain ~1.02 at K
         # 2048) or fp32 DEST (4-tile DST: column passes of <= 4)
         DN_ACC = os.environ.get("MIMO_FL_DN_ACC", "bf16")
@@ -656,6 +662,10 @@ class FlatExpert:
             (LAND_OFF + (al(NH * LAND_SLOTS * MT * SBT * BF8_TILE) if XHELP else 0)) if E2E else al(RELAY_CB * x_bytes)
         )
         arena_tiles = max(gu_bytes, dn_bytes, relay_bytes, RD_OFF) // 2048
+        assert arena_tiles * 2048 <= L1_BANK, (
+            f"arena {arena_tiles * 2} KB > L1 {L1_BANK >> 10} KB (down: ring {H_OFF >> 10} KB + {HBUF} h buffers of"
+            f" {h_tiles * H_TILE >> 10} KB): lower MIMO_FL_HBUF / MIMO_FL_DRING"
+        )
         logger.info(
             f"M {m}: {S} sub-blocks; gu ring {ring_g * slot * w_tile >> 10} KB, x ring {X_SLOTS * x_bytes >> 10} KB; "
             f"down {ND} x {pcd} (kd {kd}); arena {arena_tiles * 2} KB; relays {[(c.x, c.y) for c in relays]}"
@@ -1134,7 +1144,7 @@ class FlatExpert:
                             + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else [])
                             + dn_def,
                             config=ttnn.ComputeConfigDescriptor(
-                                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=DN_FP32, dst_full_sync_en=DN_FULL
+                                math_fidelity=MM_FID, fp32_dest_acc_en=DN_FP32, dst_full_sync_en=DN_FULL
                             ),
                         )
                     )
@@ -1375,7 +1385,7 @@ class FlatExpert:
                         + [("SE_GU_ONLY", "1"), ("SE_ACT", str(ACTS[ACT])), ("SE_XMT", str(MT))]
                         + ([("SE_NO_ACT", "1")] if os.environ.get("MIMO_FL_NO_ACT") else []),
                         config=ttnn.ComputeConfigDescriptor(
-                            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=GU_FP32, dst_full_sync_en=GU_FULL
+                            math_fidelity=MM_FID, fp32_dest_acc_en=GU_FP32, dst_full_sync_en=GU_FULL
                         ),
                     ),
                 ]
@@ -1452,7 +1462,7 @@ class FlatExpert:
                         + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else [])
                         + dn_def,
                         config=ttnn.ComputeConfigDescriptor(
-                            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=DN_FP32, dst_full_sync_en=DN_FULL
+                            math_fidelity=MM_FID, fp32_dest_acc_en=DN_FP32, dst_full_sync_en=DN_FULL
                         ),
                     ),
                 ]
@@ -1490,7 +1500,7 @@ class FlatExpert:
                         ttnn.CBDescriptor(
                             total_size=HBUF * MTG * NP * H_TILE,
                             core_ranges=gu_crs,
-                            format_descriptors=fmt(3, ttnn.bfloat8_b, H_TILE),
+                            format_descriptors=fmt(3, H_FMT, H_TILE),
                         ),
                         ttnn.CBDescriptor(
                             total_size=2048, core_ranges=gu_crs, format_descriptors=fmt(16, ttnn.bfloat16, 2048)
@@ -1502,7 +1512,7 @@ class FlatExpert:
                         else []
                     )
                     + [
-                        arena_cb_(2, H_OFF, HBUF * h_tiles * H_TILE, dn_crs, ttnn.bfloat8_b, H_TILE),
+                        arena_cb_(2, H_OFF, HBUF * h_tiles * H_TILE, dn_crs, H_FMT, H_TILE),
                     ]
                     + [
                         cb_
@@ -1539,7 +1549,7 @@ class FlatExpert:
                                 H_OFF,
                                 HBUF * h_tiles * H_TILE,
                                 _crs([readers[r] for r, _ in rdn]),
-                                ttnn.bfloat8_b,
+                                H_FMT,
                                 H_TILE,
                             ),
                             arena_cb_(

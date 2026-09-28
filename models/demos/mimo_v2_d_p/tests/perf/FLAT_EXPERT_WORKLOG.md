@@ -608,3 +608,23 @@ weights, `expert_precision_acc_sweep.tsv`; kernel time MiMo 64 experts real coun
 | bf16 | bf16 / fp32 | up to 19% | up to 1.17 | fails the harness gate | |
 fp32 gate/up stays the best (more accurate than l1acc and faster); fp32 down in a full-sync DST removes the down
 bias for ~1.7% (the pack is tiny next to the K loop, so losing math/pack overlap is cheap).
+
+**bf16 h** (`MIMO_FL_H_BF16=1`: 2 KB h tiles; at MiMo's shape only 2 h buffers and a 1.5-expert down ring fit L1, which
+also drops the pinned down regions): MiMo 64 experts 2085 us (vs 1302 with bfp8 h, fp32 full-sync down), 8 x 512 1100 us
+(vs 725); arithmetic error 5.96 -> 5.76% (vs the old, mismatched reference). The control (bfp8 h with the same smaller
+ring / 2 h buffers) runs 1640 / 863 us: half the +60% is the L1 compromise, half the doubled h traffic. Not worth it.
+HiFi2 matmuls: bit-identical accuracy (bfp4 x bfp8 products are exact in LoFi), MiMo 64 2247 us. Not the source either.
+
+**The reference was mismatched.** From fp32 weights the flat upload rounds through bf16 before bfp4 (its weights ==
+bfp4(bf16(W)) exactly, `test_flat_weight_quant.py`); the reference / unified quantize fp32 -> bfp4 directly: ~0.75% of
+the elements one bfp4 step apart (equally close to fp32: 11.28% vs 11.27%), charged to flat as ~2.5% "arithmetic
+error". The model's weights are bf16 already (no difference there). `test_expert_precision.py` now draws bf16-valued
+weights. Fair arithmetic error (vs the quantized reference, equal row-major inputs, normal weights, 13 x cases):
+| op | q rel | q norm |
+|---|---|---|
+| unified | 1.6-4.5% | 0.996-1.032 |
+| fused | 2.4-5.0% | 1.000-1.036 |
+| flat (fp32 gate/up, bf16 down: the default) | 3.9-5.2% | 1.030-1.042 |
+| flat, fp32 full-sync down | **1.1-2.5%** | **1.004-1.016** |
+With fp32 full-sync down (+1.7% time) flat is the most accurate of the three on every input. End to end (vs fp32) all
+~19.6-21% (the bfp4 weights). No NaN / Inf anywhere.
