@@ -402,3 +402,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Checks: PCC >= spec component threshold (0.99), output finite, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]. PCC alone misses sum-vs-mean, `1 + w`, and zeroed rows (known_issues "PCC alone does not gate a component").
 - Measured: reference PCC 0.999997, rel 0.002365, ratio [0.9974, 1.0021]; stub PCC 0.0 (fails); default gate PASS, PCC 0.999996.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_norm.py` (`BRINGUP_IMPL=reference|stub` for the freeze checks).
+
+## S.full_moe.04.test.1 (test review, swap 04 ffn_norm, layer 5), 2026-09-28
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_04_ffn_norm.py` (same golden). Only the docstring differs: an adoption note. Gate pcc_swap_out >= 0.98. Asserted extras: swap 03's checks (attn_norm, attention, attn_residual + attn term, block out rel <= 0.01 whole/first 128 rows), plus ffn_norm PCC >= 0.99, rel L2 <= 0.03, ratio [0.97, 1.03] (component-test limits). All checks run on gathered [2048, 4096] tensors, so none depends on the mesh shape.
+- BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; ffn_norm rel 0.0024, ratio [0.9976, 1.0024]). BRINGUP_IMPL=stub: FAIL on every check.
+- The default gate already passes (all four steps are registered on device): pcc_swap_out 0.999988, out rel 0.0050 / first rows 0.0045, h_mid rel 0.0042, coef 1.0007, ffn_norm pcc 0.999991 / rel 0.0044 / ratio [0.9954, 1.0025] / worst row 0.0068. Trail: router 0.9962, experts_out 0.9991. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
+- Tightest margin: block out rel 0.0050 against 0.01. This comes from CPU router near-tie flips caused by upstream device error.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_04_ffn_norm.py`
