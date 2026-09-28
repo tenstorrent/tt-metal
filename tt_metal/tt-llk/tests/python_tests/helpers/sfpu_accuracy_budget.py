@@ -32,6 +32,7 @@ measured on their own stimuli; any other sampled unary row is read by no gate ye
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, fields
 from enum import Enum
 from itertools import product
@@ -49,32 +50,23 @@ from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dt
 #: to the tolerance metric until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
-#: The variant :func:`accuracy_contract` was last asked about and that nothing has
-#: consumed yet, as ``(test_id, op, input_format, output_format, approx_mode,
-#: dest_acc)``. Written on every call and read only by the ``--ulp-measure`` collector;
-#: nothing here depends on it.
+#: The variant :func:`accuracy_contract` was last asked about and nothing has consumed
+#: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc)``. Read
+#: only by the ``--ulp-measure`` recorder, which tags each reading with it: a driver
+#: resolves its contract immediately before it compares, and the test id alone cannot
+#: name the variant (the per-op sweeps put the op in the function, not the parameters).
 #:
-#: Call order alone cannot associate a reading with a variant -- two lookups followed by
-#: one comparison would file it under the second op, and a lookup with no comparison
-#: would leak into a later test. So the query carries the test it was made in, and a
-#: second lookup arriving before the first is consumed *within the same test* sets
-#: :data:`PENDING_AMBIGUOUS` rather than overwriting silently. The collector then
-#: records nothing at all, which costs a datapoint; filing it under the wrong variant
-#: would cost a budget.
-#:
-#: Within the same test, specifically. A query left unconsumed by a *previous* test is
-#: ordinary and common -- the exhaustive sweep resolves a contract and then skips the
-#: cell when it is on the tolerance metric -- and treating that as ambiguity discarded
-#: the next test's reading. Measured: it silently dropped every one of the 40 readings
-#: that followed a skip in an 130-test run.
+#: Two lookups in one test with no comparison between them make the association
+#: ambiguous, and :data:`PENDING_AMBIGUOUS` tells the recorder to drop that reading
+#: rather than file it under the wrong variant. A query left over from a *previous* test
+#: is only stale -- the exhaustive sweep resolves and then skips every tolerance cell --
+#: so it is replaced; flagging it dropped every reading that followed a skip.
 LAST_QUERY: Optional[Tuple[Any, ...]] = None
 PENDING_AMBIGUOUS: bool = False
 
 
 def _current_test() -> str:
     """The test a query was made in, so a stale one cannot cross a test boundary."""
-    import os
-
     return os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
 
 
@@ -458,27 +450,12 @@ def accuracy_contract(
         arch=arch,
     )
 
-    # The variant just asked about, for --ulp-measure to tag its reading with. The
-    # driver resolves a contract immediately before it compares, so this is the exact
-    # key the comparison belongs to -- which a test id cannot always give: the dedicated
-    # per-op sweeps (div, signbit) name their op in the function, not the parameters.
-    # Overwriting an unconsumed query means the association is no longer one-to-one; see
-    # LAST_QUERY.
+    # Tag the variant for --ulp-measure; LAST_QUERY explains the rules.
     global LAST_QUERY, PENDING_AMBIGUOUS
     here = _current_test()
     if LAST_QUERY is not None and LAST_QUERY[0] == here:
-        # Two lookups, one test, nothing consumed between them: the association is no
-        # longer one-to-one. A stale query from an earlier test is not that -- it is a
-        # cell that resolved to tolerance and skipped -- so it is replaced, not flagged.
         PENDING_AMBIGUOUS = True
-    LAST_QUERY = (
-        here,
-        op.name,
-        input_format,
-        output_format,
-        approx_mode,
-        dest_acc,
-    )
+    LAST_QUERY = (here, op.name, input_format, output_format, approx_mode, dest_acc)
 
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:

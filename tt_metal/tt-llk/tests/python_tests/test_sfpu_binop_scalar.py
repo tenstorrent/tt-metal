@@ -138,19 +138,15 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The same lookup the unary, binary and ternary drivers make, and the same arm: the
-    # registry's *tolerance*, not its step budgets. This file had no lookup at all, so
-    # the five Scalar* ops could not even pick up a declared tolerance. The budgets stay
-    # with the exhaustive sweep that measured them -- one derived from a whole format is
-    # far wider than this driver's sampled domain, so enforcing it here would loosen the
-    # gate rather than tighten it.
+    # The registry's tolerance arm, as the other drivers use it. The step budgets stay
+    # with the exhaustive sweep that measured them: one derived from a whole format is
+    # far wider than this sampled domain and would loosen the gate here.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
         input_format=formats.input_format,
-        # Fixed, because this kernel compiles APPROX_MODE(ApproximationMode.No). Left
-        # unset, a row keyed `approx: "No"` would not match and would fall back to the
-        # default tolerance, and --ulp-measure would tag the reading `approx: null`.
+        # Fixed: this kernel compiles APPROX_MODE(ApproximationMode.No), and an unset
+        # query dimension would not match a row keyed on it.
         approx_mode=ApproximationMode.No,
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
