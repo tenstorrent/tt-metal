@@ -8,17 +8,8 @@
         head group.
 """
 
-from .op import (
-    bge_qkv_heads_headsplit,
-    bge_qkv_heads_scatter,
-    bge_qkv_heads_stock,
-    bge_qkv_heads_tracka,
-)
+from .op import bge_qkv_heads_headsplit
 
 __all__ = [
     "bge_qkv_heads_headsplit",
-    # Sweep baselines. The model path uses head-split; these measure against it.
-    "bge_qkv_heads_stock",
-    "bge_qkv_heads_tracka",
-    "bge_qkv_heads_scatter",
 ]
