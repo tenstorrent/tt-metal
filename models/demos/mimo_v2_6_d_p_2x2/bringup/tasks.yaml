@@ -1100,6 +1100,13 @@ tasks:
     - attn_residual
     - ffn_norm
     layer: 5
+  frozen:
+    at: '2026-09-28T07:09:51'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_04_ffn_norm.py: f4a8abcca7c392d9a00aec343b1d1eedd30e547602727e2ac610f5d0190f88a8
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.full_moe.router
   title: full_moe router (router) on device, layer 5
   step: implement
