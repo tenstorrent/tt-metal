@@ -59,11 +59,11 @@ uint32_t compute_geometry(
         // num_dev_pages() includes shard padding: use it for grid_h, but scan only real rows.
         const uint32_t padded_rows = input.buffer()->num_dev_pages() / grid_w;
         const uint32_t grid_h = (pages_per_bank > 0) ? (padded_rows / pages_per_bank) : 1;
-        const uint32_t num_pages = lshape[0] * lshape[1] * lshape[2] * grid_w;
+        const uint32_t num_rows = lshape[0] * lshape[1] * lshape[2];
 
         geom_args = {
             aligned_output_bytes,
-            num_pages,
+            num_rows,
             elements_per_page,
             aligned_page_size,
             pages_per_bank,
