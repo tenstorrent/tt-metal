@@ -61,4 +61,35 @@ struct RingJointSDPAMeshWorkloadFactory {
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingJointSDPAMeshWorkloadFactory>);
 
+// Named precision recipes B-E (args.precision set and not FAST): recipe-owned compute, reader and writer
+// kernels on the shared ring transport (ring_joint_sdpa_program_builder.hpp).
+struct RingJointSDPARecipeProgramFactory {
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const RingJointSDPAParams& args,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+struct RingJointSDPARecipeMeshWorkloadFactory {
+    using descriptor_adapter_t =
+        ttnn::device_operation::MeshDeviceOperationAdapter<detail::RingJointSDPADescriptorAdapterOperation>::
+            DescriptorMeshWorkloadAdapter<RingJointSDPARecipeProgramFactory>;
+    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const RingJointSDPAParams& args,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const RingJointSDPAParams& args,
+        const RingJointSDPAInputs& tensor_args,
+        RingJointSDPAResult& output_tensors);
+};
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingJointSDPARecipeMeshWorkloadFactory>);
+
 }  // namespace ttnn::prim

@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_builder.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -114,7 +116,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const ExpRingJointSDPAParams& operation_attributes,
     const ExpRingJointSDPAInputs& tensor_args,
     ExpRingJointSDPAResult& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    exp_ring_joint_sdpa::ComputeVariant& variant) {
     const auto& args = operation_attributes;
     auto& output_tensors = tensor_return_value;
     TT_FATAL(
@@ -208,6 +211,22 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.topology,
         args.cluster_axis);
 
+    // A two-device ring axis has no wraparound (ccl::get_boundary_mode is NONE for extent 2), so each
+    // device sees only one neighbor -- which is both its ring predecessor and successor. Route the
+    // missing direction's rows to that same device over the next num_links fabric links, so the
+    // backward and forward MUX kernels never share an ethernet channel. Rings of 3+ are unchanged.
+    uint32_t backward_link_offset = 0;
+    uint32_t forward_link_offset = 0;
+    if (args.ring_size == 2) {
+        if (!backward_coord.has_value() && forward_coord.has_value()) {
+            backward_coord = forward_coord;
+            backward_link_offset = args.num_links;
+        } else if (!forward_coord.has_value() && backward_coord.has_value()) {
+            forward_coord = backward_coord;
+            forward_link_offset = args.num_links;
+        }
+    }
+
     auto scale = args.scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
@@ -298,6 +317,11 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+
+    variant.configure(args, tensor_args, fp32_dest_acc_en);
+    // A fixed compute schedule owns the matmul subblocks ((h) x 4), ends an odd Q chunk with a partial
+    // row group and always streams.
+    const std::optional<uint32_t> fixed_subblock_h = variant.fixed_subblock_h();
 
     // Grid layout:
     //   user_grid:        Full grid from program_config (or device default). Contains SDPA workers + fabric MUX.
@@ -458,9 +482,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    if (fixed_subblock_h) {
+        qk_out_subblock_h = *fixed_subblock_h;
+        qk_out_subblock_w = variant.fixed_subblock_w(Sk_chunk_t);
+    }
 
+    // A fixed schedule ends an odd Q chunk with a single-row group (the writer drains the remainder group).
     TT_FATAL(
-        Sq_chunk_t % qk_out_subblock_h == 0,
+        fixed_subblock_h || Sq_chunk_t % qk_out_subblock_h == 0,
         "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
         Sq_chunk_t,
         qk_out_subblock_h);
@@ -470,11 +499,17 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1;
+    const bool use_streaming_compute =
+        fixed_subblock_h || (!fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
+                             Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1);
 
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    if (fixed_subblock_h) {
+        // The writer drains cb_out in rows of out_out_subblock_h, matching the fixed QK@V cadence.
+        out_out_subblock_h = *fixed_subblock_h;
+        out_out_subblock_w = variant.fixed_subblock_w(DHt);
+    }
 
     // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp). Safe here
     // because every pass runs with q_per_core == 1 (one Q chunk per pass, head-serial), so
@@ -483,7 +518,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     if (use_streaming_compute) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
         TT_FATAL(
-            Sq_chunk_t % out_out_subblock_h == 0,
+            fixed_subblock_h || Sq_chunk_t % out_out_subblock_h == 0,
             "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
             Sq_chunk_t,
             out_out_subblock_h);
@@ -634,6 +669,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
+    // Writer drain group height. The writer reads each group contiguously from cb_out's read pointer,
+    // so a group must never straddle the CB wrap. With an odd Q tile count a fixed-schedule pass leaves cb_out
+    // at a single-row offset, and the next pass's 2-row groups would run past a 4-row cb_out end; drain one
+    // row at a time then (each row is DHt tiles, and cb_out is a whole number of rows).
+    const uint32_t writer_out_row_group_h =
+        (fixed_subblock_h && Sq_chunk_t % out_out_subblock_h != 0) ? 1u : out_out_subblock_h;
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
@@ -654,7 +695,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
-        static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<std::uint32_t>(has_logical_n_tensor),
     };
 
@@ -1033,6 +1074,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // CBs must end below the lowest live L1 buffer (validate_circular_buffer_region enforces
     // exactly this). In the pipeline, global semaphores and persistent buffers occupy the top of
     // L1, so budgeting against the raw L1 size over-promises and the program clashes at allocate.
+    // A variant with its own compute CB layout replaces the exp-ring CBs built above (discarding them
+    // unchanged, so the default layout is untouched) and may add defines.
+    const bool owns_compute_cbs = variant.replace_cbs(desc, sdpa_grid_set, Sq_chunk_t, DHt, defines);
+
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
@@ -1042,7 +1087,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     for (const auto& cb : desc.cbs) {
         total_cb_bytes += cb.total_size;
     }
-    const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
+    if (owns_compute_cbs) {
+        variant.check_l1(total_cb_bytes, usable_l1, q_chunk_size);
+    }
+    // A variant-owned layout already keeps a single-slot Q per pass (read once, popped at the pass's end);
+    // the default re-read-every-iteration stream_q protocol never applies to it.
+    const bool stream_q = !owns_compute_cbs && (num_passes > 1) && (total_cb_bytes > usable_l1);
     if (stream_q) {
         total_cb_bytes -= desc.cbs[0].total_size;
         desc.cbs[0].total_size = Sq_chunk_t * DHt * q_tile_size;  // c_0 is the first CB pushed
@@ -1495,8 +1545,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // is deferred (just like the original CreateKernel calls were) until after chain
     // construction, since the mcast_enabled compile-time arg is patched above.
     KernelDescriptor reader_kernel{};
-    reader_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp";
+    const exp_ring_joint_sdpa::KernelSources kernel_sources = variant.kernel_sources();
+    reader_kernel.kernel_source = kernel_sources.reader;
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
     reader_kernel.compile_time_args = reader_compile_time_args;
@@ -1507,8 +1557,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // sdpa_grid.x-2 and sdpa_grid.x-1 are fabric MUX client columns
     CoreRange sdpa_writer_range({0, 0}, {sdpa_grid.x - 3, sdpa_grid.y - 1});
     KernelDescriptor writer_kernel{};
-    writer_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp";
+    writer_kernel.kernel_source = kernel_sources.writer;
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = CoreRangeSet(sdpa_writer_range);
     writer_kernel.compile_time_args = writer_compile_time_args;
@@ -1536,8 +1585,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     writer_fabric_defines["USE_MUX"] = "1";
     KernelDescriptor::Defines writer_fabric_kernel_defines(writer_fabric_defines.begin(), writer_fabric_defines.end());
     KernelDescriptor writer_fabric_kernel{};
-    writer_fabric_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp";
+    writer_fabric_kernel.kernel_source = kernel_sources.writer;
     writer_fabric_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_fabric_kernel.core_ranges = CoreRangeSet(mux_writer_range);
     writer_fabric_kernel.compile_time_args = writer_fabric_compile_time_args;
@@ -1545,8 +1593,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     writer_fabric_kernel.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_kernel{};
-    compute_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp";
+    compute_kernel.kernel_source = kernel_sources.compute;
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
     compute_kernel.compile_time_args = compute_compile_time_args;
@@ -1556,6 +1603,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
+    if (auto config = variant.compute_config()) {
+        compute_kernel.config = std::move(*config);
+    }
 
     // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and
     // the credit/gate protocol requires they agree. Buffer* (not ->address()) so a cache hit re-patches it.
@@ -1865,7 +1915,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (backward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, desc, mux_backward_logical_cores[link]);
+                    src_node_id, dst_node_id, link + backward_link_offset, desc, mux_backward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_backward_logical_cores[link], mux_args);
@@ -1873,7 +1923,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (forward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, desc, mux_forward_logical_cores[link]);
+                    src_node_id, dst_node_id, link + forward_link_offset, desc, mux_forward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_forward_logical_cores[link], mux_args);
@@ -1888,43 +1938,34 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
 }  // namespace
 
+namespace exp_ring_joint_sdpa {
+
 // Exp ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
 // device_index / forward_coord / backward_coord / DEST_CHIP_ID-style fabric routing all
 // depend on the mesh coordinate, so descriptors cannot be shared across coords.
-tt::tt_metal::WorkloadDescriptor ExpRingJointSDPAProgramFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor build_workload_descriptor(
     const ExpRingJointSDPAParams& operation_attributes,
     const ExpRingJointSDPAInputs& tensor_args,
     ExpRingJointSDPAResult& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    ComputeVariant& variant) {
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
     for (const auto& coord : coords) {
-        auto desc =
-            build_exp_ring_joint_sdpa_program_descriptor(operation_attributes, tensor_args, tensor_return_value, coord);
+        auto desc = build_exp_ring_joint_sdpa_program_descriptor(
+            operation_attributes, tensor_args, tensor_return_value, coord, variant);
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;
 }
 
-ExpRingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t ExpRingJointSDPAMeshWorkloadFactory::create_mesh_workload(
+// The hash-excluded per-link GlobalSemaphore addresses are the only runtime args left to patch after
+// apply_descriptor re-points the Buffer* runtime args.
+void apply_semaphore_runtime_args(
+    tt::tt_metal::distributed::MeshWorkload& workload,
     const ExpRingJointSDPAParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ExpRingJointSDPAInputs& tensor_args,
-    ExpRingJointSDPAResult& tensor_return_value) {
-    return descriptor_adapter_t::create_mesh_workload(
-        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-}
-
-void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ExpRingJointSDPAParams& operation_attributes,
-    const ExpRingJointSDPAInputs& tensor_args,
-    ExpRingJointSDPAResult& tensor_return_value) {
-    // apply_descriptor re-points the Buffer* runtime args; the hash-excluded per-link GlobalSemaphore
-    // addresses are all that is left to patch.
-    descriptor_adapter_t::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
-
+    const ExpRingJointSDPAInputs& tensor_args) {
     namespace dyn = exp_ring_joint_sdpa_dynamic;
     const auto& args = operation_attributes;
 
@@ -1937,7 +1978,7 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
     const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
 
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+    for (auto& [coordinate_range, program] : workload.get_programs()) {
         // Hoisted out of the per-core loop, and by reference: a copy would clone the whole arg grid.
         auto& reader_grid = GetRuntimeArgs(program, dyn::kReaderKernelIdx);
         auto& writer_fabric_grid = GetRuntimeArgs(program, dyn::kWriterFabricKernelIdx);
@@ -1973,6 +2014,57 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             }
         }
     }
+}
+
+}  // namespace exp_ring_joint_sdpa
+
+}  // namespace ttnn::prim
+
+namespace ttnn::prim {
+
+namespace {
+
+// Legacy exp-ring compute (precision unset or FAST): host-chosen subblocks, the exp-ring CB layout and the
+// state FIFO / scratch accumulator paths.
+class LegacyExpRingJointCompute final : public exp_ring_joint_sdpa::ComputeVariant {
+public:
+    exp_ring_joint_sdpa::KernelSources kernel_sources() const override {
+        return {
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
+        };
+    }
+};
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor ExpRingJointSDPAProgramFactory::create_workload_descriptor(
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    LegacyExpRingJointCompute variant;
+    return exp_ring_joint_sdpa::build_workload_descriptor(
+        operation_attributes, tensor_args, tensor_return_value, tensor_coords, variant);
+}
+
+ExpRingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t ExpRingJointSDPAMeshWorkloadFactory::create_mesh_workload(
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value) {
+    return descriptor_adapter_t::create_mesh_workload(
+        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+}
+
+void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value) {
+    descriptor_adapter_t::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
+    exp_ring_joint_sdpa::apply_semaphore_runtime_args(cached_workload.workload, operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

@@ -21,7 +21,10 @@ struct RingJointSDPADeviceOperation {
     using tensor_args_t = RingJointSDPAInputs;
     using spec_return_value_t = RingJointSDPAResultSpec;
     using tensor_return_value_t = RingJointSDPAResult;
-    using program_factory_t = std::variant<RingJointSDPAMeshWorkloadFactory>;
+    using program_factory_t = std::variant<RingJointSDPAMeshWorkloadFactory, RingJointSDPARecipeMeshWorkloadFactory>;
+
+    // Named recipes B-E run on the recipe factory; precision unset or FAST keeps the legacy factory.
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -73,6 +76,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     bool circular_kv_cache = false,
     // When set, the logical_n / logical_l params above are worst-case placeholders (see RingJointSDPAInputs).
     const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
+    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::prim
