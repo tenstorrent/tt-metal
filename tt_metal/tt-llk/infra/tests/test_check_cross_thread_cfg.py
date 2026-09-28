@@ -781,3 +781,25 @@ def test_guarded_write_with_no_recorded_reader_is_advisory(tree):
     assert (
         r.returncode == 0 and "advisory" in r.stdout and "may not consume" in r.stdout
     ), r.stdout
+
+
+def test_unclassified_note_is_scoped_to_the_commit(tree):
+    """pre-commit runs the hook once per batch of files; a whole-tree note would repeat per batch."""
+    tmp, d = tree
+    write(d, "llk_math_x.h", MATH_OWNS_BIT0)
+    write(
+        d,
+        "shared_helper.h",
+        "inline void set_by_dispatch() { cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(v); }\n",
+    )
+    write(d, "llk_unpack_y.h", "inline void _llk_unpack_y_() {}\n")
+    assert (
+        "could not be determined"
+        not in run(tmp, extra=[str(d / "llk_unpack_y.h")]).stdout
+    )
+    assert (
+        "could not be determined" in run(tmp, extra=[str(d / "shared_helper.h")]).stdout
+    )
+    assert (
+        "could not be determined" in run(tmp).stdout
+    ), "a whole-tree run lists every one"

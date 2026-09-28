@@ -633,7 +633,11 @@ def main():
             or any(os.path.abspath(s) in touched for s in srcs)
         )
 
-    findings = [f for f in findings if in_scope(f[0], f[6])]
+    # A blocking finding is also owed by the commit that CAUSED it; advisory output is not owed
+    # by anyone, so it is shown only at its own file. pre-commit splits a large file list into
+    # batches, and output scoped more widely would repeat once per batch.
+    findings = [f for f in findings if in_scope(f[0], f[6] if f[7] else ())]
+    unclassified = [u for u in unclassified if in_scope(u[0], ())]
 
     accepted = set()
     if args.baseline and not args.write_baseline:

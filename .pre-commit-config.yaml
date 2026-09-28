@@ -166,6 +166,9 @@ repos:
       # the whole tree. Output is shown even when it passes, so the advisory findings and the
       # unclassified-write note are seen rather than swallowed.
       verbose: true
+      # Every run parses the whole tree for ownership, so parallel batches only repeat that work
+      # and print the same output several times: run once.
+      require_serial: true
       args: ["--arch", "wormhole_b0",
              "--defs", "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
              "--tree", "tt_metal/tt-llk/tt_llk_wormhole_b0",
@@ -191,6 +194,9 @@ repos:
       # the whole tree. Output is shown even when it passes, so the advisory findings and the
       # unclassified-write note are seen rather than swallowed.
       verbose: true
+      # Every run parses the whole tree for ownership, so parallel batches only repeat that work
+      # and print the same output several times: run once.
+      require_serial: true
       args: ["--arch", "blackhole",
              "--defs", "tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h",
              "--tree", "tt_metal/tt-llk/tt_llk_blackhole",
