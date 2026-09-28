@@ -130,6 +130,18 @@ namespace ckl = compute_kernel_lib;
 // retired ("kernel_lib: drop the streaming-reduce wrappers"). It was a thin router over
 // reduce() + Accumulate; reinstated here verbatim so the call sites below are unchanged.
 namespace rms_norm_local {
+// THE CROSS-CHUNK CARRY STAYS fp32 (CHANGELOG 3).  reduce()'s default AccumulateViaAdd reload,
+// CopySeedPairs, folds an ODD chunk's leftover tile in with a DEST_TO_SRCB reuse add: that moves
+// the running sum reloaded from the fp32 accumulator CB (cb_row_stat / cb_sum_handoff) out of DEST
+// into srcB, which is programmed to the input CB's format (bf16), so at fp32_dest_acc_en=True every
+// carry was truncated to bf16.  Measured at MiMo's (5120, 4096) weight shape (3 chunks of 43
+// tiles): mean square 0.23% low, every row's scale 0.11% high.  CopySeedSfpuAdd sums the chunk's
+// new tiles alone, reloads the carry into DST[1] with copy_tile and adds it on the SFPU, so the
+// carry is never an FPU operand.  At fp32_dest_acc_en=False DEST itself is 16-bit and the reuse is
+// lossless, so that build keeps CopySeedPairs (and its program).
+constexpr auto CARRY_RELOAD =
+    DST_ACCUM_MODE ? ckl::AccumulateReloadMode::CopySeedSfpuAdd : ckl::AccumulateReloadMode::CopySeedPairs;
+
 template <
     ckernel::PoolType pool,
     ckernel::ReduceDim rdim,
@@ -152,14 +164,14 @@ ALWI void accumulate_reduce_block(
         ckl::reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode, fp32_mode, algorithm>(
             block_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at_last(cb_acc, b),
+            ckl::Accumulate::at_last(cb_acc, b).with_reload(CARRY_RELOAD),
             post_op_final,
             partial);
     } else {
         ckl::reduce<pool, rdim, cb_in, cb_scaler, cb_acc, in_policy, reconfig_mode, fp32_mode, algorithm>(
             block_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_acc, b),
+            ckl::Accumulate::at(cb_acc, b).with_reload(CARRY_RELOAD),
             ckl::NoOp{},
             ckl::ReducePartialScaler::none());
     }
