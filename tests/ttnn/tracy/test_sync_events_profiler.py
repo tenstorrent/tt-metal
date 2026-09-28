@@ -4,10 +4,15 @@
 
 """Unified sync events profiler test.
 
-Single parameterized test that verifies for each API:
-1. Expected events are present
-2. Payloads are valid (CB IDs 0-63, semaphore addresses in L1 range)
-3. Wait timing matches expected delay
+Single parameterized test that verifies, for each instrumented API:
+1. Every expected event is present, on the expected RISC.
+2. Payloads are valid -- CB ids are the CB the kernel used, local semaphore keys are
+   L1 addresses, and remote semaphore payloads decode as tagged NoC addresses.
+3. The blocking wait actually blocked for at least the producer's delay.
+
+The remote-payload checks mirror SYNC_SIGNAL_NOC_ADDR in
+tt_metal/tools/profiler/synchronization_event_profiler.hpp; if that encoding moves, the
+decoder below has to move with it.
 """
 
 from __future__ import annotations
@@ -26,12 +31,21 @@ from tools.tracy.common import PROFILER_ARTIFACTS_DIR, TT_METAL_HOME
 
 ARTIFACTS = PROFILER_ARTIFACTS_DIR / "sync_events"
 
-# Timing constants
-# The C++ uses DELAY_CYCLES=10000 iterations, but loop overhead means actual time is ~3x longer
-EXPECTED_DELAY_CYCLES = 30000  # Approximate actual cycles for 10000 loop iterations
-TIMING_TOLERANCE_CYCLES = 1000
+# Mirrors DELAY_CYCLES in tests/tt_metal/tools/profiler/test_sync_events.cpp: the producer
+# spins that many `nop`s before signalling. Each nop retires in at least one cycle, so a
+# consumer that really blocked cannot have waited less than this. There is deliberately no
+# upper bound -- NoC and scheduling latency make one flaky, and an over-long wait is not a
+# defect in the instrumentation this test covers.
+DELAY_CYCLES = 10000
+MIN_BLOCKING_CYCLES = DELAY_CYCLES
 
-# Legacy timer_id -> event name mapping (from streaming_profiler_zone_csv.cpp kSyncNames)
+# A wait shorter than this is treated as non-blocking (the "instant" reserve/wait that some
+# sequences perform before the blocking one).
+NONBLOCKING_CYCLES = 1000
+
+L1_MAX = 0x200000
+
+# Legacy timer_id -> event name mapping (kSyncNames in streaming_profiler_zone_csv.cpp)
 SYNC_LEGACY_IDS = {
     1000: "SYNC-CB-PUSH",
     1003: "SYNC-SEM-SET",
@@ -41,6 +55,53 @@ SYNC_LEGACY_IDS = {
     1009: "SYNC-CB-RESERVE-KEY",
     1010: "SYNC-CB-POP",
 }
+
+# --- NoC address decoding ---------------------------------------------------------------
+# Mirrors SYNC_SIGNAL_NOC_ADDR and the NOC_XY_ADDR / NOC_MULTICAST_ADDR macros in
+# tt_metal/hw/inc/internal/tt-1xx/*/noc/noc_parameters.h.
+NOC_TAG_PRESENT = 1 << 63  # bit 63: "this payload carries a NoC index"
+NOC_TAG_INDEX = 1 << 62  # bit 62: the NoC index itself
+NOC_ADDR_LOCAL_BITS = 36
+NOC_ADDR_NODE_ID_BITS = 6
+LOCAL_MASK = (1 << NOC_ADDR_LOCAL_BITS) - 1
+NODE_MASK = (1 << NOC_ADDR_NODE_ID_BITS) - 1
+
+
+def decode_noc_tag(payload: int) -> tuple[Optional[int], int]:
+    """Split a tagged payload into (noc_index, bare_address).
+
+    Returns (None, payload) when the tag is absent, which after the all-or-nothing rule in
+    synchronization_event_profiler.hpp means the capture came from an untagged build.
+    """
+    if not payload & NOC_TAG_PRESENT:
+        return None, payload
+    noc = 1 if payload & NOC_TAG_INDEX else 0
+    return noc, payload & ~(NOC_TAG_PRESENT | NOC_TAG_INDEX)
+
+
+def decode_noc_addr(addr: int) -> dict:
+    """Decode a bare (untagged) NoC address into its fields.
+
+    A unicast address sets only x,y (bits 36-47); a multicast descriptor also carries the
+    start corner (bits 48-59), so anything above bit 47 means multicast.
+    """
+    local = addr & LOCAL_MASK
+    coords = addr >> NOC_ADDR_LOCAL_BITS
+    if coords < (1 << (2 * NOC_ADDR_NODE_ID_BITS)):
+        return {
+            "kind": "unicast",
+            "l1": local,
+            "x": coords & NODE_MASK,
+            "y": (coords >> NOC_ADDR_NODE_ID_BITS) & NODE_MASK,
+        }
+    return {
+        "kind": "multicast",
+        "l1": local,
+        "end_x": coords & NODE_MASK,
+        "end_y": (coords >> NOC_ADDR_NODE_ID_BITS) & NODE_MASK,
+        "start_x": (coords >> (2 * NOC_ADDR_NODE_ID_BITS)) & NODE_MASK,
+        "start_y": (coords >> (3 * NOC_ADDR_NODE_ID_BITS)) & NODE_MASK,
+    }
 
 
 @dataclass
@@ -60,6 +121,9 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
     Handles two types of events:
     1. Zones (ZONE_START/ZONE_END): Have explicit zone names like SYNC-CB-RESERVE
     2. Signals (TS_DATA): Have empty zone names but timer_id maps to event name
+
+    A zone carries timing and no payload; the matching `-KEY` signal carries the payload.
+    Both are returned -- callers that only want timing filter on the `-KEY` suffix.
     """
     events = []
     zone_starts = {}  # Track zone starts to compute duration
@@ -85,49 +149,43 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
             except ValueError:
                 continue
 
+            # Only TS_DATA rows carry a payload. ZoneCsvConsumer leaves Row::data at its 0
+            # default for zone rows and prints it unconditionally, so a "0" in a zone row
+            # means "no payload" -- while in a TS_DATA row 0 is a real value (CB id 0 is the
+            # CB these kernels use). Reading the column for both would collapse the two.
+            data_str = get_col("data")
+            payload = None
+            if data_str and row_type == "TS_DATA":
+                try:
+                    payload = int(data_str, 0)
+                except ValueError:
+                    payload = None
+
             try:
-                # Handle zones (ZONE_START/ZONE_END pairs)
+                # Handle zones (ZONE_START/ZONE_END pairs); their payload rides in the
+                # matching -KEY signal, not in the zone row.
                 if zone_name.startswith("SYNC-"):
                     if row_type == "ZONE_START":
                         zone_starts[(zone_name, timer_id)] = timestamp
                     elif row_type == "ZONE_END":
                         start_ts = zone_starts.get((zone_name, timer_id), timestamp)
-                        duration = timestamp - start_ts
-
-                        payload = None
-                        data_str = get_col("data")
-                        if data_str:
-                            try:
-                                payload = int(data_str, 0)
-                            except ValueError:
-                                pass
-
                         events.append(
                             SyncEvent(
                                 zone_name=zone_name,
                                 core_x=int(get_col("core_x") or 0),
                                 core_y=int(get_col("core_y") or 0),
                                 risc=get_col("RISC processor type"),
-                                duration_cycles=duration,
-                                payload=payload,
+                                duration_cycles=timestamp - start_ts,
+                                payload=None,
                                 timestamp=start_ts,
                             )
                         )
 
                 # Handle signals (TS_DATA with timer_id mapping)
                 elif row_type == "TS_DATA" and timer_id in SYNC_LEGACY_IDS:
-                    event_name = SYNC_LEGACY_IDS[timer_id]
-                    payload = None
-                    data_str = get_col("data")
-                    if data_str:
-                        try:
-                            payload = int(data_str, 0)
-                        except ValueError:
-                            pass
-
                     events.append(
                         SyncEvent(
-                            zone_name=event_name,
+                            zone_name=SYNC_LEGACY_IDS[timer_id],
                             core_x=int(get_col("core_x") or 0),
                             core_y=int(get_col("core_y") or 0),
                             risc=get_col("RISC processor type"),
@@ -145,13 +203,36 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
     return events
 
 
-# API test configurations
-# Each tuple: (test_id, name, expected_events, wait_event_for_timing, payload_type, expected_cb_id, requires_quasar)
-# expected_events is a list of (event_name, risc) - both zones and signals
+@dataclass
+class ApiTest:
+    """One row of the C++ test table in tests/tt_metal/tools/profiler/test_sync_events.cpp.
+
+    `test_id` is the index into that table and is passed to the binary as argv[1], so the two
+    tables must stay in the same order. Append new cases at the end of both.
+    """
+
+    test_id: int
+    name: str
+    # (event_name, risc_substring) pairs that must all appear
+    expected_events: list
+    wait_event: str  # the zone whose blocking duration is checked
+    payload_type: str  # "cb_id" or "sem_addr"
+    expected_cb_id: Optional[int] = None
+    requires_quasar: bool = False
+    # To check the noc that the remote semaphore is sent on.
+    expected_noc: Optional[int] = None
+    # To check remote semaphore is unicast or multicast
+    remote_kind: Optional[str] = None
+    # To check the multicast rectangle spans correct number of cores
+    mcast_cores: int = 1
+
+
+# Producers on BRISC default to NoC 0; producers on NCRISC default to NoC 1. The Semaphore
+# class cases construct `Noc noc(0)` explicitly, so they stay on NoC 0 wherever they run.
 API_TESTS = [
     # ========== Raw CB APIs ==========
     # CB wait: producer (BRISC) reserve+push, consumer (NCRISC) wait
-    (
+    ApiTest(
         0,
         "cb_wait",
         [
@@ -161,11 +242,10 @@ API_TESTS = [
         ],
         "SYNC-CB-WAIT",
         "cb_id",
-        0,
-        False,
+        expected_cb_id=0,
     ),
     # CB reserve: producer reserve+push+reserve(blocks), consumer wait+pop
-    (
+    ApiTest(
         1,
         "cb_reserve",
         [
@@ -177,118 +257,133 @@ API_TESTS = [
         ],
         "SYNC-CB-RESERVE",
         "cb_id",
-        0,
-        False,
+        expected_cb_id=0,
     ),
     # ========== Raw Semaphore APIs ==========
     # noc_semaphore_set + noc_semaphore_wait
-    (
+    ApiTest(
         2,
         "raw_sem_set_wait",
-        [
-            ("SYNC-SEM-SET", "BRISC"),  # after delay
-            ("SYNC-SEM-WAIT", "NCRISC"),  # blocking wait completes
-        ],
+        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
     ),
     # noc_semaphore_inc (remote)
-    (
+    ApiTest(
         3,
         "raw_sem_inc_remote",
-        [
-            ("SYNC-SEM-SET-REMOTE", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
+        expected_noc=0,
+        remote_kind="unicast",
     ),
     # noc_semaphore_set + noc_semaphore_wait_min
-    (
+    ApiTest(
         4,
         "raw_sem_wait_min",
-        [
-            ("SYNC-SEM-SET", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
     ),
     # noc_semaphore_inc_multicast
-    (
+    ApiTest(
         5,
         "raw_sem_inc_multicast",
-        [
-            ("SYNC-SEM-SET-REMOTE", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
+        expected_noc=0,
+        remote_kind="multicast",
     ),
     # noc_semaphore_set_multicast
-    (
+    ApiTest(
         6,
         "raw_sem_set_multicast",
-        [
-            ("SYNC-SEM-SET-REMOTE", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
+        expected_noc=0,
+        remote_kind="multicast",
+    ),
+    # The remaining SYNC_SIGNAL_NOC_ADDR emitters, then the same raw remote APIs on NoC 1
+    # (driven from NCRISC); without those the noc-index bit is only ever observed as 0.
+    ApiTest(
+        7,
+        "raw_sem_set_remote",
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=0,
+        remote_kind="unicast",
+    ),
+    ApiTest(
+        8,
+        "raw_sem_set_multicast_loopback_src",
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=0,
+        remote_kind="multicast",
+        mcast_cores=2,  # loopback includes the sender, so the rectangle spans both cores
+    ),
+    ApiTest(
+        9,
+        "raw_sem_inc_remote_noc1",
+        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=1,
+        remote_kind="unicast",
+    ),
+    ApiTest(
+        10,
+        "raw_sem_inc_multicast_noc1",
+        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=1,
+        remote_kind="multicast",
+    ),
+    ApiTest(
+        11,
+        "raw_sem_set_multicast_noc1",
+        [("SYNC-SEM-SET-REMOTE", "NCRISC"), ("SYNC-SEM-WAIT", "BRISC")],
+        "SYNC-SEM-WAIT",
+        "sem_addr",
+        expected_noc=1,
+        remote_kind="multicast",
     ),
     # ========== Semaphore Class APIs ==========
     # Semaphore::set() + Semaphore::wait()
-    (
-        7,
+    ApiTest(
+        12,
         "class_set_wait",
-        [
-            ("SYNC-SEM-SET", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
     ),
     # Semaphore::up() + Semaphore::wait_min()
-    (
-        8,
+    ApiTest(
+        13,
         "class_up_wait_min",
-        [
-            ("SYNC-SEM-SET", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
     ),
     # Semaphore::up() remote
-    (
-        9,
+    ApiTest(
+        14,
         "class_up_remote",
-        [
-            ("SYNC-SEM-SET-REMOTE", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
+        expected_noc=0,
+        remote_kind="unicast",
     ),
     # Semaphore::set() + Semaphore::down() (down = wait + decrement)
-    (
-        10,
+    ApiTest(
+        15,
         "class_set_down",
         [
             ("SYNC-SEM-SET", "BRISC"),  # set()
@@ -297,12 +392,10 @@ API_TESTS = [
         ],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
     ),
     # Semaphore::set_multicast()
-    (
-        11,
+    ApiTest(
+        16,
         "class_set_multicast",
         [
             ("SYNC-SEM-SET", "BRISC"),  # local set first
@@ -311,25 +404,22 @@ API_TESTS = [
         ],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
+        expected_noc=0,
+        remote_kind="multicast",
     ),
     # Semaphore::inc_multicast()
-    (
-        12,
+    ApiTest(
+        17,
         "class_inc_multicast",
-        [
-            ("SYNC-SEM-SET-REMOTE", "BRISC"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET-REMOTE", "BRISC"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        False,
+        expected_noc=0,
+        remote_kind="multicast",
     ),
     # ========== Compute RISC (TRISC) CB APIs - all architectures ==========
-    (
-        13,
+    ApiTest(
+        18,
         "compute_cb_brisc_push_trisc_wait",
         [
             ("SYNC-CB-RESERVE", "BRISC"),  # instant reserve
@@ -339,11 +429,10 @@ API_TESTS = [
         ],
         "SYNC-CB-WAIT",
         "cb_id",
-        0,
-        False,
+        expected_cb_id=0,
     ),
-    (
-        14,
+    ApiTest(
+        19,
         "compute_cb_trisc_push_ncrisc_wait",
         [
             ("SYNC-CB-RESERVE", "TRISC"),  # instant reserve
@@ -352,36 +441,27 @@ API_TESTS = [
         ],
         "SYNC-CB-WAIT",
         "cb_id",
-        0,
-        False,
+        expected_cb_id=0,
     ),
     # ========== Compute RISC (TRISC) Semaphore APIs - Quasar only ==========
-    (
-        15,
+    ApiTest(
+        20,
         "compute_brisc_set_trisc_wait",
-        [
-            ("SYNC-SEM-SET", "BRISC"),
-            ("SYNC-SEM-WAIT", "TRISC0"),
-        ],
+        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "TRISC0")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        True,
+        requires_quasar=True,
     ),
-    (
-        16,
+    ApiTest(
+        21,
         "compute_brisc_set_trisc_wait_min",
-        [
-            ("SYNC-SEM-SET", "BRISC"),
-            ("SYNC-SEM-WAIT", "TRISC0"),
-        ],
+        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "TRISC0")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        True,
+        requires_quasar=True,
     ),
-    (
-        17,
+    ApiTest(
+        22,
         "compute_brisc_set_trisc_down",
         [
             ("SYNC-SEM-SET", "BRISC"),
@@ -390,33 +470,24 @@ API_TESTS = [
         ],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        True,
+        requires_quasar=True,
     ),
     # TRISC producer + NCRISC consumer
-    (
-        18,
+    ApiTest(
+        23,
         "compute_trisc_set_ncrisc_wait",
-        [
-            ("SYNC-SEM-SET", "TRISC0"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET", "TRISC0"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        True,
+        requires_quasar=True,
     ),
-    (
-        19,
+    ApiTest(
+        24,
         "compute_trisc_up_ncrisc_wait",
-        [
-            ("SYNC-SEM-SET", "TRISC0"),
-            ("SYNC-SEM-WAIT", "NCRISC"),
-        ],
+        [("SYNC-SEM-SET", "TRISC0"), ("SYNC-SEM-WAIT", "NCRISC")],
         "SYNC-SEM-WAIT",
         "sem_addr",
-        None,
-        True,
+        requires_quasar=True,
     ),
 ]
 
@@ -425,17 +496,10 @@ def get_test_binary() -> Path:
     return TT_METAL_HOME / "build/test/tt_metal/tools/profiler/test_sync_events"
 
 
-def is_quasar_device() -> bool:
-    """Check if current device is Quasar (ckernel::Semaphore is Quasar-only)."""
-    try:
-        import ttnn
-
-        device = ttnn.open_device(0)
-        arch = device.arch().name.lower()
-        ttnn.close_device(device)
-        return arch == "quasar"
-    except Exception:
-        return False
+# What the C++ harness prints for a case it will not run on this device. Detecting the skip
+# from the harness' own output keeps the arch check in one place: opening a device from here
+# just to read `arch()` costs a full device init per session and gets the answer second-hand.
+QUASAR_SKIP_MARKER = "requires Quasar"
 
 
 def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
@@ -452,7 +516,7 @@ def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_DEVICE_PROFILER_SYNC_EVENTS": "1",
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1",
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )
@@ -470,188 +534,157 @@ def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
     return proc.returncode == 0, log, streaming_active
 
 
-def validate_payload(event: SyncEvent, payload_type: str) -> tuple[bool, str]:
-    """Validate event payload based on type."""
-    if event.payload is None:
-        return True, "no payload"  # Some events may not have payloads
+def check_remote_payload(event: SyncEvent, spec: ApiTest) -> list[str]:
+    """Validate one SYNC-SEM-SET-REMOTE payload against the tagged-NoC-address encoding."""
+    errors = []
+    noc, addr = decode_noc_tag(event.payload)
+    if noc is None:
+        return [
+            f"{event.zone_name}: payload {hex(event.payload)} carries no NoC tag; "
+            "every NoC address passed to SYNC_SIGNAL must go through SYNC_SIGNAL_NOC_ADDR"
+        ]
+    if noc != spec.expected_noc:
+        errors.append(f"{event.zone_name}: NoC index {noc}, expected {spec.expected_noc}")
 
-    if payload_type == "cb_id":
-        if 0 <= event.payload < 64:
-            return True, f"CB ID {event.payload}"
-        return False, f"invalid CB ID {event.payload}"
+    fields = decode_noc_addr(addr)
+    if spec.remote_kind is not None and fields["kind"] != spec.remote_kind:
+        errors.append(f"{event.zone_name}: decoded as {fields['kind']}, expected {spec.remote_kind}")
 
-    elif payload_type == "sem_addr":
-        L1_MAX = 0x200000
-        if 0 < event.payload <= L1_MAX:
-            return True, f"addr {hex(event.payload)}"
-        return False, f"invalid addr {hex(event.payload)}"
+    if not 0 < fields["l1"] <= L1_MAX:
+        errors.append(f"{event.zone_name}: L1 offset {hex(fields['l1'])} outside (0, {hex(L1_MAX)}]")
 
-    return True, "unknown type"
+    if fields["kind"] == "multicast":
+        # The rectangle must round-trip to the size the kernel asked for; a mis-encoded
+        # descriptor shows up here as a wrong core count.
+        width = fields["end_x"] - fields["start_x"] + 1
+        height = fields["end_y"] - fields["start_y"] + 1
+        if width * height != spec.mcast_cores:
+            rect = f"start=({fields['start_x']},{fields['start_y']}) end=({fields['end_x']},{fields['end_y']})"
+            errors.append(f"{event.zone_name}: expected {spec.mcast_cores} core(s) in the rectangle, got {rect}")
+    print(f"  ✓ {event.zone_name}: noc={noc} {fields}")
+    return errors
 
 
 @pytest.fixture(autouse=True)
 def setup():
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     if not get_test_binary().exists():
-        pytest.skip(f"Build test first: cmake --build build --target profiler_test_sync_events_timing")
+        pytest.skip("Build test first: cmake --build build --target profiler_test_sync_events")
 
 
-@pytest.mark.parametrize(
-    "test_id,name,expected_sequence,wait_event,payload_type,expected_cb_id,requires_quasar", API_TESTS
-)
-def test_sync_api(
-    test_id: int,
-    name: str,
-    expected_sequence: list,
-    wait_event: str,
-    payload_type: str,
-    expected_cb_id: Optional[int],
-    requires_quasar: bool,
-):
-    if requires_quasar and not is_quasar_device():
-        pytest.skip("Test requires Quasar device (ckernel::Semaphore is Quasar-only)")
+@pytest.mark.parametrize("spec", API_TESTS, ids=lambda s: s.name)
+def test_sync_api(spec: ApiTest):
+    """Unified test for each sync API. Verifies:
+    1. Every expected event is present, on the expected RISC.
+    2. Payloads are valid -- CB ids match the CB the kernel used, local semaphore keys are L1
+       addresses, and remote payloads decode as tagged NoC addresses on the expected NoC.
+    3. The blocking wait blocked for at least the producer's delay.
     """
-    Unified test for each sync API. Verifies:
-    1. Events match expected sequence EXACTLY (type, RISC, order)
-    2. All payloads are valid (CB IDs match expected, semaphore addresses in L1 and consistent)
-    3. Wait timing is within tolerance of expected delay
-    """
-    csv_path = ARTIFACTS / f"{name}.csv"
+    csv_path = ARTIFACTS / f"{spec.name}.csv"
     csv_path.unlink(missing_ok=True)
 
-    # Run test
-    success, log, streaming_active = run_test(test_id, csv_path)
+    success, log, streaming_active = run_test(spec.test_id, csv_path)
     assert success, f"Test failed:\n{log[-2000:]}"
+    if spec.requires_quasar and QUASAR_SKIP_MARKER in log:
+        pytest.skip("Test requires Quasar device (ckernel::Semaphore is Quasar-only)")
     if not streaming_active:
         pytest.skip("Streaming profiler did not activate (requires Blackhole with ENABLE_TRACY build)")
     assert csv_path.exists(), f"Zone CSV not written. Log:\n{log[-1000:]}"
 
     events = parse_zone_csv(csv_path)
-    # Filter out -KEY marker events
-    sync_events = [e for e in events if e.zone_name.startswith("SYNC-") and not e.zone_name.endswith("-KEY")]
+    # Zones carry timing; the matching -KEY signals carry the payload.
+    sync_events = [e for e in events if not e.zone_name.endswith("-KEY")]
+    key_events = [e for e in events if e.zone_name.endswith("-KEY")]
 
     print(f"\n{'='*50}")
-    print(f"API: {name}")
+    print(f"API: {spec.name}")
     print(f"{'='*50}")
 
-    # 1. Check all expected events are present (order may vary due to concurrent execution)
-    print(f"\nEvent presence verification:")
-    print(f"  Expected: {len(expected_sequence)} events")
+    # 1. Every expected event is present (order varies with concurrent execution)
+    print("\nEvent presence verification:")
+    print(f"  Expected: {len(spec.expected_events)} events")
     print(f"  Actual:   {len(sync_events)} events")
 
-    # Build set of actual events (event_name, risc_prefix)
     actual_events = [(e.zone_name, e.risc.split()[0].upper() if e.risc else "") for e in sync_events]
 
     sequence_errors = []
-    for expected_event, expected_risc in expected_sequence:
-        # Find matching event
-        found = False
-        for actual_name, actual_risc in actual_events:
-            if actual_name == expected_event and expected_risc.upper() in actual_risc.upper():
-                found = True
-                print(f"  ✓ {expected_event} on {expected_risc}")
-                break
-        if not found:
+    for expected_event, expected_risc in spec.expected_events:
+        found = any(
+            actual_name == expected_event and expected_risc.upper() in actual_risc.upper()
+            for actual_name, actual_risc in actual_events
+        )
+        if found:
+            print(f"  ✓ {expected_event} on {expected_risc}")
+        else:
             print(f"  ✗ MISSING: {expected_event} on {expected_risc}")
             sequence_errors.append(f"MISSING: {expected_event} on {expected_risc}")
 
-    # Note any extra events (informational, not an error)
-    if len(sync_events) > len(expected_sequence):
-        print(f"  (Also found {len(sync_events) - len(expected_sequence)} additional events)")
+    if len(sync_events) > len(spec.expected_events):
+        print(f"  (Also found {len(sync_events) - len(spec.expected_events)} additional events)")
 
-    assert len(sequence_errors) == 0, f"Missing events:\n" + "\n".join(sequence_errors)
+    assert not sequence_errors, "Missing events:\n" + "\n".join(sequence_errors)
 
-    # 2. Check ALL payloads
-    print(f"\nPayload validation ({payload_type}):")
-    invalid_payloads = []
-    wrong_cb_ids = []
+    # 2. Payloads. Remote events carry a tagged NoC address; everything else carries a local
+    # key (a CB id or an L1 semaphore address), including the -KEY signals.
+    print(f"\nPayload validation ({spec.payload_type}):")
+    payload_errors = []
     sem_addresses = set()
+    remote_seen = 0
 
-    for e in sync_events:
-        # Note: Zone events (WAIT zones) have payload in -KEY markers, not in zone itself
-        # Only signals have direct payloads, zones may have payload=0
-        if e.payload is None or e.payload == 0:
-            # Skip payload validation for events without payloads
+    for e in sync_events + key_events:
+        if e.payload is None:
+            continue  # zone rows carry no payload; their -KEY signal does
+
+        if e.zone_name == "SYNC-SEM-SET-REMOTE":
+            remote_seen += 1
+            payload_errors.extend(check_remote_payload(e, spec))
             continue
 
-        if payload_type == "cb_id":
-            # CB ID must be 0-63 AND match expected value
-            if not (0 <= e.payload < 64):
-                invalid_payloads.append((e.zone_name, f"invalid CB ID {e.payload}"))
-            elif expected_cb_id is not None and e.payload != expected_cb_id:
-                wrong_cb_ids.append((e.zone_name, expected_cb_id, e.payload))
-
-        elif payload_type == "sem_addr":
-            # For local semaphores: L1 address (0 < addr <= 2MB)
-            # For remote semaphores: NOC address (64-bit, includes coordinates)
-            L1_MAX = 0x200000
+        if spec.payload_type == "cb_id":
+            if not 0 <= e.payload < 64:
+                payload_errors.append(f"{e.zone_name}: invalid CB ID {e.payload}")
+            elif spec.expected_cb_id is not None and e.payload != spec.expected_cb_id:
+                payload_errors.append(f"{e.zone_name}: expected CB ID {spec.expected_cb_id}, got {e.payload}")
+        elif spec.payload_type == "sem_addr":
             if 0 < e.payload <= L1_MAX:
                 sem_addresses.add(e.payload)
-            elif e.payload > L1_MAX:
-                # Remote NOC address - extract L1 portion (lower bits may contain L1 addr)
-                # Just note it's valid, don't track specific address
-                pass
             else:
-                invalid_payloads.append((e.zone_name, f"invalid addr {hex(e.payload)}"))
+                payload_errors.append(f"{e.zone_name}: invalid local semaphore address {hex(e.payload)}")
 
-    if payload_type == "cb_id":
-        if invalid_payloads:
-            for name, msg in invalid_payloads:
-                print(f"  ✗ {name}: {msg}")
-        elif wrong_cb_ids:
-            for name, expected, actual in wrong_cb_ids:
-                print(f"  ✗ {name}: expected CB ID {expected}, got {actual}")
+    if spec.expected_noc is not None:
+        assert remote_seen > 0, "expected at least one SYNC-SEM-SET-REMOTE payload, found none"
+
+    for msg in payload_errors:
+        print(f"  ✗ {msg}")
+    if not payload_errors:
+        if spec.payload_type == "cb_id":
+            print(f"  ✓ All payloads have CB ID = {spec.expected_cb_id}")
         else:
-            print(f"  ✓ All {len(sync_events)} events have CB ID = {expected_cb_id}")
+            print(f"  ✓ Local semaphore addresses: {[hex(a) for a in sorted(sem_addresses)]}")
 
-    elif payload_type == "sem_addr":
-        if invalid_payloads:
-            for name, msg in invalid_payloads:
-                print(f"  ✗ {name}: {msg}")
-        else:
-            # All addresses should be the same semaphore (or at most 2 for remote tests)
-            print(f"  ✓ All {len(sync_events)} events have valid L1 addresses")
-            print(f"  ✓ Unique addresses: {[hex(a) for a in sorted(sem_addresses)]}")
-            if len(sem_addresses) > 2:
-                print(f"  ⚠ More than 2 unique addresses (unexpected)")
+    assert not payload_errors, "Invalid payloads:\n" + "\n".join(payload_errors)
 
-    assert len(invalid_payloads) == 0, f"Invalid payloads: {invalid_payloads}"
-    assert len(wrong_cb_ids) == 0, f"Wrong CB IDs: {wrong_cb_ids}"
+    # 3. The blocking wait must actually have blocked.
+    wait_events = [e for e in sync_events if e.zone_name == spec.wait_event]
+    assert wait_events, f"No {spec.wait_event} events found"
 
-    # 3. Check timing - find the blocking wait (longest duration)
-    if wait_event:
-        wait_events = [e for e in sync_events if e.zone_name == wait_event]
-        blocking_waits = [e for e in wait_events if e.duration_cycles > TIMING_TOLERANCE_CYCLES]
+    blocking = [e for e in wait_events if e.duration_cycles > NONBLOCKING_CYCLES]
+    assert blocking, (
+        f"{len(wait_events)} {spec.wait_event} events found but none blocked "
+        f"(> {NONBLOCKING_CYCLES} cycles); the consumer never waited on the producer"
+    )
 
-        if blocking_waits:
-            durations = [e.duration_cycles for e in blocking_waits]
-            max_dur = max(durations)
-            min_dur = min(durations)
-            avg_dur = sum(durations) / len(durations)
+    durations = [e.duration_cycles for e in blocking]
+    print(f"\nTiming ({spec.wait_event}):")
+    print(f"  At least: {MIN_BLOCKING_CYCLES} cycles")
+    print(f"  Measured: min={min(durations)}, max={max(durations)}, avg={sum(durations)/len(durations):.0f}")
 
-            print(f"\nTiming ({wait_event}):")
-            print(f"  Expected: {EXPECTED_DELAY_CYCLES} ± {TIMING_TOLERANCE_CYCLES} cycles")
-            print(f"  Measured: min={min_dur}, max={max_dur}, avg={avg_dur:.0f}")
-
-            lower = EXPECTED_DELAY_CYCLES - TIMING_TOLERANCE_CYCLES
-            upper = EXPECTED_DELAY_CYCLES + TIMING_TOLERANCE_CYCLES
-            in_range = [d for d in durations if lower <= d <= upper]
-
-            if len(in_range) > 0:
-                print(f"  ✓ {len(in_range)}/{len(durations)} within tolerance")
-            else:
-                loose_lower = EXPECTED_DELAY_CYCLES - 2 * TIMING_TOLERANCE_CYCLES
-                loose_upper = EXPECTED_DELAY_CYCLES + 2 * TIMING_TOLERANCE_CYCLES
-                in_loose = [d for d in durations if loose_lower <= d <= loose_upper]
-                if in_loose:
-                    print(f"  ⚠ {len(in_loose)}/{len(durations)} within 2x tolerance")
-                else:
-                    pytest.fail(f"Wait timing outside expected range: got {max_dur}, expected [{lower}, {upper}]")
-        else:
-            if wait_events:
-                print(f"\n⚠ {len(wait_events)} {wait_event} events found but none with blocking duration")
-            else:
-                print(f"\n⚠ No {wait_event} events found")
+    too_short = [d for d in durations if d < MIN_BLOCKING_CYCLES]
+    assert not too_short, (
+        f"{spec.wait_event} blocked for {too_short} cycles, less than the producer's "
+        f"{DELAY_CYCLES}-nop delay; the wait did not cover the delay"
+    )
+    print(f"  ✓ {len(durations)}/{len(durations)} blocked at least {MIN_BLOCKING_CYCLES} cycles")
 
 
 def test_no_events_when_disabled():
@@ -665,7 +698,7 @@ def test_no_events_when_disabled():
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_DEVICE_PROFILER_SYNC_EVENTS": "0",  # Disabled
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "0",  # Disabled
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )
@@ -693,18 +726,17 @@ def test_no_events_when_disabled():
 
 
 def test_full_coverage_summary():
-    """Run all API tests and print coverage summary."""
+    """Run every API test in one capture and assert all event types are exercised."""
     csv_path = ARTIFACTS / "full.csv"
     csv_path.unlink(missing_ok=True)
 
-    # Run all tests (no arg = run all)
     test_binary = get_test_binary()
     env = os.environ.copy()
     env.update(
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_DEVICE_PROFILER_SYNC_EVENTS": "1",
+            "TT_METAL_STREAMING_PROFILER_SYNC_EVENTS": "1",
             "TT_METAL_STREAMING_PROFILER_ZONE_CSV": str(csv_path),
         }
     )
@@ -746,16 +778,33 @@ def test_full_coverage_summary():
         by_type[e.zone_name] += 1
 
     print("\nEvent counts:")
-    for name in sorted(by_type.keys()):
-        status = "✓" if name in all_expected or name.endswith("-KEY") else "?"
-        print(f"  {status} {name}: {by_type[name]}")
+    for event_name in sorted(by_type):
+        status = "✓" if event_name in all_expected or event_name.endswith("-KEY") else "?"
+        print(f"  {status} {event_name}: {by_type[event_name]}")
 
     covered = found & all_expected
-    pct = len(covered) / len(all_expected) * 100
-    print(f"\nCoverage: {len(covered)}/{len(all_expected)} ({pct:.0f}%)")
+    print(f"\nCoverage: {len(covered)}/{len(all_expected)} ({len(covered) / len(all_expected) * 100:.0f}%)")
 
     missing = all_expected - found
-    if missing:
-        print(f"Missing: {missing}")
-    else:
-        print("✓ All event types covered")
+    assert not missing, f"Event types never emitted: {sorted(missing)}"
+    print("✓ All event types covered")
+
+    remote = [e for e in events if e.zone_name == "SYNC-SEM-SET-REMOTE" and e.payload is not None]
+    assert remote, "no SYNC-SEM-SET-REMOTE payloads in the full capture"
+
+    # The all-or-nothing rule, checked over the whole capture rather than per case: the presence
+    # flag only lets a consumer fall back on an untagged build if EVERY emitter tags. One
+    # SYNC_SIGNAL where SYNC_SIGNAL_NOC_ADDR belonged breaks that for the entire format, so this
+    # runs across every event the run produced, not just the ones a case declared a NoC for.
+    untagged = [e for e in remote if decode_noc_tag(e.payload)[0] is None]
+    assert not untagged, (
+        f"{len(untagged)}/{len(remote)} SYNC-SEM-SET-REMOTE payloads carry no NoC tag "
+        f"(e.g. {hex(untagged[0].payload)} on {untagged[0].risc}); every NoC address passed to "
+        "SYNC_SIGNAL must go through SYNC_SIGNAL_NOC_ADDR"
+    )
+    print(f"✓ All {len(remote)} SYNC-SEM-SET-REMOTE payloads carry a NoC tag")
+
+    # Both NoC indices must appear, or the noc-index bit is untested.
+    nocs = {decode_noc_tag(e.payload)[0] for e in remote}
+    assert nocs == {0, 1}, f"expected SYNC-SEM-SET-REMOTE on both NoCs, saw {sorted(nocs)}"
+    print("✓ SYNC-SEM-SET-REMOTE observed on both NoC 0 and NoC 1")

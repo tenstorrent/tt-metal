@@ -380,21 +380,17 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
         y *= std::numeric_limits<float>::infinity();
 
         e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
-        // if e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-
+        v_if(sfpi::nearby(e < 255)) {
             // y = 2**i * r
             y = sfpi::setexp(r, e);
 
-            // if e < 1
-            v_if(e_lt_255 < -254) {
+            v_if(sfpi::nearby(e < 1)) {
                 // underflow, including subnormals
                 y = 0.0f;
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
 
     return y;
