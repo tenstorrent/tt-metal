@@ -88,6 +88,7 @@ def test_loopback_byte_check_covers_all_configs_and_detects_corruption(caches_an
     plan = migration_driver._cache_plan(table, None)
     assert len(plan) == 36
     assert [len(entry["rows"]) for entry in plan] == [1] * 4 + [5] * 32
+    assert [entry["head_dim"] for entry in plan] == [640] * 4 + [256] * 32
     for source, destination, length in pairs:
         for config in range(36):
             for layer in adapter.cache_layer_rows(config, 6):
