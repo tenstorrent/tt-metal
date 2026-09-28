@@ -268,6 +268,10 @@
 #include "api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h"
 #endif
 
+#if TT_POLY_AGGREGATE_MULTIGAMMALN_INCLUDE
+#include "api/compute/eltwise_unary/multigammaln_tt_poly_bf16.h"
+#endif
+
 #if TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE
 #include "api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h"
 #endif

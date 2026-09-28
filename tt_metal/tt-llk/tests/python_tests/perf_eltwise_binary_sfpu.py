@@ -1101,6 +1101,8 @@ _PAIRED_GENERATED = {
     "log_sigmoid_bw": "backward_complete",
     "logit": "dedicated_unary",
     "logsigmoid": "dedicated_unary",
+    "multigammaln": "dedicated_unary",
+    "multigammaln_p4": "dedicated_unary",
     "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
     "softsign_bw": "backward_complete",
