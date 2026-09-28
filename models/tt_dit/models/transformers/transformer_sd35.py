@@ -19,6 +19,7 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...utils import cache
 from ...utils.padding import PaddingConfig
+from ...utils.sdpa_recipe import validate_recipe_args
 from ...utils.substate import rename_substate
 from .attention_sd35 import SD35JointAttention
 
@@ -40,6 +41,8 @@ class SD35TransformerBlock(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
         super().__init__()
 
@@ -103,6 +106,8 @@ class SD35TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -334,7 +339,13 @@ class SD35Transformer2DModel(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every joint attention
+        (joint SDPA, or ring joint SDPA with sequence parallelism; D64); ``None`` selects
+        ``SD35JointAttention.sdpa_precision_default`` (legacy SDPA off Blackhole)."""
+        self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=attention_head_dim)
         super().__init__()
 
         self.sample_size = sample_size
@@ -396,6 +407,8 @@ class SD35Transformer2DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             self.transformer_blocks.append(block)
 
@@ -416,6 +429,13 @@ class SD35Transformer2DModel(Module):
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    @staticmethod
+    def validate_sdpa_recipe(
+        sdpa_precision: ttnn.SDPAPrecision | None, sdpa_kv_dtype: ttnn.DataType | None, *, head_dim: int
+    ) -> None:
+        """Raise ValueError for an unsupported named SDPA recipe / KV dtype (before any device work)."""
+        validate_recipe_args(sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="SD3.5")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "norm_out.linear", "norm_out_linear")
@@ -532,6 +552,8 @@ class SD35Checkpoint:
         *,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> SD35Transformer2DModel:
         """Construct an ``SD35Transformer2DModel`` for this checkpoint and load its weights."""
         device = ccl_manager.mesh_device
@@ -563,6 +585,8 @@ class SD35Checkpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         cache.load_model(
             tt_model=model,
