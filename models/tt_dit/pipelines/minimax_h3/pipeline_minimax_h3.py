@@ -616,6 +616,7 @@ class MiniMaxH3Pipeline:
                 raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
             self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
+        self.last_program_cache_misses: dict[str, int] = {}
 
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -773,6 +774,16 @@ class MiniMaxH3Pipeline:
             yield
         finally:
             self._log_generation = previous
+
+    @contextmanager
+    def _track_cache_misses(self, on_event: PipelineEventCallback, name: str):
+        """`event_section`, also adding the program-cache entries `name` builds to
+        `last_program_cache_misses`. After warmup every entry should be zero."""
+        before = self.mesh_device.num_program_cache_entries()
+        with event_section(on_event, name):
+            yield
+        misses = self.last_program_cache_misses
+        misses[name] = misses.get(name, 0) + self.mesh_device.num_program_cache_entries() - before
 
     # ------------------------------------------------------------------ text
 
@@ -1654,6 +1665,7 @@ class MiniMaxH3Pipeline:
         order.
         """
         on_event = on_event if on_event is not None else null_callback
+        self.last_program_cache_misses = {}
         validate_request(
             image=image,
             last_image=last_image,
@@ -1713,7 +1725,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text (plus the vision block, for fl2va).
-        with event_section(on_event, "encoder"):
+        with self._track_cache_misses(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes)
 
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
@@ -1750,7 +1762,7 @@ class MiniMaxH3Pipeline:
             # Every keyframe tile is exactly `tile_size` square: `split_tiles` returns `[tile_size] * n`
             # lengths unless one tile already covers the axis, and at 1344x768 neither does. So one
             # `(1, 256, 256)` encoder serves all 28 tiles, which is one wave on a 32-device mesh.
-            with event_section(on_event, "vae_encode"):
+            with self._track_cache_misses(on_event, "vae_encode"):
                 condition_rows = self._encode_keyframes(self._vae, keyframes)
                 condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
 
@@ -1847,7 +1859,7 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text, plus one vision block per image reference and one per merged frame pair of a video.
-        with event_section(on_event, "encoder"):
+        with self._track_cache_misses(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
         scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
@@ -1862,7 +1874,7 @@ class MiniMaxH3Pipeline:
         vae = self._vae if has_visual else None
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
-        with event_section(on_event, "vae_encode"):
+        with self._track_cache_misses(on_event, "vae_encode"):
             condition_rows, audio_condition_rows = encode_references(
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
@@ -1966,7 +1978,7 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
-        with event_section(on_event, "denoising"):
+        with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
                 transformer,
                 layout,
@@ -1979,16 +1991,17 @@ class MiniMaxH3Pipeline:
                 on_event=on_event,
             )
 
-        with event_section(on_event, "vae"):
+        with self._track_cache_misses(on_event, "vae"):
             video = self._decode_video(
                 self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
             )
 
-        with event_section(on_event, "audio"):
+        with self._track_cache_misses(on_event, "audio"):
             audio = self._decode_audio(
                 self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
 
+        self._log(f"program cache misses: {self.last_program_cache_misses}")
         yuv = self.vae_output_type == "yuv420"
         return MiniMaxH3Output(
             video=video,
