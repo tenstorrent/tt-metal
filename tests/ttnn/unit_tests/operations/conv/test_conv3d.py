@@ -810,17 +810,6 @@ def _prepare_fp32_conv3d_weight(weight, C_in_block, device):
     )
 
 
-# Measured cost/benefit of enable_fp32_operand_split at these shapes (Blackhole p150 die, 12x10 grid, this test's
-# blocking T_out_block=8 / C_out_block=32 / C_in_block=128, HiFi4 + fp32_dest_acc_en, best of 10 warm runs; accuracy
-# is relative RMSE against a float64 torch conv3d):
-#
-#   C_in C_out  k    T   plain fp32 (full W)    host three-conv split   in-kernel split
-#    512   512 11  400   1.08 ms  1.13e-3       3.25 ms  2.72e-4        4.20 ms  2.72e-4
-#    128   128  3 1900   0.17 ms  1.03e-3       0.56 ms  2.50e-4        0.45 ms  2.50e-4
-#   2048  1024  7   80   2.60 ms  1.14e-3       7.54 ms  2.83e-4        5.27 ms  2.83e-4
-#
-# Both splits cut the error ~4.2x for 2-4x the plain conv's time. In-kernel beats the host split up to k=7 and loses
-# at k=11, which is why models/tt_dit/layers/audio_ops.py (_KERNEL_SPLIT_MAX_K = 7) keeps the three-conv form above k=7.
 @pytest.mark.parametrize(
     "C_in, C_out, kernel, T",
     [(512, 512, 11, 400), (128, 128, 3, 1900), (2048, 1024, 7, 80)],
