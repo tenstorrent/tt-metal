@@ -1613,6 +1613,90 @@
   "started": "2026-09-28T05:42:05",
   "status": "PASS"
  },
+ "S.sliding_moe.02": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "874b140f37e897ed93af3c87748bed94e2c82b9c",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "a3a88522-0b57-447e-bcdf-49b069236f28"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/briefs/S.sliding_moe.02.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "874b140f37e897ed93af3c87748bed94e2c82b9c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/agents/S.sliding_moe.02.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 160.0,
+    "session_id": "a3a88522-0b57-447e-bcdf-49b069236f28",
+    "t": "2026-09-28T05:51:03"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 34.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T05:52:51"
+   }
+  ],
+  "last_run": "2026-09-28T05:52:51",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/S.sliding_moe.02.log",
+  "metrics": {
+   "pcc_swap_attn_norm": 0.9999959137757449,
+   "pcc_swap_attn_out": 0.9998985740032578,
+   "pcc_swap_experts_out": 0.9998916877244178,
+   "pcc_swap_ffn_norm": 0.9999971652048227,
+   "pcc_swap_h_mid": 0.9999971862860619,
+   "pcc_swap_out": 0.9999948391956914,
+   "pcc_swap_router": 0.999090275471397,
+   "rel_l2_head_rows_swap_attn_out": 0.014789105392992496,
+   "rel_l2_head_rows_swap_out": 0.0029297012370079756,
+   "rel_l2_swap_attn_norm": 0.0028921649791300297,
+   "rel_l2_swap_attn_out": 0.019297856837511063,
+   "rel_l2_swap_out": 0.0032108896411955357,
+   "rel_l2_vs_cpu_window_swap_attn_out": 0.012984463013708591,
+   "row_norm_ratio_max_swap_attn_norm": 1.0061274766921997,
+   "row_norm_ratio_max_swap_attn_out": 1.0652282238006592,
+   "row_norm_ratio_min_swap_attn_norm": 0.9935176968574524,
+   "row_norm_ratio_min_swap_attn_out": 0.9738918542861938,
+   "worst_row_rel_l2_swap_attn_norm": 0.006967208348214626,
+   "worst_row_rel_l2_swap_attn_out": 0.06543365120887756
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T05:52:17",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T04:27:18",
