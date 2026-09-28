@@ -1297,3 +1297,61 @@ def test_hardtanh_bf16_compiled_contract(device):
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.hardtanh(device_input, **{"min_val": -1.0, "max_val": 1.0})).to(torch.bfloat16)
     assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _RAW_TO_REFERENCE_INPUT, ((), ()))
+
+
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
+)
+def test_polygamma_bf16_compiled_contract(device):
+    import importlib
+    import numpy as np
+
+    _REFERENCE_MODULE = "torch.special"
+    _REFERENCE_FUNCTION = "polygamma"
+    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
+        "blackhole": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "pos_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "pos_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "pos_inf",
+            "neg_nan": "pos_inf",
+        },
+        "wormhole_b0": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "neg_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "neg_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "nan",
+            "neg_nan": "nan",
+        },
+    }
+
+    def _raw_to_reference_input():
+        if is_blackhole():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
+        if is_wormhole_b0():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
+        raise AssertionError("no compiled ingress contract for current architecture")
+
+    def _reference(values):
+        module = importlib.import_module(_REFERENCE_MODULE)
+        if _REFERENCE_MODULE == "numpy":
+            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{"n": 1})
+            return torch.from_numpy(np.asarray(result, dtype=np.float64))
+        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{"n": 1})
+
+    def _real_domain_mask(values):
+        return ~((values <= 0.0) & (values == np.trunc(values)))
+
+    host = generate_all_bfloat16_bitpatterns()
+    assert host.numel() == 65536
+    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.polygamma(device_input, 1, **{})).to(torch.bfloat16)
+    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _raw_to_reference_input(), ((), ()))
