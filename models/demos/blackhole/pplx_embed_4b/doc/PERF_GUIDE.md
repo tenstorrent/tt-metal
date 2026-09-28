@@ -144,6 +144,7 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 | `capture_qkv_call.py [batch]` (`CAP_N=9728,19456` for FF1/FF3 / fused w13) | the model's actual QKV (or other) `minimal_matmul` call: operand shapes, dtypes, memory configs (incl. shard specs), program config |
 | `l1_map_first_layer.py [batch] [n_ops]` | live L1 buffers (lowest address, total, list) after each of the first `n_ops` ops of one eager prefill, next to the CB-region start: the room a program's static CBs have |
 | `bench_mm_ablate.py <preset> [batch]` (`ff13`, `ff13fused`, `ff13plain`, `qkv`, `ff2`, `wo`; `MM_BLOCKS=`, `ABL_ONLY=`) | any model matmul at its per-batch config with reads / writes / both skipped |
+| `bench_mm_sweep.py <preset> <batch> [top_n]` (`SWEEP=`) | plain `minimal_matmul` block / subblock sweep for a model projection at its operands (presets of `bench_mm_ablate.py`) |
 | `bench_ff13_sweep.py <batch> [top_n]` (`SWEEP=`, `FF13_FP32=1`) | fused-SwiGLU FF13 block / subblock sweep at the model's operands, one device session |
 | `bench_swiglu_epilogue.py [batch …]` (`EPI_PRESET=ff13fused`, `EPI_ONLY=`) | fused-SwiGLU epilogue variants (their `swiglu_block` patches apply to the kernel before §58; the landed in-loop path is `base`) with PCC vs base and vs an fp32 torch SwiGLU |
 | `test_qkv_chunks.py` | bit-identity of the chunked bs32 path's ops: add+norm half-batch output pair, heads op per half batch at a batch offset |

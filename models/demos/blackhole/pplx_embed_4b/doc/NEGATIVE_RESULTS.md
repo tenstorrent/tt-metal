@@ -1217,3 +1217,30 @@ cold / sustained bs8 85.0 / 104.1 → 82.5 / 101.4 ms, bs16 158.3 / 210.7 → 15
 FF1 / FF3). bs1 (`QWEN_FUSE_SWIGLU_BS1=1`, M=512, 110 configs): best 2,20,8 1×2 214.4 µs (the probe's old 2,8,8 1×4
 259.2), but the legacy FF1 + FF3 + mul it replaces is cheaper e2e: 15.6 → 17.6 ms at the old config, 15.7 → 16.0 at
 the best. bs1 stays unfused; the probe's defaults now point at the best config.
+
+## 59. FF2 / WO: compute-bound at ~80% of the LoFi roofline; bs32's M_block-16 win is lost to the power cap (2026-09-28)
+
+Model calls (`capture_qkv_call.py`, `CAP_N=2560`): FF2 in0 [M, 9728] and WO in0 [M, 4096] bfp8 in **DRAM**, bfp4 weights
+DRAM width-sharded ([K, 320] per bank), bfp8 out in L1, LoFi; blocks bs8 16,8,8 1×8, bs16 / bs32 8,8,8 1×8.
+`perf_tools/bench_mm_ablate.py ff2|wo <batch>` (the presets now read in0 from DRAM, `MM_IN0=` overrides), µs:
+
+| | full | no output write | no in0 read | no in1 read | compute only | TFLOP/s full / compute |
+|---|---|---|---|---|---|---|
+| FF2 bs8 | 372.6 | 372.8 | 372.0 | 370.2 | 366.6 | 548 / 557 |
+| FF2 bs16 | 734.6 | 730.5 | 733.0 | 723.7 | 718.7 | 555 / 568 |
+| FF2 bs32 | 1505.6 | 1501.8 | 1503.6 | 1401.1 | 1389.8 | 542 / 587 |
+| WO bs8 | 173.6 | 172.9 | 172.7 | 170.5 | 167.0 | 495 / 514 |
+| WO bs16 | 333.0 | 330.2 | 329.3 | 324.8 | 320.7 | 516 / 536 |
+| WO bs32 | 660.8 | 655.3 | 660.0 | 623.1 | 610.0 | 520 / 563 |
+
+Both are compute-bound (92-98%); the DRAM in0 read and the output write are hidden. The LoFi roofline is 4096 FLOP per
+cycle per core (8×16 × 16×16 per cycle, `tech_reports/GEMM_FLOPS`): 663.6 TFLOP/s on 120 cores at 1.35 GHz, ~496 at
+the ~1.01 GHz bs16 / bs32 settle; so FF2 / WO run at 79-88% of the FPU. At bs32 the weight read is exposed (−105 /
+−38 µs when skipped): each core re-reads its in1 slice once per M block, and bs32 has 6 M blocks per core.
+
+Block sweep (`perf_tools/bench_mm_sweep.py ff2|wo <batch>`, 126-168 configs): bs8 and bs16 keep their blocks (best
+within 0.1-1%). bs32 M_block 16 halves the re-reads: FF2 1510.0 → 1417.1 µs (16,4,8 1×8), WO 666.7 → 631.9 (16,8,8).
+In the model FF2's 16,4,8 CBs (~716 KB) clash with L1 (the preallocated norm halves and FF2's L1 output leave
+~665 KB, lowest buffer 777,216 B); 16,8,4 1×4 fits (1459.8 µs standalone). With WO 16,8,8, sustained_run.sh, 3
+alternating rounds, bs32 chip 0: cold 323.0 → 320.9 ms, **sustained 399.6 → 402.6** (settled clock ~1035 → ~1017
+MHz). More work per watt-second is not faster under the power cap: kept the 8,8,8 blocks.
