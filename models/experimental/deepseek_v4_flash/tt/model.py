@@ -42,6 +42,7 @@ import ttnn
 from loguru import logger
 
 from .attention import (
+    CSA_INDEX_BLOCK_SIZE,
     CSA_MAX_COMPRESSED_ENTRIES,
     PAGED_KV_LAYER_TYPES,
     _StaticLayerCache,
@@ -441,6 +442,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._decode_max_seq: Optional[int] = None
         # Tokens the dense CSA KV buffers can hold (None: no CSA layer, or not prepared).
         self._context_limit: Optional[int] = None
+        self._csa_entries_copied = False
         # Paged multi-session decode state (see :meth:`prepare_static_decode`).
         self._paged: Optional[PagedKVManager] = None
         # Traced-decode replay state. :meth:`prepare_static_decode` fills in the buffers
@@ -919,6 +921,46 @@ class DeepSeekV4Model(DeepSeekV4Module):
             return False
         return (pos + 1) >= limit
 
+    def _csa_dense_entries(self) -> int:
+        """Compressed entries the dense CSA ``scache.kv`` holds after the ring.
+
+        Without an indexer that is the fixed dense cap. With one, dense CSA runs up to
+        :meth:`_index_dense_limit` (or ``max_seq``), so the buffer covers every window
+        closed by then, rounded to whole ``CSA_INDEX_BLOCK_SIZE`` blocks for the one-off
+        copy into ``comp_kv`` at the switch.
+        """
+        if not self._indexer_active():
+            return CSA_MAX_COMPRESSED_ENTRIES
+        cr = int(self.config.compress_rates["compressed_sparse_attention"])
+        tokens = min(self._index_dense_limit(), self._decode_max_seq)
+        entries = -(-tokens // cr)
+        blocks = -(-entries // CSA_INDEX_BLOCK_SIZE)
+        return max(CSA_MAX_COMPRESSED_ENTRIES, blocks * CSA_INDEX_BLOCK_SIZE)
+
+    def _copy_dense_csa_entries(self) -> None:
+        """Copy every dense CSA entry (``scache.kv`` rows past the ring) into ``comp_kv``.
+
+        Runs once, eagerly, before the first indexer-trace step: the dense trace appends
+        pooled entries to ``scache.kv`` only, while the indexer gathers from ``comp_kv``.
+        Queued on cq 0 from the replay thread, so it lands after the last dense step.
+        """
+        w = self.sliding_window
+        for sm in self.submeshes_io:
+            for scache in sm["scaches"].values():
+                if scache.comp_kv is None:
+                    continue
+                bsz, heads, rows, dh = scache.kv.shape
+                entries = rows - w
+                n_blocks = entries // CSA_INDEX_BLOCK_SIZE
+                dense = ttnn.slice(scache.kv, [0, 0, w, 0], [bsz, heads, rows, dh])
+                dense_rm = ttnn.to_layout(dense, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(dense)
+                blocks = ttnn.reshape(dense_rm, [n_blocks, 1, CSA_INDEX_BLOCK_SIZE, dh])
+                ttnn.experimental.slice_write(
+                    blocks, scache.comp_kv, [0, 0, 0, 0], [n_blocks, 1, CSA_INDEX_BLOCK_SIZE, dh], [1, 1, 1, 1]
+                )
+                ttnn.deallocate(dense_rm)
+
     def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: bool) -> int:
         """Position a compile run may execute at.
 
@@ -1246,6 +1288,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     "idx_prev_gate",
                     "idx_key_cache",
                 ):
+                    # The indexer's paged pools are only read below the step's closed-window
+                    # count, so they need no blanking; they are not saved per session either.
+                    if name == "idx_key_cache" and scache.idx_page_table is not None:
+                        continue
                     if getattr(scache, name) is not None:
                         yield sm, li, name
 
@@ -1474,6 +1520,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.sliding_window,
             batch=self._decode_batch,
             index_head_dim=self._indexer_head_dim(li),
+            csa_dense_entries=self._csa_dense_entries(),
         )
 
     def _build_block_pool(self, li: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1598,6 +1645,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}:
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
         self._context_limit = dense_kv_context_limit(cfg.layer_types[: self.num_layers], cfg.compress_rates)
+        if self._indexer_active():
+            # CSA attends the indexer's top-k gathered from max_seq-sized pools.
+            self._context_limit = None
         if self._context_limit is not None and max_seq > self._context_limit:
             logger.warning(
                 f"max_seq {max_seq} exceeds the {self._context_limit}-token context the dense CSA KV can hold; "
@@ -1744,7 +1794,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     sm["mask_gen"][lt] = (None, None, None)
                     continue
                 cr = cfg.compress_rates[lt]
-                dense_rows = dense_kv_rows(lt, w)
+                dense_rows = dense_kv_rows(lt, w, self._csa_dense_entries())
                 n_win_cap = masked_max_seq // cr
                 if dense_rows is not None:
                     n_win_cap = min(n_win_cap, dense_rows - w)
@@ -2030,6 +2080,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     use_causal = causal
                     masks[lt] = None if use_causal else self._device_mask(a, b_tbl, cr, pos_f)
                     curpos[lt] = self._device_causal_pos(cr, pos_row_f) if use_causal else None
+                    if curpos[lt] is not None and lt == "compressed_sparse_attention" and index_sparse:
+                        # The selected KV holds at most CSA_MAX_COMPRESSED_ENTRIES entries.
+                        last_row = float(self.sliding_window + CSA_MAX_COMPRESSED_ENTRIES - 1)
+                        thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_row_f, 1.0), 1.0 / cr))
+                        curpos[lt] = self._device_index(
+                            ttnn.clamp(ttnn.add(thr, float(self.sliding_window - 1)), max=last_row)
+                        )
                 if lt != "sliding_attention":
                     # Incremental pooling emits one entry per closure, so generate just
                     # that entry's RoPE row (the "compress" family already in scope).
@@ -2454,6 +2511,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for sid in self._resident:
             self._session_pos[sid] = pos + 1
         variant = self._variant_key(pos)
+        if variant[2] and not self._csa_entries_copied:
+            self._copy_dense_csa_entries()
+        self._csa_entries_copied = variant[2]
         for sm in self.submeshes_io:
             ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
 

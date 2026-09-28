@@ -20,6 +20,8 @@ namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv {
 struct FusedLightningSelectKvDeviceOperation {
     struct operation_attributes_t {
         uint32_t k = 0;
+        // Row of the kv output that selected row 0 is written to.
+        uint32_t output_row_offset = 0;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -32,6 +34,12 @@ struct FusedLightningSelectKvDeviceOperation {
         const Tensor& page_table_tensor;
         const Tensor& cur_pos_tensor;
         std::optional<Tensor> valid_length_tensor;
+        // Preallocated kv output ``[1, Hkv, rows, Dh]``; the selected rows land at
+        // ``[output_row_offset, output_row_offset + k)``.
+        std::optional<Tensor> output_tensor;
+        // Written into ``kv_cache`` at logical row ``new_kv_row_index[0]`` before the gather.
+        std::optional<Tensor> new_kv_row;
+        std::optional<Tensor> new_kv_row_index;
     };
 
     // [0] selected kv rows, [1] index scores.
@@ -67,6 +75,10 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     uint32_t k,
     const std::optional<ttnn::Tensor>& valid_length_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    uint32_t output_row_offset = 0,
+    const std::optional<ttnn::Tensor>& new_kv_row = std::nullopt,
+    const std::optional<ttnn::Tensor>& new_kv_row_index = std::nullopt);
 
 }  // namespace ttnn::prim

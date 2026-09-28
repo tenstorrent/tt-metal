@@ -127,15 +127,21 @@ def _decode_activation(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
 # TODO: the dense buffers are batch 1 only, and live in DRAM; move them to L1.
 # ---------------------------------------------------------------------------- #
 CSA_MAX_COMPRESSED_ENTRIES = 512
+# Rows per block of a CSA indexer layer's paged index-key and compressed-KV pools, the
+# block ``fused_lightning_select_kv`` scores and gathers through its page table.
+CSA_INDEX_BLOCK_SIZE = 64
 PAGED_KV_LAYER_TYPES = ("heavily_compressed_attention",)
 
 
-def dense_kv_rows(layer_type: str, sliding_window: int) -> Optional[int]:
-    """Rows of a layer's dense KV buffer, or ``None`` for a paged (HCA) layer."""
+def dense_kv_rows(layer_type: str, sliding_window: int, csa_entries: int = CSA_MAX_COMPRESSED_ENTRIES) -> Optional[int]:
+    """Rows of a layer's dense KV buffer, or ``None`` for a paged (HCA) layer.
+
+    ``csa_entries`` is how many compressed entries a CSA buffer holds after the ring.
+    """
     if layer_type == "sliding_attention":
         return sliding_window
     if layer_type == "compressed_sparse_attention":
-        return sliding_window + CSA_MAX_COMPRESSED_ENTRIES
+        return sliding_window + csa_entries
     return None
 
 
@@ -165,6 +171,16 @@ class _StaticLayerCache:
         ``[B*compress_rate, 1, 1, 2*Dh]`` so ``csa_pool_window`` can consume them
         in place. Only one window is held, because pooling is incremental.
         ``None`` for sliding-only layers.
+      * ``comp_kv`` / ``idx_page_table`` / ``sel_kv`` -- CSA with an indexer only. Every
+        compressed entry ``w`` lives in ``comp_kv``, a ROW_MAJOR DRAM block pool
+        ``[n_blocks, 1, CSA_INDEX_BLOCK_SIZE, Dh]``, beside the index-key pool
+        ``idx_key_cache`` ``[n_blocks, 1, CSA_INDEX_BLOCK_SIZE, index_head_dim]`` (TILE DRAM
+        interleaved). Both are read through ``idx_page_table`` INT32
+        ``[1, n_blocks]``, the identity. ``sel_kv`` is ROW_MAJOR DRAM ``[1, 1, rows, Dh]``,
+        the same rows as ``kv``: ``fused_lightning_select_kv`` writes the selected entries
+        at ``[window, window + index_topk)`` and the ring is copied into ``[0, window)``.
+        Below the indexer's switch-over length CSA stays dense on ``kv``; the entries
+        ``kv`` gathered by then are copied into ``comp_kv`` once, at the switch.
       * ``prev_kv`` / ``prev_gate`` -- CSA only: previous window's projections
         (same layout as CSA ``win_*``), because entry ``w`` also needs window
         ``w-1``'s Ca slice. Refreshed from ``win_*`` after each pool.
@@ -193,6 +209,9 @@ class _StaticLayerCache:
         "idx_prev_kv",
         "idx_prev_gate",
         "idx_key_cache",
+        "comp_kv",
+        "idx_page_table",
+        "sel_kv",
     )
 
     def __init__(
@@ -207,6 +226,9 @@ class _StaticLayerCache:
         idx_prev_gate: Optional[ttnn.Tensor] = None,
         idx_key_cache: Optional[ttnn.Tensor] = None,
         kv: Optional[ttnn.Tensor] = None,
+        comp_kv: Optional[ttnn.Tensor] = None,
+        idx_page_table: Optional[ttnn.Tensor] = None,
+        sel_kv: Optional[ttnn.Tensor] = None,
     ):
         """Store the pre-built buffers; each is ``None`` on a layer type that does not use it.
 
@@ -224,6 +246,24 @@ class _StaticLayerCache:
         self.idx_prev_kv = idx_prev_kv
         self.idx_prev_gate = idx_prev_gate
         self.idx_key_cache = idx_key_cache
+        self.comp_kv = comp_kv
+        self.idx_page_table = idx_page_table
+        self.sel_kv = sel_kv
+
+
+def _index_key_pool(device, n_blocks: int, block: int, width: int) -> ttnn.Tensor:
+    """Zeroed TILE DRAM interleaved ``[n_blocks, 1, block, width]`` pool.
+
+    Interleaved because ``paged_update_cache`` writes the index keys and accepts only an
+    interleaved cache; ``fused_lightning_select_kv`` then reads each block tile by tile.
+    """
+    return ttnn.from_torch(
+        torch.zeros(n_blocks, 1, block, width),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def build_static_layer_cache(
@@ -235,6 +275,7 @@ def build_static_layer_cache(
     sliding_window: int,
     batch: int = 1,
     index_head_dim: Optional[int] = None,
+    csa_dense_entries: int = CSA_MAX_COMPRESSED_ENTRIES,
 ) -> _StaticLayerCache:
     """Allocate a layer's dense KV and compressor window buffers empty, for ``batch`` users.
 
@@ -277,7 +318,7 @@ def build_static_layer_cache(
         )
 
     kv = None
-    rows = dense_kv_rows(layer_type, sliding_window)
+    rows = dense_kv_rows(layer_type, sliding_window, csa_dense_entries)
     if rows is not None:
         if batch != 1:
             raise NotImplementedError(f"dense {layer_type} KV supports batch 1 only, got batch={batch}")
@@ -309,12 +350,46 @@ def build_static_layer_cache(
         n_win = max(max_seq // cr, 0)
         # Replicated on every TP rank. A sequence shard would make the cache
         # write's global window row illegal once ``start_pos`` passes the
-        # local piece, and decode's query is one replicated token, not a
-        # sequence shard the ring scorer expects. Pad so ``T - 32`` is
-        # tile-aligned; top-k's valid length stops at closed windows.
-        align = ttnn.TILE_SIZE
-        t_alloc = max(align, ((n_win + align - 1) // align) * align)
-        idx_key_cache = _filled(t_alloc, index_head_dim)
+        # local piece, and decode's query is one replicated token.
+        block = CSA_INDEX_BLOCK_SIZE
+        n_blocks = max(1, (n_win + block - 1) // block)
+        idx_key_cache = _index_key_pool(device, n_blocks, block, index_head_dim)
+        comp_kv = ttnn.from_torch(
+            torch.zeros(n_blocks, 1, block, head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        idx_page_table = ttnn.from_torch(
+            torch.arange(n_blocks, dtype=torch.int32).reshape(1, n_blocks),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sel_kv = ttnn.from_torch(
+            torch.zeros(batch, 1, sliding_window + CSA_MAX_COMPRESSED_ENTRIES, head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return _StaticLayerCache(
+            win_kv,
+            win_gate,
+            prev_kv,
+            prev_gate,
+            idx_win_kv,
+            idx_win_gate,
+            idx_prev_kv,
+            idx_prev_gate,
+            idx_key_cache,
+            kv=kv,
+            comp_kv=comp_kv,
+            idx_page_table=idx_page_table,
+            sel_kv=sel_kv,
+        )
     return _StaticLayerCache(
         win_kv,
         win_gate,
@@ -1474,9 +1549,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         bounded by that position (see :meth:`_sdpa_decode`). Sliding layers require it:
         ``min(pos, sliding_window - 1)``, the last valid row of the ring.
 
-        ``index_sparse`` selects the CSA lightning-indexer trace: score compressed keys
-        and attend with ``sparse_sdpa``. The indexer is off in the system config (see
-        the TODO below).
+        ``index_sparse`` selects the CSA lightning-indexer trace. Below it CSA attends the
+        dense ``scache.kv`` (index keys are still written). On it
+        ``fused_lightning_select_kv`` writes this step's pooled entry into
+        ``scache.comp_kv``, scores every closed window and gathers the top ``index_topk``
+        rows into ``scache.sel_kv`` after the sliding ring. That buffer is tilized and
+        handed to the normal dense SDPA decode, with ``sdpa_cur_pos`` clamped by the caller
+        to its last row.
         """
         b, s, _, d = hidden.shape
         assert s == 1, f"decode attends one token per user, but S == {s}"
@@ -1493,6 +1572,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             index_sparse
             and self.layer_type == "compressed_sparse_attention"
             and getattr(self.compressor, "indexer", None) is not None
+            and getattr(scache, "sel_kv", None) is not None
         )
 
         is_paged = self.layer_type in PAGED_KV_LAYER_TYPES
@@ -1545,22 +1625,28 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             spilled = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(q)
             q = spilled
-        self.compressor.decode_static(
+        pooled = self.compressor.decode_static(
             tokens,
             cos_win,
             sin_win,
             scache,
-            kv,
+            None if use_indexer else kv,
             win_slot,
             win_row=win_row,
             pool=pool_compressor,
         )
-        indices = None
+        sdpa_kv = None
         if use_indexer:
-            indices = self.compressor.indexer.score_and_select(
-                tokens, q_a, cos, sin, scache.idx_key_cache, compress_pos
-            )
+            indexer = self.compressor.indexer
+            entry = None
+            if pooled is not None:
+                entry = ttnn.subtract(win_row, indexer.sliding_window)
+            indexer.select_kv(tokens, q_a, cos, sin, scache, compress_pos, new_row=pooled, new_row_index=entry)
+            if pooled is not None:
+                ttnn.deallocate(pooled)
+                ttnn.deallocate(entry)
             ttnn.deallocate(q_a)
+            sdpa_kv = self._selected_kv(scache, indexer.sliding_window)
             # weights_proj has no prefetch ring, so its matmul keeps a width-sharded
             # L1 copy. That copy sits on cores sparse_sdpa also uses for circular
             # buffers; drop it before the attend. The next score copies it again.
@@ -1572,10 +1658,24 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if q_config is not None:
             q = ttnn.to_memory_config(q, q_config)
         if use_indexer:
-            # TODO: the indexer is off in the system config; turn it back on once this
-            # path is validated against the dense CSA ``scache.kv``.
-            out = self._sparse_attend(q, kv, indices, cos, neg_sin)
-            ttnn.deallocate(indices)
+            out = self._attend(q, sdpa_kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+            ttnn.deallocate(sdpa_kv)
         else:
             out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
         return ttnn.reshape(out, [b, s, 1, d])
+
+    @staticmethod
+    def _selected_kv(scache: "_StaticLayerCache", window: int) -> ttnn.Tensor:
+        """Copy the sliding ring (rows ``[0, window)`` of ``scache.kv``) into ``scache.sel_kv``
+        and return a TILE DRAM copy of the whole ``[ring | selected]`` buffer for SDPA.
+
+        The slice bounds are constants, so the copy is trace-safe.
+        """
+        sel = scache.sel_kv
+        bsz, heads, _, dh = sel.shape
+        ring = ttnn.slice(scache.kv, [0, 0, 0, 0], [bsz, heads, window, dh])
+        ring_rm = ttnn.to_layout(ring, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(ring)
+        ttnn.experimental.slice_write(ring_rm, sel, [0, 0, 0, 0], [bsz, heads, window, dh], [1, 1, 1, 1])
+        ttnn.deallocate(ring_rm)
+        return ttnn.to_layout(sel, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)

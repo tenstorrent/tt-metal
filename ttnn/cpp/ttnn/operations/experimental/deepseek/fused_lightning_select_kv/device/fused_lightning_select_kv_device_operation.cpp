@@ -40,9 +40,17 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.kv_cache.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "fused_lightning_select_kv: kv_cache must be row-major");
+    TT_FATAL(
+        tensor_args.kv_cache.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "fused_lightning_select_kv: kv_cache must be interleaved (one row per page)");
+    TT_FATAL(
+        args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "fused_lightning_select_kv: the gathered kv output must be interleaved, got {}",
+        args.output_mem_config);
     const auto& query = tensor_args.query.logical_shape();
     const auto& key_cache = tensor_args.key_cache.logical_shape();
     const auto& kv_cache = tensor_args.kv_cache.logical_shape();
+    TT_FATAL(kv_cache[1] == 1, "fused_lightning_select_kv: kv_cache heads must be 1, got {}", kv_cache[1]);
 
     log_info(tt::LogOp, "query: {}, key_cache: {}, kv_cache: {}", query, key_cache, kv_cache);
     TT_FATAL(
@@ -72,16 +80,19 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         const auto& key_padded = tensor_args.key_cache.padded_shape();
         TT_FATAL(
             tensor_args.key_cache.layout() == tt::tt_metal::Layout::TILE && key_mem.is_dram() &&
-                key_mem.nd_shard_spec().has_value(),
-            "fused_lightning_select_kv: key_cache must be a tiled DRAM ND-sharded tensor");
-        const auto& shard_shape = key_mem.nd_shard_spec()->shard_shape;
-        TT_FATAL(
-            shard_shape.volume() == key_padded[-2] * key_padded[-1] && shard_shape[-2] == key_padded[-2] &&
-                shard_shape[-1] == key_padded[-1],
-            "fused_lightning_select_kv: key_cache shard shape must be one block [1, 1, {}, {}], got {}",
-            key_padded[-2],
-            key_padded[-1],
-            shard_shape);
+                (key_mem.nd_shard_spec().has_value() ||
+                 key_mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED),
+            "fused_lightning_select_kv: key_cache must be a tiled DRAM tensor, ND-sharded or interleaved");
+        if (key_mem.nd_shard_spec().has_value()) {
+            const auto& shard_shape = key_mem.nd_shard_spec()->shard_shape;
+            TT_FATAL(
+                shard_shape.volume() == key_padded[-2] * key_padded[-1] && shard_shape[-2] == key_padded[-2] &&
+                    shard_shape[-1] == key_padded[-1],
+                "fused_lightning_select_kv: key_cache shard shape must be one block [1, 1, {}, {}], got {}",
+                key_padded[-2],
+                key_padded[-1],
+                shard_shape);
+        }
     }
     TT_FATAL(
         query[1] == weights[-1] && query[-2] == weights[-2],
@@ -215,6 +226,79 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             tensor_args.valid_length_tensor->storage_type() == StorageType::DEVICE,
             "fused_lightning_select_kv: valid_length_tensor must be on device");
     }
+
+    if (tensor_args.output_tensor.has_value()) {
+        const auto& out = tensor_args.output_tensor.value();
+        require_rank4_device(out, "output_tensor");
+        const auto& out_shape = out.logical_shape();
+        TT_FATAL(
+            out.dtype() == tensor_args.kv_cache.dtype(),
+            "fused_lightning_select_kv: output_tensor dtype {} must match kv_cache dtype {}",
+            out.dtype(),
+            tensor_args.kv_cache.dtype());
+        TT_FATAL(
+            out.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "fused_lightning_select_kv: output_tensor must be row-major (one kv row per page), got {}",
+            out.layout());
+        TT_FATAL(
+            out.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_lightning_select_kv: output_tensor must be interleaved, got {}",
+            out.memory_config());
+        TT_FATAL(
+            out_shape[0] == batch && out_shape[1] == kv_cache[1] && out_shape[-1] == kv_cache[-1],
+            "fused_lightning_select_kv: output_tensor must be [{}, {}, rows, {}], got {}",
+            batch,
+            kv_cache[1],
+            kv_cache[-1],
+            out_shape);
+        TT_FATAL(
+            args.output_row_offset + args.k <= out_shape[-2],
+            "fused_lightning_select_kv: output_row_offset {} + k {} exceeds output_tensor rows {}",
+            args.output_row_offset,
+            args.k,
+            out_shape[-2]);
+    } else {
+        TT_FATAL(
+            args.output_row_offset == 0,
+            "fused_lightning_select_kv: output_row_offset {} needs an output_tensor",
+            args.output_row_offset);
+    }
+
+    TT_FATAL(
+        tensor_args.new_kv_row.has_value() == tensor_args.new_kv_row_index.has_value(),
+        "fused_lightning_select_kv: new_kv_row and new_kv_row_index must be given together");
+    if (tensor_args.new_kv_row.has_value()) {
+        const auto& row = tensor_args.new_kv_row.value();
+        const auto& row_index = tensor_args.new_kv_row_index.value();
+        require_rank4_device(row, "new_kv_row");
+        TT_FATAL(
+            row.dtype() == tensor_args.kv_cache.dtype(),
+            "fused_lightning_select_kv: new_kv_row dtype {} must match kv_cache dtype {}",
+            row.dtype(),
+            tensor_args.kv_cache.dtype());
+        TT_FATAL(
+            row.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                row.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_lightning_select_kv: new_kv_row must be row-major interleaved");
+        TT_FATAL(
+            row.logical_shape().volume() == kv_cache[-1] && row.logical_shape()[-1] == kv_cache[-1],
+            "fused_lightning_select_kv: new_kv_row must be one [1, 1, 1, {}] row, got {}",
+            kv_cache[-1],
+            row.logical_shape());
+        TT_FATAL(
+            row_index.storage_type() == StorageType::DEVICE,
+            "fused_lightning_select_kv: new_kv_row_index must be on device");
+        TT_FATAL(
+            row_index.dtype() == DataType::INT32 && row_index.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "fused_lightning_select_kv: new_kv_row_index must be INT32 row-major");
+        TT_FATAL(
+            row_index.logical_shape().volume() == 1,
+            "fused_lightning_select_kv: new_kv_row_index must hold one index, got {}",
+            row_index.logical_shape());
+        TT_FATAL(
+            !tensor_args.page_table_tensor.is_sharded(),
+            "fused_lightning_select_kv: new_kv_row needs an interleaved page_table_tensor");
+    }
 }
 
 FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectKvDeviceOperation::compute_output_specs(
@@ -225,9 +309,12 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     const uint32_t batch = pt_shape[0];
     const uint32_t max_keys = pt_shape[1] * tensor_args.key_cache.logical_shape()[-2];
     return {
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape({batch, kv_shape[1], args.k, kv_shape[3]}),
-            tt::tt_metal::TensorLayout(kv.dtype(), tt::tt_metal::PageConfig(kv.layout()), args.output_mem_config)),
+        tensor_args.output_tensor.has_value()
+            ? tensor_args.output_tensor->tensor_spec()
+            : tt::tt_metal::TensorSpec(
+                  ttnn::Shape({batch, kv_shape[1], args.k, kv_shape[3]}),
+                  tt::tt_metal::TensorLayout(
+                      kv.dtype(), tt::tt_metal::PageConfig(kv.layout()), args.output_mem_config)),
         // One fp32 score per key the page table can address; only the first valid ones are written.
         tt::tt_metal::TensorSpec(
             ttnn::Shape({batch, 1, 1, max_keys}),
@@ -239,10 +326,12 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
 FusedLightningSelectKvDeviceOperation::tensor_return_value_t
 FusedLightningSelectKvDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto specs = compute_output_specs(args, tensor_args);
     tensor_return_value_t outputs;
-    for (const auto& spec : compute_output_specs(args, tensor_args)) {
-        outputs.push_back(ttnn::create_device_tensor(spec, tensor_args.kv_cache.device()));
-    }
+    outputs.push_back(
+        tensor_args.output_tensor.has_value() ? tensor_args.output_tensor.value()
+                                              : ttnn::create_device_tensor(specs[0], tensor_args.kv_cache.device()));
+    outputs.push_back(ttnn::create_device_tensor(specs[1], tensor_args.kv_cache.device()));
     return outputs;
 }
 
@@ -260,7 +349,11 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     uint32_t k,
     const std::optional<ttnn::Tensor>& valid_length_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    uint32_t output_row_offset,
+    const std::optional<ttnn::Tensor>& new_kv_row,
+    const std::optional<ttnn::Tensor>& new_kv_row_index) {
     using OperationType =
         ttnn::operations::experimental::deepseek::fused_lightning_select_kv::FusedLightningSelectKvDeviceOperation;
 
@@ -276,7 +369,10 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
 
     auto attrs = OperationType::operation_attributes_t{
         .k = k,
-        .output_mem_config = memory_config.value_or(tt::tt_metal::MemoryConfig{}),
+        .output_row_offset = output_row_offset,
+        // SDPA reads the gathered rows next, so they stay in L1 by default.
+        .output_mem_config = memory_config.value_or(
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1}),
         .compute_kernel_config = kernel_config,
     };
     auto tensor_args = OperationType::tensor_args_t{
@@ -287,6 +383,9 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
         .page_table_tensor = page_table_tensor,
         .cur_pos_tensor = cur_pos_tensor,
         .valid_length_tensor = valid_length_tensor,
+        .output_tensor = output_tensor,
+        .new_kv_row = new_kv_row,
+        .new_kv_row_index = new_kv_row_index,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

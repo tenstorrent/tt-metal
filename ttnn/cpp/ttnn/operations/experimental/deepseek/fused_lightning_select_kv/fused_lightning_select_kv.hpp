@@ -56,9 +56,22 @@ namespace ttnn::experimental::deepseek {
 //   memory_config: output memory config. Defaults to interleaved DRAM.
 //   compute_kernel_config: compute settings for the score. Defaults to HiFi4
 //                    with fp32 destination accumulation.
+//   output_tensor:   optional preallocated kv output ``[1, Hkv, rows, Dh]``, row-major
+//                    interleaved, same dtype as ``kv_cache`` (e.g. a CSA layer's combined
+//                    sliding-ring + compressed buffer). Rows outside the selected range are
+//                    left untouched. ``memory_config`` is ignored when it is given.
+//   output_row_offset: output row that selected row 0 is written to, e.g. ``sliding_window``
+//                    to skip the ring. Needs ``output_tensor``; rows
+//                    ``[output_row_offset, output_row_offset + k)`` must fit in it.
+//   new_kv_row:      optional ``[1, 1, 1, Dh]`` row-major row, same dtype as ``kv_cache``,
+//                    written into ``kv_cache`` at logical row ``new_kv_row_index`` (through
+//                    ``page_table_tensor``) before any row is gathered, so a key closing at
+//                    this step can be selected in the same call.
+//   new_kv_row_index: ``[1]`` INT32 logical row of ``new_kv_row``. Given together with it.
 //
 // Returns: ``[kv_rows, scores]``.
-//   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``.
+//   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``,
+//            or ``output_tensor`` when given.
 //   scores:  index scores, ``[1, 1, 1, max_blocks_per_user * block_size]`` fp32 ROW_MAJOR. Only the
 //            first ``div_up((cur_pos + 1) / 4, block_size) * block_size`` entries are written.
 std::vector<Tensor> fused_lightning_select_kv(
@@ -71,6 +84,10 @@ std::vector<Tensor> fused_lightning_select_kv(
     uint32_t k,
     const std::optional<Tensor>& valid_length_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    uint32_t output_row_offset = 0,
+    const std::optional<Tensor>& new_kv_row = std::nullopt,
+    const std::optional<Tensor>& new_kv_row_index = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek
