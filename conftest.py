@@ -659,7 +659,21 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    # TT_MESH_PARENT_SHAPE="RxC" (bring-up aid): open that parent mesh (fabric initialised on every chip) and hand the
+    # test a submesh of the requested shape. Needed on multi-board boxes where a smaller direct mesh cannot bring up
+    # fabric (e.g. a 1x2 on a QuietBox-2: the routers on the inter-board eth links never see a partner).
+    parent_mesh_device = None
+    parent_shape_env = os.environ.get("TT_MESH_PARENT_SHAPE")
+    if parent_shape_env:
+        pr, pc = (int(v) for v in parent_shape_env.lower().split("x"))
+        if pr * pc > mesh_shape[0] * mesh_shape[1]:
+            parent_mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(pr, pc), **updated_device_params)
+            mesh_device = parent_mesh_device.create_submesh(mesh_shape)
+            logger.info(
+                f"TT_MESH_PARENT_SHAPE={parent_shape_env}: opened parent {parent_mesh_device.shape}, using submesh {mesh_device.shape}"
+            )
+    if parent_mesh_device is None:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
@@ -672,6 +686,9 @@ def mesh_device(request, silicon_arch_name, device_params):
         ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
+    if parent_mesh_device is not None:
+        ttnn.close_mesh_device(parent_mesh_device)
+        del parent_mesh_device
     reset_fabric(fabric_config)
     del mesh_device
 

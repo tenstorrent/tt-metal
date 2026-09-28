@@ -1,0 +1,4 @@
+{
+  "arch": "Olmo3ForCausalLM",
+  "main_class": "models.tt_transformers.tt.generator_vllm:Olmo3ForCausalLM"
+}
