@@ -322,9 +322,12 @@ void blocked_matmul_and_pack(
     tile_regs_commit();
 
     tile_regs_wait();
-#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+#if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
     if constexpr (transpose) {
-        mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
+#ifdef SDPA_RECIPE_RING
+        if (recipe_k_valid_rows < recipe_k_chunk_rows)
+#endif
+            mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
     }
 #endif
     if (!skip_pack_configure) {
