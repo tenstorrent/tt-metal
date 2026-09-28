@@ -40,3 +40,14 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: pcc_attn_norm_L00 0.999999, rel_l2 0.001738, row_norm_ratio [0.9956, 1.0027], PASS. The first `FAIL pcc=0.000000`
   line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_norm.py`
+
+## S.full_dense.01.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_01_attn_norm.py`
+  (same golden); only the docstring changed. Gate stays pcc_swap_out >= 0.98. Extra asserted checks: block out finite and rel L2 <= 0.01;
+  the swapped attn_norm output is finite, has PCC >= 0.99 (the component threshold) and rel L2 <= 0.03, and its per-token norm ratio is in [0.97, 1.03].
+  Why: a zero stub alone reaches PCC 0.988 on out and passes the 0.98 gate, because the residual dominates out at layer 0.
+- BRINGUP_IMPL=reference: out PCC 0.999999, rel L2 0.00168, step rel L2 0.0016, ratio [0.998, 1.002], PASS.
+  BRINGUP_IMPL=stub: out rel L2 0.155 and step PCC 0, which fails the extra checks.
+- Device gate (2x2, attn_norm module already implemented): out PCC 0.999999, rel L2 0.00169, step rel L2 0.00174,
+  ratio [0.9956, 1.0027], PASS. The first block of pcc=0 lines comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_01_attn_norm.py`
