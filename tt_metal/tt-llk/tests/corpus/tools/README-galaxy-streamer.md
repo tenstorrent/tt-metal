@@ -21,10 +21,11 @@ re-implementation.
   object-identity map (op → sem/hand variant + `.text` sha; asserts sem≠hand).
 - `fp32_stream_sweep.py` — single-op orchestrator (resume-safe bands, per-band SHA compare,
   coverage assert, witness-band flag). Good for one op on one chip (quietbox).
-- `lanemk_run_op.sh` / `lanemk_array.sh` — the fan-out as it actually ships: one Slurm
-  job per op (`lanemk_array.sh` is the job-array shim; Slurm is the queue), node-local
+- `run_op.sh` / `run_op_array.sh` — the fan-out as it actually ships: one Slurm
+  job per op (`run_op_array.sh` is the job-array shim; Slurm is the queue), node-local
   RUNNER_TEMP, resume-safe from cached band SHAs, and a dead job only affects its own op.
-  This fan-out is across OPS, not chips: `lanemk_run_op.sh` passes `--chip 0`, so one
+  `run_op.sh` takes `SWEEP=fp32` (default, one-operand) or `SWEEP=binary`.
+  This fan-out is across OPS, not chips: `run_op.sh` passes `--chip 0`, so one
   galaxy node runs one op on one chip.  For a true 32-chip shard of a single op see
   `galaxy_shard.sh` (binary ops today; `fp32_stream_sweep.py` accepts the same
   `--start-bit`/`--total`, so the unary equivalent is a small generalization away).
@@ -48,7 +49,8 @@ Mac, `SSH_AUTH_SOCK=$HOME/.ssh/qz-exabox-agent.sock ssh nkapre@slurm-login.exabo
 Two-stage rsync (quietbox→mac-relay:staging→exabox:/data). Etiquette: idle glx only, only
 as many as needed, NEVER touch drain/reserved/customer nodes or kill others' jobs, BH reset
 = `tt-smi -r` never `glx_reset`. Known-poisoned rack: `glx-110-c` (bh_sc36_5) — salloc there
-times out; the fleet excludes it by default (`SFPU_NODE_EXCLUDE`).
+times out — exclude it yourself with `sbatch --exclude=`.  (The retired fleet had a
+`LANEMK_NODE_EXCLUDE` knob for this; it went with the fleet and nothing reads it now.)
 
 ## One-op re-run (quietbox, one chip)
 ```
@@ -68,11 +70,11 @@ that lack a verdict one-per-line to `remaining.txt`, then submit ONE array:
     export OPS_LIST=.../remaining.txt \
            OPS_TSV=... IDMAP=... BUILD=... VENV=... LLK_HOME=... PYDIR=... OUT=... \
            SFPU_WAIT_TIMEOUT=600
-    sbatch --array=1-$(wc -l < remaining.txt) --requeue --export=ALL -J lanemk_op \
-           -p <glx-partitions> --time=720 lanemk_array.sh
+    sbatch --array=1-$(wc -l < remaining.txt) --requeue --export=ALL -J run_op \
+           -p <glx-partitions> --time=720 run_op_array.sh
 
-`lanemk_array.sh` maps `$SLURM_ARRAY_TASK_ID` → that line of `remaining.txt` → one op and
-runs `lanemk_run_op.sh <op>`: object-identity gate → stream the full 2^32 (resume-safe from
+`run_op_array.sh` maps `$SLURM_ARRAY_TASK_ID` → that line of `remaining.txt` → one op and
+runs `run_op.sh <op>` beside it: object-identity gate → stream the full 2^32 (resume-safe from
 cached band SHAs) → write `<OUT>/<op>/<op>-VERDICT.txt` → **exit, which frees the galaxy**.
 **Slurm is the scheduler, queue and refill**: it runs as many tasks as there are idle
 galaxies at once, queues the rest, and `--requeue` retries a died task. No supervisor, no
