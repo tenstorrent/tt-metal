@@ -78,10 +78,16 @@ ttnn::Tensor scaled_dot_product_attention(
                     : *attn_mask,
                 1.0f / recipe_scale);
         }
-        // Op-selected blocking when program_config leaves chunks unset. The chooser does not yet
-        // budget the mask CB; run_recipe's L1 check rejects a masked blocking that does not fit.
+        // Op-selected blocking when program_config leaves chunks unset; the chooser budgets the
+        // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1.
         const auto blocking = numeric::resolve_dense_recipe_blocking(
-            policy, input_tensor_q, input_tensor_k, nullptr, nullptr, program_config);
+            policy,
+            input_tensor_q,
+            input_tensor_k,
+            nullptr,
+            nullptr,
+            program_config,
+            recipe_mask ? &*recipe_mask : nullptr);
         return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, blocking, recipe_mask);
     }
     TT_FATAL(!inputs_prepared, "inputs_prepared is meaningful only with an explicit LOW_PRECISION recipe");

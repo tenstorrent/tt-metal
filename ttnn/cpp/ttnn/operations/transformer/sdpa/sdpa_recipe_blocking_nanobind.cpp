@@ -79,7 +79,8 @@ recipe::RecipeBlockingProblem make_problem(
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
     bool exp_mux_on_bottom_row,
-    uint64_t kernel_config_bytes) {
+    uint64_t kernel_config_bytes,
+    uint32_t mask_page_bytes) {
     recipe::RecipeBlockingProblem problem;
     problem.op = parse_op(op);
     problem.policy = policy_of(precision, kv_type);
@@ -98,6 +99,7 @@ recipe::RecipeBlockingProblem make_problem(
     problem.fixed_k_tiles = k_chunk_size / 32;
     problem.exp_mux_on_bottom_row = exp_mux_on_bottom_row;
     problem.kernel_config_bytes = kernel_config_bytes;
+    problem.mask_page_bytes = mask_page_bytes;
     return problem;
 }
 
@@ -106,7 +108,8 @@ recipe::RecipeBlockingProblem make_problem(
         nb::arg("q_rows"), nb::arg("k_rows"), nb::arg("head_dim"), nb::arg("grid"), nb::arg("l1_bytes"),       \
         nb::kw_only(), nb::arg("joint_q_rows") = 0, nb::arg("joint_k_rows") = 0, nb::arg("ring_size") = 1,     \
         nb::arg("max_cores_per_head_batch") = 16, nb::arg("q_chunk_size") = 0, nb::arg("k_chunk_size") = 0, \
-        nb::arg("exp_mux_on_bottom_row") = false, nb::arg("kernel_config_bytes") = 0
+        nb::arg("exp_mux_on_bottom_row") = false, nb::arg("kernel_config_bytes") = 0, \
+        nb::arg("mask_page_bytes") = 0
 
 }  // namespace
 
@@ -130,7 +133,8 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
            uint32_t q_chunk_size,
            uint32_t k_chunk_size,
            bool exp_mux_on_bottom_row,
-           uint64_t kernel_config_bytes) -> std::optional<BlockingTuple> {
+           uint64_t kernel_config_bytes,
+           uint32_t mask_page_bytes) -> std::optional<BlockingTuple> {
             const auto choice = recipe::choose_recipe_blocking(make_problem(
                 op,
                 precision,
@@ -149,7 +153,8 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
                 q_chunk_size,
                 k_chunk_size,
                 exp_mux_on_bottom_row,
-                kernel_config_bytes));
+                kernel_config_bytes,
+                mask_page_bytes));
             if (!choice) {
                 return std::nullopt;
             }
@@ -177,7 +182,8 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
            uint32_t q_chunk_size,
            uint32_t k_chunk_size,
            bool exp_mux_on_bottom_row,
-           uint64_t kernel_config_bytes) {
+           uint64_t kernel_config_bytes,
+           uint32_t mask_page_bytes) {
             std::vector<BlockingTuple> result;
             for (const auto& candidate : recipe::recipe_blocking_candidates(make_problem(
                      op,
@@ -197,7 +203,8 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
                      q_chunk_size,
                      k_chunk_size,
                      exp_mux_on_bottom_row,
-                     kernel_config_bytes))) {
+                     kernel_config_bytes,
+                     mask_page_bytes))) {
                 result.push_back(to_tuple(candidate));
             }
             return result;
@@ -268,14 +275,16 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
            uint32_t k_chunk_size,
            uint32_t head_dim,
            uint32_t q_blocks_per_worker,
-           uint32_t passes) {
+           uint32_t passes,
+           uint32_t mask_page_bytes) {
             const auto estimate = recipe::recipe_l1_bytes(
                 parse_op(op),
                 policy_of(precision, kv_type),
                 q_chunk_size / 32,
                 k_chunk_size / 32,
                 head_dim / 32,
-                recipe::RecipeL1Context{.q_blocks_per_worker = q_blocks_per_worker, .passes = passes});
+                recipe::RecipeL1Context{
+                    .q_blocks_per_worker = q_blocks_per_worker, .passes = passes, .mask_page_bytes = mask_page_bytes});
             return std::make_tuple(estimate.preferred, estimate.minimum);
         },
         nb::arg("op"),
@@ -287,6 +296,7 @@ void bind_sdpa_recipe_blocking(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("q_blocks_per_worker") = 2,
         nb::arg("passes") = 1,
+        nb::arg("mask_page_bytes") = 0,
         "(preferred, minimum) circular-buffer bytes per core for a supported recipe geometry.");
     mod.def(
         "_sdpa_recipe_kernel_config_bytes",
