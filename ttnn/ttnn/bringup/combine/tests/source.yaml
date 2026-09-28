@@ -1,0 +1,38 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.combine), run in place against this fork
+# (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". The tests reach the op through TtCombineModule
+# (models/demos/deepseek_v3_d_p/tt/moe/tt_combine.py), which looks it up by name at call time, or call it directly.
+#
+# This box (4x Blackhole p150b, ClusterType P150_X4) can run only the 4-device cases: fabric2d-2x2 (2 dispatch groups
+# of 2 chips, the fabric path on a 2-device dispatch axis), the ring 4x1 (fabric2d-torus-y) and the line 4x1
+# (FABRIC_1D). The DeepSeek conftest's hardware table has no P150_X4 row, so it skips torus-y 4x1 as "unfeasible on
+# the given hardware", though those cases open and pass here (the 4 chips form a ring; the ernie45 1x4
+# FABRIC_1D_RING mesh uses the same links). `unskip` drops that one skip reason, in both runs. The 8-device (8x1,
+# 4x2) and 32-device (8x4, 4x8) cases are filtered out with -k.
+#
+# Excluded: test_ttnn_combine_fabric2d (it runs combine_fabric2d, a different op with its own kernels, and only on
+# 8x4); test_combine_subdevices.py (4x2 only); tests/perf/test_prefill_dispatch_combine.py (perf, no check; disabled
+# in CI, #47287). No test under tests/ttnn calls this op.
+#
+# Not covered: a 1-device dispatch axis (the fork's one change), since no upstream test has one; the fork's own
+# tests/test_combine.py covers it (the model cases). On a multi-device axis the fork runs the original's fabric path
+# unchanged.
+upstream_sha: 4c918cee48fa3aea6ac73129abe4a212437d0a02
+swap:
+  ttnn.experimental.deepseek_prefill.combine: ttnn.bringup.combine
+tests:
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py
+    k: "test_ttnn_combine and 2x2"
+    why: "combine alone vs the torch reference, fabric2d 2x2 (2 dispatch groups of 2 chips): 8 model shapes (dsv3, glm_51, kimi_k2_7, minimax_m27, dsv4_pro, dsv4_flash, gptoss_120b, mistral4), TILE and ROW_MAJOR dispatched buffer, bf16 and fp8 (TILE, random) output, predictable and random data, pcc (seq 128) and no-check perf (seq 640) sizes"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py
+    k: "4x1 and not test_ttnn_combine_fabric2d"
+    unskip: "unfeasible on the given hardware"
+    why: "combine alone, 4 chips on the dispatch axis: dsv3 on the ring 4x1 (TILE/ROW_MAJOR, bf16/fp8 out, predictable/random, pcc/perf), and the gptoss_120b line 4x1 FABRIC_1D proxies of the externally owned production cases (seq 128 and 1280, 2 links)"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py
+    k: "4x1"
+    unskip: "unfeasible on the given hardware"
+    why: "dispatch -> combine round trip (dispatch stays the original), ring 4x1 2-link: 8 model shapes at seq 640, TILE and ROW_MAJOR dispatched buffer, predictable and random data"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py
+    k: "combine-torus"
+    unskip: "unfeasible on the given hardware"
+    why: "combine's global semaphore in L1_SMALL vs default L1 on a fragmented L1, ring 4x1"
