@@ -582,6 +582,8 @@ void kernel_main() {
         // while its alias still holds unread tiles.
         pack_reconfig_data_format(dfb_im_id);
         dfb_im.reserve_back(num_tiles_per_block);
+        // Copies and column normalisation preserve the mask and replay state.
+        sfpu_bcast_col_init();
         for (uint32_t i = 0; i < block_ht; ++i) {
             for (uint32_t w = 0; w < block_wt; w += 2) {
                 const bool paired = w + 1 < block_wt;
@@ -596,7 +598,6 @@ void kernel_main() {
                 if (paired) {
                     copy_tile(dfb_x_welford_id, w + 1, 1);
                 }
-                sfpu_bcast_col_init();
                 if (paired) {
                     sfpu_normalize_bcast_col_two_tiles(0, 1, 2, 3);
                 } else {
