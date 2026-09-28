@@ -27,6 +27,20 @@ _SUPPORTED_MESHES = {
 
 _SUPPORTED_MESH_TEXT = "a Blackhole P300_X2 QB2 in a (1, 4) mesh or a Wormhole T3K in a (1, 8) mesh"
 
+# Policy deltas per tensor-parallel width. The shipping values below are measured on QB2; a T3K
+# has a narrower worker grid and one usable ethernet link per chip pair, so both assumptions have
+# to move. Applied after the measured defaults and before any caller override.
+_TP_POLICY = {
+    8: {
+        # _width_memory lays cores out as a fixed 10-wide rectangle when the count is a multiple
+        # of ten. A T3K worker grid is 8x8, so that CoreCoord(9, ...) does not exist; fall back to
+        # deriving the range set from the device grid.
+        "rectangular_working": False,
+        # The second ethernet link of each chip pair carries the dispatch datapath.
+        "num_links": 1,
+    },
+}
+
 
 def kv_head_owners(num_kv_heads, tp):
     """Device index -> KV head index, or None when the heads shard evenly.
@@ -127,6 +141,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             # boundaries out of L1 while the next layer retains its input.
             public_dram_batch=2,
         )
+        self.policy.update(_TP_POLICY.get(self.TP, {}))
         self.policy.update(policy or {})
         self.CHUNK_SIZE = self.policy["chunk_size"]
         self.sharded_residual = self.policy["residual_layout"] == "sharded"
@@ -516,7 +531,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                     N_block_size=self.policy.get("fused_input_n", 8),
                     subblock_h=1,
                     subblock_w=4,
-                    compute_with_storage_grid_size=(10, 8),
+                    compute_with_storage_grid_size=tuple(self.policy.get("fused_grid", [10, 8])),
                 ),
                 multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
                 topology=self.topology,
@@ -588,7 +603,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                     weight,
                     dim=3,
                     multi_device_global_semaphore=self.ccl.get_and_cycle_rs_semaphore_handles(1),
-                    reduce_scatter_core_grid_offset=ttnn.CoreCoord(0, 8),
+                    reduce_scatter_core_grid_offset=ttnn.CoreCoord(*self.policy.get("rs_core_offset", (0, 8))),
                     config=config,
                     topology=self.topology,
                     cluster_axis=1,
