@@ -613,7 +613,12 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1."""
+    """Apply tensor-parallel allreduce if TP > 1.
+
+    Galaxy one-instance note: attention weights shard heads over tp_axis and
+    replicate across the other axis, so this ordinary tp-axis all-reduce also
+    completes the fractured-mesh o_proj (columns hold identical partial sums).
+    """
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
 
 
