@@ -467,14 +467,15 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
             "QWEN_WEIGHT_INTERLEAVED_K2560_N9728",
         ):
             os.environ.setdefault(k, "1")
-    # QKV output in L1 interleaved at bs8 / bs16 (ISL 512): the QKV matmul's output write (which does not overlap its
-    # compute) and the heads op's read of it stay off DRAM, and with its input in L1 the heads op is compute-bound, so
-    # it runs the v3 compute (each phase once per unit; 30% less compute at bs16 shapes, 305 -> 214 us, bit-identical;
-    # slower than v1 with a DRAM input, so it follows this knob). bs8: 27 MB, 223 KB per core; cold / sustained
-    # 102.2 / 116.2 -> 98.8 / 113.1 ms. bs16: 53.5 MB, 446 KB per core, fits only with the post-attention sum in DRAM
-    # (the sum held the norm output low in L1, splitting the free space in two), which the sum's own L1 gain does not
-    # outweigh: 189.3 / 222.9 -> 186.0 / 220.3 ms. sustained_run.sh, 3 alternating rounds, chip 0 (NEGATIVE_RESULTS
-    # 56); bs32 would need 892 KB per core. Opt out: TT_PREFILL_QKV_L1=0 (the bs16 sum then returns to L1).
+    # QKV output in L1 interleaved at bs8 / bs16 (ISL 512): the heads op reads it from L1 instead of DRAM (the QKV
+    # matmul's output write overlaps its compute either way: 559.5 vs 559.3 us at bs16), and with its input in L1 the
+    # heads op is compute-bound, so it runs the v3 compute (each phase once per unit; 30% less compute at bs16 shapes,
+    # 305 -> 214 us, bit-identical; slower than v1 with a DRAM input, so it follows this knob). bs8: 27 MB, 223 KB per
+    # core; cold / sustained 102.2 / 116.2 -> 98.8 / 113.1 ms. bs16: 53.5 MB, 446 KB per core, fits only with the
+    # post-attention sum in DRAM (the sum held the norm output low in L1, splitting the free space in two), which the
+    # sum's own L1 gain does not outweigh: 189.3 / 222.9 -> 186.0 / 220.3 ms. sustained_run.sh, 3 alternating rounds,
+    # chip 0 (NEGATIVE_RESULTS 56); bs32 would need 892 KB per core. Opt out: TT_PREFILL_QKV_L1=0 (the bs16 sum then
+    # returns to L1).
     if batch_size in (8, 16) and seq_len == 512:
         os.environ.setdefault("TT_PREFILL_QKV_L1", "1")
         if os.getenv("TT_PREFILL_QKV_L1") == "1":

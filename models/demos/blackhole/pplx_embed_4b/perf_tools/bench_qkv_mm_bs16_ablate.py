@@ -1,8 +1,9 @@
-# bs16 QKV projection (minimal_matmul, the model's config): compute-bound or data-movement-bound?
-# Variants skip the in0 (activation) DRAM/L1 reads, the in1 (weight) reads, and/or the output writes; multicast and
-# CB handshakes stay. The kernels' paths are fixed in the program factory, so each variant temporarily patches
-# minimal_matmul's matmul_dataflow_common_metal2.hpp (the header the Metal 2.0 kernels it runs include; restored afterwards) and runs in its own process with a fresh JIT cache.
-# Usage: bench_qkv_mm_bs16_ablate.py [batch]
+# QKV projection (minimal_matmul at the model's config: bfp8 in0 in L1, bfp4 weights DRAM width-sharded over the 8
+# banks, bfp8 out in L1 and in DRAM): compute-bound or data-movement-bound? Variants skip the in0 (activation) reads,
+# the in1 (weight) reads, and/or the output writes; forwarding and CB handshakes stay. The kernels' paths are fixed in
+# the program descriptor, so each variant temporarily patches minimal_matmul's matmul_dataflow_common_metal2.hpp (the
+# header its Metal 2.0 kernels include; restored afterwards) and runs in its own process with a fresh JIT cache.
+# Usage: bench_qkv_mm_bs16_ablate.py [batch]   (ABL_ONLY="full|no reads" to pick variants)
 import os
 import statistics
 import subprocess
@@ -69,17 +70,27 @@ def child():
         ckc = ttnn.init_device_compute_kernel_config(
             D.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
         )
-        wt = torch.randn(1, 1, K, N)
-        w = ttnn.from_torch(
-            wt,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=D,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # the model's QKV weight: bfp4, DRAM width-sharded [K, N / 8] over the 8 banks
+        wt = torch.randn(1, 1, K, N) * 0.02
+        w_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                [K, N // 8],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
-        for pname, mc in (("L1 in", ttnn.L1_MEMORY_CONFIG), ("DRAM in", ttnn.DRAM_MEMORY_CONFIG)):
-            xt = torch.randn(1, 1, B * S, K)
-            x = ttnn.from_torch(xt, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=D, memory_config=mc)
+        w = ttnn.from_torch(wt, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=D, memory_config=w_mc)
+        wt = ttnn.to_torch(w).float()  # reference against the quantized weight
+        # input in L1 like the model (layers 1+); the output in L1 (bs8 / bs16 defaults) and in DRAM (bs32)
+        xt = torch.randn(1, 1, B * S, K)
+        x = ttnn.from_torch(
+            xt, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=D, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        for pname, out_mc in (("L1 out", ttnn.L1_MEMORY_CONFIG), ("DRAM out", ttnn.DRAM_MEMORY_CONFIG)):
+            if pname == "L1 out" and B > 16:
+                continue  # 892 KB per core: does not fit
 
             def fn():
                 return ttnn.experimental.minimal_matmul(
@@ -87,7 +98,7 @@ def child():
                     w,
                     compute_kernel_config=ckc,
                     config=cfg,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=out_mc,
                     dtype=ttnn.bfloat8_b,
                 )
 
@@ -100,7 +111,13 @@ def child():
             ttnn.synchronize_device(D)
             n = 8
             tid = ttnn.begin_trace_capture(D, cq_id=0)
-            outs = [fn() for _ in range(n)]
+            outs = []
+            for _ in range(n):
+                o = fn()
+                if pname == "L1 out":
+                    ttnn.deallocate(o)  # 8 live L1 outputs would not fit; the trace reuses the address
+                else:
+                    outs.append(o)
             ttnn.end_trace_capture(D, tid, cq_id=0)
             ttnn.execute_trace(D, tid, cq_id=0, blocking=True)
             ts = []
@@ -110,7 +127,6 @@ def child():
                 ts.append((time.perf_counter() - t0) / n * 1e6)
             ttnn.release_trace(D, tid)
             [ttnn.deallocate(o) for o in outs]
-            ttnn.deallocate(x)
             print(f"CHILD {pname} {statistics.median(ts):.1f} grid={grid.x}x{grid.y} pcc={pcc:.3f}", flush=True)
     finally:
         ttnn.close_device(D)
