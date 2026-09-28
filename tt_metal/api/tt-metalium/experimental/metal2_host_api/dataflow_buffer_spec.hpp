@@ -171,7 +171,7 @@ struct DataflowBufferSpec {
 //
 struct CrossNodeDataflowBufferSpec {
     // A cross-node DFB has all of the same properties as a local DFB
-    DataflowBufferSpec dfb_pec;
+    DataflowBufferSpec dfb_spec;
 
     // Plus, some cross-node DFB-specific properties.
     // (These are TBD...)

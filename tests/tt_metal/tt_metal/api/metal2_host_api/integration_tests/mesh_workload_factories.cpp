@@ -25,7 +25,7 @@
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include "test_helpers.hpp"
+#include "metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {

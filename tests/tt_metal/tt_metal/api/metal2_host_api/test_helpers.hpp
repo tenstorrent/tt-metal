@@ -7,6 +7,7 @@
 // Shared test utilities for Metal 2.0 Host API tests.
 // These helpers create minimal valid spec objects for testing.
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -194,6 +195,19 @@ inline void BindTensorParameterToKernel(
         .tensor_parameter_name = TensorParamName{std::move(tensor_parameter_name)},
         .accessor_name = std::move(accessor_name),
     });
+}
+
+// Binds `semaphore_name` (declared on node (0,0)) to the named kernels of `spec`.
+inline void BindSemaphoreToKernels(
+    ProgramSpec& spec, const char* semaphore_name, const std::vector<std::string>& kernels) {
+    spec.semaphores.push_back(
+        SemaphoreSpec{.unique_id = SemaphoreSpecName{semaphore_name}, .target_nodes = NodeCoord{0, 0}});
+    for (auto& kernel : spec.kernels) {
+        if (std::find(kernels.begin(), kernels.end(), kernel.unique_id.get()) != kernels.end()) {
+            kernel.semaphore_bindings.push_back(SemaphoreBinding{
+                .semaphore_spec_name = SemaphoreSpecName{semaphore_name}, .accessor_name = semaphore_name});
+        }
+    }
 }
 
 // Helper to create a height-sharded TensorParameter for tests that exercise the
