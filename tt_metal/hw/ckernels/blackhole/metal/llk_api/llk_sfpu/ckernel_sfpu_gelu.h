@@ -362,10 +362,8 @@ inline void calculate_gelu_tanh() {
 
         // reload due to register pressure
         x = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
-
         sfpi::vFloat half_x = 0.5f * x;
-        result = half_x * t + half_x;
+        sfpi::vFloat result = half_x * t + half_x;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
