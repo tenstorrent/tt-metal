@@ -26,7 +26,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -35,15 +34,15 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
 #include <cstdint>
 #include "strided_ring_reduce_scatter_common.hpp"
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
-using namespace tt::tt_fabric::linear::experimental;
+using namespace dataflow_kernel_lib::ccl;  // FabricStreamSender / MuxConn / the armed channels
+namespace sched = ttnn::ccl::schedule;     // the neighbour-first ring slice walk
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -116,24 +115,15 @@ void kernel_main() {
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
-    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t termination_sync_address = get_semaphore(termination_sync_id);
-    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    // Build the worker-mux egress through the helper: MuxConn reads this exact runtime-arg block
+    // (same 17 fields, same order as the hand-rolled build + endpoint-ready wait it replaces).
+    MuxConn<fabric_mux_num_buffers_per_channel> mux_conn(
+        arg_cursor(arg_idx),
+        fabric_mux_channel_buffer_size_bytes,
+        fabric_mux_status_address,
+        fabric_mux_termination_signal_address,
+        num_mux_clients);
 
     const auto& unicast_route_info = direction ? forward_unicast_route_info : backward_unicast_route_info;
     const auto& multicast_route_info = direction ? forward_multicast_route_info : backward_multicast_route_info;
@@ -182,85 +172,40 @@ void kernel_main() {
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
-    if (mux_connection_valid) {
-        auto mux_connection_handle =
-            tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-                fabric_mux_x,
-                fabric_mux_y,
-                fabric_mux_channel_id,
-                fabric_mux_num_buffers_per_channel,
-                fabric_mux_channel_buffer_size_bytes,
-                fabric_mux_channel_base_address,
-                fabric_mux_connection_info_address,
-                fabric_mux_connection_handshake_address,
-                fabric_mux_flow_control_address,
-                fabric_mux_buffer_index_address,
-                local_flow_control_address,
-                local_teardown_address,
-                local_buffer_index_address);
+    // A worker without a mux link does NOTHING — not even CB consumption. The host only routes
+    // work to linked workers, so the gate wraps the whole body, exactly as before the migration.
+    if (mux_conn.valid()) {
+        FabricStreamSender<MuxConn<fabric_mux_num_buffers_per_channel>> sender(mux_conn, /*alignment=*/1);
 
-        // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+        // open(route) binds this stream's unicast route once; every unicast arm below reuses it.
+        auto stream = sender.open(unicast_route_info);
 
-        auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
-        auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
-        auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
-        auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+        // Arm once, issue many. Each channel draws its own pooled header. NOTE: the multicast
+        // barrier/batch-ready channel always programs its multicast route, where the pre-migration
+        // kernel set it only under use_barrier_sem while reusing the same header for the
+        // batch-ready increment — which sent the batch-ready multicast on an UNROUTED header
+        // whenever use_barrier_sem was false. Always setting it matches the use_barrier_sem==true
+        // behaviour (the same fix the ring and dim-zero writers got).
+        //
+        // Scatter needs >= 2 chunks (NOC_SCATTER_WRITE_MIN_CHUNKS); when
+        // num_tiles_to_write_per_packet < 2 every dispatch below falls back to unicast writes and
+        // the scatter channel is armed (a local header program) but never issued.
+        auto scatter =
+            stream.arm_scatter_write(page_size, num_tiles_to_write_per_packet >= 2 ? num_tiles_to_write_per_packet : 2);
+        auto writer = stream.arm_unicast_write(page_size);
+        auto counter = stream.arm_inc(1);
+        auto barrier = stream.arm_inc(multicast_route_info, 1);
 
-        tt::tt_fabric::fabric_client_connect(mux_connection_handle);
-
-        fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            pkt_hdr_mcastseminc,
-            static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
-            static_cast<uint8_t>(multicast_route_info.range_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0,                           // ignore
-                static_cast<uint32_t>(1)});  // increment 1
         if (use_barrier_sem) {
             // multicast to entire ring of workers going in the same direction
-            uint64_t barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                &mux_connection_handle,
-                pkt_hdr_mcastseminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            barrier.inc(safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0));
 
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         }
 
-        fabric_unicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            pkt_hdr_seminc,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0,                           // ignore
-                static_cast<uint32_t>(1)});  // increment 1
-
-        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-            pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
-
-        // Scatter write requires chunk_count >= 2 (NOC_SCATTER_WRITE_MIN_CHUNKS).
-        // When num_tiles_to_write_per_packet < 2 (e.g. float32 with large pages),
-        // the dispatch loop falls back to individual unicast writes, so we skip
-        // scatter header initialization entirely.
-        if constexpr (num_tiles_to_write_per_packet >= 2) {
-            uint64_t dummy_addrs[4] = {0, 0, 0, 0};
-            uint16_t chunk_sizes[3] = {
-                static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size), static_cast<uint16_t>(page_size)};
-            fabric_unicast_noc_scatter_write_set_state<
-                UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-                pkt_scatter_hdr,
-                static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-                NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-                page_size * num_tiles_to_write_per_packet);
-        }
+        const uint64_t out_ready_sem_noc_addr_in_pkt =
+            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
         const uint32_t batch_size = input_tensor_B;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
@@ -285,14 +230,17 @@ void kernel_main() {
                         effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
                     const auto steps_advance = decompose_tile_advance(
                         effective_advance_by_tiles, effective_subchunk_size, effective_chunk_width_in_tiles);
-                    int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+                    // Per-chunk: the ring walk restarts at the nearest neighbour's slice (the
+                    // shared neighbour-first cursor, same walk as the reader and compute kernel).
+                    auto slice_cursor = sched::RingSliceCursor::starting_at(
+                        sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
 
                     // Ring reduce-scatter loop for this chunk.
                     // i=0: consume reader_output_cb, send to neighbor's intermediate buffer.
                     // i=1..R-2: consume output_cb (from compute), send to neighbor's intermediate.
                     // i=R-1: consume output_cb, write final reduced tiles to local output.
                     for (uint32_t i = 0; i < ring_size; i++) {
-                        const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
+                        const uint32_t actual_slice_idx = slice_cursor.wrap();
                         CircularBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
 
                         const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
@@ -406,31 +354,13 @@ void kernel_main() {
 
                                             if (num_in_bounds_tiles > 1 && contiguous) {
                                                 // Scatter write: one packet, multiple destinations.
-                                                uint16_t chunk_sizes[3] = {
-                                                    static_cast<uint16_t>(page_size),
-                                                    static_cast<uint16_t>(page_size),
-                                                    static_cast<uint16_t>(page_size)};
-                                                fabric_unicast_noc_scatter_write_with_state<
-                                                    UnicastScatterWriteUpdateMask::DstAddrs |
-                                                    UnicastScatterWriteUpdateMask::ChunkSizes |
-                                                    UnicastScatterWriteUpdateMask::PayloadSize>(
-                                                    &mux_connection_handle,
-                                                    pkt_scatter_hdr,
-                                                    valid_l1_addrs[0],
-                                                    NocUnicastScatterCommandHeader(
-                                                        noc_addrs, chunk_sizes, num_in_bounds_tiles),
-                                                    page_size * num_in_bounds_tiles);
+                                                scatter.write_scatter(
+                                                    noc_addrs, num_in_bounds_tiles, valid_l1_addrs[0]);
                                             } else {
                                                 // Non-contiguous or single tile: individual unicast writes.
-                                                // All iterations reuse pkt_unicast_hdr
+                                                // All iterations reuse the armed unicast channel's pooled header.
                                                 for (uint32_t t = 0; t < num_in_bounds_tiles; t++) {
-                                                    fabric_unicast_noc_unicast_write_with_state<
-                                                        UnicastWriteUpdateMask::DstAddr>(
-                                                        &mux_connection_handle,
-                                                        pkt_unicast_hdr,
-                                                        valid_l1_addrs[t],
-                                                        NocUnicastCommandHeader{noc_addrs[t]});
-                                                    noc_async_writes_flushed();
+                                                    writer.write(noc_addrs[t], valid_l1_addrs[t]);
                                                 }
                                             }
                                         }
@@ -459,50 +389,31 @@ void kernel_main() {
                             // iteration are written.
                             const uint64_t out_ready_sem_noc_addr_in_pkt =
                                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                                &mux_connection_handle,
-                                pkt_hdr_seminc,
-                                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                            counter.inc(out_ready_sem_noc_addr_in_pkt);
                             noc_obj.async_writes_flushed();
                         } else {
                             noc_obj.async_write_barrier();
                         }
 
                         // Move to the next slice
-                        slice_idx += direction ? -1 : 1;
+                        slice_cursor.advance();
                     }
                 }
             }
 
             // Batch barrier: the intermediate buffer holds only one batch element, so all
             // devices must finish the current batch before any starts the next one.
-            const uint64_t batch_ready_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                &mux_connection_handle,
-                pkt_hdr_mcastseminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+            barrier.inc(safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0));
             noc_obj.async_writes_flushed();
 
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
         }
 
-        noc_obj.async_write_barrier();
-        noc_obj.async_atomic_barrier();
-
-        tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
-
-        if (is_termination_master) {
-            Semaphore<> termination_sync(termination_sync_id);
-            termination_sync.wait(num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-        } else {
-            const uint64_t dest_addr =
-                safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-            noc_semaphore_inc(dest_addr, 1);
-            noc_obj.async_atomic_barrier();
-        }
+        // close() drains (write + atomic barriers) then runs the mux teardown handshake behind the
+        // uniform helper teardown (disconnect; termination master waits for all clients then
+        // signals the mux endpoint to terminate).
+        stream.close();
     }
 
     noc_obj.async_write_barrier();
