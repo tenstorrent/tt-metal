@@ -521,221 +521,257 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // and produces normalized q->cb.supd, k->cb.stmp (both free in Ct==1). The rest of the chunk
     // then reads Q/Kk instead of cb.q/cb.k. scr1/scr2/scr3 are free here (used only later). ----
     uint32_t Q = cb.q, Kk = cb.k;
-    if constexpr (qk_norm) {
-        // q: q^2 -> rowsum_K -> rsqrt(+eps)*scale -> q_normed (cb.supd)
-        ew(cb.q, cb.q, cb.scr1, ck, EwOp::Mul);
-        WAIT(cb.scr1, ck);
-        rowsum_k(cb.scr1, cb.scr2, Ct, Kt, cb.ones);
-        WAIT(cb.scr2, Ct);
-        POP(cb.scr1, ck);
-        inv_rms(cb.scr2, cb.scr3, Ct, eps_bits, scale_bits, /*do_scale=*/true);
-        WAIT(cb.scr3, Ct);
-        POP(cb.scr2, Ct);
-        bcast_cols_mul(cb.q, cb.scr3, cb.supd, Ct, Kt);
-        WAIT(cb.supd, ck);
-        POP(cb.scr3, Ct);
-        POP(cb.q, ck);
-        // k: same, no scale -> k_normed (cb.stmp)
-        ew(cb.k, cb.k, cb.scr1, ck, EwOp::Mul);
-        WAIT(cb.scr1, ck);
-        rowsum_k(cb.scr1, cb.scr2, Ct, Kt, cb.ones);
-        WAIT(cb.scr2, Ct);
-        POP(cb.scr1, ck);
-        inv_rms(cb.scr2, cb.scr3, Ct, eps_bits, scale_bits, /*do_scale=*/false);
-        WAIT(cb.scr3, Ct);
-        POP(cb.scr2, Ct);
-        bcast_cols_mul(cb.k, cb.scr3, cb.stmp, Ct, Kt);
-        WAIT(cb.stmp, ck);
-        POP(cb.scr3, Ct);
-        POP(cb.k, ck);
-        Q = cb.supd;
-        Kk = cb.stmp;
+    {
+        GDN_ZONE("pp_norm");
+        if constexpr (qk_norm) {
+            // q: q^2 -> rowsum_K -> rsqrt(+eps)*scale -> q_normed (cb.supd)
+            ew(cb.q, cb.q, cb.scr1, ck, EwOp::Mul);
+            WAIT(cb.scr1, ck);
+            rowsum_k(cb.scr1, cb.scr2, Ct, Kt, cb.ones);
+            WAIT(cb.scr2, Ct);
+            POP(cb.scr1, ck);
+            inv_rms(cb.scr2, cb.scr3, Ct, eps_bits, scale_bits, /*do_scale=*/true);
+            WAIT(cb.scr3, Ct);
+            POP(cb.scr2, Ct);
+            bcast_cols_mul(cb.q, cb.scr3, cb.supd, Ct, Kt);
+            WAIT(cb.supd, ck);
+            POP(cb.scr3, Ct);
+            POP(cb.q, ck);
+            // k: same, no scale -> k_normed (cb.stmp)
+            ew(cb.k, cb.k, cb.scr1, ck, EwOp::Mul);
+            WAIT(cb.scr1, ck);
+            rowsum_k(cb.scr1, cb.scr2, Ct, Kt, cb.ones);
+            WAIT(cb.scr2, Ct);
+            POP(cb.scr1, ck);
+            inv_rms(cb.scr2, cb.scr3, Ct, eps_bits, scale_bits, /*do_scale=*/false);
+            WAIT(cb.scr3, Ct);
+            POP(cb.scr2, Ct);
+            bcast_cols_mul(cb.k, cb.scr3, cb.stmp, Ct, Kt);
+            WAIT(cb.stmp, ck);
+            POP(cb.scr3, Ct);
+            POP(cb.k, ck);
+            Q = cb.supd;
+            Kk = cb.stmp;
+        }
     }
 
-    // ---- P1: v_beta, k_beta ----
-    bcast_cols_mul(cb.v, cb.beta, cb.vbeta, Ct, Vt);
-    WAIT(cb.vbeta, cv);
-    bcast_cols_mul(Kk, cb.beta, cb.kbeta, Ct, Kt);
-    WAIT(cb.kbeta, ck);
-    POP(cb.beta, Ct);
-    POP(cb.v, cv);
+    {
+        GDN_ZONE("pp_p1");
+        // ---- P1: v_beta, k_beta ----
+        bcast_cols_mul(cb.v, cb.beta, cb.vbeta, Ct, Vt);
+        WAIT(cb.vbeta, cv);
+        bcast_cols_mul(Kk, cb.beta, cb.kbeta, Ct, Kt);
+        WAIT(cb.kbeta, ck);
+        POP(cb.beta, Ct);
+        POP(cb.v, cv);
+    }
 
-    // ---- P2: decay = tril@g, decay_exp, decay_row ----
-    mm(cb.tril, cb.g, cb.decay, Ct, Ct, 1, false);
-    WAIT(cb.decay, Ct);
-    expc(cb.decay, cb.decay_exp, Ct);
-    WAIT(cb.decay_exp, Ct);
-    transpose_col(cb.decay, cb.scr1, Ct);  // decay_row in scr1
-    WAIT(cb.scr1, Ct);
+    {
+        GDN_ZONE("pp_decay");
+        // ---- P2: decay = tril@g, decay_exp, decay_row ----
+        mm(cb.tril, cb.g, cb.decay, Ct, Ct, 1, false);
+        WAIT(cb.decay, Ct);
+        expc(cb.decay, cb.decay_exp, Ct);
+        WAIT(cb.decay_exp, Ct);
+        transpose_col(cb.decay, cb.scr1, Ct);  // decay_row in scr1
+        WAIT(cb.scr1, Ct);
+    }
 
-    // ---- L_mask = tril(exp(decay_i - decay_j)) ----
-    bcast_cols_mul(cb.ones, cb.decay, cb.scr2, Ct, Ct);  // decay_i everywhere
-    WAIT(cb.scr2, cc);
-    bcast_rows_sub(cb.scr2, cb.scr1, cb.scr3, Ct, Ct);  // decay_i - decay_j
-    WAIT(cb.scr3, cc);
-    POP(cb.scr1, Ct);  // decay_row done
-    POP(cb.scr2, cc);
-    ew(cb.scr3, cb.tril, cb.scr2, cc, EwOp::Mul);  // *tril (zero upper)
-    WAIT(cb.scr2, cc);
-    POP(cb.scr3, cc);
-    expc(cb.scr2, cb.scr3, cc);  // exp
-    WAIT(cb.scr3, cc);
-    POP(cb.scr2, cc);
-    ew(cb.scr3, cb.tril, cb.lmask, cc, EwOp::Mul);  // *tril again -> L_mask
-    WAIT(cb.lmask, cc);
-    POP(cb.scr3, cc);
-
-    // ---- decayfac = exp(g_sum - decay) ----
-    // (dl = exp(g_sum) is recomputed at the scan from decayfac[0]*decay_exp[0] so its CB
-    //  slot can be reused as the third ping-pong state buffer cb_s3.)
-    mm(cb.ones, cb.g, cb.scr1, Ct, Ct, 1, false);  // g_sum in every row (col form)
-    WAIT(cb.scr1, Ct);
-    POP(cb.g, Ct);
-    ew(cb.scr1, cb.decay, cb.scr2, Ct, EwOp::Sub);  // g_sum - decay
-    WAIT(cb.scr2, Ct);
-    POP(cb.scr1, Ct);
-    POP(cb.decay, Ct);
-    expc(cb.scr2, cb.decayfac, Ct);
-    WAIT(cb.decayfac, Ct);
-    POP(cb.scr2, Ct);
-
-    // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
-    // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each
-    // 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded Horners, and
-    // merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
-    // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
-    mm(cb.kbeta, Kk, cb.scr1, Ct, Kt, Ct, true);  // kk = k_beta @ k^T (Kk = normalized k)
-    WAIT(cb.scr1, cc);
-    ew(cb.scr1, cb.lmask, cb.scr2, cc, EwOp::Mul);  // kk_masked = kk * L_mask
-    WAIT(cb.scr2, cc);
-    POP(cb.scr1, cc);
-    ew(cb.scr2, cb.eye, cb.scr1, cc, EwOp::Mul);  // diag(kk_masked)
-    WAIT(cb.scr1, cc);
-    // negN = diag - kk_masked = -(strictly_lower(kk_masked))  (= -A_strict, kept in cb.scr3)
-    ew(cb.scr1, cb.scr2, cb.scr3, cc, EwOp::Sub);
-    WAIT(cb.scr3, cc);
-    POP(cb.scr1, cc);
-    POP(cb.scr2, cc);
-
-    // invert_block's private scratch A..D = cb.S/cb.final_s/cb.s2/cb.s3 — all fp32 and NOT drained
-    // by the prep writer (unlike the output CBs cb.w/cb.qdecay/cb.intra, whose scratch pushes the
-    // writer would wrongly consume). None alias src (cb.scr3), out, or the Ct==2 persistents
-    // (cb.supd/cb.stmp).
-    if constexpr (Ct == 1) {
-        // Single 32x32 block: T_inv is just its inverse.
-        invert_block(cb.scr3, 0, cb.Tinv, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
-        WAIT(cb.Tinv, cc);
+    {
+        GDN_ZONE("pp_lmask");
+        // ---- L_mask = tril(exp(decay_i - decay_j)) ----
+        bcast_cols_mul(cb.ones, cb.decay, cb.scr2, Ct, Ct);  // decay_i everywhere
+        WAIT(cb.scr2, cc);
+        bcast_rows_sub(cb.scr2, cb.scr1, cb.scr3, Ct, Ct);  // decay_i - decay_j
+        WAIT(cb.scr3, cc);
+        POP(cb.scr1, Ct);  // decay_row done
+        POP(cb.scr2, cc);
+        ew(cb.scr3, cb.tril, cb.scr2, cc, EwOp::Mul);  // *tril (zero upper)
+        WAIT(cb.scr2, cc);
         POP(cb.scr3, cc);
-    } else if constexpr (Ct == 2) {
-        // 2x2 tile-block lower-triangular. negN tiles: 0=(0,0), 2=(1,0), 3=(1,1); (0,1)=0.
-        // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.
-        // (A21 = -negN21, so -Mi22@A21@Mi11 = Mi22 @ negN21 @ Mi11.)
-        // Mi11 -> cb.supd, Mi22 -> cb.stmp, Mi21 -> cb.ointer (all free in prep).
-        // Mi11 -> cb.supd (negN tile 0), Mi22 -> cb.stmp (negN tile 3). ONE inlined invert_block body
-        // serves both through a 2-iteration loop the compiler must not unroll: inlining it twice
-        // put the Ct==2 prep program over the kernel-config buffer (70752 > 70656 B on QB2), and the
-        // LLK's inline asm forbids the out-of-line (noinline / -Os) alternatives. Same ops, same
-        // order, same pack boundaries -> bit-exact with the unrolled form.
-        {
-            const uint32_t neg_tile[2] = {0, 3};
-            const uint32_t inv_out[2] = {cb.supd, cb.stmp};
-#pragma GCC unroll 1
-            for (uint32_t i = 0; i < 2; i++) {
-                invert_block(
-                    cb.scr3,
-                    neg_tile[i],
-                    inv_out[i],
-                    cb.scr1,
-                    cb.scr2,
-                    cb.eye,
-                    cb.mask,
-                    cb.S,
-                    cb.final_s,
-                    cb.s2,
-                    cb.s3);
-            }
-        }
-        cpy_t(cb.scr3, 2, cb.scr1);  // negN21 -> cb.scr1[0]
-        WAIT(cb.scr1, 1);
-        mm(cb.scr1, cb.supd, cb.scr2, 1, 1, 1, false);  // tmp = negN21 @ Mi11
-        WAIT(cb.scr2, 1);
-        POP(cb.scr1, 1);
-        mm(cb.stmp, cb.scr2, cb.ointer, 1, 1, 1, false);  // Mi21 = Mi22 @ tmp
-        WAIT(cb.ointer, 1);
-        POP(cb.scr2, 1);
-        POP(cb.scr3, cc);  // negN done
-        // T_inv = [[Mi11, 0], [Mi21, Mi22]]  (cb.eye[1] is the zero block)
-        asm4(cb.supd, 0, cb.eye, 1, cb.ointer, 0, cb.stmp, 0, cb.Tinv);
-        WAIT(cb.Tinv, cc);
-        POP(cb.supd, 1);
-        POP(cb.stmp, 1);
-        POP(cb.ointer, 1);
-    } else {
-        // Fallback (C>64, currently xfail): full-matrix Horner.
-        ew(cb.eye, cb.scr3, cb.Tinv, cc, EwOp::Add);
-        WAIT(cb.Tinv, cc);
-        for (uint32_t m = 2; m < C; m++) {
-            mm(cb.scr3, cb.Tinv, cb.scr1, Ct, Ct, Ct, false);
-            WAIT(cb.scr1, cc);
-            POP(cb.Tinv, cc);
-            ew(cb.eye, cb.scr1, cb.Tinv, cc, EwOp::Add);
+        expc(cb.scr2, cb.scr3, cc);  // exp
+        WAIT(cb.scr3, cc);
+        POP(cb.scr2, cc);
+        ew(cb.scr3, cb.tril, cb.lmask, cc, EwOp::Mul);  // *tril again -> L_mask
+        WAIT(cb.lmask, cc);
+        POP(cb.scr3, cc);
+    }
+
+    {
+        GDN_ZONE("pp_decayfac");
+        // ---- decayfac = exp(g_sum - decay) ----
+        // (dl = exp(g_sum) is recomputed at the scan from decayfac[0]*decay_exp[0] so its CB
+        //  slot can be reused as the third ping-pong state buffer cb_s3.)
+        mm(cb.ones, cb.g, cb.scr1, Ct, Ct, 1, false);  // g_sum in every row (col form)
+        WAIT(cb.scr1, Ct);
+        POP(cb.g, Ct);
+        ew(cb.scr1, cb.decay, cb.scr2, Ct, EwOp::Sub);  // g_sum - decay
+        WAIT(cb.scr2, Ct);
+        POP(cb.scr1, Ct);
+        POP(cb.decay, Ct);
+        expc(cb.scr2, cb.decayfac, Ct);
+        WAIT(cb.decayfac, Ct);
+        POP(cb.scr2, Ct);
+    }
+
+    {
+        GDN_ZONE("pp_negn");
+        // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
+        // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each
+        // 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded Horners, and
+        // merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
+        // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
+        mm(cb.kbeta, Kk, cb.scr1, Ct, Kt, Ct, true);  // kk = k_beta @ k^T (Kk = normalized k)
+        WAIT(cb.scr1, cc);
+        ew(cb.scr1, cb.lmask, cb.scr2, cc, EwOp::Mul);  // kk_masked = kk * L_mask
+        WAIT(cb.scr2, cc);
+        POP(cb.scr1, cc);
+        ew(cb.scr2, cb.eye, cb.scr1, cc, EwOp::Mul);  // diag(kk_masked)
+        WAIT(cb.scr1, cc);
+        // negN = diag - kk_masked = -(strictly_lower(kk_masked))  (= -A_strict, kept in cb.scr3)
+        ew(cb.scr1, cb.scr2, cb.scr3, cc, EwOp::Sub);
+        WAIT(cb.scr3, cc);
+        POP(cb.scr1, cc);
+        POP(cb.scr2, cc);
+    }
+
+    {
+        GDN_ZONE("pp_tinv");
+        // invert_block's private scratch A..D = cb.S/cb.final_s/cb.s2/cb.s3 — all fp32 and NOT drained
+        // by the prep writer (unlike the output CBs cb.w/cb.qdecay/cb.intra, whose scratch pushes the
+        // writer would wrongly consume). None alias src (cb.scr3), out, or the Ct==2 persistents
+        // (cb.supd/cb.stmp).
+        if constexpr (Ct == 1) {
+            // Single 32x32 block: T_inv is just its inverse.
+            invert_block(cb.scr3, 0, cb.Tinv, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
             WAIT(cb.Tinv, cc);
-            POP(cb.scr1, cc);
+            POP(cb.scr3, cc);
+        } else if constexpr (Ct == 2) {
+            // 2x2 tile-block lower-triangular. negN tiles: 0=(0,0), 2=(1,0), 3=(1,1); (0,1)=0.
+            // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.
+            // (A21 = -negN21, so -Mi22@A21@Mi11 = Mi22 @ negN21 @ Mi11.)
+            // Mi11 -> cb.supd, Mi22 -> cb.stmp, Mi21 -> cb.ointer (all free in prep).
+            // Mi11 -> cb.supd (negN tile 0), Mi22 -> cb.stmp (negN tile 3). ONE inlined invert_block body
+            // serves both through a 2-iteration loop the compiler must not unroll: inlining it twice
+            // put the Ct==2 prep program over the kernel-config buffer (70752 > 70656 B on QB2), and the
+            // LLK's inline asm forbids the out-of-line (noinline / -Os) alternatives. Same ops, same
+            // order, same pack boundaries -> bit-exact with the unrolled form.
+            {
+                const uint32_t neg_tile[2] = {0, 3};
+                const uint32_t inv_out[2] = {cb.supd, cb.stmp};
+#pragma GCC unroll 1
+                for (uint32_t i = 0; i < 2; i++) {
+                    invert_block(
+                        cb.scr3,
+                        neg_tile[i],
+                        inv_out[i],
+                        cb.scr1,
+                        cb.scr2,
+                        cb.eye,
+                        cb.mask,
+                        cb.S,
+                        cb.final_s,
+                        cb.s2,
+                        cb.s3);
+                }
+            }
+            cpy_t(cb.scr3, 2, cb.scr1);  // negN21 -> cb.scr1[0]
+            WAIT(cb.scr1, 1);
+            mm(cb.scr1, cb.supd, cb.scr2, 1, 1, 1, false);  // tmp = negN21 @ Mi11
+            WAIT(cb.scr2, 1);
+            POP(cb.scr1, 1);
+            mm(cb.stmp, cb.scr2, cb.ointer, 1, 1, 1, false);  // Mi21 = Mi22 @ tmp
+            WAIT(cb.ointer, 1);
+            POP(cb.scr2, 1);
+            POP(cb.scr3, cc);  // negN done
+            // T_inv = [[Mi11, 0], [Mi21, Mi22]]  (cb.eye[1] is the zero block)
+            asm4(cb.supd, 0, cb.eye, 1, cb.ointer, 0, cb.stmp, 0, cb.Tinv);
+            WAIT(cb.Tinv, cc);
+            POP(cb.supd, 1);
+            POP(cb.stmp, 1);
+            POP(cb.ointer, 1);
+        } else {
+            // Fallback (C>64, currently xfail): full-matrix Horner.
+            ew(cb.eye, cb.scr3, cb.Tinv, cc, EwOp::Add);
+            WAIT(cb.Tinv, cc);
+            for (uint32_t m = 2; m < C; m++) {
+                mm(cb.scr3, cb.Tinv, cb.scr1, Ct, Ct, Ct, false);
+                WAIT(cb.scr1, cc);
+                POP(cb.Tinv, cc);
+                ew(cb.eye, cb.scr1, cb.Tinv, cc, EwOp::Add);
+                WAIT(cb.Tinv, cc);
+                POP(cb.scr1, cc);
+            }
+            POP(cb.scr3, cc);
         }
-        POP(cb.scr3, cc);
     }
 
-    // ---- un-premultiplied WY hand-off: output v_beta (cb.vbeta), kd=k_beta*decay_exp (cb.w),
-    // T_inv (cb.Tinv). The scan computes v_new = T_inv @ (v_beta - kd@S), applying the inverse
-    // AFTER the subtraction so its fp error is not amplified by the u - w@S cancellation.
-    bcast_cols_mul(cb.kbeta, cb.decay_exp, cb.w, Ct, Kt);  // kd -> cb.w (output)
-    WAIT(cb.w, ck);
-    POP(cb.kbeta, ck);
+    {
+        GDN_ZONE("pp_kd");
+        // ---- un-premultiplied WY hand-off: output v_beta (cb.vbeta), kd=k_beta*decay_exp (cb.w),
+        // T_inv (cb.Tinv). The scan computes v_new = T_inv @ (v_beta - kd@S), applying the inverse
+        // AFTER the subtraction so its fp error is not amplified by the u - w@S cancellation.
+        bcast_cols_mul(cb.kbeta, cb.decay_exp, cb.w, Ct, Kt);  // kd -> cb.w (output)
+        WAIT(cb.w, ck);
+        POP(cb.kbeta, ck);
+    }
     // cb.vbeta (v_beta) and cb.Tinv (T_inv) remain pushed for the writer; NOT popped here.
 
-    // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
-    mm(Q, Kk, cb.scr1, Ct, Kt, Ct, true);  // qk = q @ k^T (Q/Kk = normalized q,k)
-    WAIT(cb.scr1, cc);
-    ew(cb.scr1, cb.lmask, cb.intra, cc, EwOp::Mul);
-    WAIT(cb.intra, cc);
-    POP(cb.scr1, cc);
-    POP(cb.lmask, cc);
-    bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, Ct, Kt);
-    WAIT(cb.qdecay, ck);
-    POP(Q, ck);
-    // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
-    bcast_cols_mul(Kk, cb.decayfac, cb.scr1, Ct, Kt);  // k * exp(decay_last-decay)
-    WAIT(cb.scr1, ck);
-    POP(Kk, ck);
-    // decayfac kept alive: reused at the scan to recompute dl = exp(g_sum).
-    // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
-    cb_reserve_back(cb.kdec_t, Kt * Ct);
-    pack_reconfig_data_format(cb.kdec_t);
-    reconfig_data_format_srca(cb.scr1);  // unary: in->srcA
-    transpose_init(cb.scr1);
-    for (uint32_t ki = 0; ki < Kt; ki++) {
-        for (uint32_t ci = 0; ci < Ct; ci++) {
-            tile_regs_acquire();
-            transpose_tile(cb.scr1, ci * Kt + ki, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb.kdec_t, ki * Ct + ci);
-            tile_regs_release();
-        }
+    {
+        GDN_ZONE("pp_intra");
+        // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
+        mm(Q, Kk, cb.scr1, Ct, Kt, Ct, true);  // qk = q @ k^T (Q/Kk = normalized q,k)
+        WAIT(cb.scr1, cc);
+        ew(cb.scr1, cb.lmask, cb.intra, cc, EwOp::Mul);
+        WAIT(cb.intra, cc);
+        POP(cb.scr1, cc);
+        POP(cb.lmask, cc);
     }
-    cb_push_back(cb.kdec_t, Kt * Ct);
-    POP(cb.scr1, ck);
+    {
+        GDN_ZONE("pp_qdecay");
+        bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, Ct, Kt);
+        WAIT(cb.qdecay, ck);
+        POP(Q, ck);
+    }
+    // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
+    {
+        GDN_ZONE("pp_kdec");
+        bcast_cols_mul(Kk, cb.decayfac, cb.scr1, Ct, Kt);  // k * exp(decay_last-decay)
+        WAIT(cb.scr1, ck);
+        POP(Kk, ck);
+        // decayfac kept alive: reused at the scan to recompute dl = exp(g_sum).
+        // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
+        cb_reserve_back(cb.kdec_t, Kt * Ct);
+        pack_reconfig_data_format(cb.kdec_t);
+        reconfig_data_format_srca(cb.scr1);  // unary: in->srcA
+        transpose_init(cb.scr1);
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            for (uint32_t ci = 0; ci < Ct; ci++) {
+                tile_regs_acquire();
+                transpose_tile(cb.scr1, ci * Kt + ki, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb.kdec_t, ki * Ct + ci);
+                tile_regs_release();
+            }
+        }
+        cb_push_back(cb.kdec_t, Kt * Ct);
+        POP(cb.scr1, ck);
+    }
 
-    // ---- dl*I: dl = exp(g_sum) = decayfac[i]*decay_exp[i] (the same value in every row of column 0),
-    // broadcast down the identity -> one tile with dl on the diagonal. The scan decays the state as
-    // the matmul (dl*I) @ S_tile so the update S <- dl*S + k_dec_t@v_new accumulates in one DST pass.
-    ew(cb.decayfac, cb.decay_exp, cb.scr1, 1, EwOp::Mul);
-    WAIT(cb.scr1, 1);
-    bcast_cols_mul(cb.eye, cb.scr1, cb.dl, 1, 1);
-    WAIT(cb.dl, 1);
-    POP(cb.scr1, 1);
-    POP(cb.decayfac, Ct);
-    POP(cb.decay_exp, Ct);
+    {
+        GDN_ZONE("pp_dl");
+        // ---- dl*I: dl = exp(g_sum) = decayfac[i]*decay_exp[i] (the same value in every row of column 0),
+        // broadcast down the identity -> one tile with dl on the diagonal. The scan decays the state as
+        // the matmul (dl*I) @ S_tile so the update S <- dl*S + k_dec_t@v_new accumulates in one DST pass.
+        ew(cb.decayfac, cb.decay_exp, cb.scr1, 1, EwOp::Mul);
+        WAIT(cb.scr1, 1);
+        bcast_cols_mul(cb.eye, cb.scr1, cb.dl, 1, 1);
+        WAIT(cb.dl, 1);
+        POP(cb.scr1, 1);
+        POP(cb.decayfac, Ct);
+        POP(cb.decay_exp, Ct);
+    }
     // u, w, k_dec_t, q_decay, intra, dl remain pushed in their CBs -> prep writer -> DRAM.
     // (They are NOT popped here; the writer drains them per chunk.)
 }
