@@ -262,12 +262,17 @@ def _distributed_prefix(
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
     working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
-    # Precision boundary: FP32 composition is transported as BF16.
-    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
-    transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
-    packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
+    # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
+    # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
+    packed = ttnn.concat(
+        [
+            ttnn.reshape(transform_a, (1, batch_heads, key_dim, key_dim)),
+            ttnn.reshape(transform_b, (1, batch_heads, key_dim, value_dim)),
+        ],
+        dim=3,
+        memory_config=working_memory,
+    )
+    packed = ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
     gathered = ttnn.all_gather(
         packed,
         dim=0,
