@@ -87,10 +87,13 @@ permissions:
   copilot-requests: write
 
 engine: copilot
-# Planning quality matters more than cost here (this runs only when a human asks), so
-# pin the stronger model the repo already uses for its review workflows
-# (mattpocock-skills-reviewer.md, test-command.md) rather than the engine default.
-model: claude-sonnet-5
+# Planning quality matters more than cost here (this runs only when a human asks):
+# a bad decomposition (wrong dependency order, wrong scope boundaries across up to 8
+# sub-issues) cascades into wasted or conflicting Copilot coding-agent sessions
+# downstream, unlike issue-monster.md's cheap pick-2-from-a-filtered-list judgment call.
+# Opus over the Sonnet this repo otherwise pins for review workflows
+# (mattpocock-skills-reviewer.md, test-command.md) for that reason.
+model: claude-opus-5-5
 
 # Cost backstop, matching test-command.md. `/squad-plan` is invoked by hand, so spend
 # scales with how often maintainers reach for it; this caps a runaway day.
