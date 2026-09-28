@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full-model correctness gate for production Llama optimizer runs.
+"""Full-model correctness gate for production optimizer runs (Llama 3.1 8B by default; any
+tt-transformers checkpoint in HF_MODEL, with HF_MODEL_ID naming it).
 
 Two checks, both against the Hugging Face bf16 reference on the same fixed English text:
 
@@ -36,11 +37,17 @@ import ttnn
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.tt_transformers.tests.optimizer_weight_cache import RunCache
 
 
 # The checkpoint this gate runs. Weights come from HF_MODEL (a local directory); the id is stated so
-# the optimizer's roofline can resolve the model from the test it executes.
-HF_MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
+# the optimizer's roofline can resolve the model from the test it executes. HF_MODEL_ID overrides it
+# for another checkpoint (the Qwen3-32B campaign, 2026-09-25); unset, it is Llama as before.
+HF_MODEL_ID = os.environ.get("HF_MODEL_ID") or "meta-llama/Llama-3.1-8B-Instruct"
+DEFAULT_MODEL_DIR_NAME = "Llama-3.1-8B-Instruct"
+# The device's trace region. 52 MB is what Llama 3.1 8B needs; Qwen3-32B on a P300x2 QuietBox needs
+# 100 MB (models/model_trace_region_sizes.yaml).
+TRACE_REGION_SIZE = int(os.environ.get("TT_TRACE_REGION_SIZE") or 52_000_000)
 
 # Absolute floor for the worst logits PCC over every teacher-forced position. The optimizer lifts
 # this constant from the file text as its pass/fail threshold (model_files._extract_pcc_threshold).
@@ -55,13 +62,23 @@ TOP1_DROP_PTS = float(os.environ.get("PCC_GATE_TOP1_DROP_PTS", "1.0"))
 TOP5_DROP_PTS = float(os.environ.get("PCC_GATE_TOP5_DROP_PTS", "1.0"))
 MEAN_PCC_DROP = float(os.environ.get("PCC_GATE_MEAN_PCC_DROP", "0.002"))
 
-# See test_optimizer_perf.CACHE_ROOT: a fresh weight cache forces the HF conversion path and avoids
-# the warm-cache load that has hung on the embedding file. Gitignored, inside the checkout.
+# See test_optimizer_perf.CACHE_ROOT: a fresh per-run directory; weights come from the store in
+# optimizer_weight_cache. Gitignored, inside the checkout.
 GENERATED = Path(__file__).resolve().parents[3] / "generated"
 CACHE_ROOT = GENERATED / "optimizer_cache"
 # Pinned on the first run (or when PCC_GATE_PIN_BASELINE=1) and compared against afterwards. Lives
 # outside the model directory so the optimizer's reverts never touch it.
-BASELINE_PATH = GENERATED / "optimizer_accuracy_baseline.json"
+# One pin per checkpoint: Llama keeps the file it has always had, every other model gets its own, so a
+# second model's first run pins itself instead of being judged against Llama's scores.
+_MODEL_DIR_NAME = Path(os.environ.get("HF_MODEL", DEFAULT_MODEL_DIR_NAME)).name or DEFAULT_MODEL_DIR_NAME
+BASELINE_PATH = GENERATED / (
+    "optimizer_accuracy_baseline.json"
+    if _MODEL_DIR_NAME == DEFAULT_MODEL_DIR_NAME
+    else f"optimizer_accuracy_baseline_{_MODEL_DIR_NAME}.json"
+)
+# The Hugging Face reference is the same every run for one checkpoint and one token sequence, and a
+# 32B bf16 forward on the host is minutes; it is computed once and read back after.
+REFERENCE_ROOT = GENERATED / "optimizer_reference"
 
 # Public-domain English (Declaration of Independence, 1776). Real text, so the reference's next-token
 # distribution is peaked and a flipped argmax means the model changed, not that the prompt was noise.
@@ -135,6 +152,32 @@ def _git_head() -> str:
         return ""
 
 
+def _expected_layers(model_path: str) -> int:
+    """The checkpoint's own layer count (32 for Llama 3.1 8B, 64 for Qwen3-32B)."""
+    try:
+        return int(json.loads((Path(model_path) / "config.json").read_text())["num_hidden_layers"])
+    except (OSError, ValueError, KeyError):
+        return 32
+
+
+def _reference_logits(model_path: str, tokens: list[int]) -> torch.Tensor:
+    """HF bf16 logits for these tokens, from the on-disk cache when it holds them."""
+    import hashlib
+
+    key = hashlib.sha256((Path(model_path).name + ":" + ",".join(map(str, tokens))).encode()).hexdigest()[:16]
+    path = REFERENCE_ROOT / f"{Path(model_path).name}-{key}.pt"
+    if path.is_file():
+        return torch.load(path)
+    reference = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16, local_files_only=True).eval()
+    with torch.no_grad():
+        logits = reference(torch.tensor([tokens], dtype=torch.long)).logits[0].float()
+    reference = None
+    gc.collect()
+    REFERENCE_ROOT.mkdir(parents=True, exist_ok=True)
+    torch.save(logits, path)
+    return logits
+
+
 def _load_baseline() -> dict | None:
     try:
         doc = json.loads(BASELINE_PATH.read_text())
@@ -146,12 +189,13 @@ def _load_baseline() -> dict | None:
 @pytest.mark.no_reset_default_device
 @pytest.mark.timeout(1800)
 def test_optimizer_full_model_pcc(monkeypatch):
-    """Teacher-forced prefill + FORCED_TOKENS decode steps against Hugging Face, all 32 layers."""
+    """Teacher-forced prefill + FORCED_TOKENS decode steps against Hugging Face, every layer."""
     model_path = os.environ["HF_MODEL"]
     mesh_device = generator = model = model_args = reference = state_dict = tt_kv_cache = None
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    cache = tempfile.TemporaryDirectory(prefix="pcc-", dir=str(CACHE_ROOT))
-    monkeypatch.setenv("TT_CACHE_PATH", cache.name)
+    # Weights shared with the timing runs through the store (optimizer_weight_cache).
+    cache = RunCache(CACHE_ROOT, "pcc-")
+    monkeypatch.setenv("TT_CACHE_PATH", cache.path)
     # Under `pytest -s` the first print lands on the same line as the node id, which contains "pcc";
     # the optimizer's parser reads any "pcc ... <float>" on a line as a measurement. End that line first.
     print("", flush=True)
@@ -161,47 +205,45 @@ def test_optimizer_full_model_pcc(monkeypatch):
         needed = PROMPT_TOKENS + FORCED_TOKENS
         assert len(tokens) >= needed, f"TEXT tokenizes to {len(tokens)} tokens; the gate needs {needed}"
         tokens = tokens[:needed]
-        assert tokens[0] == tokenizer.bos_token_id, "the tokenizer did not prepend BOS; the prompt must start with it"
+        # Llama's tokenizer prepends BOS and the gate insists on it; Qwen's adds none by design.
+        if tokenizer.bos_token_id is not None and getattr(tokenizer, "add_bos_token", True):
+            assert tokens[0] == tokenizer.bos_token_id, "the tokenizer did not prepend BOS; the prompt must start with it"
         prompt = torch.tensor([tokens[:PROMPT_TOKENS]], dtype=torch.long)
         forced = tokens[PROMPT_TOKENS:]
 
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(1, 4),
-            trace_region_size=52_000_000,
+            trace_region_size=TRACE_REGION_SIZE,
             num_command_queues=1,
         )
         paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
         optimizations = lambda args: DecodersPrecision.performance(args.n_layers, args.model_name)
-        model_args, model, tt_kv_cache, state_dict = create_tt_model(
-            mesh_device,
-            instruct=True,
-            max_batch_size=1,
-            optimizations=optimizations,
-            max_seq_len=MAX_SEQ_LEN,
-            paged_attention_config=paged_attention_config,
-            dtype=ttnn.bfloat8_b,
-            num_layers=None,
-            use_prefetcher=False,
-            use_hf_rope=False,
+        model_args, model, tt_kv_cache, state_dict = cache.build(
+            lambda: create_tt_model(
+                mesh_device,
+                instruct=True,
+                max_batch_size=1,
+                optimizations=optimizations,
+                max_seq_len=MAX_SEQ_LEN,
+                paged_attention_config=paged_attention_config,
+                dtype=ttnn.bfloat8_b,
+                num_layers=None,
+                use_prefetcher=False,
+                use_hf_rope=False,
+            )
         )
-        assert model_args.n_layers == 32
-        assert len(model.layers) == 32
+        layers = _expected_layers(model_path)
+        assert model_args.n_layers == layers
+        assert len(model.layers) == layers
         assert mesh_device.get_num_devices() == 4
         state_dict = None
         gc.collect()
+        cache.loaded()
 
         # One reference pass over prompt + forced tokens: logits[p] predicts token p+1, so position
         # PROMPT_TOKENS-1 is what prefill must match and PROMPT_TOKENS+i is decode step i.
-        reference = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            dtype=torch.bfloat16,
-            local_files_only=True,
-        ).eval()
-        with torch.no_grad():
-            hf_logits = reference(torch.tensor([tokens], dtype=torch.long)).logits[0].float()
-        reference = None
-        gc.collect()
+        hf_logits = _reference_logits(model_path, tokens)
 
         generator = Generator([model], [model_args], mesh_device, tokenizer=model_args.tokenizer)
         page_table = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(
