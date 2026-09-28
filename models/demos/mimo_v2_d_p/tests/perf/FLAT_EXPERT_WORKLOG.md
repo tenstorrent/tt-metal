@@ -573,3 +573,20 @@ of its kernels), span. ms per layer:
 | | | flat | 11.59 | 10.87 | 10.88 | 10.97 |
 Traced == the slowest device's busy time (within 0.03 ms): traced runs are device-bound. The env settings bring eager
 within 0.1-0.2 ms of traced (at 32k ctx without them the gap was 0.3-0.8 ms at 640 tok/chip).
+
+## Precision stress: unified / fused / flat (2026-09-28)
+
+`tests/perf/test_expert_precision.py` (one chip, H 4096, I 2048, 8 experts, capacity 512, ragged counts
+512 / 1 / 31 / 33 / 0 / 200 / 64 / 300; unified + fused get tiled bfp8 x, flat row-major bf16), 13 x distributions x 3
+weight sets, vs a quantized reference (bfp8 x, bfp4 W, fp32 math) and fp32. Raw: `expert_precision_results.tsv`.
+* No NaN / Inf anywhere; every op scale-invariant (x 0.01 .. 100, rows 1e-3 .. 1e3, one-hot, sparse, heavy tails,
+  outlier channels, constant rows).
+* Arithmetic error vs the quantized reference (rel L2, normal / large weights): unified 1.6-3.5%, fused 2.4-4.5%,
+  flat 6.7-7.5%; norm ratio unified 1.00-1.02, fused 1.00-1.03, flat 1.03-1.04: flat's error is ~2x unified's and
+  systematic (a norm gain, the same on every input) -> the down projection's bf16 DEST accumulation over K = I
+  (ties-away rounding, measured 1.023 at K 2048) is the likely source (gate / up already run fp32 DEST). Unverified.
+* End to end (vs fp32 x / W) all three ~equal: rel 20% with N(0, 0.02) weights (the bfp4 weights dominate).
+* All-positive weights + all-positive x (abs normal, uniform, one-hot, constant): outputs are nearly a common mode, so
+  PCC (mean-removed) drops to 0.81-0.99 for every op while rel error stays 0.5-3.3% (unified < fused < flat); with
+  positive weights and zero-mean x, a few near-cancelling rows have large per-row relative error (flat worst 11x at
+  x100, unified 1.1x): small absolute errors on tiny rows.
