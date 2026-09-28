@@ -373,14 +373,17 @@ class ttKDA:
 
     def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
         # The fused sigmoid is bit-identical to a separate op; fusing the lower-bound scale is not.
-        gate = ttnn.multiply(
+        # The sigmoid result is short-lived, so it takes the activation staging memory.
+        activated = ttnn.multiply(
             self.weights.decay_scale_flat,
             gate,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.staging_memory_config,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
         )
-        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.multiply(activated, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(activated)
+        return gate
 
     def _kda_rms_norm(
         self,

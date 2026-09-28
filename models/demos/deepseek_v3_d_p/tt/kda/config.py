@@ -55,8 +55,9 @@ class KDAProgramConfig:
     # Explicit projection matmul schedules; None keeps the auto-selected ttnn.linear configs.
     input_projection_minimal_matmul_config: ttnn.MinimalMatmulConfig | None = None
     output_projection_program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None = None
-    # Stage short-lived activations (the QKV slice before its untilize and the gated-norm output
-    # before the output projection) in L1; only for local lengths where they fit comfortably.
+    # Stage short-lived activations (the QKV slice before its untilize, the bounded-decay sigmoid,
+    # and the gated-norm output before the output projection) in L1; only for local lengths where
+    # they fit comfortably.
     stage_activations_in_l1: bool = False
 
     def __post_init__(self) -> None:
