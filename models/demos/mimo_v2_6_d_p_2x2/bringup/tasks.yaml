@@ -108,3 +108,1045 @@ tasks:
       ledger_tasks: '>= 1'
   paths:
   - models/demos/mimo_v2_6_d_p_2x2/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/plan.yaml
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/plan.md
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/components.yaml
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/approvals.yaml
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/results/plan_memory.json
+  approval: plan
+- id: C.full_dense.attn_norm
+  title: full_dense attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_norm.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/mimo_v2_6_d_p_2x2/tt
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/hooks.py
+  brief:
+    block_type: full_dense
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.full_dense.01
+  title: 'full_dense block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.full_dense.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    swapped:
+    - attn_norm
+    layer: 0
+- id: C.full_dense.attention
+  title: full_dense attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+- id: S.full_dense.02
+  title: 'full_dense block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.full_dense.attention
+  - S.full_dense.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    swapped:
+    - attn_norm
+    - attention
+    layer: 0
+- id: C.full_dense.attn_residual
+  title: full_dense attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.full_dense.03
+  title: 'full_dense block with steps 1-3 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.full_dense.attn_residual
+  - S.full_dense.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_03_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_03_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    layer: 0
+- id: C.full_dense.ffn_norm
+  title: full_dense ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.full_dense.04
+  title: 'full_dense block with steps 1-4 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.full_dense.ffn_norm
+  - S.full_dense.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_04_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_04_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    layer: 0
+- id: C.full_dense.mlp
+  title: full_dense mlp (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp.py
+    metrics:
+      pcc_mlp_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    step: mlp
+    kind: mlp
+    layer: 0
+    stateful: false
+- id: S.full_dense.05
+  title: 'full_dense block with steps 1-5 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.full_dense.mlp
+  - S.full_dense.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_05_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_05_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - mlp
+    layer: 0
+- id: C.full_dense.mlp_residual
+  title: full_dense mlp_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp_residual.py
+    metrics:
+      pcc_mlp_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    step: mlp_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.full_dense.06
+  title: 'full_dense block with steps 1-6 on device (last: mlp_residual)'
+  step: implement
+  deps:
+  - C.full_dense.mlp_residual
+  - S.full_dense.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_06_mlp_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_06_mlp_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_dense
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - mlp_residual
+    layer: 0
+- id: C.sliding_moe.attn_norm
+  title: sliding_moe attn_norm (norm) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_norm.py
+    metrics:
+      pcc_attn_norm_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: attn_norm
+    kind: norm
+    layer: 1
+    stateful: false
+- id: S.sliding_moe.01
+  title: 'sliding_moe block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.sliding_moe.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    layer: 1
+- id: C.sliding_moe.attention
+  title: sliding_moe attention (attention) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attention.py
+    metrics:
+      pcc_attention_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: attention
+    kind: attention
+    layer: 1
+    stateful: true
+- id: S.sliding_moe.02
+  title: 'sliding_moe block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.sliding_moe.attention
+  - S.sliding_moe.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    - attention
+    layer: 1
+- id: C.sliding_moe.attn_residual
+  title: sliding_moe attn_residual (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_residual.py
+    metrics:
+      pcc_attn_residual_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: attn_residual
+    kind: residual
+    layer: 1
+    stateful: false
+- id: S.sliding_moe.03
+  title: 'sliding_moe block with steps 1-3 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.sliding_moe.attn_residual
+  - S.sliding_moe.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_03_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_03_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    layer: 1
+- id: C.sliding_moe.ffn_norm
+  title: sliding_moe ffn_norm (norm) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: ffn_norm
+    kind: norm
+    layer: 1
+    stateful: false
+- id: S.sliding_moe.04
+  title: 'sliding_moe block with steps 1-4 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.sliding_moe.ffn_norm
+  - S.sliding_moe.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_04_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_04_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    layer: 1
+- id: C.sliding_moe.router
+  title: sliding_moe router (router) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_router.py
+    metrics:
+      pcc_router_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: router
+    kind: router
+    layer: 1
+    stateful: false
+- id: S.sliding_moe.05
+  title: 'sliding_moe block with steps 1-5 on device (last: router)'
+  step: implement
+  deps:
+  - C.sliding_moe.router
+  - S.sliding_moe.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_05_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_05_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - router
+    layer: 1
+- id: C.sliding_moe.experts
+  title: sliding_moe experts (moe) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_experts.py
+    metrics:
+      pcc_experts_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: experts
+    kind: moe
+    layer: 1
+    stateful: false
+- id: S.sliding_moe.06
+  title: 'sliding_moe block with steps 1-6 on device (last: experts)'
+  step: implement
+  deps:
+  - C.sliding_moe.experts
+  - S.sliding_moe.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_06_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_06_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - router
+    - experts
+    layer: 1
+- id: C.sliding_moe.ffn_residual
+  title: sliding_moe ffn_residual (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    step: ffn_residual
+    kind: residual
+    layer: 1
+    stateful: false
+- id: S.sliding_moe.07
+  title: 'sliding_moe block with steps 1-7 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.sliding_moe.ffn_residual
+  - S.sliding_moe.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_07_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_07_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - router
+    - experts
+    - ffn_residual
+    layer: 1
+- id: C.full_moe.attn_norm
+  title: full_moe attn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_norm.py
+    metrics:
+      pcc_attn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: attn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.full_moe.01
+  title: 'full_moe block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.full_moe.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    layer: 5
+- id: C.full_moe.attention
+  title: full_moe attention (attention) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attention.py
+    metrics:
+      pcc_attention_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: attention
+    kind: attention
+    layer: 5
+    stateful: true
+- id: S.full_moe.02
+  title: 'full_moe block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.full_moe.attention
+  - S.full_moe.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    - attention
+    layer: 5
+- id: C.full_moe.attn_residual
+  title: full_moe attn_residual (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_residual.py
+    metrics:
+      pcc_attn_residual_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: attn_residual
+    kind: residual
+    layer: 5
+    stateful: false
+- id: S.full_moe.03
+  title: 'full_moe block with steps 1-3 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.full_moe.attn_residual
+  - S.full_moe.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_03_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_03_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    layer: 5
+- id: C.full_moe.ffn_norm
+  title: full_moe ffn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: ffn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+- id: S.full_moe.04
+  title: 'full_moe block with steps 1-4 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.full_moe.ffn_norm
+  - S.full_moe.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_04_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_04_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    layer: 5
+- id: C.full_moe.router
+  title: full_moe router (router) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_router.py
+    metrics:
+      pcc_router_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: router
+    kind: router
+    layer: 5
+    stateful: false
+- id: S.full_moe.05
+  title: 'full_moe block with steps 1-5 on device (last: router)'
+  step: implement
+  deps:
+  - C.full_moe.router
+  - S.full_moe.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_05_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_05_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - router
+    layer: 5
+- id: C.full_moe.experts
+  title: full_moe experts (moe) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_experts.py
+    metrics:
+      pcc_experts_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: experts
+    kind: moe
+    layer: 5
+    stateful: false
+- id: S.full_moe.06
+  title: 'full_moe block with steps 1-6 on device (last: experts)'
+  step: implement
+  deps:
+  - C.full_moe.experts
+  - S.full_moe.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_06_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_06_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - router
+    - experts
+    layer: 5
+- id: C.full_moe.ffn_residual
+  title: full_moe ffn_residual (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    step: ffn_residual
+    kind: residual
+    layer: 5
+    stateful: false
+- id: S.full_moe.07
+  title: 'full_moe block with steps 1-7 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.full_moe.ffn_residual
+  - S.full_moe.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_07_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_07_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: full_moe
+    swapped:
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_norm
+    - router
+    - experts
+    - ffn_residual
+    layer: 5
+- id: M.1
+  title: Assemble the all-device model (hidden state on the device from embedding to final norm)
+  step: assemble
+  deps:
+  - S.full_dense.06
+  - S.sliding_moe.07
+  - S.full_moe.07
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - M.1
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+  device: true
+  paths:
+  - models/demos/mimo_v2_6_d_p_2x2/tt
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/opportunities.md
+- id: X.3
+  title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
+  step: perf
+  deps:
+  - X.2
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/mimo_v2_6_d_p_2x2/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/mimo_v2_6_d_p_2x2/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true
