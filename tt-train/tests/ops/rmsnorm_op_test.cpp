@@ -4,6 +4,7 @@
 
 #include "ops/rmsnorm_op.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -11,6 +12,8 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <umd/device/cluster.hpp>
 #include <vector>
 
@@ -22,26 +25,33 @@
 #include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace {
 
 constexpr uint32_t kCacheTestRows = 32U;
 constexpr uint32_t kCacheTestWidth = 64U;
 constexpr float kCacheTestEpsilon = 1.0e-3F;
+constexpr uint32_t kValidationTestBatches = 2U;
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 ttnn::Tensor make_cache_test_tensor(
     const std::vector<float>& data,
     const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
-    const tt::tt_metal::Alignment& alignment = {}) {
+    const tt::tt_metal::Alignment& alignment = {},
+    const tt::tt_metal::Tile& tile = {}) {
     const auto layout = tt::tt_metal::TensorLayout(
-        ttnn::DataType::BFLOAT16, ttnn::PageConfig(ttnn::Layout::TILE), ttnn::DRAM_MEMORY_CONFIG, alignment);
+        ttnn::DataType::BFLOAT16, ttnn::PageConfig(ttnn::Layout::TILE, tile), ttnn::DRAM_MEMORY_CONFIG, alignment);
     return ttnn::Tensor::from_vector(data, tt::tt_metal::TensorSpec(shape, layout), device);
 }
 
-std::vector<float> make_cache_test_input(float offset) {
-    std::vector<float> data(kCacheTestRows * kCacheTestWidth);
-    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+std::vector<float> make_cache_test_input(float offset, uint32_t batches = 1U) {
+    const uint32_t logical_rows = batches * kCacheTestRows;
+    std::vector<float> data(logical_rows * kCacheTestWidth);
+    for (uint32_t row = 0; row < logical_rows; ++row) {
         for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
             data[row * kCacheTestWidth + col] =
                 offset + 0.015625F * static_cast<float>((row * 7U + col * 3U) % 41U) - 0.25F;
@@ -58,9 +68,10 @@ std::vector<float> make_cache_test_gamma(float offset) {
     return data;
 }
 
-std::vector<float> make_cache_test_upstream_grad(float offset) {
-    std::vector<float> data(kCacheTestRows * kCacheTestWidth);
-    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+std::vector<float> make_cache_test_upstream_grad(float offset, uint32_t batches = 1U) {
+    const uint32_t logical_rows = batches * kCacheTestRows;
+    std::vector<float> data(logical_rows * kCacheTestWidth);
+    for (uint32_t row = 0; row < logical_rows; ++row) {
         for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
             data[row * kCacheTestWidth + col] = offset + 0.00390625F * static_cast<float>((row * 5U + col * 11U) % 29U);
         }
@@ -69,8 +80,9 @@ std::vector<float> make_cache_test_upstream_grad(float offset) {
 }
 
 std::vector<float> rms_reference(const std::vector<float>& input) {
-    std::vector<float> rms(kCacheTestRows);
-    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+    const uint32_t logical_rows = input.size() / kCacheTestWidth;
+    std::vector<float> rms(logical_rows);
+    for (uint32_t row = 0; row < logical_rows; ++row) {
         float square_sum = 0.0F;
         for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
             const float value = input[row * kCacheTestWidth + col];
@@ -92,7 +104,7 @@ void expect_forward_matches_reference(
 
     ASSERT_EQ(actual_output.size(), input.size());
     ASSERT_EQ(actual_rms.size(), expected_rms.size());
-    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+    for (uint32_t row = 0; row < expected_rms.size(); ++row) {
         EXPECT_NEAR(actual_rms[row], expected_rms[row], 3.0e-2F) << "row=" << row;
         for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
             const size_t index = row * kCacheTestWidth + col;
@@ -114,7 +126,7 @@ void expect_backward_matches_reference(
 
     ASSERT_EQ(actual_da.size(), input.size());
     ASSERT_EQ(actual_dgamma.size(), input.size());
-    for (uint32_t row = 0; row < kCacheTestRows; ++row) {
+    for (uint32_t row = 0; row < rms.size(); ++row) {
         float dot = 0.0F;
         for (uint32_t col = 0; col < kCacheTestWidth; ++col) {
             const size_t index = row * kCacheTestWidth + col;
@@ -131,6 +143,20 @@ void expect_backward_matches_reference(
             EXPECT_NEAR(actual_dgamma[index], expected_dgamma, 5.0e-2F) << "row=" << row << ", col=" << col;
         }
     }
+}
+
+template <typename Operation>
+void expect_validation_rejected_on_miss_and_hit(
+    const typename Operation::operation_attributes_t& attrs,
+    const typename Operation::tensor_args_t& tensor_args,
+    std::string_view diagnostic) {
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<Operation>;
+    EXPECT_THAT(
+        ([&] { Adapter::validate_on_program_cache_miss(attrs, tensor_args); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr(std::string(diagnostic))));
+    EXPECT_THAT(
+        ([&] { Adapter::validate_on_program_cache_hit(attrs, tensor_args); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr(std::string(diagnostic))));
 }
 
 }  // namespace
@@ -318,6 +344,171 @@ TEST_F(RMSNormOpTest, RMSNorm_BackwardProgramCacheSeparatesPaddingAndRebindsAddr
         << "same-spec RMSNorm backward replay should reuse its cached program";
     expect_backward_matches_reference(
         replay_result[0], replay_result[1], replay_input_data, replay_gamma_data, replay_rms_data, replay_grad_data);
+}
+
+TEST_F(RMSNormOpTest, RawPrimitivesPreserveOverpaddedHeightWithAutomaticOutputs) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const ttnn::Shape input_shape({kValidationTestBatches, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kCacheTestWidth});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+
+    const auto input_data = make_cache_test_input(0.25F, kValidationTestBatches);
+    const auto gamma_data = make_cache_test_gamma(0.75F);
+    const auto upstream_grad_data = make_cache_test_upstream_grad(0.125F, kValidationTestBatches);
+    auto input = make_cache_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto gamma = make_cache_test_tensor(gamma_data, gamma_shape, device);
+    auto upstream_grad = make_cache_test_tensor(upstream_grad_data, input_shape, device, overpadded_alignment);
+
+    const auto forward = ttnn::prim::ttml_rmsnorm_fw(input, gamma, /*return_intermediates=*/true, kCacheTestEpsilon);
+    ASSERT_EQ(forward.size(), 2U);
+    EXPECT_EQ(forward[0].tensor_spec(), input.tensor_spec());
+    auto rms_shape = input_shape;
+    rms_shape[-1] = 1U;
+    const auto expected_rms_spec = tt::tt_metal::TensorSpec(rms_shape, input.tensor_spec().tensor_layout());
+    EXPECT_EQ(forward[1].tensor_spec(), expected_rms_spec);
+    expect_forward_matches_reference(forward[0], forward[1], input_data, gamma_data);
+
+    const auto rms_data = rms_reference(input_data);
+    const auto backward = ttnn::prim::ttml_rmsnorm_bw(input, gamma, forward[1], upstream_grad, kCacheTestEpsilon);
+    ASSERT_EQ(backward.size(), 2U);
+    EXPECT_EQ(backward[0].tensor_spec(), input.tensor_spec());
+    EXPECT_EQ(backward[1].tensor_spec(), input.tensor_spec());
+    expect_backward_matches_reference(backward[0], backward[1], input_data, gamma_data, rms_data, upstream_grad_data);
+}
+
+TEST_F(RMSNormOpTest, ForwardValidatorRejectsMalformedContractsOnMissAndHit) {
+    using Operation = ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    const ttnn::Shape input_shape({kValidationTestBatches, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kCacheTestWidth});
+    const ttnn::Shape rms_shape({kValidationTestBatches, 1U, kCacheTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const auto input_data = make_cache_test_input(0.25F, kValidationTestBatches);
+    const auto gamma_data = make_cache_test_gamma(0.75F);
+
+    auto input = make_cache_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto gamma = make_cache_test_tensor(gamma_data, gamma_shape, device);
+    auto rank3_gamma = make_cache_test_tensor(gamma_data, ttnn::Shape({1U, 1U, kCacheTestWidth}), device);
+    auto undersized_output = make_cache_test_tensor(
+        std::vector<float>(kValidationTestBatches * kCacheTestRows * 32U, -7.0F),
+        ttnn::Shape({kValidationTestBatches, 1U, kCacheTestRows, 32U}),
+        device,
+        overpadded_alignment);
+    auto wrong_stride_rms = make_cache_test_tensor(std::vector<float>(rms_shape.volume(), -7.0F), rms_shape, device);
+    auto overwide_input =
+        make_cache_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 96U}));
+    auto wide_aligned_input =
+        make_cache_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 64U}));
+    auto narrow_tile_input =
+        make_cache_test_tensor(input_data, input_shape, device, overpadded_alignment, tt::tt_metal::Tile({16U, 16U}));
+
+    const Operation::operation_attributes_t attrs{.return_intermediates = true, .epsilon = kCacheTestEpsilon};
+    const Operation::operation_attributes_t no_intermediates{
+        .return_intermediates = false, .epsilon = kCacheTestEpsilon};
+
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs, Operation::tensor_args_t{.input = input, .gamma = rank3_gamma}, "Gamma must have shape");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = input, .gamma = gamma, .preallocated_output = undersized_output},
+        "preallocated Output TensorSpec must match Input TensorSpec");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = input, .gamma = gamma, .preallocated_rms = wrong_stride_rms},
+        "preallocated RMS TensorSpec must match the input-derived RMS TensorSpec");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        no_intermediates,
+        Operation::tensor_args_t{.input = input, .gamma = gamma, .preallocated_rms = wrong_stride_rms},
+        "preallocated RMS requires return_intermediates=true");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = overwide_input, .gamma = gamma},
+        "input must use canonical width padding");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs, Operation::tensor_args_t{.input = wide_aligned_input, .gamma = gamma}, "input width alignment must be");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = narrow_tile_input, .gamma = gamma},
+        "canonical non-transposed 32x32 tile");
+}
+
+TEST_F(RMSNormOpTest, BackwardValidatorRejectsMalformedContractsOnMissAndHit) {
+    using Operation = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    const ttnn::Shape input_shape({kValidationTestBatches, 1U, kCacheTestRows, kCacheTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kCacheTestWidth});
+    const ttnn::Shape rms_shape({kValidationTestBatches, 1U, kCacheTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const auto input_data = make_cache_test_input(0.25F, kValidationTestBatches);
+    const auto gamma_data = make_cache_test_gamma(0.75F);
+    const auto rms_data = rms_reference(input_data);
+    const auto upstream_grad_data = make_cache_test_upstream_grad(0.125F, kValidationTestBatches);
+
+    auto input = make_cache_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto gamma = make_cache_test_tensor(gamma_data, gamma_shape, device);
+    auto rms = make_cache_test_tensor(rms_data, rms_shape, device, overpadded_alignment);
+    auto upstream_grad = make_cache_test_tensor(upstream_grad_data, input_shape, device, overpadded_alignment);
+    auto rank3_gamma = make_cache_test_tensor(gamma_data, ttnn::Shape({1U, 1U, kCacheTestWidth}), device);
+    auto wrong_stride_rms = make_cache_test_tensor(rms_data, rms_shape, device);
+    auto undersized_grad = make_cache_test_tensor(
+        std::vector<float>(kValidationTestBatches * kCacheTestRows * 32U, 0.0F),
+        ttnn::Shape({kValidationTestBatches, 1U, kCacheTestRows, 32U}),
+        device,
+        overpadded_alignment);
+    auto undersized_output = make_cache_test_tensor(
+        std::vector<float>(kValidationTestBatches * kCacheTestRows * 32U, -7.0F),
+        ttnn::Shape({kValidationTestBatches, 1U, kCacheTestRows, 32U}),
+        device,
+        overpadded_alignment);
+    auto overwide_input =
+        make_cache_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 96U}));
+    auto wide_aligned_input =
+        make_cache_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 64U}));
+    auto narrow_tile_input =
+        make_cache_test_tensor(input_data, input_shape, device, overpadded_alignment, tt::tt_metal::Tile({16U, 16U}));
+
+    const Operation::operation_attributes_t attrs{.epsilon = kCacheTestEpsilon};
+
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = input, .gamma = rank3_gamma, .rms = rms, .dL_dout = upstream_grad},
+        "Gamma must have shape");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = input, .gamma = gamma, .rms = wrong_stride_rms, .dL_dout = upstream_grad},
+        "RMS TensorSpec must match the input-derived RMS TensorSpec");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = input, .gamma = gamma, .rms = rms, .dL_dout = undersized_grad},
+        "dL_dout TensorSpec must match Input TensorSpec");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{
+            .input = input, .gamma = gamma, .rms = rms, .dL_dout = upstream_grad, .preallocated_da = undersized_output},
+        "preallocated dL_da TensorSpec must match Input TensorSpec");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{
+            .input = input,
+            .gamma = gamma,
+            .rms = rms,
+            .dL_dout = upstream_grad,
+            .preallocated_dgamma_components = undersized_output},
+        "preallocated dL_dgamma_components TensorSpec must match Input TensorSpec");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = overwide_input, .gamma = gamma, .rms = rms, .dL_dout = upstream_grad},
+        "input must use canonical width padding");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = wide_aligned_input, .gamma = gamma, .rms = rms, .dL_dout = upstream_grad},
+        "input width alignment must be");
+    expect_validation_rejected_on_miss_and_hit<Operation>(
+        attrs,
+        Operation::tensor_args_t{.input = narrow_tile_input, .gamma = gamma, .rms = rms, .dL_dout = upstream_grad},
+        "canonical non-transposed 32x32 tile");
 }
 
 // ============================================================================
