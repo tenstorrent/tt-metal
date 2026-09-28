@@ -967,6 +967,13 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
                 ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
             }
         ),
+        # Starts at (0, 0) like the shard grid: cores in the second range used to get no runtime args.
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
     ),
 )
 def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt, sub_core_grids):
