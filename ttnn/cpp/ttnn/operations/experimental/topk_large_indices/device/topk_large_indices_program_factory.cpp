@@ -10,7 +10,11 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <cstdlib>
+#include <map>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <tuple>
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
@@ -232,11 +236,19 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
+    // Perf experiment: TOPK_COMPUTE_ONLY=1 skips the row DRAM reads and the index reorder/write (CB handshakes
+    // kept), leaving compute-only kernel time. Results are garbage.
+    std::map<std::string, std::string> dm_defines;
+    if (const char* compute_only = std::getenv("TOPK_COMPUTE_ONLY");
+        compute_only != nullptr && std::string_view(compute_only) == "1") {
+        dm_defines["TOPK_COMPUTE_ONLY"] = "1";
+    }
+
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, dm_defines));
 
     const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
@@ -266,7 +278,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, dm_defines));
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,

@@ -76,7 +76,7 @@ def _occupancy(chunk, q_chunk, num_cores):
     return units, units / (num_cores * per_core)
 
 
-@pytest.mark.parametrize(
+MESH_8X4 = pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
@@ -88,17 +88,47 @@ def _occupancy(chunk, q_chunk, num_cores):
     ],
     indirect=["mesh_device", "device_params"],
 )
+
+# KV-prefix sweep per chunk size at its best q/k (from the chunk sweep). Target prefixes are rounded
+# to whole chunks and deduplicated.
+PREFIX_SWEEP_BEST_QK = {1024: (32, 128), 2048: (32, 512), 3072: (32, 640), 4096: (32, 512), 5120: (32, 640)}
+PREFIX_TARGETS = [0, 2048, 4096, 8192, 16384, 32768, 51200, 65536, 102400, 131072, 196608, 262144]
+
+
+def _prefix_sweep_params():
+    params = []
+    for chunk, (q, k) in PREFIX_SWEEP_BEST_QK.items():
+        for prefix in sorted({round(t / chunk) * chunk for t in PREFIX_TARGETS}):
+            params.append(pytest.param(chunk, q, k, prefix, id=f"chunk{chunk}-prefix{prefix}"))
+    return params
+
+
+@MESH_8X4
 @pytest.mark.parametrize("chunk, q_chunk, k_chunk", _sweep_params())
 @pytest.mark.timeout(900)
 def test_ring_mla_chunk_sweep(mesh_device, device_params, chunk, q_chunk, k_chunk):
+    _run_ring_mla(mesh_device, chunk, q_chunk, k_chunk, _prefix_for(chunk))
+
+
+@MESH_8X4
+@pytest.mark.parametrize("chunk, q_chunk, k_chunk, prefix", _prefix_sweep_params())
+@pytest.mark.timeout(900)
+def test_ring_mla_prefix_sweep(mesh_device, device_params, chunk, q_chunk, k_chunk, prefix):
+    _run_ring_mla(mesh_device, chunk, q_chunk, k_chunk, prefix)
+
+
+def _run_ring_mla(mesh_device, chunk, q_chunk, k_chunk, prefix):
     torch.manual_seed(1234)
     mesh_device.enable_program_cache()
     profiler_on = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
     chunk_local = chunk // SP
     heads_local = NUM_HEADS // TP
-    prefix = _prefix_for(chunk)
-    capacity = prefix + chunk
+    assert prefix % chunk == 0, f"prefix {prefix} must be a whole number of {chunk}-token chunks"
+    logical_n = prefix + chunk
+    # ring_mla needs Q.seq < K.seq (chunked prefill); the model's cache is always sized past the first
+    # chunk, so give the empty-prefix case one spare chunk of capacity (unread: logical_n bounds it).
+    capacity = logical_n + (chunk if prefix == 0 else 0)
     assert chunk_local % ttnn.TILE_SIZE == 0 and (capacity // SP) % ttnn.TILE_SIZE == 0
 
     grid = mesh_device.compute_with_storage_grid_size()
@@ -157,7 +187,7 @@ def test_ring_mla_chunk_sweep(mesh_device, device_params, chunk, q_chunk, k_chun
             tt_kv,
             persistent_output_buffer_kv=tt_kv_buf,
             head_dim_v=KV_LORA_RANK,
-            logical_n=capacity,
+            logical_n=logical_n,
             program_config=program_config,
             scale=(QK_NOPE_HEAD_DIM + QK_ROPE_HEAD_DIM) ** -0.5,
             compute_kernel_config=compute_kernel_config,
@@ -223,8 +253,11 @@ def test_ring_mla_chunk_sweep(mesh_device, device_params, chunk, q_chunk, k_chun
         "q_chunk": q_chunk,
         "k_chunk": k_chunk,
         "compute_only": COMPUTE_ONLY,
+        "sdpa_grid": f"{sdpa_grid.x}x{sdpa_grid.y}",
         "sdpa_cores": num_cores,
         "work_units": units,
+        # Derived from the op's split (min(cores, heads x Q chunks)), not measured.
+        "active_cores": min(num_cores, units),
         "occupancy": round(occupancy, 4),
     }
     if durations_ns:

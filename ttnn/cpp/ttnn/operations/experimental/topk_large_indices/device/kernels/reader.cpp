@@ -94,6 +94,7 @@ void kernel_main() {
                         ? (active_chunk_bytes - tile_offset < tile_bytes ? active_chunk_bytes - tile_offset
                                                                          : tile_bytes)
                         : 0;
+#ifndef TOPK_COMPUTE_ONLY
                 if (read_bytes != 0) {
                     noc.async_read(
                         input,
@@ -102,6 +103,9 @@ void kernel_main() {
                         {.page_id = row, .offset_bytes = chunk * chunk_bytes + tile_offset},
                         {.offset_bytes = tile_offset});
                 }
+#else
+                (void)read_bytes;  // Perf experiment: compute sorts stale L1.
+#endif
             }
             noc.async_read_barrier();
             input_cb.push_back(tiles_per_chunk);

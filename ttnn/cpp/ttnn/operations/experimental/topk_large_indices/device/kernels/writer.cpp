@@ -63,19 +63,25 @@ FORCE_INLINE void issue_reordered_row_write(
     uint32_t row_bytes) {
     src_cb.wait_front(1);
     scratch_cb.reserve_back(1);
+#ifndef TOPK_COMPUTE_ONLY
     copy_row_to_scratch<source_slices_per_row, output_slices_per_row, slice_bytes>(src_cb, scratch_cb, noc);
+#endif
     src_cb.pop_front(1);
 
     scratch_cb.push_back(1);
     scratch_cb.wait_front(1);
+#ifndef TOPK_COMPUTE_ONLY
     noc.async_write(scratch_cb, tensor, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
+#endif
 }
 
 template <typename TensorAccessorT>
 FORCE_INLINE void issue_contiguous_row_write(
     CircularBuffer& src_cb, const Noc& noc, const TensorAccessorT& tensor, uint32_t row, uint32_t row_bytes) {
     src_cb.wait_front(1);
+#ifndef TOPK_COMPUTE_ONLY
     noc.async_write(src_cb, tensor, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
+#endif
 }
 
 }  // namespace

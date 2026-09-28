@@ -78,6 +78,9 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t hi,
     uint32_t k_row_bytes,
     uint32_t page_offset) {
+#ifdef SPARSE_SDPA_COMPUTE_ONLY
+    return;  // Perf experiment: no KV gather; compute runs on stale L1.
+#endif
     constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;

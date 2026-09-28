@@ -100,10 +100,12 @@ void kernel_main() {
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
         // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
         q_cb.reserve_back(H);
+#ifndef SPARSE_SDPA_COMPUTE_ONLY
         for (uint32_t h = 0; h < H; ++h) {
             noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
         }
         noc.async_read_barrier();
+#endif
         q_cb.push_back(H);
 
         // indices row for this token (page = tok) -> idx_cb scratch

@@ -13,7 +13,9 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 
 namespace ttnn::prim {
 
@@ -285,6 +287,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    // Perf experiment: SPARSE_SDPA_COMPUTE_ONLY=1 skips the Q reads, the indexed KV gather and the output
+    // writes (the index-row read and CB handshakes stay), leaving compute-only kernel time. Results are garbage.
+    if (const char* compute_only = std::getenv("SPARSE_SDPA_COMPUTE_ONLY");
+        compute_only != nullptr && std::string_view(compute_only) == "1") {
+        reader_desc.defines.emplace_back("SPARSE_SDPA_COMPUTE_ONLY", "1");
+        writer_desc.defines.emplace_back("SPARSE_SDPA_COMPUTE_ONLY", "1");
+    }
 
     // Order matches get_compute_kernel_config_args: (fidelity, approx_mode, fp32_dest_acc, packer_l1_acc,
     // dst_full_sync). packer_l1_acc has no ComputeConfigDescriptor field for this op (no L1 packer accum), so

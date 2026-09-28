@@ -182,11 +182,13 @@ void kernel_main() {
             kack_cb.push_back(1);
         }
         out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
+#ifndef SPARSE_SDPA_COMPUTE_ONLY
         for (uint32_t h = 0; h < H; ++h) {
             // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
             noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
         }
         noc.async_write_barrier();
+#endif
         out_cb.pop_front(block_tiles);
     }
 }
