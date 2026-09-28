@@ -37,8 +37,8 @@
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
 #              leg covers (kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
 #              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
-#              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
-#              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
+#              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
+#              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
@@ -950,6 +950,30 @@
   sp_config: sc1
 
 
+- name: "(GLM-5.2-744B) MTP module + predictor accuracy 5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8/
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      test -f "$GLM52_HF_MODEL/config.json" || { echo "MTP leg: GLM52_HF_MODEL=$GLM52_HF_MODEL has no config.json on this worker; the pretrained parametrization would skip and leave the leg green on random weights alone"; exit 1; }
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and (fused or pretrained)" -vvv --tb=short
+    '
+  test_type: glm_mtp
+  test_tags: [glm_5_2, mtp]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 25
+      tier: 2
+      release_ready: false
+  owner_id: U09L76N1MAT  # Nenad Babin
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== DeepSeek-V4-Flash ===============================================================================
 
 - name: "(DeepSeek-V4-Flash) HCA chunked accuracy 6k@5k"
@@ -1072,18 +1096,19 @@
 # ===== MiniMax-M3-428B =================================================================================
 
 # MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
-# Requires staged mounts (same layout as models/demos/minimax_m3/scripts/README_golden_kv.md):
-#   HF_MODEL          -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/
-#   PREFILL_TRACE_DIR -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/golden
-#   TT_CACHE_PATH     -> optional; defaults under HF_MODEL. Prefill the tilized
-#                       tensor_cache_bfp8_{MeshShape(8,4)} there or CI will cold-build for hours.
+# Weka mounts (same layout as models/demos/minimax_m3/scripts/README_golden_kv.md):
+#   HF_MODEL          -> /mnt/weka/model-weights/llm/minimax/MiniMax-M3/ (read-only checkpoint)
+#   TT_CACHE_PATH     -> /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill
+#                       (tilized tensor_cache_bfp8_{MeshShape(8,4)}; without it CI would cold-build for hours)
+#   PREFILL_TRACE_DIR -> /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden
 - name: "(MiniMax-M3-428B) chunked prefill KV accuracy longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
-    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320
+    export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3/
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_56320
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     export EXPERT_DTYPE=bf4
     export PREFILL_CHUNKED=1
@@ -1117,8 +1142,9 @@
     export LOGURU_LEVEL=ERROR
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
-    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320
+    export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3/
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_56320
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     export EXPERT_DTYPE=bf4
     export PREFILL_CHUNKED=1
@@ -1552,7 +1578,7 @@
   sp_config: sc1
 
 
-# ===== Disaggregated prefill, SC4 -- keep these adjacent; the first two share one launcher =============
+# ===== Disaggregated prefill -- keep adjacent; trunk, DFlash and MTP entries each share a launcher =====
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
@@ -1644,6 +1670,31 @@
   sp_config: sc4
 
 
+# 4-galaxy (SC4) GLM-5.2 MTP7 prefill KV accuracy and throughput, sharing a launcher with the SC1 MTP7
+# entry below. MTP is gated against its own tail-trace golden, not the manifest golden the entries above use.
+- name: "(GLM-5.2-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm52 sc4 7
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_2, runner, kv_cache, mtp]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+      release_ready: false
+  owner_id: U09L76N1MAT # Nenad Babin
+  team: models
+  budget_type: demo
+  sp_config: sc4
+
+
 
 - name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
@@ -1706,6 +1757,31 @@
       timeout: 120
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
+# Single-galaxy (SC1) GLM-5.2 MTP7 prefill KV accuracy, same launcher as the SC4 entry above and the
+# control for it: one rank skips the D2D union-embedding transport, so a failure here is MTP7 itself.
+- name: "(GLM-5.2-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm52 sc1 7
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_2, runner, kv_cache, mtp]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      timeout: 120
+      tier: 1
+      release_ready: false
+  owner_id: U09L76N1MAT # Nenad Babin
+  team: models
   budget_type: demo
   sp_config: sc1
 

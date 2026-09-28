@@ -146,7 +146,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         }
         auto topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
         if constexpr (has_actual_end) {
-            const auto end_tensor = TensorAccessor(tensor::actual_end);
+            const auto end_tensor = TensorAccessor(*tensor::get_token_if_present<"actual_end">());
             noc.async_read(end_tensor, control, sizeof(uint32_t), {.page_id = 0}, {});
             noc.async_read_barrier();
             topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);

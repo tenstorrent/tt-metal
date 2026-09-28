@@ -85,7 +85,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
 
-    IDevice* device = input_tensor_a.device();
+    MeshDevice* device = input_tensor_a.device();
     auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     auto inputB_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
     auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
