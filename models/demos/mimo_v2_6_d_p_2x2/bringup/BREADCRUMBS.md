@@ -369,3 +369,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; step rel 0.0024, ratio [0.9972, 1.0018]). BRINGUP_IMPL=stub: FAIL on every check (block out rel 0.345, step rel 1.0).
 - Default gate already passes (device attn_norm already registered): pcc_swap_out 0.999997, out rel 0.0025, step pcc 0.999996 / rel 0.0029 / ratio [0.9962, 1.0023]. 1 passed. (The first `FAIL pcc=0` line is the precompile collect pass.)
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_01_attn_norm.py`
+
+## C.full_moe.attention.test.1 (2026-09-28)
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attention.py` (same golden and CPU reference, layer 5). Only the docstring changed: a note that it was adopted. Checks: PCC >= 0.99 (gated), finite, rel L2 <= 0.015 on the whole chunk and on the first 128 rows, per-token norm ratio [0.97, 1.03], worst row rel L2 <= 0.06. It also asserts that layer 5 is full attention with no sink. Every check runs on the gathered [2048, 4096] output, so none depends on the mesh shape.
+- Kept the prior's full-attention limits. The owner widened limits (rel 0.022, ratio [0.95, 1.08]) only for sliding attention with a sink (preset S). Full attention has no sink.
+- BRINGUP_IMPL=reference: pcc 0.999999, rel 0.0017, ratio [0.9992, 1.0007], worst 0.0021: PASS. BRINGUP_IMPL=stub: pcc 0: FAIL.
+- The default gate already passes (the device attention is registered from full_dense): pcc 0.999992, rel 0.0052 / first rows 0.0051, ratio [0.9989, 1.0079], worst 0.0093. 1 passed. (The first `FAIL pcc=0` line comes from the precompile collect pass.)
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attention.py`
