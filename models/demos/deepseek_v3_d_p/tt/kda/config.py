@@ -55,8 +55,9 @@ class KDAProgramConfig:
     # Explicit projection matmul schedules; None keeps the auto-selected ttnn.linear configs.
     input_projection_minimal_matmul_config: ttnn.MinimalMatmulConfig | None = None
     output_projection_program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None = None
-    # Stage the sliced QKV block in L1 for its untilize; only for local lengths where it fits comfortably.
-    stage_qkv_in_l1: bool = False
+    # Stage short-lived activations (the QKV slice before its untilize and the gated-norm output
+    # before the output projection) in L1; only for local lengths where they fit comfortably.
+    stage_activations_in_l1: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -109,7 +110,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     if active_seq_len_local not in group_chunks:
         raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
     # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs and
-    # DRAM QKV staging (the 640x9216 BF16 block is ~98 KB per core in L1).
+    # DRAM staging (the largest staged activation, 640x9216 BF16, is ~98 KB per core in L1).
     galaxy = active_seq_len_local == 640
     input_projection, output_projection = _galaxy_projection_configs() if galaxy else (None, None)
     return KDAProgramConfig(
@@ -125,5 +126,5 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         input_projection_minimal_matmul_config=input_projection,
         output_projection_program_config=output_projection,
-        stage_qkv_in_l1=galaxy,
+        stage_activations_in_l1=galaxy,
     )

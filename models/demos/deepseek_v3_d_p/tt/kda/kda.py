@@ -161,8 +161,8 @@ class ttKDA:
         )
         self.input_projection_minimal_matmul_config = program_config.input_projection_minimal_matmul_config
         self.output_projection_program_config = program_config.output_projection_program_config
-        self.qkv_staging_memory_config = (
-            ttnn.L1_MEMORY_CONFIG if program_config.stage_qkv_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+        self.staging_memory_config = (
+            ttnn.L1_MEMORY_CONFIG if program_config.stage_activations_in_l1 else ttnn.DRAM_MEMORY_CONFIG
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -320,7 +320,7 @@ class ttKDA:
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             # Transient: forward untilizes it to DRAM immediately, which reads faster from L1.
-            qkv=_slice_width(projected, 0, auxiliary_start, memory_config=self.qkv_staging_memory_config),
+            qkv=_slice_width(projected, 0, auxiliary_start, memory_config=self.staging_memory_config),
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
             output_gate=_slice_width(
                 projected,
@@ -395,7 +395,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.staging_memory_config,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
         )
@@ -406,13 +406,15 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        normalized = output
         output = ttnn.linear(
-            output,
+            normalized,
             weights.output_projection,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
+        ttnn.deallocate(normalized)
         if self.tensor_parallel_size > 1:
             cluster_axis = self._tp_cluster_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
