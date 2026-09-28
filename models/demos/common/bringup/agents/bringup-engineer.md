@@ -35,7 +35,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 6. Never edit an existing TTNN op. If a step needs an op changed (a feature or a bug fix), use the bring-up forks in
    `ttnn/ttnn/bringup/`, following `models/demos/common/bringup/skill/bringup-fork-op/SKILL.md`. Check `INDEX.md` there
    first: if the op is already forked, call the fork (`ttnn.bringup.<op>`) and extend it, with any new behaviour behind
-   an option whose default keeps the fork's current behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`.
+   an option whose default keeps the fork's current behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`,
+   and carry a best-effort selection of the source op's own tests with a recorded baseline (skill section 2b).
    Record every change in the fork's `CHANGELOG.md` (what, why, model and task, files), keep the `INDEX.md` row
    current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests. When you extend an existing
    fork, run its whole test suite before the change and again after it with the new option off: the results must
