@@ -6,6 +6,7 @@ default selection (`oob`) with the new one (`v2`) on the same inputs.
 
 | File | Purpose |
 |---|---|
+| `run.py` | Runs one named suite (see Suites) |
 | `run_all.sh` | Runs the complete validation below in one go |
 | `cases.csv` | The 539 benchmark cases: curated shapes from issues and models, a generic grid, sharded cases, and 304 real-model calls from the model tracer (traced tier) |
 | `suite.py` | Case definitions (`Case`), the curated tiers, `cases_from_csv` |
@@ -16,6 +17,31 @@ default selection (`oob`) with the new one (`v2`) on the same inputs.
 | `sweep_configs.py` | Times alternative explicit configs for a case (investigation only) |
 | `compare_runs.py` | Joins two `run_all.sh` result directories per case and per pytest test |
 | `results/<arch>/` | Reference results of `run_all.sh` (same layout as a run directory) |
+
+## Suites (`run.py`)
+
+`run.py --suite SUITE` runs one named suite, legacy selection against `matmul_auto_config_v2`, and writes
+`generated/matmul_oob/<arch>_<git rev>/<suite>/` with a `summary.txt`. Rerunning a suite skips finished parts.
+
+| Suite | What | Time on Wormhole |
+|---|---|---|
+| `gist` | The #57884 gist sweeps (`gist/`): 116 2D-routed and 64 1D-routed Llama shapes, bf16, HiFi4, fp32 dest acc; mean wall time over 20 calls; PCC | about 20 min |
+| `gist-fast` | The same without the PCC check | about 10 min |
+| `validation` | Every case in `cases.csv` (device kernel time, PCC against torch) | about 1.5 h |
+| `validation-fast` | `cases_fast.csv`: 41 cases across the tiers, including block-float and fp32-accumulation cases | about 5 min |
+| `pytest` | The matmul pytest directory, flag off and on (outcome and device time per test) | about 50 min |
+| `pytest-fast` | Every 10th test of it (`DEVICE_TIME_SAMPLE=10`) | about 5 min |
+| `all` | `gist`, `validation` and `pytest` | |
+
+```bash
+tests/ttnn/unit_tests/benchmarks/matmul_oob/run.py --suite gist-fast
+MM_KCAP=32 tests/ttnn/unit_tests/benchmarks/matmul_oob/run.py --suite gist-fast --out generated/matmul_oob/kcap32
+```
+
+"Legacy" is the same build with the flag off, which is within about 1% of main on these suites. To compare
+against main itself, run the gist suite on a main build: `gist/time_default.py` works there too (it only
+times the default config). `gist/bh_reference_*.log` are the gist author's Blackhole 12x10 results (tt-metal
+default, a searched oracle and the tt-mlir rule), for context.
 
 ## Running it on a new machine (e.g. Blackhole)
 

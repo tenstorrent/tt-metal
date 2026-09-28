@@ -1,0 +1,708 @@
+2D sweep: 116 shapes, grid 12x10, models 70B 1B, tokens 128 256 512 1024 2048 4096, passes fwd dgrad
+=== 70B q_proj fwd T=128  [128x8192, 8192x1024] B^T  per_core=1x3  Kt=256  12 candidates
+    metal default    0.244 ms     8.8 TFLOP/s
+    oracle           0.069 ms    31.3 TFLOP/s  blk 1x3 bw 16 sb 1x3
+    our strategy     0.072 ms    30.0 TFLOP/s  blk 1x3 bw 32 sb 1x3  pcc 1.00000
+=== 70B k_proj/v_proj fwd T=128  [128x8192, 8192x128] B^T  per_core=1x1  Kt=256  6 candidates
+    metal default    0.183 ms     1.5 TFLOP/s
+    oracle           0.028 ms     9.5 TFLOP/s  blk 1x1 bw 32 sb 1x1
+    our strategy     0.028 ms     9.5 TFLOP/s  blk 1x1 bw 32 sb 1x1  pcc 1.00000
+=== 70B o_proj dgrad T=128  [128x8192, 8192x1024]  per_core=1x3  Kt=256  12 candidates
+    metal default    0.188 ms    11.4 TFLOP/s
+    oracle           0.070 ms    30.5 TFLOP/s  blk 1x3 bw 16 sb 1x3
+    our strategy     0.071 ms    30.2 TFLOP/s  blk 1x3 bw 32 sb 1x3  pcc 1.00000
+=== 70B q_proj fwd T=256  [256x8192, 8192x1024] B^T  per_core=1x3  Kt=256  12 candidates
+    metal default    0.256 ms    16.8 TFLOP/s
+    oracle           0.071 ms    60.3 TFLOP/s  blk 1x3 bw 16 sb 1x3
+    our strategy     0.074 ms    58.0 TFLOP/s  blk 1x3 bw 32 sb 1x3  pcc 1.00000
+=== 70B k_proj/v_proj fwd T=256  [256x8192, 8192x128] B^T  per_core=1x1  Kt=256  6 candidates
+    metal default    0.183 ms     2.9 TFLOP/s
+    oracle           0.033 ms    16.2 TFLOP/s  blk 1x1 bw 16 sb 1x1
+    our strategy     0.035 ms    15.4 TFLOP/s  blk 1x1 bw 32 sb 1x1  pcc 1.00000
+=== 70B qkv_proj fwd T=256  [256x8192, 8192x1280] B^T  per_core=1x4  Kt=256  18 candidates
+    metal default    0.302 ms    17.8 TFLOP/s
+    oracle           0.086 ms    62.2 TFLOP/s  blk 1x4 bw 16 sb 1x4
+    our strategy     0.092 ms    58.3 TFLOP/s  blk 1x4 bw 32 sb 1x4  pcc 1.00000
+=== 70B o_proj dgrad T=256  [256x8192, 8192x1024]  per_core=1x3  Kt=256  12 candidates
+    metal default    0.191 ms    22.4 TFLOP/s
+    oracle           0.075 ms    57.2 TFLOP/s  blk 1x3 bw 16 sb 1x3
+    our strategy     0.075 ms    57.1 TFLOP/s  blk 1x3 bw 32 sb 1x3  pcc 1.00000
+=== 70B q_proj fwd T=512  [512x8192, 8192x1024] B^T  per_core=2x3  Kt=256  24 candidates
+    metal default    0.326 ms    26.3 TFLOP/s
+    oracle           0.100 ms    86.0 TFLOP/s  blk 2x3 bw 16 sb 1x3
+    our strategy     0.101 ms    85.2 TFLOP/s  blk 2x3 bw 32 sb 1x3  pcc 1.00000
+=== 70B k_proj/v_proj fwd T=512  [512x8192, 8192x128] B^T  per_core=2x1  Kt=256  12 candidates
+    metal default    0.209 ms     5.1 TFLOP/s
+    oracle           0.060 ms    18.0 TFLOP/s  blk 2x1 bw 32 sb 2x1
+    our strategy     0.060 ms    18.0 TFLOP/s  blk 2x1 bw 32 sb 2x1  pcc 1.00000
+=== 70B qkv_proj fwd T=512  [512x8192, 8192x1280] B^T  per_core=2x4  Kt=256  36 candidates
+    metal default    0.387 ms    27.7 TFLOP/s
+    oracle           0.129 ms    83.2 TFLOP/s  blk 2x4 bw 32 sb 2x2
+    our strategy     0.129 ms    83.2 TFLOP/s  blk 2x4 bw 32 sb 2x2  pcc 1.00000
+=== 70B o_proj dgrad T=512  [512x8192, 8192x1024]  per_core=2x3  Kt=256  24 candidates
+    metal default    0.290 ms    29.7 TFLOP/s
+    oracle           0.096 ms    89.3 TFLOP/s  blk 2x3 bw 32 sb 1x3
+    our strategy     0.096 ms    89.3 TFLOP/s  blk 2x3 bw 32 sb 1x3  pcc 1.00000
+=== 70B gate_proj/up_proj fwd T=512  [512x8192, 8192x3584] B^T  per_core=2x10  Kt=256  46 candidates
+    metal default    0.948 ms    31.7 TFLOP/s
+    oracle           0.319 ms    94.1 TFLOP/s  blk 2x10 bw 16 sb 2x2
+    our strategy     0.321 ms    93.7 TFLOP/s  blk 2x5 bw 32 sb 2x1  pcc 1.00000
+=== 70B down_proj dgrad T=512  [512x8192, 8192x3584]  per_core=2x10  Kt=256  46 candidates
+    metal default    0.904 ms    33.3 TFLOP/s
+    oracle           0.315 ms    95.6 TFLOP/s  blk 2x5 bw 32 sb 2x1
+    our strategy     0.315 ms    95.6 TFLOP/s  blk 2x5 bw 32 sb 2x1  pcc 1.00000
+=== 70B q_proj fwd T=1024  [1024x8192, 8192x1024] B^T  per_core=4x3  Kt=256  36 candidates
+    metal default    0.538 ms    31.9 TFLOP/s
+    oracle           0.182 ms    94.4 TFLOP/s  blk 4x3 bw 32 sb 4x1
+    our strategy     0.182 ms    94.4 TFLOP/s  blk 4x3 bw 32 sb 4x1  pcc 1.00000
+=== 70B q_proj dgrad T=1024  [1024x1024, 1024x8192]  per_core=4x22  Kt=32  57 candidates
+    metal default    0.532 ms    32.3 TFLOP/s
+    oracle           0.198 ms    87.0 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     0.198 ms    87.0 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 70B k_proj/v_proj fwd T=1024  [1024x8192, 8192x128] B^T  per_core=4x1  Kt=256  18 candidates
+    metal default    0.260 ms     8.2 TFLOP/s
+    oracle           0.102 ms    21.1 TFLOP/s  blk 4x1 bw 32 sb 4x1
+    our strategy     0.102 ms    21.1 TFLOP/s  blk 4x1 bw 32 sb 4x1  pcc 1.00000
+=== 70B k_proj/v_proj dgrad T=1024  [1024x128, 128x8192]  per_core=4x22  Kt=4  24 candidates
+    metal default    0.111 ms    19.4 TFLOP/s
+    oracle           0.087 ms    24.6 TFLOP/s  blk 4x22 bw 2 sb 2x2
+    our strategy     0.087 ms    24.6 TFLOP/s  blk 4x22 bw 2 sb 2x2  pcc 1.00000
+=== 70B qkv_proj fwd T=1024  [1024x8192, 8192x1280] B^T  per_core=4x4  Kt=256  54 candidates
+    metal default    0.721 ms    29.8 TFLOP/s
+    oracle           0.239 ms    90.0 TFLOP/s  blk 4x4 bw 32 sb 2x2
+    our strategy     0.239 ms    90.0 TFLOP/s  blk 4x4 bw 32 sb 2x2  pcc 1.00000
+=== 70B qkv_proj dgrad T=1024  [1024x1280, 1280x8192]  per_core=4x22  Kt=40  79 candidates
+    metal default    0.653 ms    32.9 TFLOP/s
+    oracle           0.259 ms    83.0 TFLOP/s  blk 4x11 bw 10 sb 4x1
+    our strategy     0.269 ms    79.7 TFLOP/s  blk 4x22 bw 8 sb 2x2  pcc 1.00000
+=== 70B o_proj fwd T=1024  [1024x1024, 1024x8192] B^T  per_core=4x22  Kt=32  57 candidates
+    metal default    0.540 ms    31.8 TFLOP/s
+    oracle           0.205 ms    83.8 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     0.205 ms    83.8 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 70B o_proj dgrad T=1024  [1024x8192, 8192x1024]  per_core=4x3  Kt=256  36 candidates
+    metal default    0.537 ms    32.0 TFLOP/s
+    oracle           0.181 ms    95.1 TFLOP/s  blk 4x3 bw 32 sb 4x1
+    our strategy     0.181 ms    95.1 TFLOP/s  blk 4x3 bw 32 sb 4x1  pcc 1.00000
+=== 70B gate_proj/up_proj fwd T=1024  [1024x8192, 8192x3584] B^T  per_core=4x10  Kt=256  69 candidates
+    metal default    1.821 ms    33.0 TFLOP/s
+    oracle           0.589 ms   102.1 TFLOP/s  blk 4x5 bw 32 sb 4x1
+    our strategy     0.589 ms   102.1 TFLOP/s  blk 4x5 bw 32 sb 4x1  pcc 1.00000
+=== 70B gate_proj/up_proj dgrad T=1024  [1024x3584, 3584x8192]  per_core=4x22  Kt=112  84 candidates
+    metal default    1.752 ms    34.3 TFLOP/s
+    oracle           0.598 ms   100.6 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     0.598 ms   100.6 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 70B gate_up_proj fwd T=1024  [1024x8192, 8192x7168] B^T  per_core=4x19  Kt=256  30 candidates
+    metal default    3.366 ms    35.7 TFLOP/s
+    oracle           1.298 ms    92.7 TFLOP/s  blk 4x19 bw 8 sb 4x1
+    our strategy     1.298 ms    92.7 TFLOP/s  blk 4x19 bw 8 sb 4x1  pcc 1.00000
+=== 70B gate_up_proj dgrad T=1024  [1024x7168, 7168x8192]  per_core=4x22  Kt=224  90 candidates
+    metal default    3.452 ms    34.8 TFLOP/s
+    oracle           1.162 ms   103.5 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     1.162 ms   103.5 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 70B down_proj fwd T=1024  [1024x3584, 3584x8192] B^T  per_core=4x22  Kt=112  84 candidates
+    metal default    1.760 ms    34.2 TFLOP/s
+    oracle           0.604 ms    99.6 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     0.604 ms    99.6 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 70B down_proj dgrad T=1024  [1024x8192, 8192x3584]  per_core=4x10  Kt=256  69 candidates
+    metal default    1.813 ms    33.2 TFLOP/s
+    oracle           0.584 ms   103.0 TFLOP/s  blk 4x5 bw 32 sb 4x1
+    our strategy     0.584 ms   103.0 TFLOP/s  blk 4x5 bw 32 sb 4x1  pcc 1.00000
+=== 70B lm_head dgrad T=1024  [1024x16032, 16032x8192]  per_core=4x22  Kt=501  24 candidates
+    metal default    7.655 ms    35.1 TFLOP/s
+    oracle           4.023 ms    66.9 TFLOP/s  blk 4x11 bw 3 sb 4x1
+    our strategy     4.075 ms    66.0 TFLOP/s  blk 4x22 bw 3 sb 2x2  pcc 1.00000
+=== 70B q_proj fwd T=2048  [2048x8192, 8192x1024] B^T  per_core=7x3  Kt=256  23 candidates
+    metal default    0.970 ms    35.4 TFLOP/s
+    oracle           0.325 ms   105.6 TFLOP/s  blk 7x3 bw 16 sb 1x3
+    our strategy     0.325 ms   105.6 TFLOP/s  blk 7x3 bw 16 sb 1x3  pcc 1.00000
+=== 70B q_proj dgrad T=2048  [2048x1024, 1024x8192]  per_core=7x22  Kt=32  35 candidates
+    metal default    1.063 ms    32.3 TFLOP/s
+    oracle           0.354 ms    97.1 TFLOP/s  blk 7x2 bw 16 sb 1x2
+    our strategy     0.416 ms    82.6 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 70B k_proj/v_proj dgrad T=2048  [2048x128, 128x8192]  per_core=7x22  Kt=4  16 candidates
+    metal default    0.213 ms    20.1 TFLOP/s
+    oracle           0.162 ms    26.5 TFLOP/s  blk 7x22 bw 2 sb 1x2
+    our strategy     0.162 ms    26.5 TFLOP/s  blk 7x22 bw 2 sb 1x2  pcc 1.00000
+=== 70B qkv_proj fwd T=2048  [2048x8192, 8192x1280] B^T  per_core=7x4  Kt=256  35 candidates
+    metal default    1.234 ms    34.8 TFLOP/s
+    oracle           0.421 ms   102.0 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     0.421 ms   102.0 TFLOP/s  blk 7x2 bw 32 sb 1x2  pcc 1.00000
+=== 70B qkv_proj dgrad T=2048  [2048x1280, 1280x8192]  per_core=7x22  Kt=40  49 candidates
+    metal default    1.306 ms    32.9 TFLOP/s
+    oracle           0.417 ms   103.0 TFLOP/s  blk 7x2 bw 20 sb 1x2
+    our strategy     0.469 ms    91.5 TFLOP/s  blk 7x11 bw 10 sb 1x1  pcc 1.00000
+=== 70B o_proj fwd T=2048  [2048x1024, 1024x8192] B^T  per_core=7x22  Kt=32  35 candidates
+    metal default    1.070 ms    32.1 TFLOP/s
+    oracle           0.352 ms    97.5 TFLOP/s  blk 7x2 bw 16 sb 1x2
+    our strategy     0.422 ms    81.4 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 70B o_proj dgrad T=2048  [2048x8192, 8192x1024]  per_core=7x3  Kt=256  23 candidates
+    metal default    0.970 ms    35.4 TFLOP/s
+    oracle           0.325 ms   105.7 TFLOP/s  blk 7x3 bw 16 sb 1x3
+    our strategy     0.325 ms   105.7 TFLOP/s  blk 7x3 bw 16 sb 1x3  pcc 1.00000
+=== 70B gate_proj/up_proj fwd T=2048  [2048x8192, 8192x3584] B^T  per_core=7x10  Kt=256  44 candidates
+    metal default    3.617 ms    33.3 TFLOP/s
+    oracle           1.022 ms   117.6 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     1.147 ms   104.9 TFLOP/s  blk 7x5 bw 16 sb 1x1  pcc 1.00000
+=== 70B gate_proj/up_proj dgrad T=2048  [2048x3584, 3584x8192]  per_core=7x22  Kt=112  51 candidates
+    metal default    3.490 ms    34.5 TFLOP/s
+    oracle           1.036 ms   116.1 TFLOP/s  blk 7x2 bw 28 sb 1x2
+    our strategy     1.351 ms    89.0 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 70B gate_up_proj fwd T=2048  [2048x8192, 8192x7168] B^T  per_core=7x19  Kt=256  19 candidates
+    metal default    8.550 ms    28.1 TFLOP/s
+    oracle           2.925 ms    82.2 TFLOP/s  blk 7x1 bw 32 sb 1x1
+    our strategy     3.516 ms    68.4 TFLOP/s  blk 7x19 bw 4 sb 1x1  pcc 1.00000
+=== 70B gate_up_proj dgrad T=2048  [2048x7168, 7168x8192]  per_core=7x22  Kt=224  55 candidates
+    metal default    6.887 ms    34.9 TFLOP/s
+    oracle           1.960 ms   122.7 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     2.660 ms    90.4 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 70B down_proj fwd T=2048  [2048x3584, 3584x8192] B^T  per_core=7x22  Kt=112  51 candidates
+    metal default    3.498 ms    34.4 TFLOP/s
+    oracle           1.044 ms   115.1 TFLOP/s  blk 7x2 bw 28 sb 1x2
+    our strategy     1.357 ms    88.6 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 70B down_proj dgrad T=2048  [2048x8192, 8192x3584]  per_core=7x10  Kt=256  44 candidates
+    metal default    3.614 ms    33.3 TFLOP/s
+    oracle           1.024 ms   117.4 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     1.145 ms   105.1 TFLOP/s  blk 7x5 bw 16 sb 1x1  pcc 1.00000
+=== 70B lm_head fwd T=2048  [2048x8192, 8192x16032] B^T  per_core=7x42  Kt=256  76 candidates
+    metal default   13.940 ms    38.6 TFLOP/s
+    oracle           4.223 ms   127.4 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     4.827 ms   111.4 TFLOP/s  blk 7x7 bw 16 sb 1x1  pcc 1.00000
+=== 70B lm_head dgrad T=2048  [2048x16032, 16032x8192]  per_core=7x22  Kt=501  16 candidates
+    metal default   15.565 ms    34.6 TFLOP/s
+    oracle           7.760 ms    69.3 TFLOP/s  blk 7x22 bw 3 sb 1x2
+    our strategy     7.760 ms    69.3 TFLOP/s  blk 7x22 bw 3 sb 1x2  pcc 1.00000
+=== 70B q_proj fwd T=4096  [4096x8192, 8192x1024] B^T  per_core=13x3  Kt=256  22 candidates
+    metal default    1.797 ms    38.2 TFLOP/s
+    oracle           0.601 ms   114.3 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     0.601 ms   114.3 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 70B q_proj dgrad T=4096  [4096x1024, 1024x8192]  per_core=13x22  Kt=32  32 candidates
+    metal default    2.408 ms    28.5 TFLOP/s
+    oracle           0.621 ms   110.7 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     1.038 ms    66.2 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 70B k_proj/v_proj dgrad T=4096  [4096x128, 128x8192]  per_core=13x22  Kt=4  14 candidates
+    metal default    0.430 ms    20.0 TFLOP/s
+    oracle           0.305 ms    28.2 TFLOP/s  blk 13x11 bw 2 sb 1x1
+    our strategy     0.305 ms    28.2 TFLOP/s  blk 13x11 bw 2 sb 1x1  pcc 1.00000
+=== 70B qkv_proj fwd T=4096  [4096x8192, 8192x1280] B^T  per_core=13x4  Kt=256  32 candidates
+    metal default    2.279 ms    37.7 TFLOP/s
+    oracle           0.819 ms   104.9 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     0.819 ms   104.9 TFLOP/s  blk 13x2 bw 16 sb 1x2  pcc 1.00000
+=== 70B qkv_proj dgrad T=4096  [4096x1280, 1280x8192]  per_core=13x22  Kt=40  45 candidates
+    metal default    2.972 ms    28.9 TFLOP/s
+    oracle           0.717 ms   119.8 TFLOP/s  blk 13x2 bw 20 sb 1x2
+    our strategy     1.133 ms    75.8 TFLOP/s  blk 13x11 bw 5 sb 1x1  pcc 1.00000
+=== 70B o_proj fwd T=4096  [4096x1024, 1024x8192] B^T  per_core=13x22  Kt=32  32 candidates
+    metal default    2.413 ms    28.5 TFLOP/s
+    oracle           0.617 ms   111.5 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     1.046 ms    65.7 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 70B o_proj dgrad T=4096  [4096x8192, 8192x1024]  per_core=13x3  Kt=256  22 candidates
+    metal default    1.793 ms    38.3 TFLOP/s
+    oracle           0.599 ms   114.7 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     0.599 ms   114.7 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 70B gate_proj/up_proj fwd T=4096  [4096x8192, 8192x3584] B^T  per_core=13x10  Kt=256  40 candidates
+    metal default    6.709 ms    35.8 TFLOP/s
+    oracle           2.006 ms   119.9 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     2.570 ms    93.6 TFLOP/s  blk 13x5 bw 8 sb 1x1  pcc 1.00000
+=== 70B gate_proj/up_proj dgrad T=4096  [4096x3584, 3584x8192]  per_core=13x22  Kt=112  45 candidates
+    metal default    8.025 ms    30.0 TFLOP/s
+    oracle           1.966 ms   122.3 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     3.363 ms    71.5 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 70B gate_up_proj fwd T=4096  [4096x8192, 8192x7168] B^T  per_core=13x19  Kt=256  15 candidates
+    metal default   18.024 ms    26.7 TFLOP/s
+    oracle           5.600 ms    85.9 TFLOP/s  blk 13x1 bw 16 sb 1x1
+    our strategy     5.600 ms    85.9 TFLOP/s  blk 13x1 bw 16 sb 1x1  pcc 1.00000
+=== 70B gate_up_proj dgrad T=4096  [4096x7168, 7168x8192]  per_core=13x22  Kt=224  47 candidates
+    metal default   16.255 ms    29.6 TFLOP/s
+    oracle           3.850 ms   125.0 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     6.661 ms    72.2 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 70B down_proj fwd T=4096  [4096x3584, 3584x8192] B^T  per_core=13x22  Kt=112  45 candidates
+    metal default    8.040 ms    29.9 TFLOP/s
+    oracle           1.959 ms   122.8 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     3.365 ms    71.5 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 70B down_proj dgrad T=4096  [4096x8192, 8192x3584]  per_core=13x10  Kt=256  40 candidates
+    metal default    6.707 ms    35.9 TFLOP/s
+    oracle           2.006 ms   119.9 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     2.571 ms    93.5 TFLOP/s  blk 13x5 bw 8 sb 1x1  pcc 1.00000
+=== 70B lm_head fwd T=4096  [4096x8192, 8192x16032] B^T  per_core=13x42  Kt=256  67 candidates
+    metal default   34.714 ms    31.0 TFLOP/s
+    oracle           8.160 ms   131.8 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy    11.992 ms    89.7 TFLOP/s  blk 13x7 bw 8 sb 1x1  pcc 1.00000
+=== 70B lm_head dgrad T=4096  [4096x16032, 16032x8192]  per_core=13x22  Kt=501  14 candidates
+    metal default   39.726 ms    27.1 TFLOP/s
+    oracle          14.410 ms    74.7 TFLOP/s  blk 13x2 bw 3 sb 1x2
+    our strategy    18.152 ms    59.3 TFLOP/s  blk 13x11 bw 3 sb 1x1  pcc 1.00000
+=== 1B k_proj/v_proj fwd T=128  [128x2048, 2048x512] B^T  per_core=1x2  Kt=64  12 candidates
+    metal default    0.055 ms     4.9 TFLOP/s
+    oracle           0.021 ms    12.6 TFLOP/s  blk 1x2 bw 32 sb 1x2
+    our strategy     0.021 ms    12.6 TFLOP/s  blk 1x2 bw 32 sb 1x2  pcc 1.00000
+=== 1B q_proj fwd T=256, 1B o_proj fwd T=256  [256x2048, 2048x2048] B^T  per_core=1x6  Kt=64  24 candidates
+    metal default    0.106 ms    20.2 TFLOP/s
+    oracle           0.041 ms    52.0 TFLOP/s  blk 1x6 bw 8 sb 1x3
+    our strategy     0.049 ms    44.0 TFLOP/s  blk 1x6 bw 32 sb 1x3  pcc 1.00000
+=== 1B q_proj dgrad T=256, 1B o_proj dgrad T=256  [256x2048, 2048x2048]  per_core=1x6  Kt=64  24 candidates
+    metal default    0.078 ms    27.5 TFLOP/s
+    oracle           0.042 ms    51.6 TFLOP/s  blk 1x6 bw 8 sb 1x3
+    our strategy     0.046 ms    46.5 TFLOP/s  blk 1x6 bw 32 sb 1x3  pcc 1.00000
+=== 1B k_proj/v_proj fwd T=256  [256x2048, 2048x512] B^T  per_core=1x2  Kt=64  12 candidates
+    metal default    0.055 ms     9.8 TFLOP/s
+    oracle           0.023 ms    23.3 TFLOP/s  blk 1x2 bw 32 sb 1x2
+    our strategy     0.023 ms    23.3 TFLOP/s  blk 1x2 bw 32 sb 1x2  pcc 1.00000
+=== 1B k_proj/v_proj dgrad T=256  [256x512, 512x2048]  per_core=1x6  Kt=16  16 candidates
+    metal default    0.026 ms    20.6 TFLOP/s
+    oracle           0.023 ms    23.5 TFLOP/s  blk 1x3 bw 8 sb 1x3
+    our strategy     0.023 ms    23.3 TFLOP/s  blk 1x6 bw 8 sb 1x3  pcc 1.00000
+=== 1B qkv_proj dgrad T=256  [256x3072, 3072x2048]  per_core=1x6  Kt=96  40 candidates
+    metal default    0.058 ms    55.5 TFLOP/s
+    oracle           0.057 ms    56.1 TFLOP/s  blk 1x6 bw 16 sb 1x3
+    our strategy     0.060 ms    53.7 TFLOP/s  blk 1x6 bw 32 sb 1x3  pcc 1.00000
+=== 1B gate_proj/up_proj dgrad T=256  [256x8192, 8192x2048]  per_core=1x6  Kt=256  24 candidates
+    metal default    0.291 ms    29.5 TFLOP/s
+    oracle           0.131 ms    65.7 TFLOP/s  blk 1x6 bw 32 sb 1x3
+    our strategy     0.131 ms    65.7 TFLOP/s  blk 1x6 bw 32 sb 1x3  pcc 1.00000
+=== 1B gate_up_proj dgrad T=256  [256x16384, 16384x2048]  per_core=1x6  Kt=512  24 candidates
+    metal default    0.571 ms    30.1 TFLOP/s
+    oracle           0.255 ms    67.3 TFLOP/s  blk 1x6 bw 32 sb 1x3
+    our strategy     0.255 ms    67.3 TFLOP/s  blk 1x6 bw 32 sb 1x3  pcc 1.00000
+=== 1B down_proj fwd T=256  [256x8192, 8192x2048] B^T  per_core=1x6  Kt=256  24 candidates
+    metal default    0.425 ms    20.2 TFLOP/s
+    oracle           0.124 ms    69.0 TFLOP/s  blk 1x6 bw 16 sb 1x3
+    our strategy     0.133 ms    64.6 TFLOP/s  blk 1x6 bw 32 sb 1x3  pcc 1.00000
+=== 1B lm_head dgrad T=256  [256x128256, 128256x2048]  per_core=1x6  Kt=4008  32 candidates
+    metal default    2.847 ms    47.2 TFLOP/s
+    oracle           1.920 ms    70.0 TFLOP/s  blk 1x6 bw 24 sb 1x3
+    our strategy     1.920 ms    70.0 TFLOP/s  blk 1x6 bw 24 sb 1x3  pcc 1.00000
+=== 1B q_proj fwd T=512, 1B o_proj fwd T=512  [512x2048, 2048x2048] B^T  per_core=2x6  Kt=64  48 candidates
+    metal default    0.155 ms    27.7 TFLOP/s
+    oracle           0.060 ms    71.6 TFLOP/s  blk 2x6 bw 16 sb 2x2
+    our strategy     0.067 ms    64.5 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B q_proj dgrad T=512, 1B o_proj dgrad T=512  [512x2048, 2048x2048]  per_core=2x6  Kt=64  48 candidates
+    metal default    0.145 ms    29.7 TFLOP/s
+    oracle           0.058 ms    74.6 TFLOP/s  blk 2x6 bw 16 sb 2x2
+    our strategy     0.064 ms    67.4 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B k_proj/v_proj fwd T=512  [512x2048, 2048x512] B^T  per_core=2x2  Kt=64  24 candidates
+    metal default    0.066 ms    16.3 TFLOP/s
+    oracle           0.025 ms    42.6 TFLOP/s  blk 2x2 bw 16 sb 2x2
+    our strategy     0.026 ms    40.8 TFLOP/s  blk 2x2 bw 32 sb 2x2  pcc 1.00000
+=== 1B k_proj/v_proj dgrad T=512  [512x512, 512x2048]  per_core=2x6  Kt=16  32 candidates
+    metal default    0.044 ms    24.3 TFLOP/s
+    oracle           0.023 ms    46.2 TFLOP/s  blk 2x6 bw 8 sb 2x2
+    our strategy     0.023 ms    46.2 TFLOP/s  blk 2x6 bw 8 sb 2x2  pcc 1.00000
+=== 1B qkv_proj fwd T=512  [512x2048, 2048x3072] B^T  per_core=2x8  Kt=64  47 candidates
+    metal default    0.204 ms    31.6 TFLOP/s
+    oracle           0.082 ms    78.4 TFLOP/s  blk 2x8 bw 16 sb 2x2
+    our strategy     0.123 ms    52.2 TFLOP/s  blk 1x8 bw 32 sb 1x4  pcc 1.00000
+=== 1B qkv_proj dgrad T=512  [512x3072, 3072x2048]  per_core=2x6  Kt=96  80 candidates
+    metal default    0.086 ms    74.9 TFLOP/s
+    oracle           0.080 ms    81.0 TFLOP/s  blk 2x6 bw 16 sb 2x2
+    our strategy     0.084 ms    76.4 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B gate_proj/up_proj dgrad T=512  [512x8192, 8192x2048]  per_core=2x6  Kt=256  48 candidates
+    metal default    0.546 ms    31.5 TFLOP/s
+    oracle           0.187 ms    91.8 TFLOP/s  blk 2x6 bw 32 sb 2x2
+    our strategy     0.187 ms    91.8 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B gate_up_proj dgrad T=512  [512x16384, 16384x2048]  per_core=2x6  Kt=512  48 candidates
+    metal default    1.083 ms    31.7 TFLOP/s
+    oracle           0.352 ms    97.7 TFLOP/s  blk 2x6 bw 32 sb 2x2
+    our strategy     0.352 ms    97.7 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B down_proj fwd T=512  [512x8192, 8192x2048] B^T  per_core=2x6  Kt=256  48 candidates
+    metal default    0.617 ms    27.9 TFLOP/s
+    oracle           0.192 ms    89.6 TFLOP/s  blk 2x6 bw 32 sb 2x2
+    our strategy     0.192 ms    89.6 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B lm_head dgrad T=512  [512x128256, 128256x2048]  per_core=2x6  Kt=4008  64 candidates
+    metal default    5.448 ms    49.4 TFLOP/s
+    oracle           2.654 ms   101.4 TFLOP/s  blk 2x6 bw 24 sb 2x2
+    our strategy     2.654 ms   101.4 TFLOP/s  blk 2x6 bw 24 sb 2x2  pcc 1.00000
+=== 1B q_proj fwd T=1024, 1B o_proj fwd T=1024  [1024x2048, 2048x2048] B^T  per_core=4x6  Kt=64  71 candidates
+    metal default    0.285 ms    30.1 TFLOP/s
+    oracle           0.105 ms    81.6 TFLOP/s  blk 4x6 bw 16 sb 2x2
+    our strategy     0.124 ms    69.0 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B q_proj dgrad T=1024, 1B o_proj dgrad T=1024  [1024x2048, 2048x2048]  per_core=4x6  Kt=64  71 candidates
+    metal default    0.284 ms    30.2 TFLOP/s
+    oracle           0.101 ms    85.4 TFLOP/s  blk 4x6 bw 16 sb 2x2
+    our strategy     0.121 ms    71.1 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B k_proj/v_proj fwd T=1024  [1024x2048, 2048x512] B^T  per_core=4x2  Kt=64  36 candidates
+    metal default    0.100 ms    21.5 TFLOP/s
+    oracle           0.042 ms    51.7 TFLOP/s  blk 4x2 bw 16 sb 2x2
+    our strategy     0.045 ms    48.1 TFLOP/s  blk 4x2 bw 32 sb 2x2  pcc 1.00000
+=== 1B k_proj/v_proj dgrad T=1024  [1024x512, 512x2048]  per_core=4x6  Kt=16  48 candidates
+    metal default    0.083 ms    25.7 TFLOP/s
+    oracle           0.038 ms    56.8 TFLOP/s  blk 4x6 bw 8 sb 2x2
+    our strategy     0.038 ms    56.8 TFLOP/s  blk 4x6 bw 8 sb 2x2  pcc 1.00000
+=== 1B qkv_proj fwd T=1024  [1024x2048, 2048x3072] B^T  per_core=4x8  Kt=64  70 candidates
+    metal default    0.383 ms    33.7 TFLOP/s
+    oracle           0.144 ms    89.6 TFLOP/s  blk 4x8 bw 16 sb 2x2
+    our strategy     0.149 ms    86.7 TFLOP/s  blk 4x4 bw 32 sb 2x2  pcc 1.00000
+=== 1B qkv_proj dgrad T=1024  [1024x3072, 3072x2048]  per_core=4x6  Kt=96  119 candidates
+    metal default    0.163 ms    79.0 TFLOP/s
+    oracle           0.144 ms    89.7 TFLOP/s  blk 4x6 bw 24 sb 2x2
+    our strategy     0.144 ms    89.7 TFLOP/s  blk 4x6 bw 24 sb 2x2  pcc 1.00000
+=== 1B gate_proj/up_proj fwd T=1024  [1024x2048, 2048x8192] B^T  per_core=4x22  Kt=64  63 candidates
+    metal default    1.023 ms    33.6 TFLOP/s
+    oracle           0.364 ms    94.4 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     0.364 ms    94.4 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 1B gate_proj/up_proj dgrad T=1024  [1024x8192, 8192x2048]  per_core=4x6  Kt=256  71 candidates
+    metal default    1.087 ms    31.6 TFLOP/s
+    oracle           0.358 ms    95.9 TFLOP/s  blk 4x3 bw 32 sb 4x1
+    our strategy     0.370 ms    92.7 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B gate_up_proj dgrad T=1024  [1024x16384, 16384x2048]  per_core=4x6  Kt=512  71 candidates
+    metal default    2.164 ms    31.7 TFLOP/s
+    oracle           0.684 ms   100.5 TFLOP/s  blk 4x3 bw 32 sb 4x1
+    our strategy     0.699 ms    98.3 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B down_proj fwd T=1024  [1024x8192, 8192x2048] B^T  per_core=4x6  Kt=256  71 candidates
+    metal default    1.089 ms    31.5 TFLOP/s
+    oracle           0.360 ms    95.5 TFLOP/s  blk 4x3 bw 32 sb 4x1
+    our strategy     0.376 ms    91.3 TFLOP/s  blk 2x6 bw 32 sb 2x2  pcc 1.00000
+=== 1B down_proj dgrad T=1024  [1024x2048, 2048x8192]  per_core=4x22  Kt=64  63 candidates
+    metal default    1.013 ms    33.9 TFLOP/s
+    oracle           0.358 ms    95.9 TFLOP/s  blk 4x11 bw 16 sb 4x1
+    our strategy     0.358 ms    95.9 TFLOP/s  blk 4x11 bw 16 sb 4x1  pcc 1.00000
+=== 1B lm_head dgrad T=1024  [1024x128256, 128256x2048]  per_core=4x6  Kt=4008  96 candidates
+    metal default   10.844 ms    49.6 TFLOP/s
+    oracle           5.253 ms   102.4 TFLOP/s  blk 4x3 bw 24 sb 4x1
+    our strategy     5.270 ms   102.1 TFLOP/s  blk 4x6 bw 24 sb 2x2  pcc 1.00000
+=== 1B q_proj fwd T=2048, 1B o_proj fwd T=2048  [2048x2048, 2048x2048] B^T  per_core=7x6  Kt=64  46 candidates
+    metal default    0.514 ms    33.4 TFLOP/s
+    oracle           0.168 ms   102.1 TFLOP/s  blk 7x6 bw 16 sb 1x3
+    our strategy     0.168 ms   102.1 TFLOP/s  blk 7x6 bw 16 sb 1x3  pcc 1.00000
+=== 1B q_proj dgrad T=2048, 1B o_proj dgrad T=2048  [2048x2048, 2048x2048]  per_core=7x6  Kt=64  46 candidates
+    metal default    0.514 ms    33.4 TFLOP/s
+    oracle           0.167 ms   102.9 TFLOP/s  blk 7x6 bw 16 sb 1x3
+    our strategy     0.167 ms   102.9 TFLOP/s  blk 7x6 bw 16 sb 1x3  pcc 1.00000
+=== 1B k_proj/v_proj fwd T=2048  [2048x2048, 2048x512] B^T  per_core=7x2  Kt=64  24 candidates
+    metal default    0.190 ms    22.6 TFLOP/s
+    oracle           0.067 ms    63.7 TFLOP/s  blk 7x2 bw 16 sb 1x2
+    our strategy     0.075 ms    57.3 TFLOP/s  blk 7x2 bw 32 sb 1x2  pcc 1.00000
+=== 1B k_proj/v_proj dgrad T=2048  [2048x512, 512x2048]  per_core=7x6  Kt=16  32 candidates
+    metal default    0.149 ms    28.8 TFLOP/s
+    oracle           0.063 ms    68.7 TFLOP/s  blk 7x6 bw 8 sb 1x3
+    our strategy     0.063 ms    68.7 TFLOP/s  blk 7x6 bw 8 sb 1x3  pcc 1.00000
+=== 1B qkv_proj fwd T=2048  [2048x2048, 2048x3072] B^T  per_core=7x8  Kt=64  46 candidates
+    metal default    0.657 ms    39.2 TFLOP/s
+    oracle           0.233 ms   110.5 TFLOP/s  blk 7x8 bw 16 sb 1x4
+    our strategy     0.233 ms   110.5 TFLOP/s  blk 7x8 bw 16 sb 1x4  pcc 1.00000
+=== 1B qkv_proj dgrad T=2048  [2048x3072, 3072x2048]  per_core=7x6  Kt=96  77 candidates
+    metal default    0.284 ms    90.7 TFLOP/s
+    oracle           0.245 ms   105.2 TFLOP/s  blk 7x6 bw 16 sb 1x3
+    our strategy     0.245 ms   105.2 TFLOP/s  blk 7x6 bw 16 sb 1x3  pcc 1.00000
+=== 1B gate_proj/up_proj fwd T=2048  [2048x2048, 2048x8192] B^T  per_core=7x22  Kt=64  39 candidates
+    metal default    2.041 ms    33.7 TFLOP/s
+    oracle           0.625 ms   110.0 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     0.794 ms    86.5 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 1B gate_proj/up_proj dgrad T=2048  [2048x8192, 8192x2048]  per_core=7x6  Kt=256  46 candidates
+    metal default    1.965 ms    35.0 TFLOP/s
+    oracle           0.624 ms   110.1 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     0.634 ms   108.3 TFLOP/s  blk 7x6 bw 16 sb 1x3  pcc 1.00000
+=== 1B gate_up_proj fwd T=2048  [2048x2048, 2048x16384] B^T  per_core=7x43  Kt=64  15 candidates
+    metal default    5.140 ms    26.7 TFLOP/s
+    oracle           1.676 ms    82.0 TFLOP/s  blk 7x1 bw 32 sb 1x1
+    our strategy     1.676 ms    82.0 TFLOP/s  blk 7x1 bw 32 sb 1x1  pcc 1.00000
+=== 1B gate_up_proj dgrad T=2048  [2048x16384, 16384x2048]  per_core=7x6  Kt=512  46 candidates
+    metal default    3.900 ms    35.2 TFLOP/s
+    oracle           1.204 ms   114.1 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     1.250 ms   110.0 TFLOP/s  blk 7x6 bw 16 sb 1x3  pcc 1.00000
+=== 1B down_proj fwd T=2048  [2048x8192, 8192x2048] B^T  per_core=7x6  Kt=256  46 candidates
+    metal default    1.966 ms    35.0 TFLOP/s
+    oracle           0.623 ms   110.2 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     0.637 ms   107.8 TFLOP/s  blk 7x6 bw 16 sb 1x3  pcc 1.00000
+=== 1B down_proj dgrad T=2048  [2048x2048, 2048x8192]  per_core=7x22  Kt=64  39 candidates
+    metal default    2.033 ms    33.8 TFLOP/s
+    oracle           0.626 ms   109.7 TFLOP/s  blk 7x2 bw 32 sb 1x2
+    our strategy     0.788 ms    87.3 TFLOP/s  blk 7x11 bw 8 sb 1x1  pcc 1.00000
+=== 1B lm_head dgrad T=2048  [2048x128256, 128256x2048]  per_core=7x6  Kt=4008  63 candidates
+    metal default   22.943 ms    46.9 TFLOP/s
+    oracle           9.279 ms   115.9 TFLOP/s  blk 7x3 bw 24 sb 1x3
+    our strategy     9.279 ms   115.9 TFLOP/s  blk 7x3 bw 24 sb 1x3  pcc 1.00000
+=== 1B q_proj fwd T=4096, 1B o_proj fwd T=4096  [4096x2048, 2048x2048] B^T  per_core=13x6  Kt=64  43 candidates
+    metal default    0.956 ms    36.0 TFLOP/s
+    oracle           0.314 ms   109.3 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     0.314 ms   109.3 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 1B q_proj dgrad T=4096, 1B o_proj dgrad T=4096  [4096x2048, 2048x2048]  per_core=13x6  Kt=64  43 candidates
+    metal default    0.953 ms    36.0 TFLOP/s
+    oracle           0.313 ms   109.7 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     0.313 ms   109.7 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 1B k_proj/v_proj fwd T=4096  [4096x2048, 2048x512] B^T  per_core=13x2  Kt=64  22 candidates
+    metal default    0.346 ms    24.8 TFLOP/s
+    oracle           0.124 ms    69.5 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     0.124 ms    69.5 TFLOP/s  blk 13x2 bw 16 sb 1x2  pcc 1.00000
+=== 1B k_proj/v_proj dgrad T=4096  [4096x512, 512x2048]  per_core=13x6  Kt=16  32 candidates
+    metal default    0.275 ms    31.3 TFLOP/s
+    oracle           0.114 ms    75.6 TFLOP/s  blk 13x6 bw 8 sb 1x3
+    our strategy     0.114 ms    75.6 TFLOP/s  blk 13x6 bw 8 sb 1x3  pcc 1.00000
+=== 1B qkv_proj fwd T=4096  [4096x2048, 2048x3072] B^T  per_core=13x8  Kt=64  42 candidates
+    metal default    1.222 ms    42.2 TFLOP/s
+    oracle           0.481 ms   107.2 TFLOP/s  blk 13x8 bw 8 sb 1x4
+    our strategy     0.481 ms   107.2 TFLOP/s  blk 13x8 bw 8 sb 1x4  pcc 1.00000
+=== 1B qkv_proj dgrad T=4096  [4096x3072, 3072x2048]  per_core=13x6  Kt=96  70 candidates
+    metal default    0.526 ms    97.9 TFLOP/s
+    oracle           0.456 ms   112.9 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     0.456 ms   112.9 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 1B gate_proj/up_proj fwd T=4096  [4096x2048, 2048x8192] B^T  per_core=13x22  Kt=64  34 candidates
+    metal default    4.661 ms    29.5 TFLOP/s
+    oracle           1.151 ms   119.4 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     1.971 ms    69.7 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 1B gate_proj/up_proj dgrad T=4096  [4096x8192, 8192x2048]  per_core=13x6  Kt=256  43 candidates
+    metal default    3.642 ms    37.7 TFLOP/s
+    oracle           1.180 ms   116.5 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     1.180 ms   116.5 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 1B gate_up_proj fwd T=4096  [4096x2048, 2048x16384] B^T  per_core=13x43  Kt=64  14 candidates
+    metal default    9.558 ms    28.8 TFLOP/s
+    oracle           3.411 ms    80.6 TFLOP/s  blk 13x1 bw 16 sb 1x1
+    our strategy     3.411 ms    80.6 TFLOP/s  blk 13x1 bw 16 sb 1x1  pcc 1.00000
+=== 1B gate_up_proj dgrad T=4096  [4096x16384, 16384x2048]  per_core=13x6  Kt=512  43 candidates
+    metal default    7.240 ms    38.0 TFLOP/s
+    oracle           2.341 ms   117.4 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     2.341 ms   117.4 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 1B down_proj fwd T=4096  [4096x8192, 8192x2048] B^T  per_core=13x6  Kt=256  43 candidates
+    metal default    3.644 ms    37.7 TFLOP/s
+    oracle           1.182 ms   116.3 TFLOP/s  blk 13x3 bw 16 sb 1x3
+    our strategy     1.182 ms   116.3 TFLOP/s  blk 13x3 bw 16 sb 1x3  pcc 1.00000
+=== 1B down_proj dgrad T=4096  [4096x2048, 2048x8192]  per_core=13x22  Kt=64  34 candidates
+    metal default    4.661 ms    29.5 TFLOP/s
+    oracle           1.162 ms   118.2 TFLOP/s  blk 13x2 bw 16 sb 1x2
+    our strategy     1.970 ms    69.8 TFLOP/s  blk 13x11 bw 4 sb 1x1  pcc 1.00000
+=== 1B lm_head dgrad T=4096  [4096x128256, 128256x2048]  per_core=13x6  Kt=4008  59 candidates
+    metal default   47.577 ms    45.2 TFLOP/s
+    oracle          19.063 ms   112.9 TFLOP/s  blk 13x3 bw 12 sb 1x3
+    our strategy    27.632 ms    77.9 TFLOP/s  blk 13x6 bw 8 sb 1x3  pcc 1.00000
+
+## 2D mcast matmul, Blackhole 12x10, bf16, HiFi4, fp32 dest acc
+Time per op; parentheses = speedup over metal default. A^T = A stored [K, M] (transpose_a), B^T = B stored [N, K] (transpose_b).
+
+| [MxK, KxN] | metal default | oracle | our strategy |
+|---|---:|---:|---:|
+| [128x8192, 8192x1024] B^T | 0.244 ms | 0.069 ms (3.56x) | 0.072 ms (3.40x) |
+| [128x8192, 8192x128] B^T | 0.183 ms | 0.028 ms (6.44x) | 0.028 ms (6.44x) |
+| [128x8192, 8192x1024] | 0.188 ms | 0.070 ms (2.66x) | 0.071 ms (2.64x) |
+| [256x8192, 8192x1024] B^T | 0.256 ms | 0.071 ms (3.59x) | 0.074 ms (3.45x) |
+| [256x8192, 8192x128] B^T | 0.183 ms | 0.033 ms (5.52x) | 0.035 ms (5.26x) |
+| [256x8192, 8192x1280] B^T | 0.302 ms | 0.086 ms (3.50x) | 0.092 ms (3.28x) |
+| [256x8192, 8192x1024] | 0.191 ms | 0.075 ms (2.55x) | 0.075 ms (2.55x) |
+| [512x8192, 8192x1024] B^T | 0.326 ms | 0.100 ms (3.26x) | 0.101 ms (3.23x) |
+| [512x8192, 8192x128] B^T | 0.209 ms | 0.060 ms (3.51x) | 0.060 ms (3.51x) |
+| [512x8192, 8192x1280] B^T | 0.387 ms | 0.129 ms (3.00x) | 0.129 ms (3.00x) |
+| [512x8192, 8192x1024] | 0.290 ms | 0.096 ms (3.01x) | 0.096 ms (3.01x) |
+| [512x8192, 8192x3584] B^T | 0.948 ms | 0.319 ms (2.97x) | 0.321 ms (2.96x) |
+| [512x8192, 8192x3584] | 0.904 ms | 0.315 ms (2.87x) | 0.315 ms (2.87x) |
+| [1024x8192, 8192x1024] B^T | 0.538 ms | 0.182 ms (2.96x) | 0.182 ms (2.96x) |
+| [1024x1024, 1024x8192] | 0.532 ms | 0.198 ms (2.69x) | 0.198 ms (2.69x) |
+| [1024x8192, 8192x128] B^T | 0.260 ms | 0.102 ms (2.55x) | 0.102 ms (2.55x) |
+| [1024x128, 128x8192] | 0.111 ms | 0.087 ms (1.27x) | 0.087 ms (1.27x) |
+| [1024x8192, 8192x1280] B^T | 0.721 ms | 0.239 ms (3.02x) | 0.239 ms (3.02x) |
+| [1024x1280, 1280x8192] | 0.653 ms | 0.259 ms (2.53x) | 0.269 ms (2.43x) |
+| [1024x1024, 1024x8192] B^T | 0.540 ms | 0.205 ms (2.64x) | 0.205 ms (2.64x) |
+| [1024x8192, 8192x1024] | 0.537 ms | 0.181 ms (2.98x) | 0.181 ms (2.98x) |
+| [1024x8192, 8192x3584] B^T | 1.821 ms | 0.589 ms (3.09x) | 0.589 ms (3.09x) |
+| [1024x3584, 3584x8192] | 1.752 ms | 0.598 ms (2.93x) | 0.598 ms (2.93x) |
+| [1024x8192, 8192x7168] B^T | 3.366 ms | 1.298 ms (2.59x) | 1.298 ms (2.59x) |
+| [1024x7168, 7168x8192] | 3.452 ms | 1.162 ms (2.97x) | 1.162 ms (2.97x) |
+| [1024x3584, 3584x8192] B^T | 1.760 ms | 0.604 ms (2.92x) | 0.604 ms (2.92x) |
+| [1024x8192, 8192x3584] | 1.813 ms | 0.584 ms (3.10x) | 0.584 ms (3.10x) |
+| [1024x16032, 16032x8192] | 7.655 ms | 4.023 ms (1.90x) | 4.075 ms (1.88x) |
+| [2048x8192, 8192x1024] B^T | 0.970 ms | 0.325 ms (2.98x) | 0.325 ms (2.98x) |
+| [2048x1024, 1024x8192] | 1.063 ms | 0.354 ms (3.00x) | 0.416 ms (2.56x) |
+| [2048x128, 128x8192] | 0.213 ms | 0.162 ms (1.32x) | 0.162 ms (1.32x) |
+| [2048x8192, 8192x1280] B^T | 1.234 ms | 0.421 ms (2.93x) | 0.421 ms (2.93x) |
+| [2048x1280, 1280x8192] | 1.306 ms | 0.417 ms (3.13x) | 0.469 ms (2.78x) |
+| [2048x1024, 1024x8192] B^T | 1.070 ms | 0.352 ms (3.04x) | 0.422 ms (2.54x) |
+| [2048x8192, 8192x1024] | 0.970 ms | 0.325 ms (2.98x) | 0.325 ms (2.98x) |
+| [2048x8192, 8192x3584] B^T | 3.617 ms | 1.022 ms (3.54x) | 1.147 ms (3.15x) |
+| [2048x3584, 3584x8192] | 3.490 ms | 1.036 ms (3.37x) | 1.351 ms (2.58x) |
+| [2048x8192, 8192x7168] B^T | 8.550 ms | 2.925 ms (2.92x) | 3.516 ms (2.43x) |
+| [2048x7168, 7168x8192] | 6.887 ms | 1.960 ms (3.51x) | 2.660 ms (2.59x) |
+| [2048x3584, 3584x8192] B^T | 3.498 ms | 1.044 ms (3.35x) | 1.357 ms (2.58x) |
+| [2048x8192, 8192x3584] | 3.614 ms | 1.024 ms (3.53x) | 1.145 ms (3.16x) |
+| [2048x8192, 8192x16032] B^T | 13.940 ms | 4.223 ms (3.30x) | 4.827 ms (2.89x) |
+| [2048x16032, 16032x8192] | 15.565 ms | 7.760 ms (2.01x) | 7.760 ms (2.01x) |
+| [4096x8192, 8192x1024] B^T | 1.797 ms | 0.601 ms (2.99x) | 0.601 ms (2.99x) |
+| [4096x1024, 1024x8192] | 2.408 ms | 0.621 ms (3.88x) | 1.038 ms (2.32x) |
+| [4096x128, 128x8192] | 0.430 ms | 0.305 ms (1.41x) | 0.305 ms (1.41x) |
+| [4096x8192, 8192x1280] B^T | 2.279 ms | 0.819 ms (2.78x) | 0.819 ms (2.78x) |
+| [4096x1280, 1280x8192] | 2.972 ms | 0.717 ms (4.14x) | 1.133 ms (2.62x) |
+| [4096x1024, 1024x8192] B^T | 2.413 ms | 0.617 ms (3.91x) | 1.046 ms (2.31x) |
+| [4096x8192, 8192x1024] | 1.793 ms | 0.599 ms (2.99x) | 0.599 ms (2.99x) |
+| [4096x8192, 8192x3584] B^T | 6.709 ms | 2.006 ms (3.34x) | 2.570 ms (2.61x) |
+| [4096x3584, 3584x8192] | 8.025 ms | 1.966 ms (4.08x) | 3.363 ms (2.39x) |
+| [4096x8192, 8192x7168] B^T | 18.024 ms | 5.600 ms (3.22x) | 5.600 ms (3.22x) |
+| [4096x7168, 7168x8192] | 16.255 ms | 3.850 ms (4.22x) | 6.661 ms (2.44x) |
+| [4096x3584, 3584x8192] B^T | 8.040 ms | 1.959 ms (4.11x) | 3.365 ms (2.39x) |
+| [4096x8192, 8192x3584] | 6.707 ms | 2.006 ms (3.34x) | 2.571 ms (2.61x) |
+| [4096x8192, 8192x16032] B^T | 34.714 ms | 8.160 ms (4.25x) | 11.992 ms (2.89x) |
+| [4096x16032, 16032x8192] | 39.726 ms | 14.410 ms (2.76x) | 18.152 ms (2.19x) |
+| [128x2048, 2048x512] B^T | 0.055 ms | 0.021 ms (2.57x) | 0.021 ms (2.57x) |
+| [256x2048, 2048x2048] B^T | 0.106 ms | 0.041 ms (2.57x) | 0.049 ms (2.18x) |
+| [256x2048, 2048x2048] | 0.078 ms | 0.042 ms (1.88x) | 0.046 ms (1.69x) |
+| [256x2048, 2048x512] B^T | 0.055 ms | 0.023 ms (2.37x) | 0.023 ms (2.37x) |
+| [256x512, 512x2048] | 0.026 ms | 0.023 ms (1.14x) | 0.023 ms (1.13x) |
+| [256x3072, 3072x2048] | 0.058 ms | 0.057 ms (1.01x) | 0.060 ms (0.97x) |
+| [256x8192, 8192x2048] | 0.291 ms | 0.131 ms (2.22x) | 0.131 ms (2.22x) |
+| [256x16384, 16384x2048] | 0.571 ms | 0.255 ms (2.23x) | 0.255 ms (2.23x) |
+| [256x8192, 8192x2048] B^T | 0.425 ms | 0.124 ms (3.41x) | 0.133 ms (3.19x) |
+| [256x128256, 128256x2048] | 2.847 ms | 1.920 ms (1.48x) | 1.920 ms (1.48x) |
+| [512x2048, 2048x2048] B^T | 0.155 ms | 0.060 ms (2.58x) | 0.067 ms (2.33x) |
+| [512x2048, 2048x2048] | 0.145 ms | 0.058 ms (2.51x) | 0.064 ms (2.27x) |
+| [512x2048, 2048x512] B^T | 0.066 ms | 0.025 ms (2.61x) | 0.026 ms (2.50x) |
+| [512x512, 512x2048] | 0.044 ms | 0.023 ms (1.90x) | 0.023 ms (1.90x) |
+| [512x2048, 2048x3072] B^T | 0.204 ms | 0.082 ms (2.48x) | 0.123 ms (1.65x) |
+| [512x3072, 3072x2048] | 0.086 ms | 0.080 ms (1.08x) | 0.084 ms (1.02x) |
+| [512x8192, 8192x2048] | 0.546 ms | 0.187 ms (2.92x) | 0.187 ms (2.92x) |
+| [512x16384, 16384x2048] | 1.083 ms | 0.352 ms (3.08x) | 0.352 ms (3.08x) |
+| [512x8192, 8192x2048] B^T | 0.617 ms | 0.192 ms (3.22x) | 0.192 ms (3.22x) |
+| [512x128256, 128256x2048] | 5.448 ms | 2.654 ms (2.05x) | 2.654 ms (2.05x) |
+| [1024x2048, 2048x2048] B^T | 0.285 ms | 0.105 ms (2.71x) | 0.124 ms (2.29x) |
+| [1024x2048, 2048x2048] | 0.284 ms | 0.101 ms (2.82x) | 0.121 ms (2.35x) |
+| [1024x2048, 2048x512] B^T | 0.100 ms | 0.042 ms (2.40x) | 0.045 ms (2.23x) |
+| [1024x512, 512x2048] | 0.083 ms | 0.038 ms (2.21x) | 0.038 ms (2.21x) |
+| [1024x2048, 2048x3072] B^T | 0.383 ms | 0.144 ms (2.66x) | 0.149 ms (2.57x) |
+| [1024x3072, 3072x2048] | 0.163 ms | 0.144 ms (1.14x) | 0.144 ms (1.14x) |
+| [1024x2048, 2048x8192] B^T | 1.023 ms | 0.364 ms (2.81x) | 0.364 ms (2.81x) |
+| [1024x8192, 8192x2048] | 1.087 ms | 0.358 ms (3.03x) | 0.370 ms (2.94x) |
+| [1024x16384, 16384x2048] | 2.164 ms | 0.684 ms (3.16x) | 0.699 ms (3.10x) |
+| [1024x8192, 8192x2048] B^T | 1.089 ms | 0.360 ms (3.03x) | 0.376 ms (2.89x) |
+| [1024x2048, 2048x8192] | 1.013 ms | 0.358 ms (2.83x) | 0.358 ms (2.83x) |
+| [1024x128256, 128256x2048] | 10.844 ms | 5.253 ms (2.06x) | 5.270 ms (2.06x) |
+| [2048x2048, 2048x2048] B^T | 0.514 ms | 0.168 ms (3.06x) | 0.168 ms (3.06x) |
+| [2048x2048, 2048x2048] | 0.514 ms | 0.167 ms (3.08x) | 0.167 ms (3.08x) |
+| [2048x2048, 2048x512] B^T | 0.190 ms | 0.067 ms (2.81x) | 0.075 ms (2.53x) |
+| [2048x512, 512x2048] | 0.149 ms | 0.063 ms (2.39x) | 0.063 ms (2.39x) |
+| [2048x2048, 2048x3072] B^T | 0.657 ms | 0.233 ms (2.82x) | 0.233 ms (2.82x) |
+| [2048x3072, 3072x2048] | 0.284 ms | 0.245 ms (1.16x) | 0.245 ms (1.16x) |
+| [2048x2048, 2048x8192] B^T | 2.041 ms | 0.625 ms (3.27x) | 0.794 ms (2.57x) |
+| [2048x8192, 8192x2048] | 1.965 ms | 0.624 ms (3.15x) | 0.634 ms (3.10x) |
+| [2048x2048, 2048x16384] B^T | 5.140 ms | 1.676 ms (3.07x) | 1.676 ms (3.07x) |
+| [2048x16384, 16384x2048] | 3.900 ms | 1.204 ms (3.24x) | 1.250 ms (3.12x) |
+| [2048x8192, 8192x2048] B^T | 1.966 ms | 0.623 ms (3.15x) | 0.637 ms (3.08x) |
+| [2048x2048, 2048x8192] | 2.033 ms | 0.626 ms (3.25x) | 0.788 ms (2.58x) |
+| [2048x128256, 128256x2048] | 22.943 ms | 9.279 ms (2.47x) | 9.279 ms (2.47x) |
+| [4096x2048, 2048x2048] B^T | 0.956 ms | 0.314 ms (3.04x) | 0.314 ms (3.04x) |
+| [4096x2048, 2048x2048] | 0.953 ms | 0.313 ms (3.04x) | 0.313 ms (3.04x) |
+| [4096x2048, 2048x512] B^T | 0.346 ms | 0.124 ms (2.80x) | 0.124 ms (2.80x) |
+| [4096x512, 512x2048] | 0.275 ms | 0.114 ms (2.42x) | 0.114 ms (2.42x) |
+| [4096x2048, 2048x3072] B^T | 1.222 ms | 0.481 ms (2.54x) | 0.481 ms (2.54x) |
+| [4096x3072, 3072x2048] | 0.526 ms | 0.456 ms (1.15x) | 0.456 ms (1.15x) |
+| [4096x2048, 2048x8192] B^T | 4.661 ms | 1.151 ms (4.05x) | 1.971 ms (2.36x) |
+| [4096x8192, 8192x2048] | 3.642 ms | 1.180 ms (3.09x) | 1.180 ms (3.09x) |
+| [4096x2048, 2048x16384] B^T | 9.558 ms | 3.411 ms (2.80x) | 3.411 ms (2.80x) |
+| [4096x16384, 16384x2048] | 7.240 ms | 2.341 ms (3.09x) | 2.341 ms (3.09x) |
+| [4096x8192, 8192x2048] B^T | 3.644 ms | 1.182 ms (3.08x) | 1.182 ms (3.08x) |
+| [4096x2048, 2048x8192] | 4.661 ms | 1.162 ms (4.01x) | 1.970 ms (2.37x) |
+| [4096x128256, 128256x2048] | 47.577 ms | 19.063 ms (2.50x) | 27.632 ms (1.72x) |
+| **geomean speedup** | 1.00x | 2.75x | 2.52x |
+
+| op | per_core | oracle config | our config | ours / oracle | pcc vs default |
+|---|---|---|---|---:|---:|
+| 70B q_proj fwd T=128 | 1x3 | blk 1x3 bw 16 sb 1x3 | blk 1x3 bw 32 sb 1x3 | 0.958 | 1.00000 |
+| 70B k_proj/v_proj fwd T=128 | 1x1 | blk 1x1 bw 32 sb 1x1 | blk 1x1 bw 32 sb 1x1 | 1.000 | 1.00000 |
+| 70B o_proj dgrad T=128 | 1x3 | blk 1x3 bw 16 sb 1x3 | blk 1x3 bw 32 sb 1x3 | 0.991 | 1.00000 |
+| 70B q_proj fwd T=256 | 1x3 | blk 1x3 bw 16 sb 1x3 | blk 1x3 bw 32 sb 1x3 | 0.962 | 1.00000 |
+| 70B k_proj/v_proj fwd T=256 | 1x1 | blk 1x1 bw 16 sb 1x1 | blk 1x1 bw 32 sb 1x1 | 0.953 | 1.00000 |
+| 70B qkv_proj fwd T=256 | 1x4 | blk 1x4 bw 16 sb 1x4 | blk 1x4 bw 32 sb 1x4 | 0.937 | 1.00000 |
+| 70B o_proj dgrad T=256 | 1x3 | blk 1x3 bw 16 sb 1x3 | blk 1x3 bw 32 sb 1x3 | 1.000 | 1.00000 |
+| 70B q_proj fwd T=512 | 2x3 | blk 2x3 bw 16 sb 1x3 | blk 2x3 bw 32 sb 1x3 | 0.991 | 1.00000 |
+| 70B k_proj/v_proj fwd T=512 | 2x1 | blk 2x1 bw 32 sb 2x1 | blk 2x1 bw 32 sb 2x1 | 1.000 | 1.00000 |
+| 70B qkv_proj fwd T=512 | 2x4 | blk 2x4 bw 32 sb 2x2 | blk 2x4 bw 32 sb 2x2 | 1.000 | 1.00000 |
+| 70B o_proj dgrad T=512 | 2x3 | blk 2x3 bw 32 sb 1x3 | blk 2x3 bw 32 sb 1x3 | 1.000 | 1.00000 |
+| 70B gate_proj/up_proj fwd T=512 | 2x10 | blk 2x10 bw 16 sb 2x2 | blk 2x5 bw 32 sb 2x1 | 0.995 | 1.00000 |
+| 70B down_proj dgrad T=512 | 2x10 | blk 2x5 bw 32 sb 2x1 | blk 2x5 bw 32 sb 2x1 | 1.000 | 1.00000 |
+| 70B q_proj fwd T=1024 | 4x3 | blk 4x3 bw 32 sb 4x1 | blk 4x3 bw 32 sb 4x1 | 1.000 | 1.00000 |
+| 70B q_proj dgrad T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 70B k_proj/v_proj fwd T=1024 | 4x1 | blk 4x1 bw 32 sb 4x1 | blk 4x1 bw 32 sb 4x1 | 1.000 | 1.00000 |
+| 70B k_proj/v_proj dgrad T=1024 | 4x22 | blk 4x22 bw 2 sb 2x2 | blk 4x22 bw 2 sb 2x2 | 1.000 | 1.00000 |
+| 70B qkv_proj fwd T=1024 | 4x4 | blk 4x4 bw 32 sb 2x2 | blk 4x4 bw 32 sb 2x2 | 1.000 | 1.00000 |
+| 70B qkv_proj dgrad T=1024 | 4x22 | blk 4x11 bw 10 sb 4x1 | blk 4x22 bw 8 sb 2x2 | 0.960 | 1.00000 |
+| 70B o_proj fwd T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 70B o_proj dgrad T=1024 | 4x3 | blk 4x3 bw 32 sb 4x1 | blk 4x3 bw 32 sb 4x1 | 1.000 | 1.00000 |
+| 70B gate_proj/up_proj fwd T=1024 | 4x10 | blk 4x5 bw 32 sb 4x1 | blk 4x5 bw 32 sb 4x1 | 1.000 | 1.00000 |
+| 70B gate_proj/up_proj dgrad T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 70B gate_up_proj fwd T=1024 | 4x19 | blk 4x19 bw 8 sb 4x1 | blk 4x19 bw 8 sb 4x1 | 1.000 | 1.00000 |
+| 70B gate_up_proj dgrad T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 70B down_proj fwd T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 70B down_proj dgrad T=1024 | 4x10 | blk 4x5 bw 32 sb 4x1 | blk 4x5 bw 32 sb 4x1 | 1.000 | 1.00000 |
+| 70B lm_head dgrad T=1024 | 4x22 | blk 4x11 bw 3 sb 4x1 | blk 4x22 bw 3 sb 2x2 | 0.987 | 1.00000 |
+| 70B q_proj fwd T=2048 | 7x3 | blk 7x3 bw 16 sb 1x3 | blk 7x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 70B q_proj dgrad T=2048 | 7x22 | blk 7x2 bw 16 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.851 | 1.00000 |
+| 70B k_proj/v_proj dgrad T=2048 | 7x22 | blk 7x22 bw 2 sb 1x2 | blk 7x22 bw 2 sb 1x2 | 1.000 | 1.00000 |
+| 70B qkv_proj fwd T=2048 | 7x4 | blk 7x2 bw 32 sb 1x2 | blk 7x2 bw 32 sb 1x2 | 1.000 | 1.00000 |
+| 70B qkv_proj dgrad T=2048 | 7x22 | blk 7x2 bw 20 sb 1x2 | blk 7x11 bw 10 sb 1x1 | 0.889 | 1.00000 |
+| 70B o_proj fwd T=2048 | 7x22 | blk 7x2 bw 16 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.835 | 1.00000 |
+| 70B o_proj dgrad T=2048 | 7x3 | blk 7x3 bw 16 sb 1x3 | blk 7x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 70B gate_proj/up_proj fwd T=2048 | 7x10 | blk 7x2 bw 32 sb 1x2 | blk 7x5 bw 16 sb 1x1 | 0.891 | 1.00000 |
+| 70B gate_proj/up_proj dgrad T=2048 | 7x22 | blk 7x2 bw 28 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.767 | 1.00000 |
+| 70B gate_up_proj fwd T=2048 | 7x19 | blk 7x1 bw 32 sb 1x1 | blk 7x19 bw 4 sb 1x1 | 0.832 | 1.00000 |
+| 70B gate_up_proj dgrad T=2048 | 7x22 | blk 7x2 bw 32 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.737 | 1.00000 |
+| 70B down_proj fwd T=2048 | 7x22 | blk 7x2 bw 28 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.770 | 1.00000 |
+| 70B down_proj dgrad T=2048 | 7x10 | blk 7x2 bw 32 sb 1x2 | blk 7x5 bw 16 sb 1x1 | 0.895 | 1.00000 |
+| 70B lm_head fwd T=2048 | 7x42 | blk 7x2 bw 32 sb 1x2 | blk 7x7 bw 16 sb 1x1 | 0.875 | 1.00000 |
+| 70B lm_head dgrad T=2048 | 7x22 | blk 7x22 bw 3 sb 1x2 | blk 7x22 bw 3 sb 1x2 | 1.000 | 1.00000 |
+| 70B q_proj fwd T=4096 | 13x3 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 70B q_proj dgrad T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.598 | 1.00000 |
+| 70B k_proj/v_proj dgrad T=4096 | 13x22 | blk 13x11 bw 2 sb 1x1 | blk 13x11 bw 2 sb 1x1 | 1.000 | 1.00000 |
+| 70B qkv_proj fwd T=4096 | 13x4 | blk 13x2 bw 16 sb 1x2 | blk 13x2 bw 16 sb 1x2 | 1.000 | 1.00000 |
+| 70B qkv_proj dgrad T=4096 | 13x22 | blk 13x2 bw 20 sb 1x2 | blk 13x11 bw 5 sb 1x1 | 0.633 | 1.00000 |
+| 70B o_proj fwd T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.590 | 1.00000 |
+| 70B o_proj dgrad T=4096 | 13x3 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 70B gate_proj/up_proj fwd T=4096 | 13x10 | blk 13x2 bw 16 sb 1x2 | blk 13x5 bw 8 sb 1x1 | 0.780 | 1.00000 |
+| 70B gate_proj/up_proj dgrad T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.585 | 1.00000 |
+| 70B gate_up_proj fwd T=4096 | 13x19 | blk 13x1 bw 16 sb 1x1 | blk 13x1 bw 16 sb 1x1 | 1.000 | 1.00000 |
+| 70B gate_up_proj dgrad T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.578 | 1.00000 |
+| 70B down_proj fwd T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.582 | 1.00000 |
+| 70B down_proj dgrad T=4096 | 13x10 | blk 13x2 bw 16 sb 1x2 | blk 13x5 bw 8 sb 1x1 | 0.780 | 1.00000 |
+| 70B lm_head fwd T=4096 | 13x42 | blk 13x3 bw 16 sb 1x3 | blk 13x7 bw 8 sb 1x1 | 0.680 | 1.00000 |
+| 70B lm_head dgrad T=4096 | 13x22 | blk 13x2 bw 3 sb 1x2 | blk 13x11 bw 3 sb 1x1 | 0.794 | 1.00000 |
+| 1B k_proj/v_proj fwd T=128 | 1x2 | blk 1x2 bw 32 sb 1x2 | blk 1x2 bw 32 sb 1x2 | 1.000 | 1.00000 |
+| 1B q_proj fwd T=256, 1B o_proj fwd T=256 | 1x6 | blk 1x6 bw 8 sb 1x3 | blk 1x6 bw 32 sb 1x3 | 0.846 | 1.00000 |
+| 1B q_proj dgrad T=256, 1B o_proj dgrad T=256 | 1x6 | blk 1x6 bw 8 sb 1x3 | blk 1x6 bw 32 sb 1x3 | 0.900 | 1.00000 |
+| 1B k_proj/v_proj fwd T=256 | 1x2 | blk 1x2 bw 32 sb 1x2 | blk 1x2 bw 32 sb 1x2 | 1.000 | 1.00000 |
+| 1B k_proj/v_proj dgrad T=256 | 1x6 | blk 1x3 bw 8 sb 1x3 | blk 1x6 bw 8 sb 1x3 | 0.994 | 1.00000 |
+| 1B qkv_proj dgrad T=256 | 1x6 | blk 1x6 bw 16 sb 1x3 | blk 1x6 bw 32 sb 1x3 | 0.958 | 1.00000 |
+| 1B gate_proj/up_proj dgrad T=256 | 1x6 | blk 1x6 bw 32 sb 1x3 | blk 1x6 bw 32 sb 1x3 | 1.000 | 1.00000 |
+| 1B gate_up_proj dgrad T=256 | 1x6 | blk 1x6 bw 32 sb 1x3 | blk 1x6 bw 32 sb 1x3 | 1.000 | 1.00000 |
+| 1B down_proj fwd T=256 | 1x6 | blk 1x6 bw 16 sb 1x3 | blk 1x6 bw 32 sb 1x3 | 0.935 | 1.00000 |
+| 1B lm_head dgrad T=256 | 1x6 | blk 1x6 bw 24 sb 1x3 | blk 1x6 bw 24 sb 1x3 | 1.000 | 1.00000 |
+| 1B q_proj fwd T=512, 1B o_proj fwd T=512 | 2x6 | blk 2x6 bw 16 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 0.901 | 1.00000 |
+| 1B q_proj dgrad T=512, 1B o_proj dgrad T=512 | 2x6 | blk 2x6 bw 16 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 0.904 | 1.00000 |
+| 1B k_proj/v_proj fwd T=512 | 2x2 | blk 2x2 bw 16 sb 2x2 | blk 2x2 bw 32 sb 2x2 | 0.959 | 1.00000 |
+| 1B k_proj/v_proj dgrad T=512 | 2x6 | blk 2x6 bw 8 sb 2x2 | blk 2x6 bw 8 sb 2x2 | 1.000 | 1.00000 |
+| 1B qkv_proj fwd T=512 | 2x8 | blk 2x8 bw 16 sb 2x2 | blk 1x8 bw 32 sb 1x4 | 0.666 | 1.00000 |
+| 1B qkv_proj dgrad T=512 | 2x6 | blk 2x6 bw 16 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 0.943 | 1.00000 |
+| 1B gate_proj/up_proj dgrad T=512 | 2x6 | blk 2x6 bw 32 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 1.000 | 1.00000 |
+| 1B gate_up_proj dgrad T=512 | 2x6 | blk 2x6 bw 32 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 1.000 | 1.00000 |
+| 1B down_proj fwd T=512 | 2x6 | blk 2x6 bw 32 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 1.000 | 1.00000 |
+| 1B lm_head dgrad T=512 | 2x6 | blk 2x6 bw 24 sb 2x2 | blk 2x6 bw 24 sb 2x2 | 1.000 | 1.00000 |
+| 1B q_proj fwd T=1024, 1B o_proj fwd T=1024 | 4x6 | blk 4x6 bw 16 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 0.846 | 1.00000 |
+| 1B q_proj dgrad T=1024, 1B o_proj dgrad T=1024 | 4x6 | blk 4x6 bw 16 sb 2x2 | blk 2x6 bw 32 sb 2x2 | 0.832 | 1.00000 |
+| 1B k_proj/v_proj fwd T=1024 | 4x2 | blk 4x2 bw 16 sb 2x2 | blk 4x2 bw 32 sb 2x2 | 0.930 | 1.00000 |
+| 1B k_proj/v_proj dgrad T=1024 | 4x6 | blk 4x6 bw 8 sb 2x2 | blk 4x6 bw 8 sb 2x2 | 1.000 | 1.00000 |
+| 1B qkv_proj fwd T=1024 | 4x8 | blk 4x8 bw 16 sb 2x2 | blk 4x4 bw 32 sb 2x2 | 0.968 | 1.00000 |
+| 1B qkv_proj dgrad T=1024 | 4x6 | blk 4x6 bw 24 sb 2x2 | blk 4x6 bw 24 sb 2x2 | 1.000 | 1.00000 |
+| 1B gate_proj/up_proj fwd T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 1B gate_proj/up_proj dgrad T=1024 | 4x6 | blk 4x3 bw 32 sb 4x1 | blk 2x6 bw 32 sb 2x2 | 0.967 | 1.00000 |
+| 1B gate_up_proj dgrad T=1024 | 4x6 | blk 4x3 bw 32 sb 4x1 | blk 2x6 bw 32 sb 2x2 | 0.979 | 1.00000 |
+| 1B down_proj fwd T=1024 | 4x6 | blk 4x3 bw 32 sb 4x1 | blk 2x6 bw 32 sb 2x2 | 0.956 | 1.00000 |
+| 1B down_proj dgrad T=1024 | 4x22 | blk 4x11 bw 16 sb 4x1 | blk 4x11 bw 16 sb 4x1 | 1.000 | 1.00000 |
+| 1B lm_head dgrad T=1024 | 4x6 | blk 4x3 bw 24 sb 4x1 | blk 4x6 bw 24 sb 2x2 | 0.997 | 1.00000 |
+| 1B q_proj fwd T=2048, 1B o_proj fwd T=2048 | 7x6 | blk 7x6 bw 16 sb 1x3 | blk 7x6 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B q_proj dgrad T=2048, 1B o_proj dgrad T=2048 | 7x6 | blk 7x6 bw 16 sb 1x3 | blk 7x6 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B k_proj/v_proj fwd T=2048 | 7x2 | blk 7x2 bw 16 sb 1x2 | blk 7x2 bw 32 sb 1x2 | 0.900 | 1.00000 |
+| 1B k_proj/v_proj dgrad T=2048 | 7x6 | blk 7x6 bw 8 sb 1x3 | blk 7x6 bw 8 sb 1x3 | 1.000 | 1.00000 |
+| 1B qkv_proj fwd T=2048 | 7x8 | blk 7x8 bw 16 sb 1x4 | blk 7x8 bw 16 sb 1x4 | 1.000 | 1.00000 |
+| 1B qkv_proj dgrad T=2048 | 7x6 | blk 7x6 bw 16 sb 1x3 | blk 7x6 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B gate_proj/up_proj fwd T=2048 | 7x22 | blk 7x2 bw 32 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.787 | 1.00000 |
+| 1B gate_proj/up_proj dgrad T=2048 | 7x6 | blk 7x2 bw 32 sb 1x2 | blk 7x6 bw 16 sb 1x3 | 0.984 | 1.00000 |
+| 1B gate_up_proj fwd T=2048 | 7x43 | blk 7x1 bw 32 sb 1x1 | blk 7x1 bw 32 sb 1x1 | 1.000 | 1.00000 |
+| 1B gate_up_proj dgrad T=2048 | 7x6 | blk 7x2 bw 32 sb 1x2 | blk 7x6 bw 16 sb 1x3 | 0.964 | 1.00000 |
+| 1B down_proj fwd T=2048 | 7x6 | blk 7x2 bw 32 sb 1x2 | blk 7x6 bw 16 sb 1x3 | 0.978 | 1.00000 |
+| 1B down_proj dgrad T=2048 | 7x22 | blk 7x2 bw 32 sb 1x2 | blk 7x11 bw 8 sb 1x1 | 0.795 | 1.00000 |
+| 1B lm_head dgrad T=2048 | 7x6 | blk 7x3 bw 24 sb 1x3 | blk 7x3 bw 24 sb 1x3 | 1.000 | 1.00000 |
+| 1B q_proj fwd T=4096, 1B o_proj fwd T=4096 | 13x6 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B q_proj dgrad T=4096, 1B o_proj dgrad T=4096 | 13x6 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B k_proj/v_proj fwd T=4096 | 13x2 | blk 13x2 bw 16 sb 1x2 | blk 13x2 bw 16 sb 1x2 | 1.000 | 1.00000 |
+| 1B k_proj/v_proj dgrad T=4096 | 13x6 | blk 13x6 bw 8 sb 1x3 | blk 13x6 bw 8 sb 1x3 | 1.000 | 1.00000 |
+| 1B qkv_proj fwd T=4096 | 13x8 | blk 13x8 bw 8 sb 1x4 | blk 13x8 bw 8 sb 1x4 | 1.000 | 1.00000 |
+| 1B qkv_proj dgrad T=4096 | 13x6 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B gate_proj/up_proj fwd T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.584 | 1.00000 |
+| 1B gate_proj/up_proj dgrad T=4096 | 13x6 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B gate_up_proj fwd T=4096 | 13x43 | blk 13x1 bw 16 sb 1x1 | blk 13x1 bw 16 sb 1x1 | 1.000 | 1.00000 |
+| 1B gate_up_proj dgrad T=4096 | 13x6 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B down_proj fwd T=4096 | 13x6 | blk 13x3 bw 16 sb 1x3 | blk 13x3 bw 16 sb 1x3 | 1.000 | 1.00000 |
+| 1B down_proj dgrad T=4096 | 13x22 | blk 13x2 bw 16 sb 1x2 | blk 13x11 bw 4 sb 1x1 | 0.590 | 1.00000 |
+| 1B lm_head dgrad T=4096 | 13x6 | blk 13x3 bw 12 sb 1x3 | blk 13x6 bw 8 sb 1x3 | 0.690 | 1.00000 |
+| **geomean** | | | | 0.917 | |
