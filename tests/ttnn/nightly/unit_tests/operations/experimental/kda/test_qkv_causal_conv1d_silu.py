@@ -48,19 +48,16 @@ class _BenchmarkCase:
 
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Recalibrated 2026-08-19 on Blackhole P150b device 0, firmware 19.5.0.0. The
-# previous references (92_606, 50_123, 55_324) were calibrated before the
-# hoisted unpack/init optimization, which made every shape 3.7-4.6% faster with
-# bit-identical outputs. Against a symmetric band that left each case only
-# 335-672 ns above its lower bound, so a further improvement would have failed
-# the gate for being too fast. Seven real-time-profiler samples of the current
-# implementation produced 88358-88443 ns, 47952-48257 ns, and 53230-53373 ns;
-# the inline references are their medians. The 5% symmetric margin now leaves
-# 2.2-4.4 us on both sides, against an observed spread of 85-305 ns.
+# Recalibrated 2026-09-28 on a Galaxy Blackhole device after the reader stopped rereading DRAM
+# once per tap and reused tap weights across channel-block-major work items (outputs are
+# bit-identical). The previous kernel measured 87505-87534, 48143-48184 and 52686-52780 ns on
+# this device, within 1% of the 2026-08-19 P150b references (88_383, 48_090, 53_270). Three
+# real-time-profiler samples of the current implementation produced 83755-83764, 46514-46628 and
+# 50924-50950 ns; the inline references are their medians.
 _PRODUCTION_CASES = (
-    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=88_383),
-    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=48_090),
-    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=53_270),
+    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_757),
+    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_575),
+    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=50_944),
 )
 
 

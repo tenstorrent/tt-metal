@@ -4,6 +4,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -34,7 +35,14 @@ FORCE_INLINE void load_weight_block(
     weights.push_back(4 * block_ct);
 }
 
-template <uint32_t block_ct, uint32_t num_blocks, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+template <
+    uint32_t block_ct,
+    uint32_t num_blocks,
+    uint32_t Mt,
+    uint32_t window_tiles,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -45,6 +53,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto tap3 = TensorAccessor(tensor::tap3);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer activation(dfb::act_rm);
+    DataflowBuffer window(dfb::act_window);
     Noc noc;
 
     uint32_t local_split_row = 0;
@@ -60,22 +69,33 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         initial_from_predecessor = topology.rank != topology.first_rank;
     }
 
-    const uint32_t tile_bytes = weights.get_entry_size();
-    if constexpr (num_blocks == 1) {
-        load_weight_block<block_ct>(noc, weights, tap0, tap1, tap2, tap3, tile_bytes, 0);
-    }
-
+    constexpr uint32_t tap_count = 4;
+    constexpr uint32_t history_rows = tap_count - 1;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t block_row_bytes = block_ct * tile_width * sizeof(uint16_t);
     constexpr uint32_t block_offset_scale = tile_width * sizeof(uint16_t);
+    const uint32_t tile_bytes = weights.get_entry_size();
+
+    // The window is private reader scratch: rows [mt * 32 - 3, mt * 32 + 32) of one channel block,
+    // read from DRAM once and then copied locally into the four shifted tap views.
+    window.reserve_back(window_tiles);
+    const uint32_t window_base = window.get_write_ptr();
+    UnicastEndpoint self;
+    const uint32_t self_x = my_x[noc.get_noc_id()];
+    const uint32_t self_y = my_y[noc.get_noc_id()];
+
+    // Work items are channel-block-major, so consecutive items on a core share tap weights.
+    uint32_t loaded_block = num_blocks;
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t mt = work / num_blocks;
-        const uint32_t ct_start = (work % num_blocks) * block_ct;
+        const uint32_t block = work / Mt;
+        const uint32_t mt = work % Mt;
+        const uint32_t ct_start = block * block_ct;
 
-        if constexpr (num_blocks > 1) {
+        if (block != loaded_block) {
             load_weight_block<block_ct>(noc, weights, tap0, tap1, tap2, tap3, tile_bytes, ct_start);
+            loaded_block = block;
         }
 
         // Tile-aligned actual_start and local_rows make the split tile-aligned,
@@ -85,34 +105,43 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             row_floor = static_cast<int32_t>(local_split_row);
         }
 
-        for (uint32_t tap = 0; tap < 4; ++tap) {
-            activation.reserve_back(block_ct);
-            for (uint32_t row = 0; row < tile_height; ++row) {
-                const int32_t source_row = static_cast<int32_t>(mt * tile_height + row + tap) - 3;
-                if (source_row < row_floor) {
-                    const auto read_history = [&](const auto& carry) {
-                        noc.async_read(
-                            carry,
-                            activation,
-                            block_row_bytes,
-                            {.page_id = static_cast<uint32_t>(source_row - row_floor + 3),
-                             .offset_bytes = ct_start * block_offset_scale},
-                            {.offset_bytes = row * block_row_bytes});
-                    };
-                    if (initial_from_predecessor || row_floor != 0) {
-                        read_history(predecessor_carry);
-                    } else {
-                        read_history(history);
-                    }
-                } else {
+        for (uint32_t row = 0; row < tile_height + history_rows; ++row) {
+            const int32_t source_row =
+                static_cast<int32_t>(mt * tile_height + row) - static_cast<int32_t>(history_rows);
+            if (source_row < row_floor) {
+                const auto read_history = [&](const auto& carry) {
                     noc.async_read(
-                        input,
-                        activation,
+                        carry,
+                        window,
                         block_row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row), .offset_bytes = ct_start * block_offset_scale},
+                        {.page_id = static_cast<uint32_t>(source_row - row_floor + static_cast<int32_t>(history_rows)),
+                         .offset_bytes = ct_start * block_offset_scale},
                         {.offset_bytes = row * block_row_bytes});
+                };
+                if (initial_from_predecessor || row_floor != 0) {
+                    read_history(predecessor_carry);
+                } else {
+                    read_history(history);
                 }
+            } else {
+                noc.async_read(
+                    input,
+                    window,
+                    block_row_bytes,
+                    {.page_id = static_cast<uint32_t>(source_row), .offset_bytes = ct_start * block_offset_scale},
+                    {.offset_bytes = row * block_row_bytes});
             }
+        }
+        noc.async_read_barrier();
+
+        for (uint32_t tap = 0; tap < tap_count; ++tap) {
+            activation.reserve_back(block_ct);
+            noc.async_read(
+                self,
+                activation,
+                tile_height * block_row_bytes,
+                {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tap * block_row_bytes},
+                {});
             noc.async_read_barrier();
             activation.push_back(block_ct);
         }
