@@ -437,6 +437,9 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp_root.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp_root_core.h
     inc/api/compute/eltwise_unary/leaky_relu_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_root_native_log.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_root_native_log_core.h
+    inc/api/compute/eltwise_unary/lgamma_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc
     inc/api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h

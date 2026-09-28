@@ -1384,3 +1384,65 @@ def test_i1_bf16_compiled_contract(device):
     assert_bfloat16_compiled_contract(
         host, result, _reference, _real_domain_mask, _raw_to_reference_input(), _NUMERIC_TERMINALS
     )
+
+
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
+)
+def test_lgamma_bf16_compiled_contract(device):
+    import importlib
+    import numpy as np
+
+    _REFERENCE_MODULE = "torch"
+    _REFERENCE_FUNCTION = "lgamma"
+    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
+        "blackhole": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "pos_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "pos_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "pos_inf",
+            "neg_nan": "pos_inf",
+        },
+        "wormhole_b0": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "neg_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "neg_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "nan",
+            "neg_nan": "nan",
+        },
+    }
+    _NUMERIC_TERMINALS_BY_ARCH = {"blackhole": ((), ()), "wormhole_b0": (("pos_subnormal",), ())}
+    architecture = "blackhole" if is_blackhole() else "wormhole_b0" if is_wormhole_b0() else None
+
+    def _raw_to_reference_input():
+        if is_blackhole():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
+        if is_wormhole_b0():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
+        raise AssertionError("no compiled ingress contract for current architecture")
+
+    def _reference(values):
+        module = importlib.import_module(_REFERENCE_MODULE)
+        if _REFERENCE_MODULE == "numpy":
+            result = getattr(module, _REFERENCE_FUNCTION)(values.numpy(), **{})
+            return torch.from_numpy(np.asarray(result, dtype=np.float64))
+        return getattr(module, _REFERENCE_FUNCTION)(input=values, **{})
+
+    def _real_domain_mask(values):
+        return np.ones(values.shape, dtype=bool)
+
+    host = generate_all_bfloat16_bitpatterns()
+    assert host.numel() == 65536
+    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(device_input, **{})).to(torch.bfloat16)
+    assert_bfloat16_compiled_contract(
+        host, result, _reference, _real_domain_mask, _raw_to_reference_input(), _NUMERIC_TERMINALS_BY_ARCH[architecture]
+    )
