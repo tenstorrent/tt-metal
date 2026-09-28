@@ -90,6 +90,8 @@ svg text{font-family:var(--f-body)}
 .hd{width:18px;height:18px;border-radius:4px;font:500 10px/18px var(--f-mono);text-align:center;color:#fff}
 .tag{font:500 10.5px/1 var(--f-mono);letter-spacing:.05em;padding:3px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
 .tag.COMPOSED{border-color:var(--s4);} .tag.CPU{border-color:var(--crit);color:var(--crit)}
+.tag.OPGEN,.tag.DEFERRED{border-color:var(--accent);color:var(--accent)}
+.def-banner{margin:10px 0 0;padding:8px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);font-size:13.5px}
 .strip{display:grid;gap:2px}
 .strip div{height:26px;border-radius:3px;font:500 9.5px/26px var(--f-mono);text-align:center;color:var(--ink2);background:var(--surface2);border:1px solid var(--line)}
 .strip div.moe{border-color:color-mix(in srgb,var(--s2) 55%,var(--line))}
@@ -180,6 +182,7 @@ section[hidden]{display:none}
     <span class="eyebrow">Prefill bring-up · Tenstorrent</span>
     <h1 id="h1"></h1>
     <div class="facts" id="facts"></div>
+    <p class="def-banner" id="def-banner" hidden></p>
   </header>
 
   <section aria-labelledby="s-sum">
@@ -197,6 +200,11 @@ section[hidden]{display:none}
         <div class="next" id="wait"></div>
       </div>
     </div>
+  </section>
+
+  <section aria-labelledby="s-def" id="def-sec" hidden>
+    <div class="sec-head"><h2 id="s-def">Deferred to op-gen</h2><p>Steps TTNN has no op for yet: they run on the CPU through the bridge until the op code generator delivers one. Launching op-gen is the owner's call.</p></div>
+    <div class="tbl-wrap"><table id="deferred"><thead><tr><th>Task</th><th>Step · layers</th><th>Op request</th><th>Status</th><th>Evidence</th></tr></thead><tbody></tbody></table></div>
   </section>
 
   <section aria-labelledby="s-ladder">
@@ -221,7 +229,7 @@ section[hidden]{display:none}
 
     <section aria-labelledby="s-ops">
       <div class="sec-head"><h2 id="s-ops">Op coverage</h2><p>Reference op to TTNN</p></div>
-      <div class="legend"><span><span class="tag">NATIVE</span> single TTNN op</span><span><span class="tag COMPOSED">COMPOSED</span> built from TTNN pieces</span><span><span class="tag CPU">CPU</span> stays on host</span></div>
+      <div class="legend"><span><span class="tag">NATIVE</span> single TTNN op</span><span><span class="tag COMPOSED">COMPOSED</span> built from TTNN pieces</span><span><span class="tag CPU">CPU</span> stays on host</span><span><span class="tag OPGEN">OPGEN</span> requested from op-gen</span></div>
       <div class="tbl-wrap"><table id="ops"><thead><tr><th>Component</th><th>TTNN</th><th>Tag</th></tr></thead><tbody></tbody></table></div>
     </section>
   </div>
@@ -307,8 +315,9 @@ const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).
 const STATUS = {
   PASS:{c:"--good", i:"✓", l:"PASS"}, FAIL:{c:"--crit", i:"✕", l:"FAIL"}, HANG:{c:"--crit", i:"⧗", l:"HANG"},
   RUNNING:{c:"--warn", i:"◐", l:"RUNNING"}, TODO:{c:"--muted", i:"○", l:"TODO"}, BLOCKED:{c:"--serious", i:"!", l:"BLOCKED"},
-  STOPPED:{c:"--serious", i:"■", l:"STOPPED"}
+  STOPPED:{c:"--serious", i:"■", l:"STOPPED"}, DEFERRED:{c:"--accent", i:"↷", l:"DEFERRED"}
 };
+const DONE = s => s === "PASS" || s === "DEFERRED";
 const STEP_NAMES = {reference:"Reference (CPU) and HF parity", goldens:"Goldens", box:"Box", plan:"Plan (approved by a person)",
   implement:"Implement: components and swap order", integrate:"Integrate: ladder on device", contract:"Serving contract",
   perf:"Performance review", framework:"Framework"};
@@ -352,15 +361,26 @@ function header(){
   D.tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
   $("#passn").textContent = `${counts.PASS || 0}/${n}`;
   $("#passof").textContent = "gates passed";
-  const keys = ["PASS","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
+  const keys = ["PASS","DEFERRED","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
   $("#meter").innerHTML = keys.map(k => `<span style="width:${100*counts[k]/n}%;background:var(${STATUS[k].c})" title="${k}: ${counts[k]}"></span>`).join("");
   $("#meter-legend").innerHTML = keys.map(k => `<span><span class="dot" style="background:var(${STATUS[k].c})"></span> ${STATUS[k].i} ${k} <span class="num">${counts[k]}</span></span>`).join("");
   const st = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));
-  const ready = D.tasks.filter(t => t.status !== "PASS" && t.status !== "STOPPED" && t.deps.every(d => st[d] === "PASS"));
+  const ready = D.tasks.filter(t => !DONE(t.status) && t.status !== "STOPPED" && t.deps.every(d => DONE(st[d])));
   $("#next").innerHTML = ready.map(t => `<span class="chip" title="${esc(t.title)}">${t.id} ${esc(t.title.split(" (")[0].slice(0, 46))}</span>`).join("") || `<span class="sub">none</span>`;
   const waiting = D.tasks.filter(t => t.waiting && t.status !== "PASS");
   $("#wait-h").hidden = !waiting.length;
   $("#wait").innerHTML = waiting.map(t => `<span class="chip" title="${esc(t.waiting)}">${t.id} ${esc(t.waiting.slice(0, 60))}</span>`).join("");
+  const F = D.deferred || [];
+  $("#def-banner").hidden = !F.length;
+  $("#def-banner").textContent = F.length ? `These results include ${F.length} step${F.length > 1 ? "s" : ""} on the CPU, deferred to op-gen: ${F.map(f => `${f.block_type}.${f.step} (${f.op}, ${f.status})`).join(", ")}. Accuracy and timing below include their host work.` : "";
+}
+
+function deferred(){
+  const F = D.deferred || [];
+  $("#def-sec").hidden = !F.length;
+  $("#deferred tbody").innerHTML = F.map(f => `<tr><td class="mono">${esc(f.task)}</td><td>${esc(f.block_type)}.${esc(f.step)} <span class="sub mono">${esc(f.layers)}</span></td>
+    <td class="mono" style="font-size:12px">${esc(f.op)}<br><span class="sub">${esc(f.request || "no request file")}</span></td><td><span class="tag DEFERRED">${esc(f.status)}</span></td>
+    <td style="font-size:12.5px"><div>Searched: ${esc(f.searched.join("; ") || "—")}</div><div>Tried: ${esc(f.tried.join("; ") || "—")}</div><div>Not a fork: ${esc(f.why_not_fork || "—")}</div></td></tr>`).join("");
 }
 
 function ladder(){
@@ -398,6 +418,7 @@ function dag(){
   const cx = k => 20 + colW * k + colW / 2;
   const node = (x, y, c, label, sub) => {
     const dev = c && c.state === "device";
+    if (c && c.deferred) sub = `${sub} · op-gen`;
     const fill = dev ? css("--dev-fill") : css("--surface"), stroke = dev ? css("--dev-line") : muted;
     return `<g class="node" data-k="${esc(c ? c.key : "")}" tabindex="0"><rect x="${x - W/2}" y="${y - H/2}" width="${W}" height="${H}" rx="7" fill="${fill}" stroke="${stroke}" stroke-width="1.5" ${dev ? "" : 'stroke-dasharray="4 3"'}/>
       <text x="${x}" y="${y - 3}" font-size="12" font-weight="600" text-anchor="middle" fill="${ink}">${dev ? "✓ " : ""}${esc(label.slice(0, 22))}</text>
@@ -423,7 +444,7 @@ function dag(){
           s += `<path d="M${x - W/2},${y0} C${bx},${y0} ${bx},${y} ${x - W/2},${y}" fill="none" stroke="${muted}" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#ar)"/>`; }
       }
       const c = C[`${bt}/${st.name}`] || {key: `${bt}/${st.name}`, state: st.state};
-      s += node(x, y, {...c, state: st.state}, st.name, `${st.kind}${c.tag ? " · " + c.tag : ""} · ${st.task || "—"}`);
+      s += node(x, y, {...c, state: st.state, deferred: st.deferred || c.deferred}, st.name, `${st.kind}${c.tag ? " · " + c.tag : ""} · ${st.task || "—"}`);
     });
     s += `<path d="M${x},${top + 12 + (steps.length - 1) * dy + H/2} C${x},${height - 70} ${mid},${height - 90} ${mid},${height - 64 - H/2}" fill="none" stroke="${muted}" stroke-width="1.1" marker-end="url(#ar)"/>`;
   });
@@ -432,7 +453,7 @@ function dag(){
   svg.innerHTML = s;
   svg.querySelectorAll(".node").forEach(g => {
     const c = C[g.dataset.k]; if (!c) return;
-    const h = `<b>${esc(c.key)}</b><br>ttnn: ${esc(c.ttnn)}<br>reuse: ${esc(c.reuse)}<br>${esc(c.tag)} · gate ${esc(c.task || "—")} · ${c.state === "device" ? "on device" : "CPU reference"}`;
+    const h = `<b>${esc(c.key)}</b><br>ttnn: ${esc(c.ttnn)}<br>reuse: ${esc(c.reuse)}<br>${esc(c.tag)} · gate ${esc(c.task || "—")} · ${c.state === "device" ? "on device" : c.deferred ? "CPU bridge (deferred to op-gen)" : "CPU reference"}`;
     g.addEventListener("mouseenter", e => showTip(e, h)); g.addEventListener("mousemove", moveTip); g.addEventListener("mouseleave", hideTip);
   });
   $("#dag-sub").textContent = `One block per block type; ${D.layer_types.length} layers in total${D.subset ? `, ${D.selected_layers.length} selected on device` : ""}`;
@@ -449,7 +470,7 @@ function dag(){
 }
 
 function ops(){
-  $("#ops tbody").innerHTML = D.components.map(c => `<tr><td>${c.state === "device" ? "✓ " : ""}${esc(c.key)}</td><td class="mono" style="font-size:12px">${esc(c.ttnn)}</td><td><span class="tag ${c.tag}">${esc(c.tag)}</span></td></tr>`).join("")
+  $("#ops tbody").innerHTML = D.components.map(c => `<tr><td>${c.state === "device" ? "✓ " : ""}${esc(c.key)}</td><td class="mono" style="font-size:12px">${esc(c.ttnn)}</td><td><span class="tag ${c.tag}">${esc(c.tag)}</span>${c.deferred ? ` <span class="tag DEFERRED">DEFERRED</span>` : ""}</td></tr>`).join("")
     || `<tr><td colspan="3"><div class="empty">No components.yaml yet (written by the plan step)</div></td></tr>`;
 }
 
@@ -728,7 +749,7 @@ function prior(){
     const n = (vi + (e.key === "ArrowRight" ? 1 : -1) + V.length) % V.length; show(n); tabs.querySelector(`[data-v="${n}"]`).focus(); };
   show(vi);
 }
-function render(){ header(); profile(); prior(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
+function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml, findings.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());

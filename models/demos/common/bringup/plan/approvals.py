@@ -8,6 +8,10 @@
 picked items). Any edit to an approved file after approval makes ``is_approved`` false again, so the gate that needs
 the approval fails. The ledger is approved by structure (ids, titles, deps, gate commands and thresholds), because
 freezing and runs legitimately add ``frozen`` blocks to tasks.yaml later. Findings go to findings.yaml, not here.
+
+Op requests (F46): ``approvals.yaml`` ``op_request: {<op>: {by, at, files, note}}``, the hash of every file of
+``op_requests/<op>/`` with request.yaml hashed without its lifecycle fields (status, exported, delivered), so export and
+delivery keep the approval while any edit of the request voids it. op-export needs it.
 """
 
 from __future__ import annotations
@@ -105,3 +109,49 @@ def is_approved(spec, point: str) -> bool:
     if not files or set(files) != set(rec["files"]) or hash_paths(spec.repo, files) != rec["files"]:
         return False
     return point != "plan" or rec.get("ledger") == ledger_signature(spec)
+
+
+# ---------------------------------------------------------------- op requests (F46)
+LIFECYCLE = ("status", "exported", "delivered")
+
+
+def op_request_hashes(spec, op: str) -> dict[str, str]:
+    from models.demos.common.bringup.plan import op_request as OR
+
+    d = OR.request_dir(spec, op)
+    if not (d / "request.yaml").exists():
+        raise FileNotFoundError(f"no op request {op} in {OR.root(spec)}")
+    rel = lambda f: str(f.relative_to(spec.repo))  # noqa: E731
+    files = [f for f in sorted(d.rglob("*")) if f.is_file() and "__pycache__" not in f.parts]
+    out = {rel(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in files if f.name != "request.yaml"}
+    req = {k: v for k, v in OR.load(d).items() if k not in LIFECYCLE}
+    out[rel(d / "request.yaml")] = hashlib.sha256(json.dumps(req, sort_keys=True).encode()).hexdigest()
+    return out
+
+
+def approve_op_request(spec, op: str, note: str = "", by: str | None = None) -> dict:
+    """The owner's approval of an op request: what op-export will hand to op-gen. Marks the request approved."""
+    from models.demos.common.bringup.plan import op_request as OR
+
+    d = OR.request_dir(spec, op)
+    format_paths(spec.repo, [str(d.relative_to(spec.repo))])
+    if OR.load(d).get("status") == "draft":
+        OR.set_status(d, "approved")
+    data = load(spec)
+    rec = {
+        "by": by or getpass.getuser(),
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "files": op_request_hashes(spec, op),
+        "note": note,
+    }
+    data.setdefault("op_request", {})[op] = rec
+    _path(spec).write_text(yaml.safe_dump(data, sort_keys=False))
+    return rec
+
+
+def op_request_approved(spec, op: str) -> bool:
+    rec = (load(spec).get("op_request") or {}).get(op)
+    try:
+        return bool(rec) and rec.get("files") == op_request_hashes(spec, op)
+    except FileNotFoundError:
+        return False
