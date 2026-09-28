@@ -11,7 +11,6 @@
 #include "device/gather_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -280,6 +279,11 @@ Tensor gather_dispatch(
         const auto tile_out =
             gather_native(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
         auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
+        // Like the native op, `out` takes precedence over memory_config: write straight into it.
+        if (optional_output_tensor.has_value()) {
+            return ttnn::to_memory_config(
+                rm_out, optional_output_tensor->memory_config(), std::nullopt, optional_output_tensor);
+        }
         // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
         // uses, since to_memory_config does not derive a spec for the actual allocation call.
         if (requested_mc.is_sharded() && !requested_mc.shard_spec().has_value()) {
@@ -288,12 +292,7 @@ Tensor gather_dispatch(
             requested_mc =
                 tt::tt_metal::MemoryConfig(requested_mc.memory_layout(), requested_mc.buffer_type(), derived);
         }
-        auto result = ttnn::to_memory_config(rm_out, requested_mc);
-        // This path allocates its own result; copy it into `out` if given.
-        if (optional_output_tensor.has_value() && result.buffer() != optional_output_tensor->buffer()) {
-            return ttnn::copy(result, optional_output_tensor.value());
-        }
-        return result;
+        return ttnn::to_memory_config(rm_out, requested_mc);
     }
 
     // Normalize negative dimension to positive index with bounds check
