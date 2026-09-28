@@ -340,10 +340,10 @@ class TTMLRolloutSampler(RolloutSampler):
 
           (1) future decode positions ``(cur_pos+1, cache_len)`` — causal cap,
               same for every row on row 0.
-          (2) trailing prompt pads ``[len_b, Np)`` — per row on row 0.
+          (2) trailing prompt pads ``[len_b, prefill_end)`` — per row on row 0.
 
         Everything else on row 0 (real prompt ``[0, len_b)`` and decoded
-        tokens ``[Np, cur_pos]``) stays 1.
+        tokens ``[prefill_end, cur_pos]``) stays 1.
         """
         B = len(pad_positions)
         padded_q = _TTML_ROLLOUT_TILE_SIZE if self._kind == "llama" else 1
@@ -353,8 +353,8 @@ class TTMLRolloutSampler(RolloutSampler):
         mask[:, 0, 0, : cur_pos + 1] = 1.0
         # Row 0: zero per-row trailing prompt pads.
         for b in range(B):
-            len_b, Np = pad_positions[b]
-            mask[b, 0, 0, len_b:Np] = 0.0
+            len_b, prefill_end = pad_positions[b]
+            mask[b, 0, 0, len_b:prefill_end] = 0.0
         # Rows 1..padded_q-1 stay zero (Llama tile-pad; matches today's behavior).
 
         return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
@@ -414,13 +414,14 @@ class TTMLRolloutSampler(RolloutSampler):
         B_local = B // self._num_devices
 
         lengths = [len(r) for r in rows]
-        max_prompt_len = max(lengths)
+        W = max(lengths)
         # Tile-aligned right-padded prompt window: real at [0, len_b), pad after.
-        Np = round_up_to_tile(max_prompt_len)
+        prefill_width = round_up_to_tile(W)
+        cache_advance = W if self._kind == "llama" else prefill_width
         pred_pos = np.asarray([length - 1 for length in lengths], dtype=np.int64)
-        pad_positions: List[Tuple[int, int]] = [(int(length), Np) for length in lengths]
+        pad_positions: List[Tuple[int, int]] = [(int(length), cache_advance) for length in lengths]
 
-        tokens_to_complete = max(0, min(self._max_tokens_to_complete, self._max_seq_len - Np))
+        tokens_to_complete = max(0, min(self._max_tokens_to_complete, self._max_seq_len - cache_advance))
 
         prompts_x: List[List[int]] = [list(r) for r in rows]
         max_len = self._max_completion_length
@@ -452,7 +453,7 @@ class TTMLRolloutSampler(RolloutSampler):
             tokens_t: [B_local, 1, S, 1] autograd tensor from sample_op (UINT32 / ROW_MAJOR).
             Returns [B_local, S] autograd tensor of -log p(tokens_t) at every (row, pos).
 
-            Both dimensions are read from ``tokens_t.get_value().logical_shape()``
+            Both dimensions are read from ``tokens_t.shape()`` (per-device local)
             so this works correctly under axis-0 sharding — closing over the
             enclosing ``B`` (which is the host batch count) would fail on any
             multi-device run because each shard holds only
@@ -466,7 +467,7 @@ class TTMLRolloutSampler(RolloutSampler):
             ``[B_local, 1, S, 1] -> [B_local, S]`` on the way in and the result
             is reshaped ``[B_local, S]`` on the way out.
             """
-            shape = tokens_t.get_value().logical_shape()
+            shape = tokens_t.shape()
             bl = int(shape[0])
             s = int(shape[2])
             tokens_2d = ttml.ops.reshape.reshape(tokens_t, [bl, s])
@@ -503,21 +504,21 @@ class TTMLRolloutSampler(RolloutSampler):
         try:
             with no_grad():
                 # -------- Prefill: shard-safe host-side per-row pick --------
-                prompt_np = np.full((B, Np), pad_token, dtype=np.uint32)
+                prompt_np = np.full((B, prefill_width), pad_token, dtype=np.uint32)
                 for b in range(B):
                     seq = rows[b]
                     prompt_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
 
                 input_tensor = self._tokens_to_tensor(prompt_np, B)
-                prefill_mask = build_causal_mask(Np, device=True)
-                logits = self._forward(input_tensor, prefill_mask, kv, new_tokens=Np)
+                prefill_mask = build_causal_mask(prefill_width, device=True)
+                logits = self._forward(input_tensor, prefill_mask, kv, new_tokens=cache_advance)
 
                 prefill_seed = int(np.random.randint(low=1, high=int(1e7)))
                 sampled_full = ttml.ops.sample.sample_op(logits, temperature, prefill_seed, None, seed_axes)
                 nlog_full = nlog_probs(logits, sampled_full)
 
-                sampled_host = gather_to_host(sampled_full.get_value(), (B, Np), torch.int32)
-                nlog_host = gather_to_host(nlog_full.get_value(), (B, Np), torch.float32)
+                sampled_host = gather_to_host(sampled_full.get_value(), (B, prefill_width), torch.int32)
+                nlog_host = gather_to_host(nlog_full.get_value(), (B, prefill_width), torch.float32)
 
                 rows_arr = np.arange(B)
                 first_tokens = sampled_host[rows_arr, pred_pos].astype(np.int32)
