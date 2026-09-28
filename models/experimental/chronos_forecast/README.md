@@ -199,14 +199,6 @@ PYTHONPATH=. pytest \
 pytest -s "models/experimental/chronos_forecast/tests/perf/test_paper_forward_trace.py" -k "performance_l1 and not groups"
 ```
 
-The FEV benchmark is separate and is not part of these pytest commands:
-
-```bash
-PYTHONPATH=. python \
-  models/experimental/chronos_forecast/benchmarks/fev_bench/models/evaluate.py \
-  -m chronos-2
-```
-
 `TtChronosTraceRunner` is TT Metal trace capture/replay, not a resident
 persistent compute kernel. A true persistent kernel would require porting the
 full transformer into unified device kernels under slow dispatch.
