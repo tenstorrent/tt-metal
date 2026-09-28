@@ -1219,6 +1219,13 @@ tasks:
     - router
     - experts
     layer: 5
+  frozen:
+    at: '2026-09-28T07:25:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_06_experts.py: 298e79d706559362b982f5da7f6c773f1a58baeab91d129f57017903a4de39c4
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.full_moe.ffn_residual
   title: full_moe ffn_residual (residual) on device, layer 5
   step: implement
