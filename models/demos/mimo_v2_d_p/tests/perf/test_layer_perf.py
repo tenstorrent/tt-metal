@@ -7,6 +7,7 @@ import os
 import time
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -87,6 +88,43 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
         wall.append((time.perf_counter() - t0) * 1e3)
         if it:
             signpost(f"{tag}_end")
+        out.deallocate(True)
+        x.deallocate(True)
+    if int(os.environ.get("MIMO_PERF_TRACE", "0")):  # the layer traced: capture once, replay (no host in the loop)
+        n_tr = int(os.environ["MIMO_PERF_TRACE"])
+        x = ttnn.from_torch(
+            x_host,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None)),
+        )
+        eager = layer(x, rope, trans, kv, cache_layer=0, kv_actual=kv_actual)  # (also warms this x's addresses)
+        eager_h = [ttnn.to_torch(t_) for t_ in ttnn.get_device_tensors(eager)]
+        eager.deallocate(True)
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        out = layer(x, rope, trans, kv, cache_layer=0, kv_actual=kv_actual)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        synced = []
+        for _ in range(n_tr):
+            t0 = time.perf_counter()
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            synced.append((time.perf_counter() - t0) * 1e3)
+        t0 = time.perf_counter()
+        for _ in range(n_tr):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        b2b = (time.perf_counter() - t0) * 1e3 / n_tr
+        s_ = sorted(synced)
+        logger.info(
+            f"TRACE {tag}: replay synced median {s_[len(s_) // 2]:.2f} ms (min {s_[0]:.2f}), back to back {b2b:.2f} ms/layer over {n_tr}"
+        )
+        traced_h = [ttnn.to_torch(t_) for t_ in ttnn.get_device_tensors(out)]
+        assert all(torch.equal(a_, b_) for a_, b_ in zip(eager_h, traced_h)), f"{tag}: traced output differs from eager"
+        ttnn.release_trace(mesh_device, tid)
         out.deallocate(True)
         x.deallocate(True)
     w_ = sorted(wall[1:])

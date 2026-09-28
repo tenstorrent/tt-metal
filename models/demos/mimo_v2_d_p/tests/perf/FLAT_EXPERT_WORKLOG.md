@@ -543,3 +543,15 @@ Wall per layer (unprofiled, median, 33k ctx): unified -> flat Python -> flat C++
 | L1 SWA + MoE | 2048 | 11.73 | 10.29 | 10.32 (-12%) |
 | L5 GA + MoE | 640 | 10.21 | 7.92 | 7.88 (-23%) |
 | L5 GA + MoE | 2048 | 20.61 | 17.83 | 17.83 (-13%) |
+
+**The layer traced** (`MIMO_TRACE_REGION=200000000 MIMO_PERF_TRACE=20`: capture one layer call on a persistent x,
+replay; traced output bit-identical to eager, checked). ms per layer, eager wall / traced back to back:
+| layer | tok/chip | unified eager | unified traced | flat C++ eager | flat C++ traced | traced gain |
+|---|---|---|---|---|---|---|
+| L1 SWA + MoE | 640 | 5.75 | 4.98 | 4.92 | 4.10 | -18% |
+| L1 SWA + MoE | 2048 | 11.71 | 11.62 | 10.29 | 10.17 | -12% |
+| L5 GA + MoE | 640 | 10.21 | 9.85 | 7.90 | 7.56 | -23% |
+| L5 GA + MoE | 2048 | 20.63 | 20.50 | 17.82 | 17.70 | -14% |
+Device time (profiler: sum of per-op kernel durations, the slowest chip per op) excludes op-to-op gaps and host;
+wall adds them; traced removes the host, so traced ~ device execution. At 640 tok/chip eager layers are partly
+host-bound (0.3-0.8 ms of eager wall is host); at 2048 they are device-bound (traced ~ eager).
