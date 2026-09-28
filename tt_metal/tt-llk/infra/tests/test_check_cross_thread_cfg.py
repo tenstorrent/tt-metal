@@ -5,11 +5,14 @@ Each test encodes a mistake the checker made during development, so a regression
 than rediscovered. Run: python3 -m pytest tt_metal/tt-llk/infra/tests/ -q
 """
 
+import contextlib
 import importlib.util
+import io
 import os
-import subprocess
+import runpy
 import sys
 import textwrap
+import types
 
 import pytest
 
@@ -50,20 +53,29 @@ def tree(tmp_path):
 
 
 def run(tmp_path, arch="wormhole_b0", extra=()):
-    return subprocess.run(
-        [
-            sys.executable,
-            SCRIPT,
-            "--defs",
-            str(tmp_path / "cfg_defines.h"),
-            "--tree",
-            str(tmp_path),
-            "--arch",
-            arch,
-            *extra,
-        ],
-        capture_output=True,
-        text=True,
+    """Run the checker as a script (`__main__`, as the hook does), in-process."""
+    argv = [
+        SCRIPT,
+        "--defs",
+        str(tmp_path / "cfg_defines.h"),
+        "--tree",
+        str(tmp_path),
+        "--arch",
+        arch,
+        *extra,
+    ]
+    out, err, code = io.StringIO(), io.StringIO(), 0
+    saved = sys.argv
+    sys.argv = argv
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            runpy.run_path(SCRIPT, run_name="__main__")
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    finally:
+        sys.argv = saved
+    return types.SimpleNamespace(
+        returncode=code, stdout=out.getvalue(), stderr=err.getvalue()
     )
 
 
