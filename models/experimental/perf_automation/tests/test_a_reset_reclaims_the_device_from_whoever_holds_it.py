@@ -78,7 +78,7 @@ def test_it_can_never_kill_the_process_doing_the_recovering():
     assert 1 not in protected, "init is walked into"
 
 
-def test_a_host_without_fuser_still_recovers():
+def test_a_host_without_fuser_still_recovers(monkeypatch):
     """This runs when the board is already in trouble. A reclaim that raises would turn a
     recoverable wedge into a dead run, so every step degrades to 'reaped fewer than there were'."""
     src = (_PA / "agent" / "device_recovery.py").read_text()
@@ -91,5 +91,17 @@ def test_a_host_without_fuser_still_recovers():
     assert "except Exception" in _body("device_holders"), "the scan can raise into the caller"
     assert "except Exception" in _body("reap_device_holders"), "the kill can raise into the caller"
     assert "device_holders()" in _body("reap_device_holders"), "the reaper no longer uses the shared scan"
-    # And it must actually run here, on a host that has no device at all.
+    # And it must actually run, not merely read. THE SCAN IS STUBBED TO EMPTY FIRST: unstubbed, this
+    # line called the real reaper, whose contract is "SIGKILL every process holding /dev/tenstorrent
+    # except this one and its ancestors". The comment that used to sit here said "on a host that has
+    # no device at all" -- an assumption about CI that is false on any bring-up machine. On a T3K it
+    # killed whatever held the board: a live Qwen-Image-Edit gate died with rc=-9 on five separate
+    # runs of this suite, at whatever point it had reached, and because a SIGKILL leaves no trace in
+    # its victim those deaths were chased for two days as a trace hang in the model.
+    #
+    # A test may not reach outside its own process for a resource it did not create. Stubbing the
+    # SCAN rather than the reaper keeps what this asserts -- that the reaper runs and returns a list
+    # on a host where the scan finds nothing -- while making "nothing" true by construction instead
+    # of by luck.
+    monkeypatch.setattr(_dr(), "device_holders", lambda: set())
     assert isinstance(_dr().reap_device_holders(), list)
