@@ -226,6 +226,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
     const uint32_t ring_full_waits = rt->ring_full_wait_count();
+    const uint32_t record_ring_full_waits = rt->record_ring_full_wait_count();
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
@@ -238,7 +239,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
-        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} startup-race skips, {} "
+        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, record_ring_full_waits={}, {} "
+        "startup-race skips, {} "
         "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
         stress_records,
         num_active_devices,
@@ -248,6 +250,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         peak_fifo_pages,
         fifo_capacity_pages,
         ring_full_waits,
+        record_ring_full_waits,
         startup_race_skips,
         large_negative_skips,
         worst_negative_delta,

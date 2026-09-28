@@ -29,11 +29,13 @@ dispatch_s            BRISC reader          NCRISC pusher          host
                        NOC 0)                NOC 1)
     |                      |                      |                      |
     |-- inline_dw_write -->|                      |                      |
-    |   PUSH_A / PUSH_B    |                      |                      |
-    |   (NOC 1, ~92 cyc)   |                      |                      |
+    |   record_wr_idx      |                      |                      |
+    |   (NOC 1)            |                      |                      |
     |                      |-- noc_async_read     |                      |
-    |                      |   (read timestamps,  |                      |
+    |                      |   (read record slot, |                      |
     |                      |    NOC 0)            |                      |
+    |<-- inline_dw_write --|                      |                      |
+    |    record_rd_idx     |                      |                      |
     |                      |-- write_index++ ---->| L1 ring buffer       |
     |                      |                      |                      |
     |                      |                      |-- drain all pending  |
@@ -44,22 +46,34 @@ dispatch_s            BRISC reader          NCRISC pusher          host
     |                      |                      |                      |   -> callbacks
 ```
 
-## Double-Buffer Protocol
+## Record Ring Protocol
 
-dispatch_s maintains two timestamp buffers in its own L1 (A/B). On each
-`CQ_DISPATCH_CMD_WAIT` completion it:
+dispatch_s hands records to the BRISC reader through a single-producer,
+single-consumer ring of `REALTIME_PROFILER_RECORD_SLOTS` (16) record slots in its
+own L1 (`records[]` in `realtime_profiler_msgs.h`). Two free-running indices
+drive it, and each has exactly one writer:
 
-1. Writes the program's start/end timestamps into the next buffer (alternating A/B)
-2. Sends a `PUSH_A` or `PUSH_B` state to the reserved profiler tensix via a NOC
-   inline dword write
+- `record_wr_idx`, written only by dispatch_s. On the dispatch core it names the
+  open slot that dispatch_s and its compute helper are filling; dispatch_s pushes
+  it to the reader's copy with a NOC inline dword write on every publish.
+- `record_rd_idx`, written only by the reader. It pushes its count back to
+  dispatch_s once a slot's NOC read has landed, which frees the slot.
 
-This alternation only hands one in-flight record to the reader at a time;
-dispatch_s never blocks on the profiler.
+After each command, dispatch_s publishes the open slot and opens the next one. It
+never reuses a slot the reader may still be reading: if all other slots are
+unread it waits (watcher waypoint `RPFW`) instead of dropping a record. Because
+the published value is a count, a reader that polls late still sees every record,
+and no write can overwrite another side's signal. At `CQ_DISPATCH_CMD_TERMINATE`
+dispatch_s publishes the final count with `REALTIME_PROFILER_RECORD_WR_IDX_TERMINATE`
+set in the same word, so the reader drains every record before it exits.
 
-The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
-`noc_async_read` of the 32-byte timestamp pair from the indicated dispatch_s
-buffer into the next ring slot, then advances `write_index` (records for
-unprofiled programs are read but not committed). If the ring is full it spins
+This replaced an A/B ping-pong handoff that had no acknowledgement and dropped
+records whenever the reader fell behind dispatch_s (issue #57632).
+
+The **BRISC reader** polls its `record_wr_idx`. For each published slot it issues a
+`noc_async_read` of the 32-byte record into the next ring slot, then advances
+`write_index` (records for unprofiled programs are read but not committed). It
+keeps draining while servicing a clock sync. If the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
 host drains records faster than they are produced. The reader also services host
 clock-sync requests, enqueueing sync-marker records into the same ring.
@@ -80,8 +94,13 @@ ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 
 | Metric | Value |
 |--------|-------|
-| `signal_realtime_profiler_and_switch` duration | **~92 cycles (~0.09 us)** |
-| Signal = NOC 1 inline dword write | Negligible overhead on dispatch |
+| `publish_realtime_profiler_record` duration (BH p100a, device-profiler zone, p50) | **~128 cycles (~0.09 us)** |
+| Former A/B signal, same zone and board | ~105 cycles |
+| Peak production rate, `RealtimeProfilerStress` (ring vs. A/B) | ~1.068 M rec/s both |
+
+The zone figures include the zone's own overhead. `record_full_wait_count` (host:
+`RealtimeProfilerManager::record_ring_full_wait_count()`) counts how often dispatch_s
+waited for a free slot; it stays 0 at the stress test's peak rate.
 
 ### Push cost (NCRISC pusher side)
 

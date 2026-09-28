@@ -399,18 +399,44 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
 }
 
 FORCE_INLINE
-void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
-    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
-    msg->realtime_profiler_state = new_state;
-
+void write_realtime_profiler_remote_wr_idx(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t value) {
     if (msg->realtime_profiler_core_noc_xy != 0) {
         uint64_t realtime_profiler_addr =
-            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
-        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
+            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_wr_idx_addr);
+        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, value, my_noc_index);
     }
+}
+
+// Publish the open record slot to the RT-profiler BRISC and open the next one (record ring protocol in
+// realtime_profiler_msgs.h). Lossless: while every other slot is still unread, wait rather than reuse one.
+FORCE_INLINE
+void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    const uint32_t wr_idx = msg->record_wr_idx;
+    const uint32_t next_wr_idx = (wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+    // The next slot was last used by record (next_wr_idx - SLOTS); it is free once the BRISC has read that.
+    // A stale record_rd_idx only overstates the fill level, so the unfenced first read is safe.
+    if (((next_wr_idx - msg->record_rd_idx) & REALTIME_PROFILER_RECORD_WR_IDX_MASK) >= REALTIME_PROFILER_RECORD_SLOTS) {
+        msg->record_full_wait_count = msg->record_full_wait_count + 1;
+        WAYPOINT("RPFW");
+        do {
+            invalidate_l1_cache();
+        } while (((next_wr_idx - msg->record_rd_idx) & REALTIME_PROFILER_RECORD_WR_IDX_MASK) >=
+                 REALTIME_PROFILER_RECORD_SLOTS);
+        WAYPOINT("RPFD");
+    }
+    // Carry the latest end time into the new slot. If no worker completes while it is open (dispatch_s was
+    // held up and its wait for workers returns at once), the record must end at the last completion seen,
+    // not at whatever that slot held a full ring ago.
+    volatile realtime_profiler_timestamp_t* prev_end =
+        &msg->records[wr_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)].kernel_end;
+    volatile realtime_profiler_timestamp_t* next_end =
+        &msg->records[next_wr_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)].kernel_end;
+    next_end->time_hi = prev_end->time_hi;
+    next_end->time_lo = prev_end->time_lo;
+    // Move the local writers (this kernel and the compute helper) to the new slot before the BRISC can
+    // start reading the old one.
+    msg->record_wr_idx = next_wr_idx;
+    write_realtime_profiler_remote_wr_idx(msg, next_wr_idx);
 }
 
 FORCE_INLINE
@@ -928,20 +954,17 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_TERMINATE:
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
                 if (rt_profiler_enabled) {
-                    signal_realtime_profiler_and_switch(rt_profiler_msg);
+                    // Publish the last record and terminate in one write, so the BRISC drains every
+                    // record before it exits. No slot is opened, so no wait for space is needed.
+                    const uint32_t final_wr_idx =
+                        (rt_profiler_msg->record_wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+                    write_realtime_profiler_remote_wr_idx(
+                        rt_profiler_msg, final_wr_idx | REALTIME_PROFILER_RECORD_WR_IDX_TERMINATE);
                     noc_async_writes_flushed();
-                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
-                    }
                 }
 
+                // Stops the local compute helper.
                 rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
-                if (rt_profiler_enabled) {
-                    uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
-                        rt_profiler_msg->realtime_profiler_core_noc_xy,
-                        rt_profiler_msg->realtime_profiler_remote_state_addr);
-                    dispatch_s_noc_inline_dw_write(
-                        realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
-                }
                 if constexpr (telemetry_enabled) {
                     dispatch_telemetry_control->compute_terminate = 1;
                 }
@@ -963,7 +986,7 @@ void kernel_main() {
         total_pages_acquired++;
 
         if (!done && rt_profiler_enabled) {
-            signal_realtime_profiler_and_switch(rt_profiler_msg);
+            publish_realtime_profiler_record(rt_profiler_msg);
         }
     }
     // Confirm expected number of pages, spinning here is a leak
