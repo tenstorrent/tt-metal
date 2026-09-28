@@ -33,6 +33,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "command_queue_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -53,12 +54,11 @@ namespace {
 //   non-L1-backed scratchpad, would fail the compare.
 TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Gen1 only (mirrors test_program_spec_hw.cpp's guard). The scratchpad feature works on both
     // gens, but the device-side kernel here uses the Gen1 L1-readback idiom (plain volatile L1
     // write, host-visible after a blocking enqueue).
-    if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+    if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
     }
 
@@ -113,7 +113,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback
     // base address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     // -------------------------------------------------------
     // Dispatch via the fast/mesh path (blocking).
@@ -128,13 +128,13 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     // Verify: read the reported scratchpad base address, then read the scratchpad's L1 and compare.
     // -------------------------------------------------------
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
 
     std::vector<uint32_t> scratch_contents;
-    detail::ReadFromDeviceL1(device, node, scratch_base, kScratchpadBytes, scratch_contents);
+    slow_dispatch::ReadFromL1(*mesh_device, node, scratch_base, kScratchpadBytes, scratch_contents);
     ASSERT_EQ(scratch_contents.size(), kNumElems);
 
     std::vector<uint32_t> expected(kNumElems);
@@ -163,10 +163,9 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
 //   down. The zero suffix additionally catches a transfer that ran long.
 TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Gen1 only, for the same reason as ScratchpadWriteReadback above.
-    if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+    if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
     }
 
@@ -245,14 +244,14 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     for (uint32_t i = 0; i < kTransferElems; i++) {
         source_pattern[i] = kPatternBase + i;
     }
-    detail::WriteToDeviceL1(device, remote_core, kSrcAddr, source_pattern);
+    slow_dispatch::WriteToL1(*mesh_device, remote_core, kSrcAddr, source_pattern);
 
     std::vector<uint32_t> zeros(kTransferElems, 0u);
-    detail::WriteToDeviceL1(device, remote_core, kDstAddr, zeros);
+    slow_dispatch::WriteToL1(*mesh_device, remote_core, kDstAddr, zeros);
 
     // Pre-zero the report location, so a kernel that never wrote it reads back as 0 (see below).
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     // -------------------------------------------------------
     // Dispatch via the fast/mesh path (blocking).
@@ -267,7 +266,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     // Verify (1): the pattern round-tripped remote -> scratchpad -> remote.
     // -------------------------------------------------------
     std::vector<uint32_t> round_tripped;
-    detail::ReadFromDeviceL1(device, remote_core, kDstAddr, kTransferBytes, round_tripped);
+    slow_dispatch::ReadFromL1(*mesh_device, remote_core, kDstAddr, kTransferBytes, round_tripped);
     ASSERT_EQ(round_tripped.size(), kTransferElems);
     EXPECT_EQ(round_tripped, source_pattern)
         << "Pattern did not survive the remote -> scratchpad -> remote NoC round trip";
@@ -276,13 +275,13 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     // Verify (2): inside the scratchpad, the data landed at kOffsetBytes and nowhere else.
     // -------------------------------------------------------
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t scratch_base = reported[0];
     ASSERT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
 
     std::vector<uint32_t> scratch_contents;
-    detail::ReadFromDeviceL1(device, node, scratch_base, kScratchpadBytes, scratch_contents);
+    slow_dispatch::ReadFromL1(*mesh_device, node, scratch_base, kScratchpadBytes, scratch_contents);
     ASSERT_EQ(scratch_contents.size(), kNumElems);
 
     std::vector<uint32_t> expected(kNumElems, 0u);

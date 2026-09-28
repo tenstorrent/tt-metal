@@ -24,6 +24,7 @@
 #include "common/mesh_dispatch_fixture.hpp"
 #include "jit_build/jit_build_settings.hpp"  // ::SemScope, host mirror of the device enum
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -45,7 +46,6 @@ protected:
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    IDevice* device_{nullptr};
     std::vector<uint32_t> result;
 
     void SetUp() override {
@@ -54,8 +54,7 @@ protected:
             GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
         }
         mesh_device_ = devices_[0];
-        device_ = mesh_device_->get_devices()[0];
-        report_addr = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+        report_addr = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         num_dms_ = std::min(num_dms_, 6u);  // Metal 2.0 reserves DM0/DM1
     }
@@ -73,7 +72,7 @@ protected:
         // Prefill with a sentinel, not 0: the with_down tests expect 0, so a zero prefill would
         // pass even if the kernel never reported.
         std::vector<uint32_t> sentinel(1, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         Program program;
@@ -166,7 +165,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
         EXPECT_NE(result.empty() ? kNoReport : result[0], kNoReport) << "kernel never reported";
         return result.empty() ? 0u : result[0];
@@ -181,10 +180,10 @@ protected:
         const bool has_watchdog = mode_define == "MODE_MULTI_CONSUMER";
         // Sentinel prefill
         std::vector<uint32_t> sentinel(3, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
         if (has_watchdog) {
             std::vector<uint32_t> wd_sentinel(1, kNoReport);
-            tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr + 64u, wd_sentinel);
+            slow_dispatch::WriteToL1(*mesh_device_, core, report_addr + 64u, wd_sentinel);
         }
 
         distributed::MeshWorkload workload;
@@ -246,7 +245,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 3 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 3u);
         if (result.size() < 3) {
             return 0u;
@@ -256,7 +255,7 @@ protected:
         EXPECT_EQ(result[2], static_cast<uint32_t>(want)) << "done_sem baked scope != shape intent";
         if (has_watchdog) {
             std::vector<uint32_t> wd;
-            tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr + 64u, sizeof(uint32_t), wd);
+            slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr + 64u, sizeof(uint32_t), wd);
             EXPECT_EQ(wd.size(), 1u);
             if (!wd.empty()) {
                 const uint32_t total_credits = (num_dms_ - 2) * concurrent_iterations;
@@ -275,7 +274,7 @@ protected:
     // The baked scopes are asserted.
     std::pair<uint32_t, uint32_t> run_coexist() {
         std::vector<uint32_t> zero(4, 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero);
 
         distributed::MeshWorkload workload;
         Program program;
@@ -327,7 +326,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 4 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 4 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 4u);
         if (result.size() < 4) {
             return {0u, 0u};
@@ -344,7 +343,7 @@ protected:
         const uint32_t expected = sender_threads * iters;
         // Sentinel prefill: see run_scope.
         std::vector<uint32_t> sentinel(2, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
         // The sender addresses the semaphore's node by its virtual NoC coords.
         const CoreCoord core_virtual = mesh_device_->worker_core_from_logical_core(core);
@@ -408,7 +407,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 2 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 2u);
         if (result.size() < 2) {
             return {kNoReport, 0u};
@@ -440,7 +439,7 @@ protected:
             }
         }
         std::vector<uint32_t> sentinel(3, kNoReport);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, reporter_node, report_addr, sentinel);
+        slow_dispatch::WriteToL1(*mesh_device_, reporter_node, report_addr, sentinel);
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord{0, 0};
@@ -508,7 +507,7 @@ protected:
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, reporter_node, report_addr, 3 * sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, reporter_node, report_addr, 3 * sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 3u);
         if (result.size() < 3) {
             return {kNoReport, 0u};
@@ -540,8 +539,7 @@ TEST_F(SemScopeFixture, TestExternalScopeIncrement) {
     }
     const uint32_t observed = run_scope(SemScope::EXTERNAL);
     log_info(LogTest, "EXTERNAL scope value(): {} (expected {})", observed, iterations);
-    EXPECT_EQ(observed, iterations)
-        << "Semaphore<EXTERNAL>::up()/value() did not produce the expected single-writer count.";
+    EXPECT_EQ(observed, iterations) << "EXTERNAL up()/value() did not produce the expected single-writer count.";
 }
 
 // The smallest cached shape: one 2-thread on-node binder kernel (a single instance would
@@ -555,7 +553,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
     log_info(LogTest, "DM_LOCAL_CACHED scope={} count={} (expected {})", scope, count, 2 * iterations);
     EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED))
         << "the smallest cached-geometry shape must resolve DM_LOCAL_CACHED";
-    EXPECT_EQ(count, 2 * iterations) << "Semaphore<DM_LOCAL_CACHED>::up()/value() did not produce the expected count.";
+    EXPECT_EQ(count, 2 * iterations) << "DM_LOCAL_CACHED up()/value() did not produce the expected count.";
 }
 
 // A single-writer single-node shape is the census's cheap pick. value() must equal iterations.
@@ -563,7 +561,7 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
     const uint32_t observed = run_scope(SemScope::LOCAL_NONATOMIC);
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
     EXPECT_EQ(observed, iterations)
-        << "Semaphore<LOCAL_NONATOMIC>::up()/value() (legacy default) did not produce the expected count.";
+        << "LOCAL_NONATOMIC up()/value() (legacy default) did not produce the expected count.";
 }
 
 // up(N) then down(N) must leave the semaphore at 0, per scope. DM_LOCAL_CACHED has no
@@ -575,13 +573,13 @@ TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
     }
     const uint32_t observed = run_scope(SemScope::EXTERNAL, /*with_down=*/true);
     log_info(LogTest, "EXTERNAL up/down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() (atomic NoC decrement) did not return to 0.";
+    EXPECT_EQ(observed, 0u) << "EXTERNAL down() (atomic NoC decrement) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
     const uint32_t observed = run_scope(SemScope::LOCAL_NONATOMIC, /*with_down=*/true);
     log_info(LogTest, "LOCAL_NONATOMIC up/down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
+    EXPECT_EQ(observed, 0u) << "LOCAL_NONATOMIC down() (legacy) did not return to 0.";
 }
 
 TEST_F(SemScopeFixture, TestExternalDownFromAllOnes) {
@@ -602,7 +600,7 @@ TEST_F(SemScopeFixture, TestExternalConcurrentUp) {
     const uint32_t observed = run_concurrent(SemScope::EXTERNAL, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "EXTERNAL concurrent up value(): {} (expected {})", observed, expected);
-    EXPECT_EQ(observed, expected) << "Semaphore<EXTERNAL>::up() lost updates under concurrency (non-atomic route?).";
+    EXPECT_EQ(observed, expected) << "EXTERNAL up() lost updates under concurrency (non-atomic route?).";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
@@ -612,7 +610,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
     const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_CONCURRENT_UP");
     const uint32_t expected = num_dms_ * concurrent_iterations;
     log_info(LogTest, "DM_LOCAL_CACHED concurrent up value(): {} (expected {})", observed, expected);
-    EXPECT_EQ(observed, expected) << "Semaphore<DM_LOCAL_CACHED>::up() lost updates under concurrency.";
+    EXPECT_EQ(observed, expected) << "DM_LOCAL_CACHED up() lost updates under concurrency.";
 }
 
 // The current WH/BH pattern, up(noc, my_x, my_y, 1) on a semaphore the census resolves to
@@ -651,7 +649,7 @@ TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
     }
     const uint32_t observed = run_concurrent(SemScope::EXTERNAL, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "EXTERNAL producer/consumer value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<EXTERNAL>::down() lost a concurrent producer increment (non-atomic?).";
+    EXPECT_EQ(observed, 0u) << "EXTERNAL down() lost a concurrent producer increment (non-atomic?).";
 }
 
 TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
@@ -660,7 +658,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     }
     const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
+    EXPECT_EQ(observed, 0u) << "DM_LOCAL_CACHED down() lost a concurrent producer increment.";
 }
 
 // One producer feeds single credits while (num_dms-2) consumers concurrently down() them
@@ -672,9 +670,8 @@ TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
     }
     const uint32_t observed = run_concurrent(SemScope::DM_LOCAL_CACHED, "MODE_MULTI_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED multi-consumer down value(): {} (expected 0)", observed);
-    EXPECT_EQ(observed, 0u)
-        << "Semaphore<DM_LOCAL_CACHED>::down() double-spent a credit under multi-consumer contention "
-           "(the LR/SC CAS retry loop is broken, two consumers passed the >= check on one credit).";
+    EXPECT_EQ(observed, 0u) << "DM_LOCAL_CACHED down() double-spent a credit under multi-consumer contention "
+                               "(the LR/SC CAS retry loop is broken, two consumers passed the >= check on one credit).";
 }
 
 // The same multi-consumer shape on EXTERNAL. Exact 0 means no credit was double-spent or lost.
@@ -795,7 +792,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                         "with different thread counts";
     }
     std::vector<uint32_t> sentinel(3, kNoReport);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+    slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
     const experimental::SemaphoreSpecName SEM_A{"sem_a"};
     const experimental::SemaphoreSpecName SEM_B{"sem_b"};
@@ -857,7 +854,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 3 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 3u);
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "two cached sems on one node: scope={} count={}", result[0], result[1]);
@@ -905,7 +902,7 @@ TEST_F(SemScopeFixture, TestCachedSelfRestoresAcrossLaunches) {
         EXPECT_EQ(scope, scope_val(SemScope::DM_LOCAL_CACHED)) << "run " << run << " did not resolve cached";
         EXPECT_EQ(count, expected)
             << (run == 0 ? "first launch miscounted"
-                         : "a later launch started from a stale pool row, the exit-stub "
+                         : "a later launch started from a stale pool row, the pool exit "
                            "self-restore did not fully reset the protocol words");
     }
 }
@@ -920,7 +917,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
         GTEST_SKIP() << "needs >= 2 worker nodes: KB's semaphore spans two nodes to resolve EXTERNAL";
     }
     std::vector<uint32_t> sentinel(3, kNoReport);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+    slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
     const experimental::SemaphoreSpecName SEM_A{"sem_cached"};
     const experimental::SemaphoreSpecName SEM_B{"sem_external"};
@@ -982,7 +979,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 3 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 3u);
     ASSERT_NE(result[0], kNoReport) << "probe never reported: the reporter kernel/thread did not run";
     log_info(LogTest, "cached seeding vs user barrier slot: scope={} count={}", result[0], result[1]);
@@ -1077,7 +1074,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
         GTEST_SKIP() << "needs a second node for the disjoint-node id collision";
     }
     std::vector<uint32_t> sentinel(2, kNoReport);
-    tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
+    slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, sentinel);
 
     experimental::SemaphoreSpec sem_near{
         .unique_id = experimental::SemaphoreSpecName{"sem_near"}, .target_nodes = core};
@@ -1113,7 +1110,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
     RunProgram(mesh_device_, workload);
 
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, 2 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 2u);
     ASSERT_NE(result[0], kNoReport) << "slot probe never reported";
     log_info(LogTest, "same-id scopes: near={} far={}", result[0], result[1]);

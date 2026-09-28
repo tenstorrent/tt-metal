@@ -7,7 +7,6 @@
 //   MULTICAST not defined -> double-buffered unicast with TRIDs (bandwidth measurement).
 
 #include "api/dataflow/noc.h"
-#include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -26,9 +25,6 @@ void kernel_main() {
 
     Noc noc;
     UnicastEndpoint src;
-    // Stream mode: required for DRISC to initiate NOC traffic and for
-    // remote cores to reach DRISC L1 over NOC.
-    experimental::drisc_set_stream_mode();
 
 #if defined(MULTICAST)
     MulticastEndpoint dst;
@@ -150,6 +146,4 @@ void kernel_main() {
     uint32_t offset = num_bytes / sizeof(uint64_t);
     total_time_res[offset] = total_time;
 #endif
-    // Always restore NOC2AXI so subsequent context observes the default.
-    experimental::drisc_set_noc2axi_mode();
 }

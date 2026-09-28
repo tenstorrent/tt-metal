@@ -40,15 +40,15 @@ public:
     std::vector<uint32_t> buf_tile_c_dim_arr;
     std::vector<uint32_t> buf_tile_size_arr;
 
-    tt_hlk_desc(uint32_t max_cbs) :
-        buf_dataformat_arr(max_cbs, DataFormat::Invalid),
-        buf_num_faces_arr(max_cbs, constants::TILE_HW / constants::FACE_HW),
-        buf_partial_face_arr(max_cbs, 0),
-        buf_face_r_dim_arr(max_cbs, constants::FACE_HEIGHT),
-        buf_narrow_tile_arr(max_cbs, 0),
-        buf_tile_r_dim_arr(max_cbs, constants::TILE_HEIGHT),
-        buf_tile_c_dim_arr(max_cbs, constants::TILE_WIDTH),
-        buf_tile_size_arr(max_cbs, constants::BFLOAT8_B_TILE_HW) {}
+    tt_hlk_desc(uint32_t max_dfbs) :
+        buf_dataformat_arr(max_dfbs, DataFormat::Invalid),
+        buf_num_faces_arr(max_dfbs, constants::TILE_HW / constants::FACE_HW),
+        buf_partial_face_arr(max_dfbs, 0),
+        buf_face_r_dim_arr(max_dfbs, constants::FACE_HEIGHT),
+        buf_narrow_tile_arr(max_dfbs, 0),
+        buf_tile_r_dim_arr(max_dfbs, constants::TILE_HEIGHT),
+        buf_tile_c_dim_arr(max_dfbs, constants::TILE_WIDTH),
+        buf_tile_size_arr(max_dfbs, constants::BFLOAT8_B_TILE_HW) {}
 
     DataFormat get_buf_dataformat(int buf_idx) const { return buf_dataformat_arr[buf_idx]; }
 
@@ -111,6 +111,8 @@ inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
         hasher.update(static_cast<uint64_t>(obj.get_buf_dataformat(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_r_dim(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_c_dim(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_face_r_dim(i)));
+        hasher.update(static_cast<uint64_t>(obj.get_buf_num_faces(i)));
     }
     hasher.update(static_cast<uint64_t>(obj.get_hlk_math_fidelity()));
     hasher.update(obj.get_hlk_math_approx_mode() ? 1u : 0u);

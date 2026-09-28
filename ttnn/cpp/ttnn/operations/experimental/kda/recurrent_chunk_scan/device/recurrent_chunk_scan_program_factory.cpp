@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/recurrent_chunk_scan/device/recurrent_chunk_scan_program_factory.hpp"
 
 #include <algorithm>
@@ -55,8 +57,11 @@ ScanWorkDistribution distribute_scan(
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::create_program_artifacts(
-    const RecurrentChunkScanParams& attrs, const RecurrentChunkScanInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::create_mesh_workload_artifacts(
+    const RecurrentChunkScanParams& attrs,
+    const RecurrentChunkScanInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& v_beta_tensor = in.v_beta.mesh_tensor();
     const auto& kd_tensor = in.kd.mesh_tensor();
     const auto& q_decay_tensor = in.q_decay.mesh_tensor();
@@ -105,6 +110,9 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const tt::tt_metal::experimental::DFBSpecName summary_raw_dfb_name{"summary_raw"};
     const tt::tt_metal::experimental::DFBSpecName summary_seed_dfb_name{"summary_seed"};
     const tt::tt_metal::experimental::DFBSpecName summary_ring_dfb_name{"summary_ring"};
+    const tt::tt_metal::experimental::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
+    const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
+    const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
 
     const tt::tt_metal::experimental::TensorParamName v_beta_tensor_name{"v_beta"};
     const tt::tt_metal::experimental::TensorParamName kd_tensor_name{"kd"};
@@ -113,12 +121,16 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const tt::tt_metal::experimental::TensorParamName k_decay_transposed_tensor_name{"k_decay_transposed"};
     const tt::tt_metal::experimental::TensorParamName final_decay_tensor_name{"final_decay"};
     const tt::tt_metal::experimental::TensorParamName t_inv_tensor_name{"t_inv"};
-    const tt::tt_metal::experimental::TensorParamName initial_state_tensor_name{"initial_state"};
+    const tt::tt_metal::experimental::TensorParamName group_entry_states_tensor_name{"group_entry_states"};
+    const tt::tt_metal::experimental::TensorParamName tail_entry_states_tensor_name{"tail_entry_states"};
     const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
     const tt::tt_metal::experimental::TensorParamName final_state_tensor_name{"final_state"};
+    const tt::tt_metal::experimental::TensorParamName tail_output_tensor_name{"tail_output"};
+    const tt::tt_metal::experimental::TensorParamName tail_final_state_tensor_name{"tail_final_state"};
 
     const auto fp32 = tt::DataFormat::Float32;
-    const auto output_format = summary ? fp32 : tt::DataFormat::Float16_b;
+    const auto output_format = tt::DataFormat::Float16_b;
+    const tt::tt_metal::experimental::DFBSpecName transport_state_dfb_name{"transport_state"};
     const auto input_format = [](const Tensor& tensor) {
         return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     };
@@ -130,6 +142,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 .num_entries = entries,
                 .data_format_metadata = format};
         };
+    const uint32_t split_head_tiles = summary ? Vt : 1;
+    const uint32_t tail_entry_states_tiles = !summary ? kv : 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(state_dfb_name, kv, fp32),
         make_dfb(t_inv_dfb_name, 2 * cc, input_format(in.t_inv)),
@@ -146,10 +160,17 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         make_dfb(state_update_dfb_name, kv, fp32),
         make_dfb(state_temporary_dfb_name, kv, fp32),
         make_dfb(final_state_dfb_name, kv, fp32),
+        make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),
         make_dfb(summary_raw_dfb_name, kv, fp32),
         make_dfb(summary_seed_dfb_name, kv, fp32),
         make_dfb(summary_ring_dfb_name, 2 * kv, fp32),
+        // ProgramSpec names must exist even when if-constexpr discards their
+        // users. Give inactive-mode buffers one tile instead of reserving every
+        // summary and recurrent restart payload simultaneously.
+        make_dfb(summary_head_output_dfb_name, split_head_tiles, output_format),
+        make_dfb(summary_head_state_dfb_name, split_head_tiles, output_format),
+        make_dfb(tail_entry_states_dfb_name, tail_entry_states_tiles, fp32),
     };
 
     tt::tt_metal::experimental::KernelSpec reader{
@@ -166,6 +187,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 tt::tt_metal::experimental::ProducerOf(q_decay_dfb_name, "q_decay"),
                 tt::tt_metal::experimental::ProducerOf(intra_dfb_name, "intra"),
                 tt::tt_metal::experimental::ProducerOf(summary_seed_dfb_name, "summary_seed"),
+                tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
                 tt::tt_metal::experimental::ProducerOf(k_decay_transposed_dfb_name, "k_decay_transposed"),
                 tt::tt_metal::experimental::ProducerOf(final_decay_dfb_name, "final_decay"),
             },
@@ -182,7 +204,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Kt", Kt},
              {"Vt", Vt},
              {"Vt_full", Vt_full},
-             {"summary_pair", static_cast<uint32_t>(summary)}},
+             {"summary", static_cast<uint32_t>(summary)},
+             {"groups_per_head", attrs.groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -190,13 +213,17 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{q_decay_tensor_name, "q_decay"});
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{intra_tensor_name, "intra"});
         reader.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{initial_state_tensor_name, "initial_state"});
+            tt::tt_metal::experimental::TensorBinding{group_entry_states_tensor_name, "group_entry_states"});
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{tail_entry_states_tensor_name, "tail_entry_states"});
     } else {
         // The discarded recurrence branch is still parsed; aliases provide its binding names without extra parameters.
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "q_decay"});
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{t_inv_tensor_name, "intra"});
         reader.tensor_bindings.push_back(
-            tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "initial_state"});
+            tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "group_entry_states"});
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "tail_entry_states"});
     }
 
     tt::tt_metal::experimental::KernelSpec writer{
@@ -205,20 +232,35 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
             "ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/kernels/dataflow/"
             "writer_recurrent_chunk_scan.cpp",
         .dfb_bindings =
-            {tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "output"),
-             tt::tt_metal::experimental::ConsumerOf(final_state_dfb_name, "final_state")},
+            {
+                tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "output"),
+                tt::tt_metal::experimental::ConsumerOf(
+                    summary ? transport_state_dfb_name : final_state_dfb_name, "final_state"),
+                tt::tt_metal::experimental::ConsumerOf(summary_head_output_dfb_name, "summary_head_output"),
+                tt::tt_metal::experimental::ConsumerOf(summary_head_state_dfb_name, "summary_head_state"),
+                tt::tt_metal::experimental::ConsumerOf(
+                    summary ? final_state_dfb_name : transport_state_dfb_name, "unused_state"),
+            },
         .tensor_bindings =
             {tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
              tt::tt_metal::experimental::TensorBinding{final_state_tensor_name, "final_state"}},
         .compile_time_args =
-            {{"Ct", Ct},
-             {"Kt", Kt},
-             {"Vt", Vt},
-             {"Vt_full", Vt_full},
-             {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
+            {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"Vt_full", Vt_full}, {"summary", static_cast<uint32_t>(summary)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks", "group"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
+
+    if (summary) {
+        writer.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{tail_output_tensor_name, "tail_output"});
+        writer.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{tail_final_state_tensor_name, "tail_final_state"});
+    } else {
+        // Parsed even when if-constexpr discards segmented summary emission.
+        writer.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{output_tensor_name, "tail_output"});
+        writer.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{final_state_tensor_name, "tail_final_state"});
+    }
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hw);
@@ -241,7 +283,10 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
           scratch_dfb_name,
           summary_raw_dfb_name,
           summary_seed_dfb_name,
-          summary_ring_dfb_name}) {
+          summary_ring_dfb_name,
+          summary_head_output_dfb_name,
+          summary_head_state_dfb_name,
+          tail_entry_states_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     tt::tt_metal::experimental::KernelSpec compute{
@@ -271,6 +316,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 tt::tt_metal::experimental::ProducerOf(state_temporary_dfb_name, "state_temporary"),
                 tt::tt_metal::experimental::ConsumerOf(state_temporary_dfb_name, "state_temporary"),
                 tt::tt_metal::experimental::ProducerOf(final_state_dfb_name, "final_state"),
+                tt::tt_metal::experimental::ProducerOf(transport_state_dfb_name, "transport_state"),
                 tt::tt_metal::experimental::ProducerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::experimental::ConsumerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::experimental::ProducerOf(summary_raw_dfb_name, "summary_raw"),
@@ -278,12 +324,14 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 tt::tt_metal::experimental::ConsumerOf(summary_seed_dfb_name, "summary_seed"),
                 tt::tt_metal::experimental::ProducerOf(summary_ring_dfb_name, "summary_ring"),
                 tt::tt_metal::experimental::ConsumerOf(summary_ring_dfb_name, "summary_ring"),
+                tt::tt_metal::experimental::ProducerOf(summary_head_output_dfb_name, "summary_head_output"),
+                tt::tt_metal::experimental::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
+                tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks"}},
+        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary", static_cast<uint32_t>(summary)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group"}},
         .hw_config = std::move(compute_hw),
     };
-
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
     tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
     tt::tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
@@ -291,6 +339,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         const auto& core = distribution.cores[index];
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
+        const uint32_t group = head % attrs.groups_per_head;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
@@ -298,9 +347,9 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}, {"group", group}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}});
+            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"group", group}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
@@ -317,17 +366,27 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         tt::tt_metal::experimental::TensorParameter{
             .unique_id = final_state_tensor_name, .spec = outputs[1].mesh_tensor().tensor_spec()},
     };
+    if (summary) {
+        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+            .unique_id = tail_output_tensor_name, .spec = outputs[2].mesh_tensor().tensor_spec()});
+        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+            .unique_id = tail_final_state_tensor_name, .spec = outputs[3].mesh_tensor().tensor_spec()});
+    }
     if (!summary) {
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
             .unique_id = q_decay_tensor_name, .spec = q_decay_tensor.tensor_spec()});
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
             .unique_id = intra_tensor_name, .spec = intra_tensor.tensor_spec()});
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
-            .unique_id = initial_state_tensor_name, .spec = in.initial_state->mesh_tensor().tensor_spec()});
+            .unique_id = group_entry_states_tensor_name, .spec = in.group_entry_states->mesh_tensor().tensor_spec()});
+        {
+            tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+                .unique_id = tail_entry_states_tensor_name, .spec = in.tail_entry_states->mesh_tensor().tensor_spec()});
+        }
     }
+
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = summary ? "summarize_chunk_recurrence" : "recurrent_chunk_scan",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
@@ -349,9 +408,37 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     if (!summary) {
         run_args.tensor_args.emplace(q_decay_tensor_name, q_decay_tensor);
         run_args.tensor_args.emplace(intra_tensor_name, intra_tensor);
-        run_args.tensor_args.emplace(initial_state_tensor_name, in.initial_state->mesh_tensor());
+        run_args.tensor_args.emplace(group_entry_states_tensor_name, in.group_entry_states->mesh_tensor());
+        run_args.tensor_args.emplace(tail_entry_states_tensor_name, in.tail_entry_states->mesh_tensor());
     }
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+
+    if (summary) {
+        run_args.tensor_args.emplace(tail_output_tensor_name, outputs[2].mesh_tensor());
+        run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
+    }
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, in.actual_start, reader);
+    // The writer reads the chronology channel on the same condition as the reader publishes it.
+    writer.compile_time_args.insert({"has_actual_end", static_cast<uint32_t>(in.actual_end.has_value())});
+    if (summary || in.actual_end.has_value()) {
+        const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
+        spec.dataflow_buffers.push_back({
+            .unique_id = writer_chronology,
+            .entry_size = 32,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+        reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(writer_chronology, "chronology_writer"));
+        writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
+    }
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.num_chunks * attrs.groups_per_head * tt::constants::TILE_HEIGHT,
+        reader_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

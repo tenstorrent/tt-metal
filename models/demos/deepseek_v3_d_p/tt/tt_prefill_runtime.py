@@ -64,8 +64,11 @@ class TtPrefillRuntimeConfig:
     # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
-    # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
+    # slices from the drafter checkpoint; only the last rank builds the KV tail + cache.
     dflash_enabled: bool = False
+    # Drafter checkpoint dir. Empty falls back to $DFLASH_HF_MODEL, which is how the standalone tests that
+    # build a runtime directly still reach one.
+    dflash_checkpoint_path: str = ""
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -263,11 +266,13 @@ class TtPrefillRuntime:
         """Build this rank's DFlash speculative-drafter when ``config.dflash_enabled``.
 
         Each rank taps only the target layers it owns; the last rank also builds the KV tail and allocates
-        the caller-owned context K/V caches. Checkpoint (config + weights) comes from ``$DFLASH_HF_MODEL``."""
-        path = os.environ.get("DFLASH_HF_MODEL")
+        the caller-owned context K/V caches. Checkpoint (config + weights) comes from
+        ``config.dflash_checkpoint_path``, else ``$DFLASH_HF_MODEL``."""
+        path = self.config.dflash_checkpoint_path or os.environ.get("DFLASH_HF_MODEL")
         assert path, (
-            "DFlash drafter build requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "
-            "(a dir with config.json + model.safetensors)"
+            "DFlash drafter build needs a checkpoint dir (config.json + model.safetensors): set "
+            "dflash_checkpoint_path, give the model adapter a dflash_model_default, or export "
+            "DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash"
         )
         dcfg = DFlashDrafterConfig.from_pretrained(path)
         # The adapter gates which MODEL may run DFlash (ADAPTER.supports_dflash, checked in the runner); this
@@ -799,6 +804,12 @@ class TtPrefillRuntime:
                     actual_start,
                     slot_idx=slot_id,
                     actual_end=actual_end,
+                    d2h_service=d2h_service,
+                    metadata_msg=metadata_msg,
+                    on_layer_complete=on_layer_complete,
+                    # This rank is the KV tail, so its slice ends at the model's global layer count: the
+                    # draft layers ack as the layers just past it (see layer_ack_layers).
+                    layer_ack_base=self.config.first_layer_idx + self.config.num_layers,
                 )
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
@@ -886,6 +897,18 @@ class TtPrefillRuntime:
         second cache too: see `kv_migration_stages`, which the engine prefers."""
         return int(kv_caches.kvpe.storage.buffer_address())
 
+    def layer_ack_layers(self, global_ack_layers: int, local_ack_layers: int) -> tuple[int, int]:
+        """``(global, local)`` layer-ack row counts for this rank, widening the counts the model's own
+        layers emit.
+
+        Under DFlash the drafter's context K/V are further caches the migration consumer must see filled, so
+        they ack as layers past the verifier's last one. Every rank must agree on the GLOBAL count — the
+        master router's reorder buffer keys on ``chunk * global + layer`` and demands a dense sequence — but
+        only the KV-tail rank writes those layers, so only its LOCAL count grows.
+        """
+        extra = self.drafter.config.num_hidden_layers if self.config.dflash_enabled else 0
+        return global_ack_layers + extra, local_ack_layers + (extra if self.config.is_last_rank else 0)
+
     def kv_migration_stages(self, kv_caches: MlaKvCaches, first_layer_idx=None, num_my_layers=None):
         """One `KvCacheStage` per merged-table config: KVPE first, then the sparse/DSA index-key cache
         when present. The engine all-gathers one layout per entry (on ALL ranks) and hands them to
@@ -915,6 +938,24 @@ class TtPrefillRuntime:
                     "cache is sized to the stage (see the GLM-5.2 adapter's allocate_kv_cache)."
                 )
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
+
+        if self.config.dflash_enabled:
+            # Two more stages, K then V: they are distinct allocations, so each needs its own gathered
+            # base address. The drafter is built on the KV-tail rank alone, so every other rank
+            # contributes a null stage — the all-gather is collective and must be entered by all ranks,
+            # and merged_num_layers/the populate walk both ignore count == 0. Keep these LAST so the
+            # block-cyclic configs stay at layout indices [0, n_block_cyclic).
+            draft_layers = self.drafter.config.num_hidden_layers
+            if self._dflash_k_cache is not None:
+                # The drafter lives on the KV tail, whose slice ends at the model's global layer count, so
+                # this is where the verifier's layer axis ends and the draft layers continue it. One axis for
+                # both keeps a single (layer, position, slot) key meaningful across every config of the table.
+                draft_first = first_layer_idx + num_my_layers
+                stages.append(KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers))
+                stages.append(KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers))
+            else:
+                stages.append(KvCacheStage(0, 0, 0))
+                stages.append(KvCacheStage(0, 0, 0))
         return stages
 
     def kv_table_layer_rows(self, stage_layouts):
@@ -982,17 +1023,45 @@ class TtPrefillRuntime:
         #     has not written yet. Registering it for the mock path (which only reads) is safe; wiring it
         #     into live migration needs that ordering fixed first.
         dflash_caches = None
-        if self._dflash_k_cache is not None:
-            # The runner all-gathers whenever migration is enabled, so a layout carrying one stage still
-            # means single-rank; only a genuine cross-stage merge has to drop the drafter.
-            if stage_layouts is None or all(len(layout) == 1 for layout in stage_layouts):
-                dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
+        dflash_spec = None
+        # Where the draft layers sit on the merged table's layer axis. The drafter runs after the last
+        # verifier layer and lives on the KV tail, so on the owning rank this is exactly the model's
+        # global layer count -- the same number the drafter acks under (see layer_ack_layers).
+        dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
+        if self.config.dflash_enabled:
+            if stage_layouts is None:
+                # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
+                # straight from the tensors.
+                if self._dflash_k_cache is not None:
+                    dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
             else:
-                logger.warning(
-                    "[migration] DFlash drafter caches are NOT in the KV chunk table: the cross-stage "
-                    "(pipeline-parallel) merge does not describe them, and the drafter write trails the "
-                    "layer-acks within a chunk. Drafter KV will not be migrated or PCC-checked."
-                )
+                # kv_migration_stages appends the drafter's K and V stages last, so peel them off here;
+                # what remains is one layout per block-cyclic cache, which is what the builder expects.
+                # Works for any rank count: the drafter is not layer-partitioned, so exactly one gathered
+                # stage carries it (the KV tail) and the rest are count==0 nulls. Under pipeline
+                # parallelism THIS rank generally owns no drafter tensor, which is precisely why the
+                # spec is metadata-only.
+                n_block_cyclic = 1 + (1 if kv_caches.index is not None else 0)
+                if len(stage_layouts) != n_block_cyclic + 2:
+                    raise RuntimeError(
+                        f"dflash is on, so kv_migration_stages emits {n_block_cyclic} block-cyclic stage(s) "
+                        f"plus the drafter's K and V, but {len(stage_layouts)} layouts were gathered. The "
+                        "caller must gather one layout per stage this runtime declares (a stale "
+                        "kv_migration_base_address fallback does not)."
+                    )
+                *block_cyclic_layouts, k_layout, v_layout = stage_layouts
+                stage_layouts = block_cyclic_layouts
+                # Read it off the gather: THIS rank is generally not the one that owns the drafter, so its
+                # own layer slice says nothing about where the tail's draft layers begin.
+                dflash_first_layer = next(s["first_layer"] for s in k_layout if s["count"] > 0)
+                dcfg = self.drafter.config
+                dflash_spec = {
+                    "num_kv_heads": dcfg.num_key_value_heads,
+                    "head_dim": dcfg.head_dim,
+                    "num_layers": dcfg.num_hidden_layers,
+                    "k_stage_layout": k_layout,
+                    "v_stage_layout": v_layout,
+                }
 
         # Dense row -> global layer map, so config 1 is published on the layer axis (see the builder).
         index_layer_ids = None
@@ -1020,6 +1089,8 @@ class TtPrefillRuntime:
             path=path,
             index_kv_cache=kv_caches.index,
             dflash_caches=dflash_caches,
+            dflash_spec=dflash_spec,
+            dflash_first_layer=dflash_first_layer,
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=stage_layouts,

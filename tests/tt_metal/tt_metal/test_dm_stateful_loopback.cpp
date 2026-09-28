@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -29,8 +30,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
     constexpr uint32_t chunk_bytes = 64;
@@ -48,13 +47,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
     }
     // Poison the output region so a silently-dropped write cannot pass.
     std::vector<uint32_t> poison(total_bytes / sizeof(uint32_t), 0xDEADBEEF);
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_in_address, inputs);
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_out_address, poison);
-    MetalContext::instance().get_cluster().dram_barrier(dev->id());
+    slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_in_address, inputs);
+    slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_out_address, poison);
+    MetalContext::instance().get_cluster().dram_barrier(this->device().get_device_ids()[0]);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 
     const experimental::KernelSpecName STATEFUL{"stateful_dram_loopback"};
 
@@ -76,7 +75,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
             .target_nodes = node,
         }},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
@@ -93,7 +92,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> outputs(total_bytes / sizeof(uint32_t), 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_out_address, total_bytes, outputs);
+    slow_dispatch::ReadFromDRAMChannel(this->device(), 0, dram_out_address, total_bytes, outputs);
 
     for (uint32_t i = 0; i < inputs.size(); i++) {
         ASSERT_EQ(outputs[i], inputs[i]) << "word " << i << ": got 0x" << std::hex << outputs[i] << " expected 0x"

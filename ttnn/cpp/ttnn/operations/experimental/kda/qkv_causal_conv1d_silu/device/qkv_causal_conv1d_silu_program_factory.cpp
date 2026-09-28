@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_program_factory.hpp"
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include <limits>
 #include <vector>
 
@@ -26,8 +27,11 @@ constexpr uint32_t tap_count = 4;
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
-    const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory::create_mesh_workload_artifacts(
+    const QkvCausalConv1dSiluParams& attrs,
+    const QkvCausalConv1dSiluInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input = in.input.mesh_tensor();
     const auto& history = in.history.mesh_tensor();
     const auto& tap0 = in.tap0.mesh_tensor();
@@ -117,6 +121,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
+    const tt::tt_metal::experimental::TensorParamName actual_start_name{"actual_start"};
+    const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
+    reader.tensor_bindings.push_back({actual_start_name, "actual_start"});
+    reader.tensor_bindings.push_back({predecessor_name, "predecessor_carry"});
+
     tt::tt_metal::experimental::KernelSpec writer{
         .unique_id = writer_kernel_name,
         .source =
@@ -176,24 +185,27 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
     }
 
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
+        tt::tt_metal::experimental::TensorParameter{.unique_id = input_tensor_name, .spec = input.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = history_tensor_name, .spec = history.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
+    };
+
+    tensor_parameters.push_back({.unique_id = actual_start_name, .spec = in.actual_start.mesh_tensor().tensor_spec()});
+    tensor_parameters.push_back(
+        {.unique_id = predecessor_name, .spec = in.predecessor_carry.mesh_tensor().tensor_spec()});
+
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
-        .tensor_parameters =
-            {
-                tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = input_tensor_name, .spec = input.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = history_tensor_name, .spec = history.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
-            },
+        .tensor_parameters = std::move(tensor_parameters),
         .work_units =
             {
                 tt::tt_metal::experimental::WorkUnitSpec{
@@ -221,10 +233,19 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         {v_tensor_name, v},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = std::move(run_args),
-    };
+    run_args.tensor_args.emplace(actual_start_name, in.actual_start.mesh_tensor());
+    run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry.mesh_tensor());
+
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(spec),
+            .run_params = std::move(run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.sequence,
+        reader_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

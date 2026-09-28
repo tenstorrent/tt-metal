@@ -12,6 +12,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -243,97 +244,25 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs SliceTileProgramFactory::override_runtime_arguments(
-    const SliceParams& args,
-    const SliceInputs& tensor_args,
-    Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    return slice_program_run_args(SliceTileProgramFactory{}, args, tensor_args, output);
+SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    auto artifacts = create_program_artifacts(args, tensor_args, output);
+    auto program = MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
+    SetProgramRunArgs(program, artifacts.run_params);
+    // The cache key includes the full input/output geometry, slice bounds and core grid. Reuse the
+    // resulting work assignments, but re-apply them on hits to preserve scalar restoration (#52651).
+    // Do not retain non-owning references to the miss's tensors after this call.
+    artifacts.run_params.tensor_args.clear();
+    return {std::move(program), {.run_args = std::move(artifacts.run_params)}};
 }
 
-tt::tt_metal::experimental::Group<tt::tt_metal::experimental::KernelRunArgs> slice_tile_run_args(
-    const SliceParams& args,
-    const SliceInputs& tensor_args,
-    const Tensor& output,
-    uint32_t start_offset,
-    const tt::tt_metal::experimental::KernelSpecName& reader_kernel,
-    const tt::tt_metal::experimental::KernelSpecName& writer_kernel) {
-    // Must reproduce create_program_artifacts's work split exactly; divergence leaves stale scalars in these slots.
-    const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
-    const uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        args.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
-
-    const auto& input_shape = input.padded_shape();
-    const auto& output_shape = output.padded_shape();
-    const std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-
-    const uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
-    const uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
-    const uint32_t num_unpadded_Yt = output_shape[-2] / TILE_HEIGHT;
-    const uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT;
-
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    accumulated_total_per_dim[0] = num_total_Xt;
-    accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
-    std::vector<uint32_t> num_unpadded_tiles_per_dim(num_dims);
-    num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
-    num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
-    for (int32_t i = 2; i < static_cast<int32_t>(num_dims); ++i) {
-        const uint32_t num_unpadded_dim = output_shape[-(i + 1)];
-        const uint32_t num_total_dim = input_shape[-(i + 1)];
-        num_unpadded_tiles_per_dim[i] = num_unpadded_dim;
-        accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
-    }
-
-    const auto cores = corerange_to_cores(all_cores);
-
-    KernelRunArgs reader_run_args{.kernel = reader_kernel};
-    KernelRunArgs writer_run_args{.kernel = writer_kernel};
-
-    uint32_t num_tiles_written = 0;
-    for (const auto& core : cores) {
-        uint32_t num_tiles_per_core = 0;
-        bool active = true;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            active = false;
-        }
-
-        uint32_t start_id = 0;
-        std::vector<uint32_t> id_per_dim(num_dims, 0);
-        if (active) {
-            id_per_dim[0] = num_tiles_written % num_unpadded_tiles_per_dim[0];
-            uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
-            start_id = id_per_dim[0] + start_offset;
-            for (uint32_t j = 1; j < num_dims; ++j) {
-                id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
-                unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
-                start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
-            }
-        }
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"start_id", start_id}, {"num_tiles", num_tiles_per_core}});
-        reader_run_args.advanced_options.runtime_varargs[core] = std::move(id_per_dim);
-
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_written}});
-
-        if (active) {
-            num_tiles_written += num_tiles_per_core;
-        }
-    }
-    return {std::move(reader_run_args), std::move(writer_run_args)};
+void SliceTileProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program, const SliceParams& /*args*/, const SliceInputs& tensor_args, Tensor& output) {
+    using namespace ttnn::prim::slice_metal2;
+    auto& run_args = cached_program.shared_variables.run_args;
+    run_args.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+    UpdateProgramRunArgs(cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    run_args.tensor_args.clear();
 }
 
 }  // namespace ttnn::prim

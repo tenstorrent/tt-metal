@@ -8,11 +8,9 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -308,6 +306,7 @@ class ttMLA:
         idx_host = TtIndexer.extract_host_weights(state_dict)
         self.config = config
         self.mesh_device = mesh_device
+        self._is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
         # Optional segmented-trace controller. Sparse MLA uses it to split capture around the
         # top-k/KV-gather sub-device-manager load and clear, which cannot occur inside one trace.
         self._trace_controller = None
@@ -444,7 +443,7 @@ class ttMLA:
         ), f"active_seq_len ({self.active_seq_len}) must divide SP factor ({self.sp_factor})"
         self.active_seq_len_local = self.active_seq_len // self.sp_factor
 
-        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
+        self.ccl_num_links = 2 if self._is_blackhole else 1  # Blackhole trains 2 fabric routing planes, others 1
 
         # The TP high-bandwidth all-gathers operate on the fixed prefill chunk, never on the full
         # growing KV-cache. Allocate their worst-case outputs once at construction and share them
@@ -801,7 +800,7 @@ class ttMLA:
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying the gating tags.
         Returns None when no tuned config applies (caller falls back to defaults)."""
-        if not is_blackhole():
+        if not self._is_blackhole:
             return None
         return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local), weight_name)
 
@@ -1129,20 +1128,12 @@ class ttMLA:
         )
         ttnn.deallocate(qr)
 
-        # convert to
-        # [batch (1), num_heads_local, seq_len_local, qk_head_dim]
-        tt_q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        # The Q stem uses interleaved head creation. Write the two channel regions directly.
+        tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
             num_heads=num_heads_local,
-            num_kv_heads=0,
-            transpose_k_heads=False,
+            split_head_dim=self.qk_nope_head_dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len_local, self.qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(
-            tt_q, [0, 0, 0, self.qk_nope_head_dim], [1, num_heads_local, seq_len_local, self.qk_head_dim]
         )
         ttnn.deallocate(tt_q)
 
@@ -1300,19 +1291,26 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
             )
-            tt_kv = ttnn.experimental.fast_reduce_nc(
-                tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            # Reduce the TP partials directly into the two consumer tensors.
+            tt_kv_nope, tt_kv_rope = ttnn.experimental.fast_reduce_nc_split(
+                tt_kv,
+                dim=1,
+                split_output_width=self.kv_lora_rank,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
-
-        # Raw compressed KV (pre-norm/pre-rope, [.., 576]) for debug/PCC against golden traces.
-        kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
-        tt_kv_rope = ttnn.slice(
-            tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
-        )
-        ttnn.deallocate(tt_kv)
+            # tt_kv aliases model-owned gather scratch; keep that buffer alive.
+            kv_intermediates = (
+                {"tt_kv": ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)} if return_kv_intermediates else None
+            )
+        else:
+            # TP=1 has no reduction producer into which to fuse the split.
+            kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
+            tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
+            tt_kv_rope = ttnn.slice(
+                tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
+            )
+            ttnn.deallocate(tt_kv)
 
         tt_kv_nope = ttnn.rms_norm(
             tt_kv_nope,
@@ -1543,7 +1541,8 @@ class ttMLA:
                 kvpe_cache.format == self.sparse_kv_cache_format
             ), f"MLA configured for {self.sparse_kv_cache_format}, got {kvpe_cache.format} cache"
 
-        signpost(header="MLA_START")
+        # Preserve profiler region labels without duplicating them through Python logging.
+        ttnn.tracy_message("`TT_SIGNPOST: MLA_START`")
 
         # q-norm output uses the tuned activation memory_config in every mode (dense and sparse);
         # the next op (q_b_proj) is the same matmul regardless of attention path.
@@ -1625,7 +1624,7 @@ class ttMLA:
             attn_out = self._attention(**attention_kwargs)
 
         out = self._o_proj_epilogue(attn_out, seq_len_local, hidden_states=hidden_states)
-        signpost(header="MLA_END")
+        ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
         # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
         # for a "full" layer to hand to downstream "shared" layers (GLM-5.2 reuse).
         if return_kv_intermediates and return_indexer_indices:
@@ -1841,14 +1840,14 @@ class ttMLA:
             else:
                 self.mesh_device.load_sub_device_manager(resources.manager_id)
             loaded = True
-            signpost(header="SPARSE_MLA_OVERLAP_START")
-            signpost(header="SPARSE_MLA_LOCAL_TOPK")
+            ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
+            ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_LOCAL_TOPK`")
             local_indices = self._indexer.select_local(
                 selection_state,
                 subdevice_id=resources.topk_subdevice_id,
                 sub_core_grids=resources.topk_core_grid,
             )
-            signpost(header="SPARSE_MLA_KV_GATHER")
+            ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_KV_GATHER`")
             kvpe_dev = self._gather_kvpe_prefix(
                 kvpe_cache,
                 cache_batch_idx,
@@ -1866,11 +1865,11 @@ class ttMLA:
                     trace_controller.sub_device_clear()
                 else:
                     self.mesh_device.clear_loaded_sub_device_manager()
-                signpost(header="SPARSE_MLA_OVERLAP_END")
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_END`")
             if failed:
                 self.tt_ccl.reset_sparse_mla_overlap_semaphores()
 
-        signpost(header="SPARSE_MLA_INDEX_REDISTRIBUTION")
+        ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`")
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
         return indices, kvpe_dev
 
@@ -1936,7 +1935,7 @@ class ttMLA:
         a shared/reuse-indexer layer deliberately skips that write because it owns no indexer state. The
         enclosing block skips FFN/MoE/norm/LM head as well, so this path produces no first-token output.
         """
-        signpost(header="MLA_START")
+        ttnn.tracy_message("`TT_SIGNPOST: MLA_START`")
         seq_len_local = hidden_states.shape[2]
 
         # Sparse decode needs the index key cache for every full-indexer layer even though this fast path
@@ -1986,7 +1985,7 @@ class ttMLA:
         )
         ttnn.deallocate(tt_kvpe)
 
-        signpost(header="MLA_END")
+        ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
         return None
 
     # ----------------------------------------------------------------------------------------

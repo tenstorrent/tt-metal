@@ -378,9 +378,9 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
         0,
         [tensor_shape]
         {
-            // Set up a dest addr to output temp results into, has to be less than 64 (to not write into next tile)
+            // Set up a dest addr to output temp results into, has to be less than 16 (to not write into next tile)
             // but also has to be greater than 0 (where results are expected)
-            constexpr std::uint32_t scratch_dst_addr = 16;
+            constexpr std::uint32_t scratch_dst_addr = 8;
 
             // Pool all faces together (default 4 faces), this will generate 1x16 row of result at dst index scratch_dst_addr
             // No src/dest counters are incremented

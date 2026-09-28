@@ -559,6 +559,27 @@ void py_module(nb::module_& mod) {
 
                 Returns:
                     CoreCoord: The virtual coordinate of that DRAM bank.
+            )doc")
+        .def(
+            "logical_core_from_worker_core",
+            &MeshDevice::logical_core_from_worker_core,
+            nb::arg("virtual_core"),
+            R"doc(
+                Convert a virtual/translated worker coordinate to a logical coordinate.
+
+                The inverse of worker_core_from_logical_core.
+
+                Args:
+                    virtual_core (CoreCoord): The virtual/translated coordinate to convert.
+
+                Returns:
+                    CoreCoord: The logical coordinate of the worker core.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> virtual_core = ttnn.CoreCoord(1, 1)
+                    >>> logical_core = device.logical_core_from_worker_core(virtual_core)
+                    >>> print(f"Logical core: x={logical_core.x}, y={logical_core.y}")
             )doc");
 
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
@@ -1158,6 +1179,7 @@ void py_module(nb::module_& mod) {
             if (!DistributedContext::is_initialized()) {
                 throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
+            nb::gil_scoped_release release;
             DistributedContext::get_current_world()->barrier();
         },
         R"doc(
@@ -1212,7 +1234,11 @@ void py_module(nb::module_& mod) {
             const auto& ctx = DistributedContext::get_current_world();
             // MPI send does not modify the buffer; const_cast is safe here.
             auto* ptr = const_cast<std::byte*>(reinterpret_cast<const std::byte*>(data.c_str()));
-            ctx->send(ttsl::Span<std::byte>(ptr, data.size()), Rank(dest), Tag(tag));
+            const auto size = data.size();
+            {
+                nb::gil_scoped_release release;
+                ctx->send(ttsl::Span<std::byte>(ptr, size), Rank(dest), Tag(tag));
+            }
         },
         nb::arg("data"),
         nb::arg("dest"),
@@ -1238,8 +1264,13 @@ void py_module(nb::module_& mod) {
             }
             std::vector<char> buf(size);
             const auto& ctx = DistributedContext::get_current_world();
-            ctx->recv(
-                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()), Rank(source), Tag(tag));
+            {
+                nb::gil_scoped_release release;
+                ctx->recv(
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()),
+                    Rank(source),
+                    Tag(tag));
+            }
             return nb::bytes(buf.data(), buf.size());
         },
         nb::arg("size"),

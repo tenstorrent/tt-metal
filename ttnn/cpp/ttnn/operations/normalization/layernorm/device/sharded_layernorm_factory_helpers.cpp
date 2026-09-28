@@ -1046,7 +1046,6 @@ m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
         {"num_subblocks_w", c.block_wt / c.subblock_wt},
         {"num_tiles_per_block", c.block_ht * c.block_wt},
         {"float32_dtype", static_cast<uint32_t>(c.fp32_dest_acc_en)},
-        {"legacy_rsqrt", static_cast<uint32_t>(c.legacy_rsqrt)},
         {"num_blocks_second_stage", workers.num_blocks_second_stage},
     };
 

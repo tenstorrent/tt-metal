@@ -36,7 +36,7 @@ struct DramPrefetcherValidatorDeviceOperation {
         // Per-receiver streaming rotation, indexed by global ring position (must match what was
         // queued to the prefetcher). Empty == identity (lead_block = ring_pos), the natural
         // topology order. Non-empty exercises a host-chosen lead block per receiver.
-        std::vector<uint32_t> rotation = {};
+        std::vector<uint32_t> rotation;
     };
 
     struct tensor_args_t {

@@ -1,0 +1,517 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Writer kernel for unified_routed_expert_ffn.
+//
+// Two responsibilities, both handled by this writer kernel:
+//
+// 1. Output drain + placement. Pop `cb_out` (the down matmul's per-core
+//    final block, packed one subblock at a time) and write tiles to the
+//    DRAM-interleaved output tensor at this core's (mt, nt_d) tile region,
+//    looped over `effective_chunks` chunks (computed from the device-side
+//    counts/idx scratch CBs). Activated tiles are distributed across the
+//    M-row by the READER via L1 multicast — no DRAM scratch round-trip or
+//    cross-core barrier. Every expert's output is written directly into the
+//    shared destination buffer at that expert's region offset: the kernel
+//    reads start[global_expert_id] from `start` (= expert_region_offsets)
+//    device-side and adds (start / TILE_HEIGHT) tile-rows to every output
+//    row — fusing what ttnn::insert would otherwise do (no temp-buffer DRAM
+//    round-trip). expert_region_offsets is a mandatory op input, so there is
+//    no per-expert-output-tensor mode.
+//
+// 2. Two-RISC `up`-weight read (UP_SPLIT). The writer (BRISC) reads `up`
+//    from DRAM on NoC 1 concurrent with the reader's NoC-0 `gate` read. The
+//    program factory selects UP_SPLIT (writer_split_up) for ALL layouts: the
+//    writer reads `up` into the gy=0 sender's cb_in1_up slot and the reader
+//    multicasts it on NoC 0, ordered by a local up_go/up_done handshake. Only
+//    a NoC-1 DRAM read happens here — no worker multicast and no NoC-1 atomics
+//    — so it is safe beside the fabric CCL ops. The legacy writer-side NoC-1
+//    multicast mode (UP_WRITER_MCAST / writer_mcasts_up) is retired and never
+//    selected. Per chunk the writer produces all `up` K-blocks, then drains
+//    `cb_out`.
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/debug/assert.h"
+#include "../adaptive_chunk.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp"
+// Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
+// the two halves cannot collide at file scope, and the shims rebase its argument indices into
+// the concatenated lists. Without HYB_NS it is the standalone kernel, unchanged.
+#ifdef HYB_NS
+namespace HYB_NS {
+#include "../hybrid_arg_shims.hpp"
+#else
+// Standalone: this body owns the whole arg list, so both bases are zero.
+#define HYB_CT_BASE 0
+#define HYB_RT_BASE 0
+#endif
+
+constexpr uint32_t TILE_HEIGHT = 32;
+
+void kernel_main() {
+    Noc noc;
+
+    const uint32_t output_addr = get_arg_val<uint32_t>(0);
+    const uint32_t my_mt = get_arg_val<uint32_t>(1);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
+    const uint32_t start_addr = get_arg_val<uint32_t>(3);
+    // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
+    // runtime-arg array starting at UP_RT.
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(4);
+    const bool is_up_sender = get_arg_val<uint32_t>(5) != 0;
+    // UP_SPLIT local handshake sems (see reader): up_go = slot reserved,
+    // up_done = up landed.
+    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(6);
+    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(7);
+
+    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
+    // per_core_M_max: CB-sized max per-core M. The runtime per_core_M is picked
+    // from the device count below; the down matmul packs the full max ring (so
+    // cb_out carries per_core_M_max rows) and this writer emits only the first
+    // (runtime) per_core_M of them.
+    constexpr uint32_t per_core_M_max = get_compile_time_arg_val(1);
+    constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(2);
+    constexpr uint32_t per_core_N_d = get_compile_time_arg_val(3);
+    constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(4);
+    constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(6);
+    constexpr uint32_t N_down_tiles_full = get_compile_time_arg_val(7);
+    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(8);
+    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(9);
+    // device-side count read.
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(11);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(12);
+    // M_tiles_full: total tile-row count of the FFN *input* (x). When the
+    // kernel runs more chunks than strictly needed (because
+    // M_tiles_full % chunk_M_tiles != 0), the last chunk has writer
+    // destinations past M_tiles_full — we skip those source rows here.
+    constexpr uint32_t M_tiles_full = get_compile_time_arg_val(13);
+    // dst_M_tiles: tile-row count of the *destination* (shared) buffer, used to
+    // bound destination writes.
+    constexpr uint32_t dst_M_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(15);
+    // UP_SPLIT up-weight read (see header): the writer reads `up` on NoC 1 into
+    // the gy=0 sender's cb_in1_up slot; the reader mcasts it on NoC 0.
+    // writer_split_up gates it (1 = UP_SPLIT, 0 = LEGACY: reader owns `up`).
+    constexpr uint32_t cb_in1_up = get_compile_time_arg_val(16);
+    constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(17);
+    constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(18);
+    constexpr uint32_t writer_split_up = get_compile_time_arg_val(19);
+    // DOWN_SPLIT: this RISC reads [down_split_k, in0_block_w_d) of each down K-block on
+    // NoC 1 while the reader reads [0, down_split_k) on NoC 0. Split rather than handed
+    // over wholesale because the reads are issue-bound: two RISCs issuing half each beat
+    // one issuing all (see the program factory).
+    constexpr uint32_t cb_in1_down = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(21);
+    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t num_blocks_d = get_compile_time_arg_val(23);
+    constexpr uint32_t d_in1_block_num_tiles = get_compile_time_arg_val(24);
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(25);
+    constexpr bool writer_split_down = down_split_k < in0_block_w_d;
+
+    constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
+    // Full compile-time M-subblock count of cb_out. The writer DRAINS all of them
+    // but only WRITES the first (runtime) per_core_M rows (see the drain loop below).
+    constexpr uint32_t d_in1_num_subblocks_M = per_core_M_max / d_out_subblock_h;
+    // Ceil, matching the program factory: on a ragged grid the last subblock is narrower, so
+    // truncating here would drain one subblock per row too few and deadlock against compute.
+    constexpr uint32_t d_in1_num_subblocks_N = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
+    constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
+    constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
+
+    CircularBuffer cb_out_buf(cb_out);
+    CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
+    CircularBuffer cb_idx_scratch_buf(cb_idx_scratch);
+    CircularBuffer cb_start_scratch_buf(cb_start_scratch);
+
+    // Accessor compile-arg stream order (host appends in this exact order):
+    // out, then start, then up (UP_SPLIT). The accessors are constructed
+    // unconditionally; up_acc is used only when writer_split_up.
+    // IN1_WRITER_MCAST: this RISC owns NoC 1, so it runs the gate/up weight multicast
+    // the reader used to do on NoC 0, overlapping the reader's next DRAM read.
+    constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(26);
+    constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(27) != 0;
+    // Active-token band, appended after the DOWN_SPLIT block above rather than at 20/21:
+    // those slots carry the down-weight args this branch added, so the band moved instead.
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(28);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(29);
+    // Tile columns per DRAM ND shard of the weight tensors, 0 when they are DRAM-interleaved;
+    // see the reader and weight_runs.hpp. Must match the reader's values — both RISCs read the
+    // same tensors.
+    constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(30);
+    constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(31);
+    // Width of the LAST down N-subblock. Equals d_out_subblock_w on an exact subblock grid;
+    // narrower on a ragged one, where the compute kernel packs fewer tiles for that subblock --
+    // waiting on the full width here would hang.
+    constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
+    using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+    using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+
+    // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
+    // below walk the same window on every K-row, so it is computed once.
+    const uint32_t up_col0 = my_nt_gu * per_core_N_gu;
+    const uint32_t up_col_end =
+        (up_col0 + per_core_N_gu < N_gate_tiles_full) ? up_col0 + per_core_N_gu : N_gate_tiles_full;
+    const uint32_t down_col0 = my_nt_d * per_core_N_d;
+    const uint32_t down_col_end =
+        (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+
+    constexpr uint32_t out_accessor_offset = HYB_CT_BASE + 33;
+    constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
+    const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
+
+    constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
+    constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
+    const auto start_acc = TensorAccessor(start_args, start_addr);
+
+    constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
+    constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
+    // DOWN_SPLIT: down accessor follows up in the compile-arg stream.
+    constexpr uint32_t down_accessor_offset = up_args.next_compile_time_args_offset();
+    constexpr auto down_args = TensorAccessorArgs<down_accessor_offset>();
+    // Per-expert `up` base addresses live in a runtime-arg array after the fixed
+    // writer args; UP_RT is its first index. up_addr(e) = arg[UP_RT + e].
+    constexpr uint32_t UP_RT = 8;
+    // DOWN_SPLIT: per-expert down base addresses follow the up block.
+    constexpr uint32_t DOWN_RT = UP_RT + experts_per_chip;
+    // DOWN_SPLIT go/done sem ids follow the per-expert down addresses.
+    constexpr uint32_t DOWN_SEM_RT = DOWN_RT + experts_per_chip;
+    // IN1_WRITER_MCAST runtime args (9) follow the DOWN_SPLIT sem pair.
+    constexpr uint32_t IN1_WM_RT = DOWN_SEM_RT + 2;
+
+    const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
+
+    // Wait for the reader's counts/idx push (resident scratch). Per expert the
+    // writer bounds its cb_out drain by that expert's effective_chunks; the
+    // reader and compute bound theirs identically, so the pipeline stays in
+    // lockstep and the writer never waits on a chunk compute never pushes.
+    cb_counts_scratch_buf.wait_front(1);
+    cb_idx_scratch_buf.wait_front(1);
+    const volatile tt_l1_ptr uint32_t* counts_ptr =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(cb_counts_scratch_buf.get_read_ptr());
+    const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
+    const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
+
+    // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
+    // each expert's output slice begins at start[global_id] (token row).
+    const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
+    {
+        const uint32_t start_page_size = start_acc.get_aligned_page_size();
+        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
+        noc.async_read_barrier();
+    }
+    const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
+
+    // ---- UP_SPLIT up-weight read setup (see header) ----
+    // The writer reads `up` from DRAM on NoC 1 concurrent with the reader's
+    // NoC-0 `gate` read, into the gy=0 sender's cb_in1_up slot; the reader
+    // multicasts it on NoC 0. A local same-core (NCRISC reader <-> BRISC writer)
+    // handshake (up_go / up_done, monotonic) orders the two.
+    Noc noc_up(1);
+    const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
+    Semaphore<> up_go_sem(up_go_sem_id);
+    Semaphore<> up_done_sem(up_done_sem_id);
+    // up_seq stays in lockstep with the reader ACROSS all experts.
+    uint32_t up_seq = 0;
+    // DOWN_SPLIT: the down slot index advances once per down K-block and runs across
+    // chunks and experts, so kb % 2 is the wrong slot after the first chunk.
+    const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
+    uint32_t down_blk = 0;
+    // Separate counter and sems so up_seq stays a pure gate/up count.
+    uint32_t down_seq = 0;
+    Semaphore<> down_go_sem(get_arg_val<uint32_t>(DOWN_SEM_RT));
+    Semaphore<> down_done_sem(get_arg_val<uint32_t>(DOWN_SEM_RT + 1));
+    // IN1_WRITER_MCAST state. NoC 1 multicasts bottom-left -> top-right, so the rectangle
+    // corners come in the OPPOSITE order from a NoC-0 multicast: pass them unswapped and
+    // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
+    // deadlocks with no assert.
+    const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
+    const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
+    const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
+    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
+    Semaphore<> in1_ready_sem(get_arg_val<uint32_t>(IN1_WM_RT + 5));
+    Semaphore<> in1_valid_sem(get_arg_val<uint32_t>(IN1_WM_RT + 6));
+    Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_RT + 7));
+    Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
+    // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
+    uint32_t mc_seq = 0;
+
+    // ======================= per-local-expert loop =======================
+    // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
+    // cores, feed its `up` weights) into the shared output buffer at the
+    // expert's region offset. The chunk-loop body below is unchanged from the
+    // single-expert kernel — only the per-expert bindings differ.
+    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+        const auto up_acc = TensorAccessor(up_args, get_arg_val<uint32_t>(UP_RT + local_expert_id), up_tile_bytes);
+        const uint32_t global_expert_id = idx_ptr[local_expert_id];
+        // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+        // op and are dropped here exactly like a zero count.
+        const uint32_t count_value =
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+        // Same capacity clamp the reader and compute apply to the device-produced
+        // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
+        // the chunk loop in Release too, where ASSERT is a no-op.
+        const uint32_t count_tiles_raw = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        const uint32_t count_tiles =
+            adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, M_tiles_full);
+        ASSERT(count_tiles == count_tiles_raw);
+        // Runtime chunk layout from THIS expert's count — the same math the reader
+        // and compute kernels run, so all three agree on the row mapping (a
+        // mismatch would emit this expert's rows at the wrong token offsets).
+        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+        const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
+
+        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+            // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
+            // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
+            // Runs before the cb_out drain.
+            if constexpr (writer_split_up) {
+                // UP_SPLIT: only gy=0 in1-sender cores read `up`. Per K-block: wait
+                // for the reader to reserve the slot (up_go), read this column's
+                // `up` slice on NoC 1 into it, then signal up_done so the reader
+                // mcasts on NoC 0. Only a NoC-1 DRAM read here (fabric-safe); the
+                // reader owns cb_in1_up reserve/push.
+                if (is_up_sender) {
+                    // The CB write pointer is PER-RISC and the reader owns push, so
+                    // the writer's get_write_ptr never advances. Replicate the
+                    // reader's cadence: cb_in1_up is double-buffered, one push per
+                    // K-block, so the live slot is base + (up_seq-1)%2 * slot.
+                    constexpr uint32_t kUpNumSlots = 2;
+                    CircularBuffer cb_in1_up_buf(cb_in1_up);
+                    const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
+                    const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
+                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+                        ++up_seq;
+                        up_go_sem.wait_min(up_seq);
+                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                        uint32_t l1_w_up = l1_w_up_block_start;
+                        // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
+                        // a down K position the down matmul never reduces (the compute bounds
+                        // its K-loop by real_k_tiles), so stale L1 is dropped.
+                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                            GuRuns::read(
+                                noc_up,
+                                up_acc,
+                                kb * in0_block_w_gu + k,
+                                N_gate_tiles_full,
+                                up_col0,
+                                up_col_end,
+                                l1_w_up,
+                                up_tile_bytes);
+                            l1_w_up += per_core_N_gu * up_tile_bytes;
+                        }
+                        noc_up.async_read_barrier();
+                        up_done_sem.set(up_seq);
+
+                        // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
+                        // for the receivers to free their slots (in1_ready), multicast
+                        // gate+up on NoC 1, and signal mcast_done so the reader may
+                        // eventually REUSE this slot. The reader does not block on
+                        // mcast_done until it needs the slot again, so its next block's DRAM
+                        // read overlaps this multicast -- which is the whole point.
+                        if constexpr (writer_mcasts_in1) {
+                            ++mc_seq;
+                            mcast_go_sem.wait_min(mc_seq);
+                            in1_ready_sem.wait(in1_num_receivers);
+                            in1_ready_sem.set(0);
+                            CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+                            const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+                            const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
+                            const uint32_t gate_block_start =
+                                cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
+                            // linked=true on both data multicasts and the sem, so the posted
+                            // valid-sem write cannot overtake the data (same rationale as the
+                            // reader's NoC-0 version this replaces).
+                            noc_up.async_write_multicast(
+                                CoreLocalMem<uint32_t>(gate_block_start),
+                                MulticastEndpoint{},
+                                gate_slot_bytes,
+                                in1_num_receivers,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = in1_mc_nx_start,
+                                 .noc_y_start = in1_mc_ny_start,
+                                 .noc_x_end = in1_mc_nx_end,
+                                 .noc_y_end = in1_mc_ny_end,
+                                 .addr = gate_block_start},
+                                /*linked=*/true);
+                            noc_up.async_write_multicast(
+                                CoreLocalMem<uint32_t>(l1_w_up_block_start),
+                                MulticastEndpoint{},
+                                up_slot_bytes,
+                                in1_num_receivers,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = in1_mc_nx_start,
+                                 .noc_y_start = in1_mc_ny_start,
+                                 .noc_x_end = in1_mc_nx_end,
+                                 .noc_y_end = in1_mc_ny_end,
+                                 .addr = l1_w_up_block_start},
+                                /*linked=*/true);
+                            noc_up.async_writes_flushed();
+                            in1_valid_sem.set(1);
+                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                                noc_up,
+                                in1_mc_nx_start,
+                                in1_mc_ny_start,
+                                in1_mc_nx_end,
+                                in1_mc_ny_end,
+                                in1_num_receivers);
+                            mcast_done_sem.set(mc_seq);
+                        }
+                    }
+                }
+            }
+
+            // ---- DOWN_SPLIT: read the UPPER K-rows of each down block on NoC 1 ----
+            // Mirrors the UP_SPLIT block above. The reader owns cb_in1_down's reserve/push
+            // and multicast and reads rows [0, down_split_k) on NoC 0; this RISC reads
+            // [down_split_k, in0_block_w_d) into the upper part of the same slot,
+            // concurrently. Per K-block: wait for the reader's go, read, barrier, signal
+            // done.
+            //
+            // down_seq and the down_go/down_done sems are DEDICATED, not shared with
+            // UP_SPLIT: the up block indexes its cb_in1_up slot off (up_seq - 1) % slots,
+            // which only holds while up_seq counts gate/up blocks alone. Folding down
+            // blocks into that counter shifts the up slot by num_blocks_d per chunk and
+            // corrupts the gate/up path from the second chunk on.
+            if constexpr (writer_split_down) {
+                if (is_up_sender) {
+                    const auto down_acc =
+                        TensorAccessor(down_args, get_arg_val<uint32_t>(DOWN_RT + local_expert_id), down_tile_bytes);
+                    // cb_in1_down is double-buffered with one push per down K-block, and this
+                    // RISC never pushes, so its write pointer is static: index the live slot
+                    // off the block counter, exactly as the UP_SPLIT block does.
+                    constexpr uint32_t kDownNumSlots = 2;
+                    CircularBuffer cb_in1_down_buf(cb_in1_down);
+                    const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
+                    const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                    for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+                        ++down_seq;
+                        down_go_sem.wait_min(down_seq);
+                        uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
+                                        down_split_k * per_core_N_d * down_tile_bytes;
+                        ++down_blk;
+                        // Both OOB directions left UNWRITTEN, matching the reader: the compute
+                        // bounds its down K-loop by real_k_tiles and the writer's col guard drops
+                        // phantom output columns.
+                        for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
+                            const uint32_t row = kb * in0_block_w_d + k;
+                            if (row < K_down_tiles) {
+                                DRuns::read(
+                                    noc_up,
+                                    down_acc,
+                                    row,
+                                    N_down_tiles_full,
+                                    down_col0,
+                                    down_col_end,
+                                    l1_w,
+                                    down_tile_bytes);
+                            }
+                            l1_w += per_core_N_d * down_tile_bytes;
+                        }
+                        noc_up.async_read_barrier();
+                        down_done_sem.set(down_seq);
+                    }
+                }
+            }
+
+            // ---- Drain cb_out (down matmul output) to DRAM ----
+            // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
+            // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
+            // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
+            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+            const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
+            const uint32_t col0 = my_nt_d * per_core_N_d;
+            // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
+            // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
+            // rows to keep cb_out balanced — but only WRITE the first per_core_M
+            // (runtime) rows; the rest are MAC-skipped zeros that map onto other
+            // cores' rows and must not be emitted (the local_row < per_core_M guard below).
+            const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+            for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
+                for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
+                    const uint32_t this_w =
+                        (sb_n + 1 == d_in1_num_subblocks_N) ? d_out_subblock_w_tail : d_out_subblock_w;
+                    const uint32_t this_tiles = this_w * d_out_subblock_h;
+                    cb_out_buf.wait_front(this_tiles);
+                    uint32_t subblock_tile_offset = 0;
+                    for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
+                        for (uint32_t j = 0; j < this_w; ++j) {
+                            const uint32_t local_row = sb_m * d_out_subblock_h + i;
+                            const uint32_t row = row0 + local_row;
+                            const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
+                            // `row` indexes the FFN *input* (x) tile-rows; the
+                            // destination tile-row adds the per-expert region
+                            // offset.
+                            const uint32_t dst_row = row_offset_tiles + row;
+                            // Bounds that decide whether this is a real output tile
+                            // for this expert:
+                            //   * col < N_down_tiles_full: GRID_X=11 ceil_div
+                            //     produces phantom output cols past actual N.
+                            //   * row < M_tiles_full: ceil_div of M produces a
+                            //     last-chunk tail past actual M when
+                            //     M_tiles_full doesn't divide chunk_M_tiles.
+                            //   * row < count_tiles: the last chunk's per_core_M
+                            //     rows extend past count_tiles when count_tiles
+                            //     is not chunk-aligned.
+                            //   * local_row < per_core_M: cb_out carries per_core_M_max
+                            //     rows (full ring); rows past the runtime per_core_M
+                            //     are zeros that belong to other cores — never write.
+                            //     The bound is on the tile-ROW, not on sb_m: a subblock
+                            //     spans d_out_subblock_h rows, so comparing the subblock
+                            //     index would pass the whole subblock holding the first
+                            //     out-of-range row.
+                            if (local_row < per_core_M && col < N_down_tiles_full && row < M_tiles_full &&
+                                row < count_tiles) {
+                                // The destination tile-row must stay inside the
+                                // (possibly shared) output buffer. ttnn::insert
+                                // asserted the whole-slice fit
+                                // (start_tile_idx + num_tiles <= global_num_tiles);
+                                // assert the per-tile equivalent so an over-capacity
+                                // region offset fails loudly in watcher builds. The
+                                // guard below keeps Release builds safe (skip the OOB
+                                // write rather than corrupt DRAM, since ASSERT is a
+                                // no-op there).
+                                ASSERT(dst_row < dst_M_tiles);
+                                if (dst_row < dst_M_tiles) {
+                                    const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
+                                    noc.async_write(
+                                        cb_out_buf,
+                                        out_acc,
+                                        out_tile_bytes,
+                                        {.offset_bytes = subblock_tile_offset},
+                                        {.page_id = tile_idx});
+                                }
+                            }
+                            subblock_tile_offset += out_tile_bytes;
+                        }
+                    }
+                    // Wait for the writes to LEAVE this core (departed sender);
+                    // doesn't wait for the DRAM round-trip. Safe to reuse the L1
+                    // slot now — the NoC has captured the data. ~10x faster than
+                    // noc_async_write_barrier per subblock at small per_core_M.
+                    noc.async_writes_flushed();
+                    cb_out_buf.pop_front(this_tiles);
+                }
+            }
+        }  // end chunk loop
+    }  // end per-local-expert loop
+    // Ensure all outstanding writes complete at the destination before the
+    // kernel returns (the next dispatched op may read this output).
+    noc.async_write_barrier();
+    // UP_SPLIT issues only per-K-block-barriered NoC-1 `up` reads (no NoC-1
+    // worker multicast and no NoC-1 atomics), so no extra NoC-1 drain is needed
+    // here — which is exactly why it is safe beside the fabric CCL ops.
+}
+
+#ifdef HYB_NS
+}  // namespace HYB_NS
+#endif
