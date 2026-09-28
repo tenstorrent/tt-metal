@@ -10,6 +10,7 @@
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/generic/generic_op.hpp"
@@ -247,7 +248,7 @@ void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, 
         "SDPA recipe attn_mask only supports minimal tile padding");
 }
 
-// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned).
+// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
 constexpr uint8_t kRecipeMaskCb = 15;
 
 static std::vector<Tensor> run_recipe_segments(
