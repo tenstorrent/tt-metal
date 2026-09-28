@@ -6,7 +6,7 @@
 Structural + wiring tests run always (random weights at real checkpoint shapes — 390M fits in
 RAM, so the FULL block runs here, not a shortened one). Numerical tests need the checkpoint.
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_flow_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_flow_ref.py
 """
 
 import os

@@ -266,7 +266,10 @@ class Asr:
         self.model = WhisperForConditionalGeneration.from_pretrained(
             ASR_MODEL, torch_dtype=torch.float32).eval()
 
-    def __call__(self, wav, lang):
+    def __call__(self, wav, lang, long_form=None):
+        """`long_form` None decides by duration, which is what the gate uses. Forcing it False on a
+        long clip reproduces the 30 s truncation, so the calibration test can prove the branch is
+        load-bearing rather than assume it."""
         audio = wav.reshape(1, -1)
         n = int(audio.shape[1] * ASR_SR / OUTPUT_SR)
         audio = torch.nn.functional.interpolate(audio.unsqueeze(0), size=n, mode="linear",
@@ -277,8 +280,8 @@ class Asr:
         # losing the thread on long input -- it measured WER 0.245 on a passage that is actually
         # word-perfect. Under 30 s the default padding is required instead, because the encoder
         # wants the full 3000 frames.
-        long_form = n > 30 * ASR_SR
-        kw = ({"truncation": False, "padding": "longest", "return_attention_mask": True}
+        long_form = n > 30 * ASR_SR if long_form is None else long_form
+        kw =({"truncation": False, "padding": "longest", "return_attention_mask": True}
               if long_form else {})
         inp = self.proc(audio[0].numpy(), sampling_rate=ASR_SR, return_tensors="pt", **kw)
         gen = {"language": lang, "task": "transcribe", "do_sample": False, "num_beams": 1}
@@ -349,7 +352,8 @@ def rig():
 
 @pytest.mark.slow
 # The default 300 s covers a two-voice medium cell and not the long band, where one utterance is
-# ~36 s of audio and Whisper pays two 30 s windows for it.
+# ~36 s of audio and long-form transcription of it costs ~28 s (BUG-13: decode steps for a longer
+# transcript, not a second window).
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("band", BANDS)
 @pytest.mark.parametrize("lang", sorted(WER_SENTENCES), ids=lambda l: LANG_NAMES[l])

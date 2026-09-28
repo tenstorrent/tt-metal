@@ -30,7 +30,7 @@ frames whose semantic code flips while every acoustic code is exact. Do not fold
 into one.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_model_teacher_forced_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
     pytest -svv ... -k "not full_utterance"      # the 64-frame breadth alone, ~18 min
 """
 

@@ -4,6 +4,10 @@ Prints MOS_LANG_<code> lines for quality_report.py to parse, plus MOS_LANG_MIN, 
 degrading is visible where a pooled mean hides it.
 
     /tmp/mosvenv/bin/python tests/probes/mos_perlang.py base
+    /tmp/mosvenv/bin/python tests/probes/mos_perlang.py /path/to/clip_dir     # any manifest dir
+
+Also prints one MOS_JSON line with every clip's score, for callers that must not depend on the
+table's formatting (tests/test_mos.py).
 """
 import json, os, sys
 
@@ -17,7 +21,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 GEN = os.path.join(HERE, "generated")
 
 tag = sys.argv[1] if len(sys.argv) > 1 else "base"
-d = os.path.join(GEN, f"lang_{tag}")
+d = tag if os.path.isdir(tag) else os.path.join(GEN, f"lang_{tag}")
 rows = json.load(open(os.path.join(d, "manifest.json")))
 
 m = distillmos.ConvTransformerSQAModel()
@@ -31,11 +35,12 @@ def score(path):
         return float(m(x).item())
 
 
-by_lang = {}
+by_lang, clips = {}, []
 print(f"  {'lang':>5} {'voice':<16} {'s':>2} {'words':>5} {'sec':>6} {'MOS':>6}")
 for r in rows:
     v = score(os.path.join(d, r["file"]))
     by_lang.setdefault(r["lang"], []).append(v)
+    clips.append({**r, "mos": v})
     print(f"  {r['lang']:>5} {r['voice']:<16} {r['sentence']:>2} {r['words']:>5} "
           f"{r['seconds']:>6.1f} {v:>6.3f}", flush=True)
 
@@ -48,3 +53,4 @@ for lang in sorted(by_lang):
           f"max={max(vals):.3f}")
 print(f"MOS_LANG_MIN {min(means.values()):.4f}")
 print(f"MOS_LANG_SPREAD {max(means.values()) - min(means.values()):.4f}")
+print("MOS_JSON: " + json.dumps({"means": means, "clips": clips}))

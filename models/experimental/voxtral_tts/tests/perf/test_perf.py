@@ -11,7 +11,7 @@ Ceilings are loose smoke checks. This runs on a shared card, and the regression 
 paired comparison `scripts/quality_report.py --compare` performs against measured noise floors.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_perf.py
+    pytest -svv models/experimental/voxtral_tts/tests/perf/test_perf.py
 """
 
 import pytest

@@ -9,7 +9,7 @@ RAM so the FULL decoder runs). Numerical tests need the checkpoint.
 Also pins the two facts that shape the whole port plan: the codec ENCODER is absent from the
 released checkpoint, and the codec's norm_eps is 1e-2.
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_codec_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_codec_ref.py
 """
 
 import os
