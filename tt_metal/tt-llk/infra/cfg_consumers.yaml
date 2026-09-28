@@ -1,5 +1,6 @@
 # Config-field consumers: which Tensix thread's instructions READ each field.
-# Generated data -- do not hand-edit.
+# Vendored snapshot, maintained by hand: when a field is added or its readers change, add or
+# update its entry here, under each architecture it exists on, keeping keys sorted.
 #
 # A field ABSENT here has no reader recorded for it: that is UNKNOWN, not 'nobody consumes it'.
 # Coverage is uneven between architectures, so absence carries no weight on its own.

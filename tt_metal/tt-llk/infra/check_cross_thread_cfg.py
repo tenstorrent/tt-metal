@@ -4,8 +4,9 @@
 Most Tensix backend config lives in ONE copy shared by all three threads, packed several fields to
 a 32-bit word. Two consequences:
 
-  CLOBBER    A whole-word write (WRCFG_32b, `cfg[w] = ...`) writes all 32 bits, so it destroys every
-             other field in that word -- including fields belonging to another thread.
+  CLOBBER    A whole-word write (WRCFG_32b, `cfg[w] = ...`, the MMIO `cfg_rmw`/`cfg_write` helpers)
+             writes all 32 bits, so it destroys every other field in that word -- including fields
+             belonging to another thread.
   SAME-FIELD Two threads doing a masked read-modify-write of the SAME bits still race on the value.
              (DIFFERENT bits are safe without a mutex: the config RMW is per-byte atomic.)
 
@@ -15,7 +16,12 @@ so classification is by the WRITING INSTRUCTION, never by the address.
 
 Field ownership is derived from the tree rather than hand-maintained: the checker first records
 which thread writes which field (from the enclosing llk_unpack_* / llk_math_* / llk_pack_* file or
-function), then flags writes that cross those boundaries.
+function, and the math thread for SFPU kernels), then flags writes that cross those boundaries.
+
+This is the blocking pre-commit gate: plain Python, no build and no Clang, so it runs on every
+commit. The llk-audit `cfg-word-overlap` check models the same hazard more deeply (REG2FLOP,
+CFGSHIFTMASK, intra-thread clobbers, Quasar) but needs the Clang extractor, so it stays an
+advisory audit. Keep the two agreeing on what counts as a write when either changes.
 """
 import argparse
 import os
@@ -40,6 +46,23 @@ def load_defs(path):
     return {k: (addr[k], shamt[k], mask[k]) for k in addr if k in shamt and k in mask}
 
 
+def thread_section_fields(path):
+    """Fields in the `// Registers for THREAD` section, which index ThreadConfig, not Config.
+
+    Their word numbers alias the shared Config words (both bases are 0), so they must not be
+    read as other fields of a shared word.
+    """
+    names, in_thread = set(), False
+    for line in open(path, errors="ignore"):
+        if line.startswith("// Registers for "):
+            in_thread = line.strip() == "// Registers for THREAD"
+        elif in_thread:
+            m = DEF_ADDR.match(line)
+            if m:
+                names.add(m.group(1))
+    return names
+
+
 # --- write mechanisms ---------------------------------------------------------------------------
 # Whole-word: every bit of the word is overwritten.
 # Addressing is frequently BASE + OFFSET. Three pitfalls, all of which silently corrupt a result:
@@ -56,36 +79,66 @@ WRCFG_ANY = re.compile(
 )
 WRCFG_WIDE = ("WRCFG_128b", "1")
 CFG_INDEX = re.compile(r"\bcfg\s*\[([^\]]+)\]\s*=")
+# The WH/BH `cfg_rmw` / `cfg_rmw_gpr` / `cfg_write` helpers are RISC MMIO: a load, a modify and a
+# full 32-bit store (`cfg_write` is the store alone). A write by another thread to the same word
+# between the load and the store is lost, so they clobber like a whole-word write -- disjoint bits
+# are NOT safe through them. (On Quasar `cfg_rmw` is a Tensix RMWCIB; that arch is refused below.)
+MMIO_WRITE = re.compile(r"\bcfg_(?:rmw_gpr|rmw|write)\s*\(\s*([^,()]+)")
 ADDR_EXPR = re.compile(r"^\s*([A-Za-z_0-9]+)_ADDR32\s*(?:\+\s*(.+?))?\s*$")
+FULL_WORD_MASK = 0xFFFFFFFF
 
 
 def resolve_addr(expr, defs):
-    """(word, n_words, ok). ok=False when the offset is not a compile-time constant."""
+    """(word, ok). ok=False when the offset is not a compile-time constant."""
     m = ADDR_EXPR.match(expr)
     if not m or m.group(1) not in defs:
-        return None, 0, False
+        return None, False
     base = defs[m.group(1)][0]
     off = m.group(2)
     if off is None:
-        return base, 1, True
+        return base, True
     off = off.strip()
     if re.fullmatch(r"\d+", off):
-        return base + int(off), 1, True
-    return base, 1, False  # variable offset: target not statically known
+        return base + int(off), True
+    return base, False  # variable offset: target not statically known
 
 
-# Masked read-modify-write: only the field's bits change.
-MASKED = [
-    re.compile(r"\bcfg_reg_rmw_tensix\s*<\s*([A-Za-z_0-9]+?)_RMW\s*>"),
-    re.compile(
-        r"\bcfg_reg_rmw_tensix\s*<\s*([A-Za-z_0-9]+)_ADDR32\s*,\s*[^,]+,\s*([A-Za-z_0-9]+)\s*>"
-    ),
-    re.compile(r"\bcfg_reg_rmw_tensix\s*<\s*([A-Za-z_0-9]+)_ADDR32\s*,"),
-]
+# Masked read-modify-write: only the masked bits change. The template arguments are parsed
+# whole, since they may span lines: `<FIELD_RMW>`, or `<ADDR32 [+ k], SHAMT, MASK>` where MASK
+# is a `FIELD_MASK`, a literal, a local mask constant, or an OR of those.
+MASKED_START = re.compile(r"\bcfg_reg_rmw_tensix\s*<")
+
+
+def _template_args(code, lt):
+    """The text between the `<` at offset `lt` and its matching `>`, which may span lines."""
+    depth, j = 1, lt + 1
+    while j < len(code) and depth:
+        depth += {"<": 1, ">": -1}.get(code[j], 0)
+        j += 1
+    return None if depth else code[lt + 1 : j - 1]
+
+
+def _split_args(args):
+    """Split on top-level commas only."""
+    parts, depth, cur = [], 0, []
+    for ch in args:
+        depth += 1 if ch in "<([" else -1 if ch in ">)]" else 0
+        if ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur).strip())
+    return parts
+
+
 # A combined write names one field for the address but masks several: the reconfig helpers build
 # `config_mask = A_MASK | B_MASK`. Reading only the named field's mask misses the other fields in
 # the same write -- which is how INT8_math_enabled was invisible in the first version.
 MASK_CONST = re.compile(r"\b(\w*mask\w*)\s*=\s*([^;]+);", re.I)
+# How many layers of local mask aliases (`a_mask = b_mask | c_mask`) are followed. `seen` already
+# guarantees termination; this bounds work on a pathological chain, which then reads as unresolved.
+MAX_MASK_ALIAS_DEPTH = 6
 
 
 def resolve_mask(name, text, defs, depth=0, seen=None):
@@ -99,7 +152,7 @@ def resolve_mask(name, text, defs, depth=0, seen=None):
     Returns None when the mask cannot be resolved, so the caller can decline to judge rather
     than guess.
     """
-    if depth > 6:
+    if depth > MAX_MASK_ALIAS_DEPTH:
         return None
     seen = seen or set()
     if name in seen:
@@ -129,6 +182,73 @@ def resolve_mask(name, text, defs, depth=0, seen=None):
     return None
 
 
+TREE_MASK_CONST = re.compile(
+    r"\bconstexpr\b[^;=]*?\b(\w*mask\w*)\s*=\s*(0[xX][0-9a-fA-F]+|\d+)\s*;", re.I
+)
+
+
+def tree_mask_constants(paths):
+    """Literal `constexpr` mask constants from the whole tree, for masks defined in another header
+    (e.g. TILE_DESC_UPPER_HALFWORD_MASK in cunpack_common.h). A name given two different values is
+    ambiguous and left out, so it stays unresolved rather than guessed."""
+    seen = defaultdict(set)
+    for p in paths:
+        for m in TREE_MASK_CONST.finditer(open(p, errors="ignore").read()):
+            seen[m.group(1)].add(int(m.group(2), 0))
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
+def resolve_mask_expr(expr, text, defs, tree_masks=None):
+    """A template MASK argument -> bitmask, or None if any part of it does not resolve.
+
+    Every OR'd term must resolve: dropping one would under-report the bits the write touches.
+    A constant defined in this file above the write wins over a tree-wide one.
+    """
+    bits = 0
+    for term in expr.split("|"):
+        term = term.strip().strip("()").strip()
+        if re.fullmatch(r"0[xX][0-9a-fA-F]+|\d+", term):
+            bits |= int(term, 0)
+            continue
+        # a cfg_defines `FIELD_MASK` is a macro, so it wins over any same-named local
+        leaf = term[:-5] if term.endswith("_MASK") else None
+        if leaf in defs:
+            bits |= defs[leaf][2]
+            continue
+        sub = resolve_mask(term, text, defs)
+        if sub is None:
+            sub = (tree_masks or {}).get(term)
+        if sub is None:
+            return None
+        bits |= sub
+    return bits
+
+
+def masked_target(args, text, defs, tree_masks=None):
+    """(field, word, bits, kind) for a cfg_reg_rmw_tensix<...> argument list, or None."""
+    parts = _split_args(args)
+    if len(parts) == 1:
+        field = parts[0][:-4] if parts[0].endswith("_RMW") else None
+        if field not in defs:
+            return None
+        word, _sh, mask = defs[field]
+        return field, word, mask, "masked"
+    if len(parts) != 3:
+        return None
+    word, ok = resolve_addr(parts[0], defs)
+    if word is None:
+        return None
+    field = ADDR_EXPR.match(parts[0]).group(1)
+    if not ok:
+        return field, word, FULL_WORD_MASK, "masked-addr-unresolved"
+    bits = resolve_mask_expr(parts[2], text, defs, tree_masks)
+    if bits is None:
+        # Never fall back to the named field's mask: that attributes the write to bits it may
+        # never touch. Report it as unresolved instead.
+        return field, word, 0, "mask-unresolved"
+    return field, word, bits, "masked"
+
+
 # Per-thread register file -- each thread has its own copy, so it cannot cross threads.
 PER_THREAD = re.compile(r"\bTTI?_SETC16\b")
 MUTEX_ACQ = re.compile(r"t6_mutex_acquire\s*\(\s*mutex::REG_RMW")
@@ -140,16 +260,6 @@ THREADS = ("UNPACK", "MATH", "PACK")
 # --- consumer map ------------------------------------------------------------------------------
 # Which THREAD's instructions consume a field is not derivable from the LLK source; it is a
 # hardware fact, so it is supplied as a vendored table rather than inferred here.
-READER_THREADS = [
-    ("unpacker", "UNPACK"),
-    ("matrix unit", "MATH"),
-    ("sfpu", "MATH"),  # SFPU instructions are issued by the math thread
-    ("vector unit", "MATH"),
-    ("packer", "PACK"),  # includes "the Dest-read output stage that feeds the packer"
-    ("pack path", "PACK"),
-]
-
-
 CONSUMERS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cfg_consumers.yaml"
 )
@@ -158,7 +268,8 @@ CONSUMERS_FILE = os.path.join(
 def load_consumers(arch, path=None):
     """field -> set(consuming threads), from the vendored table.
 
-    The table is generated data, committed so the check needs no external input at run time.
+    The table is vendored, so the check needs no external input at run time; it is maintained by
+    hand (see the header of cfg_consumers.yaml).
     A field ABSENT from it has no reader recorded for it: that is UNKNOWN, not 'nobody consumes
     it'.
     """
@@ -177,24 +288,47 @@ def load_consumers(arch, path=None):
 def thread_of(path, text_before):
     """Which Tensix thread executes this line, from the file and enclosing function."""
     base = os.path.basename(path)
-    for name, keys in (
-        ("UNPACK", ("llk_unpack", "cunpack_common")),
-        ("MATH", ("llk_math", "cmath_common")),
-        ("PACK", ("llk_pack", "cpack_common")),
+    for name, keys in zip(
+        THREADS,
+        (
+            ("llk_unpack", "cunpack_common"),
+            ("llk_math", "cmath_common"),
+            ("llk_pack", "cpack_common"),
+        ),
     ):
         if any(k in base for k in keys):
             return name
     m = None
     for fn in re.finditer(r"_llk_(unpack|math|pack)\w*_\s*\(", text_before):
         m = fn
-    return (
-        {"unpack": "UNPACK", "math": "MATH", "pack": "PACK"}[m.group(1)] if m else None
-    )
+    if m:
+        return m.group(1).upper()
+    return None
 
 
-def writes_in(path, defs):
-    """Yield (line_no, thread, kind, field, word, bitmask, guarded)."""
+def inferred_thread(path):
+    """The thread an SFPU kernel USUALLY runs on, for a write thread_of() cannot name.
+
+    SFPU instructions are normally issued by the math thread, and the kernels live in ckernel_sfpu_*
+    headers under sfpu/ -- names that carry no llk_math. But some SFPU code is issued from another
+    thread, so this is a guess: a finding that depends on it is advisory and never fails a commit.
+    """
+    base = os.path.basename(path)
+    if base.startswith("ckernel_sfpu") or f"{os.sep}sfpu{os.sep}" in path:
+        return "MATH"
+    return None
+
+
+def writes_in(path, defs, tree_masks=None):
+    """Yield (line_no, thread, kind, field, word, bitmask, guarded, inferred)."""
     lines = open(path, errors="ignore").read().split("\n")
+    # comment-stripped text with offsets per line, so a template argument list can be read across lines
+    code_lines = [raw.split("//")[0] for raw in lines]
+    code = "\n".join(code_lines)
+    line_start, pos = [], 0
+    for cl in code_lines:
+        line_start.append(pos)
+        pos += len(cl) + 1
     joined = ""
     # Track the mutex as acquire/release STATE, not a fixed lookback window: a protected write can
     # sit far below its acquire (cunpack_common.h has 26 lines between them), and a window-based
@@ -214,58 +348,64 @@ def writes_in(path, defs):
         # note rather than a finding -- an unclassified write is a gap in this tool's coverage, not
         # evidence of a hazard, and must not fail anyone's commit.
         th = thread_of(path, joined)
+        inferred = th is None and inferred_thread(path) is not None
+        th = th or inferred_thread(path)
         if MUTEX_ACQ.search(line):
             held = True
         if MUTEX_REL.search(line):
             held = False
         guarded = held
-        hit = False
+
+        def whole_word(expr, span=1):
+            """Yield a whole-word write over `span` words; span 4 is a 128b WRCFG."""
+            word, ok = resolve_addr(expr, defs)
+            if word is None:
+                return
+            if span > 1:
+                word &= ~(
+                    span - 1
+                )  # a 128b WRCFG writes the ALIGNED group of four words
+            for k in range(span):
+                yield i + 1, th, (
+                    "whole-word" if ok else "addr-unresolved"
+                ), expr.strip(), word + k, FULL_WORD_MASK, guarded, inferred
+
+        hit = []
         m = WRCFG_ANY.search(line)
         if m:
-            word, _n, ok = resolve_addr(m.group(2), defs)
-            if word is not None:
-                hit = True
-                # WRCFG_128b writes an aligned group of FOUR words.
-                span = 4 if m.group(1) in WRCFG_WIDE else 1
-                for k in range(span):
-                    yield i + 1, th, "whole-word" if ok else "addr-unresolved", m.group(
-                        2
-                    ).strip(), word + k, 0xFFFFFFFF, guarded
+            hit = list(whole_word(m.group(2), 4 if m.group(1) in WRCFG_WIDE else 1))
         if not hit:
             m = CFG_INDEX.search(line)
             if m:
-                word, _n, ok = resolve_addr(m.group(1), defs)
-                if word is not None:
-                    hit = True
-                    yield i + 1, th, "whole-word" if ok else "addr-unresolved", m.group(
-                        1
-                    ).strip(), word, 0xFFFFFFFF, guarded
+                hit = list(whole_word(m.group(1)))
         if not hit:
-            for rx in MASKED:
-                m = rx.search(line)
-                if m and m.group(1) in defs:
-                    w, _sh, mk = defs[m.group(1)]
-                    if m.lastindex and m.lastindex > 1 and m.group(2):
-                        combined = resolve_mask(m.group(2), joined, defs)
-                        if combined is None:
-                            # Do not fall back to the named field's mask: that attributes the
-                            # write to bits it may never touch. Report it as unresolved instead.
-                            yield i + 1, th, "mask-unresolved", m.group(
-                                1
-                            ), w, 0, guarded
-                            break
-                        mk = combined
-                    # _MASK is already positioned within the word (e.g. SrcA: SHAMT 17,
+            m = MMIO_WRITE.search(line)
+            if m:
+                arg = m.group(1).strip()
+                # `cfg_rmw(FIELD_RMW, v)` names the field; the macro expands to its ADDR32 first
+                expr = arg[:-4] + "_ADDR32" if arg.endswith("_RMW") else arg
+                hit = list(whole_word(expr))
+        yield from hit
+        if not hit:
+            for m in MASKED_START.finditer(line):
+                args = _template_args(code, line_start[i] + m.end() - 1)
+                target = (
+                    masked_target(args, joined, defs, tree_masks)
+                    if args is not None
+                    else None
+                )
+                if target:
+                    # A MASK is already positioned within the word (e.g. SrcA: SHAMT 17,
                     # MASK 0x1e0000). Shifting by SHAMT again would double-shift and compare
                     # the wrong bits, producing both false positives and false negatives.
-                    yield i + 1, th, "masked", m.group(1), w, mk, guarded
-                    break
+                    field, word, bits, kind = target
+                    yield i + 1, th, kind, field, word, bits, guarded, inferred
 
 
-def collect(paths, defs):
+def collect(paths, defs, tree_masks=None):
     sites = []
     for p in paths:
-        sites += [(p,) + w for w in writes_in(p, defs)]
+        sites += [(p,) + w for w in writes_in(p, defs, tree_masks)]
     return sites
 
 
@@ -303,30 +443,34 @@ def main():
         return 2
 
     defs = load_defs(args.defs)
+    per_thread = thread_section_fields(args.defs)
     consumers = load_consumers(args.arch, args.consumers)
     all_h = [
         os.path.join(d, f)
         for d, _, fs in os.walk(args.tree)
         for f in fs
-        if f.endswith(".h")
+        if f.endswith((".h", ".hpp"))  # the same suffixes the hooks trigger on
     ]
-    every = collect(all_h, defs)
+    tree_masks = tree_mask_constants(all_h)
+    every = collect(all_h, defs, tree_masks)
 
-    # Derive ownership from the tree: which threads write which bits of which word.
+    # Derive ownership from the tree: which threads write which bits of which word. Each owner bit
+    # remembers where it came from, so a finding can say which write it conflicts with, and whether
+    # that write's thread is certain or only inferred.
     owners = defaultdict(lambda: defaultdict(int))  # word -> thread -> bitmask
-    for _, _, th, kind, _, word, bits, _ in every:
+    owner_sites = defaultdict(list)  # word -> [(thread, bits, path, inferred)]
+    for path, _, th, kind, _, word, bits, _, inferred in every:
         # th is None for an unclassified write; it must not become an owner, or every real write
         # to the word would read it as another thread and report against it.
         if (
             kind == "masked" and th is not None
         ):  # whole-word/unresolved writes tell us nothing about ownership
             owners[word][th] |= bits
+            owner_sites[word].append((th, bits, path, inferred))
 
     # Vacuity guard: if the tree has headers but essentially no masked writes were recognised,
     # the parser is blind to this tree's write API and a zero result proves nothing.
-    n_masked = sum(
-        1 for e in every if e[3] == "masked"
-    )  # tuple: path,ln,thread,kind,field,...
+    n_masked = sum(1 for e in every if e[3] == "masked")
     if all_h and n_masked == 0:
         print(
             f"REFUSING: parsed {len(all_h)} header(s) but recognised no masked config writes."
@@ -339,28 +483,37 @@ def main():
         )
         return 2
 
+    # Findings are computed over the whole tree, then scoped to what the commit is responsible for.
+    # Each carries `sources` (the conflicting owner writes) and `blocking`: a finding fails a commit
+    # only when both sides are certain -- the writer's thread and at least one conflicting owner's
+    # thread are named, not inferred -- and the write itself was resolved. Everything else is
+    # printed as advisory, so an inference can never block someone's PR.
     findings, unclassified = [], []
-    for path, ln, th, kind, field, word, bits, guarded in collect(
-        args.files or all_h, defs
-    ):
+    for path, ln, th, kind, field, word, bits, guarded, inferred in every:
         if th is None:
             unclassified.append((path, ln, field, word))
             continue
         others = {t: b for t, b in owners[word].items() if t != th and b}
         if not others:
             continue
-        if kind == "addr-unresolved":
-            findings.append(
-                (
-                    path,
-                    ln,
-                    "UNRESOLVED",
-                    field,
-                    word,
-                    "offset is not a compile-time constant; review by hand",
-                )
+
+        def conflict(mask=None):
+            srcs = [
+                (p, inf)
+                for t, b, p, inf in owner_sites[word]
+                if t != th and b and (mask is None or b & mask)
+            ]
+            return {p for p, _ in srcs}, any(not inf for _, inf in srcs)
+
+        if kind in ("addr-unresolved", "mask-unresolved", "masked-addr-unresolved"):
+            srcs, certain = conflict()
+            why = (
+                "mask could not be resolved; review by hand"
+                if kind == "mask-unresolved"
+                else "offset is not a compile-time constant; review by hand"
             )
-        elif kind == "mask-unresolved":
+            # a masked write at a variable offset was invisible before; it is surfaced, not enforced
+            enforce = kind != "masked-addr-unresolved"
             findings.append(
                 (
                     path,
@@ -368,7 +521,9 @@ def main():
                     "UNRESOLVED",
                     field,
                     word,
-                    "mask could not be resolved; review by hand",
+                    why,
+                    srcs,
+                    enforce and certain and not inferred,
                 )
             )
         elif kind == "whole-word":
@@ -381,13 +536,14 @@ def main():
             harmed = set()
             if consumers is not None:
                 for fname, (fw, _fs, _fm) in defs.items():
-                    if fw == word:
+                    if fw == word and fname not in per_thread:
                         harmed |= {t for t in consumers.get(fname, set()) if t != th}
             extra = (
                 f"; other fields in this word are consumed by {', '.join(sorted(harmed))}"
                 if harmed
                 else ""
             )
+            srcs, certain = conflict()
             findings.append(
                 (
                     path,
@@ -396,12 +552,15 @@ def main():
                     field,
                     word,
                     f"whole-word write from {th} destroys {victims}{extra}",
+                    srcs,
+                    certain and not inferred,
                 )
             )
         elif not guarded:
             overlap = {t: b & bits for t, b in others.items() if b & bits}
             if overlap:
                 v = ", ".join(f"{t} (0x{b:08x})" for t, b in sorted(overlap.items()))
+                srcs, certain = conflict(bits)
                 findings.append(
                     (
                         path,
@@ -410,8 +569,29 @@ def main():
                         field,
                         word,
                         f"{th} RMWs bits also written by {v}, no mutex::REG_RMW",
+                        srcs,
+                        certain and not inferred,
                     )
                 )
+
+    # Scope. Run with no files (by hand, or CI over the tree) and everything is reported. From the
+    # hook, a commit is answerable for findings AT the files it touches and for findings its
+    # writes CAUSE elsewhere (it added the conflicting owner) -- never for unrelated debt in the
+    # tree, which would block every LLK commit until someone else fixed it. A commit that touches
+    # a verdict input instead of a header (the checker, the defs, the consumer table, the
+    # baseline) moves the answer everywhere, so it is checked against the whole tree.
+    tree_root = os.path.abspath(args.tree) + os.sep
+    touched = {os.path.abspath(f) for f in args.files}
+    whole_tree = not touched or any(not t.startswith(tree_root) for t in touched)
+
+    def in_scope(path, srcs):
+        return (
+            whole_tree
+            or os.path.abspath(path) in touched
+            or any(os.path.abspath(s) in touched for s in srcs)
+        )
+
+    findings = [f for f in findings if in_scope(f[0], f[6])]
 
     accepted = set()
     if args.baseline and not args.write_baseline:
@@ -424,7 +604,7 @@ def main():
         except FileNotFoundError:
             pass
 
-    keys = [f"{os.path.relpath(p)}:{k}:{f}" for p, _, k, f, _, _ in findings]
+    keys = [f"{os.path.relpath(f[0])}:{f[2]}:{f[3]}" for f in findings]
     if args.write_baseline:
         with open(args.baseline, "w") as fh:
             fh.write("# Cross-thread config-register writes accepted for now.\n")
@@ -433,21 +613,36 @@ def main():
         print(f"baseline written: {len(set(keys))} site(s)")
         return 0
 
-    new = [(f, k) for f, k in zip(findings, keys) if k not in accepted]
-    for (path, ln, kind, field, word, why), _ in new:
-        print(f"{path}:{ln}: [{kind}] config word {word} shared across threads")
-        print(f"  field: {field}")
-        print(f"  {why}")
-        if consumers is not None:
-            cs = consumers.get(field.replace("_ADDR32", ""))
+    new = [f for f, k in zip(findings, keys) if k not in accepted]
+    blocking = [f for f in new if f[7]]
+    advisory = [f for f in new if not f[7]]
+
+    def report(items):
+        for path, ln, kind, field, word, why, _srcs, _blk in items:
+            print(f"{path}:{ln}: [{kind}] config word {word} shared across threads")
+            print(f"  field: {field}")
+            print(f"  {why}")
+            if consumers is not None:
+                cs = consumers.get(field.replace("_ADDR32", ""))
+                print(
+                    f"  consumed by: {', '.join(sorted(cs))}"
+                    if cs
+                    else "  consumed by: NOT RECORDED -- treat as unknown, not safe"
+                )
             print(
-                f"  consumed by: {', '.join(sorted(cs))}"
-                if cs
-                else "  consumed by: NOT RECORDED -- treat as unknown, not safe"
+                "  fix: masked cfg_reg_rmw_tensix for your own bits. A FIELD two threads write needs one\n"
+                "       owning thread, or its writers ordered (e.g. by a semaphore): mutex::REG_RMW only\n"
+                "       stops a multi-byte RMW from tearing, and the last writer still wins.\n"
             )
+
+    report(blocking)
+    if advisory:
         print(
-            "  fix: masked cfg_reg_rmw_tensix for your own bits; for a shared FIELD, hold mutex::REG_RMW\n"
+            f"advisory: {len(advisory)} possible cross-thread config write(s) that do NOT fail the commit --\n"
+            "  a thread here is inferred (an SFPU kernel's location), or the write's target is only\n"
+            "  partly known. Review them; baseline or fix any that are real.\n"
         )
+        report(advisory)
     if unclassified:
         print(
             f"note: {len(unclassified)} config write(s) whose thread could not be determined, "
@@ -462,8 +657,8 @@ def main():
             "  Review by hand, or teach thread_of() the spelling. Never fails the commit.\n"
         )
 
-    if new:
-        print(f"{len(new)} new cross-thread config write(s).")
+    if blocking:
+        print(f"{len(blocking)} new cross-thread config write(s).")
         return 1
     return 0
 
