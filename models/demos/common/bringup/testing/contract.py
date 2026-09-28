@@ -8,12 +8,17 @@ Checks (each failure is listed in ``contract_failures``; metric ``contract_check
   engine input      every chunk's input is the H2D shape: uint32 ROW_MAJOR [sp, 1, chunk/sp], tail padded with
                     ``contract.pad_token`` (default 0xFFFFFFFF, what the Blaze engine sends) past actual_end; the last
                     chunk ends ``tests.contract_tail_pad`` tokens early (default 32)
-  acks              one ack per (layer, chunk), in layer order within each chunk
+  acks              one ack per (layer, chunk), in layer order within each chunk; with an adapter that has
+                    ``kv_slot_layer_ids`` (hybrids: only the layers that own a KV slab ack), one per slab layer
   ack timing        at each ack, the table's blocks for that layer and chunk already hold their final bytes
                     (re-read after a full sync must be byte-identical); ``acks_early`` counts violations
   table             build_kv_chunk_table round-trips through protobuf; the migration base address is entry 0
   producer          the producer's own KV read-back PCC vs the golden (``pcc_producer_kv_*``), plus the model's
                     independent read-back (``pcc_kv_independent_min``) when the hooks provide one, and their gap
+  fixed state       tensors in spec state.fixed (recurrent state, conv tail) are not in the KV table: the hooks'
+                    ``contract_state_pcc(spec, runtime, kv, slot, length, golden) -> {name: pcc}`` compares them with
+                    the golden snapshot at ``length`` (``pcc_contract_state_*``); a spec with fixed state and no such
+                    hook fails the contract
 
 Engine env (PREFILL_MODEL, PREFILL_SP/TP, PREFILL_CHUNK_SIZE, PREFILL_MAX_SEQ_LEN, PREFILL_NUM_LAYERS,
 PREFILL_NUM_USERS) must be set before the adapter is imported: call ``engine_env(spec)`` at module import.
@@ -161,7 +166,9 @@ def run_contract_test(s, mesh) -> list[str]:
         rt.prefill_chunk(inp, kv, slot_id=slot, actual_start=a, actual_end=b, request_id=c)
     ttnn.synchronize_device(mesh)
 
-    want = [(layer, c) for c in range(n_chunks) for layer in range(L)]
+    slab_layers = getattr(adapter, "kv_slot_layer_ids", lambda n: None)(L)
+    n_acks = L if slab_layers is None else len(slab_layers)
+    want = [(layer, c) for c in range(n_chunks) for layer in range(n_acks)]
     if acks != want:
         failed.append(f"acks {acks[:6]}... != one per layer in order per chunk ({len(acks)} vs {len(want)})")
     early = sum(
@@ -190,6 +197,15 @@ def run_contract_test(s, mesh) -> list[str]:
             failed.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
     if min(mins.values()) < s.threshold("state", 0.97):
         failed.append(f"producer read-back PCC {mins} below threshold")
+    if s.state_fixed:
+        if not hasattr(hooks, "contract_state_pcc"):
+            failed.append(f"fixed-size state {s.state_fixed} unchecked: hooks.contract_state_pcc is missing")
+        else:
+            fixed = hooks.contract_state_pcc(s, rt, kv, slot, actual_len, g)
+            for k, v in fixed.items():
+                metrics.record(f"pcc_contract_state_{k}", v)
+            if not fixed or min(fixed.values()) < s.threshold("state", 0.97):
+                failed.append(f"fixed-size state read-back PCC {fixed} below threshold")
     metrics.record("contract_checks_failed", len(failed))
     for f in failed:
         print(f"FAIL contract: {f}")
