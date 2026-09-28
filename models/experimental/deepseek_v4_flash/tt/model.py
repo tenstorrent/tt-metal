@@ -30,6 +30,7 @@ Three deviations from the reference, all forced by the on-device decode scope:
   so the real 43-layer checkpoint wants a populated weight ``cache`` or ``max_layers``.
 """
 
+import collections
 import contextlib
 import math
 import os
@@ -178,6 +179,17 @@ def _dspark_enabled() -> bool:
     :meth:`DeepSeekV4Model.read_mtp_hiddens`).
     """
     return os.environ.get("DEEPSEEK_V4_DSPARK", "1") not in ("0", "", "false", "False")
+
+
+def _traced_decode_enabled() -> bool:
+    """Whether :meth:`DeepSeekV4Model.decode_traced` captures and replays traces.
+
+    ``DEEPSEEK_V4_TRACED_DECODE=0`` runs every step eagerly instead: the same per-submesh
+    :meth:`DeepSeekV4Model._decode_submesh_static` program a trace capture records, with the
+    same variant selection, packet and output sockets, just dispatched op by op. Profiler
+    reads inside the layers then run, which a replayed trace cannot do.
+    """
+    return os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "false", "False")
 
 
 class DeepSeekV4Model(DeepSeekV4Module):
@@ -452,6 +464,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # in ``prepare_static_decode`` would make the unwind itself raise and mask the
         # error being unwound.
         self._traced_captured = False
+        self._eager_decode = not _traced_decode_enabled()
+        # Eager mode: positions posted by :meth:`replay_traced`, each run once its packet is
+        # written, and the previous step's outputs, freed once that step has been read.
+        self._eager_pending: collections.deque = collections.deque()
+        self._eager_outs: list = []
         self._replay_queue: queue.Queue = queue.Queue()
         self._replay_thread: Optional[threading.Thread] = None
         # H2D socket carrying the per-step input packet into the traced decode, and the
@@ -2475,7 +2492,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # Capture first: the compile runs inside consume a packet each, so pushing this
         # step's packet before them would hand it to a compile run instead of to the
         # replay below.
-        if not self._traced_captured:
+        if not self._traced_captured and not self._eager_decode:
             self._capture_traces(token_id, pos)
         # Kick the traces before the host packet so execute_trace is already on the
         # command queue (device parked on in-trace recv) while this thread writes PCIe.
@@ -2514,8 +2531,28 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if variant[2] and not self._csa_entries_copied:
             self._copy_dense_csa_entries()
         self._csa_entries_copied = variant[2]
+        if self._eager_decode:
+            self._run_eager_step(variant)
+            return
         for sm in self.submeshes_io:
             ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
+
+    def _run_eager_step(self, variant: tuple[bool, int, bool]) -> None:
+        """Eager body of :meth:`_execute_traces`: the capture's compile run at the real position.
+
+        Every submesh is issued before any output is read, as in :meth:`_capture_traces`,
+        so the cross-submesh sends and receives pair up. The outputs are persistent until
+        the next step, by which time :meth:`read_decoded_output` has drained this one.
+        """
+        for out in self._eager_outs:
+            out.deallocate(True)
+        self._eager_outs = []
+        causal, phase_idx, index_sparse = variant
+        flags = dict(zip(self._pool_crs, self._pool_phases[phase_idx]))
+        for sm in self.submeshes_io:
+            out = self._decode_submesh_static(sm, flags, causal, index_sparse)
+            if out is not None:
+                self._eager_outs.append(out)
 
     def shutdown(self) -> None:
         """Stop the traced-decode replay thread started by :meth:`_ensure_replay_thread`.
@@ -2544,8 +2581,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         Talks only to the H2D socket (a direct PCIe write, no command queue work), and
         may run ahead of the replays by as much as the socket FIFO holds.
+
+        In eager mode this also runs the step :meth:`replay_traced` posted for ``pos``;
+        the packet goes first, as in a compile run, since the eager layers may sync.
         """
         self._write_packet(token_id, pos)
+        if self._eager_decode:
+            posted = self._eager_pending.popleft()
+            assert posted == pos, f"eager decode: packet for pos {pos}, but pos {posted} was posted next"
+            self._execute_traces(pos)
 
     def replay_traced(self, pos: int) -> None:
         """Stage 2 of a step: queue the traces for a step at ``pos`` on the replay thread.
@@ -2558,10 +2602,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         Requires the traces to already be captured: dispatch one blocking
         :meth:`decode_traced` first (the compile/capture path).
         """
+        if self._variant_key(pos)[2]:
+            logger.info(f"indexer {'eager' if self._eager_decode else 'trace'} pos={pos}")
+        if self._eager_decode:
+            self._eager_pending.append(pos)
+            return
         if not self._traced_captured:
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
-        if self._variant_key(pos)[2]:
-            logger.info(f"indexer trace pos={pos}")
         self._ensure_replay_thread()
         self._replay_queue.put(pos)
 
