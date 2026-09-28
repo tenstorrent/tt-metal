@@ -7,7 +7,9 @@ Runs the last chunk of the profile rung (spec ``perf.rung``, default the last ru
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
 chunk_wall_ms, host_transfers_per_layer, pcc_chunk_out (last layer's output vs the golden), prefill_ms_full (opt-in), prefill_tok_s,
-prefill_chunk_ms_c<nn>, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
+prefill_chunk_ms_c<nn>, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs,
+and deferred_cpu_steps / deferred_cpu_ms: the steps deferred to op-gen that ran on the CPU bridge in the timed run and
+their host time (F46; the profile lists them as ``bridged_steps``, and their transfers are not host_transfers_per_layer).
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from collections import defaultdict
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
-from models.demos.common.bringup.testing import profiler
+from models.demos.common.bringup.testing import cpu_bridge, profiler
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
@@ -227,9 +229,12 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         model.free(h)
 
     run()  # compile and fill the program cache: performance is measured warm only
+    cpu_bridge.STATS.reset()
     t0 = time.time()
     run()
     wall = time.time() - t0
+    cpu_bridge.record(metrics)
+    bridged = {"steps": cpu_bridge.STATS.step_names, "ms": round(cpu_bridge.STATS.ms, 1)}
     run(count=True)  # warm, apart from the timed run: host round-trips inside the forward pass (agent rule 5)
     metrics.record("host_transfers_per_layer", max(host))
     # The full-target prefill takes minutes; it is for a final number, not for every perf iteration (spec perf.full_prefill
@@ -286,6 +291,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         "programs": prof["programs"],
         "settings": getattr(model, "perf_settings", lambda: {})(),
         "full_prefill": full,
+        "bridged_steps": bridged["steps"],  # deferred to op-gen: host time in the wall, not device work
+        "deferred_cpu_ms": bridged["ms"],
         **({"ops": ops} if ops else {}),
         **({"timeline": timeline} if timeline else {}),
     }
