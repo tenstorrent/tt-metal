@@ -257,3 +257,15 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   coef 1.0200, attn rel 0.1554. The 1x4 prior's device run gave coef 1.0198. The 1.02 comes from bf16 output rounding correlated with the addend, with 0.03 of margin.
   `DEVICE_STEPS["sliding_moe"]` still lists only attention. The implement step only needs to register the step there.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_residual.py`
+
+## S.sliding_moe.03.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_03_attn_residual.py` (same golden, layer 1, s4096 chunk 1).
+  One deliberate change: the attention step limits now match this run's swap 02, which the owner widened for preset S: rel L2 0.022 (was 0.02) and norm ratio
+  [0.95, 1.08] (was [0.95, 1.05]). The prior's swap 03 was written before that widening. Under the prior's limits the 2x2 device would fail (ratio max 1.0652).
+  All other limits are unchanged: block out rel <= 0.01 (whole chunk and first 128 rows); attn_norm rel 0.03 with ratio [0.97, 1.03]; attention worst row <= 0.08,
+  <= 0.015 vs CPU, and window 128 closer than 127 or 129; h_mid rel <= 0.01 with ratio [0.99, 1.01]; attention term coefficient in [0.95, 1.05] with rel <= 0.3.
+- BRINGUP_IMPL=reference: PASS (out rel 0.0030, h_mid rel 0.0024, coef 1.0000). BRINGUP_IMPL=stub: FAIL on every check.
+- Gate (device TtRMSNorm + TtSlidingAttention + residual add; the first `FAIL pcc=0` lines come from the precompile pass): pcc_swap_out 0.999993, out rel 0.0037 / 0.0029.
+  attention rel 0.0193 / first rows 0.0148, ratio [0.9739, 1.0652], vs CPU w128 0.0130, w127 0.0164, w129 0.0150. h_mid rel 0.0029, ratio [0.9991, 1.0018].
+  coef 1.0199 (0.03 of margin), attn rel 0.154. PASS.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_03_attn_residual.py`
