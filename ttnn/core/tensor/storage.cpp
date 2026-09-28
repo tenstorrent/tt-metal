@@ -112,8 +112,9 @@ struct DeviceStorage::MeshTensorHolder {
         retained_owner_.reset();
     }
 
-    // Retained views share this holder's MeshBuffer, so dropping the MeshTensor alone would keep the memory
-    // reserved until every view is destroyed. Only the holder that owns the allocation may call this.
+    // Other MeshBuffers can reference this holder's MeshBuffer through RetainedViewState, so dropping the
+    // MeshTensor alone would keep it alive until they are destroyed. On an owning holder this frees the device
+    // memory; on a retained view it releases only the view's reference to its source MeshBuffer.
     void deallocate_device_memory() {
         if (auto* allocated = std::get_if<Allocated>(&state_)) {
             allocated->mesh_tensor_.impl().raw_mesh_buffer()->deallocate();
@@ -254,9 +255,11 @@ void DeviceStorage::deallocate() {
         return;
     }
 
-    if (!mesh_tensor_holder_->is_retained_view()) {
-        get_root_mesh_tensor()->deallocate_device_memory();
+    if (mesh_tensor_holder_->is_retained_view()) {
+        mesh_tensor_holder_->deallocate_device_memory();
+        return;
     }
+    get_root_mesh_tensor()->deallocate_device_memory();
     mesh_tensor_holder_->deallocate();
 }
 

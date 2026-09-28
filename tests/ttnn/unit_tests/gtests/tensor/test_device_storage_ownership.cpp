@@ -229,6 +229,28 @@ TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewInvalidatedByOwnerDeal
         << "explicit owner deallocation must release the allocation while nested views of it still exist";
 }
 
+TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewIntermediateDeallocationReleasesRoot) {
+    uint32_t owner_address = 0;
+    std::optional<Tensor> outer;
+    std::optional<Tensor> inner;
+    {
+        Tensor owner = ttnn::create_device_tensor(make_nested_owner_spec(), mesh_device_.get());
+        owner_address = owner.buffer()->address();
+        outer.emplace(
+            ttnn::experimental::create_sharded_tensor_view(owner, make_nested_outer_spec(), kOuterViewOffset));
+        inner.emplace(
+            ttnn::experimental::create_sharded_tensor_view(*outer, make_nested_inner_spec(), kInnerViewOffset));
+    }
+
+    outer->deallocate(/*force=*/true);
+
+    EXPECT_FALSE(inner->is_allocated());
+    Tensor replacement = ttnn::create_device_tensor(make_nested_owner_spec(), mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), owner_address)
+        << "deallocating the only view that retains the root must release the root allocation even while a "
+           "view created from it still exists";
+}
+
 TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewDeallocationPreservesSources) {
     Tensor owner = ttnn::create_device_tensor(make_nested_owner_spec(), mesh_device_.get());
     Tensor outer = ttnn::experimental::create_sharded_tensor_view(owner, make_nested_outer_spec(), kOuterViewOffset);
