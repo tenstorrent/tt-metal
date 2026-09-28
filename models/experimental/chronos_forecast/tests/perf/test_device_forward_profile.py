@@ -5,14 +5,15 @@
 
 Run under Tracy and summarize the signposted region:
 
-    python -m tracy -v -r -p -m pytest \
-        "models/experimental/chronos_forecast/tests/perf/test_device_forward_profile.py" -k default_dram
+    python -m tracy -v -r -p --op-support-count 12000 -m pytest \
+        "models/experimental/chronos_forecast/tests/perf/test_device_forward_profile.py" -k performance_l1
     tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv \
         --start-signpost chronos_device_forward_start --end-signpost chronos_device_forward_stop
 
-The ``*_l1`` variants dispatch ~3.5k ops per forward, which overflows the
-device profiler's marker buffers at batch 1024; run them without Tracy for
-the eager timing, or profile a smaller batch (per-chunk costs are identical).
+The ``*_l1`` variants dispatch ~3.1k programs per forward and the two warmup
+forwards run before the first profiler read, so ``--op-support-count`` must
+cover about 6.3k programs; the default (1000) drops markers and the report
+step then fails with "Device data missing".
 """
 
 from __future__ import annotations
