@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.3 variants.
+"""Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.2 variants.
+
+GLM-5.2, not GLM-5.3: these tests compare against a CPU reference cached under ``variant.mla_ref_cache_env``,
+and only GLM-5.2 has a populated one. The two checkpoints are architecturally identical and these runs use
+random weights, so GLM-5.2 covers the same sparse path.
 
 Dense MLA coverage lives in test_mla.py. This file keeps the sparse reference
 path separate while reusing the same TT execution helper and the production mesh
@@ -46,7 +50,7 @@ SPARSE_KVPE_PCC = 0.99
 # quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-SPARSE_VARIANTS = ["glm_5_1", "glm_5_3"]
+SPARSE_VARIANTS = ["glm_5_1", "glm_5_2"]
 
 
 def _collect_kvpe_cache(cache, mesh_device):
@@ -1001,8 +1005,8 @@ def test_sparse_mla_accuracy_chunked(
     )
 
 
-# GLM-5.3 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
-SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_3" in c.id]
+# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
+SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
 @pytest.mark.parametrize(
@@ -1015,7 +1019,7 @@ SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_3" in c.id]
 def test_sparse_mla_indexer_reuse_chunked(
     mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    """GLM-5.3 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
+    """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
     weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit."""
     config = config_only
@@ -1117,10 +1121,10 @@ def test_sparse_mla_chunked(
     )
 
 
-# glm_5_3 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_3 is the
+# glm_5_2 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_2 is the
 # production-closest of the two (it also exercises DSA cross-layer indexer reuse). Cache format IS kept --
 # it changes the page layout the clamp addresses.
-SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_3" in c.id]
+SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
 @pytest.mark.parametrize(

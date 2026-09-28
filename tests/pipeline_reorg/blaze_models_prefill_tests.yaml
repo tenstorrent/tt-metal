@@ -703,19 +703,21 @@
 
 # ===== GLM-5.3-744B ====================================================================================
 
-- name: "(GLM-5.3-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
+- name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export GLM53_MLA_REF_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm_5_3_mla_ref_cache
+    export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
-    # GLM-5.3 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_3 variant sweep at the
-    # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_3-only),
+    # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
+    # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
+    # GLM-5.2 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_2 variant sweep at the
+    # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_2-only),
     # so no separate -k clause is needed. Random weights + on-the-fly CPU truth -> no staged weights.
     # (The glm_5_1-only kv_only case is intentionally not run here; GLM-5.1 is fully retired from CI.)
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_3 and shape-8x4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4" -vvv --tb=short
     '
   test_type: dsa_mla_glm
   test_tags: [glm_5_3, mla, determinism]
