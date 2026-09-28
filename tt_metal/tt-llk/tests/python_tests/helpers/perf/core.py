@@ -780,6 +780,7 @@ class PerfConfig(TestConfig):
                 run_type,
             )
             for run_type in run_types
+            if run_type.name in {'L1_TO_L1'}
         ]
 
         super().__init__(
@@ -926,6 +927,8 @@ class PerfConfig(TestConfig):
             )
 
     def run(self, perf_report: PerfReport, run_count=1):
+        if not self.run_configs:
+            pytest.skip("bisect: none of ['L1_TO_L1'] in this test")
         results = []
         counter_results_list = []
         code_sizes = {}
