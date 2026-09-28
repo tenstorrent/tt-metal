@@ -196,3 +196,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Device gate (2x2): pcc_swap_out 0.999992, out rel 0.0059, ratio [1.0017, 1.0085] (limit 1.01), mlp_residual vs CPU rel 0.0019,
   mlp_out coef 1.0020, PASS. The device error accumulates as a small upward norm bias: h_mid max 1.0084, out max 1.0085.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_06_mlp_residual.py`
+
+## C.sliding_moe.attn_norm.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attn_norm.py` (same golden,
+  layer 1). Checks: PCC >= 0.99, finite, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03]; the docstring keeps the prior's mutation
+  measurements (sum-for-mean, eps, `1 + w`, zeroed rows).
+- BRINGUP_IMPL=reference: PCC 0.999997, rel 0.0024, ratio [0.9954, 1.0043], PASS. BRINGUP_IMPL=stub: PCC 0, FAIL.
+- The default gate (2x2) already passes, because the device norm module covers every norm step: PCC 0.999996, rel 0.0029, ratio [0.9935, 1.0061].
+  The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_norm.py`
