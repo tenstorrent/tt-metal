@@ -29,7 +29,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
+from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
 from models.perf.benchmarking_utils import BenchmarkProfiler
