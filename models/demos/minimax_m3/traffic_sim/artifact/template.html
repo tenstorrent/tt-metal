@@ -254,9 +254,10 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <div class="prose small" style="margin:4px 0 10px">
         <p>Each scenario has two numbers per feature, measured from opposite ends:</p>
         <ul>
-          <li><b>Gain when added (step #).</b> Start from today's configuration, try every feature and keep the best; repeat from the new configuration until all features are in. "×1.65 #2" = this feature was the 2nd one added and multiplied goodput by 1.65 at that point. The order is a suggested build order; a gain depends on the features added before it.</li>
-          <li><b>Loss if removed.</b> Start with every feature on and turn only this one off. "×1.96" = goodput drops 1.96x without it. ×1.00 = it adds nothing once everything else is on. That is usually because another feature does the same job: bounded dense gather and variable-size lanes both remove the whole-slot scan, and variable chunk already includes unaligned resume.</li>
+          <li><b>G = gain when added (step #).</b> Start from today's configuration, try every feature and keep the best; repeat from the new configuration until all features are in. "×1.65 #2" = this feature was the 2nd one added and multiplied goodput by 1.65 at that point. The order is a suggested build order; a gain depends on the features added before it.</li>
+          <li><b>LOO = loss if removed (leave-one-out).</b> Start with every feature on and turn only this one off. "×1.96" = goodput drops 1.96x without it. ×1.00 = it adds nothing once everything else is on. That is usually because another feature does the same job: bounded dense gather and variable-size lanes both remove the whole-slot scan, and variable chunk already includes unaligned resume.</li>
         </ul>
+        <p>Columns: "4gx today" = 4 galaxies with today's kernels, "4gx roofline" = 4 galaxies with kernels at roofline targets, and the same for 8 galaxies (Method tab).</p>
         <p><b>Tier</b> = the larger of the two numbers, maximised over the four scenarios: P0 ≥ 1.25x, P1 ≥ 1.07x, else P2. Scope is a rough single-engineer estimate.</p>
       </div>
       <div class="tablewrap" id="prioTable"></div>
@@ -829,7 +830,7 @@ function renderRoadmap() {
     }).join('');
     return { t, html: `<tr><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td>${esc(f.name)}${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span> <span class="small muted">${f.scope ? esc(f.scope[1]) : ''}</span></td><td class="small muted">${f.scope ? esc(f.scope[2]) : ''}</td></tr>` };
   }).sort((a, b) => b.t.score - a.t.score);
-  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2">${esc(STUDY.scenarios[sk].label)}<br><span class="muted">gain when added (step #) · loss if removed</span></th>`).join('')}<th>scope</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
+  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2" title="${esc(STUDY.scenarios[sk].label)}">${sk.replace(/^g(\d)_k0$/, "$1gx today").replace(/^g(\d)_k1$/, "$1gx roofline")}<br><span class="muted">G · LOO</span></th>`).join('')}<th>scope</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
   $('scSeg').innerHTML = SCS.map((sk) => `<button type="button" data-sc="${sk}" aria-pressed="${sk === curSc}">${esc(STUDY.scenarios[sk].label)}</button>`).join('');
   $('scSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { curSc = b.dataset.sc; renderRoadmap(); }));
   const S = STUDY.scenarios[curSc];
