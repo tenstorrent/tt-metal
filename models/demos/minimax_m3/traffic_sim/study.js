@@ -49,7 +49,7 @@ const allowed = (keys, f) => (f.requires || []).every((r) => keys.includes(r));
 async function main() {
   const args = process.argv.slice(2);
   const get = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
-  const out = get('--out', path.join(__dirname, 'results', 'study.json'));
+  const out = get('--out', require('./lib/paths.js').STUDY);
   const quick = args.includes('--quick');
   const pool = new Pool(Number(get('--workers', 36)));
   const concs = quick ? CONCS.filter((_, i) => i % 3 === 0) : CONCS;

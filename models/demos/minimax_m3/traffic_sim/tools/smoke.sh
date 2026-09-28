@@ -1,7 +1,7 @@
 #!/bin/bash
 # Smoke test every feature path at one concurrency. Usage: JOB=<slurm job> tools/smoke.sh [C]
 cd "$(dirname "$0")/.." || exit 1
-NODE=${NODE:-/data/philei/tools/node-v22.11.0-linux-x64/bin/node}
+NODE=${NODE:-node}
 C=${1:-256}
 run() { echo "## $*"; ./on_node.sh "$NODE" run.js --preset today-C --conc "$C" "$@" 2>&1 | grep -v '^plan'; }
 run

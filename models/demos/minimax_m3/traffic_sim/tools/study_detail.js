@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Detail view of study.json: candidate gains at every greedy step, and the sensitivity table.
 'use strict';
-const R = JSON.parse(require('fs').readFileSync(process.argv[2] || '/data/philei/m3_traffic_sim/results/study.json'));
+const R = JSON.parse(require('fs').readFileSync(process.argv[2] || require('../lib/paths.js').STUDY));
 const k = (x) => (x / 1000).toFixed(1) + 'k';
 for (const [key, S] of Object.entries(R.scenarios)) {
   console.log(`\n=== ${key} ${S.label}`);

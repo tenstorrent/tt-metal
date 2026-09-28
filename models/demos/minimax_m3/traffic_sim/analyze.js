@@ -3,7 +3,7 @@
 // Usage: node analyze.js [results/study.json] [--points]
 'use strict';
 const fs = require('fs');
-const f = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : '/data/philei/m3_traffic_sim/results/study.json';
+const f = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : require('./lib/paths.js').STUDY;
 const R = JSON.parse(fs.readFileSync(f));
 const k = (x) => (x == null ? '    -' : (x / 1000).toFixed(1).padStart(5) + 'k');
 const pc = (x) => (x == null ? '  - ' : (100 * x).toFixed(0).padStart(3) + '%');

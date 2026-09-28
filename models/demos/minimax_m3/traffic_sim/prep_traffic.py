@@ -233,8 +233,13 @@ def process(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--traces", default="/data/philei/agentx_data/062126/traces.jsonl")
-    ap.add_argument("--out", default="/data/philei/m3_traffic_sim/data")
+    here = os.path.dirname(os.path.abspath(__file__))
+    ap.add_argument(
+        "--traces",
+        default=os.environ.get("AGENTX_TRACES", "/data/philei/agentx_data/062126/traces.jsonl"),
+        help="traces.jsonl of semianalysisai/cc-traces-weka-062126 (HF dataset); env AGENTX_TRACES",
+    )
+    ap.add_argument("--out", default=os.environ.get("M3SIM_DATA", os.path.join(here, "data")))
     ap.add_argument("--procs", type=int, default=min(32, os.cpu_count() or 4))
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()

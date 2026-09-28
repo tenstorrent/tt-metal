@@ -50,7 +50,7 @@ function refineCliff(points, slo, steps, run) {
 
 class Pool {
   constructor(n, data) {
-    this.n = n || Math.min(32, os.cpus().length); this.data = data || '/data/philei/m3_traffic_sim/data';
+    this.n = n || Math.min(32, os.cpus().length); this.data = data || require('./paths.js').DATA;
     this.workers = []; this.queue = []; this.idle = [];
     for (let i = 0; i < this.n; i++) {
       const w = new Worker(__filename, { workerData: { data: this.data } });

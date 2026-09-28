@@ -5,8 +5,29 @@ AIPerf's `inferencex-agentx-mvp` scenario does and runs every request through a 
 16-stage hardware runs of #57827. The goal is to rank features and hyperparameters by what they do for the whole system
 on realistic traffic, not by single-cell benchmarks.
 
-* Interactive artifact (presets, live sweeps, roadmap, calibration): https://claude.ai/artifact/3Yresb3qbWJQpvpQMabaq6
+* Repository: https://github.com/philei-tt/m3-agentx-prefill-lab (also mirrored in tt-metal branch `philei/m3-traffic-sim`, `models/demos/minimax_m3/traffic_sim/`)
+* Hosted copy of the web app: https://claude.ai/artifact/3Yresb3qbWJQpvpQMabaq6
 * Tracking issue: https://github.com/tenstorrent/tt-metal/issues/57827
+
+## Quick start: run the web app
+
+Needs only Node.js ≥ 18 (no `npm install`, no dependencies). The traffic, calibration and study results are in the repository.
+
+```bash
+git clone https://github.com/philei-tt/m3-agentx-prefill-lab && cd m3-agentx-prefill-lab
+node server.js                      # builds dist/index.html on first start, serves http://127.0.0.1:8765
+node server.js --port 9000          # another port; --host 0.0.0.0 to listen on all interfaces
+```
+
+On a remote machine, forward the port from your laptop and open http://localhost:8765:
+
+```bash
+ssh -L 8765:localhost:8765 <remote-host>     # then, on the remote host: node server.js
+```
+
+The page is self-contained: the simulator runs in your browser (Web Workers), so the server only serves one file.
+Fonts come from Google Fonts when reachable, with system fallbacks otherwise.
+`node server.js --rebuild` forces a rebuild; the server also rebuilds automatically when any input is newer than `dist/index.html`.
 
 ## Metric
 
@@ -28,31 +49,37 @@ tokens into useful, re-prefill and padding.
 | `study.js` | Greedy feature roadmap, leave-one-out, topology/budget/lane grid and sensitivity, over {4, 8} galaxies × {today's kernels, roofline kernels}. |
 | `analyze.js`, `tools/study_detail.js` | Print study results. |
 | `lib/pool.js` | Worker-thread pool plus the goodput rule (early stop past the cache cliff). |
-| `build_artifact.js`, `artifact/template.html` | Build the single-file artifact: the core, calibration, 4 MB of traffic as base64, the study summary and the presets. |
+| `build_artifact.js`, `artifact/template.html` | Build the single-file page: the core, calibration, 4 MB of traffic as base64, the study summary and the presets. `--standalone` wraps it as a full HTML document for `server.js`. |
+| `server.js`, `package.json` | Zero-dependency local web server (see Quick start); `npm start` / `npm run build` / `npm run study` are shortcuts. |
+| `feature_details.js` | The per-feature explanations shown when a feature is expanded in the Roadmap table. |
+| `lib/paths.js` | Where data and results are read from: env `M3SIM_DATA` / `M3SIM_RESULTS`, else `./data` and `./results`, else the exabox scratch copies. |
 | `on_node.sh` | `JOB=<slurm id> ./on_node.sh <cmd>` runs on the compute node with soft ulimits raised to the hard limits. |
-| `tools/` | Debug helpers: `dump_cells.js` (per-cell stage medians), `traffic_stats.js`, `smoke.sh` (every feature path). |
+| `tools/` | Helpers: `feature_table.js` (README tables), `study_detail.js`, `grid_by_topology.js`, `dump_cells.js` (per-cell stage medians), `traffic_stats.js`, `smoke.sh` (every feature path), `investigate.sh`. |
 
-Data that does not belong in git lives in `/data/philei/m3_traffic_sim/` on exabox:
-* `data/`: `traffic.bin/json`, plus `zones/` holding copies of the `parse_zone_perf.py` outputs.
-* `results/study.json`: the full study.
-* `artifact/`: the built HTML.
+Data:
+* `data/traffic.bin` + `traffic.json`: the preprocessed corpus, 4 MB, derived from the Apache-2.0 HF dataset.
+* `data/zones/`: `parse_zone_perf.py` outputs of the per-op profiles, the inputs to `collect_calib.py`.
+* `results/study.json`: the full study, which the page's Roadmap tab and presets are built from.
 
-## How to run (exabox, cpu_only allocation; never on the login node)
+`dist/` (the built page) is not committed.
+
+## How to run the model and the study
+
+Any machine with Node ≥ 18 works. On exabox use a cpu_only Slurm allocation, never the login node; `JOB=<id> ./on_node.sh <cmd>` runs a command there with raised ulimits.
 
 ```bash
-NODE=/data/philei/tools/node-v22.11.0-linux-x64/bin/node   # node 22 tarball, no install needed
-PY=/data/philei/tt-metal/python_env/bin/python3
-cd models/demos/minimax_m3/traffic_sim
-JOB=<id> ./on_node.sh $PY prep_traffic.py --procs 32              # once per corpus version
-python3 collect_calib.py                                          # after new hardware runs
-$NODE validate.js                                                 # check the calibration
-JOB=<id> ./on_node.sh $NODE run.js --preset today-C --conc 16,64,256 --set cache=pool --set hostTier=true
-JOB=<id> ./on_node.sh $NODE study.js --workers 36 --out /data/philei/m3_traffic_sim/results/study.json   # 5 min
-$NODE analyze.js /data/philei/m3_traffic_sim/results/study.json
-$NODE build_artifact.js    # then republish artifact/m3_agentx_lab.html to the artifact URL above
+node validate.js                                                  # calibration report (model vs 105 measured cells)
+node run.js --preset today-C --conc 16,64,256                     # one config over a few concurrencies
+node run.js --study-preset g8_k0 --set decodeTps=90 --conc 512,1024
+node study.js --workers 36                                        # full study -> results/study.json (about 8 min on 36 threads)
+node analyze.js && node tools/feature_table.js                    # print results / README tables
+node build_artifact.js --standalone                               # rebuild dist/index.html (server.js does this itself)
+# regenerate the inputs (needs numpy, the AgentX traces and the #57827 run directories):
+python3 prep_traffic.py --traces <traces.jsonl> --procs 32        # data/traffic.bin + traffic.json
+python3 collect_calib.py --matrix <run dir with runA/runB/runC>   # calib_data.json
 ```
 
-One simulation of 1800 s of traffic at C=1024 takes 0.3–0.5 s. The full study (749 configurations, about 12k runs) takes 278 s on 36 threads.
+One simulation of 1800 s of traffic at C=1024 takes 0.3–0.5 s. The full study (751 configurations, about 13k runs with cliff refinement) takes about 8 minutes on 36 threads.
 
 ## Traffic replay (AIPerf `inferencex-agentx-mvp` semantics)
 
@@ -130,7 +157,9 @@ Each cell below is "G #step / LOO":
 * **G** is the gain at the greedy step where the feature was added (the step number is the build order);
 * **LOO** is the leave-one-out loss when the feature is removed from the full stack.
 
-Tier = the larger of the two, maximised over the four scenarios: P0 ≥ 1.25, P1 ≥ 1.07.
+Order and tier come from one reference scenario, **8 galaxies with today's kernels**: the larger of G and LOO there, highest first. P0 ≥ 1.25, P1 ≥ 1.07.
+
+A single scenario is used on purpose. Taking the maximum over scenarios let a feature rank high on one column, and it gave both substitutes (bounded dense gather and variable-size lanes) credit that only one of them earns.
 
 Complexity is a rough judgement of how much of the stack a feature touches:
 * **low**: one op or the scheduler, plus validation;
@@ -139,19 +168,19 @@ Complexity is a rough judgement of how much of the stack a feature touches:
 
 It is not a time estimate and has not been checked with the code owners.
 
-| tier | feature | 4gx today | 4gx roofline | 8gx today | 8gx roofline | complexity |
+| tier | feature | 4gx today | 4gx roofline | 8gx today (ranking) | 8gx roofline | complexity |
 |---|---|---|---|---|---|---|
 | P0 | slot lanes + paged KV pool | ×3.15 #1 / ×6.58 | ×3.38 #1 / ×5.48 | ×2.03 #1 / ×5.51 | ×3.20 #1 / ×5.59 | high |
 | P0 | bounded dense gather | ×0.99 #13 / ×0.99 | ×1.00 #11 / ×1.00 | ×3.50 #2 / ×1.00 | ×1.00 #12 / ×1.00 | low |
 | P0 | host-DRAM KV tier (1 TB/gx) | ×1.43 #3 / ×2.09 | ×2.05 #2 / ×1.67 | ×1.45 #3 / ×1.57 | ×1.31 #2 / ×1.61 | high |
-| P0 | variable-size lanes (arena) | ×1.71 #2 / ×0.99 | ×1.00 #12 / ×1.00 | ×1.01 #11 / ×1.01 | ×1.01 #9 / ×1.00 | med |
-| P0 | async stage handoff | ×1.13 #7 / ×1.16 | ×1.30 #3 / ×1.35 | ×1.22 #4 / ×1.23 | ×1.52 #3 / ×1.51 | med |
-| P0 | multi-request batching | ×1.20 #5 / ×1.29 | ×1.26 #5 / ×1.35 | ×1.17 #6 / ×1.20 | ×1.13 #5 / ×1.18 | high |
-| P0 | index_k stored once (not ×TP) | ×1.14 #4 / ×1.29 | ×1.19 #4 / ×1.20 | ×1.14 #5 / ×1.16 | ×1.20 #4 / ×1.20 | med |
+| P1 | async stage handoff | ×1.13 #7 / ×1.16 | ×1.30 #3 / ×1.35 | ×1.22 #4 / ×1.23 | ×1.52 #3 / ×1.51 | med |
+| P1 | multi-request batching | ×1.20 #5 / ×1.29 | ×1.26 #5 / ×1.35 | ×1.17 #6 / ×1.20 | ×1.13 #5 / ×1.18 | high |
+| P1 | index_k stored once (not ×TP) | ×1.14 #4 / ×1.29 | ×1.19 #4 / ×1.20 | ×1.14 #5 / ×1.16 | ×1.20 #4 / ×1.20 | med |
 | P1 | variable chunk (a2a KV write) | ×1.17 #6 / ×1.04 | ×1.12 #6 / ×1.03 | ×1.13 #7 / ×1.05 | ×1.10 #6 / ×1.04 | high |
-| P1 | index_k bf8 | ×1.08 #8 / ×1.10 | ×1.08 #7 / ×1.08 | ×1.06 #8 / ×1.06 | ×1.05 #8 / ×1.05 | low (PCC) |
-| P1 | shortest-first scheduling | ×1.02 #10 / ×1.03 | ×1.01 #8 / ×1.02 | ×1.03 #9 / ×1.06 | ×1.07 #7 / ×1.06 | low |
+| P2 | index_k bf8 | ×1.08 #8 / ×1.10 | ×1.08 #7 / ×1.08 | ×1.06 #8 / ×1.06 | ×1.05 #8 / ×1.05 | low (PCC) |
+| P2 | shortest-first scheduling | ×1.02 #10 / ×1.03 | ×1.01 #8 / ×1.02 | ×1.03 #9 / ×1.06 | ×1.07 #7 / ×1.06 | low |
 | P2 | MSA SP-local indexer | ×1.02 #9 / ×1.01 | ×1.02 #9 / ×1.02 | ×1.01 #10 / ×1.03 | ×1.01 #10 / ×1.01 | high |
+| P2 | variable-size lanes (arena; substitute for bounded gather) | ×1.71 #2 / ×0.99 | ×1.00 #12 / ×1.00 | ×1.01 #11 / ×1.01 | ×1.01 #9 / ×1.00 | med |
 | P2 | fused multi-user attention | ×1.01 #11 / ×1.01 | ×1.00 #13 / ×1.00 | ×1.01 #12 / ×1.01 | ×1.00 #11 / ×1.00 | high |
 | P2 | unaligned resume (subsumed by var; up to ×1.18 before var) | ×1.00 #12 / ×1.00 | ×1.00 #10 / ×1.00 | ×1.00 #13 / ×1.00 | ×1.00 #13 / ×1.00 | low |
 

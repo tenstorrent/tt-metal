@@ -273,7 +273,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
           <li><b>LOO = loss if removed (leave-one-out).</b> Start with every feature on and turn only this one off. "×1.96" = goodput drops 1.96x without it. ×1.00 = it adds nothing once everything else is on. That is usually because another feature does the same job: bounded dense gather and variable-size lanes both remove the whole-slot scan, and variable chunk already includes unaligned resume.</li>
         </ul>
         <p>Columns: "4gx today" = 4 galaxies with today's kernels, "4gx roofline" = 4 galaxies with kernels at roofline targets, and the same for 8 galaxies (Method tab).</p>
-        <p><b>Tier</b> = the larger of the two numbers, maximised over the four scenarios: P0 ≥ 1.25x, P1 ≥ 1.07x, else P2. Complexity is a rough low / med / high judgement of the implementation work (Method tab).</p>
+        <p><b>Order and tier</b> come from the "8gx today" column (8 galaxies, today's kernels): the larger of its G and LOO, highest first. P0 ≥ 1.25x, P1 ≥ 1.07x, else P2. The other columns show how the value changes with fewer galaxies or faster kernels. Complexity is a rough low / med / high judgement of the implementation work (Method tab).</p>
       </div>
       <div class="tablewrap" id="prioTable"></div>
     </div>
@@ -495,7 +495,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <li><b>Concurrency sweep.</b> Each configuration is simulated at C = 8 to 4096 (28 points), stopping early once it is past the cache cliff, and summarised as goodput.</li>
       <li><b>Greedy roadmap ("gain when added").</b> From the baseline, try every remaining feature, keep the one with the largest goodput, repeat. The order is a suggested build order; each gain is measured in the context of the features before it.</li>
       <li><b>Leave-one-out ("loss if removed").</b> Start from all features on, remove one at a time. It shows what each feature is still worth at the end.</li>
-      <li><b>Priority tier.</b> For each feature, take the larger of its greedy gain and its leave-one-out loss in every scenario, then the maximum over scenarios. P0 ≥ 1.25×, P1 ≥ 1.07×, else P2.</li>
+      <li><b>Priority order and tier.</b> Both come from the reference scenario, 8 galaxies with today's kernels: take the larger of the feature's greedy gain and its leave-one-out loss there, and sort highest first. P0 ≥ 1.25×, P1 ≥ 1.07×, else P2. One scenario is used on purpose. A maximum over scenarios lets a feature rank high on one column, and substitutes such as bounded dense gather and variable-size lanes both get credit that only one of them earns.</li>
       <li><b>Grid.</b> On the features that helped, search topology (stage count × mesh × replicas), batching budget or chunk size, and lanes or arena size. The top result per scenario becomes the <span class="mono">best-*</span> preset.</li>
       <li><b>Sensitivity.</b> The best configuration re-run with:
         <ul>
@@ -536,7 +536,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
     </ul>
 
     <h2 id="m-repro">Reproduce</h2>
-    <p>Code: tenstorrent/tt-metal branch <span class="mono">philei/m3-traffic-sim</span>, directory <span class="mono">models/demos/minimax_m3/traffic_sim/</span>. The README explains the files and the commands. The simulator is one file, <span class="mono">sim_core.js</span>, used unchanged by this page (in a Web Worker) and by node for the study (<span class="mono">study.js</span>, about 5 minutes on 36 threads). Traffic preprocessing is <span class="mono">prep_traffic.py</span>; calibration data collection is <span class="mono">collect_calib.py</span>; the calibration report is <span class="mono">validate.js</span>. Built Sep 28 2026.</p>
+    <p>Code: <a href="https://github.com/philei-tt/m3-agentx-prefill-lab">github.com/philei-tt/m3-agentx-prefill-lab</a>, also mirrored in tenstorrent/tt-metal branch <span class="mono">philei/m3-traffic-sim</span> under <span class="mono">models/demos/minimax_m3/traffic_sim/</span>. To run this page locally: <span class="mono">node server.js</span> (Node ≥ 18, no dependencies), then open http://localhost:8765 or forward that port over ssh. The README explains the files and the commands. The simulator is one file, <span class="mono">sim_core.js</span>, used unchanged by this page (in a Web Worker) and by node for the study (<span class="mono">study.js</span>, about 8 minutes on 36 threads). Traffic preprocessing is <span class="mono">prep_traffic.py</span>; calibration data collection is <span class="mono">collect_calib.py</span>; the calibration report is <span class="mono">validate.js</span>. Built Sep 28 2026.</p>
   </div>
 </section>
 </div>
@@ -862,9 +862,11 @@ $('slo').addEventListener('change', render);
 const FEAT = Object.fromEntries(STUDY.features.map((f) => [f.key, f]));
 const SCS = Object.keys(STUDY.scenarios);
 let curSc = SCS[0];
+// Sort order and tier come from one reference scenario: 8 galaxies with today's kernels.
+const RANK_SC = STUDY.scenarios.g8_k0 ? 'g8_k0' : SCS[0];
 function tierOf(key) {
   let best = 1;
-  for (const sk of SCS) {
+  for (const sk of [RANK_SC]) {
     const S = STUDY.scenarios[sk];
     const l = S.loo.find((x) => x.remove === key); if (l && S.full && l.goodput > 0) best = Math.max(best, S.full.goodput / l.goodput);
     const gi = S.greedy.findIndex((g) => g.add === key); if (gi > 0 && S.greedy[gi - 1].goodput > 0) best = Math.max(best, S.greedy[gi].goodput / S.greedy[gi - 1].goodput);

@@ -2,7 +2,7 @@
 // Traffic statistics of the preprocessed corpus: end-to-start delays, api_time, per-request new tokens.
 'use strict';
 const { loadAll } = require('../run.js');
-const { TR } = loadAll(process.argv[2] || '/data/philei/m3_traffic_sim/data');
+const { TR } = loadAll(process.argv[2] || require('../lib/paths.js').DATA);
 const q = (a, p) => a[Math.min(a.length - 1, Math.floor(p * (a.length - 1)))];
 const show = (name, a) => { a.sort((x, y) => x - y); const m = a.reduce((x, y) => x + y, 0) / a.length; console.log(`${name.padEnd(22)} n=${a.length} mean=${m.toFixed(1)} p10=${q(a, .1).toFixed(1)} p50=${q(a, .5).toFixed(1)} p90=${q(a, .9).toFixed(1)} p99=${q(a, .99).toFixed(1)} max=${a[a.length - 1].toFixed(0)}`); };
 const dMain = [], dSub = [], api = [], out = [], cyc = [];

@@ -17,7 +17,7 @@ function loadAll(dataDir) {
 }
 
 function parseArgs(argv) {
-  const a = { data: '/data/philei/m3_traffic_sim/data', set: {}, conc: null, preset: null, json: false };
+  const a = { data: require('./lib/paths.js').DATA, set: {}, conc: null, preset: null, json: false };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i];
     if (k === '--data') a.data = argv[++i];
@@ -42,7 +42,7 @@ if (require.main === module) {
   let sp = {};
   if (a.studyPreset) {
     const { withFeatures } = require('./study.js');
-    const R = JSON.parse(fs.readFileSync('/data/philei/m3_traffic_sim/results/study.json')).scenarios[a.studyPreset];
+    const R = JSON.parse(fs.readFileSync(require('./lib/paths.js').STUDY)).scenarios[a.studyPreset];
     sp = Object.assign(withFeatures(R.base, R.bestKeys), R.grid[0].extra);
   }
   const base = Object.assign({}, a.preset ? PRESETS.byName(a.preset).cfg : {}, sp, a.set);

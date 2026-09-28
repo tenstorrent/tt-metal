@@ -1,7 +1,7 @@
 #!/bin/bash
 # Reproduce user-reported oddities: replicas, paging vs pool, chunk size. Usage: JOB=<id> tools/investigate.sh
 cd "$(dirname "$0")/.." || exit 1
-NODE=${NODE:-/data/philei/tools/node-v22.11.0-linux-x64/bin/node}
+NODE=${NODE:-node}
 C=${C:-256,384,512}
 run() { echo "## $*"; ./on_node.sh "$NODE" run.js --conc "$C" "$@" 2>&1 | grep -v '^plan' | cut -c1-200; }
 echo "### replicas"

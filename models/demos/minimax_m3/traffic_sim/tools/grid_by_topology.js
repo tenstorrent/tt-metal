@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Best goodput per topology (stages x mesh x replicas) in each scenario's grid.
 'use strict';
-const R = JSON.parse(require('fs').readFileSync(process.argv[2] || '/data/philei/m3_traffic_sim/results/study.json'));
+const R = JSON.parse(require('fs').readFileSync(process.argv[2] || require('../lib/paths.js').STUDY));
 for (const [key, S] of Object.entries(R.scenarios)) {
   const best = new Map();
   for (const g of S.grid) {

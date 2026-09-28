@@ -1,0 +1,16 @@
+{
+  "name": "m3-agentx-prefill-lab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MiniMax-M3 pipeline-prefill traffic simulator: AgentX 1M replay against a calibrated per-op roofline of Tenstorrent Blackhole galaxies.",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "build": "node build_artifact.js --standalone",
+    "validate": "node validate.js",
+    "study": "node study.js",
+    "analyze": "node analyze.js",
+    "table": "node tools/feature_table.js"
+  }
+}
