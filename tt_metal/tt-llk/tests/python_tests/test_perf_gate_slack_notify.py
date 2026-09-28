@@ -224,3 +224,16 @@ def test_one_change_on_many_points_is_one_finding():
     text = build_text("regressed", rows, _CTX)
     assert "4 point(s) regressed, in 1 finding(s)" in text
     assert "×4 points" in text
+
+
+def test_the_merge_gate_names_itself_and_carries_the_note():
+    ctx = {**_CTX, "gate_name": "LLK perf merge gate", "note": "Stale baseline."}
+    for status, rows in (("clean", []), ("skipped", []), ("regressed", [_ROW])):
+        text = build_text(status, rows, ctx)
+        assert "LLK perf merge gate" in text.splitlines()[0]
+        assert ":hourglass: Stale baseline." in text
+
+
+def test_no_note_adds_no_line():
+    text = build_text("clean", [], _CTX)
+    assert "*LLK perf gate passed*" in text and ":hourglass:" not in text

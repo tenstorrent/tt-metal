@@ -2,11 +2,13 @@
 set -euo pipefail
 shopt -s extglob
 
-# Determine the merge-base between main and the current branch
-MERGE_BASE=$(git merge-base origin/main HEAD)
+# Determine the merge-base between main and the current branch.
+# FIND_CHANGES_BASE / FIND_CHANGES_HEAD classify another range, e.g. one commit on main.
+HEAD_REF=${FIND_CHANGES_HEAD:-HEAD}
+MERGE_BASE=${FIND_CHANGES_BASE:-$(git merge-base origin/main "$HEAD_REF")}
 
 # Get the list of files changed since the merge-base, ignoring changes on main
-CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT "${MERGE_BASE}..HEAD")
+CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT "${MERGE_BASE}..${HEAD_REF}")
 
 # Check for specific file patterns
 CMAKE_CHANGED=false
@@ -122,7 +124,7 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml|tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
@@ -321,6 +323,15 @@ if [[ "$LLK_WORMHOLE_CHANGED" = true || "$LLK_BLACKHOLE_CHANGED" = true || "$LLK
     ANY_CODE_CHANGED=true
 fi
 
+# Anything that can move an LLK perf number: the merge gate measures, and uploads
+# a merge baseline, exactly when this is true.
+LLK_PERF_INPUTS_CHANGED=false
+if [[ "$LLK_WORMHOLE_CHANGED" = true || "$LLK_BLACKHOLE_CHANGED" = true || "$LLK_COMMON_CHANGED" = true || \
+      "$LLK_SFPI_CHANGED" = true || "$LLK_PERF_CHANGED" = true || "$LLK_TESTS_CHANGED" = true || \
+      "$LLK_CI_CHANGED" = true ]]; then
+    LLK_PERF_INPUTS_CHANGED=true
+fi
+
 # Derive combined tests-changed flag from isolated flags
 if [[ "$TTMETALIUM_TESTS_CHANGED" = true || "$TTNN_TESTS_CHANGED" = true ]]; then
     TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
@@ -354,6 +365,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [llk-perf-inputs-changed]=$LLK_PERF_INPUTS_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )
 

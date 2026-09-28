@@ -437,11 +437,11 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
-VALID_PIPELINES = ("pr", "nightly", "baseline")
+VALID_PIPELINES = ("pr", "nightly", "baseline", "merge_baseline")
 
 
 def _pipeline(event: str) -> str:
-    """Which pipeline produced this run: ``pr``, ``nightly`` or ``baseline``.
+    """Which pipeline produced this run: one of ``VALID_PIPELINES``.
 
     Read from PIPELINE when the workflow says so; otherwise inferred from the
     GitHub event, which can only tell a PR from everything else.
