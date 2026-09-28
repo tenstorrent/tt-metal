@@ -1245,7 +1245,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 output,
                 cluster_axis=_tp_cluster_axis(self.device),
                 num_links=2,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
             )
             ttnn.deallocate(output)
             output = gathered
@@ -1350,7 +1350,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 dim=1,
                 cluster_axis=_tp_cluster_axis(self.device),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)

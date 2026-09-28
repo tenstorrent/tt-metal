@@ -2124,7 +2124,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
                 if self.tp_size > 1:
-                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1)
+                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
             elif recv:
                 # Receive the residual streams + fused packet from the submesh holding the
                 # previous layer into the persistent buffers. Streams arrive row-major (no
