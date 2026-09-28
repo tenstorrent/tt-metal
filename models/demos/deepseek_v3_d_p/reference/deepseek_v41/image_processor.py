@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2023 DeepSeek
+# SPDX-License-Identifier: MIT
 # Vendored from huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash, revision
 # dba1be0a40aa45a94ad051997016db3960a90277, file inference/image_processor.py (MIT License).
 # Deviations from upstream are listed in README.md next to this file.

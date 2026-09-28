@@ -6,7 +6,7 @@ This directory holds a vendored copy of the DeepSeek-V4.1-Flash reference infere
 
 - Upstream: <https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash>, revision
   `dba1be0a40aa45a94ad051997016db3960a90277`, directory `inference/`.
-- License: MIT. The upstream repository README states: "This repository and the model weights are licensed under the MIT License". The vendored files carry no copyright notice of their own.
+- License: MIT (upstream `LICENSE`: "Copyright (c) 2023 DeepSeek"). The vendored files carry that notice as an SPDX header.
 
 | File | Origin |
 |---|---|
@@ -23,8 +23,8 @@ Upstream files that are not vendored: `kernel.py` (tilelang, replaced by `kernel
 
 ## Deviations from upstream (complete list)
 
-1. Each vendored `.py` file begins with a provenance comment block (3 lines, plus a blank line) that points to this README. The files carry no SPDX header because they are vendored MIT code. `model.py` also carries `# isort: skip_file` and `# fmt: off` (7 header lines in total), because the repository's black and isort pre-commit hooks would otherwise reflow upstream code (assert wrapping, import order). The other vendored files are already stable under those hooks.
-2. `model.py`: four import statements are changed. Everything else is byte-identical to upstream. Check with `diff <(tail -n +8 model.py) <upstream>/inference/model.py`; for the other files, use `tail -n +5`.
+1. Each vendored `.py` file begins with a 2-line SPDX header naming the upstream copyright and MIT license, then a provenance comment block (3 lines, plus a blank line) that points to this README. `model.py` also carries `# isort: skip_file` and `# fmt: off` (9 header lines in total), because the repository's black and isort pre-commit hooks would otherwise reflow upstream code (assert wrapping, import order). The other vendored files are already stable under those hooks.
+2. `model.py`: four import statements are changed. Everything else is byte-identical to upstream. Check with `diff <(tail -n +10 model.py) <upstream>/inference/model.py`; for the other files, use `tail -n +7`.
    - `from engram import ...` becomes `from .engram import ...`. The same change applies to `image_processor` and `vision`. Rationale: package-relative imports.
    - `from kernel import (...)` becomes `from .kernel_cpu import (...)`. Rationale: CPU kernels. The imported names and signatures are the same.
 
