@@ -1,0 +1,333 @@
+{
+ "upstream_sha": "b27084f09f85e518701e0b550ed044d42b530059",
+ "tests": {
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_combine_l1_small_semaphores::test_deepseek_prefill_l1_small_semaphores[blackhole-l1_default-dispatch-torus-y-4x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_combine_l1_small_semaphores::test_deepseek_prefill_l1_small_semaphores[blackhole-l1_small-dispatch-torus-y-4x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv3-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv3-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv4_flash-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv4_flash-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv4_pro-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-dsv4_pro-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-glm_51-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-glm_51-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-gptoss_120b-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-gptoss_120b-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-kimi_k2_7-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-kimi_k2_7-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-minimax_m27-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-minimax_m27-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-mistral4-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-predictable-fabric2d-torus-y-4x1-2link-mistral4-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv3-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv3-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv4_flash-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv4_flash-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv4_pro-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-dsv4_pro-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-glm_51-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-glm_51-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-gptoss_120b-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-gptoss_120b-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-kimi_k2_7-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-kimi_k2_7-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-minimax_m27-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-minimax_m27-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-mistral4-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-bf16_out-bf16_in-tile-random-fabric2d-torus-y-4x1-2link-mistral4-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv3-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv3-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv4_flash-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv4_flash-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv4_pro-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-dsv4_pro-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-glm_51-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-glm_51-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-gptoss_120b-pcc]": {
+   "original": "failed",
+   "fork": "failed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-gptoss_120b-perf_no_pcc]": {
+   "original": "failed",
+   "fork": "failed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-kimi_k2_7-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-kimi_k2_7-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-minimax_m27-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-minimax_m27-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-mistral4-pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch::test_ttnn_dispatch[blackhole-False-fp8_out-fp8_scaled_in-row_major-random-fabric2d-torus-y-4x1-2link-mistral4-perf_no_pcc]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-dsv4_flash-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-dsv4_pro-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-glm_51-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-gptoss_120b-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-kimi_k2_7-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-minimax_m27-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-predictable-fabric2d-torus-y-4x1-2link-mistral4-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-dsv4_flash-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-dsv4_pro-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-glm_51-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-gptoss_120b-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-kimi_k2_7-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-minimax_m27-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-row_major-random-fabric2d-torus-y-4x1-2link-mistral4-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-dsv4_flash-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-dsv4_pro-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-glm_51-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-gptoss_120b-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-kimi_k2_7-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-minimax_m27-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-predictable-fabric2d-torus-y-4x1-2link-mistral4-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-dsv3-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-dsv4_flash-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-dsv4_pro-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-glm_51-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-gptoss_120b-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-kimi_k2_7-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-minimax_m27-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_ttnn_dispatch_combine::test_ttnn_dispatch_combine[blackhole-tile-random-fabric2d-torus-y-4x1-2link-mistral4-640-avg]": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}
