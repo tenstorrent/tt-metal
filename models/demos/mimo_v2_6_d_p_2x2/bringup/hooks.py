@@ -20,7 +20,7 @@ for _name in ("tokenizer", "hf_model", "hf_layers"):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm"},
+    "full_dense": {"attn_norm", "attention"},
     "sliding_moe": set(),
     "full_moe": set(),
 }
@@ -59,22 +59,93 @@ def _host_fn(mesh, module):
     return fn
 
 
+def _rope_max_seq(spec):
+    """Longest sequence any rung or the target runs: the RoPE tables are built once for it at load."""
+    seqs = [int(r.get("seq", 0)) for r in spec.data.get("ladder", [])]
+    seqs.append(int((spec.data.get("target") or {}).get("seq", 0)))
+    return max(seqs)
+
+
+def _cfg(loader):
+    import os
+
+    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
+
+    return MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
+
+
+def _attention_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtFullAttention (TP=4 over the 2x2 mesh, all_reduce axis 1 then axis 0) for one full layer; loads only its
+    attention weights (fused qkv dequantized per TP rank, bf16 o_proj)."""
+    from models.demos.mimo_v2_6_d_p_2x2.tt.model import build_attention
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    return build_attention(mesh, loader, cfg, layer, _rope_max_seq(spec)), cfg
+
+
+def _new_kv_cache(mesh, cfg, layer, max_seq):
+    from models.demos.mimo_v2_6_d_p_2x2.tt.model import new_kv_cache
+
+    return new_kv_cache(mesh, cfg, layer, max_seq)
+
+
+def _attention_host_fn(mesh, module, cache_of):
+    """fn(ctx, x_host [S, H]) -> host [S, H]; cache_of(ctx) returns the layer's device KV cache."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_2x2.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x):
+        xd = to_device_replicated(mesh, x)
+        yd = module(xd, ctx.start, cache_of(ctx))
+        y = replicated_to_host(yd)
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step in _NORM_STEPS:
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
+    if step == "attention":
+        module, cfg = _attention_module(mesh, spec, layer)
+        caches = {}
+
+        def cache_of(ctx):
+            # Component/swap tests: a fresh device cache holding the golden prefix [0, prefix_len).
+            ex = ctx.extra or {}
+            max_seq = int(ex.get("max_seq", ctx.start + ctx.length))
+            if "c" in caches:
+                caches.pop("c").free()
+            c = _new_kv_cache(mesh, cfg, layer, max_seq)
+            n = int(ex.get("prefix_len", ctx.start))
+            if n:
+                c.load_prefix(ex["state_prefix"]["key"], ex["state_prefix"]["value"], n)
+            caches["c"] = c
+            return c
+
+        return _attention_host_fn(mesh, module, cache_of)
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
 class _HybridState:
-    """CPU reference state (no device attention yet)."""
+    """CPU reference state, except layers whose attention runs on the device: their K/V live in a device cache."""
 
-    def __init__(self, ref, max_seq):
+    def __init__(self, ref, max_seq, mesh=None, device_attn_layers=(), cfg=None):
         self.ref, self.s = ref, ref.new_state(max_seq)
+        self.dev = {i: _new_kv_cache(mesh, cfg, i, max_seq) for i in device_attn_layers}
 
     def load_prefix(self, layer, tensors, length):
-        self.ref.load_state(self.s, layer, tensors, length)
+        if layer in self.dev:
+            self.dev[layer].load_prefix(tensors["key"], tensors["value"], length)
+        else:
+            self.ref.load_state(self.s, layer, tensors, length)
 
     def to_torch(self, layer, length):
+        if layer in self.dev:
+            return self.dev[layer].to_torch(length)
         return self.ref.state_tensors(self.s, layer, length)
 
 
@@ -93,15 +164,19 @@ class HybridDeviceModel:
         self.cfg = self.ref.cfg
         loader = WeightLoader(self.ref.loader.model_path)
         self.overrides = {}
+        self.attn_layers = []
         for i in self.ref.layer_ids:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
-            self.overrides[i] = {
-                s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_STEPS
-            }
+            ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_STEPS}
+            if "attention" in steps:
+                module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
+                ov["attention"] = _attention_host_fn(mesh, module, lambda ctx: ctx.extra["dev_cache"])
+                self.attn_layers.append(i)
+            self.overrides[i] = ov
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        return _HybridState(self.ref, max_seq)
+        return _HybridState(self.ref, max_seq, self.mesh, self.attn_layers, self.cfg)
 
     def embed(self, tokens):
         import torch.nn.functional as F
@@ -115,9 +190,11 @@ class HybridDeviceModel:
         return h
 
     def layer(self, i, h, start, state):
-        from models.demos.common.bringup.reference.interface import run_block
+        from models.demos.common.bringup.reference.interface import Ctx, run_block
 
         ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
+        if i in state.dev:
+            ctx = Ctx(ctx.layer, ctx.start, ctx.length, ctx.state, {**ctx.extra, "dev_cache": state.dev[i]})
         return run_block(
             self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
         )
