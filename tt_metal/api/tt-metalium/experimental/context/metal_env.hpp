@@ -98,8 +98,8 @@ public:
     /// @return Required address alignment in bytes for L1 allocations of this environment.
     uint32_t get_l1_alignment() const;
 
-    /// @return Maximum number of circular buffers per core of this environment.
-    uint32_t get_arch_num_circular_buffers() const;
+    /// @return Maximum number of dataflow buffers per core of this environment.
+    uint32_t get_num_dataflow_buffers() const;
 
     /// @return Maximum usable L1 size in bytes when the ring-buffer size is 0 of this environment.
     uint32_t get_max_worker_l1_unreserved_size() const;

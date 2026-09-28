@@ -79,12 +79,12 @@ void fabric_mux_connection_rt_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::ProgramDescriptor& desc,
     const CoreCoord& termination_master_logical_core,
-    tt::tt_metal::IDevice* device,
+    const MeshDevice& device,
     std::vector<uint32_t>& worker_rt_args) {
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    const CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
+    const CoreCoord mux_virtual_core = device.worker_core_from_logical_core(mux_logical_core);
     const CoreCoord termination_master_virtual_core =
-        device->worker_core_from_logical_core(termination_master_logical_core);
+        device.worker_core_from_logical_core(termination_master_logical_core);
 
     worker_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid));
     worker_rt_args.push_back(static_cast<uint32_t>(is_termination_master));
@@ -294,7 +294,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "num_local_k_chunks: {}", num_local_k_chunks);
     log_debug(tt::LogOp, "num_joint_k_chunks: {}", num_joint_k_chunks);
 
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
@@ -1750,7 +1750,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                     mux_kernel_config,
                     desc,
                     termination_master_logical,
-                    device,
+                    *device,
                     mux_writer_args);
             } else {
                 // link index out of range or invalid direction — append a disconnected MUX connection

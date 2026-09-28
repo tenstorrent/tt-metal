@@ -580,7 +580,7 @@ static Program build_quasar_program(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -589,14 +589,14 @@ static Program build_quasar_program(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     // A 32-bit dest fed by a 32-bit buffer has to state how the unpacker routes it. Float32 and Int32
     // datacopy need UnpackToDest: SrcA cannot carry a full 32-bit datum, so going via Src would lose bits.
     const bool enable_32_bit_dest =
         config.data_format == tt::DataFormat::Float32 || config.data_format == tt::DataFormat::Int32;
-    experimental::ComputeUnpackModes unpack_modes{};
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (enable_32_bit_dest) {
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
@@ -621,7 +621,7 @@ static Program build_quasar_program(
         .compile_time_args =
             {{"per_core_tile_cnt", num_tiles}, {"dest_data_format", static_cast<uint32_t>(config.get_dest_format())}},
         .hw_config =
-            experimental::ComputeGen2Config{.enable_32_bit_dest = enable_32_bit_dest, .unpack_modes = unpack_modes},
+            experimental::ComputeHardwareConfig{.enable_32_bit_dest = enable_32_bit_dest, .unpack_modes = unpack_modes},
     };
 
     experimental::ProgramSpec spec{

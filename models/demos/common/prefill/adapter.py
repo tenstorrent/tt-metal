@@ -85,6 +85,7 @@ class PrefillRunParams:
     # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
+    mtp_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -139,6 +140,7 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    supports_mtp: bool = False
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
