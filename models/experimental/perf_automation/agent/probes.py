@@ -502,6 +502,58 @@ def detect_marker_drop(log_text: str) -> str | None:
     return m.group(0) if m else None
 
 
+# The generated perf test drains the device profiler every <this many> wrapped ttnn calls; the
+# profiling env carries it (measure._capacity_scaled_osl sets it), so a retry can change it.
+PERF_FLUSH_EVERY_ENV = "TT_PERF_FLUSH_EVERY"
+_SUPPORT_COUNT_ENV = "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"
+_DEFAULT_SUPPORT_COUNT = 1000  # tt-metal's DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT
+
+# One line per (chip, core, RISC) whose buffer was full when the host read it:
+# "... markers were dropped! device 20, worker core 18, 18, Risc BRISC,  bufferEndIndex = 12000 ..."
+_DROP_SITE_RE = re.compile(r"markers were dropped!\s*device (\d+),\s*(\w+ core \d+,\s*\d+),\s*Risc (\w+)")
+
+
+def marker_drop_evidence(log_text: str) -> dict | None:
+    """What the drop warnings say about WHY markers were lost, or None when none were.
+
+    A site (chip, core, RISC) reported ONCE overflowed during one stretch between two reads: every
+    site of a WH Galaxy run (32 chips x 72 cores x 5 RISCs = 11,520 lines, 2026-09-28) dropped in the
+    single read that followed a trace capture, where the drain cannot run at all -- reading more
+    often cannot help, only a bigger buffer can. A site reported on SEVERAL reads overflows at the
+    current drain cadence, which reading more often does fix."""
+    reason = detect_marker_drop(log_text)
+    if not reason:
+        return None
+    sites: dict[tuple, int] = {}
+    for m in _DROP_SITE_RE.finditer(log_text):
+        sites[m.groups()] = sites.get(m.groups(), 0) + 1
+    return {
+        "reason": reason,
+        "drops": sum(sites.values()) or 1,  # a drop seen only as an imbalance still counts
+        "sites": len(sites),
+        "repeated": any(n > 1 for n in sites.values()),
+    }
+
+
+def choose_marker_drop_remedy(evidence: dict, support_count: int, flush_every: str | None) -> dict | None:
+    """The env change the next attempt runs with, chosen from the drop evidence, or None when no
+    knob is left. Repeated drops halve the drain interval; a single overflow grows the buffer."""
+    try:
+        flush = int(flush_every) if flush_every else 0
+    except (TypeError, ValueError):
+        flush = 0
+    can_drain_more = flush > 1
+    can_grow = support_count < _MAX_PROFILER_SUPPORT_COUNT
+    if evidence.get("repeated") and can_drain_more:
+        return {PERF_FLUSH_EVERY_ENV: str(flush // 2)}
+    if can_grow:
+        grown = min(max(support_count, _DEFAULT_SUPPORT_COUNT) * _HEAL_GROWTH, _MAX_PROFILER_SUPPORT_COUNT)
+        return {_SUPPORT_COUNT_ENV: str(grown)}
+    if can_drain_more:
+        return {PERF_FLUSH_EVERY_ENV: str(flush // 2)}
+    return None
+
+
 class PreflightError(Exception):
     """The discovered perf test selects zero tests (the S512 trap)."""
 
@@ -1769,14 +1821,79 @@ def make_run_profiled(
             _warn_thermal_inert("make_run_profiled", exc)
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
-        support_count = int(env.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or 0)
+        support_count = int(env.get(_SUPPORT_COUNT_ENV) or 0)
         t_start = time.monotonic()
         partial_reason = None
         heal_attempt = 0
         throttle_retry = 0
+        attempts_set_aside = 0
+        # The cleanest finished attempt so far that left a CSV, kept in case every retry still drops
+        # markers or a later one crashes: {"drops", "csv", "log", "reason"}.
+        best = None
+        kept = None  # the attempt the result comes from when it is not the last one run
+
+        def _set_aside_log() -> Path | None:
+            # Each launch reopens log_path for writing; keep the finished attempt's log as
+            # <name>.attemptN (no *_tracy.log reader matches it).
+            nonlocal attempts_set_aside
+            if not log_path.is_file():
+                return None
+            attempts_set_aside += 1
+            aside = log_path.with_name("%s.attempt%d" % (log_path.name, attempts_set_aside))
+            try:
+                log_path.replace(aside)
+            except OSError:
+                return None
+            return aside
+
+        def _reset_before_retry(error_text: str) -> None:
+            # A multi-chip run that ended badly leaves the fabric wedged while every ARC still
+            # answers, so the temperature veto would cancel the reset the retry needs; the kill rule
+            # already knows which runs held a fabric. fault_is_certain passed only when set, so a
+            # single-chip run resets as before.
+            from . import device_recovery as _dr
+
+            _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
+            device_reset(error_text=error_text, **_kill)
+
+        def _find_csv(watermark: float) -> Path | None:
+            # layer 1: directed output (-o). out_dir PERSISTS across iterations, so a PRIOR
+            # run's CSV is still sitting here -- filter to THIS run (mtime > watermark) or the
+            # glob can return the stale baseline. That stale-CSV reuse made every REMEASURE
+            # re-read the baseline, so real edits measured identical to baseline and were
+            # wrongly flagged inert/no-gain and reverted (the "zero gains" root cause).
+            found = sorted(
+                (p for p in out_dir.glob("**/ops_perf_results_*.csv") if p.stat().st_mtime > watermark),
+                key=lambda p: p.stat().st_mtime,
+            )
+            # layer 2: the stdout path is AUTHORITATIVE -- tracy logs the exact CSV it wrote for
+            # THIS run ("OPs csv generated at: <path>"). Trust it over the glob, which can tie or
+            # pick a touched older dir. Previously this only WARNED on a mismatch and kept the
+            # (stale) glob result; now the reported path wins whenever it exists.
+            log_text = log_path.read_text() if log_path.is_file() else ""
+            m = _CSV_STDOUT_RE.search(log_text)
+            if m:
+                reported = Path(m.group(1))
+                if reported.is_file():
+                    if found and reported.resolve() != found[-1].resolve():
+                        with open(log_path, "a") as fh:
+                            fh.write(f"\n[harness] using authoritative stdout CSV {reported} over glob {found[-1]}\n")
+                    found = [reported]
+            # layer 3: watermark fallback in the shared area
+            if not found:
+                found = sorted(
+                    (
+                        p
+                        for p in root.glob("generated/profiler/**/ops_perf_results_*.csv")
+                        if p.stat().st_mtime > watermark
+                    ),
+                    key=lambda p: p.stat().st_mtime,
+                )
+            return found[-1] if found else None
+
         while True:
             if support_count > 0:
-                env["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(support_count)
+                env[_SUPPORT_COUNT_ENV] = str(support_count)
             for _attempt in range(retries + 1):
                 watermark = time.time() - 0.05
                 try:
@@ -1784,24 +1901,42 @@ def make_run_profiled(
                     break
                 except TracyHangError:
                     if _attempt >= retries:
-                        raise
+                        if best is None:
+                            raise
+                        code = None  # out of hang retries, but an earlier attempt finished
+                        break
                     # The hung run's process group was just SIGKILLed. Keep its log -- the retry
                     # reopens log_path for writing, which is how the first failure of a night went
-                    # unrecorded -- as <name>.attemptN (no *_tracy.log reader matches it), and hand
-                    # both it and the kill to the reset: with neither, the temperature veto cancels
-                    # the reset on a multi-chip fabric and the retry opens the mesh still wedged.
+                    # unrecorded -- and hand both it and the kill to the reset: with neither, the
+                    # temperature veto cancels the reset on a multi-chip fabric and the retry opens
+                    # the mesh still wedged.
                     hung = log_path.read_text(errors="ignore") if log_path.is_file() else ""
-                    try:
-                        log_path.replace(log_path.with_name("%s.attempt%d" % (log_path.name, _attempt + 1)))
-                    except OSError:
-                        pass
-                    from . import device_recovery as _dr
-
-                    # fault_is_certain passed only when set, so a single-chip run resets as before
-                    _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
-                    device_reset(error_text=hung, **_kill)
+                    _set_aside_log()
+                    _reset_before_retry(hung)
+            if code is None:
+                kept, partial_reason = best, best["reason"]
+                break
             if code != 0:
-                tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
+                log_text = log_path.read_text(errors="ignore") if log_path.is_file() else ""
+                # A device or capture-tool crash (the tracy capture tool segfaulting at shutdown
+                # after "1 passed", WH Galaxy 2026-09-28) leaves no CSV and a dirty board: reset
+                # and run again. Any other non-zero exit is tracy's own verdict, raised as before.
+                if _DEVICE_CRASH_RE.search(log_text) and heal_attempt < _MAX_HEAL_ATTEMPTS:
+                    heal_attempt += 1
+                    with open(log_path, "a") as fh:
+                        fh.write(
+                            f"\n[harness] tracy exit {code} after a crash; reset + re-profile "
+                            f"(heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                        )
+                    _set_aside_log()
+                    _await_cool()
+                    _reset_before_retry(log_text)
+                    continue
+                if best is not None:
+                    kept = best
+                    partial_reason = best["reason"]
+                    break
+                tail = _salient_tail(log_text)
                 raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
             log_text = log_path.read_text() if log_path.is_file() else ""
             if detect_overheat(log_text):
@@ -1839,65 +1974,76 @@ def make_run_profiled(
                 if _DEVICE_CRASH_RE.search(log_text) and heal_attempt < _MAX_HEAL_ATTEMPTS:
                     heal_attempt += 1
                     _await_cool()
-                    device_reset()
+                    _reset_before_retry(log_text)
                     with open(log_path, "a") as fh:
                         fh.write(
                             f"\n[harness] device crash ({crash}); reset + re-profile "
                             f"(heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
                         )
+                    _set_aside_log()
                     continue
                 raise PerfRunFailed(crash, log_path)
-            drop = detect_marker_drop(log_text)
-            if drop and support_count < _MAX_PROFILER_SUPPORT_COUNT and heal_attempt < _MAX_HEAL_ATTEMPTS:
-                heal_attempt += 1
-                support_count = min(max(support_count, 1000) * _HEAL_GROWTH, _MAX_PROFILER_SUPPORT_COUNT)
-                with open(log_path, "a") as fh:
-                    fh.write(
-                        f"\n[harness] profiler buffer grew to TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="
-                        f"{support_count}; re-profiling (heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
-                    )
-                continue
-            partial_reason = drop
-            break
+            evidence = marker_drop_evidence(log_text)
+            if not evidence:
+                break
+            # EVERY MARKER OR ANOTHER ATTEMPT. A dropped marker is a missing op, and a profile
+            # missing ops ranks the wrong ones; retry while attempts remain, with the knob the drop
+            # evidence points at, and keep the cleanest finished attempt in case none is complete.
+            _csv = _find_csv(watermark)
+            _new_best = _csv is not None and (best is None or evidence["drops"] < best["drops"])
+            if _new_best:
+                _copy = profiles_dir / ("run%d_raw.csv.best" % i)
+                shutil.copyfile(_csv, _copy)
+                best = {"drops": evidence["drops"], "csv": _copy, "log": None, "reason": evidence["reason"]}
+            remedy = (
+                choose_marker_drop_remedy(evidence, support_count, env.get(PERF_FLUSH_EVERY_ENV))
+                if heal_attempt < _MAX_HEAL_ATTEMPTS
+                else None
+            )
+            if remedy is None:
+                partial_reason = evidence["reason"]
+                if best is not None and best["drops"] < evidence["drops"]:
+                    kept = best
+                    partial_reason = best["reason"]
+                break
+            heal_attempt += 1
+            with open(log_path, "a") as fh:
+                fh.write(
+                    f"\n[harness] {evidence['drops']} marker drop(s) at {evidence['sites']} site(s)"
+                    f"{' on repeated reads' if evidence['repeated'] else ' in one read'}; "
+                    + ", ".join(f"{k}={v}" for k, v in remedy.items())
+                    + f"; reset + re-profile (heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                )
+            env.update(remedy)
+            support_count = int(env.get(_SUPPORT_COUNT_ENV) or 0)
+            _aside = _set_aside_log()
+            if _new_best:
+                best["log"] = _aside
+            _await_cool()
+            _reset_before_retry(log_text)
         wall_ms = (time.monotonic() - t_start) * 1000.0
 
-        # layer 1: directed output (-o). out_dir PERSISTS across iterations, so a PRIOR
-        # run's CSV is still sitting here -- filter to THIS run (mtime > watermark) or the
-        # glob can return the stale baseline. That stale-CSV reuse made every REMEASURE
-        # re-read the baseline, so real edits measured identical to baseline and were
-        # wrongly flagged inert/no-gain and reverted (the "zero gains" root cause).
-        found = sorted(
-            (p for p in out_dir.glob("**/ops_perf_results_*.csv") if p.stat().st_mtime > watermark),
-            key=lambda p: p.stat().st_mtime,
-        )
-        # layer 2: the stdout path is AUTHORITATIVE -- tracy logs the exact CSV it wrote for
-        # THIS run ("OPs csv generated at: <path>"). Trust it over the glob, which can tie or
-        # pick a touched older dir. Previously this only WARNED on a mismatch and kept the
-        # (stale) glob result; now the reported path wins whenever it exists.
-        log_text = log_path.read_text() if log_path.is_file() else ""
-        m = _CSV_STDOUT_RE.search(log_text)
-        if m:
-            reported = Path(m.group(1))
-            if reported.is_file():
-                if found and reported.resolve() != found[-1].resolve():
-                    with open(log_path, "a") as fh:
-                        fh.write(f"\n[harness] using authoritative stdout CSV {reported} over glob {found[-1]}\n")
-                found = [reported]
-        # layer 3: watermark fallback in the shared area
-        if not found:
-            found = sorted(
-                (p for p in root.glob("generated/profiler/**/ops_perf_results_*.csv") if p.stat().st_mtime > watermark),
-                key=lambda p: p.stat().st_mtime,
-            )
-        if not found:
+        newest = None if kept is not None else _find_csv(watermark)
+        if newest is None and kept is None and best is not None:
+            kept, partial_reason = best, best["reason"]  # the last attempt left no CSV
+        if kept is not None:
+            # The result is an earlier attempt: its log is the one every reader of log_path must see.
+            _set_aside_log()
+            if kept["log"] is not None and Path(kept["log"]).is_file():
+                shutil.copyfile(kept["log"], log_path)
+            with open(log_path, "a") as fh:
+                fh.write(f"\n[harness] kept the cleanest finished attempt ({kept['drops']} marker drop(s))\n")
+            newest = kept["csv"]
+        elif newest is None:
             raise TracyRunError(
                 f"no ops_perf_results_*.csv produced (checked {out_dir}, stdout, "
                 f"generated/profiler); log: {log_path}"
             )
-        newest = found[-1]
         _validate_csv(newest, log_path)
         dest = profiles_dir / f"run{i}_raw.csv"
         shutil.copyfile(newest, dest)
+        if best is not None:
+            Path(best["csv"]).unlink(missing_ok=True)
         if partial_reason:
             try:
                 (profiles_dir / f"run{i}.partial").write_text(str(partial_reason))

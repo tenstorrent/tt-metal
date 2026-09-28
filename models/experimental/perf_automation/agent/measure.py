@@ -39,7 +39,7 @@ def _capacity_scaled_osl(ctx, repo_root, node, case, declared_osl: int):
     from .probes import _cc_optimize
 
     try:
-        ops_per_step = _cc_optimize("run").coverage_cache_get_ops_per_step(repo_root, node, case)
+        ops_per_step = _cc_optimize("run").coverage_cache_get_ops_per_step(repo_root, node, case, allow_stale=True)
     except Exception:  # noqa: BLE001 -- a signal that cannot be read must not block the profile
         ops_per_step = None
     if not ops_per_step or ops_per_step <= 0:

@@ -86,7 +86,9 @@ def _marked(path):
     corpus failures that looked like injector bugs, so the stored bytes are trusted as they came."""
     src = path.read_text()
     if "_tt_sm" in src:
-        return src, "already injected"
+        # the stored block is kept, except that a call from an older template is brought up to
+        # today's (stage_marks._refresh_mark_pass) -- the same thing a real run does to that file
+        return inject_stage_marks(src)[0], "already injected"
     return inject_stage_marks(src)
 
 

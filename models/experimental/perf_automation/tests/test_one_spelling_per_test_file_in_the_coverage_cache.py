@@ -112,6 +112,29 @@ def test_a_stale_fingerprint_still_invalidates_across_spellings(run, tmp_path):
     assert run.coverage_cache_get_ops_per_step(worktree, str(operator / _REL), _CASE) is None
 
 
+def test_the_capacity_bound_survives_an_edit_beside_the_test(run, tmp_path):
+    """2026-09-28, WH Galaxy: the optimize agent edited the perf test, the fingerprint moved, the
+    count went unread, and the next profile ran the declared OSL instead of the capped one. The
+    capacity bound reads a stale count; the strict default above still refuses it."""
+    from models.experimental.perf_automation.agent.measure import _capacity_scaled_osl
+
+    worktree, operator = _two_checkouts(tmp_path)
+    run._coverage_cache_put(worktree, str(operator / _REL), _CASE, 6, ops_per_step=29436)
+    later = time.time() + 100
+    os.utime(worktree / _REL, (later, later))
+    assert run.coverage_cache_get_ops_per_step(worktree, _REL, _CASE) is None
+    assert run.coverage_cache_get_ops_per_step(worktree, _REL, _CASE, allow_stale=True) == 29436
+    scaled = _capacity_scaled_osl(None, worktree, _REL, _CASE, 128)
+    assert scaled is not None and int(scaled[0]) < 128, scaled
+
+
+def test_a_stale_read_still_needs_a_recorded_count(run, tmp_path):
+    worktree, operator = _two_checkouts(tmp_path)
+    assert run.coverage_cache_get_ops_per_step(worktree, _REL, _CASE, allow_stale=True) is None
+    run._coverage_cache_put(worktree, str(operator / _REL), _CASE, 6)
+    assert run.coverage_cache_get_ops_per_step(worktree, _REL, _CASE, allow_stale=True) is None
+
+
 def test_no_raw_node_is_used_as_a_cache_key(run):
     src = (_PERF / "cc_optimize" / "run.py").read_text()
     assert 'f"{node}|' not in src and 'f"depth|{node}"' not in src

@@ -1034,7 +1034,7 @@ def _coverage_cache_get(repo_root: Path, node, case):
     return None
 
 
-def coverage_cache_get_ops_per_step(repo_root: Path, node, case):
+def coverage_cache_get_ops_per_step(repo_root: Path, node, case, allow_stale: bool = False):
     """Total op INVOCATIONS the k=0 coverage probe's own capture already saw in one decode step
     (len(seq) at cache-write time), or None if never recorded (older cache entry, or the probe that
     wrote it had none). Same fingerprint/invalidation rule as _coverage_cache_get -- this reads the
@@ -1043,13 +1043,21 @@ def coverage_cache_get_ops_per_step(repo_root: Path, node, case):
     nvidia_nemotron_3_5_lightning_30b_a3b_bf16 (2026-09-12): 27,577 op invocations in ONE decode step
     at its coverage depth (TT_PERF_LAYERS=6, dense 128-expert MoE dominating) -- the number
     agent.measure's profiling capture needs to know a declared OSL=128 means ~3.5M profiled op
-    invocations, which is what produced a 27+ GB tracy_ops_times.csv and OOM'd mid-round."""
+    invocations, which is what produced a 27+ GB tracy_ops_times.csv and OOM'd mid-round.
+
+    allow_stale=True also answers from an entry whose fingerprint no longer matches. For the
+    capacity bound that is the right trade: the fingerprint is the newest .py mtime beside the node,
+    so ANY edit there -- including the agent's own edit to the perf test -- invalidated the count,
+    the bound fell back to the declared OSL, and the next profile ran 64x larger. Measured 2026-09-28
+    on a WH Galaxy: an agent edit at 06:39 turned OSL=2 into OSL=128, and that profile recorded 562M
+    zones in 16 minutes and aborted. A count from before a small edit is a far better size bound than
+    none. Every other caller keeps the strict default."""
     try:
         _fp = _coverage_fingerprint(node, repo_root)
-        if not _fp:
+        if not _fp and not allow_stale:
             return None
         entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{_cache_node(node, repo_root)}|{case}")
-        if entry and entry.get("fp") == _fp and entry.get("ops"):
+        if entry and entry.get("ops") and (entry.get("fp") == _fp or allow_stale):
             return int(entry["ops"])
     except Exception:  # noqa: BLE001
         pass
@@ -4273,13 +4281,28 @@ def record_observed(repo_root: Path, op: str, seconds: float) -> None:
         pass
 
 
+def _p95(vals: list) -> float:
+    s = sorted(vals)
+    return s[min(len(s) - 1, int(0.95 * len(s)))]
+
+
+def _timer_override(key: str):
+    """An operator's pinned timer value, or None when unset or not an integer (adaptivity resumes)."""
+    ov = os.environ.get(key)
+    if ov:
+        try:
+            return int(ov)
+        except ValueError:
+            pass
+    return None
+
+
 def _op_cost(repo_root: Path, op: str) -> float:
     """Best estimate of what ONE `op` costs on this model: p95 of its own observations,
     else the baseline-profile duration scaled into that operation's units."""
     obs = _observed(repo_root, op)
     if obs:
-        s = sorted(obs)
-        return s[min(len(s) - 1, int(0.95 * len(s)))]
+        return _p95(obs)
     # COLD START: ask the agent to size this op from the model's own evidence instead of applying a
     # frozen per-op multiplier table (the table is what capped llama's 872 s build at 240 s).
     base, ceil = _baseline_ceiling(repo_root)
@@ -4303,12 +4326,9 @@ def adaptive_timer(repo_root: Path, op: str, *, env_key: str = "", mult: float =
     gets tens of seconds and an 8B pipeline gets what its own cycle costs.
     """
     if env_key:
-        ov = os.environ.get(env_key)
-        if ov:
-            try:
-                return int(ov)
-            except ValueError:
-                pass
+        ov = _timer_override(env_key)
+        if ov is not None:
+            return ov
     _, ceil = _baseline_ceiling(repo_root)
     cost = _op_cost(repo_root, op)
     m = mult or _OP_MULT.get(op, 4.0)
@@ -4333,9 +4353,33 @@ def _adaptive_cap(repo_root: Path, floor: int, mult: int = 3) -> int:
 _MAX_WATCHDOG_REPRIEVES = 3
 
 
+_ROUND_CAP_ENV = "PERF_MCP_ROUND_MAX_SEC"
+
+
 def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
-    """UNPRODUCTIVE bound for one agent round, derived from the observed ROUND cycle."""
-    return adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_MAX_SEC")
+    """UNPRODUCTIVE bound for one agent round, derived from the observed ROUND cycle -- and never
+    shorter than one profiled measurement can legitimately take on this model.
+
+    A round cannot show progress before its first measurement returns, and one measurement is the
+    profile plus every re-profile make_run_profiled may run to heal it. WH Galaxy, 2026-09-28: the
+    profiles this model had taken ran up to 5,158 s, the cap came out at 7,200 s (the ceiling is one
+    OPERATION's timeout, not a round's), and the round was killed inside its first measurement with
+    nothing recorded. So the measured profile p95 times (1 + the heal budget) is a floor, and it is
+    allowed above the ceiling. Only real profile observations count -- no proxy -- and an operator
+    override still wins outright."""
+    ov = _timer_override(_ROUND_CAP_ENV)
+    if ov is not None:
+        return ov
+    cap = adaptive_timer(repo_root, "round")
+    prof = _observed(repo_root, "profile")
+    if prof:
+        try:
+            from agent.probes import _MAX_HEAL_ATTEMPTS
+
+            cap = max(cap, int(_p95(prof) * (1 + _MAX_HEAL_ATTEMPTS)))
+        except Exception:  # noqa: BLE001 -- no floor is the old behaviour, never a failure
+            pass
+    return cap
 
 
 def _measure_backstop(repo_root: Path) -> int:

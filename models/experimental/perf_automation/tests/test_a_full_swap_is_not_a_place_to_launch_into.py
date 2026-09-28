@@ -596,7 +596,7 @@ def test_capacity_scaled_osl_still_shrinks_for_nemotrons_measured_density():
 
     class _FakeRun:
         @staticmethod
-        def coverage_cache_get_ops_per_step(repo_root, node, case):
+        def coverage_cache_get_ops_per_step(repo_root, node, case, **_kw):
             return 38_604
 
     import models.experimental.perf_automation.agent.probes as probes_mod
@@ -620,7 +620,7 @@ def test_capacity_scaled_osl_leaves_a_light_model_untouched():
 
     class _FakeRun:
         @staticmethod
-        def coverage_cache_get_ops_per_step(repo_root, node, case):
+        def coverage_cache_get_ops_per_step(repo_root, node, case, **_kw):
             return 200  # a normal model: 200 * 128 = 25,600, well under the 60,000 budget
 
     import models.experimental.perf_automation.agent.probes as probes_mod

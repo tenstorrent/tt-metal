@@ -133,3 +133,39 @@ def test_cap_no_longer_derives_from_stall(tmp_path, monkeypatch):
     # BUG 4: the cap no longer derives from stall_sec at all -- it derives from the observed
     # round cycle, which is the whole point (a round is not 4x a FROZEN threshold).
     assert m._round_hard_cap(tmp_path, 1000) >= 30
+
+
+def _write_observed(run_dir, **ops):
+    (run_dir / "observed_durations.json").write_text(json.dumps(ops))
+
+
+def test_a_round_outlasts_one_healed_profile(tmp_path, monkeypatch):
+    """WH Galaxy, 2026-09-28: profiles up to 5,158 s, a 7,200 s cap, and the round killed inside
+    its first measurement. The floor is the measured profile times the heal budget, even past the
+    per-operation ceiling."""
+    from agent.probes import _MAX_HEAL_ATTEMPTS
+
+    m = _load_run()
+    monkeypatch.delenv("PERF_MCP_ROUND_MAX_SEC", raising=False)
+    rd = _run_dir(tmp_path)
+    _write_manifest(rd, timeout=10800)
+    _write_observed(rd, profile=[870.354, 302.372, 296.776, 5158.014, 2001.33], round=[7207.139])
+    assert m._round_hard_cap(tmp_path, 600) == int(5158.014 * (1 + _MAX_HEAL_ATTEMPTS))
+
+
+def test_a_fast_models_profiles_leave_its_round_cap_alone(tmp_path, monkeypatch):
+    m = _load_run()
+    monkeypatch.delenv("PERF_MCP_ROUND_MAX_SEC", raising=False)
+    rd = _run_dir(tmp_path)
+    _write_manifest(rd, timeout=10800)
+    _write_observed(rd, profile=[3.0, 4.0], round=[600.0])
+    assert m._round_hard_cap(tmp_path, 600) == 1200, "2 x the observed round, as before"
+
+
+def test_the_override_still_beats_the_profile_floor(tmp_path, monkeypatch):
+    m = _load_run()
+    monkeypatch.setenv("PERF_MCP_ROUND_MAX_SEC", "999")
+    rd = _run_dir(tmp_path)
+    _write_manifest(rd, timeout=10800)
+    _write_observed(rd, profile=[5158.0])
+    assert m._round_hard_cap(tmp_path, 600) == 999
