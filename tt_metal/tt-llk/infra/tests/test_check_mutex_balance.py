@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Tests for the Tensix mutex-balance checker."""
+import contextlib
+import io
 import os
-import subprocess
+import runpy
 import sys
 import textwrap
+import types
 
 import pytest
 
@@ -13,10 +16,23 @@ LLK = os.path.normpath(os.path.join(HERE, "..", ".."))  # tt_metal/tt-llk
 
 
 def run(*paths, baseline=None):
-    cmd = [sys.executable, SCRIPT, *map(str, paths)]
+    """Run the checker as a script (`__main__`, as the hook does), in-process."""
+    argv = [SCRIPT, *map(str, paths)]
     if baseline:
-        cmd += ["--baseline", str(baseline)]
-    return subprocess.run(cmd, capture_output=True, text=True)
+        argv += ["--baseline", str(baseline)]
+    out, err, code = io.StringIO(), io.StringIO(), 0
+    saved = sys.argv
+    sys.argv = argv
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            runpy.run_path(SCRIPT, run_name="__main__")
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    finally:
+        sys.argv = saved
+    return types.SimpleNamespace(
+        returncode=code, stdout=out.getvalue(), stderr=err.getvalue()
+    )
 
 
 def hdr(tmp_path, name, body):
