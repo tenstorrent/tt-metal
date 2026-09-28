@@ -302,6 +302,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 
             return {"elu_tile_init();", fmt::format("elu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::GELU:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
+                return {
+                    "gelu_tt_poly_bf16_tile_init<false>();", fmt::format("gelu_tt_poly_bf16_tile<false>({});", idst)};
+            }
+#endif
             return {
                 fmt::format("gelu_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("gelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
