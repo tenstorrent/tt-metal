@@ -1,6 +1,6 @@
 ---
 name: bug-audit
-description: Large-scale, resumable bug audit of any repository — every in-scope file read in full by a hunter agent, every candidate adversarially verified, coverage proven rather than claimed, and recall measured against the repo's own past bugs. Hunts the universal bug classes plus domain classes, prioritised by knowledge mined from the repo's real bug history (closed issues, fix PRs and whether those fixes held, review threads). Ships mined knowledge for tt-metal and tt-llk, and the mining pipeline to build it for any other repo. Use for a full or area-wide bug hunt, a diff audit of what landed since a commit, or to (re)build a repo's knowledge pack.
+description: Large-scale, resumable bug audit of any repository — every in-scope file read in full by a hunter agent, every candidate adversarially verified, coverage proven rather than claimed, and recall measured against the repo's own past bugs. Hunts the universal bug classes plus domain classes, and sweeps the unfixed sibling copies of past fixes mined from the repo's real bug history (closed issues, fix PRs and whether those fixes held, review threads). Ships mined knowledge for tt-metal and tt-llk, and the mining pipeline to build it for any other repo. Use for a full or area-wide bug hunt, a diff audit of what landed since a commit, or to (re)build a repo's knowledge pack.
 user_invocable: true
 ---
 
@@ -18,20 +18,29 @@ Everything lives in two places:
 - **a run directory** (you choose it; use shared storage, not `/tmp`): the state of one audit. It holds batches,
   findings, verdicts, dispositions and reports. The run directory is never committed.
 
-## The knowledge stack (read before hunting, and hand it to every hunter)
+## The knowledge stack
+Handed to every hunter:
 1. `references/classes-universal.md`: the floor. Always hunted, in every repo.
 2. Domain classes, when the repo matches. For Tenstorrent code, use `references/classes-tenstorrent.md`.
+
+Not handed to hunters by default:
 3. The repo pack, if one exists: `packs/<repo>.md`. It holds class weights from the repo's real bug history, hot
-   spots per area, "fix seeds" (past defects whose pattern may recur elsewhere), fixes found incomplete, and the
-   checks reviewers apply.
+   spots per area, "fix seeds", fixes found incomplete, and the checks reviewers apply. As reading for hunters it
+   showed **no measurable recall benefit** in either benchmark run (see *Measured recall*), so it costs tokens on every
+   batch for no measured gain. Add it with `--knowledge ...,packs/<repo>.md` only to re-measure it. Its hot areas
+   still inform the `--prio` globs.
 4. An optional private overlay: a `packs-private/<repo>.md` next to the run directory, for internal-only material
    that must never be committed to a public repo.
 
-**History re-weights; it never removes.** The pack decides what to check first and where to spend effort. A
-universal class with no recorded history is still hunted, because history only contains the bugs somebody noticed.
-Knowledge is a floor, not a ceiling: hunters report any grounded defect, whether or not a class names it.
+**The history pays off in three other ways, and those are measured.** The held-out bugs are the recall benchmark.
+The post-mortem of what the audit missed on them produced the classes and the contract-trace rule behind the one
+significant gain. And the deep reads of past fixes name their **unfixed siblings** in the current tree, which the
+sibling sweep verifies (*Sweeping siblings from history*): on tt-metal that confirmed 536 of 776 leads. A universal class with no recorded history is still hunted, because history only contains the bugs
+somebody noticed. Knowledge is a floor, not a ceiling: hunters report any grounded defect, whether or not a class
+names it.
 
-No pack for this repo? Build one first (see *Mining a repo*), or run with the class lists alone and say so.
+No mined history for this repo? Run with the class lists alone and say so; mine it (see *Mining a repo*) to get a
+benchmark and a sibling sweep.
 
 ## Modes
 | Mode | Scope | How |
@@ -39,6 +48,7 @@ No pack for this repo? Build one first (see *Mining a repo*), or run with the cl
 | full | every source file in the repo | `init_run.py` with priority globs, then the wave loop |
 | area | a subtree | `init_run.py --prio 'A=<subtree>/**' --exclude ...` |
 | diff | files changed since a commit | `init_run.py --since <commit>`, the cheap way to keep an old full audit current |
+| siblings | the unfixed copies of past fixes, from mined deep reads | `engine/siblings.py from-deep`, then the recheck verification (*Sweeping siblings from history*) |
 | bench | real past bugs, at the commit before their fix | `engine/bench.py prepare/score`, which measures recall |
 | mine | build or refresh a repo pack | `mining/` pipeline (below) |
 
@@ -83,7 +93,7 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    (`git worktree add --detach <path> <commit>`), and keep it until the run is closed, so every recorded
    `file:line` stays valid.
 2. **Init:** `engine/init_run.py --root <tree> --out <run> --repo owner/name --prio 'A=<highest-value globs>' ...
-   --knowledge references/classes-universal.md,<domain>,packs/<repo>.md`. Put device kernels and core runtime
+   --knowledge references/classes-universal.md,<domain>`. Put device kernels and core runtime
    first, host periphery next, and tests and models last. Batches are at most 20 files and 3,500 lines (1,500 for
    priority A), so a hunter can read every line.
    - **Submodules:** `git ls-files` lists a submodule as ONE entry, so by default its files are silently out of
@@ -121,14 +131,25 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
      - it is filed as one issue naming all the sites, and `OPEN.md` counts it once.
      The merged-in rows stay in `CONFIRMED.md`, marked "merged into".
    - **Against GitHub:** `engine/filed_check.py --run <run> candidates`. It searches the repo's issues and PRs, all
-     authors, open and closed, by file name and by the finding's identifiers. Then run `engine/filed-wave.js`, where a
+     authors, open and closed, by file name, by the function enclosing the site, and by the finding's identifiers.
+     For a large run pass `--local` with current dumps of EVERY issue and PR, open and closed, of every repo where the
+     code lives or lived (`owner/name=<glob>` for another repo): a closed-only dump silently misses the open reports,
+     which are exactly the duplicates. Candidates are ranked per repo, so a large repo never crowds out a small one.
+     Then run `engine/filed-wave.js`, where a
      judge decides whether any candidate is the same defect, then `filed_check.py persist <output>`, then
      `consolidate.py`. It records one of:
      - `already_filed`: an open issue or PR covers it, so it is never filed again;
      - `filed_closed`: reported and closed, but still present in the audited tree (an incomplete fix or a
        regression), so it goes under "needs attention" with the link;
      - `fixed_upstream`: a PR merged after the audited commit fixes it.
-     A search failure stops the run; it never silently means "not filed".
+     A search failure stops the run; it never silently means "not filed". This search matches words, so it misses a
+     report that describes the behaviour rather than naming the file or function ("fast exp ignores ITERATIONS").
+     **Before filing anything, also search for it by behaviour** (the op and the symptom), by hand or with GitHub's
+     search; that is how the last duplicates of a large run were found.
+   - **Write the suggested fixes:** `engine/fixes.py --run <run> prepare --to-dir <dir>`, then `engine/fix-wave.js`
+     with the args it prints, then `fixes.py persist <output>`, then `consolidate.py`. Each open finding and each
+     merged site gets a fix grounded in the current code, from the verifiers' write-ups, with a `Test:` line. A
+     history-sibling lead has no fix of its own until this step: its scenario and evidence describe the past bug.
 7. **Optional second pass over the highest-priority areas.** Independent hunts miss different bugs, but the measured
    gain is small: three post-fix passes together found 49%, against 45% for the best single pass. It is worth it only
    for the areas that matter most: priority-A batches (device kernels, core runtime, the pack's hot areas).
@@ -190,9 +211,26 @@ The same pipeline built the shipped packs. It is repo-agnostic.
    loose keyword filter that drops nits before any agent sees them), then `mining/review-wave.js`. This
    gives the defects reviewers caught before merge, and the lessons in PRs closed without merging.
 7. **Synthesise:** `mining/synthesize.py` computes the class weights and hot spots. Then write the pack by hand:
-   a weighted class table, hot spots, seeds, incomplete fixes, and reviewer checks. Unfixed siblings from step 5
-   are candidate bugs. Queue them into an audit run's `recheck.py`-style verification; never file them straight
-   from mining.
+   a weighted class table, hot spots, seeds, incomplete fixes, and reviewer checks. The unfixed siblings from step 5
+   are candidate bugs: sweep them (*Sweeping siblings from history*); never file them straight from mining.
+
+## Sweeping siblings from history
+A fix lands in one arch, dtype or overload, and its copies keep the bug. The deep read of each past fix (mining step
+5) lists the fix's siblings in the current tree as fixed, unfixed, unsure or not applicable. Every `unfixed` one is a
+lead. This finds bugs the hunt does not, because it starts from where history says the defect lives rather than from
+whatever file a batch holds, and it needs the deep reads, not the pack.
+1. **Pin the tree** at the commit the deep reads judged ("current tree"), as for an audit, and create a run for it
+   (`init_run.py`, or reuse an audit run so the leads sit with its findings).
+2. **Leads:** `engine/siblings.py --run <run> from-deep <mine>/<repo>_deep.jsonl=<repo> [...]`. One lead per
+   `file:line`, carrying every past case that names it; a location given in words keeps a unique key of its own.
+   `--include-unsure` adds the `unsure` ones too.
+3. **Verify:** `engine/recheck.py --run <run> queue --to-dir <items> --max 330` (three verifiers each; 330 leads is the
+   1000-agent cap), then `engine/recheck-wave.js` with the args it prints, then `recheck.py persist`. Repeat until
+   nothing is queued. For hundreds of leads run each wave unattended with `engine/run_workflow_headless.py`.
+4. **Consolidate, dedup and file-check** exactly as in step 6 of *Running an audit*, then re-rate the placeholder
+   severities with `engine/severity-wave.js` (record them as disposition severity overrides) and write the fixes.
+The first sweep, over the tt-metal and tt-llk deep reads (927 unfixed-sibling entries), verified 776 leads: 536 were
+confirmed, and 388 of them were new after dedup and the filed check.
 
 Every text in a committed pack must be public-safe: no internal hardware internals, no private-doc content, no
 issue or PR numbers. Mechanisms are stated in general terms and cite living docs or code. Put anything else in the
@@ -269,7 +307,8 @@ What the data supports:
 first holdout or among the deep-read fixes, 3 excluded as contaminated). Static only, full skill (universal +
 Tenstorrent classes + pack, the contract-trace ledger with its trace audit, and the post-mortem hunter rules):
 **23 of 47 = 49%**, scored semantically, with the two judges agreeing on every finding. It is not directly
-comparable to the 45%/38% above, which were measured on a different set of bugs.
+comparable to the 45%/38% above, which were measured on a different set of bugs. That run still handed hunters the
+pack; the default no longer does, since no run measured a gain from it. Re-measure on this holdout to confirm.
 The run cost about 880 agents for 50 batches (~17.7 per batch; waves are capped accordingly). The trace audit
 overturned 24 of 223 re-checked "consistent" verdicts (11%), so hunters' own trace verdicts are wrong about one time
 in nine. Verification confirmed 260 of 261 candidates. **Precision, measured separately:** 24 of a random 25 of those

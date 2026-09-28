@@ -17,7 +17,9 @@ A finding with no match stays open and is safe to file. Arch copies (dedup.py) t
 so a Wormhole+Blackhole bug is checked, and later filed, once, with every site listed.
 GitHub's search API allows about 30 requests a minute, so the live search pauses between findings (hours for hundreds
 of findings). For large runs, pass --local with current dumps of every issue and PR (mining/fetch_repo.py): the same
-matching, offline, in seconds.
+matching, offline, in seconds. The dumps must hold EVERY state -- open and closed -- for EVERY repo searched: a dump of
+closed issues only silently misses the open reports, which are the ones that make a finding a duplicate. Candidates
+are ranked per repo (`--limit` each), so a large repo's matches never crowd out a small one's.
 """
 import datetime
 import hashlib
@@ -27,6 +29,7 @@ import re
 import subprocess
 import sys
 import time
+from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import key_of, load, run_dir, save, state  # noqa: E402
@@ -69,13 +72,43 @@ STOP = {
 def idents(f):
     text = f["summary"] + " " + f.get("evidence", "")[:600]
     ticks = re.findall(r"`([^`]{3,60})`", text)
-    toks = re.findall(r"\b(?:[a-z]+_[a-z0-9_]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+)\b", text)
+    # a leading underscore is allowed: every LLK function is spelled `_llk_..._`
+    toks = re.findall(
+        r"(?<![A-Za-z0-9_])(?:_*[a-z]+_[a-z0-9_]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+)\b", text
+    )
     seen = []
     for t in ticks + toks:
         t = re.sub(r"[^A-Za-z0-9_:]", "", t).split("::")[-1]
         if len(t) > 4 and t.lower() not in STOP and t not in seen:
             seen.append(t)
     return seen[:3]
+
+
+DECL = re.compile(
+    r"^(?!\s)(?!(?:if|for|while|switch|return|else|do|case|#)\b)[^;{}()]*?\b(~?[A-Za-z_]\w*)\s*\("
+)
+
+
+def enclosing_function(f):
+    """The function around the finding's line in the audited tree: an issue often names the function, not the file.
+
+    A top-level declarator is a line that starts at column 0 and calls no keyword (LLK and tt-metal headers keep
+    function declarators unindented inside their namespace). None when the file or the line is not found.
+    """
+    try:
+        lines = (
+            open(os.path.join(st["root"], f["file"]), errors="ignore")
+            .read()
+            .split("\n")
+        )
+        ln = int(str(f.get("line") or "0").split("-")[0])
+    except (OSError, ValueError):
+        return None
+    for i in range(min(ln, len(lines)) - 1, max(ln - 600, 0) - 1, -1):
+        m = DECL.match(lines[i])
+        if m and len(m.group(1)) > 4 and m.group(1).lower() not in STOP:
+            return m.group(1)
+    return None
 
 
 def gh_search(kind, query, limit):
@@ -155,6 +188,13 @@ def local_corpus(globs):
                         (x.get("title") or "") + "\n" + (x.get("body") or "")
                     ).lower(),
                 }
+    # a dump with no open item is almost always a closed-only fetch: it would miss exactly the open duplicates
+    for repo in sorted({r for r, _, _ in items}):
+        if not any(v["state"] == "OPEN" for (r, _, _), v in items.items() if r == repo):
+            print(
+                f"WARNING: the {repo} dumps hold no OPEN issue or PR -- refetch with every state",
+                file=sys.stderr,
+            )
     return list(items.values())
 
 
@@ -192,21 +232,37 @@ if argv[0] == "candidates":
         found = {}
         if corpus is not None:
             # offline: rank every issue/PR by how many of the finding's anchors it mentions (file name counts double)
-            anchors = [base.lower()] + [t.lower() for t in idents(f)]
+            # the file name and the enclosing function count double: either alone names the site
+            fn = (enclosing_function(f) or "").lower()
+            anchors = [base.lower()] + [t.lower() for t in idents(f) if t.lower() != fn]
             scored = []
             for it in corpus:
-                sc = 2 * (anchors[0] in it["_text"]) + sum(
-                    1 for t in anchors[1:] if t in it["_text"]
+                sc = (
+                    2 * (anchors[0] in it["_text"])
+                    + 2 * bool(fn and fn in it["_text"])
+                    + sum(1 for t in anchors[1:] if t in it["_text"])
                 )
                 if sc >= 2:
                     scored.append((sc, it))
             scored.sort(key=lambda x: -x[0])
-            for sc, it in scored[:limit]:
+            # top N PER REPO: pooled, the big repo's matches crowd out the small one's, which is how
+            # open tt-llk reports of tt-metal-vendored code were missed
+            per_repo = defaultdict(int)
+            for sc, it in scored:
+                if per_repo[it["repo"]] >= limit:
+                    continue
+                per_repo[it["repo"]] += 1
                 found[(it["repo"], it["kind"], it["number"])] = {
                     k: v for k, v in it.items() if k != "_text"
                 }
         else:
-            for q in [base] + [f"{base} {t}" for t in idents(f)[:2]] + idents(f)[:1]:
+            fn = enclosing_function(f)
+            for q in (
+                [base]
+                + [f"{base} {t}" for t in idents(f)[:2]]
+                + idents(f)[:1]
+                + ([fn] if fn else [])
+            ):
                 for kind in ("issues", "prs"):
                     for it in gh_search(kind, q, limit):
                         found.setdefault(

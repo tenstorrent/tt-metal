@@ -5,7 +5,7 @@
       [--prio 'A=src/kernels/**,src/core/**' --prio 'B=tools/**'] [--default-prio C] \
       [--ext .c,.cc,.cpp,.h,.hpp,.py] [--include 'src/area/**'] [--exclude 'third_party/**'] \
       [--since <commit>] [--max-files 20] [--max-lines 3500] \
-      [--knowledge references/classes-universal.md,packs/<repo>.md]
+      [--knowledge references/classes-universal.md,references/classes-<domain>.md]   # a repo pack only to re-measure it
 
 --root must be a git checkout pinned at the commit you mean to audit (a dedicated worktree is best), so
 recorded file:line findings stay valid for the life of the run. The commit is recorded in state.json.
