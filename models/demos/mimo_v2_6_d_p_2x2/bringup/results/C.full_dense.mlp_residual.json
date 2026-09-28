@@ -1,0 +1,29 @@
+{
+ "metrics": {
+  "mlp_coef_mlp_residual_L00": {
+   "t": "2026-09-28T05:31:13",
+   "value": 1.0020073652267456
+  },
+  "mlp_rel_l2_mlp_residual_L00": {
+   "t": "2026-09-28T05:31:13",
+   "value": 0.003828566987067461
+  },
+  "pcc_mlp_residual_L00": {
+   "t": "2026-09-28T05:31:13",
+   "value": 0.9999967223070532
+  },
+  "rel_l2_mlp_residual_L00": {
+   "t": "2026-09-28T05:31:13",
+   "value": 0.002768860897049308
+  },
+  "row_norm_ratio_max_mlp_residual_L00": {
+   "t": "2026-09-28T05:31:13",
+   "value": 1.0022858381271362
+  },
+  "row_norm_ratio_min_mlp_residual_L00": {
+   "t": "2026-09-28T05:31:13",
+   "value": 1.0002782344818115
+  }
+ },
+ "task": "C.full_dense.mlp_residual"
+}
