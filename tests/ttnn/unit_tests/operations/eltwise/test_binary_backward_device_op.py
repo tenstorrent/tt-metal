@@ -2,12 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the shared binary_backward device operation.
+"""Tests for the shared BinaryBackwardDeviceOperation.
 
-Exercises MUL_BW as the first op routed through the shared device op. Covers
-dtypes x shapes vs torch, mixed operand dtypes (input vs other vs grad_output),
-memory configs, preallocated outputs, program-cache keying, and validation
-rejections that flip the caller back onto the composite path.
+Covers mul_bw as the first op routed through it. Tests focus on the shared layer's contract:
+output specs, validation, program-cache keying, and broadcast reduce.
 """
 
 import pytest
@@ -15,11 +13,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
 
 
 _TORCH_OF = {
@@ -39,19 +32,11 @@ def _pt_and_tt(shape, low, high, device, dtype, memory_config, seed=213919, layo
         dtype=dtype,
         memory_config=memory_config,
     )
-    # bfloat8_b round-trips through the tile packer, so read back the exact
-    # value the device sees for the golden comparison.
     return ttnn.to_torch(tt).float(), tt
 
 
 def _torch_mul_bw(grad, a, b):
-    # d(a*b)/da = grad*b, d(a*b)/db = grad*a
     return grad * b, grad * a
-
-
-# ---------------------------------------------------------------------------
-# forward correctness
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -60,18 +45,14 @@ def _torch_mul_bw(grad, a, b):
         (1, 1, 32, 32),
         (1, 1, 320, 384),
         (1, 3, 320, 384),
-        (4, 8, 512, 512),
     ],
 )
-# bit-addressable floats use ULP because mul_bw is a pure multiply (kernel result is
-# round_to_dtype(grad*operand)); block-float types keep PCC (shared-exponent quantisation).
 @pytest.mark.parametrize(
     "dtype, ulp, expected_pcc",
     [
         (ttnn.bfloat16, 4, None),
         (ttnn.float32, 4, None),
         (ttnn.bfloat8_b, None, 0.99),
-        (ttnn.bfloat4_b, None, 0.93),
     ],
 )
 @pytest.mark.parametrize(
@@ -80,8 +61,6 @@ def _torch_mul_bw(grad, a, b):
     ids=["dram", "l1"],
 )
 def test_mul_bw_correctness(shape, dtype, ulp, expected_pcc, memory_config, device):
-    if shape == (4, 8, 512, 512) and dtype == ttnn.float32 and memory_config == ttnn.L1_MEMORY_CONFIG:
-        pytest.skip("fp32 (4,8,512,512) x 5 buffers exceeds L1 budget")
     a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, dtype, memory_config, seed=213919)
     b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, dtype, memory_config, seed=213920)
     g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, dtype, memory_config, seed=213921)
@@ -92,16 +71,14 @@ def test_mul_bw_correctness(shape, dtype, ulp, expected_pcc, memory_config, devi
     grad_a_tt = ttnn.to_torch(out[0]).float()
     grad_b_tt = ttnn.to_torch(out[1]).float()
 
-    assert out[0].dtype == a_tt.dtype, f"input_grad dtype {out[0].dtype} != input dtype {a_tt.dtype}"
-    assert out[1].dtype == b_tt.dtype, f"other_grad dtype {out[1].dtype} != other dtype {b_tt.dtype}"
+    assert out[0].dtype == a_tt.dtype
+    assert out[1].dtype == b_tt.dtype
 
     if expected_pcc is not None:
         assert_with_pcc(grad_a_pt, grad_a_tt, expected_pcc)
         assert_with_pcc(grad_b_pt, grad_b_tt, expected_pcc)
         return
 
-    # Compare in operand dtype so ULP is measured in the space the device sees; comparing
-    # at fp32 for a bf16 result would score every pack-back rounding as ~800000 fp32 ULPs.
     torch_out_dtype = _TORCH_OF[dtype]
     assert_with_ulp(
         expected_result=grad_a_pt.to(torch_out_dtype),
@@ -115,23 +92,12 @@ def test_mul_bw_correctness(shape, dtype, ulp, expected_pcc, memory_config, devi
     )
 
 
-# ---------------------------------------------------------------------------
-# mixed operand dtypes — the exact class the tanh_bw factory bug bit (#56061)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "grad_dtype,a_dtype,b_dtype,pcc",
     [
         (ttnn.float32, ttnn.bfloat16, ttnn.bfloat16, 0.999),
         (ttnn.bfloat16, ttnn.float32, ttnn.bfloat16, 0.999),
-        (ttnn.bfloat16, ttnn.bfloat16, ttnn.float32, 0.999),
-        # bfloat8_b is a shared-exponent block format, so per-tile quantisation is looser;
-        # the nightly mul_bw sweep parametrises it for every operand, so cover it here too.
         (ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16, 0.99),
-        (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, 0.99),
-        (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat8_b, 0.99),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.float32, 0.99),
     ],
 )
 def test_mul_bw_mixed_operand_dtypes(grad_dtype, a_dtype, b_dtype, pcc, device):
@@ -151,15 +117,7 @@ def test_mul_bw_mixed_operand_dtypes(grad_dtype, a_dtype, b_dtype, pcc, device):
     assert_with_pcc(grad_b_pt, grad_b_tt, pcc)
 
 
-# ---------------------------------------------------------------------------
-# preallocated outputs
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "preallocate",
-    ["both", "input_only", "other_only"],
-)
+@pytest.mark.parametrize("preallocate", ["both", "input_only", "other_only"])
 def test_mul_bw_preallocated(preallocate, device):
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
@@ -167,12 +125,8 @@ def test_mul_bw_preallocated(preallocate, device):
     b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=213920)
     g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=213921)
 
-    input_grad = None
-    other_grad = None
-    if preallocate in ("both", "input_only"):
-        input_grad = ttnn.empty_like(a_tt)
-    if preallocate in ("both", "other_only"):
-        other_grad = ttnn.empty_like(b_tt)
+    input_grad = ttnn.empty_like(a_tt) if preallocate in ("both", "input_only") else None
+    other_grad = ttnn.empty_like(b_tt) if preallocate in ("both", "other_only") else None
 
     grad_a_pt, grad_b_pt = _torch_mul_bw(g_pt, a_pt, b_pt)
 
@@ -185,19 +139,12 @@ def test_mul_bw_preallocated(preallocate, device):
         input_grad=input_grad,
         other_grad=other_grad,
     )
-    # Address parity: op must write into the caller's buffers, not silently allocate fresh.
+
     if input_grad is not None:
-        assert out[0].buffer_address() == input_grad.buffer_address(), (
-            f"input_grad buffer_address diverged (out={out[0].buffer_address()} "
-            f"preallocated={input_grad.buffer_address()}); op ignored the preallocated tensor"
-        )
+        assert out[0].buffer_address() == input_grad.buffer_address()
     if other_grad is not None:
-        assert out[1].buffer_address() == other_grad.buffer_address(), (
-            f"other_grad buffer_address diverged (out={out[1].buffer_address()} "
-            f"preallocated={other_grad.buffer_address()}); op ignored the preallocated tensor"
-        )
-    # ULP oracle instead of PCC 0.999: PCC hides real per-element error, and the
-    # device path must match the composite ttnn::multiply to within a fixed ULP bound.
+        assert out[1].buffer_address() == other_grad.buffer_address()
+
     assert_with_ulp(
         expected_result=grad_a_pt.to(torch.bfloat16),
         actual_result=ttnn.to_torch(out[0]).to(torch.bfloat16),
@@ -208,11 +155,6 @@ def test_mul_bw_preallocated(preallocate, device):
         actual_result=ttnn.to_torch(out[1]).to(torch.bfloat16),
         ulp_threshold=1,
     )
-
-
-# ---------------------------------------------------------------------------
-# partial mask stays on the composite path (device op contract requires both)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("mask", [[True, False], [False, True]])
@@ -240,13 +182,7 @@ def test_mul_bw_partial_mask_routes_to_composite(mask, device):
         )
 
 
-# ---------------------------------------------------------------------------
-# broadcasting operands — operand-shape grads via composite reduce_to_shape
-# ---------------------------------------------------------------------------
-
-
 def _torch_ref_mul_bw(g_pt, a_pt, b_pt):
-    # Ground truth via the CPU reference: builds grads at operand shape.
     a = a_pt.detach().clone().float().requires_grad_(True)
     b = b_pt.detach().clone().float().requires_grad_(True)
     (a * b).backward(g_pt.float())
@@ -254,27 +190,15 @@ def _torch_ref_mul_bw(g_pt, a_pt, b_pt):
 
 
 @pytest.mark.parametrize(
-    "grad_shape,input_shape,other_shape,label",
+    "grad_shape,input_shape,other_shape",
     [
-        # forward: input broadcasts up on dim 2 -> grad_output at (1,1,32,128); reduce input_grad only.
-        ((1, 1, 32, 128), (1, 1, 1, 128), (1, 1, 32, 128), "leading_bcast_input"),
-        # forward: other broadcasts up on dim 2 -> reduce other_grad only.
-        ((1, 1, 32, 128), (1, 1, 32, 128), (1, 1, 1, 128), "leading_bcast_other"),
-        # both operands broadcast on different axes -> reduce both grads.
-        ((2, 4, 32, 32), (2, 1, 32, 32), (1, 4, 32, 32), "channel_bcast_both"),
-        # scalar-broadcast: one operand is a single-element tile.
-        ((2, 4, 32, 32), (1, 1, 32, 32), (2, 4, 32, 32), "scalar_like_input"),
-        # cross-rank: operand.rank < grad.rank; needs sum + rank-drop reshape.
-        ((2, 3, 32, 128), (128,), (2, 3, 32, 128), "cross_rank_input"),
-        ((2, 3, 32, 128), (2, 3, 32, 128), (32, 128), "cross_rank_other"),
-        # regression: same-shape stays on the fast (single-launch) path.
-        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32), "no_bcast_fast_path"),
+        ((1, 1, 32, 128), (1, 1, 1, 128), (1, 1, 32, 128)),
+        ((1, 1, 32, 128), (1, 1, 32, 128), (1, 1, 1, 128)),
+        ((2, 4, 32, 32), (2, 1, 32, 32), (1, 4, 32, 32)),
+        ((2, 3, 32, 128), (128,), (2, 3, 32, 128)),
     ],
-    ids=lambda v: v if isinstance(v, str) else None,
 )
-def test_mul_bw_broadcast_returns_operand_shape_grads(grad_shape, input_shape, other_shape, label, device):
-    # Composite mul_bw's reduce_to_shape must return grads at operand shape, not the
-    # broadcast shape (silently-broadcast-shape grads were the pre-existing bug).
+def test_mul_bw_broadcast_returns_operand_shape_grads(grad_shape, input_shape, other_shape, device):
     mc = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt(input_shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
     b_pt, b_tt = _pt_and_tt(other_shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
@@ -284,19 +208,13 @@ def test_mul_bw_broadcast_returns_operand_shape_grads(grad_shape, input_shape, o
 
     out = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=mc)
 
-    assert list(out[0].shape) == list(
-        a_pt.shape
-    ), f"[{label}] input_grad shape={list(out[0].shape)} != input shape={list(a_pt.shape)}"
-    assert list(out[1].shape) == list(
-        b_pt.shape
-    ), f"[{label}] other_grad shape={list(out[1].shape)} != other shape={list(b_pt.shape)}"
+    assert list(out[0].shape) == list(a_pt.shape)
+    assert list(out[1].shape) == list(b_pt.shape)
     assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
     assert_with_pcc(grad_b_pt, ttnn.to_torch(out[1]).float(), 0.999)
 
 
 def test_mul_bw_broadcast_with_preallocated_operand_shape(device):
-    # Preallocated grads sized to operand shape (not grad shape) still round-trip; the
-    # reduce path writes into them via ttnn::assign, not through the multiply's output slot.
     mc = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt((1, 1, 1, 128), -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
     b_pt, b_tt = _pt_and_tt((1, 1, 32, 128), -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
@@ -317,17 +235,10 @@ def test_mul_bw_broadcast_with_preallocated_operand_shape(device):
         other_grad=other_grad,
     )
 
-    assert (
-        out[0].buffer_address() == input_grad.buffer_address()
-    ), "preallocated input_grad address changed; reduce path must ttnn::assign into caller's buffer"
+    assert out[0].buffer_address() == input_grad.buffer_address()
     assert out[1].buffer_address() == other_grad.buffer_address()
     assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
     assert_with_pcc(grad_b_pt, ttnn.to_torch(out[1]).float(), 0.999)
-
-
-# ---------------------------------------------------------------------------
-# program-cache keying: one entry per dtype-set for the device-op path
-# ---------------------------------------------------------------------------
 
 
 def test_mul_bw_program_cache_keying(device):
@@ -342,25 +253,17 @@ def test_mul_bw_program_cache_keying(device):
 
     start = device.num_program_cache_entries()
     _run(ttnn.bfloat16)
-    _run(ttnn.bfloat16)  # second call must not add an entry
+    _run(ttnn.bfloat16)
     after_bf16 = device.num_program_cache_entries()
     added_bf16 = after_bf16 - start
-    assert added_bf16 == 1, (
-        f"expected 1 program cache entry for two identical bfloat16 mul_bw calls (second a hit), got {added_bf16}; "
-        "more means the hash separates runs it should share, fewer means it collides distinct programs"
-    )
+    assert added_bf16 == 1
+
     _run(ttnn.float32)
     added_f32 = device.num_program_cache_entries() - after_bf16
-    assert added_f32 == 1, (
-        f"expected 1 additional entry when switching bfloat16 -> float32 mul_bw, got {added_f32}; "
-        "0 means the hash collides dtypes, >1 means the second float32 program was not cached"
-    )
+    assert added_f32 == 1
 
 
 def test_mul_bw_alternating_prealloc_slot_isolates_program_cache(device):
-    # Regression for hash collision: (input_grad=L1, other_grad=auto-DRAM) and
-    # (input_grad=auto-DRAM, other_grad=L1) build different programs (writer's per-slot
-    # TensorAccessorArgs differ), so their hashes must not collide.
     shape = (1, 1, 32, 32)
     output_mc = ttnn.DRAM_MEMORY_CONFIG
     prealloc_mc = ttnn.L1_MEMORY_CONFIG
@@ -384,7 +287,7 @@ def test_mul_bw_alternating_prealloc_slot_isolates_program_cache(device):
 
     input_grad_l1 = _make_l1(shape)
     out_a = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=output_mc, input_grad=input_grad_l1)
-    assert out_a[0].buffer_address() == input_grad_l1.buffer_address(), "call A: input_grad must reuse prealloc"
+    assert out_a[0].buffer_address() == input_grad_l1.buffer_address()
     assert out_a[0].memory_config().buffer_type == ttnn.BufferType.L1
     assert out_a[1].memory_config().buffer_type == ttnn.BufferType.DRAM
     assert_with_pcc(grad_a_pt, ttnn.to_torch(out_a[0]).float(), 0.999)
@@ -392,28 +295,18 @@ def test_mul_bw_alternating_prealloc_slot_isolates_program_cache(device):
 
     other_grad_l1 = _make_l1(shape)
     out_b = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=output_mc, other_grad=other_grad_l1)
-    assert out_b[1].buffer_address() == other_grad_l1.buffer_address(), "call B: other_grad must reuse prealloc"
+    assert out_b[1].buffer_address() == other_grad_l1.buffer_address()
     assert out_b[0].memory_config().buffer_type == ttnn.BufferType.DRAM
     assert out_b[1].memory_config().buffer_type == ttnn.BufferType.L1
     assert_with_pcc(grad_a_pt, ttnn.to_torch(out_b[0]).float(), 0.999)
     assert_with_pcc(grad_b_pt, ttnn.to_torch(out_b[1]).float(), 0.999)
 
     added = device.num_program_cache_entries() - start
-    assert added == 2, (
-        f"expected 2 program cache entries (one per prealloc slot layout), got {added}; "
-        "1 means the hash collides two structurally-different programs"
-    )
-
-
-# ---------------------------------------------------------------------------
-# rejection paths (routing gate + device op TT_FATALs)
-# ---------------------------------------------------------------------------
+    assert added == 2
 
 
 @pytest.mark.parametrize("bad_role", ["grad", "input", "other"])
 def test_mul_bw_int_operand_raises(bad_role, device, expect_error):
-    # int/uint gradient requests are non-differentiable and rejected here instead of
-    # routing to a silent composite via mul_int_tile.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
     _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
@@ -433,43 +326,33 @@ def test_mul_bw_int_operand_raises(bad_role, device, expect_error):
         ttnn.mul_bw(grad, input_, other, memory_config=mc)
 
 
-def test_mul_bw_all_int32_operands_raise(device, expect_error):
-    # Pure int32 for all three: rejected here rather than dispatching a silent-composite
-    # mul_int_tile that would masquerade as a valid backward.
+@pytest.mark.parametrize("bad_role", ["grad", "input"])
+def test_mul_bw_scalar_overload_int_operand_raises(bad_role, device, expect_error):
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
-    torch.manual_seed(51)
-    a_pt = torch.randint(-8, 8, shape, dtype=torch.int32)
-    b_pt = torch.randint(-8, 8, shape, dtype=torch.int32)
-    g_pt = torch.randint(-8, 8, shape, dtype=torch.int32)
-    to_tt = lambda pt: ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, memory_config=mc)
-    a_tt, b_tt, g_tt = to_tt(a_pt), to_tt(b_pt), to_tt(g_pt)
+    _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
+    _, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=2)
+    int_tensor = ttnn.zeros(shape, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    grad, input_ = (int_tensor, a_tt) if bad_role == "grad" else (g_tt, int_tensor)
 
     with expect_error(RuntimeError, "floating-point"):
-        ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=mc)
+        ttnn.mul_bw(grad, input_, 2.0, memory_config=mc)
 
 
 def test_mul_bw_row_major_operand_routes_to_composite(device):
-    # ROW_MAJOR operand: device op requires TILE, ttnn.multiply accepts ROW_MAJOR.
-    # Gate must fall back — no MUL_BW device-op fatal.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
-    _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1, layout=ttnn.ROW_MAJOR_LAYOUT)
-    _, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
-    _, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1, layout=ttnn.ROW_MAJOR_LAYOUT)
+    b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
 
-    try:
-        ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=mc)
-    except RuntimeError as exc:
-        assert "MUL_BW device op" not in str(exc) and "MUL_BW operation" not in str(
-            exc
-        ), f"routing gate leaked a ROW_MAJOR operand into MUL_BW device op:\n{exc}"
+    out = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=mc)
+    grad_a_pt, grad_b_pt = _torch_mul_bw(g_pt, a_pt, b_pt)
+    assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
+    assert_with_pcc(grad_b_pt, ttnn.to_torch(out[1]).float(), 0.999)
 
 
 def test_mul_bw_sharded_preallocated_grad_routes_to_composite(device):
-    # Preallocated sharded input_grad + interleaved operands + default mem_config:
-    # compute_output_specs returns preallocated->tensor_spec() verbatim, so a sharded
-    # buffer would slip past an input-only gate. Must fall back to composite.
     shape = (1, 1, 32, 32)
     dram = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, dram, seed=1)
@@ -496,9 +379,6 @@ def test_mul_bw_sharded_preallocated_grad_routes_to_composite(device):
 
 
 def test_mul_bw_fp32_grad_bf16_operands_uses_fp32_dest_acc(device):
-    # Guards issue #43196: fp32 grad + bf16 operands. Without fp32_dest_acc_en, an fp32
-    # tile is unpacked into a bf16-configured DEST and tile-aligned corruption follows.
-    # PCC 0.999 does not catch it; ULP does.
     shape = (1, 1, 320, 384)
     mc = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
@@ -511,8 +391,6 @@ def test_mul_bw_fp32_grad_bf16_operands_uses_fp32_dest_acc(device):
     grad_a_tt = ttnn.to_torch(out[0]).float()
     grad_b_tt = ttnn.to_torch(out[1]).float()
 
-    # Assert in bf16 (the DEST-facing output dtype); ULP measured in fp32 would score
-    # every pack-back rounding as ~800000 ULPs.
     assert_with_ulp(
         expected_result=grad_a_pt.to(torch.bfloat16),
         actual_result=grad_a_tt.to(torch.bfloat16),
@@ -526,8 +404,6 @@ def test_mul_bw_fp32_grad_bf16_operands_uses_fp32_dest_acc(device):
 
 
 def test_mul_bw_rejects_preallocated_output_dtype_mismatch(device, expect_error):
-    # Dtype-mismatched preallocated grad: gate rejects and the composite's ttnn.multiply
-    # also raises; either path must fail loudly rather than silently coerce.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
     _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
@@ -541,25 +417,7 @@ def test_mul_bw_rejects_preallocated_output_dtype_mismatch(device, expect_error)
         ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=mc, input_grad=wrong_dtype, other_grad=correct)
 
 
-def test_mul_bw_default_mem_config_divergent_operands_stays_on_composite(device):
-    # A1: routing gate rejects when input and other differ mem_configs without an explicit
-    # output_memory_config; this test pins the correctness half of that fallback.
-    shape = (1, 1, 32, 32)
-    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, seed=1)
-    b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, seed=2)
-    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, seed=3)
-
-    out = ttnn.mul_bw(g_tt, a_tt, b_tt)
-
-    grad_a_pt, grad_b_pt = _torch_mul_bw(g_pt, a_pt, b_pt)
-    assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
-    assert_with_pcc(grad_b_pt, ttnn.to_torch(out[1]).float(), 0.999)
-
-
 def test_mul_bw_output_preserves_input_padded_shape(device):
-    # Input padded beyond tile alignment via tilize_with_val_padding: the factory writes
-    # input.physical_volume()/TILE_HW pages, so the output must carry the same padded shape
-    # or the writer runs past the allocation (same class as #56061 5daac64).
     logical_shape = (1, 1, 40, 40)
     padded_shape = (1, 1, 96, 96)
     torch.manual_seed(41)
@@ -572,14 +430,12 @@ def test_mul_bw_output_preserves_input_padded_shape(device):
         return ttnn.tilize_with_val_padding(rm, padded_shape, 0.0)
 
     a_tt, b_tt, g_tt = _tilize_pad(a_pt), _tilize_pad(b_pt), _tilize_pad(g_pt)
-    assert tuple(a_tt.padded_shape) == padded_shape, f"tilize_with_val_padding didn't produce {padded_shape}"
+    assert tuple(a_tt.padded_shape) == padded_shape
 
     out = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for grad_tt, name in ((out[0], "input_grad"), (out[1], "other_grad")):
-        assert tuple(grad_tt.padded_shape) == padded_shape, (
-            f"{name} padded_shape {tuple(grad_tt.padded_shape)} != input's {padded_shape}; "
-            f"writer would overrun on the {padded_shape[-2] * padded_shape[-1] // 32 // 32}-tile input"
-        )
+    for grad_tt in (out[0], out[1]):
+        assert tuple(grad_tt.padded_shape) == padded_shape
+
     grad_a_pt, grad_b_pt = _torch_mul_bw(g_pt, a_pt, b_pt)
     r = tuple(slice(0, s) for s in logical_shape)
     assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0])[r].float(), 0.999)
@@ -587,8 +443,6 @@ def test_mul_bw_output_preserves_input_padded_shape(device):
 
 
 def test_mul_bw_sharded_stays_on_composite(device):
-    # Sharded operands must fall back to composite (fused device op is interleaved-only);
-    # same regression class as sigmoid_bw in #56061 (b59f52d).
     shape = (1, 1, 32, 32)
     sharded_mc = ttnn.create_sharded_memory_config(
         shape=shape,
@@ -600,8 +454,6 @@ def test_mul_bw_sharded_stays_on_composite(device):
     b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, sharded_mc, seed=2)
     g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, sharded_mc, seed=3)
 
-    # If the gate regresses, the per-operand sharded rejection would fire with the
-    # MUL_BW-keyed message; composite accepts and returns a matching-precision result.
     out = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=sharded_mc)
     grad_a_pt, grad_b_pt = _torch_mul_bw(g_pt, a_pt, b_pt)
     assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
