@@ -47,11 +47,12 @@ inline void _llk_packer_set_math_semaphore_()
 }
 
 /**
- * @brief Finish a destination-register section: wait for pack, clear dest, and release math.
+ * @brief Finish a destination-register section: wait for pack, optionally clear dest, and release math.
  *
- * Stalls until the pack completes, zeroes the just-packed dest region (all of dest for SyncFull, the
- * active half for SyncHalf), then signals the MATH_PACK semaphore. For SyncHalf it also flips the
- * dest-offset id and re-selects the packer dest registers so the next half can be packed.
+ * Waits until the pack completes, then signals the MATH_PACK semaphore. If clear_dest is true,
+ * first zeroes the just-packed dest region (all of dest for SyncFull, the active half for SyncHalf).
+ * For SyncHalf it also flips the dest-offset id and re-selects the packer dest registers so the
+ * next half can be packed.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -59,7 +60,7 @@ inline void _llk_packer_set_math_semaphore_()
  */
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
-// Clear dest
+// Clear dest only when clear_dest is true
 template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true>
 inline void _llk_pack_dest_section_done_()
 {
