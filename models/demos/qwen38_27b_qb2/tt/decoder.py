@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
+from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv, qkv_conv_compat
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -890,16 +890,12 @@ class Qwen38Decoder(LightweightModule):
             chunks = []
             for user in range(b):
                 chunks.append(
-                    ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                    qkv_conv_compat(
                         row_qkv[user : user + 1],
                         state.conv[user : user + 1],
-                        *self.conv_taps,
-                        h * d,
-                        h * d,
-                        hv * d,
-                        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
-                        actual_start=self.conv_actual_start,
-                        predecessor_carry=state.conv[user : user + 1],
+                        self.conv_taps,
+                        (h * d, h * d, hv * d),
+                        self.conv_actual_start,
                     )
                 )
             q, k, v = [parts[0] if b == 1 else ttnn.concat(parts, dim=0) for parts in zip(*chunks)]

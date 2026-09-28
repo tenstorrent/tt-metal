@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
+from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv, qkv_conv_compat
 from models.demos.qwen38_27b_qb2.tt.model import Checkpoint, checkpoint_path
 
 
@@ -45,14 +45,12 @@ def test_packed_decode_conv_matches_independent_users(device, batch, seed):
     taps = [upload(tap, ttnn.TILE_LAYOUT) for tap in taps_host]
     actual_start = make_actual_start(device)
     reference = [
-        ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        qkv_conv_compat(
             row[i : i + 1],
             history[i : i + 1],
-            *taps,
-            *widths,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
-            actual_start=actual_start,
-            predecessor_carry=history[i : i + 1],
+            taps,
+            widths,
+            actual_start,
         )
         for i in range(batch)
     ]
