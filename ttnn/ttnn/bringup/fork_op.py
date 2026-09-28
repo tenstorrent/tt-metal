@@ -55,7 +55,7 @@ def rewrite(text: str, path: Path, src: Path, dst: Path, src_inc: str, ns: str, 
         target = dst / m.group(2)
         return f'{m.group(1)}"{rel_include(here, target)}"'
 
-    for prefix in (src_root + "/", src_inc + "/"):
+    for prefix in (src_root + "/", "cpp/" + src_inc + "/", src_inc + "/"):
         text = re.sub(r'(#include\s*)"' + re.escape(prefix) + r'([^"]+)"', inc, text)
     # Kernel paths and install destinations (root-relative strings) point at the copy.
     text = text.replace(src_root + "/", dst_root + "/").replace(src_root + '"', dst_root + '"')
@@ -158,6 +158,81 @@ def add_unlisted_sources(dst: Path, name: str) -> list[str]:
     return missing
 
 
+def write_cmake(dst: Path, name: str) -> None:
+    """The source is a subfolder of a larger op target (e.g. transformer/sdpa inside ttnn_op_transformer), so it has no
+    CMakeLists.txt of its own: write one for the fork, in the layout of the single-op targets (sources.cmake lists the
+    host sources, the public headers and the nanobind sources)."""
+    target, up = f"ttnn_op_bringup_{name}", f"TTNN_OP_BRINGUP_{name.upper()}"
+    rel = lambda fs: sorted(str(f.relative_to(dst)) for f in fs)
+    host = [f for f in dst.rglob("*.cpp") if "kernels" not in f.relative_to(dst).parts]
+    srcs = rel(f for f in host if not f.name.endswith("_nanobind.cpp"))
+    nb = rel(f for f in host if f.name.endswith("_nanobind.cpp"))
+    api = rel(f for f in dst.glob("*.hpp") if not f.name.endswith("_nanobind.hpp"))
+    lst = lambda xs: "\n".join(f"    {x}" for x in xs)
+    (dst / "sources.cmake").write_text(
+        f"# Source files for {target} (written by fork_op.py: the source op had no target of its own).\n\n"
+        f"set({up}_API_HEADERS\n{lst(api)}\n)\n\nset({up}_SRCS\n{lst(srcs)}\n)\n\n"
+        f"set({up}_NANOBIND_SRCS\n{lst(nb)}\n)\n"
+    )
+    (dst / "CMakeLists.txt").write_text(
+        f"""include(sources.cmake)
+
+add_library({target} ${{LIB_TYPE}})
+add_library(TTNN::Ops::Bringup::{camel(name)} ALIAS {target})
+
+tt_reuse_precompile_headers({target} TTNN::PCHFull)
+TT_ENABLE_UNITY_BUILD({target})
+target_include_directories({target} PRIVATE ${{FixmeOpAPIDir}} ${{FixmeOpIncDirs}})
+
+set_target_properties(
+    {target}
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+    device/kernels/*.h
+)
+
+target_sources(
+    {target}
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${{CMAKE_CURRENT_SOURCE_DIR}}
+        FILES ${{{up}_API_HEADERS}}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${{CMAKE_CURRENT_SOURCE_DIR}}
+        FILES ${{kernels}}
+    PRIVATE
+        ${{{up}_SRCS}}
+)
+
+target_link_libraries({target} PRIVATE TT::Metalium PUBLIC TTNN::Core)
+
+install(
+    TARGETS
+        {target}
+    FILE_SET
+    kernels
+        DESTINATION ${{CMAKE_INSTALL_LIBEXECDIR}}/tt-metalium/{dst.relative_to(ROOT)}
+        COMPONENT ttnn-runtime
+)
+
+install(TARGETS {target} FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${{{up}_NANOBIND_SRCS}})
+endif()
+"""
+    )
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
@@ -172,8 +247,9 @@ def main(argv=None) -> int:
     src = (ROOT / a.source).resolve()
     name = a.name or src.name
     dst = HERE / name
-    if not (src / "CMakeLists.txt").is_file():
-        sys.exit(f"{src} has no CMakeLists.txt; only C++ ops with their own CMake target can be forked")
+    own_target = (src / "CMakeLists.txt").is_file()
+    if not own_target and not any((d / "CMakeLists.txt").is_file() for d in src.parents if d != ROOT):
+        sys.exit(f"{src} is not in a C++ op target (no CMakeLists.txt in it or above it)")
     if dst.exists():
         sys.exit(f"{dst.relative_to(ROOT)} exists: extend that fork (INDEX.md) instead of forking again")
     src_inc = str(src.relative_to(ROOT / "ttnn" / "cpp"))  # ttnn/operations/.../<op>
@@ -193,6 +269,8 @@ def main(argv=None) -> int:
             shutil.copy2(f, out)
 
     isolate_namespaces(dst)
+    if not own_target:
+        write_cmake(dst, name)
     add_unlisted_sources(dst, name)
 
     # Anything still pointing at the source tree is a sibling op the fork depends on; list it for the person.
@@ -206,15 +284,13 @@ def main(argv=None) -> int:
     hpp = next(dst.glob("*_nanobind.hpp"), None)
     found = []
     for m in re.finditer(
-        r"namespace (ttnn::operations::bringup[\w:]*::detail) \{(.*?)\n\}", hpp.read_text() if hpp else "", re.S
+        r"namespace (ttnn::operations::bringup[\w:]*) \{(.*?)\n\}", hpp.read_text() if hpp else "", re.S
     ):
         found += [
             (m.group(1), f) for f in re.findall(r"void (bind_\w+)\(\s*(?:::)?(?:nb|nanobind)::module_", m.group(2))
         ]
     if not found:
-        sys.exit(
-            f"no bind_* function in a ttnn::operations::bringup...::detail namespace of {hpp}; register it by hand"
-        )
+        sys.exit(f"no bind_* function in a ttnn::operations::bringup... namespace of {hpp}; register it by hand")
     bns, bind = found[-1]  # the domain-level wrapper when there is one, else the op's own detail::bind_*
     reg = HERE / "bringup_nanobind.cpp"
     t = reg.read_text()
