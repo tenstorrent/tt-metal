@@ -22,7 +22,10 @@ from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, metrics, prepa
 
 RING = 2
 K_CHUNK = 512
-WORKER_L1 = int(os.getenv("TEST_EXP_RING_WORKER_L1", "1344544"))  # the H3 pipeline's worker L1 size
+PIPELINE_WORKER_L1 = 1344544  # the H3 pipeline's worker L1 size
+WORKER_L1 = int(os.getenv("TEST_EXP_RING_WORKER_L1", str(PIPELINE_WORKER_L1)))  # 0 = device default
+# L1-rejection expectations below are calibrated at the pipeline worker L1; the default L1 is larger.
+AT_PIPELINE_L1 = WORKER_L1 == PIPELINE_WORKER_L1
 
 
 @pytest.fixture(scope="module")
@@ -201,7 +204,7 @@ def test_recipe_exp_ring(exp_ring_mesh, case, variant, q_chunk, record_property)
             **kwargs,
         )
 
-    if variant == "A" and heads * (-(-(local + joint) // q_chunk) // (grid[0] - 1)) > 2 * grid[1]:
+    if AT_PIPELINE_L1 and variant == "A" and heads * (-(-(local + joint) // q_chunk) // (grid[0] - 1)) > 2 * grid[1]:
         # FAST keeps the legacy exp compute and its multi-pass L1 layout (all passes' Q chunks and
         # accumulator states resident), which does not fit three passes at Q256/K512: the legacy call
         # and FAST must reject it identically.
@@ -350,6 +353,8 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
     """Rejected on the host before dispatch. (Causal/balanced/window/cache do not exist on this op;
     Recipes run pass-outer with a single-slot Q per pass, so the legacy stream_q fallback never applies.)"""
     mesh, subdevice, semaphores = exp_ring_mesh
+    if case == "l1_q320" and not AT_PIPELINE_L1:
+        pytest.skip("Q320 exceeds L1 only at the pipeline worker L1 size")
     heads = 16 if case == "four_pass" else 4
     local = 1280 if case == "l1_q320" else 1024
     host = generate(heads, RING * local, RING * local, 0)
