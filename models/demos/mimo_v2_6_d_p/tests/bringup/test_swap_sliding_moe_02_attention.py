@@ -16,9 +16,9 @@ of the softmax mass, so attn_out is small next to the residual. Extra asserted c
 the runner's threshold list):
   - each swapped float step's own output vs golden: finite, PCC >= spec component threshold;
     attn_norm: rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03] (C.sliding_moe.attn_norm / swap 01 limits);
-    attention: rel L2 <= 0.02 whole chunk and first 128 rows, per-token norm ratio in [0.95, 1.05], worst per-token
-    rel L2 <= 0.08 (C.sliding_moe.attention limits; here the attention input is the device attn_norm, so the check
-    covers the chain);
+    attention: rel L2 <= 0.022 whole chunk and first 128 rows, per-token norm ratio in [0.95, 1.08], worst per-token
+    rel L2 <= 0.08 (C.sliding_moe.attention limits 0.02 / [0.95, 1.05] / 0.08, widened here as noted below; here the
+    attention input is the device attn_norm, so the check covers the chain);
   - attention window discriminator, as in the component test but against the CPU attention on the same (device)
     attn_norm input: rel L2 to the CPU attention at window 128 <= 0.015 (component noise estimate 0.0072, x1.02 0.020),
     and the output must be closer to it than to the CPU attention at windows 127 and 129 (an off-by-one window sits
@@ -34,6 +34,17 @@ test on the golden input: 0.0086; the device attn_norm error is amplified by the
 0.0070, w127 0.0081, w129 0.0141. The window-127 margin is small (0.0011): noise added to this path (bf8 KV, HiFi2,
 a noisier attn_norm) must re-check it.
 The K/V the attention writes to the state is not returned here; the state metrics check it.
+Limits widened 2026-09-28 (owner decision): attention rel L2 0.02 -> 0.022, per-token norm ratio upper bound 1.05 ->
+1.08; every other limit is unchanged. Why: the owner keeps the sliding SDPA preset "S" (P.2; fp32 accumulation off),
+chosen for speed (sliding SDPA 2.5 ms against 19.7 ms at base). On its own, with the native norm, it measured attention
+rel 0.0235, ratio [0.9791, 1.0729], worst row 0.073. The bring-up norm used to add a +0.1% scale bias on top: its
+cross-chunk sum of squares was truncated to bf16 (fixed in ttnn.bringup.rms_norm, CHANGELOG 3). Measured at the
+defaults (preset S, bring-up norm): before the norm fix, attention rel 0.0220 / first rows 0.0187, ratio
+[0.9420, 1.0319], worst row 0.058; attn_norm rel 0.0033, ratio [0.9939, 1.0067]. After it, attention rel 0.0196 /
+first rows 0.0151, ratio [0.9742, 1.0657], worst row 0.066, vs CPU w128 0.0132, w127 0.0166, w129 0.0150; attn_norm rel
+0.0029, ratio [0.9935, 1.0061]; pcc_swap_out 0.999995, out rel 0.0032 / 0.0029. The new limits are those numbers plus
+a small margin. Full-model accuracy is unchanged: ladder rung last, per-layer PCC L00 0.998576 ... L05 0.998414
+(0.998435 before), state_min 0.999280 (0.999283).
 """
 
 import torch
@@ -56,8 +67,8 @@ S = spec()
 BLOCK_TYPE = "sliding_moe"
 SWAPPED = ["attn_norm", "attention"]
 THRESHOLD = None  # None = spec thresholds.block (default 0.98)
-STEP_MAX_REL_L2 = {"attn_norm": 0.03, "attention": 0.02}  # swapped step output, whole chunk
-STEP_ROW_NORM_RATIO = {"attn_norm": (0.97, 1.03), "attention": (0.95, 1.05)}  # per-token ||got|| / ||want||
+STEP_MAX_REL_L2 = {"attn_norm": 0.03, "attention": 0.022}  # swapped step output, whole chunk (attention: see notes)
+STEP_ROW_NORM_RATIO = {"attn_norm": (0.97, 1.03), "attention": (0.95, 1.08)}  # per-token ||got|| / ||want|| (notes)
 STEP_MAX_WORST_ROW_REL_L2 = {"attention": 0.08}  # max over tokens of ||got_t - want_t|| / ||want_t||
 HEAD_ROWS = 128  # first rows of the chunk: the only rows that attend into the KV prefix
 HEAD_ROW_STEPS = {"attention"}  # stateful steps whose first HEAD_ROWS rows are checked separately
