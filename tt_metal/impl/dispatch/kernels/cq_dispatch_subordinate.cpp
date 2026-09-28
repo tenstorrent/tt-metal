@@ -293,7 +293,7 @@ void init_fds_signalling() {
         overlay::dispatch_auto_dispatch_queue_depth, previous_auto_dispatch_cycle_count));
     WAYPOINT("FACW");
     overlay::fds_signalling::dispatch_config_auto_dispatch_pacing(
-        overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
+        overlay::fds_signalling::auto_dispatch_pacing_cycle_count);
     overlay::fds_signalling::dispatch_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
     overlay::fds_signalling::dispatch_enable_auto_dispatch();
     // Worker filters capture only on a change, so a first go that repeats the group a previous run left on the
@@ -307,8 +307,7 @@ void init_fds_signalling() {
 FORCE_INLINE
 void drain_fds_go_wire() {
     const uint32_t drain_cycles = overlay::auto_dispatch_drain_cycles(
-        overlay::dispatch_auto_dispatch_queue_depth,
-        overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
+        overlay::dispatch_auto_dispatch_queue_depth, overlay::fds_signalling::auto_dispatch_pacing_cycle_count);
     overlay::fds_signalling::wait_cycles(drain_cycles);
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
 }

@@ -13,9 +13,23 @@
 
 namespace overlay::fds_signalling {
 
+// The two cycle counts below are preliminary and may be updated later. They count cycles of two
+// separate clocks, the filter length in NoC clock cycles and the pacing in DM clock cycles, so a
+// cycle count in one does not match the same cycle count in the other. Each paced value must stay on
+// the wire longer than the filter window, so (pacing + 1) DM cycles must last longer than the filter
+// length in NoC cycles.
+
 // Cycles a go/done must be stable through the deglitcher before capture.
 // Dispatch (done) and worker (go) must use the same window.
-inline constexpr uint32_t filter_length_cycles = 8;
+inline constexpr uint32_t filter_length_cycles = 27;
+
+// Auto dispatch pacing on dispatch and worker: queued values go out one every count + 1 cycles, so each
+// value stays on the wire long enough for the receiving filters to capture it before the next one
+// replaces it. On dispatch, every worker's filter captures each go, and the same value sizes the wait
+// for queued gos to go out before auto dispatch is disabled. On the worker, a short kernel can queue the
+// round's idle clear and its done back to back, so the spacing keeps idle on the wire long enough for
+// dispatch to capture it, and the done then arrives as a change.
+inline constexpr uint32_t auto_dispatch_pacing_cycle_count = 39;
 
 // Group 0 is the idle value on the wire, so payload groups start at 1.
 inline constexpr uint32_t idle_group_id = 0;
@@ -37,18 +51,6 @@ inline constexpr uint32_t worker_go_threshold = 1;
 // Neither dispatch nor worker startup arms FDS interrupts: dispatch polls done counts, and the
 // worker arms its go interrupt mask only after auto dispatch is enabled and groups are programmed.
 inline constexpr uint32_t interrupts_disabled = 0;
-
-// The two cycle counts below are temporary placeholders and will be updated to their actual values later.
-
-// Auto dispatch pacing on dispatch: queued gos go out one every count + 1 cycles, so each go stays on
-// the wire long enough for every worker's filter to capture it before the next value replaces it.
-// The same value sizes the wait for queued gos to go out before auto dispatch is disabled.
-inline constexpr uint32_t dispatch_auto_dispatch_pacing_cycle_count = 512;
-
-// Auto dispatch pacing on the worker: queued values go out one every count + 1 cycles. A short kernel
-// can queue the round's idle clear and its done back to back, so the spacing keeps idle on the wire
-// long enough for dispatch to capture it, and the done then arrives as a change.
-inline constexpr uint32_t worker_auto_dispatch_pacing_cycle_count = 512;
 
 inline void wait_cycles(uint32_t cycles) {
     const uint32_t start_timestamp = get_timestamp_32b();

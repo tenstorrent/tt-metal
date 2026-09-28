@@ -77,7 +77,7 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
         overlay::worker_auto_dispatch_queue_depth, previous_auto_dispatch_cycle_count));
     WAYPOINT("FACW");
     overlay::fds_signalling::worker_config_auto_dispatch_pacing(
-        overlay::fds_signalling::worker_auto_dispatch_pacing_cycle_count);
+        overlay::fds_signalling::auto_dispatch_pacing_cycle_count);
     overlay::fds_signalling::worker_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
     overlay::fds_signalling::worker_enable_auto_dispatch();
     WAYPOINT("FACD");
