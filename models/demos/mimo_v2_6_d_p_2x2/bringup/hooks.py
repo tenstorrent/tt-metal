@@ -20,13 +20,17 @@ for _name in ("tokenizer", "hf_model", "hf_layers"):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention"},
+    "full_dense": {"attn_norm", "attention", "attn_residual"},
     "sliding_moe": set(),
     "full_moe": set(),
 }
 
 # Norm steps -> checkpoint weight name (under model.layers.<i>.); tt/model.py:NORM_WEIGHTS.
 _NORM_STEPS = {"attn_norm", "ffn_norm"}
+
+# Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out; out = h_mid + mlp_out (dense)
+# or out = h_mid + experts_out (MoE, ffn_residual).
+_RESIDUAL_STEPS = {"attn_residual", "mlp_residual", "ffn_residual"}
 
 
 def _loader(spec):
@@ -55,6 +59,26 @@ def _host_fn(mesh, module):
         ttnn.deallocate(xd)
         ttnn.deallocate(yd)
         return y.to(x.dtype)
+
+    return fn
+
+
+def _residual_host_fn(mesh):
+    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] via TtResidualAdd (a + b on the device)."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_2x2.tt.residual import TtResidualAdd
+    from models.demos.mimo_v2_6_d_p_2x2.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    module = TtResidualAdd(mesh)
+
+    def fn(ctx, a, b):
+        ad = to_device_replicated(mesh, a)
+        bd = to_device_replicated(mesh, b)
+        yd = module(ad, bd)
+        y = replicated_to_host(yd)
+        for t in (ad, bd, yd):
+            ttnn.deallocate(t)
+        return y.to(a.dtype)
 
     return fn
 
@@ -109,6 +133,8 @@ def _attention_host_fn(mesh, module, cache_of):
 def device_component(mesh, spec, layer, step):
     if step in _NORM_STEPS:
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
+    if step in _RESIDUAL_STEPS:
+        return _residual_host_fn(mesh)
     if step == "attention":
         module, cfg = _attention_module(mesh, spec, layer)
         caches = {}
@@ -168,6 +194,7 @@ class HybridDeviceModel:
         for i in self.ref.layer_ids:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_STEPS}
+            ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, lambda ctx: ctx.extra["dev_cache"])
