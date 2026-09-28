@@ -5,6 +5,9 @@
 
 import ttnn
 
+# Weight columns per core in the 1D config: with 2-row output subblocks, 2 x 2 tiles fill the fp32 dest.
+_PER_CORE_N_1D = 2
+
 # Tallest per-core output block measured to fit in L1 (chunk 8192 at CP8). Chunk 16384 gives 7 tiles
 # per core, whose circular buffers need 1,660,032 B against 1,572,864 B of L1, so larger shapes keep
 # ttnn's default config.
@@ -55,17 +58,15 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
     m_tiles = hidden_states.padded_shape[-2] // tile
     k_tiles = hidden_states.padded_shape[-1] // tile
     n_tiles = weight.padded_shape[-1] // tile
-    per_core_n = 2
-    if m_tiles > 8 or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
+    if m_tiles > 8 or n_tiles % _PER_CORE_N_1D or n_tiles // _PER_CORE_N_1D > grid.x * grid.y:
         return None
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=_in0_block_w(k_tiles),
-        # 2 x 2 subblocks fill the fp32 dest.
         out_subblock_h=2 if m_tiles % 2 == 0 else 1,
-        out_subblock_w=per_core_n,
+        out_subblock_w=_PER_CORE_N_1D,
         per_core_M=m_tiles,
-        per_core_N=per_core_n,
+        per_core_N=_PER_CORE_N_1D,
         fuse_batch=True,
         fused_activation=fused_activation,
         mcast_in0=True,

@@ -22,6 +22,8 @@ def _block_shard_geometry(rows, width):
     across core columns.
     """
     tile = ttnn.TILE_SIZE
+    # Up to 512 rows, 12 columns with 2-row blocks measured 2.5x faster (256 rows: 25 -> 10 us). At 1024 rows
+    # 12 columns was slower in the model, so taller slabs keep 8 columns with 4-row blocks.
     grid_x, min_block_h = (12, 2) if rows <= 512 else (8, 4)
     if rows % tile or width % tile or (width // tile) % grid_x:
         return None
@@ -86,7 +88,7 @@ class RMSNorm(nn.Module):
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
-        # Match the reference's FP32 prefill RMSNorm computation.
+        # FP32 accumulation as in the reference's FP32 norm; HiFi2 multiplies keep the 256k KV-cache PCC gate.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
