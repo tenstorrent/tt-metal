@@ -1,0 +1,29 @@
+{
+ "metrics": {
+  "attn_coef_attn_residual_L05": {
+   "t": "2026-09-28T06:59:57",
+   "value": 1.0006550550460815
+  },
+  "attn_rel_l2_attn_residual_L05": {
+   "t": "2026-09-28T06:59:57",
+   "value": 0.002815108047798276
+  },
+  "pcc_attn_residual_L05": {
+   "t": "2026-09-28T06:59:57",
+   "value": 0.9999958250802782
+  },
+  "rel_l2_attn_residual_L05": {
+   "t": "2026-09-28T06:59:57",
+   "value": 0.0029858879279345274
+  },
+  "row_norm_ratio_max_attn_residual_L05": {
+   "t": "2026-09-28T06:59:57",
+   "value": 1.0018291473388672
+  },
+  "row_norm_ratio_min_attn_residual_L05": {
+   "t": "2026-09-28T06:59:57",
+   "value": 0.9997998476028442
+  }
+ },
+ "task": "C.full_moe.attn_residual"
+}
