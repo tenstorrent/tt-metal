@@ -167,8 +167,10 @@ to an internal DRAM buffer. C/D retain FP32 numerator/denominator; B/E retain
 both BF16 components, unfinished local groups and global chunk parity. Only the
 last active contribution normalizes. A retains the existing ring streaming loop.
 
-Current ring scope is Blackhole, noncausal D64/D128/D256, K256/K384/K512 with Q128/Q192/Q256/Q320, batch/GQA, scalar
-logical lengths, and the existing `rear` joint strategy. Physical local primary
+Current ring scope is Blackhole, noncausal attention with any tile-aligned Q chunk
+(32-1024 rows), K chunk and head dim within L1 for B-E (FAST keeps the legacy ring
+kernel's Q128-Q320 / K256-K512 / D64-D256 limits), batch/GQA, scalar or device-tensor
+logical lengths (`logical_n`/`logical_l`), and the existing `rear` joint strategy. Physical local primary
 Q/KV sequence extents must be tile-aligned; `logical_n` masks a possibly
 sub-tile global KV tail. Q shorter than local KV requires `is_cross=True`.
 Two connected devices are qualified, including unequal worker chains, skipped
@@ -197,9 +199,12 @@ split-head dedup relays and phase-alignment pairs stay matched on every device. 
 grow with the pass count, and the legacy streamed-Q fallback never applies. The legacy (no
 `precision`) loop order is unchanged.
 
-Current exp-ring recipe scope is Blackhole, D128, K512, Q128-Q320 in 32-row steps (as L1 allows),
-scalar `logical_n`, the
-default scale and up to three head-segments per core row. Multi-pass programs run pass-outer,
+Current exp-ring recipe scope is Blackhole, any tile-aligned Q chunk (32-1024 rows), K
+chunk and head dim within L1 for B-E (FAST keeps the legacy exp ring kernel's
+D128/K512/Q128-Q320 limits), scalar or device-tensor `logical_n`, the default scale and up
+to three head-segments per core row. At the device-default worker L1 the kernel config
+buffer is 70656 B, and BF16-destination B/E exp ring builds size-optimize pack and unpack
+to fit it. Multi-pass programs run pass-outer,
 ring-inner, keeping one resident recurrent state and Q chunk per pass; FAST at three passes keeps the
 legacy exp-ring L1 layout, which does not fit Q256/K512.
 
