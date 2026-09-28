@@ -1181,7 +1181,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
 #endif
             return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
-        case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::SOFTSIGN:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"softsign_tt_poly_bf16_tile_init();", fmt::format("softsign_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::LGAMMA:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
