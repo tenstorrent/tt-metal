@@ -208,6 +208,13 @@ tasks:
     kind: attention
     layer: 0
     stateful: true
+  frozen:
+    at: '2026-09-28T05:04:19'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py: a7b2414b6189d1b536f94a720426823eaf2ef6d79e97b3484fd94b3f00b3fb2f
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_dense.02
   title: 'full_dense block with steps 1-2 on device (last: attention)'
   step: implement
