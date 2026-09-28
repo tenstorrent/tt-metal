@@ -54,6 +54,21 @@ class TtRMSNorm:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def fused_add(self, a: ttnn.Tensor, b: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The residual add a + b and this norm of it in one call: (norm(a + b), a + b). ttnn.bringup.rms_norm with
+        return_residual_sum (the sum is bit-identical to ttnn.add(a, b)); the model's residual step returns the sum and
+        hands the norm to the norm step that follows (TtMiMoBlock, MIMO_FUSE_RESIDUAL_NORM)."""
+        return ttnn.bringup.rms_norm(
+            b,
+            residual_input_tensor=a,
+            return_residual_sum=True,
+            weight=self.weight,
+            epsilon=self.eps,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            residual_sum_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
 
 def to_device_replicated(mesh, h: torch.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     """Host [S, H] -> replicated device [1, 1, S, H] TILE (harness boundary only, never inside a forward)."""
