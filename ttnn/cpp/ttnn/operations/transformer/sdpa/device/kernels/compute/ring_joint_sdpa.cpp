@@ -17,7 +17,7 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_mla_packing_plan.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
@@ -570,7 +570,8 @@ void kernel_main() {
                 Lt_local,
                 rotated_q_split_enabled,
                 dense_causal_skip,
-                kv_region_Nt>(
+                kv_region_Nt,
+                (GROUPED_KV_SOURCE_COUNT > 1)>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,

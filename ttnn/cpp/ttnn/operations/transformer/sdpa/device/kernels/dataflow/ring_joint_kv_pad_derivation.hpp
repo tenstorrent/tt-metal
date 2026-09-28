@@ -57,7 +57,7 @@ struct RingWorkMasksParams {
     uint32_t kv_local_padded_Nt;
     bool kernel_chunked;
     uint32_t q_chunk_group_tile_count;
-    uint32_t q_local_padded_Nt;
+    uint32_t kv_region_Nt;  // Per-source chunk region: Q slab / kv_stripe_split.
     uint32_t logical_nt;
     uint32_t num_joint_k_chunks;
     uint32_t joint_seq_len;
@@ -87,7 +87,7 @@ inline RingWorkMasks build_ring_work_masks_device(const RingWorkMasksParams& p) 
     const uint32_t kv_local_padded_Nt = p.kv_local_padded_Nt;
     const bool kernel_chunked = p.kernel_chunked;
     const uint32_t q_chunk_group_tile_count = p.q_chunk_group_tile_count;
-    const uint32_t q_local_padded_Nt = p.q_local_padded_Nt;
+    const uint32_t kv_region_Nt = p.kv_region_Nt;
     const uint32_t logical_nt = p.logical_nt;
     const uint32_t num_joint_k_chunks = p.num_joint_k_chunks;
     const uint32_t joint_seq_len = p.joint_seq_len;
@@ -137,7 +137,7 @@ inline RingWorkMasks build_ring_work_masks_device(const RingWorkMasksParams& p) 
                     ring_id,
                     local_tile_start,
                     q_chunk_group_tile_count,
-                    q_chunk_group_tile_count / ring_size,
+                    kv_region_Nt,
                     kv_local_padded_Nt) < logical_nt) {
                 valid_spatial_kv_chunks++;
             }

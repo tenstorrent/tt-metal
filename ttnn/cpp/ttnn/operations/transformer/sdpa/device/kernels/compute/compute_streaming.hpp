@@ -12,7 +12,7 @@
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_mla_packing_plan.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 
@@ -979,7 +979,9 @@ template <
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
     uint32_t sliding_window_size = 0,
-    bool circular_kv_cache = false>
+    bool circular_kv_cache = false,
+    // Split-KV grouped sources: K columns follow packed_runs instead of one local range.
+    bool packed_kv_enabled = false>
 static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
@@ -1001,9 +1003,8 @@ static void apply_lightweight_mask_streaming(
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0,
     const KVPadRotationContext& kv_pad_rotation = {},
-    uint32_t straddle_period = 0,
-    const PackedKVMaskRun* packed_runs = nullptr,
-    uint32_t packed_run_count = 0) {
+    [[maybe_unused]] const PackedKVMaskRun* packed_runs = nullptr,
+    [[maybe_unused]] uint32_t packed_run_count = 0) {
     // This constrains the inner lightweight-mask path, not the kernel-level causal flag.
     // Chunked prefill re-enables this path when calling sdpa_inner_loop_step.
     static_assert(!kv_pad_rotation_enabled || is_causal_sdpa, "KV-pad rotation mask is causal-only");
@@ -1029,7 +1030,8 @@ static void apply_lightweight_mask_streaming(
                 const uint32_t q_tile = q_subblock * sbh + row;
                 const uint32_t q_pos_u32 =
                     q_global_tile_for_mask_row<kv_pad_rotation_enabled>(q_tile, q_start_tile, kv_pad_rotation);
-                const uint32_t mask_cols = packed_runs ? active_Sk : (kv_pad_rotation_enabled ? num_cols : active_Sk);
+                const uint32_t mask_cols =
+                    (packed_kv_enabled && packed_runs) ? active_Sk : (kv_pad_rotation_enabled ? num_cols : active_Sk);
                 if constexpr (kv_pad_rotation_enabled) {
                     if (q_pos_u32 == KV_PAD_ROTATION_INVALID_TILE) {
                         l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, mask_cols, neginf_idx);
@@ -1047,7 +1049,7 @@ static void apply_lightweight_mask_streaming(
                     }
                 }
 
-                if (packed_runs) {
+                if (packed_kv_enabled && packed_runs) {
                     uint32_t begin = 0;
                     for (uint32_t run = 0; run < packed_run_count; ++run) {
                         const auto interval = packed_runs[run];
@@ -1115,9 +1117,11 @@ static void apply_lightweight_mask_streaming(
                         for (uint32_t col = 0; col < mask_cols; col++) {
                             int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
                             if (col >= straddle_col) {
-                                const uint32_t crossings =
-                                    straddle_period == 0 ? 1 : 1 + (col - straddle_col) / straddle_period;
-                                k_pos += static_cast<int32_t>(crossings * straddle_jump);
+                                uint32_t crossed_slabs = 1;
+                                if constexpr (kv_pad_q_local_padded_Nt > 0 && num_cols > kv_pad_q_local_padded_Nt) {
+                                    crossed_slabs += (col - straddle_col) / kv_pad_q_local_padded_Nt;
+                                }
+                                k_pos += static_cast<int32_t>(crossed_slabs * straddle_jump);
                             }
                             l1_acc_causal_col_mask(
                                 mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
@@ -1300,7 +1304,9 @@ template <
     bool has_q_base_tiles = false,
     // Circular sliding KV cache: mask K origins come from the work plan, not from
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
-    bool circular_kv_cache = false>
+    bool circular_kv_cache = false,
+    // Split-KV grouped sources; off for every other caller, so its branches compile out.
+    bool packed_kv_enabled = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1328,9 +1334,8 @@ static void sdpa_inner_loop_step(
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
     const uint32_t q_base_tiles = 0,
-    const uint32_t mask_straddle_period = 0,
-    const PackedKVMaskRun* packed_runs = nullptr,
-    const uint32_t packed_run_count = 0) {
+    [[maybe_unused]] const PackedKVMaskRun* packed_runs = nullptr,
+    [[maybe_unused]] const uint32_t packed_run_count = 0) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1389,22 +1394,26 @@ static void sdpa_inner_loop_step(
 
         // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
         // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
-        const bool overlap_first_half = reduce_trigger && sdpa_first_half_unmasked<
-                                                              is_causal_sdpa,
-                                                              kv_pad_rotation_enabled,
-                                                              sliding_window_size,
-                                                              use_provided_mask,
-                                                              Sk_chunk_t>(
-                                                              no_mask_this_iter,
-                                                              apply_causal,
-                                                              apply_sliding_window,
-                                                              apply_mask,
-                                                              lw_partial_tile_idx,
-                                                              mask_straddle_col,
-                                                              mask_q_start_tile,
-                                                              mask_k_start_tile,
-                                                              q_subblock * qkt_subblock_h,
-                                                              active_Sk);
+        const bool overlap_first_half_contiguous = reduce_trigger && sdpa_first_half_unmasked<
+                                                                         is_causal_sdpa,
+                                                                         kv_pad_rotation_enabled,
+                                                                         sliding_window_size,
+                                                                         use_provided_mask,
+                                                                         Sk_chunk_t>(
+                                                                         no_mask_this_iter,
+                                                                         apply_causal,
+                                                                         apply_sliding_window,
+                                                                         apply_mask,
+                                                                         lw_partial_tile_idx,
+                                                                         mask_straddle_col,
+                                                                         mask_q_start_tile,
+                                                                         mask_k_start_tile,
+                                                                         q_subblock * qkt_subblock_h,
+                                                                         active_Sk);
+        // Packed K columns are not one contiguous global range, so the diagonal-position proof
+        // above does not apply; overlap only when nothing is masked.
+        const bool overlap_first_half =
+            (packed_kv_enabled && packed_runs) ? reduce_trigger && no_mask_this_iter : overlap_first_half_contiguous;
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
@@ -1492,7 +1501,8 @@ static void sdpa_inner_loop_step(
                     kv_pad_chunk_size_t,
                     kv_pad_kv_local_padded_Nt,
                     sliding_window_size,
-                    circular_kv_cache>(
+                    circular_kv_cache,
+                    packed_kv_enabled>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
@@ -1508,12 +1518,11 @@ static void sdpa_inner_loop_step(
                     sliding_trailing_next_idx,
                     mask_q_start_tile,
                     mask_k_start_tile,
-                    packed_runs ? active_Sk : (kv_pad_rotation_enabled ? KT_stride : active_Sk),
+                    (packed_kv_enabled && packed_runs) ? active_Sk : (kv_pad_rotation_enabled ? KT_stride : active_Sk),
                     apply_sliding_window,
                     mask_straddle_col,
                     mask_straddle_jump,
                     kv_pad_rotation,
-                    mask_straddle_period,
                     packed_runs,
                     packed_run_count);
                 end_mask_l1_accumulate();
@@ -1624,7 +1633,8 @@ static void sdpa_inner_loop_step(
                 // A smaller final group keeps the physical K/V strides unchanged.
                 // This avoids repeating V-matmul setup and L1 accumulation once per
                 // tile when the configured K width has no larger fitting divisor.
-                const uint32_t drain_width = packed_runs ? dst_size / qkt_subblock_h : actual_sbw;
+                const uint32_t drain_width =
+                    (packed_kv_enabled && packed_runs) ? dst_size / qkt_subblock_h : actual_sbw;
                 for (uint32_t col_start = 0; col_start < active_Sk; col_start += drain_width) {
                     const uint32_t remaining = active_Sk - col_start;
                     const uint32_t drain_inner = remaining < drain_width ? remaining : drain_width;
@@ -2385,6 +2395,8 @@ template <
     // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
     bool causal_k_skip = false,
     uint32_t kv_region_Nt = q_local_padded_Nt,
+    // Split-KV: GROUPED_KV_SOURCE_COUNT > 1. Keeps the per-source path free of packed branches.
+    bool packed_kv_enabled = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2421,7 +2433,7 @@ void sdpa_ring_v2(
     const uint32_t* packed_source_ids = nullptr,
     const uint32_t packed_source_count = 0) {
     init_sdpa_streaming_semaphores();
-    const bool packed_sources = packed_source_count > 1;
+    const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
     const PackedKVGroupPlan packed_kv{
         packed_kv_source_tiles(local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
         packed_sources ? packed_source_count : 1,
@@ -2693,10 +2705,8 @@ void sdpa_ring_v2(
             const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
             const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
             const bool kv_chunk_is_joint = !packed_sources && !has_sliding_window && k_chunk >= num_local_k_chunks;
-            if (!packed_sources && try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
-                // Sliding plans are clipped to logical_n before chunking. Treat a future mismatch
-                // as a device failure rather than leaving the writer waiting for a missing signal.
-                ASSERT(!has_sliding_window);
+            if (!packed_sources && !has_sliding_window &&
+                try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 continue;
             }
             if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
@@ -2904,7 +2914,7 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
-            PackedKVMaskRun packed_runs[Sk_chunk_t];
+            PackedKVMaskRun packed_runs[packed_kv_enabled ? Sk_chunk_t : 1];
             const uint32_t packed_run_count =
                 packed_sources
                     ? packed_kv.mask_runs(k_chunk, packed_source_ids, kv_region_Nt, chunk_size_t, packed_runs)
@@ -2947,7 +2957,8 @@ void sdpa_ring_v2(
                 cb_attention_sink,
                 false,              // use_provided_mask
                 use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
-                circular_kv_cache>(
+                circular_kv_cache,
+                packed_kv_enabled>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2972,7 +2983,6 @@ void sdpa_ring_v2(
                 step_straddle_jump,
                 step_kv_pad_rotation,
                 q_base_tiles,
-                chunked_enabled ? kv_region_Nt : 0,
                 packed_sources ? packed_runs : nullptr,
                 packed_run_count);
 

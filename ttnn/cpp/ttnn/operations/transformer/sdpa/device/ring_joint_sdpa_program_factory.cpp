@@ -6,7 +6,7 @@
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
-#include "kernels/dataflow/ring_mla_packing_plan.hpp"
+#include "kernels/ring_mla_packing_plan.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
@@ -22,7 +22,6 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -1864,21 +1863,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                                          ? args.kv_stripe_split
                                          : 1;
     defines["GROUPED_KV_SOURCE_COUNT"] = std::to_string(grouped_sources);
-    // Explicit development diagnostics also work in release builds, where debug
-    // logging is compiled out. Host group evidence is exact for scalar metadata;
-    // device-metadata invocations recompute the live group in the kernels.
-    if (std::getenv("TT_METAL_RING_MLA_DIAGNOSTICS") != nullptr) {
-        log_info(
-            tt::LogOp,
-            "RingMLA packing: tensor_rank={} host_group={} configured_group={} active_mask={:#x} q_chunk={} v_path={}",
-            tensor_rank,
-            packed_kv_source_group_size(
-                grouped_sources, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask),
-            grouped_sources,
-            active_ring_iter_mask,
-            Sq_chunk_t * tt::constants::TILE_HEIGHT,
-            kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
-    }
+    // Host group is exact for scalar prefixes; metadata dispatches recompute it on device.
+    log_debug(
+        tt::LogOp,
+        "RingMLA packing: tensor_rank={} host_group={} configured_group={} active_mask={:#x} q_chunk={} v_path={}",
+        tensor_rank,
+        packed_kv_source_group_size(grouped_sources, ring_size, kv_local_padded_Nt, logical_nt, active_ring_iter_mask),
+        grouped_sources,
+        active_ring_iter_mask,
+        Sq_chunk_t * tt::constants::TILE_HEIGHT,
+        kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);

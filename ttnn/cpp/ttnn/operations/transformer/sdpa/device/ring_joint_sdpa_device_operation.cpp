@@ -437,8 +437,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) * args.kv_stripe_split ==
                     ag.ring_size &&
                 ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input_k, ag.dim) == ag.ring_size,
-            "Full-mesh RingJointSDPA requires sequence shards across all {} mesh devices",
-            ag.ring_size);
+            "Full-mesh RingJointSDPA requires K/V sequence shards across all {} mesh devices and Q sequence "
+            "shards across {} / kv_stripe_split={} of them",
+            ag.ring_size,
+            ag.ring_size,
+            args.kv_stripe_split);
         TT_FATAL(
             is_replicated_across_complete_mesh(gathered_input_tensor_k),
             "Full-mesh RingJointSDPA requires the persistent gathered K/V buffer replicated across the mesh");
@@ -770,10 +773,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         N_local_q <= static_cast<uint64_t>(N_local_kv) * args.kv_stripe_split,
-        "Per-device Q seq length must be <= per-device K/V seq length. Equal: full-prefill path. Less: "
-        "chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}",
+        "Per-device Q seq length must be <= per-device K/V seq length times kv_stripe_split. Equal: full-prefill "
+        "path. Less: chunked-prefill path. Greater is undefined. Got N_local_q={}, N_local_kv={}, kv_stripe_split={}",
         N_local_q,
-        N_local_kv);
+        N_local_kv,
+        args.kv_stripe_split);
 
     if (args.kv_stripe_split > 1) {
         const ring_joint::RingMLAGeometry geometry{
@@ -1394,8 +1398,17 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "ring_mla cluster_axis=None requires row-major mesh coordinates for Q, KV, and the persistent buffer");
         const uint32_t q_shards = ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2);
         const uint32_t kv_shards = ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_k, gather_dim);
-        TT_FATAL(kv_shards == num_devices, "Full-mesh ring MLA requires KV sequence shards on every device");
-        TT_FATAL(q_shards > 0 && kv_shards % q_shards == 0, "KV shard count must be divisible by Q shard count");
+        TT_FATAL(
+            kv_shards == num_devices,
+            "Full-mesh ring MLA requires KV sequence shards on every device (dim {}); got {} shards on {} devices",
+            gather_dim,
+            kv_shards,
+            num_devices);
+        TT_FATAL(
+            q_shards > 0 && kv_shards % q_shards == 0,
+            "KV shard count must be divisible by Q sequence shard count; got {} KV and {} Q shards",
+            kv_shards,
+            q_shards);
         resolved_kv_stripe_split = kv_shards / q_shards;
         if (resolved_kv_stripe_split > 1) {
             const auto& placements = input_tensor_q.tensor_topology().placements();

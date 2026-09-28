@@ -32,7 +32,7 @@ struct KVPadRotationContext {
  */
 struct ChunkedContext {
     uint32_t q_start_idx_t = 0;  // absolute Q-tile offset of this chunk's Q slab
-    uint32_t ring_index = 0;     // logical ring rotation index for absolute-Q-tile compute
+    uint32_t ring_index = 0;     // Q-slab rank (tensor rank / kv_stripe_split) for absolute-Q-tile compute
     KVPadRotationContext kv_pad_rotation = {};
 };
 
@@ -147,29 +147,24 @@ constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks
 /**
  * Map a device-local K tile index to its global attention K position. Used by the
  * logical_n skip predicate and the diagonal-stamp mask coords. Under chunked-prefill
- * the local cache packs the per-chunk K region for each chunk back-to-back; each
- * region is q_local_padded_Nt tiles (= Q's per-device extent, since one chunk's Q
- * is one such region), so adjacent local slabs have gaps in global position space.
+ * the local cache packs this source's K region for each chunk back-to-back, so
+ * adjacent local slabs have gaps in global position space. A region is Q's per-device
+ * extent when Q and KV share the ring, and Q's extent / kv_stripe_split under split KV.
  */
 inline uint32_t chunked_kv_global_tile_for_local(
-    uint32_t ring_id, uint32_t local_tile_idx, uint32_t chunk_size_t, uint32_t q_local_padded_Nt) {
-    return (local_tile_idx / q_local_padded_Nt) * chunk_size_t + ring_id * q_local_padded_Nt +
-           (local_tile_idx % q_local_padded_Nt);
+    uint32_t ring_id, uint32_t local_tile_idx, uint32_t chunk_size_t, uint32_t kv_region_Nt) {
+    return (local_tile_idx / kv_region_Nt) * chunk_size_t + ring_id * kv_region_Nt + (local_tile_idx % kv_region_Nt);
 }
 
-template <uint32_t chunk_size_t, uint32_t q_local_padded_Nt>
+template <uint32_t chunk_size_t, uint32_t kv_region_Nt>
 inline uint32_t chunked_kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
-    return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, q_local_padded_Nt);
+    return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, kv_region_Nt);
 }
 
-template <
-    bool chunked_enabled,
-    uint32_t kv_local_padded_Nt = 0,
-    uint32_t chunk_size_t = 0,
-    uint32_t q_local_padded_Nt = 0>
+template <bool chunked_enabled, uint32_t kv_local_padded_Nt = 0, uint32_t chunk_size_t = 0, uint32_t kv_region_Nt = 0>
 inline uint32_t kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
     if constexpr (chunked_enabled) {
-        return chunked_kv_global_tile_for_local<chunk_size_t, q_local_padded_Nt>(ring_id, local_tile_idx);
+        return chunked_kv_global_tile_for_local<chunk_size_t, kv_region_Nt>(ring_id, local_tile_idx);
     } else {
         return ring_id * kv_local_padded_Nt + local_tile_idx;
     }
@@ -180,7 +175,7 @@ template <
     bool chunked_enabled,
     uint32_t kv_local_padded_Nt,
     uint32_t chunk_size_t = 0,
-    uint32_t q_local_padded_Nt = 0>
+    uint32_t kv_region_Nt = 0>
 inline bool kv_chunk_starts_before_logical_end(
     uint32_t ring_id, uint32_t local_k_chunk_start_tile, uint32_t logical_tile_count) {
     if (local_k_chunk_start_tile >= kv_local_padded_Nt) {
@@ -188,10 +183,10 @@ inline bool kv_chunk_starts_before_logical_end(
     }
     // A partial trailing K chunk still returns true here; mask logic handles invalid columns inside it.
     if constexpr (kv_pad_rotation_enabled) {
-        return chunked_kv_global_tile_for_local<chunk_size_t, q_local_padded_Nt>(ring_id, local_k_chunk_start_tile) <
+        return chunked_kv_global_tile_for_local<chunk_size_t, kv_region_Nt>(ring_id, local_k_chunk_start_tile) <
                logical_tile_count;
     } else {
-        return kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+        return kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, kv_region_Nt>(
                    ring_id, local_k_chunk_start_tile) < logical_tile_count;
     }
 }

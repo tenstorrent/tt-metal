@@ -14,7 +14,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
-#include "ring_mla_packing_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
@@ -510,7 +510,6 @@ void kernel_main() {
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(27);
     constexpr uint32_t kv_region_Nt = chunk_size_t / ring_size;
     constexpr uint32_t kv_stripe_split = q_local_padded_Nt / kv_region_Nt;
-    constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     // Slot 29: trace-safe KV-pad derivation. When set, the writer reads kv_actual_isl from the
@@ -675,7 +674,7 @@ void kernel_main() {
             .kv_local_padded_Nt = kv_local_padded_Nt,
             .kernel_chunked = chunked_enabled,
             .q_chunk_group_tile_count = chunk_size_t,
-            .q_local_padded_Nt = q_local_padded_Nt,
+            .kv_region_Nt = kv_region_Nt,
             .logical_nt = logical_nt,
             .num_joint_k_chunks = num_joint_k_chunks,
             .joint_seq_len = L,
@@ -719,7 +718,7 @@ void kernel_main() {
             .kv_local_padded_Nt = kv_local_padded_Nt,
             .kernel_chunked = chunked_enabled,
             .q_chunk_group_tile_count = chunk_size_t,
-            .q_local_padded_Nt = q_local_padded_Nt,
+            .kv_region_Nt = kv_region_Nt,
             .logical_nt = logical_nt,
             .num_joint_k_chunks = num_joint_k_chunks,
             .joint_seq_len = L,

@@ -8,9 +8,11 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
-// Dense full-mesh chunked MLA geometry, in tiles. Tensor ranks are row-major
-// cache placement ranks. Transport ranks must be translated by the route first.
-// Q ownership is separate from K striping: TP lanes may own different Q heads.
+// Split-KV (dense full-mesh chunked MLA) geometry, in tiles. Q is sharded over
+// q_shards; K/V over kv_sources in a block-cyclic layout: global region g lives on
+// tensor rank g % kv_sources at local offset (g / kv_sources) * region, where
+// region = q_slab_tiles / (kv_sources / q_shards). Tensor ranks are row-major cache
+// placement ranks; kernels translate transport ranks through the resolved route.
 // The host additionally validates mesh-axis placement and supported op modes.
 struct RingMLAGeometry {
     uint32_t q_shards;
@@ -32,28 +34,6 @@ struct RingMLAGeometry {
         // represent each global token: every source must hold whole regions.
         return source_capacity_tiles % region == 0 && q_slab_tiles <= UINT32_MAX / q_shards &&
                source_capacity_tiles <= UINT32_MAX / kv_sources;
-    }
-
-    // All accessors require valid(). Indices must lie in the allocated geometry.
-    constexpr uint32_t stripes_per_q_rank() const { return kv_sources / q_shards; }
-    constexpr uint32_t region_tiles() const { return q_slab_tiles / stripes_per_q_rank(); }
-    constexpr uint32_t global_chunk_tiles() const { return q_shards * q_slab_tiles; }
-    constexpr uint32_t capacity_tiles() const { return kv_sources * source_capacity_tiles; }
-    constexpr uint32_t q_rank(uint32_t tensor_rank) const { return tensor_rank / stripes_per_q_rank(); }
-    constexpr uint32_t global_k_tile(uint32_t tensor_rank, uint32_t local_tile) const {
-        const uint32_t region = region_tiles();
-        return (local_tile / region) * global_chunk_tiles() + tensor_rank * region + local_tile % region;
-    }
-
-    // Metadata carries the prior prefix, not the true valid end of a partial
-    // current chunk. Saturation also avoids overflow when prefix is very large.
-    constexpr uint32_t metadata_end_tiles(uint32_t prefix_tiles) const {
-        const uint32_t capacity = capacity_tiles();
-        if (prefix_tiles >= capacity) {
-            return capacity;
-        }
-        const uint32_t remaining = capacity - prefix_tiles;
-        return prefix_tiles + (remaining < global_chunk_tiles() ? remaining : global_chunk_tiles());
     }
 };
 

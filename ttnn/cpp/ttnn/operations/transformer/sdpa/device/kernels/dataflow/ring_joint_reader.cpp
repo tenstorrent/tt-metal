@@ -10,7 +10,7 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
-#include "ring_mla_packing_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
@@ -574,7 +574,7 @@ void kernel_main() {
                 .kv_local_padded_Nt = kv_local_padded_Nt,
                 .kernel_chunked = chunked_enabled,
                 .q_chunk_group_tile_count = chunk_size_t,
-                .q_local_padded_Nt = q_local_padded_Nt,
+                .kv_region_Nt = kv_region_Nt,
                 .logical_nt = logical_nt,
                 .num_joint_k_chunks = num_joint_k_chunks,
                 .joint_seq_len = L,
@@ -599,7 +599,7 @@ void kernel_main() {
                 .kv_local_padded_Nt = kv_local_padded_Nt,
                 .kernel_chunked = chunked_enabled,
                 .q_chunk_group_tile_count = chunk_size_t,
-                .q_local_padded_Nt = q_local_padded_Nt,
+                .kv_region_Nt = kv_region_Nt,
                 .logical_nt = logical_nt,
                 .num_joint_k_chunks = num_joint_k_chunks,
                 .joint_seq_len = L,
