@@ -370,6 +370,10 @@ enum class BinaryOp : std::uint8_t
     // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
+    // calculate_mask_posinf (mask_posinf_tile) and the equal_nan=True instantiation of
+    // calculate_sfpu_isclose, which the MASK / ISCLOSE entries above do not reach.
+    MASK_POSINF       = 47,
+    ISCLOSE_EQUAL_NAN = 48,
 };
 
 enum class PackMode : std::uint8_t

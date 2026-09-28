@@ -3793,10 +3793,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLcm: self._lcm,
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
+                MathOperation.SfpuMaskPosinf: self._mask_posinf,
                 MathOperation.SfpuAtan2: self._atan2,
                 MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
+                MathOperation.SfpuIscloseEqualNan: self._isclose_equal_nan,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,
                 # Integer / format-typed binary SFPU ops.
                 MathOperation.SfpuEqInt: self._eq_int,
@@ -4252,6 +4254,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # through. Matches calculate_mask (v_if(is_fp16_zero(mask)) data = 0).
         return t1 if float(t2) != 0.0 else t1 * 0
 
+    def _mask_posinf(self, t1, t2):
+        # mask_posinf: data (t1) becomes +inf wherever the mask (t2) is zero, else passes
+        # through. Matches calculate_mask_posinf (v_if(is_fp16_zero(mask)) data = +inf).
+        return t1 if float(t2) != 0.0 else torch.full_like(t1, float("inf"))
+
     def _atan2(self, t1, t2):
         # calculate_sfpu_atan2 computes atan2(in0, in1) = atan2(y, x) with y=t1
         # (src1) and x=t2 (src2). Evaluated in fp32 to mirror the SFPU minimax path;
@@ -4292,6 +4299,17 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             rtol=1e-5,
             atol=1e-8,
             equal_nan=False,
+        )
+        return 1.0 if bool(close) else 0.0
+
+    def _isclose_equal_nan(self, t1, t2):
+        # As _isclose with equal_nan=True: two NaN operands compare close.
+        close = torch.isclose(
+            t1.to(torch.float32),
+            t2.to(torch.float32),
+            rtol=1e-5,
+            atol=1e-8,
+            equal_nan=True,
         )
         return 1.0 if bool(close) else 0.0
 

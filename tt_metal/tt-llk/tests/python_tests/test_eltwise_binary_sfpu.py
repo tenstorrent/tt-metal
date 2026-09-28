@@ -246,9 +246,11 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuFmodInt32,
         MathOperation.SfpuGcd,
         MathOperation.SfpuIsclose,
+        MathOperation.SfpuIscloseEqualNan,
         MathOperation.SfpuLcm,
         MathOperation.SfpuLogsigmoid,
         MathOperation.SfpuMask,
+        MathOperation.SfpuMaskPosinf,
         MathOperation.SfpuMaxInt32,
         MathOperation.SfpuMaxUint32,
         MathOperation.SfpuMinInt32,
@@ -789,11 +791,12 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuMask],
+    mathop=[MathOperation.SfpuMask, MathOperation.SfpuMaskPosinf],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
-    # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
+    # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
+    # (MASK) or +inf (MASK_POSINF).
     # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
@@ -873,7 +876,7 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop):
 
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuIsclose],
+    mathop=[MathOperation.SfpuIsclose, MathOperation.SfpuIscloseEqualNan],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):

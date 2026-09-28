@@ -50,4 +50,12 @@ inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const s
 {
     calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
 }
+
+// As calculate_mask_binary, for calculate_mask_posinf: data at dst_reg[0] becomes +inf where
+// the mask at dst_reg[32] is zero, in place.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_mask_posinf_binary(const std::uint32_t /*dst_index_in0*/, const std::uint32_t /*dst_index_in1*/, const std::uint32_t /*dst_index_out*/)
+{
+    calculate_mask_posinf<APPROXIMATION_MODE, ITERATIONS>();
+}
 } // namespace ckernel::sfpu

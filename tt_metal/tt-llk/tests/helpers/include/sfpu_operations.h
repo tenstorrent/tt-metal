@@ -1710,6 +1710,12 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(add1, div_floor_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQUAL_NAN)
+    {
+        // isclose_init programs vConstIntPrgm0 = 0x7FFFFFFF, the sign-clear mask the kernel's
+        // Inf/NaN classification reads. Mirrors isclose_binary_tile_init.
+        SFPU_BINARY_INIT_FN_NO_ARGS(isclose, isclose_init);
+    }
     else if constexpr (BINOP == BinaryOp::GCD)
     {
         // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
@@ -1780,7 +1786,7 @@ void call_binary_sfpu_operation_init()
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK(_POSINF) and LOGSIGMOID land here: those
         // kernels need no per-op init beyond the standard binary addrmod configuration
         // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
@@ -2141,6 +2147,20 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+    else if constexpr (BINOP == BinaryOp::MASK_POSINF)
+    {
+        // mask_posinf: out = (mask != 0) ? data : +inf, data at in0 and mask at in1. Same
+        // fixed-offset adapter as MASK.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_mask_posinf_binary,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
     else if constexpr (BINOP == BinaryOp::ATAN2)
     {
         // atan2(y, x): in0 = y, in1 = x (calculate_sfpu_atan2 forwards them as
@@ -2179,6 +2199,22 @@ void call_binary_sfpu_operation(
             DST_ACCUM_MODE,
             calculate_sfpu_isclose,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS, /*EQUAL_NAN=*/false),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode,
+            /*rtol_bits=*/0x3727c5acu,
+            /*atol_bits=*/0x322bcc77u);
+    }
+    else if constexpr (BINOP == BinaryOp::ISCLOSE_EQUAL_NAN)
+    {
+        // As ISCLOSE with EQUAL_NAN=true (torch.isclose(..., equal_nan=True)): a NaN in both
+        // operands yields 1.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_isclose,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, /*EQUAL_NAN=*/true),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

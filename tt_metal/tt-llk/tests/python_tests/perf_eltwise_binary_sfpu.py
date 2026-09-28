@@ -124,6 +124,61 @@ def test_perf_eltwise_binary_sfpu_float(
     configuration.run(perf_report)
 
 
+# Float ops whose cost does not depend on the format pair beyond the Dest width, so they are
+# measured on one 16-bit and one 32-bit pair rather than the full matrix above. mask and
+# mask_posinf hard-code their operands (data at dst tile 0, mask at tile 1), so every placement
+# re-runs the first pair; the SFPU work per call is the same.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16_b,
+        ],
+        same=True,
+    ),
+    approx_mode=[
+        ApproximationMode.No,
+    ],
+    mathop=[
+        MathOperation.SfpuMask,
+        MathOperation.SfpuMaskPosinf,
+        MathOperation.SfpuIsclose,
+        MathOperation.SfpuIscloseEqualNan,
+    ],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
+    loop_factor=[
+        16,
+    ],
+    iterations=[
+        32,
+    ],
+    input_dimensions=[
+        [128, 64],  # tile_cnt: 8
+    ],
+)
+def test_perf_eltwise_binary_sfpu_float_misc(
+    perf_report,
+    formats,
+    mathop,
+    approx_mode,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
+    test_perf_eltwise_binary_sfpu_float(
+        perf_report,
+        formats,
+        mathop,
+        approx_mode,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    )
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
