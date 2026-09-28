@@ -291,6 +291,70 @@ def _bank_sharded(regions_per_dev, banks, dtype, device):
     )
 
 
+def _kd_of(pcd, it):
+    return max(k for k in (8, 4, 2, 1) if k * pcd <= 16 and it % k == 0)
+
+
+def flat_weight_regions(W_l, lay):
+    """One device's weights in the flat expert's per-core bank regions (the C++ op's flat_routed_expert_plan and this
+    builder share it). W_l: per local expert (Wg [H, I], Wu [H, I], Wd [I, H]). Returns (gate/up regions per reader,
+    down regions per down core, reader-tail down regions or None), each a list of equal-size [tiles, 32, 32]:
+    * reader r: per expert, per K-block of KBLK tiles, its RG pair-sets' [KBLK x (gate, up) x NP] blocks
+      (pair-set column (r % n_rd_sg) * RG + pl);
+    * down core d: per expert, per K-block of kd_of(pcds[d]) tiles, its [kd x pcds[d]] columns from col0s[d]
+      (zero-padded to the widest core's region);
+    * reader tail i: per expert, per K-block of kd_r tiles, [kd_r x pcd_r] columns from rem_cols + (i % n_rdn) pcd_r."""
+    kblk = 8
+    tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
+    T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
+    it = W_l[0][0].shape[1] // 32
+    RG, NP = lay["rg"], lay["np"]
+    regions = []
+    for r in range(lay["n_rd"]):
+        blocks = []
+        for Wg_t, Wu_t, _ in T_l:
+            for c in range(lay["nk_gu"]):
+                ks = slice(c * kblk, (c + 1) * kblk)
+                for pl in range(RG):
+                    cols = [((r % lay["n_rd_sg"]) * RG + pl) * NP + p_ for p_ in range(NP)]
+                    blocks.append(
+                        torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
+                    )
+        regions.append(torch.cat(blocks))
+    pcds, col0s = lay["pcds"], lay["col0s"]
+
+    def dreg(d):
+        p_ = pcds[d]
+        k_ = _kd_of(p_, it)
+        return torch.cat(
+            [
+                Wd_t[c * k_ : (c + 1) * k_, col0s[d] : col0s[d] + p_].reshape(-1, 32, 32)
+                for _, _, Wd_t in T_l
+                for c in range(it // k_)
+            ]
+        )
+
+    dregs = [dreg(d) for d in range(lay["nd"])]
+    n_max = max(r_.shape[0] for r_ in dregs)
+    dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype)]) for r_ in dregs]
+    rregs = None
+    if lay["rdown"]:
+        kd_r, n_rdn, pcd_r, rem = lay["kd_r"], lay["n_rdn"], lay["pcd_r"], lay["rem_cols"]
+        rregs = [
+            torch.cat(
+                [
+                    Wd_t[c * kd_r : (c + 1) * kd_r, rem + (i % n_rdn) * pcd_r : rem + (i % n_rdn + 1) * pcd_r].reshape(
+                        -1, 32, 32
+                    )
+                    for _, _, Wd_t in T_l
+                    for c in range(lay["nblk_r"])
+                ]
+            )
+            for i in range(n_rdn * lay["nsg"])
+        ]
+    return regions, dregs, rregs
+
+
 class FlatExpert:
     """The flat expert op for one set of local experts per device (see the module docstring).
 
@@ -591,62 +655,46 @@ class FlatExpert:
             f"down {ND} x {pcd} (kd {kd}); arena {arena_tiles * 2} KB; relays {[(c.x, c.y) for c in relays]}"
         )
 
-        tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
+        lay = dict(
+            n_rd=n_rd,
+            n_rd_sg=n_rd_sg,
+            rg=RG,
+            np=NP,
+            nk_gu=nk_gu,
+            nd=ND,
+            pcds=pcds,
+            col0s=col0s,
+            rdown=RDOWN,
+            n_rdn=n_rdn,
+            pcd_r=pcd_r,
+            kd_r=kd_r if RDOWN else 0,
+            nblk_r=nblk_r if RDOWN else 0,
+            rem_cols=rem_cols,
+            nsg=NSG,
+        )
+        self.layout = dict(
+            lay,
+            readers=[(c.x, c.y) for c in readers],
+            gu=[(c.x, c.y) for c in gu],
+            relays=[(c.x, c.y) for c in relays],
+            down=[(c.x, c.y) for c in down],
+            mt=MT,
+            g=G,
+            x_slots=X_SLOTS,
+            hbuf=HBUF,
+            gu_rp=GU_RP,
+            arena_tiles=arena_tiles,
+        )
         w_all, wd_all, wr_all, wx_all = [], [], [], []
+        tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
         for W_l in weights:  # per device
-            T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]  # per expert gate / up / down tile views
-
-            # ---- gate/up weights: per reader region, per expert, per K-block, its 4 cores' [KBLK x (g, u)] blocks ----
-            regions = []
-            for r in range(n_rd):
-                blocks = []
-                for Wg_t, Wu_t, _ in T_l:
-                    for c in range(nk_gu):
-                        ks = slice(c * KBLK, (c + 1) * KBLK)
-                        for pl in range(RG):
-                            cols = [((r % n_rd_sg) * RG + pl) * NP + p_ for p_ in range(NP)]
-                            blocks.append(
-                                torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(
-                                    -1, 32, 32
-                                )
-                            )
-                regions.append(torch.cat(blocks))
+            regions, dregs, rregs = flat_weight_regions(W_l, lay)
             w_all.append(regions)
-            region_bytes = regions[0].shape[0] * w_tile
-
-            # ---- down weights: per down core region, per expert, per K-block, [kd x pcd] ----
-            def dreg(d):
-                p_, k_ = pcds[d], kd_of(pcds[d])
-                return torch.cat(
-                    [
-                        Wd_t[c * k_ : (c + 1) * k_, col0s[d] : col0s[d] + p_].reshape(-1, 32, 32)
-                        for _, _, Wd_t in T_l
-                        for c in range(It // k_)
-                    ]
-                )
-
-            dregs = [dreg(d) for d in range(ND)]
-            n_max = max(r_.shape[0] for r_ in dregs)
-            dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32)]) for r_ in dregs]  # equal regions
             wd_all.append(dregs)
-            wd_region = dregs[0].shape[0] * w_tile
-            if RDOWN:  # the down-computing readers' columns follow the down cores'
-                rregs = [
-                    torch.cat(
-                        [
-                            Wd_t[
-                                c * kd_r : (c + 1) * kd_r,
-                                rem_cols + (i % n_rdn) * pcd_r : rem_cols + (i % n_rdn + 1) * pcd_r,
-                            ].reshape(-1, 32, 32)
-                            for _, _, Wd_t in T_l
-                            for c in range(nblk_r)
-                        ]
-                    )
-                    for i in range(n_rdn * NSG)
-                ]
+            if RDOWN:
                 wr_all.append(rregs)
-                wr_region = rregs[0].shape[0] * w_tile
             if SMALL:
+                T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]
 
                 def xreg(d):
                     if d >= n_x:
@@ -662,6 +710,9 @@ class FlatExpert:
 
                 wx_all.append([xreg(d) for d in range(ND)])
                 wx_region = E * nblk_x * slot_x * w_tile
+        region_bytes = w_all[0][0].shape[0] * w_tile
+        wd_region = wd_all[0][0].shape[0] * w_tile
+        wr_region = wr_all[0][0].shape[0] * w_tile if RDOWN else 0
         w_dev = _bank_sharded(w_all, banks, w_dtype, device)
         wd_dev = _bank_sharded(wd_all, banks, w_dtype, device)
         wr_dev = _bank_sharded(wr_all, banks, w_dtype, device) if RDOWN else None
@@ -1633,3 +1684,72 @@ class FlatExpert:
                 f"rects {len(ranges_):3d} rt words {rt_words:5d}"
             )
         logger.info(f"KERNELS {len(program.kernels)} total rt words {tot_rt}, cbs {len(program.cbs)}")
+
+
+class FlatRoutedExpert:
+    """The C++ op ``ttnn.experimental.deepseek_prefill.flat_routed_expert`` (the model path of FlatExpert: dynamic
+    counts, row-major x): the plan comes from C++, the weights are laid out by flat_weight_regions from it, and the
+    op re-applies every buffer address itself on a program-cache hit (per-call arena / words / x / y cost nothing
+    on the host). weights / gids as for FlatExpert."""
+
+    def __init__(self, device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1):
+        E, n_dev = len(weights[0]), len(weights)
+        assert all(len(w_) == E for w_ in weights) and len(gids) == n_dev
+        self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
+        self.plan = ttnn._ttnn.operations.experimental.flat_routed_expert_plan(
+            device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin
+        )
+        lay = dict(self.plan)
+        w_dtype = W_DTYPES[wdtype][0]
+        w_all, wd_all, wr_all = [], [], []
+        for W_l in weights:
+            regions, dregs, rregs = flat_weight_regions(W_l, lay)
+            w_all.append(regions)
+            wd_all.append(dregs)
+            if lay["rdown"]:
+                wr_all.append(rregs)
+        banks = lay["banks"]
+        self.w_gu = _bank_sharded(w_all, banks, w_dtype, device)
+        self.w_d = _bank_sharded(wd_all, banks, w_dtype, device)
+        self.w_rd = _bank_sharded(wr_all, banks, w_dtype, device) if lay["rdown"] else None
+        del w_all, wd_all, wr_all
+        gid_host = torch.tensor(gids, dtype=torch.int32).reshape(n_dev, 1, E)
+        mesh = n_dev > 1
+        self.gidx = ttnn.from_torch(
+            gid_host if mesh else gid_host[0],
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if mesh else None,
+        )
+        coords = [ttnn.CoreCoord(x, y) for x, y in lay["coords"]]
+        self.done = ttnn.from_torch(  # the down coordinators' done words: zero, left zeroed by every launch
+            torch.zeros(len(coords) * 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_crs(coords), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+
+    def __call__(self, x, counts, regions):
+        """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32 rows.
+        Returns y [rows, H] bfp8 TILE (the active experts' rows)."""
+        return ttnn.experimental.deepseek_prefill.flat_routed_expert(
+            x,
+            counts,
+            regions,
+            self.gidx,
+            self.w_gu,
+            self.w_d,
+            reader_down_weights=self.w_rd,
+            done_words=self.done,
+            intermediate=self.I,
+            max_tokens_per_expert=self.m,
+            activation=self.act,
+            pin=self.pin,
+        )

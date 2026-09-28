@@ -33,7 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
-from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert
+from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert, FlatRoutedExpert
 from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_dir, cache_name
 
@@ -191,8 +191,9 @@ def routed_expert_hybrid_threshold() -> int | None:
 
 
 def flat_expert_enabled() -> bool:
-    """``MIMO_FLAT_EXPERT=1``: routed experts on the flat streamed expert op instead of unified_routed_expert_moe."""
-    return os.environ.get("MIMO_FLAT_EXPERT", "0") == "1"
+    """``MIMO_FLAT_EXPERT=1``: routed experts on the flat streamed expert C++ op (flat_routed_expert) instead of
+    unified_routed_expert_moe; ``=py``: the Python generic_op builder it was ported from."""
+    return os.environ.get("MIMO_FLAT_EXPERT", "0") in ("1", "py")
 
 
 def build_flat_expert(mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dgs, ndg, max_tok, weights_dtype):
@@ -207,7 +208,8 @@ def build_flat_expert(mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dg
     tw = lambda g, n: sd[f"experts.{g}.{n}.weight"].T.float().contiguous()  # nn.Linear [out, in] -> x @ W [in, out]
     weights = [[(tw(g, "gate_proj"), tw(g, "up_proj"), tw(g, "down_proj")) for g in gl] for gl in gids]
     wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
-    return FlatExpert(
+    cls = FlatExpert if os.environ.get("MIMO_FLAT_EXPERT") == "py" else FlatRoutedExpert
+    return cls(
         mesh_device,
         weights,
         m=max_tok,

@@ -515,3 +515,31 @@ warm iterations; host + device):
 kernel-cache miss (new buffer addresses: once after the warm-up iteration) 29 ms; under Tracy both are ~10x (a miss
 340-965 ms), which is why profiled layer spans looked like 180-500 ms. L1 at 640 tok/chip gains 0.64 ms wall of the
 1.14 ms expert saving: that layer is partly host-bound, the flat call's host path shows; L5 (longer attention) hides it.
+
+## C++ op: ttnn.experimental.deepseek_prefill.flat_routed_expert (2026-09-28)
+
+The model path (dynamic counts, row-major x, >= 256 tokens per expert: helper relays, pinning, gate/up split,
+1-3 subgrids, reader tails) as a C++ device op (`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/
+flat_routed_expert`): `device/flat_routed_expert_plan.cpp` (the layout, ported from FlatExpert: role cores, split,
+chains, arena; Python's `min()` first-minimum and round-half-even kept), `device/flat_routed_expert_program_factory.cpp`
+(classic factory: every buffer-address runtime-arg word is recorded as a patch (kernel, core, arg, source tensor,
+offset); `override_runtime_arguments` re-applies them and the arena-backed CB addresses on a program-cache hit),
+the kernels moved there (one copy; stubs at the old research paths). The expert ids now come from a per-device table
+the kernels read (se_dyn.hpp `SE_DYN_NARGS` = 7: counts, regions, row bytes, band lo / hi, id table, its bytes): one
+program for every device. The host wrapper allocates y and the per-launch arena / words, launches, frees the scratch;
+`flat_routed_expert_plan` (ttnn._ttnn.operations.experimental) gives Python the plan (weight layout, coordinator
+cores); `tt/flat_expert.py` FlatRoutedExpert = plan + `flat_weight_regions` (the weight layout, shared with the Python
+builder) + the op. `MIMO_FLAT_EXPERT=1` uses it in TtMoE (`=py`: the Python builder).
+
+Checks: `tests/unit/test_flat_routed_expert_op.py` (MiMo 64 experts / K2 reader tails / TP4 2 subgrids / TP2 3 subgrids
++ l1acc): C++ plan == Python plan, y bit-identical to the Python builder over two launches (the second after a moved
+arena: the cache-hit patch), min PCC 0.998 vs the quantized reference; test_flat_expert_mesh.py (2x2, other ops
+between launches) with either implementation; decoder layers L1 / L5 PCC 0.99956 / 0.99196.
+Host cost per call on the 2x2 mesh: 0.154 ms enqueue, 0.28 ms after an address move (Python builder: 0.84 ms, 29 ms).
+Wall per layer (unprofiled, median, 33k ctx): unified -> flat Python -> flat C++:
+| layer | tok/chip | unified | flat py | flat C++ |
+|---|---|---|---|---|
+| L1 SWA + MoE | 640 | 5.77 ms | 5.13 | 4.94 (-14%) |
+| L1 SWA + MoE | 2048 | 11.73 | 10.29 | 10.32 (-12%) |
+| L5 GA + MoE | 640 | 10.21 | 7.92 | 7.88 (-23%) |
+| L5 GA + MoE | 2048 | 20.61 | 17.83 | 17.83 (-13%) |

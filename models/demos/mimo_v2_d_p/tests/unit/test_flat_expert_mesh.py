@@ -20,7 +20,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
-from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert
+from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert, FlatRoutedExpert
 
 H, I, E_GLOBAL = 4096, 2048, 256
 
@@ -82,7 +82,10 @@ def test_flat_expert_mesh(mesh_device, device_params):
         [(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(epc)]
         for _ in range(n_dev)
     ]
-    fe = FlatExpert(mesh_device, weights, m=m, H=H, I=I, gids=gids, n_global=E_GLOBAL, pin=1)
+    impl = os.environ.get("MIMO_FLAT_IMPL", "cpp")  # cpp: the flat_routed_expert op; py: the generic_op builder
+    fe = (FlatRoutedExpert if impl == "cpp" else FlatExpert)(
+        mesh_device, weights, m=m, H=H, I=I, gids=gids, n_global=E_GLOBAL, pin=1
+    )
     # per device: packed 32-row-aligned regions in local expert order, rows = the largest device's total
     offs = [[sum(-(-c // 32) * 32 for c in cl[:e]) for e in range(epc)] for cl in local]
     cap = max(o[-1] + -(-cl[-1] // 32) * 32 for o, cl in zip(offs, local)) + 64
@@ -131,30 +134,31 @@ def test_flat_expert_mesh(mesh_device, device_params):
     if int(os.environ.get("MIMO_FLAT_HOSTPROF", "0")):  # host cost per call (run without the profiler)
         import time
 
-        n_ = 10
-        ar_, wo_ = fe.alloc_scratch()
-        tm = time.perf_counter()
-        fe.program(x, y, counts, regions, ar_, wo_)  # (the kernels' cache entry for these addresses: a miss)
+        n_ = 20
+        ttnn.deallocate(y)
         t0 = time.perf_counter()
-        logger.info(f"HOSTPROF miss ms: {(t0 - tm) * 1e3:.1f}")
-        for _ in range(n_):
-            p_ = fe.program(x, y, counts, regions, ar_, wo_)
+        ys_ = [fe(x, counts, regions) for _ in range(n_)]  # enqueue only
         t1 = time.perf_counter()
-        for _ in range(n_):
-            ttnn.generic_op([fe.w_dev, fe.wd_dev, x, ar_, y, wo_, fe.done], p_)
-        t2 = time.perf_counter()
         ttnn.synchronize_device(mesh_device)
+        t2 = time.perf_counter()
+        for y_ in ys_:
+            ttnn.deallocate(y_)
+        pinned.append(
+            ttnn.from_torch(
+                torch.zeros(32 * 110 // 16, 32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        )
         t3 = time.perf_counter()
-        ttnn.deallocate(ar_)
-        ttnn.deallocate(wo_)
-        for _ in range(n_):
-            fe(x, counts, regions, y=y)
+        y = fe(x, counts, regions)  # moved arena: new addresses
         t4 = time.perf_counter()
         ttnn.synchronize_device(mesh_device)
-        t5 = time.perf_counter()
         logger.info(
-            f"HOSTPROF ms/call: program() {(t1 - t0) / n_ * 1e3:.2f}, generic_op enqueue {(t2 - t1) / n_ * 1e3:.2f} "
-            f"(+drain {(t3 - t2) * 1e3:.1f} total), full call enqueue {(t4 - t3) / n_ * 1e3:.2f} (+drain {(t5 - t4) * 1e3:.1f})"
+            f"HOSTPROF {impl}: enqueue {(t1 - t0) / n_ * 1e3:.3f} ms/call (device drain after {(t2 - t1) * 1e3:.1f} ms), "
+            f"first call after an address move {(t4 - t3) * 1e3:.2f} ms"
         )
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     ys = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(y)]
