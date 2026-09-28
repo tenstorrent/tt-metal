@@ -470,3 +470,17 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - `tt/attention.py`: `FULL_SDPA_DEFAULT = "A"` (HiFi2, fp32 dest off, approx exp, q512/k128), the same config the 1x4 prior ends with. This is an owner exception to the HiFi4 rule for the full-layer SDPA only (layers 0 and 5). Sliding layers keep preset S, and every other matmul stays at HiFi4. `MIMO_SDPA_CFG=A4` selects the old HiFi4 behaviour. `perf_settings()` already records `sdpa_full_cfg` (the profile shows "A").
 - Gate: PASS. All 13 frozen component and swap tests pass unchanged (full_moe swap 07 pcc_swap_out 0.999989, attention rel 0.0042; ffn_residual row ratio [0.9823, 1.0119], limit (0.98, 1.02), the tightest margin). Last rung: pcc_chunk_out 0.99841, worst layer pcc 0.998408, host_transfers_per_layer 0. Profile for chunk [51200,56320): device 250.1 ms (was 278.5), attention.sdpa 45.0 ms (was 73.5), the same as the 1x4 prior's 45.0 ms.
 - Re-run: the brief's gate command, with `PYTHONPATH=$PWD`. Add `MIMO_SDPA_CFG=A4` to compare against the HiFi4 variant.
+
+## O.1.optests.1 (derived-op test cases), 2026-09-28
+- Attempt 0 changed no files, so all 8 calls in `results/fork_calls.json` were still uncovered.
+- Added one 2x2 case per captured call, with `model` mimo_v2_6_d_p_2x2 and the captured sig: rms_norm (fdbf629524, and ab56dee4d6 residual-sum), sdpa (f34d0b9d1f chunked/paged HiFi2, 4caa547c27 SWA+sink HiFi4), unified_routed_expert_moe (86afb6a289), offset_cumsum (5ac677f17a), dispatch (6920429db4), combine (3f5a6dfceb). Mesh [2, 2], FABRIC_2D, l1_small_size 24576.
+- The rms_norm and sdpa tests already shard over every device, so they only needed the new cases.
+- Test changes (existing cases keep the same inputs and checks):
+  - The unified_routed_expert_ffn test now takes any mesh. Device d = r*cols + c holds experts (c*rows + r)*64 + le (ExpertMapping col-major). Counts cover the device's dispatch-group experts. On a 1-row mesh this reduces to the old layout, with the same random draws.
+  - offset_cumsum `local_experts_only`: a group now has epc*rows experts (was epc).
+  - dispatch and combine: a new path for `dispatch_group_size > 1` (`_dispatch_groups`, `_combine_groups`), with the reference helpers `dispatch_table_groups`, `group_routing` and `group_slots`. Before touching the device, I checked these helpers on the CPU against DeepSeek's `TorchDispatchModule` and `get_gate_outputs` (E 32, 2x2 groups). Both paths assert the row-major device order the test assumes.
+- Measured, all 4 chips: rms pcc 0.9999972 (residual-sum case 0.9999985); sdpa chunked pcc 0.99916-0.99921, rel 0.090-0.092; SWA pcc 0.99974, rel 0.023; experts pcc 0.999996, rel 0.00304. Dispatch, combine and offset_cumsum are exact. The 2x2 limits are the same as the 1x4 cases.
+- Can-fail check (done by hand, then reverted): scaling the device output by 1.01 fails dispatch, combine and experts.
+- INDEX.md "Used by" now lists mimo_v2_6_d_p_2x2 on all 6 forks.
+- Gate: PASS. 23 fork tests passed; forks_used 6, fork_calls 8, fork_calls_uncovered 0, fork_tests_failed 0.
+- Re-run: the brief's gate command with `PYTHONPATH=$PWD`. Just the new cases: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests/test_<fork>.py -k 2x2`.
