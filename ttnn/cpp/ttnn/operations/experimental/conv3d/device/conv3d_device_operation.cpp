@@ -179,14 +179,14 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             args.output_channels);
     }
 
-    if (args.config.operand_split) {
+    if (args.config.enable_fp32_operand_split) {
         TT_FATAL(
             tensor_args.weight_lo_tensor.has_value(),
-            "operand_split needs weight_lo_tensor (the W - bf16(W) residual).");
+            "enable_fp32_operand_split needs weight_lo_tensor (the W - bf16(W) residual).");
         const auto& weight_lo = tensor_args.weight_lo_tensor.value();
         TT_FATAL(
             input_tensor_a.dtype() == DataType::FLOAT32,
-            "operand_split recovers fp32 operand bits; the activation must be float32. got {}",
+            "enable_fp32_operand_split recovers fp32 operand bits; the activation must be float32. got {}",
             input_tensor_a.dtype());
         TT_FATAL(weight_lo.layout() == Layout::TILE, "weight_lo_tensor must be tiled.");
         TT_FATAL(
@@ -198,9 +198,13 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             weight_tensor.logical_shape());
         [[maybe_unused]] const auto [fidelity, approx, fp32_dest_acc, l1_acc, full_sync] =
             get_compute_kernel_config_args(hal::get_arch(), args.compute_kernel_config);
-        TT_FATAL(fp32_dest_acc, "operand_split accumulates three products in fp32 DST; fp32_dest_acc_en must be set.");
+        TT_FATAL(
+            fp32_dest_acc,
+            "enable_fp32_operand_split accumulates three products in fp32 DST; fp32_dest_acc_en must be set.");
     } else {
-        TT_FATAL(!tensor_args.weight_lo_tensor.has_value(), "weight_lo_tensor is only read with operand_split=True.");
+        TT_FATAL(
+            !tensor_args.weight_lo_tensor.has_value(),
+            "weight_lo_tensor is only read with enable_fp32_operand_split=True.");
     }
 
     // Add grid size validation
@@ -362,6 +366,12 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
     int64_t num_mul_adds_per_elem =
         static_cast<int64_t>(C_in) * filter_t * filter_h * filter_w * 2;  // 1 multiply and 1 add per element
     int64_t num_mul_adds = num_mul_adds_per_elem * T_out * H_out * W_out * args.output_channels * batch_size;
+    // The fp32 operand split runs three matmul products per block (x_hi*W_hi + x_hi*W_lo + x_lo*W_hi). Not modeled:
+    // the SFPU hi/lo split of each activation tile, and the extra weight reads -- the split disables weight sharing,
+    // so every core reads W_hi and W_lo from DRAM itself, while the byte count below takes each tensor once.
+    if (args.config.enable_fp32_operand_split) {
+        num_mul_adds *= 3;
+    }
 
     int ideal_dev_clock_cycles = std::ceil(
         (static_cast<float>(num_mul_adds) / static_cast<float>(num_cores * tensix_mul_adds_per_cycle_lofi)) *

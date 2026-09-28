@@ -810,6 +810,17 @@ def _prepare_fp32_conv3d_weight(weight, C_in_block, device):
     )
 
 
+# Measured cost/benefit of enable_fp32_operand_split at these shapes (Blackhole p150 die, 12x10 grid, this test's
+# blocking T_out_block=8 / C_out_block=32 / C_in_block=128, HiFi4 + fp32_dest_acc_en, best of 10 warm runs; accuracy
+# is relative RMSE against a float64 torch conv3d):
+#
+#   C_in C_out  k    T   plain fp32 (full W)    host three-conv split   in-kernel split
+#    512   512 11  400   1.08 ms  1.13e-3       3.25 ms  2.72e-4        4.20 ms  2.72e-4
+#    128   128  3 1900   0.17 ms  1.03e-3       0.56 ms  2.50e-4        0.45 ms  2.50e-4
+#   2048  1024  7   80   2.60 ms  1.14e-3       7.54 ms  2.83e-4        5.27 ms  2.83e-4
+#
+# Both splits cut the error ~4.2x for 2-4x the plain conv's time. In-kernel beats the host split up to k=7 and loses
+# at k=11, which is why models/tt_dit/layers/audio_ops.py (_KERNEL_SPLIT_MAX_K = 7) keeps the three-conv form above k=7.
 @pytest.mark.parametrize(
     "C_in, C_out, kernel, T",
     [(512, 512, 11, 400), (128, 128, 3, 1900), (2048, 1024, 7, 80)],
@@ -844,7 +855,7 @@ def test_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T):
         )
         for _ in range(2)
     )
-    split_config.operand_split = True
+    split_config.enable_fp32_operand_split = True
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -900,3 +911,59 @@ def test_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T):
     assert (
         kernel_vs_host <= 1e-5 * scale
     ), f"kernel and host splits disagree by {kernel_vs_host:.3e} (max |out| {scale:.3e})"
+
+
+def test_conv3d_fp32_operand_split_raw_weights(device):
+    """Raw rank-5 W_hi / W_lo passed straight to conv3d: the op prepares weight_lo_tensor itself, and the result
+    matches the pre-prepared split exactly (split first, then prepare both with the same arguments)."""
+    torch.manual_seed(0)
+    N, C_in, C_out, kernel, T = 1, 128, 64, 3, 64
+    kernel_size = (kernel, 1, 1)
+    padding = (kernel // 2, 0, 0)
+    weight = torch.randn(C_out, C_in, *kernel_size) * 0.05
+    weight_hi = weight.bfloat16().float()
+    weight_lo = weight - weight_hi
+    input_tensor = torch.randn(N, C_in, T, 1, 1) * 0.1
+
+    config = create_conv3d_config(
+        T_out_block=8,
+        C_out_block=32,
+        C_in_block=128,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        weights_dtype=ttnn.float32,
+    )
+    config.enable_fp32_operand_split = True
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C_in, device, dtype=ttnn.float32)
+
+    def conv(w, w_lo):
+        return ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=w,
+            device=device,
+            dtype=ttnn.float32,
+            output_channels=C_out,
+            kernel_size=kernel_size,
+            padding=padding,
+            config=config,
+            compute_kernel_config=kernel_config,
+            weight_lo_tensor=w_lo,
+        )
+
+    raw = conv(
+        ttnn.from_torch(weight_hi, dtype=ttnn.float32, pad_value=0),
+        ttnn.from_torch(weight_lo, dtype=ttnn.float32, pad_value=0),
+    )
+    prepared = conv(
+        _prepare_fp32_conv3d_weight(weight_hi, config.C_in_block, device),
+        _prepare_fp32_conv3d_weight(weight_lo, config.C_in_block, device),
+    )
+    raw_out = reshape_output(raw, N, T, 1, 1, C_out, device)
+    prepared_out = reshape_output(prepared, N, T, 1, 1, C_out, device)
+    assert torch.equal(raw_out, prepared_out), "raw rank-5 weights and pre-prepared weights disagree"

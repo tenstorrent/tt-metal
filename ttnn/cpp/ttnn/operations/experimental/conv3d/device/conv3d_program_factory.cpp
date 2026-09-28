@@ -302,10 +302,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
-    const bool operand_split = config.operand_split;
+    const bool operand_split = config.enable_fp32_operand_split;
     TT_FATAL(
         !operand_split || (use_fp32_exact && tensor_args.weight_lo_tensor.has_value()),
-        "operand_split needs float32 data with fp32 dest accumulation and a weight_lo_tensor");
+        "enable_fp32_operand_split needs float32 data with fp32 dest accumulation and a weight_lo_tensor");
     uint32_t cb_x_hi_tiled_id = 32;
     uint32_t cb_x_lo_tiled_id = 32;
     uint32_t cb_weight_lo_tiled_id = 32;
