@@ -165,3 +165,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: pcc_mlp_L00 0.999995, rel_l2 0.004004, row_norm_ratio [1.0007, 1.0050], worst row 0.0056, PASS. Every row's norm ratio is slightly
   above 1, a small upward bias well inside [0.98, 1.02]. The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp.py`
+
+## S.full_dense.05.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with this run's reviewed swap 04 (attn_residual addend check included) and added mlp as the 1x4
+  prior's frozen swap 05 does: mlp vs golden rel L2 <= 0.015, per-token norm ratio [0.98, 1.02]; mlp vs the CPU mlp on the same device
+  ffn_norm output, rel <= 0.015, ratio [0.98, 1.02], worst row <= 0.05 (catches a one-axis down reduce on 2x2, which block out misses).
+- BRINGUP_IMPL=reference: out 0.999999 / rel 0.0017, PASS. BRINGUP_IMPL=stub: FAIL.
+- Device gate (2x2): pcc_swap_out 0.999994, out rel 0.0048, mlp rel 0.0037 ratio [0.9968, 1.0076], mlp vs CPU rel 0.0034 worst row
+  0.0048, PASS.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_05_mlp.py`
