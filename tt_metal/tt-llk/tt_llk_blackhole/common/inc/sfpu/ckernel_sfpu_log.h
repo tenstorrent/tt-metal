@@ -148,6 +148,38 @@ sfpi_inline void _calculate_log_with_base_body_(
 }
 
 /**
+ * @brief ln(in) of a value already held in a register, with no Dest load or store.
+ *
+ * Same arithmetic as _calculate_log_body_, for a caller that holds its operand in a register
+ * and would otherwise store it to Dest, run the in-place body and reload the result (two
+ * SFPSTOREs and two SFPLOADs per row).
+ *
+ * The -inf lane is every input whose biased exponent is 0: +-0 *and* the denormals. That is
+ * what the Dest round trip it replaces produces: SFPSTORE flushes a denormal to zero (measured
+ * on Blackhole, fp32 and bf16 Dest), so the in-place body only ever sees 0 there. An
+ * `in == 0.0F` test would instead return a finite value for a denormal (about -88.0..-87.3
+ * for a positive one: setexp gives 1.m and exexp the raw 0 - 127, since SFPEXEXP does not
+ * normalize).
+ *
+ * @param in: Input value.
+ * @param c: LogPoly::C, bound outside the caller's row loop.
+ * @param d: LogPoly::D, bound outside the caller's row loop.
+ * @note Call @ref _init_log_ first.
+ */
+sfpi_inline sfpi::vFloat _calculate_log_body_on_reg_(const sfpi::vFloat in, const sfpi::vFloat c, const sfpi::vFloat d)
+{
+    sfpi::vFloat result = _calculate_log_series_(in, c, d);
+
+    v_if (sfpi::exexp(in, sfpi::ExponentMode::Biased) == 0)
+    {
+        result = -std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+
+    return result;
+}
+
+/**
  * @brief ln(base) without any program constant register.
  *
  * ln2 and D come from the caller: a loop with two spare LREGs (lgamma) keeps them resident, a
