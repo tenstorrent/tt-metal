@@ -22,15 +22,12 @@
 
 namespace ckernel {
 
-template <DstSync DST_SYNC, SfpuType SFPU_OP>
+template <DstSync DST_SYNC>
 inline __attribute__((always_inline)) void _sfpu_binary_check_(
     std::uint32_t dst_index_in0,
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_out,
     [[maybe_unused]] VectorMode vector_mode) {
-    if constexpr (!sfpu_operation<SFPU_OP>::modelled) {
-        SAN_HOOK(unsupported());
-    }
     LLK_ASSERT(
         (dst_index_in0 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in0 exceeds max dest tiles");
@@ -54,15 +51,15 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
  * side effects.
  */
 #define SFPU_BINARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_binary_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(                         \
-         DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),                                                         \
+    (::ckernel::assert_supported_sanitizer<::ckernel::sfpu::FN##_san_tag::op>(),                          \
+     ::ckernel::_sfpu_binary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),                    \
      _llk_math_eltwise_binary_sfpu_params_(                                                               \
          ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
 #define SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_binary_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(                               \
-         DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),                                                               \
+    (::ckernel::assert_supported_sanitizer<::ckernel::sfpu::FN##_san_tag::op>(),                                \
+     ::ckernel::_sfpu_binary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),                          \
      _llk_math_eltwise_binary_sfpu_params_(                                                                     \
          ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
@@ -81,24 +78,30 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
  * Note: SfpuType lives in the global namespace (see llk_sfpu_types.h), so the
  * fully-qualified path is `::SfpuType::OP`, not `::ckernel::SfpuType::OP`.
  */
-#define SFPU_BINARY_INIT(OP) ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>()
+#define SFPU_BINARY_INIT(OP)                                  \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>())
 
 /*
  * Init with a non-templated callback.
  *   SFPU_BINARY_INIT_FN_NO_ARGS(lcm, sfpu::calculate_sfpu_lcm_init);
  */
-#define SFPU_BINARY_INIT_FN_NO_ARGS(OP, INIT_FN) ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(INIT_FN)
+#define SFPU_BINARY_INIT_FN_NO_ARGS(OP, INIT_FN)              \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(INIT_FN))
 
 /*
  * Init with a templated callback.
  *   SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATE));
  */
-#define SFPU_BINARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>)
+#define SFPU_BINARY_INIT_FN(OP, INIT_FN, TEMPLATES)           \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>))
 
 /*
  * Init with a templated callback and extra runtime arguments.
  *   SFPU_BINARY_INIT_FN_ARGS(add_fp32, sfpu::add_init, (APPROX), scale);
  */
 #define SFPU_BINARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...) \
-    ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>, ##__VA_ARGS__)
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_binary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>, ##__VA_ARGS__))

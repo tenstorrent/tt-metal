@@ -22,16 +22,13 @@
 
 namespace ckernel {
 
-template <DstSync DST_SYNC, SfpuType SFPU_OP>
+template <DstSync DST_SYNC>
 inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     std::uint32_t dst_index_in0,
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_in2,
     std::uint32_t dst_index_out,
     [[maybe_unused]] VectorMode vector_mode) {
-    if constexpr (!sfpu_operation<SFPU_OP>::modelled) {
-        SAN_HOOK(unsupported());
-    }
     LLK_ASSERT(
         (dst_index_in0 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in0 exceeds max dest tiles");
@@ -58,8 +55,8 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
  * not side effects.
  */
 #define SFPU_TERNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_ternary_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(                                  \
-         DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                                                          \
+    (::ckernel::assert_supported_sanitizer<::ckernel::sfpu::FN##_san_tag::op>(),                                    \
+     ::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                    \
      _llk_math_eltwise_ternary_sfpu_params_(                                                                        \
          ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                          \
          DST_IN0,                                                                                                   \
@@ -70,11 +67,11 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
          ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                        \
-    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_ternary_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>( \
-         DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                         \
-     _llk_math_eltwise_ternary_sfpu_params_(                                       \
+#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                                      \
+    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...)               \
+    (::ckernel::assert_supported_sanitizer<::ckernel::sfpu::FN##_san_tag::op>(),                 \
+     ::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE), \
+     _llk_math_eltwise_ternary_sfpu_params_(                                                     \
          ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
@@ -92,25 +89,32 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
  * Note: SfpuType lives in the global namespace (see llk_sfpu_types.h), so the
  * fully-qualified path is `::SfpuType::OP`, not `::ckernel::SfpuType::OP`.
  */
-#define SFPU_TERNARY_INIT(OP) ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>()
+#define SFPU_TERNARY_INIT(OP)                                 \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>())
 
 /*
  * Init with a non-templated callback.
  *   SFPU_TERNARY_INIT_FN_NO_ARGS(some_op, sfpu::some_init);
  */
-#define SFPU_TERNARY_INIT_FN_NO_ARGS(OP, INIT_FN) ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN)
+#define SFPU_TERNARY_INIT_FN_NO_ARGS(OP, INIT_FN)             \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN))
 
 /*
  * Init with a templated callback.
  *   SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROXIMATE));
  *   SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROXIMATE));
  */
-#define SFPU_TERNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>)
+#define SFPU_TERNARY_INIT_FN(OP, INIT_FN, TEMPLATES)          \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>))
 
 /*
  * Init with a templated callback and extra runtime arguments.
  *   SFPU_TERNARY_INIT_FN_ARGS(some_op, sfpu::some_init, (APPROX), arg0, arg1);
  */
-#define SFPU_TERNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...) \
-    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>, ##__VA_ARGS__)
+#define SFPU_TERNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...)      \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(),       \
+     ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>( \
+         INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>, ##__VA_ARGS__))

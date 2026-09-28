@@ -5,6 +5,7 @@
 #pragma once
 
 #include "llk_sfpu_types.h"
+#include "sanitizer/api.h"
 
 // SAN_SFPU_TAG(FN, OP) records which SfpuType a ckernel functor implements. The SFPU call macros paste
 // FN##_san_tag to recover the op from the functor they are about to invoke, so the identity the sanitizer
@@ -33,6 +34,15 @@ template <>
 struct sfpu_operation<SfpuType::sqrt> {
     static constexpr bool modelled = true;
 };
+
+// Fence for ops the sanitizer does not model. Every SFPU entry point that knows its SfpuType routes
+// through here, so the modelled/not decision has exactly one home: sfpu_operation above.
+template <SfpuType OP>
+inline void assert_supported_sanitizer() {
+    if constexpr (!sfpu_operation<OP>::modelled) {
+        SAN_HOOK(unsupported());
+    }
+}
 
 namespace sfpu {
 

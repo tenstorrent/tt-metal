@@ -22,12 +22,9 @@
 
 namespace ckernel {
 
-template <DstSync DST_SYNC, SfpuType SFPU_OP>
+template <DstSync DST_SYNC>
 inline __attribute__((always_inline)) void _sfpu_check_(
     std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode) {
-    if constexpr (!sfpu_operation<SFPU_OP>::modelled) {
-        SAN_HOOK(unsupported());
-    }
     LLK_ASSERT(
         (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
 }
@@ -42,19 +39,17 @@ inline __attribute__((always_inline)) void _sfpu_check_(
  * Macro hygiene: DST_IDX and VECTOR_MODE are evaluated by both the check and
  * params call. Keep call sites to identifiers/literals, not side effects.
  */
-#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...)              \
-    do {                                                                                            \
-        ::ckernel::_sfpu_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(DST_IDX, VECTOR_MODE); \
-        _llk_math_eltwise_unary_sfpu_params_(                                                       \
-            ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__);      \
-    } while (false)
+#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::assert_supported_sanitizer<::ckernel::sfpu::FN##_san_tag::op>(),       \
+     ::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                          \
+     _llk_math_eltwise_unary_sfpu_params_(                                             \
+         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...)            \
-    do {                                                                                                \
-        ::ckernel::_sfpu_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(DST_IDX, VECTOR_MODE);     \
-        _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__); \
-    } while (false)
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::assert_supported_sanitizer<::ckernel::sfpu::FN##_san_tag::op>(),             \
+     ::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                                \
+     _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
  * SFPU init macros (3 total)
@@ -71,19 +66,23 @@ inline __attribute__((always_inline)) void _sfpu_check_(
  * Bare init: no callback.
  *   SFPU_UNARY_INIT(abs);
  */
-#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, DST_ACCUM_MODE>()
+#define SFPU_UNARY_INIT(OP)                                   \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, DST_ACCUM_MODE>())
 
 /*
  * Init with a templated callback.
  *   SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (APPROXIMATE));
  *   SFPU_UNARY_INIT_FN(log, sfpu::log_init, (APPROX, fp32, FAST));
  */
-#define SFPU_UNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>)
+#define SFPU_UNARY_INIT_FN(OP, INIT_FN, TEMPLATES)            \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>))
 
 /*
  * Init with a templated callback and extra runtime arguments.
  *   SFPU_UNARY_INIT_FN_ARGS(exponential, sfpu::exp_init, (APPROX), scale, clamp_neg);
  */
-#define SFPU_UNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...) \
-    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>, ##__VA_ARGS__)
+#define SFPU_UNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...)  \
+    (::ckernel::assert_supported_sanitizer<::SfpuType::OP>(), \
+     ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>, ##__VA_ARGS__))
