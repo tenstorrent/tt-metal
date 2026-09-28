@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 import re
+from functools import lru_cache
 from typing import Dict, List, Set, Tuple
 
 import torch
@@ -60,6 +61,42 @@ def sweep_spec() -> StimuliSpec:
     return StimuliSpec.ulp_sweep(low=-_INF, high=_INF)
 
 
+@lru_cache(maxsize=None)
+def swept_value_count(input_format: DataFormat) -> int:
+    """How many values the sweep actually generates for *input_format*.
+
+    Cached because the answer is a property of the format, while finding it walks the
+    whole format, and `padding_lanes` asks twice per variant.
+    """
+    from helpers.stimuli_generator.strategies.structured import ulp_sweep_value_count
+
+    return int(ulp_sweep_value_count(stimuli_format_for(input_format), -_INF, _INF))
+
+
+def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+    """The tail ``generate_full_tensor`` fills with zeros to reach the tile count.
+
+    The sweep enumerates every finite value of the stimuli format -- 65,279 for
+    bfloat16, 63,487 for float16 -- into a fixed 65,536-lane tensor, so the last 257
+    (or 2,049) lanes are padding rather than data. They are not values the sweep chose
+    to feed, and they are all the same one, so they belong in no statistic: they
+    inflate every lane count, and on an op singular at zero whose registered domain
+    includes it they would read as a real failure. ``reciprocal`` is the near miss --
+    the hardware returns ``Inf`` there against a finite golden clamp, and only its
+    registered domain excluding zero keeps those 257 lanes out of the verdict.
+
+    Identified by position rather than by value, because ``0.0`` is also a legitimate
+    swept value: exactly one, in the middle of the sorted order. Confirmed on hardware
+    that the padding is the contiguous tail.
+    """
+    swept = swept_value_count(input_format)
+    # On *src*'s device: the mask is composed with tensors derived from it, and a
+    # CPU-only mask would fail that composition for a device-resident sweep.
+    flat = torch.zeros(src.numel(), dtype=torch.bool, device=src.device)
+    flat[swept:] = True
+    return flat.reshape(src.shape)
+
+
 def measurable_mask(
     src: torch.Tensor,
     golden: torch.Tensor,
@@ -82,6 +119,7 @@ def measurable_mask(
       is still finite. ``passed_test`` rejects those positionally whatever the budget
       says, so ranking them would inflate the number without tightening the gate. One
       such lane is worth ~48,000 steps.
+    * the sweep's own zero padding -- see :func:`padding_lanes`.
     * subnormal inputs. The hardware flushes them on the way in and the golden does not,
       so ``ceil(5.69e-39)`` is 1 in the model and 0 on silicon -- 16,129 bf16 steps for
       a difference that is the unpack path's flush, not the op's accuracy. Measured, it
@@ -115,25 +153,80 @@ def measurable_mask(
     normal_input = (magnitude >= smallest_normal) | (magnitude == 0)
 
     both_measurable = ~(torch.isnan(golden) | torch.isnan(result))
-    return both_measurable & ~nonfinite_mismatches(golden, result) & normal_input
+    return (
+        both_measurable
+        & ~nonfinite_mismatches(golden, result)
+        & normal_input
+        & ~padding_lanes(src, input_format)
+    )
+
+
+def _within_safe_domain(
+    op, src: torch.Tensor, input_format: DataFormat
+) -> torch.Tensor:
+    """Lanes whose input is inside the domain ``sfpu_domains`` registers for *op*.
+
+    The sweep deliberately runs outside it -- that is the whole point, and the budget is
+    measured over everything. This is used only to judge *non-finite* answers, where the
+    distinction matters: outside the registered domain an op is not claiming anything,
+    and ``sin(2.6e28)`` returning ``inf`` against a golden of ``-1`` is an argument
+    reduction giving up, not a regression.
+    """
+    from helpers.sfpu_domains import exclude_undefined, for_op
+
+    spec = exclude_undefined(op, for_op(op, input_format).spec_A)
+    magnitude = src.detach().to(torch.float32)
+    inside = torch.ones_like(magnitude, dtype=torch.bool)
+    if spec.low is not None:
+        inside &= magnitude >= spec.low
+    if spec.high is not None:
+        inside &= magnitude <= spec.high
+    intervals = getattr(spec, "intervals", None)
+    if intervals:
+        covered = torch.zeros_like(inside)
+        for low, high in intervals:
+            covered |= (magnitude >= low) & (magnitude <= high)
+        inside &= covered
+    return inside
 
 
 def nonfinite_failures(
+    op,
     src: torch.Tensor,
     golden: torch.Tensor,
     result: torch.Tensor,
     input_format: DataFormat,
+    output_format: DataFormat,
 ) -> torch.Tensor:
     """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
-    non-question: the two sides disagreeing about being non-finite, on a normal input.
+    non-question: the two sides disagreeing about being non-finite where the output
+    format could have held the answer.
 
     ``passed_test`` rejects these positionally whatever the budget says, but the sweep
     driver ranks a distance rather than calling it, so it has to ask separately -- a
     hardware overflow or an unexpected NaN would otherwise leave the statistics clean
     and both emit and gate would pass.
 
-    Subnormal inputs are excluded on the same grounds as in the mask: the unpack path
-    flushes them and the golden does not, so a disagreement there is the flush.
+    Four exclusions, all of them the sweep's own doing rather than the op's:
+
+    * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
+      flushes them and the golden does not, so a disagreement there is the flush.
+    * **a golden past the output format's finite range.** A full-range sweep feeds
+      every value of a 16-bit input, and ``relu_min`` passes most of them straight
+      through, so a bf16 input against a Float16 output reaches magnitudes fp16 cannot
+      represent -- 14,334 lanes of it. Saturating there is the store doing what it must
+      (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel being
+      wrong, and no budget on any op could be met.
+    * **the sweep's own zero padding**, which is not a value it chose to feed.
+    * **an input outside the op's registered safe domain.** ``Sin`` and ``Cos`` are
+      registered over ``[-pi, pi]`` and disagree on ~21,000 bf16 lanes far outside it,
+      which is the case ``measurable_mask``'s own docstring cites. The budget is still
+      measured over the whole format; it is only the *non-finite* answer that needs the
+      op to have been claiming something.
+
+    What is left is the case the mask would otherwise hide: an op returning ``inf`` or
+    ``NaN`` where it is defined, the input is normal, and the output could have held
+    the answer.
     """
     from helpers.llk_params import format_dict
 
@@ -144,7 +237,15 @@ def nonfinite_failures(
     normal_input = (magnitude >= torch.finfo(stimuli_dtype).smallest_normal) | (
         magnitude == 0
     )
-    return nonfinite_mismatches(golden, result) & normal_input
+    output_max = torch.finfo(format_dict[stimuli_format_for(output_format)]).max
+    in_range = golden.detach().to(torch.float32).abs() <= output_max
+    return (
+        nonfinite_mismatches(golden, result)
+        & normal_input
+        & in_range
+        & _within_safe_domain(op, src, input_format)
+        & ~padding_lanes(src, input_format)
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

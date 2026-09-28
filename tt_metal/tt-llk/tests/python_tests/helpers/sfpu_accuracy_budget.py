@@ -218,6 +218,11 @@ DEFAULT = BudgetKey()
 #: One op's keyed budgets.
 _BudgetTable = Dict[BudgetKey, AccuracyContract]
 
+#: What makes a 0-step Bfp8_b budget legitimate for the integer-valued ops: every block
+#: maximum stays below 2**7, so the shared exponent is exact. A property of the
+#: *stimulus*, not the format, so the host tests assert it against _OP_DOMAIN_REGISTRY.
+BFP8_B_EXACT_INTEGER_DOMAIN = 128.0
+
 
 # ── Loading the table ───────────────────────────────────────────────────────
 
@@ -431,6 +436,11 @@ def accuracy_contract(
         if contract.metric is not Metric.ULP
     }
     return resolve_contract(tolerance_rows, query, label=op.name)
+
+
+def enrolled_ops() -> Tuple[MathOperation, ...]:
+    """Every op with a declared contract, in name order. For reporting and tests."""
+    return tuple(sorted(_SFPU_ACCURACY_BUDGET, key=lambda op: op.name))
 
 
 def usable_budget_ceiling(output_format: DataFormat) -> float:
