@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -15,6 +16,17 @@ namespace ttnn::operations::data_movement {
 bool is_fast_path_input(const Tensor& t) {
     return t.memory_config().is_l1() && t.is_sharded() && t.shard_spec().has_value() &&
            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && t.layout() == Layout::ROW_MAJOR;
+}
+
+bool is_tile_native_fold_supported(const Tensor& input_tensor) {
+    if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    const bool is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const uint32_t noc_align =
+        is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t c_bytes = input_tensor.logical_shape()[-1] * input_tensor.element_size();
+    return c_bytes % noc_align == 0;
 }
 
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(

@@ -10,94 +10,64 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
+using namespace tt::data_movement::common;
+
 void kernel_main() {
-    constexpr uint32_t input_width = get_arg(args::input_width);                      // Width of input tensor
-    constexpr uint32_t stride_height = get_arg(args::stride_height);                  // Vertical stride for fold
-    constexpr uint32_t stride_width = get_arg(args::stride_width);                    // Horizontal stride for fold
-    constexpr uint32_t stick_nbytes = get_arg(args::stick_nbytes);                    // Size of each stick in bytes
-    constexpr uint32_t aligned_stick_nbytes = get_arg(args::aligned_stick_nbytes);    // Aligned size of each stick
-    constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);  // Tiles per channel dimension
-    constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);      // Tiles per width dimension
-    constexpr uint32_t element_size = get_arg(args::element_size);                    // Size of each element in bytes
+    constexpr uint32_t input_width = get_arg(args::input_width);
+    constexpr uint32_t stride_height = get_arg(args::stride_height);
+    constexpr uint32_t stride_width = get_arg(args::stride_width);
+    // `c_bytes` = logical C * elem_size; `c_padded_bytes` = untilize row stride (C_tiles * TILE_WIDTH * elem_size).
+    constexpr uint32_t c_bytes = get_arg(args::c_bytes);
+    constexpr uint32_t c_padded_bytes = get_arg(args::c_padded_bytes);
+    constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);
+    constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);
 
-    // Runtime arguments - Processing parameters
-    const uint32_t start_block_id = get_arg(args::start_block_id);      // Starting block ID for processing
-    const uint32_t num_blocks = get_arg(args::num_blocks);              // Number of blocks to process
-    uint32_t patch_height_offset = get_arg(args::patch_height_offset);  // Current height offset within patch
-    uint32_t output_offset = get_arg(args::output_offset);              // Current output offset
+    const uint32_t start_block_id = get_arg(args::start_block_id);
+    const uint32_t num_blocks = get_arg(args::num_blocks);
+    uint32_t patch_height_offset = get_arg(args::patch_height_offset);
+    uint32_t curr_out_page = get_arg(args::output_offset);
 
-    // Calculated constants
-    constexpr uint32_t output_width = input_width / stride_width;  // Output tensor width
-    constexpr uint32_t patch_size = stride_height * stride_width;  // Total elements per patch
-    // Initialize DRAM address generator for interleaved memory access
+    constexpr uint32_t output_width = input_width / stride_width;
+
     const auto dst = TensorAccessor(tensor::dst);
-
     Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
 
-    // Processing loop bounds and state variables
     const uint32_t end_block_id = start_block_id + num_blocks;
-    uint32_t curr_offset = output_offset;  // Current working offset
-    uint32_t orig_patch_height_offset = patch_height_offset;
-
-    // Main processing loop - iterate through each block
     for (uint32_t block_id = start_block_id; block_id < end_block_id; block_id++) {
-        uint32_t stick_offset = 0;                // Current stick offset within patch
-        uint32_t stride_width_idx = 0;            // Current position within stride width
-        uint32_t output_stick_idx = curr_offset;  // Current destination stick index
-        uint32_t remaining_width = input_width;   // Remaining width to process
+        uint32_t remaining_width = input_width;
+        uint32_t out_page = curr_out_page;
+        uint32_t stride_w_idx = 0;
+        // Per-input-row patch base within the output stick: `(h % sh) * sw` slots.
+        const uint32_t row_patch_base = patch_height_offset * stride_width;
 
-        // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
             dfb_in1.wait_front(tiles_per_channel_dim);
-            // Source the write pointer of the input DFB (matches the legacy WRITE_PTR selector).
-            const uint32_t src_base = dfb_in1.get_write_ptr();
-            uint32_t src_offset = 0;
+            const uint32_t src_base = dfb_in1.get_read_ptr();
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
 
-            for (uint32_t stick_idx = 0; stick_idx < width_limit; stick_idx++) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(src_base),
-                    dst,
-                    stick_nbytes,
-                    {.offset_bytes = src_offset},
-                    {.page_id = output_stick_idx});
-
-                // Update pointers and indices
-                src_offset += aligned_stick_nbytes;
-                output_stick_idx++;
-                stride_width_idx++;
-
-                // Check if we've completed a stride width - move to next patch row
-                if (stride_width_idx == stride_width) {
-                    stick_offset++;
-                    output_stick_idx = curr_offset + (stick_offset * patch_size);
-                    stride_width_idx = 0;
+            for (uint32_t local_w = 0; local_w < width_limit; local_w++) {
+                const uint32_t patch_idx = row_patch_base + stride_w_idx;
+                // Scatter each input pixel's C real bytes into its patch slot in the output stick.
+                noc_async_write_sharded(
+                    noc, src_base + local_w * c_padded_bytes, dst, out_page, patch_idx * c_bytes, c_bytes);
+                if (++stride_w_idx == stride_width) {
+                    stride_w_idx = 0;
+                    out_page++;
                 }
             }
 
             remaining_width -= tt::constants::TILE_HEIGHT;
-
-            // Ensure all writes complete before moving to next set of tiles_per_channel_dim tiles
             noc.async_write_barrier();
             dfb_in1.pop_front(tiles_per_channel_dim);
         }
 
-        // Update patch offset for next block
-        patch_height_offset++;
-
-        // Check if we've completed a full patch height - move to next patch
-        if (patch_height_offset == stride_height) {
-            // Calculate new output offset for next patch
-            curr_offset = output_offset + (patch_size * output_width) - (orig_patch_height_offset * stride_width);
-            output_offset = curr_offset;
+        // Advance to the next output-h row only after `sh` input rows have been scattered.
+        if (++patch_height_offset == stride_height) {
+            curr_out_page += output_width;
             patch_height_offset = 0;
-            orig_patch_height_offset = 0;
-        } else {
-            // Move to next row within the same patch
-            curr_offset += stride_width;
         }
     }
 }
