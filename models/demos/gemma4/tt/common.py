@@ -85,7 +85,17 @@ def create_tt_model(
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")
         num_devices = mesh_device.get_num_devices() if is_mesh else 1
-        if is_mesh and num_devices > 1:
+        _fracture = os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
+        if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1:
+            # Galaxy one-instance: heads/TP over axis 0, weights 2D-fractured
+            # (SharedMLP over rows*cols; attention replicated across columns).
+            mesh_config = MeshConfig(
+                mesh_device.shape,
+                decode=ModeConfig(tp=mesh_device.shape[0]),
+                tp_axis=0,
+                weight_fracture=True,
+            )
+        elif is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
             mesh_config = MeshConfig((1, 1), decode=ModeConfig(tp=1))
