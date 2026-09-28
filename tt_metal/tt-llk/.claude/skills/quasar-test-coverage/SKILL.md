@@ -20,7 +20,7 @@ Three rules. Apply all three to any new or edited `tests/python_tests/quasar/tes
 Two requirements, whatever scheme the test uses to express its shapes:
 
 - Sweep a few representative shapes, not every shape that fits in dest. Examples of
-  representative shapes :single tile, a full-width row, a full-height column, a balanced grid and an odd tile count cover the distinct dest layouts.
+  representative shapes: a single tile, a full-width row, a full-height column, a balanced grid and an odd tile count cover the distinct dest layouts.
 - Include at least one shape that **overflows dest**. `3 * max_tiles_in_dest`
   walks bank 0 -> 1 -> 0, so it covers the wrap back to the first bank and not
   just the initial switch.
@@ -34,7 +34,7 @@ scheme and add an overflow case to it rather than adopt the helper.
 ## 2. MX formats
 
 MX formats do not belong in the regular format cross product of a math-kernel
-test. On Quasar they live only in L1: the unpacker decodes every one of them to `
+test. On Quasar they live only in L1: the unpacker decodes every one of them to
 `Float16_b` in SrcA/SrcB, so an op fed an MX input runs the identical math
 configuration as the `Float16_b` row beside it in the same sweep.
 Multiplying MX through the whole sweep re-measures one unpacker descriptor
@@ -101,7 +101,7 @@ Where the shape is a plain input matrix,
 shape scheme computes its own block count. Either way the kernel loop is the
 same:
 
-```c
+```cpp
 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
 {
     for (std::uint32_t i = 0; i < NUM_TILES_IN_BLOCK; ++i)
