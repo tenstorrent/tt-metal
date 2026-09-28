@@ -67,10 +67,14 @@ def run_combine(
     use_fp8_output,
     num_links=2,
     cmb_version=1,
+    dispatched_buffer_dtype=ttnn.bfloat16,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
-    num_experts_per_tok) shape axis."""
+    num_experts_per_tok) shape axis.
+
+    A bfloat8_b dispatched buffer is checked for an exact match against the reference fed the
+    bfp8-rounded tokens: the op only moves tokens, and bfp8 -> bf16 is lossless."""
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -184,8 +188,14 @@ def run_combine(
         mesh_mapper=mesh_mapper,
         layout=dispatched_buffer_layout,
         device=mesh_device,
-        dtype=ttnn.bfloat16,
+        dtype=dispatched_buffer_dtype,
     )
+    if dispatched_buffer_dtype == ttnn.bfloat8_b:
+        # The reference combines exactly the values the device holds, so the bfp8 rounding is taken off
+        # the device tensor rather than reproduced on the host.
+        dispatched_buffer = ttnn.to_torch(
+            tt_dispatched_buffer, mesh_composer=get_ep_mesh_composer(mesh_device), dtype=torch.bfloat16
+        )
 
     tt_dispatched_metadata = ttnn.from_torch(
         dispatched_metadata,
@@ -315,6 +325,7 @@ def run_combine(
         num_dispatch_groups,
         num_routed_experts,
         use_pcc=use_fp8_output,
+        **({"atol": 0.0, "rtol": 0.0} if dispatched_buffer_dtype == ttnn.bfloat8_b else {}),
         verbose=True,
         expert_dispatch_table=expert_dispatch_table,
         expert_token_counts=expert_token_counts,
@@ -658,33 +669,42 @@ def _cmb_fabric2d_dimensions():
     marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
 
     params = []
-    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
-        ("pcc", 128, 4, True),
-        ("perf_no_pcc", 640, 8, False),
+    # Input formats the op takes. row_major is the bf16 case this test has always run; the tile ones
+    # go through the untilizer cores, bfloat8_b being the routed expert's native output.
+    for format_id, layout, dtype in (
+        ("row_major", ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        ("tile", ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ("tile_bfp8", ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
     ):
-        model_config = _model_scaledown(
-            DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
-        )
-        params.append(
-            pytest.param(
-                mesh,
-                fabric_to_device_params(fabric_cfg),
-                per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
-                seq_len_per_chip,
-                model_config.EMB_SIZE,
-                model_config.NUM_ROUTED_EXPERTS,
-                model_config.NUM_EXPERTS_PER_TOKEN,
-                dispatch_buffer_capacity_factor,
-                run_pcc,
-                marks=marks,
-                id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-{scenario_id}",
+        for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
+            ("pcc", 128, 4, True),
+            ("perf_no_pcc", 640, 8, False),
+        ):
+            model_config = _model_scaledown(
+                DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
             )
-        )
+            params.append(
+                pytest.param(
+                    mesh,
+                    fabric_to_device_params(fabric_cfg),
+                    per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
+                    seq_len_per_chip,
+                    model_config.EMB_SIZE,
+                    model_config.NUM_ROUTED_EXPERTS,
+                    model_config.NUM_EXPERTS_PER_TOKEN,
+                    dispatch_buffer_capacity_factor,
+                    run_pcc,
+                    layout,
+                    dtype,
+                    marks=marks,
+                    id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-{format_id}-2link-{scenario_id}",
+                )
+            )
     return params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check, dispatched_buffer_layout, dispatched_buffer_dtype",
     _cmb_fabric2d_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -697,6 +717,8 @@ def test_ttnn_combine_fabric2d(
     dispatch_buffer_capacity_factor,
     topology,
     run_pcc_check,
+    dispatched_buffer_layout,
+    dispatched_buffer_dtype,
 ):
     run_combine(
         mesh_device,
@@ -709,7 +731,8 @@ def test_ttnn_combine_fabric2d(
         topology=topology,
         use_predictable_data=False,
         run_pcc_check=run_pcc_check,
-        dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
+        dispatched_buffer_layout=dispatched_buffer_layout,
         use_fp8_output=False,
         cmb_version=2,
+        dispatched_buffer_dtype=dispatched_buffer_dtype,
     )
