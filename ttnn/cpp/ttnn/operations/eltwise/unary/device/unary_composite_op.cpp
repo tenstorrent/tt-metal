@@ -4,6 +4,7 @@
 
 #include "unary_composite_op.hpp"
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <variant>
@@ -150,10 +151,12 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
     ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
-    Tensor std_y = detail::_std(y, mean_y, y_minus_mean_y, output_mem_config);
-    Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
-    Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
-    return z;
+    // The divisor was built as reciprocal(sqrt(variance)), two dispatches for
+    // what rsqrt is, and multiply applies a unary chain to its operands anyway,
+    // so the rsqrt rides on the multiply that was going to read it.
+    Tensor var_y = detail::_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
+    const std::array rsqrt_of_var = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
+    return ttnn::multiply(y_minus_mean_y, var_y, std::nullopt, output_mem_config, std::nullopt, {}, {}, rsqrt_of_var);
 }
 
 // Function Clip

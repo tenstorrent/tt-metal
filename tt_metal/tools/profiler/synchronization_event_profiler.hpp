@@ -14,7 +14,7 @@
 //   dataflow_api.h, noc_semaphore.h (BRISC/NCRISC)
 //   llk_io_pack.h, llk_io_unpack.h, experimental/semaphore.h (TRISC)
 //
-// Enable with: TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+// Enable with: TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
 
 #if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && defined(PROFILE_SYNC_EVENTS) && defined(PROFILE_STREAMING)
 

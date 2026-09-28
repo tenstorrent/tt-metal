@@ -244,7 +244,8 @@ bool WriteToDeviceDRAMChannel(
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    metal_ctx.get_cluster().write_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    metal_ctx.get_cluster().write_dram_vec(
+        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address, tt::umd::IoOrdering::Relaxed);
     return true;
 }
 
@@ -1161,7 +1162,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = metal_ctx.hal();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    uint32_t max_dfbs = hal.get_num_dataflow_buffers();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
@@ -1179,7 +1180,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 const bool scans_remote_cb_configs =
-                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_dfbs;
                 if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
@@ -1202,7 +1203,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
                                 remote_offset_index +
-                                ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                                ((max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
