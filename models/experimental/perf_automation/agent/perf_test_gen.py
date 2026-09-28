@@ -675,6 +675,12 @@ _ERR_NOISE = re.compile(
 )
 
 
+# The marker prefix `measure_adapter` prints per stage (TRACE_STAGE_MS[...], _BYTES[...], _ITEMS[...]).
+# Matched on the PREFIX only: the stage names inside the brackets come from the model at runtime and
+# are never enumerated here.
+_STAGE_MARKER = "TRACE_STAGE"
+
+
 def _extract_error(out: str) -> str:
     """Surface the REAL failure from a pytest run so the correction feedback is actionable. Anchor on
     pytest's own error lines ('E   ...', 'ERROR collecting', assertion/exception summaries) and DROP the
@@ -702,6 +708,16 @@ def _extract_error(out: str) -> str:
             or "TRACE_NOT_TRACE_CAPABLE" in ln
             or "TRACE_REPLAY_PATH" in ln
             or "HANDROLLED_TRACE_CAPTURE" in ln
+            # HOW FAR IT GOT IS PART OF THE ERROR. A hang has no exception to anchor on, so the only
+            # evidence of WHERE it died is which stages reported. Those markers used to be dropped
+            # here, and by a cruel accident it was this function's own WEDGE line that dropped them:
+            # a log with no anchor falls through to the "last few lines" tail, which happened to
+            # include them, but appending "[perf_test_gen] WEDGE: ..." anchors the whitelist and the
+            # tail is never reached. So the richer a failure's description became, the less of the
+            # failure survived. Measured on a real capture: 3 stage lines kept without the WEDGE
+            # line, 0 with it -- and the agent was told only "trace did not engage" for five rounds
+            # while the log said it traced two stages and froze in the third.
+            or _STAGE_MARKER in ln
         ):
             picked.append(s)
     tail = "\n".join(picked[-25:]) if picked else ""
