@@ -897,7 +897,12 @@ def main(node: str, case: str | None = None) -> None:
 
     # The probe asks for ALL layers (the caller removed the cap); load the depth guard so a
     # setdefault in the test module cannot quietly reinstate one before the model is built.
-    argv = ["-s", "-p", "models.experimental.perf_automation.agent.depth_guard_plugin", "-o", "timeout=0", node]
+    try:
+        from ..agent.probes import PYTEST_NO_TIMEOUT
+    except ImportError:  # perf_automation itself is the sys.path root
+        from agent.probes import PYTEST_NO_TIMEOUT
+
+    argv = ["-s", "-p", "models.experimental.perf_automation.agent.depth_guard_plugin", *PYTEST_NO_TIMEOUT, node]
     if case:
         argv += ["-k", case]
     try:

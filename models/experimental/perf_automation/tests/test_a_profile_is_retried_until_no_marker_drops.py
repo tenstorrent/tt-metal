@@ -102,7 +102,10 @@ def test_one_overflowed_read_grows_the_buffer():
 
 
 def test_repeated_drops_drain_more_often():
-    assert probes.choose_marker_drop_remedy({"repeated": True}, 0, "4") == {probes.PERF_FLUSH_EVERY_ENV: "2"}
+    # by the heal factor, so a buffer-sized interval reaches a per-few-ops one within the budget
+    assert probes.choose_marker_drop_remedy({"repeated": True}, 0, "250") == {probes.PERF_FLUSH_EVERY_ENV: "31"}
+    assert probes.choose_marker_drop_remedy({"repeated": True}, 0, "31") == {probes.PERF_FLUSH_EVERY_ENV: "3"}
+    assert probes.choose_marker_drop_remedy({"repeated": True}, 0, "4") == {probes.PERF_FLUSH_EVERY_ENV: "1"}
 
 
 def test_repeated_drops_at_the_fastest_drain_grow_the_buffer():
@@ -115,7 +118,7 @@ def test_an_unknown_drain_is_not_guessed():
 
 def test_a_full_buffer_falls_back_to_draining_then_to_nothing():
     top = probes._MAX_PROFILER_SUPPORT_COUNT
-    assert probes.choose_marker_drop_remedy({"repeated": False}, top, "4") == {probes.PERF_FLUSH_EVERY_ENV: "2"}
+    assert probes.choose_marker_drop_remedy({"repeated": False}, top, "4") == {probes.PERF_FLUSH_EVERY_ENV: "1"}
     assert probes.choose_marker_drop_remedy({"repeated": False}, top, "1") is None
 
 
@@ -172,3 +175,41 @@ def test_a_crash_with_nothing_finished_still_raises_once_attempts_run_out(tmp_pa
     crashed = "Segmentation fault (core dumped)"
     with pytest.raises(probes.TracyRunError, match="exit 139"):  # allow-pytest.raises: no expect_error fixture
         _run(tmp_path, [(139, crashed, False)] * 10)
+
+
+# -- the forward's drain interval and pytest's own timeout ----------------------------------------
+
+
+def test_a_capacity_bridged_forward_drains_at_the_buffers_size(monkeypatch):
+    from agent import profiler_drain as pd
+    from agent.measure import _capacity_scaled_osl
+
+    class _Run:
+        @staticmethod
+        def coverage_cache_get_ops_per_step(repo_root, node, case, **_kw):
+            return 38_604
+
+    monkeypatch.setattr(probes, "_cc_optimize", lambda name: _Run())
+    monkeypatch.delenv(probes._SUPPORT_COUNT_ENV, raising=False)
+    osl, flush = _capacity_scaled_osl(None, "r", "n", "c", 128)
+    assert int(flush) == pd.capacity_cadence(), "the same interval the stage pass reads at"
+
+
+def test_every_tool_launched_pytest_turns_pytests_timeout_off():
+    """A @pytest.mark.timeout on a test beats "-o timeout=0"; only disabling the plugin ends it."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(probes.__file__).resolve().parents[1]
+    offenders = [
+        f"{p.relative_to(root)}:{i}"
+        for p in root.rglob("*.py")
+        if "tests" not in p.parts
+        for i, line in enumerate(p.read_text(errors="ignore").splitlines(), 1)
+        if re.search(r'"timeout=0"', line)
+    ]
+    assert offenders == [], offenders
+    assert probes.PYTEST_NO_TIMEOUT == ("-p", "no:timeout")
+    cmd = probes.build_tracy_command("t.py", None, "/tmp/out")
+    i = cmd.index("pytest")
+    assert cmd[i + 1 : i + 3] == list(probes.PYTEST_NO_TIMEOUT)

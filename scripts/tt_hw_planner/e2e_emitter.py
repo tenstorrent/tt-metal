@@ -80,7 +80,7 @@ Components classified as CPU-fallback continue to run on CPU via
 the HF reference — no wiring required for those.
 
 Usage:
-    pytest {test_path} -svv --timeout=600
+    pytest {test_path} -svv
 """
 from __future__ import annotations
 
@@ -576,7 +576,7 @@ Component coverage:
 {component_summary}
 
 Usage:
-    pytest {test_path} -svv --timeout=600
+    pytest {test_path} -svv
 """
 from __future__ import annotations
 
@@ -750,7 +750,7 @@ Component coverage:
 {component_summary}
 
 Usage:
-    pytest {test_path} -svv --timeout=600
+    pytest {test_path} -svv
 """
 from __future__ import annotations
 

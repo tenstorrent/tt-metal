@@ -225,7 +225,8 @@ def test_the_profiled_command_loads_the_drain():
 
 def test_a_tool_outside_the_profiled_tree_adds_no_plugin(tmp_path):
     assert probes.profiler_drain_plugin(tmp_path) is None
-    assert "-p" not in probes.build_tracy_command("t.py", None, "/tmp/out")[6:]
+    cmd = probes.build_tracy_command("t.py", None, "/tmp/out")
+    assert [cmd[k + 1] for k, a in enumerate(cmd) if a == "-p" and k > 5] == ["no:timeout"], "no drain plugin"
 
 
 def test_make_run_profiled_passes_it(tmp_path, monkeypatch):
@@ -247,7 +248,7 @@ def test_make_run_profiled_passes_it(tmp_path, monkeypatch):
     )
     with pytest.raises(probes.TracyRunError):  # allow-pytest.raises: no expect_error fixture
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
-    assert seen and seen[0][seen[0].index("-p", 7) + 1] == "x.profiler_drain"
+    assert seen and seen[0][seen[0].index("x.profiler_drain") - 1] == "-p"
     assert "--dump-device-data-mid-run" in seen[0]
     assert "--disable-device-data-push-to-tracy" in seen[0], "device markers stay out of tracy-capture"
 

@@ -1553,11 +1553,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     _gate_log = Path(_caller_log) if _caller_log else Path(tempfile.mkdtemp(prefix="e2e_gate_")) / "gate.log"
     _gate_log.parent.mkdir(parents=True, exist_ok=True)
 
+    _gate_argv = [py, "-m", "pytest", *[str(f) for f in gate_tests], "-p", "no:cacheprovider"]
+    _gate_argv += [*_pr.PYTEST_NO_TIMEOUT, "-rA", "-s"]
+
     def _e2e_once():
         _gate_log.unlink(missing_ok=True)  # each attempt is judged on its own output
         try:
             rc = _pr._execute(
-                [py, "-m", "pytest", *[str(f) for f in gate_tests], "-p", "no:cacheprovider", "-rA", "-s"],
+                _gate_argv,
                 Path(demo_repo_root),
                 gate_env,
                 int(timeout_s),
@@ -3178,6 +3181,14 @@ def _progress_prompt_block() -> str:
     return _PROGRESS_PROMPT_BLOCK.format(stall_s=int(stall) if isinstance(stall, int) else "the watchdog's stall")
 
 
+def _pytest_no_timeout() -> str:
+    """The flags every tool-launched pytest carries to switch pytest's own timeout off, as the agent
+    should type them -- from probes, which owns them (see probes.PYTEST_NO_TIMEOUT)."""
+    from models.experimental.perf_automation.agent import probes as _pr
+
+    return " ".join(_pr.PYTEST_NO_TIMEOUT)
+
+
 def _build_agent_prompt(
     *,
     model_id: str,
@@ -3290,7 +3301,10 @@ For ANY model, emit a complete, runnable package — not a lone test file:
   deliverable is a runnable demo; a green test with no/working demo is NOT done.
 Match the conventions of existing demos under models/demos/ rather than
 inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT device) until the
-gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
+gates pass. Use `./python_env/bin/python -m pytest {_pytest_no_timeout()} <file> -s` to run on device.
+Do NOT add `@pytest.mark.timeout` (or any other timeout) to a test you write: the tool bounds every
+run it launches by watching progress, and a limit typed into a test later kills slower runs of the
+same test -- a profiled run of it takes several times longer than this one.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
 {hardware_note}{parallel_note}{trace_note}{batch_note}{_progress_prompt_block()}{_README_LAYOUT_BLOCK}

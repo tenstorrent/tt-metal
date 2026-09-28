@@ -545,8 +545,9 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
         env.setdefault("TT_PERF_OSL_TOKENS", "4")
         env.pop("TT_METAL_DEVICE_PROFILER", None)
         env.update(ev)
-        cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
         from . import probes as _pr
+
+        cmd = [sys.executable, "-m", "pytest", *_pr.PYTEST_NO_TIMEOUT, "-s", node_abs]
 
         # A PERF-ONLY NODE NEVER CHECKS THE REFERENCE'S VALUES, ONLY ITS SHAPES -- see the
         # authoring contract (_contract/_SKELETON_REF): "NO PCC / correctness assertions ... just

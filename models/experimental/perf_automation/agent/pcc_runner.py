@@ -199,11 +199,12 @@ def run_pcc(ctx) -> dict:
 
     apply_scope(env, ctx.manifest.get("config", {}))
     probes.wait_for_memory_headroom_before_device_work("check_pcc (full-depth)")
+    # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
+    argv = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", *probes.PYTEST_NO_TIMEOUT]
     try:
         r = probes.run_with_low_memory_fallback(
             lambda: subprocess.run(
-                # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
-                [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
+                [*argv, test, "-sv"],
                 cwd=str(gitio.repo_root(ctx.model_root())),
                 env=env,
                 capture_output=True,

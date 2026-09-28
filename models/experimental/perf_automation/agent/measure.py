@@ -50,11 +50,18 @@ def _capacity_scaled_osl(ctx, repo_root, node, case, declared_osl: int):
     from .layer_depth import MIN_TOKEN_WINDOW
 
     osl = max(MIN_TOKEN_WINDOW, _OP_BUDGET // ops_per_step)
-    # The overflow that made OSL=128 fail to even finish was NOT primarily size -- it was
-    # TT_PERF_FLUSH_EVERY=32 draining too rarely for this many op invocations between drains.
-    # Shrinking only kicks in here, alongside the token cap: a model that never trips the budget
-    # keeps the original default untouched.
-    return str(osl), "4"
+    # The drain interval comes from the profiler buffer's own size (profiler_drain.capacity_cadence),
+    # the rule the per-stage pass already reads at. This was a fixed "4": on a 32-chip WH Galaxy
+    # (2026-09-28) reading every chip every 4 ops kept a depth-capped forward running past 1 h 38 m,
+    # where the same stages at the buffer-sized interval took 10 minutes with no marker dropped. A
+    # model whose ops dispatch more programs than the interval assumes drops markers on repeated
+    # reads, and the heal cuts the interval by _HEAL_GROWTH per attempt (probes.choose_marker_drop_remedy)
+    # -- nemotron (2026-09-12, above) overflowed at an interval of 32, so a model like it pays one
+    # re-profile to get there instead of keeping every model at 4.
+    # Only models that trip the budget get it: everyone else keeps the test's own default.
+    from .profiler_drain import capacity_cadence
+
+    return str(osl), str(capacity_cadence())
 
 
 def measure_runs(ctx) -> list[dict]:

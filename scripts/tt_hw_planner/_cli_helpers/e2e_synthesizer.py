@@ -553,9 +553,11 @@ def _make_default_pytest_runner(
             env["HF_MODEL"] = model_id
             env["PLANNER_TARGET_HF_MODEL"] = model_id
         env["PYTHONUNBUFFERED"] = "1"
+        from models.experimental.perf_automation.agent.probes import PYTEST_NO_TIMEOUT
+
         try:
             proc = subprocess.run(
-                [sys.executable, "-m", "pytest", f"{demo_py_path}::test_demo", "-v", "-s"],
+                [sys.executable, "-m", "pytest", *PYTEST_NO_TIMEOUT, f"{demo_py_path}::test_demo", "-v", "-s"],
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
@@ -578,9 +580,11 @@ def _default_pytest_runner(demo_py_path: Path) -> "tuple[int, str]":
     import subprocess
     import sys
 
+    from models.experimental.perf_automation.agent.probes import PYTEST_NO_TIMEOUT
+
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "pytest", f"{demo_py_path}::test_demo", "-v", "-s"],
+            [sys.executable, "-m", "pytest", *PYTEST_NO_TIMEOUT, f"{demo_py_path}::test_demo", "-v", "-s"],
             capture_output=True,
             text=True,
             timeout=600,

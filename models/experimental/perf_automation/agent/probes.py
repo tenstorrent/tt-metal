@@ -502,6 +502,14 @@ def detect_marker_drop(log_text: str) -> str | None:
     return m.group(0) if m else None
 
 
+# PYTEST'S OWN TIMEOUT IS OFF IN EVERY TOOL-LAUNCHED RUN. The repo's pytest.ini gives every test
+# 300 s, and a @pytest.mark.timeout on a test beats any command-line value -- so "-o timeout=0" did
+# not stop Qwen-Image-Edit's own @pytest.mark.timeout(2 * 3600) from killing a healthy WH Galaxy
+# profile at 7,204 s (2026-09-28), and a bring-up agent that saw its test die at 300 s wrote that
+# marker in to survive emit-e2e's gate. Disabling the plugin ends both. pytest.ini registers the
+# `timeout` mark, so a test carrying one still collects. Hangs stay bounded by _execute's watch.
+PYTEST_NO_TIMEOUT = ("-p", "no:timeout")
+
 # The generated perf test drains the device profiler every <this many> wrapped ttnn calls; the
 # profiling env carries it (measure._capacity_scaled_osl sets it), so a retry can change it.
 PERF_FLUSH_EVERY_ENV = "TT_PERF_FLUSH_EVERY"
@@ -537,7 +545,9 @@ def marker_drop_evidence(log_text: str) -> dict | None:
 
 def choose_marker_drop_remedy(evidence: dict, support_count: int, flush_every: str | None) -> dict | None:
     """The env change the next attempt runs with, chosen from the drop evidence, or None when no
-    knob is left. Repeated drops halve the drain interval; a single overflow grows the buffer."""
+    knob is left. Repeated drops shorten the drain interval, a single overflow grows the buffer --
+    each by _HEAL_GROWTH, so a buffer-sized interval (profiler_drain.capacity_cadence) reaches a
+    per-few-ops one within the heal budget for a model whose ops dispatch many programs each."""
     try:
         flush = int(flush_every) if flush_every else 0
     except (TypeError, ValueError):
@@ -545,12 +555,12 @@ def choose_marker_drop_remedy(evidence: dict, support_count: int, flush_every: s
     can_drain_more = flush > 1
     can_grow = support_count < _MAX_PROFILER_SUPPORT_COUNT
     if evidence.get("repeated") and can_drain_more:
-        return {PERF_FLUSH_EVERY_ENV: str(flush // 2)}
+        return {PERF_FLUSH_EVERY_ENV: str(max(1, flush // _HEAL_GROWTH))}
     if can_grow:
         grown = min(max(support_count, _DEFAULT_SUPPORT_COUNT) * _HEAL_GROWTH, _MAX_PROFILER_SUPPORT_COUNT)
         return {_SUPPORT_COUNT_ENV: str(grown)}
     if can_drain_more:
-        return {PERF_FLUSH_EVERY_ENV: str(flush // 2)}
+        return {PERF_FLUSH_EVERY_ENV: str(max(1, flush // _HEAL_GROWTH))}
     return None
 
 
@@ -605,8 +615,7 @@ def build_tracy_command(
         str(out_dir),
         "-m",
         "pytest",
-        "-o",
-        "timeout=0",
+        *PYTEST_NO_TIMEOUT,
     ]
     for plugin in plugins:
         cmd += ["-p", plugin]
