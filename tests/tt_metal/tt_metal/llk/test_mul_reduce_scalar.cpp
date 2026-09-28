@@ -223,7 +223,7 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // One-tile accumulation, parametrized past the 8-tile DEST capacity.
-class MulReduceScalarOneTileTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
+class MulReduceScalarOneTileTest : public LLKBlackholeSingleCardFixture, public testing::WithParamInterface<int> {};
 
 TEST_P(MulReduceScalarOneTileTest, MulReduceScalarOneTile) {
     int num_tiles = GetParam();
@@ -243,7 +243,7 @@ INSTANTIATE_TEST_SUITE_P(
         return "MulReduceScalarOneTile_" + std::to_string(info.param) + "_Tiles";
     });
 
-class MulReduceScalarOneTileTinyTileTest : public LLKMeshDeviceSingleCardFixture,
+class MulReduceScalarOneTileTinyTileTest : public LLKBlackholeSingleCardFixture,
                                            public testing::WithParamInterface<int> {};
 
 TEST_P(MulReduceScalarOneTileTinyTileTest, MulReduceScalarOneTileTinyTile) {

@@ -42,25 +42,6 @@ ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
 }
 
-// clang-format off
-/**
- * mul_reduce_scalar_init with an explicit fidelity for the multiply, for a caller whose multiply runs at a
- * fidelity other than the program's. MATH_FIDELITY exists only on the math thread, so it cannot be a default
- * template argument; this variant is named apart instead. Pair with mul_reduce_scalar_tile_fidelity.
- *
- * | Param Type | Name         | Description                              | Type         | Valid Range | Required |
- * |------------|--------------|------------------------------------------|--------------|-------------|----------|
- * | Template   | mul_fidelity | Fidelity of the element-wise multiply    | MathFidelity | N/A         | True     |
- * | Function   | icb0         | Input circular buffer 0 (tensor A)       | uint32_t     | 0 to 31     | True     |
- * | Function   | icb1         | Input circular buffer 1 (tensor B)       | uint32_t     | 0 to 31     | True     |
- */
-// clang-format on
-template <MathFidelity mul_fidelity>
-ALWI void mul_reduce_scalar_init_fidelity(uint32_t icb0, uint32_t icb1) {
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
-    MATH((llk_math_eltwise_mul_reduce_scalar_init<mul_fidelity>(icb0, false /*acc_to_dest*/)));
-}
-
 namespace detail {
 // Shared body of mul_reduce_scalar_tile and mul_reduce_scalar_tile_fidelity. program_fidelity selects
 // MATH_FIDELITY for both phases, which is why it is only read inside MATH().
@@ -78,6 +59,9 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     LLK_ASSERT(
         accumulate_in_one_tile || num_tiles <= dest_capacity,
         "mul_reduce_scalar_tile: num_tiles exceeds the DEST capacity; accumulate_in_one_tile has no such limit");
+#if !defined(ARCH_BLACKHOLE)
+    static_assert(!accumulate_in_one_tile, "accumulate_in_one_tile is Blackhole-only");
+#endif
 
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication. ELWMUL accumulates
     // into DEST, so with accumulate_in_one_tile every product lands in dest[0].
@@ -157,7 +141,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  *
  * | Param Type | Name                   | Description                                                | Type     | Valid Range | Required |
  * |------------|------------------------|------------------------------------------------------------|----------|-------------|----------|
- * | Template   | accumulate_in_one_tile | Sum every product in dest[0] rather than one tile each     | bool     | true/false  | False    |
+ * | Template   | accumulate_in_one_tile | Sum every product in dest[0] rather than one tile each (Blackhole only) | bool | true/false | False |
  * | Function   | icb0                   | Input circular buffer 0 (tensor A)                         | uint32_t | 0 to 31     | True     |
  * | Function   | icb1                   | Input circular buffer 1 (tensor B)                         | uint32_t | 0 to 31     | True     |
  * | Function   | ocb                    | Output circular buffer (used to program packer face_r_dim) | uint32_t | 0 to 31     | True     |
@@ -179,6 +163,27 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
         MathFidelity::LoFi,
         accumulate_in_one_tile,
         is_fp32_dest_acc_en>(icb0, icb1, ocb, num_tiles, scaler);
+}
+
+#if defined(ARCH_BLACKHOLE)
+
+// clang-format off
+/**
+ * mul_reduce_scalar_init with an explicit fidelity for the multiply, for a caller whose multiply runs at a
+ * fidelity other than the program's. MATH_FIDELITY exists only on the math thread, so it cannot be a default
+ * template argument; this variant is named apart instead. Pair with mul_reduce_scalar_tile_fidelity.
+ *
+ * | Param Type | Name         | Description                              | Type         | Valid Range | Required |
+ * |------------|--------------|------------------------------------------|--------------|-------------|----------|
+ * | Template   | mul_fidelity | Fidelity of the element-wise multiply    | MathFidelity | N/A         | True     |
+ * | Function   | icb0         | Input circular buffer 0 (tensor A)       | uint32_t     | 0 to 31     | True     |
+ * | Function   | icb1         | Input circular buffer 1 (tensor B)       | uint32_t     | 0 to 31     | True     |
+ */
+// clang-format on
+template <MathFidelity mul_fidelity>
+ALWI void mul_reduce_scalar_init_fidelity(uint32_t icb0, uint32_t icb1) {
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
+    MATH((llk_math_eltwise_mul_reduce_scalar_init<mul_fidelity>(icb0, false /*acc_to_dest*/)));
 }
 
 // clang-format off
@@ -209,6 +214,8 @@ ALWI void mul_reduce_scalar_tile_fidelity(
         mul_reduce_scalar_tile_impl<false, mul_fidelity, reduce_fidelity, accumulate_in_one_tile, is_fp32_dest_acc_en>(
             icb0, icb1, ocb, num_tiles, scaler);
 }
+
+#endif  // ARCH_BLACKHOLE
 
 // clang-format off
 /**
