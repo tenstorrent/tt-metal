@@ -3,6 +3,7 @@
 
 
 import os
+import struct
 from itertools import chain, product
 
 import pytest
@@ -53,6 +54,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CLAMP_BOUNDS,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
@@ -873,6 +875,282 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     )
 
 
+def _f32_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _clamp_bounds_bits(input_format: DataFormat, bounds) -> tuple[int, int]:
+    """The (min, max) values of *bounds* as the raw 32-bit patterns SFPU_CLAMP_BOUNDS emits.
+
+    Two's complement on an integer input (calculate_clamp_int32 takes the bound as a std::uint32_t and
+    reinterprets it), fp32 bits otherwise.
+    """
+    lo, hi = bounds
+    if input_format.is_integer():
+        return int(lo) & 0xFFFFFFFF, int(hi) & 0xFFFFFFFF
+    return _f32_bits(float(lo)), _f32_bits(float(hi))
+
+
+# Int32 clamp: every sign combination of the two bounds, because calculate_clamp_int32 emits a
+# different row for each -- SFPSWAP orders sign-magnitude integers, so a two's-complement bound
+# with its sign bit set is complemented (with min and max exchanged) and the operand complemented
+# around the compare, and the complement closing the max step cancels the one opening the min
+# step only when both bounds share a sign.
+_CLAMP_INT32_BOUNDS = [
+    # Negative min, positive max: ttnn's usual shape (one complement pair straddles the max step).
+    (-500, 1000),
+    # Both non-negative: no complement at all, the float row on integer loads.
+    (5, 1000),
+    # Both negative: the two inner complements cancel, one opens and one closes the row.
+    (-1000, -5),
+    # min > max: the max-then-min composition lands every lane on max_val.
+    (1000, -500),
+    # INT_MIN as a bound complements to INT_MAX in L12; nothing clamps.
+    (-(2**31), 2**31 - 1),
+    # A zero-valued max, so the sign flips at the bound.
+    (-1, 0),
+]
+
+
+def _clamp_int32_stimuli_spec(lo: int, hi: int) -> StimuliSpec:
+    """Values straddling both bounds, plus both ends and the middle of int32.
+
+    Built around the bounds rather than a fixed span, so each bound actually fires whatever its
+    sign. INT_MIN itself is not a stimulus (CustomStrategy clamps at info.min + 1), so the range
+    ends are +/-INT32_MAX.
+    """
+    offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
+    candidates = [b + d for b in (lo, hi) for d in offsets]
+    candidates += [-_INT32_MAX, _INT32_MAX, -(2**30), 2**30, -1, 0, 1]
+    values = sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX})
+    return StimuliSpec.custom(values=[float(v) for v in values], seed=0)
+
+
+@parametrize(
+    bounds=_CLAMP_INT32_BOUNDS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_clamp_int32_bounds(
+    bounds: tuple[int, int],
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """clamp on Int32 (calculate_clamp_int32) against bounds of every sign combination.
+
+    The golden is an exact integer min(max(x, lo), hi), so a wrong complement or a wrong
+    SFPSWAP mode shows up as a wrong clamp value rather than a tolerance miss. Int32 stimuli
+    are two's complement, which is how ttnn's clamp_tile_int32 feeds the device.
+    """
+    lo, hi = bounds
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Clamp,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_clamp_int32_stimuli_spec(lo, hi),
+        clamp_bounds=bounds,
+        twos_complement=True,
+    )
+
+
+# clamp / hardtanh on the fp32 values that decide what SFPSWAP min/max does beyond ordinary
+# finite inputs, read back as raw bit patterns. Outside the edge sweep because passed_test()
+# treats -0.0 and +0.0 as equal and NaN payloads as interchangeable, so only a bit comparison can
+# tell what came out, and because the sweep's bounds are fixed at [-1, 1] while the interesting
+# bound sets (min > max, zero-valued, denormal) need SFPU_CLAMP_BOUNDS. Float32 -> Float32 at
+# dest_acc=Yes is the only pipeline that delivers every one of these patterns to the LREG and
+# returns 32 bits intact (the pack path keeps a NaN a NaN there, see UnarySFPUGolden).
+_CLAMP_SPECIAL_INPUT_BITS = [
+    0x7FC00000,  # +qNaN
+    0xFFC00000,  # -qNaN
+    0x7F800001,  # +sNaN, smallest payload
+    0xFF800001,  # -sNaN
+    0x7F800000,  # +inf
+    0xFF800000,  # -inf
+    0x00000000,  # +0
+    0x80000000,  # -0
+    0x00000001,  # smallest +denormal
+    0x80000001,  # smallest -denormal
+    0x007FFFFF,  # largest +denormal
+    0x807FFFFF,  # largest -denormal
+    0x00800000,  # FLT_MIN
+    0x80800000,  # -FLT_MIN
+    0x7F7FFFFF,  # FLT_MAX
+    0xFF7FFFFF,  # -FLT_MAX
+    0xBF800000,  # -1.0: equal to the default min bound
+    0x3F800000,  # 1.0: equal to the default max bound
+    0xBF800001,  # one ulp below -1.0
+    0xBF7FFFFF,  # one ulp above -1.0
+    0x3F7FFFFF,  # one ulp below 1.0
+    0x3F800001,  # one ulp above 1.0
+    0xC0000000,  # -2.0
+    0x40000000,  # 2.0
+    0xBF000000,  # -0.5
+    0x3F000000,  # 0.5
+]
+
+# (min, max) bound patterns. Ordinary, inverted, zero-valued and denormal.
+_CLAMP_SPECIAL_BOUNDS = [
+    (0xBF800000, 0x3F800000),  # [-1, 1], the defaults
+    (0x3F800000, 0xBF800000),  # min > max: max-then-min lands every lane on max_val
+    (0x80000000, 0x00000000),  # [-0, +0]: distinguishes the zeros under the total order
+    (
+        0x80000001,
+        0x007FFFFF,
+    ),  # denormal bounds: every lane lands on a bound and flushes to +/-0
+]
+
+
+def _sfpu_order_key_bits(bits: int) -> int:
+    """sfpu_total_order_key on a raw fp32 pattern: -NaN < -inf < ... < -0 < +0 < ... < +NaN."""
+    magnitude = bits & 0x7FFFFFFF
+    return -magnitude - 1 if bits & 0x80000000 else magnitude
+
+
+def _sfpu_clamp_bits(x: int, lo: int, hi: int) -> int:
+    """min(max(x, lo), hi) on raw patterns under the SFPU's total order.
+
+    SFPSWAP selects one of its operands unchanged, so the result is one of the three input
+    patterns -- which one is the whole question this test asks the hardware.
+    """
+    y = x if _sfpu_order_key_bits(x) >= _sfpu_order_key_bits(lo) else lo
+    return y if _sfpu_order_key_bits(y) <= _sfpu_order_key_bits(hi) else hi
+
+
+def _is_nan_bits(bits: int) -> bool:
+    return (bits & 0x7F800000) == 0x7F800000 and (bits & 0x007FFFFF) != 0
+
+
+def _ftz_bits(bits: int) -> int:
+    """A denormal pattern as it leaves the Dst path: the signed zero of its sign.
+
+    Measured on Blackhole (both kernels, before and after the one-pass rewrite, bit-identical):
+    every lane whose selected pattern is a denormal reads back as +0 or -0, including a
+    denormal *bound* that never passed through SFPLOAD, so the flush sits on the store/pack
+    side. Everything else -- NaN of either sign, +/-inf, +/-0, normals -- comes back as the
+    exact pattern the total order selects.
+    """
+    return (
+        bits & 0x80000000
+        if (bits & 0x7F800000) == 0 and (bits & 0x007FFFFF) != 0
+        else bits
+    )
+
+
+@pytest.mark.parametrize(
+    "mathop",
+    [MathOperation.Clamp, MathOperation.Hardtanh],
+    ids=lambda op: op.name,
+)
+@pytest.mark.parametrize(
+    "bounds_bits",
+    _CLAMP_SPECIAL_BOUNDS,
+    ids=lambda b: f"bounds:0x{b[0]:08X}..0x{b[1]:08X}",
+)
+def test_clamp_hardtanh_special_inputs(mathop, bounds_bits):
+    """clamp / hardtanh on NaN of both signs, +/-inf, +/-0, denormals and the bounds themselves.
+
+    Both kernels are the same two SFPSWAPs against the bounds held in L12/L13 (see
+    ckernel_sfpu_clamp.h), and SFPSWAP orders fp32 by sign-magnitude pattern rather than IEEE:
+    a +NaN outranks +inf and a -NaN ranks below -inf, so a NaN lands on the bound instead of
+    propagating, and -0 sits below +0. The expected pattern is the operand that order selects
+    (sfpu_total_order_key's model), checked bit for bit.
+
+    Two adjustments to that model, both measured rather than assumed: a denormal result leaves
+    the Dst path as its signed zero (_ftz_bits), and a NaN's payload is not compared exactly,
+    because the readback path goes through a float64 conversion on the host, which quiets a
+    signalling NaN (0x7F800001 -> 0x7FC00001), so a NaN result is checked on its sign and
+    NaN-ness instead.
+    """
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+    lo_bits, hi_bits = bounds_bits
+
+    assert negative_zero_delivered(formats.input_format, dest_acc), (
+        "Float32 at dest_acc=Yes no longer delivers a real -0.0 to the LREG; re-derive the "
+        "combination this regression test runs on before editing it."
+    )
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_bits = torch.full((num_elements,), 0x3F000000, dtype=torch.int32)  # 0.5 filler
+    probes = torch.tensor(
+        [b - (1 << 32) if b & 0x80000000 else b for b in _CLAMP_SPECIAL_INPUT_BITS],
+        dtype=torch.int32,
+    )
+    src_bits[: len(probes)] = probes
+    src_A = src_bits.view(torch.float32)
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+            SFPU_CLAMP_BOUNDS(lo_bits, hi_bits),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result, dtype=torch.float32)
+    got_bits = [v & 0xFFFFFFFF for v in res.view(torch.int32).tolist()]
+    op = mathop.name.lower()
+
+    mismatches = []
+    for lane in range(num_elements):
+        x = _CLAMP_SPECIAL_INPUT_BITS[lane] if lane < len(probes) else 0x3F000000
+        want = _ftz_bits(_sfpu_clamp_bits(x, lo_bits, hi_bits))
+        got = got_bits[lane]
+        if _is_nan_bits(want):
+            ok = _is_nan_bits(got) and (got & 0x80000000) == (want & 0x80000000)
+        else:
+            ok = got == want
+        if not ok:
+            mismatches.append(
+                f"lane {lane}: {op}(0x{x:08X}) = 0x{got:08X}, expected 0x{want:08X}"
+            )
+    assert not mismatches, (
+        f"{op} with bounds [0x{lo_bits:08X}, 0x{hi_bits:08X}] diverges from the SFPSWAP "
+        "total-order model on:\n  " + "\n  ".join(mismatches)
+    )
+
+
 # Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are
 # shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
@@ -1136,6 +1414,7 @@ def eltwise_unary_sfpu(
     spec_A=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    clamp_bounds=None,
     twos_complement=False,
 ):
     torch.manual_seed(0)
@@ -1179,6 +1458,7 @@ def eltwise_unary_sfpu(
             if relu_min_int_threshold is None
             else {"relu_min_int_threshold": relu_min_int_threshold}
         ),
+        **({} if clamp_bounds is None else {"clamp_bounds": clamp_bounds}),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1206,6 +1486,15 @@ def eltwise_unary_sfpu(
                 []
                 if relu_min_int_threshold is None
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if clamp_bounds is None
+                else [
+                    SFPU_CLAMP_BOUNDS(
+                        *_clamp_bounds_bits(formats.input_format, clamp_bounds)
+                    )
+                ]
             ),
         ],
         runtimes=[

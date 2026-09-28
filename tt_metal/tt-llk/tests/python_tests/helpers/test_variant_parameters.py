@@ -329,6 +329,29 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_CLAMP_BOUNDS(TemplateParameter):
+    """Clamp / hardtanh bounds, as the raw 32-bit patterns the kernels take.
+
+    fp32 bit patterns for calculate_clamp / calculate_hardtanh, two's-complement for
+    calculate_clamp_int32 -- sfpu_operations.h hands both kernels the same two macros.
+    Emitted as macros rather than constexprs for the same reason as
+    :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations.h selects on ``#ifdef``, the header is
+    shared by every unary test, and only the clamp special-input and int32 sweeps set this,
+    so the rest have to keep compiling without it. Unset means the fixed defaults
+    (CLAMP_MIN / CLAMP_MAX and CLAMP_INT32_MIN / CLAMP_INT32_MAX in sfpu_dispatch_constants).
+    """
+
+    clamp_min_bits: int = 0xBF800000  # -1.0f
+    clamp_max_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define SFPU_CLAMP_MIN_BITS {self.clamp_min_bits & 0xFFFFFFFF}u\n"
+            f"#define SFPU_CLAMP_MAX_BITS {self.clamp_max_bits & 0xFFFFFFFF}u"
+        )
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 

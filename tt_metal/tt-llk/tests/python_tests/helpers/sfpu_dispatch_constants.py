@@ -31,6 +31,12 @@ UNARY_MAX_MIN_VALUE = 0.0
 CLAMP_MIN = -1.0
 CLAMP_MAX = 1.0
 
+# clamp on Int32 (calculate_clamp_int32) bounds. A negative min and a positive max is the
+# shape ttnn's int32 clamp overwhelmingly takes, and the one where the kernel complements
+# the operand around the first SFPSWAP only.
+CLAMP_INT32_MIN = -500
+CLAMP_INT32_MAX = 1000
+
 # Shrinkage lambdas: the value below which the op returns 0.
 SOFTSHRINK_LAMBDA = 0.5
 HARDSHRINK_LAMBDA = 0.5
