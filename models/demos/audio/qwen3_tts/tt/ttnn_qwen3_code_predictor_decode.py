@@ -36,6 +36,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, c
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     CACHE_TILE_MULTIPLE,
     MLP_WEIGHT_DTYPE,
+    NORM_NAMES,
     NORM_SHARD_HEIGHT,
     ROPE_ROWS,
     decode_matmul_config,
@@ -116,6 +117,12 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
         # On device too, so a lookup costs an index write rather than 76 us of `from_torch`.
         "talker_codec_embedding_device": lookup_table(talker_table),
         "codec_embedding_device": [lookup_table(table) for table in predictor_tables],
+        # The norm weights again, on host, for the decoder's width-sharded copies.
+        "norm_weights": {
+            n: state[n]
+            for n in [f"model.layers.{i}.{name}.weight" for i in range(cfg["num_hidden_layers"]) for name in NORM_NAMES]
+            + ["model.norm.weight"]
+        },
     }
 
 
@@ -170,7 +177,7 @@ class TtCodePredictorCachedDecoder:
         }
         self._norm_plan = sharded_norm_plan(device, self.hidden)
         if self._norm_plan is not None:
-            state = checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX)
+            state = parameters["norm_weights"]
             expand = lambda name: ttnn.from_torch(
                 state[name].reshape(1, 1, -1).expand(1, NORM_SHARD_HEIGHT, self.hidden).contiguous(),
                 dtype=ttnn.bfloat16,

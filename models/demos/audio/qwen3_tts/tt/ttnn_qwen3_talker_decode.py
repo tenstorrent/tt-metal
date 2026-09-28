@@ -46,6 +46,8 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, c
 # sdpa_decode miscomputes at an odd tile count; keep the cache an even number of tiles.
 CACHE_TILE_MULTIPLE = 64
 
+NORM_NAMES = ("input_layernorm", "post_attention_layernorm")
+
 
 # The K reduction is cut into this many tiles per step so the weight stream pipelines
 # against the math, and out_subblock_h * w must stay under this ceiling because
@@ -150,7 +152,9 @@ def preprocess_cached_talker_parameters(
             }
         )
 
-    return {"config": cfg, "layers": layers, "norm": norm("norm")}
+    # The norm weights again, on host, for the decoder's width-sharded copies (68 small tensors).
+    names = [f"layers.{i}.{n}.weight" for i in range(cfg["num_hidden_layers"]) for n in NORM_NAMES] + ["norm.weight"]
+    return {"config": cfg, "layers": layers, "norm": norm("norm"), "norm_weights": {n: state[n] for n in names}}
 
 
 def fill_step_tiles(kv_heads, cores):
@@ -254,7 +258,7 @@ class TtTalkerCachedDecoder:
         # The sharded norm wants its weight broadcast over the shard-height tile.
         self._norm_plan = sharded_norm_plan(device, self.hidden)
         if self._norm_plan is not None:
-            state = checkpoint.load_talker_state()
+            state = parameters["norm_weights"]
             expand = lambda name: ttnn.from_torch(
                 state[name].reshape(1, 1, -1).expand(1, NORM_SHARD_HEIGHT, self.hidden).contiguous(),
                 dtype=ttnn.bfloat16,
