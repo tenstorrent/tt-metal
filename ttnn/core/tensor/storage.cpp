@@ -86,8 +86,10 @@ struct DeviceStorage::MeshTensorHolder {
 
     using States = std::variant<DeallocatedDefaultConstructed, Allocated, DeallocatedTombStone>;
     States state_;
-    // Set only on a retained view: the root holder of the allocation the view depends on. Every DeviceStorage
-    // copy of the view shares this holder, so deallocating any copy releases the retention for all of them.
+    // Set only on a retained view: the holder of the storage this view was created from. A view of a view
+    // retains its immediate source, which retains its own source in turn, so the whole chain stays alive and
+    // deallocating any link invalidates everything downstream of it. Every DeviceStorage copy of the view
+    // shares this holder, so deallocating any copy releases the retention for all of them.
     std::shared_ptr<MeshTensorHolder> retained_owner_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
@@ -151,7 +153,7 @@ DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor rei
 DeviceStorage DeviceStorage::create_retained_view(
     const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) {
     auto view_holder = std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor));
-    view_holder->retained_owner_ = owning_storage.get_root_mesh_tensor();
+    view_holder->retained_owner_ = owning_storage.mesh_tensor_holder_;
     return DeviceStorage(std::move(view_holder), owning_storage.coords_, nullptr);
 }
 
@@ -228,7 +230,11 @@ MeshTensor& DeviceStorage::get_mesh_tensor() {
 
 const std::shared_ptr<DeviceStorage::MeshTensorHolder>& DeviceStorage::get_root_mesh_tensor() const {
     if (mesh_tensor_holder_->retained_owner_) {
-        return mesh_tensor_holder_->retained_owner_;
+        const std::shared_ptr<MeshTensorHolder>* root = &mesh_tensor_holder_->retained_owner_;
+        while ((*root)->retained_owner_) {
+            root = &(*root)->retained_owner_;
+        }
+        return *root;
     }
     return root_mesh_tensor_holder_ ? root_mesh_tensor_holder_ : mesh_tensor_holder_;
 }
@@ -245,7 +251,16 @@ void DeviceStorage::deallocate() {
 }
 
 bool DeviceStorage::is_allocated() const {
-    return mesh_tensor_holder_->is_allocated() && get_root_mesh_tensor()->is_allocated();
+    if (!mesh_tensor_holder_->is_allocated() || !get_root_mesh_tensor()->is_allocated()) {
+        return false;
+    }
+    for (const MeshTensorHolder* source = mesh_tensor_holder_->retained_owner_.get(); source != nullptr;
+         source = source->retained_owner_.get()) {
+        if (!source->is_allocated()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool DeviceStorage::is_root_allocated() const { return get_root_mesh_tensor()->is_allocated(); }

@@ -211,8 +211,9 @@ private:
         std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
 
-    // Constructs a view whose holder retains the root allocation of owning_storage. Deallocating the view
-    // releases that retention without deallocating the owner; deallocating the owner invalidates the view.
+    // Constructs a view whose holder retains owning_storage, which may itself be a view. Deallocating the view
+    // releases that retention without deallocating owning_storage; deallocating owning_storage or any storage
+    // it depends on invalidates the view.
     static DeviceStorage create_retained_view(
         const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
     friend Tensor experimental::create_sharded_tensor_view(
