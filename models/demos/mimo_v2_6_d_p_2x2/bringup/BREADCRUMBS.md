@@ -436,3 +436,9 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - The default gate already passes (all six steps are registered on device): pcc_swap_out 0.999988, out rel 0.0050 / first rows 0.0045; experts golden pcc 0.999148 / rel 0.0420, iso rel 0.0051 / ratio [0.9962, 1.0109] / worst row 0.0115 (row 1256); router overlap 0.98975 / 0.99915. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
 - Tightest margin: still router overlap vs golden, 0.98975 against 0.985 (inherited from swap 05).
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_06_experts.py`
+
+## C.full_moe.ffn_residual test (attempt 1)
+- Adopted the 1x4 prior's reviewed test (`mimo_v2_6_d_p/tests/bringup/test_c_full_moe_ffn_residual.py`, same golden) unchanged, plus an adoption note. Checks: PCC >= 0.99, finite, rel L2 <= 0.01, per-token norm ratio [0.99, 1.01], experts term on out - h_mid: coef [0.97, 1.03], rel <= 0.1. All checks are on the gathered output, so none depends on the mesh shape.
+- reference: PCC 0.999998, rel 0.0019, ratio [0.9992, 1.0008], coef 1.0, rel 0 -> pass. stub: PCC 0 -> fail.
+- Default (device) gate: PCC 0.999997, rel 0.0023, ratio [0.9988, 1.0014], coef 1.0016, experts rel 0.0194 -> pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_residual.py`
