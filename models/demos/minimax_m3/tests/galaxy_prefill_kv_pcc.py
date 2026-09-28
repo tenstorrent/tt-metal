@@ -105,7 +105,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
-from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
+from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, set_fabric_config_from_env
 
 
 def _raise_nproc_limit():
@@ -681,7 +681,7 @@ def main():
     # match the production runner (1d, linear). 1d_ring / 2d_torus_xy need the torus_xy mesh graph
     # descriptor (the wrapper scripts pick it); measurements in PR #55668.
     ccl_topology = ccl_topology_from_env()
-    ttnn.set_fabric_config(fabric_config_from_env())
+    set_fabric_config_from_env()
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE)
     print(
         f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "

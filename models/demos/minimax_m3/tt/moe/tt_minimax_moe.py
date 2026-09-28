@@ -22,12 +22,13 @@ Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
+from models.demos.minimax_m3.utils.fabric_env import MOE_COMBINE_V2_FABRICS
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 
@@ -57,8 +58,14 @@ class TtMiniMaxMoE(LightweightModule):
         layer_idx: int = 0,
         route_scale: float = 1.0,
         reduce_scatter_fn=None,
+        combine_version: str = "v1",
     ):
+        """topology: dispatch and v1 combine on cluster_axis=0 (the TP collectives on axis 1 stay Linear).
+        combine_version: "v1" = deepseek_prefill.combine, "v2" = combine_fabric2d (Ring on a torus fabric).
+        """
         super().__init__()
+        assert combine_version in ("v1", "v2"), f"combine_version must be 'v1' or 'v2', got {combine_version!r}"
+        self.combine_version = combine_version
         self.mesh_device = mesh_device
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
@@ -120,28 +127,42 @@ class TtMiniMaxMoE(LightweightModule):
         assert (
             max_dispatch_buffer_token_size >= worst_case_tokens
         ), f"init_zeros=False needs a drop-free dispatch buffer: {max_dispatch_buffer_token_size} < {worst_case_tokens}"
-        self.combine_module = TtCombineModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            num_dispatch_groups=num_dispatch_groups,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=0,
-            num_links=num_links,
-            topology=topology,
-            # No zero-init (~95 us per call). Invariant: every slot post_combine_reduce reads with a
-            # non-zero weight is written, because the dispatch buffer is drop-free (asserted above).
-            # Unwritten slots ARE still read: when none of a token's top-k experts is local to this
-            # dispatch group (about (1-1/ndg)^topk of tokens, ~1/3 on the 8x4 mesh, plus every padded
-            # row) the kernel's must_zero_init branch forces the last slot through with a writer-
-            # forced zero weight, so the result is stale_slot * 0. That is exact for finite stale
-            # data; for NaN/Inf it relies on the Blackhole FPU returning 0 for NaN*0 and Inf*0
-            # (measured on BH Galaxy, not an IEEE guarantee). deepseek_v3_d_p prefill runs the same
-            # path with init_zeros=False. Hard guarantee = kernel packs explicit zeros in the
-            # must_zero_init branch instead of reading the slot.
-            init_zeros=False,
-        )
+        if combine_version == "v2":
+            self._check_combine_v2_fabric(emb_dim)
+            # No init_zeros knob: the output is never zeroed, the same contract as v1 with init_zeros=False
+            # (post_combine_reduce skips or zero-weights every slot combine does not write).
+            self.combine_module = TtCombine2dModule(
+                mesh_device=mesh_device,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                cluster_axis=0,
+                num_links=num_links,
+                topology=ttnn.Topology.Ring,
+            )
+        else:
+            self.combine_module = TtCombineModule(
+                mesh_device=mesh_device,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                cluster_axis=0,
+                num_links=num_links,
+                topology=topology,
+                # No zero-init (~95 us per call). Invariant: every slot post_combine_reduce reads with a
+                # non-zero weight is written, because the dispatch buffer is drop-free (asserted above).
+                # Unwritten slots ARE still read: when none of a token's top-k experts is local to this
+                # dispatch group (about (1-1/ndg)^topk of tokens, ~1/3 on the 8x4 mesh, plus every padded
+                # row) the kernel's must_zero_init branch forces the last slot through with a writer-
+                # forced zero weight, so the result is stale_slot * 0. That is exact for finite stale
+                # data; for NaN/Inf it relies on the Blackhole FPU returning 0 for NaN*0 and Inf*0
+                # (measured on BH Galaxy, not an IEEE guarantee). deepseek_v3_d_p prefill runs the same
+                # path with init_zeros=False. Hard guarantee = kernel packs explicit zeros in the
+                # must_zero_init branch instead of reading the slot.
+                init_zeros=False,
+            )
         global_expert_idx_tt = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(
                 experts_per_chip=experts_per_chip,
@@ -180,8 +201,24 @@ class TtMiniMaxMoE(LightweightModule):
             topk_dim=3,
             cluster_axis=1,
             num_links=num_links,
-            topology=topology,
+            # Fallback reduce-scatter on axis 1 (TP), not the MoE's axis-0 topology.
+            topology=ttnn.Topology.Linear,
             reduce_scatter_fn=reduce_scatter_fn,
+        )
+
+    @staticmethod
+    def _check_combine_v2_fabric(emb_dim):
+        fabric = ttnn.get_fabric_config()
+        assert fabric in MOE_COMBINE_V2_FABRICS, (
+            f"combine v2 needs a fabric that wraps axis 0 {[str(f) for f in MOE_COMBINE_V2_FABRICS]}, got {fabric}; "
+            "open it with M3_FABRIC=2d_torus_xy via utils/fabric_env.set_fabric_config_from_env"
+        )
+        # One packet carries a bf16 token plus combine_fabric2d's 64 B routing tail.
+        needed = emb_dim * 2 + 64
+        payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+        assert payload >= needed, (
+            f"combine v2 needs fabric max payload >= {needed} B, fabric has {payload} B; open the fabric with "
+            "utils/fabric_env.set_fabric_config_from_env (passes the router config under M3_MOE_COMBINE=v2)"
         )
 
     def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
@@ -254,9 +291,30 @@ class TtMiniMaxMoE(LightweightModule):
             expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
 
         with zone("combine"):
-            combined_output = self.combine_module(
-                expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
-            )
+            if self.combine_version == "v2":
+                # combine_fabric2d takes BF16 only and the fused expert op emits bfp8 TILE with no dtype
+                # option. bfp8 -> bf16 is exact; the op untilizes TILE input itself.
+                with zone("combine_v2_prep", FINE):
+                    expert_outputs_bf16 = ttnn.typecast(expert_outputs, ttnn.bfloat16)
+                    ttnn.deallocate(expert_outputs)
+                    expert_outputs = expert_outputs_bf16
+                    # Every chip needs every origin chip's per-expert run starts: gather this chip's
+                    # (1, E) offsets over the dispatch axis into (dispatch_group_size, E).
+                    all_expert_offsets = ttnn.all_gather(
+                        tt_expert_offsets,
+                        dim=0,
+                        cluster_axis=0,
+                        num_links=self.routing_setup.num_links,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                combined_output = self.combine_module(
+                    expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets, all_expert_offsets
+                )
+                ttnn.deallocate(all_expert_offsets)
+            else:
+                combined_output = self.combine_module(
+                    expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
+                )
         # Fused weighted-sum over topk, then the TP reduce-scatter (see tt_reduce.py).
         with zone("moe_reduce"):
             routed_output = self.reduce_module(

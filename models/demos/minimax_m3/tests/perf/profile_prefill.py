@@ -55,6 +55,8 @@ Env:
                       PROFILE_NUM_LAYERS takes the first N of it                             [default 0]
   M3_FABRIC           fabric config: 1d | 1d_ring | 2d | 2d_torus_xy (utils/fabric_env.py)     [default 1d]
   M3_CCL_TOPOLOGY     legacy-CCL topology: linear | ring (ring needs a ring/torus fabric)   [default linear]
+  M3_MOE_TOPOLOGY     MoE axis-0 dispatch / v1 combine topology: linear | ring             [default linear]
+  M3_MOE_COMBINE      MoE combine: v1 | v2 (combine_fabric2d; needs M3_FABRIC=2d_torus_xy) [default v1]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                  [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
   M3_PROFILE_ZONES    set to 1 by this script before the model is imported
@@ -97,7 +99,11 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
-from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
+from models.demos.minimax_m3.utils.fabric_env import (  # noqa: E402
+    ccl_topology_from_env,
+    fabric_config_from_env,
+    set_fabric_config_from_env,
+)
 
 
 def _raise_nproc_limit():
@@ -295,7 +301,7 @@ def main():
     # 2d / 2d_torus_xy are wired through but not yet validated on a carved sub-mesh (torus also needs the
     # matching *_torus_xy mesh graph descriptor). M3_CCL_TOPOLOGY=Ring puts the legacy CCLs on the ring
     # (measured in PR #55668); high_bw_all_gather derives its own from the fabric.
-    ttnn.set_fabric_config(fabric_config)
+    set_fabric_config_from_env(fabric_config)
     galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
     print(
         f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_config} "

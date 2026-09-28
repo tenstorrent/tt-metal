@@ -40,7 +40,11 @@ import time
 
 import ttnn
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
-from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
+from models.demos.minimax_m3.utils.fabric_env import (
+    ccl_topology_from_env,
+    fabric_config_from_env,
+    set_fabric_config_from_env,
+)
 
 SEG = 2048
 STREAM_STRIDE = 7919
@@ -147,7 +151,7 @@ def main():
         fabric=str(fabric_config_from_env()),
     )
 
-    ttnn.set_fabric_config(fabric_config_from_env())
+    set_fabric_config_from_env()
     galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
     try:
         mesh = galaxy.create_submeshes(ttnn.MeshShape(8 // stages, 4))[stage] if stages > 1 else galaxy

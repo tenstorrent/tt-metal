@@ -10,6 +10,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 """
 
 import ttnn
+from models.demos.minimax_m3.utils.fabric_env import moe_combine_from_env, moe_topology_from_env
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -201,6 +202,9 @@ class MLP:
             # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
             route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
             reduce_scatter_fn=moe_reduce_scatter,
+            # M3_MOE_TOPOLOGY / M3_MOE_COMBINE (utils/fabric_env.py); defaults linear / v1.
+            topology=moe_topology_from_env(),
+            combine_version=moe_combine_from_env(),
         )
         self.ep_num_links = ccl_manager.num_links
 
