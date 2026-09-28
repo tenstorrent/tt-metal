@@ -260,14 +260,10 @@ ttnn::Tensor transpose_impl(
 
     Tensor output;
     if (identity) {
-        if (memory_config_arg.has_value() && input_typecasted.memory_config() != memory_config_arg.value()) {
-            output = ttnn::clone(
-                input_typecasted,
-                std::nullopt,
-                memory_config_arg.value_or(input_typecasted.memory_config()),
-                std::nullopt);
+        if (memory_config_arg.has_value() && input_unsqueezed.memory_config() != *memory_config_arg) {
+            output = ttnn::clone(input_unsqueezed, std::nullopt, *memory_config_arg, std::nullopt);
         } else {
-            output = input_typecasted;
+            output = input_unsqueezed;
         }
     } else {
         // covered in main if branch => not a TT_FATAL
