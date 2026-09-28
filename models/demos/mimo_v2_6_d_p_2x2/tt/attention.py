@@ -6,7 +6,7 @@
 2x2 port of models/demos/mimo_v2_6_d_p/tt/attention.py (1x4). Changed: chip d = 2*row + col (ShardTensorToMesh over
 the 2x2 mesh, row-major device order) holds TP rank d, and the o_proj reduce is ttnn.all_reduce(cluster_axis=None),
 which on a non-line mesh runs axis 1 then axis 0 (two 2-chip stages). Everything else is the prior's module. The
-sliding-window class is not ported yet (its own component task).
+sliding-window classes (TtKVCacheSliding, TtSlidingAttention) are ported the same way.
 
 64 Q heads / 4 KV heads, QK head dim 192, V head dim 128, partial rotate-half RoPE on dims [0, 64) (theta 1e7),
 scale 192^-0.5, no sink. Chip r holds Q heads 16r..16r+15 and KV head r (GQA 16:1 inside the chip). V at its real
@@ -40,6 +40,7 @@ host transfer: RoPE tables and the page table live on the device and are sliced 
 
 from __future__ import annotations
 
+import math
 import os
 
 import torch
@@ -451,3 +452,196 @@ class TtFullAttention:
         for t in (self.wq, self.wkv, self.wo, self.cos, self.sin):
             if t is not None:
                 ttnn.deallocate(t)
+
+
+# --------------------------------------------------------------------------------------
+# Sliding-window layers (window 128, per-head sink)
+# --------------------------------------------------------------------------------------
+
+
+class TtKVCacheSliding:
+    """Full-length K and V for one sliding layer: contiguous [1, 8, max_seq, W] sharded by head, [1, 2, max_seq, W] per
+    chip (KV heads 2d, 2d+1 on chip d = 2*row + col), W = 192 for K and 128 for V (192, zero-padded, under MIMO_V_PAD=1). Written
+    with fill_cache at the chunk offset; the attention reads the previous window rows back with ttnn.slice."""
+
+    def __init__(self, mesh, num_kv_heads: int, head_dim: int, v_head_dim: int, max_seq: int, dtype=ttnn.bfloat16):
+        assert num_kv_heads % NUM_CHIPS == 0
+        self.max_seq = -(-max_seq // TILE) * TILE
+        self.mesh, self.nkv, self.d, self.dv, self.dtype = mesh, num_kv_heads, head_dim, v_head_dim, dtype
+        self.vw = head_dim if v_pad_enabled() else v_head_dim  # V width on the device
+        self.k = self._dev(torch.zeros(1, num_kv_heads, self.max_seq, head_dim))
+        self.v = self._dev(torch.zeros(1, num_kv_heads, self.max_seq, self.vw))
+
+    def _dev(self, t: torch.Tensor) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=1),
+        )
+
+    def load_prefix(self, key: torch.Tensor, value: torch.Tensor, length: int) -> None:
+        """Host key [nkv, >= length, 192], value [nkv, >= length, 128]: positions [0, length) copied, rest zero."""
+
+        def full(t, w):
+            f = torch.zeros(1, self.nkv, self.max_seq, w)
+            f[0, :, :length, : t.shape[-1]] = t[:, :length].float()
+            return f
+
+        ttnn.deallocate(self.k)
+        ttnn.deallocate(self.v)
+        self.k, self.v = self._dev(full(key, self.d)), self._dev(full(value, self.vw))
+
+    def to_torch(self, length: int) -> dict:
+        def host(t, d):
+            parts = [ttnn.to_torch(x).float() for x in ttnn.get_device_tensors(t)]  # each [1, nkv/4, max_seq, W]
+            return torch.cat(parts, dim=1)[0, :, :length, :d]
+
+        return {"key": host(self.k, self.d), "value": host(self.v, self.dv)}
+
+    def free(self):
+        ttnn.deallocate(self.k)
+        ttnn.deallocate(self.v)
+
+
+class TtSlidingAttention(TtFullAttention):
+    """MiMo-V2 sliding-window attention (window W = 128, key j visible to query i iff i - W < j <= i) with a per-head
+    sink logit, TP by KV head: chip d = 2*row + col holds Q heads 16d..16d+15, KV heads 2d, 2d+1 and sink values
+    16d..16d+15 (GQA 8:1 on the chip).
+
+        q, kv = x @ Wq_r, x @ Wkv_r           [H, 16*192], [H, 2 * (192 + 128)] (V x value_scale), as TtFullAttention
+        q,k,v = nlp_create_q_heads_split x2   [1, 16, S, 64] + [1, 16, S, 128], [1, 2, S, 192], [1, 2, S, 128]
+        q,k   = partial RoPE dims [0, 64), theta 1e4 (tables built once, sliced per chunk on the device)
+        cache[start:start+S] = k, v           fill_cache at the chunk offset
+        tail  = cache[start - T : start]      T = min(round_up(W, 32), start) rows read back on the device
+        sdpa  = ttnn.bringup SDPA(causal, sliding_window_size=W, attention_sink) over [tail | chunk], V 128; Q
+                 front-padded by T rows (their outputs are dropped). Sink stored pre-divided by the scale: the kernel scales the sink logit,
+                 HF does not (as gpt_oss_d_p weights.py).
+        out   = all_reduce(concat_heads(sdpa[T:]) @ Wo_r)   o_proj K 16*128 per chip; cluster_axis None (axis 1, axis 0)
+
+    MIMO_V_PAD=1: the padded path as in TtFullAttention (V 192 everywhere, ttnn.transformer SDPA).
+    Adapted from gemma4_a4b_d_p TtSlidingAttention (window tail concat) and gpt_oss_d_p (sinks)."""
+
+    def __init__(
+        self,
+        mesh,
+        wqkv: torch.Tensor,
+        wo: torch.Tensor,
+        dims: tuple[int, int, int, int],
+        inv_freq: torch.Tensor,
+        max_seq: int,
+        value_scale: float | None,
+        window: int,
+        sink: torch.Tensor | None,
+        dtype=ttnn.bfloat16,
+    ):
+        n = NUM_CHIPS
+        hq, hkv, d, dv = dims
+        assert hq % n == 0 and hkv % n == 0
+        self.mesh, self.d, self.dv, self.window = mesh, d, dv, int(window)
+        self.nq, self.nkv = hq // n, hkv // n
+        self.rope_dim = 2 * inv_freq.shape[0]
+        self.v_pad = v_pad_enabled()
+        self.vw = d if self.v_pad else dv
+        # SDPA scale: a power of two, the rest folded into the Q rows. The kernel folds the sink as
+        # exp((sink - max) * scale) with the scale truncated to bf16 (compute_streaming.hpp, scale_fp32 >> 16):
+        # 192^-0.5 -> 0.07178 (-0.54%), and with the row max ~390 (unscaled) below the sink that shrinks the sink
+        # logit by ~0.15 and inflates the output ~14%. A power of two is exact in bf16.
+        true_scale = d**-0.5
+        self.scale = 2.0 ** math.floor(math.log2(true_scale))
+        q_scale = true_scale / self.scale
+        self.wq, self.wkv, self.wo = _tp_weights(
+            mesh, wqkv, wo, dims, value_scale, dtype, q_scale=q_scale, v_pad=self.v_pad
+        )
+        self.sink = None
+        if sink is not None:
+            s = (sink.float() / self.scale).reshape(1, hq, 1, 1)
+            self.sink = self._shard(s, dim=1, dtype=ttnn.bfloat16)  # [1, 16, 1, 1] per chip
+        cos, sin = rope_tables(inv_freq, -(-max_seq // TILE) * TILE)
+        self.cos = self._replicate(cos[None, None])
+        self.sin = self._replicate(sin[None, None])
+        self.max_seq = cos.shape[0]
+
+    def _sliding_program_config(self, total: int):
+        c = sdpa_settings(sliding=True)
+        q = _fit_chunk(c["chunks"][0], total)
+        k = _fit_chunk(min(c["chunks"][1], max(TILE, self.window)), total)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            q_chunk_size=q,
+            k_chunk_size=k,
+            exp_approx_mode=c["exp_approx"],
+        )
+
+    def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheSliding, kv_sink=None) -> ttnn.Tensor:
+        """x: replicated [1, 1, S, H] TILE (attn_norm output), queries at [start, start+S). Returns replicated
+        [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S).
+        kv_sink(k, v), if given, also receives this chunk's per-chip K [1, 2, S, 192] and V [1, 2, S, 128] (192,
+        zero-padded, under MIMO_V_PAD=1)."""
+        seq = x.shape[-2]
+        D, VW, nq, nkv = self.d, self.vw, self.nq, self.nkv
+        assert start % TILE == 0 and seq % TILE == 0 and start + seq <= min(self.max_seq, cache.max_seq)
+        assert cache.vw == VW, f"KV cache V width {cache.vw} != attention's {VW} (MIMO_V_PAD changed?)"
+
+        q, k, v = self._qkv_rope(x, start, seq)
+
+        _sp("kv_write")
+        if kv_sink is not None:
+            kv_sink(k, v)
+        ttnn.fill_cache(cache.k, k, batch_idx=0, update_idx=start)
+        ttnn.fill_cache(cache.v, v, batch_idx=0, update_idx=start)
+
+        _sp("kv_tail")
+        hist = min(-(-self.window // TILE) * TILE, start)
+        if hist:
+            k_tail = ttnn.slice(cache.k, [0, 0, start - hist, 0], [1, nkv, start, D])
+            v_tail = ttnn.slice(cache.v, [0, 0, start - hist, 0], [1, nkv, start, VW])
+            if seq >= hist:
+                q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, nq, hist, D])
+            else:
+                q_pad = ttnn.zeros([1, nq, hist, D], dtype=q.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh)
+            q_cat = ttnn.concat([q_pad, q], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_cat = ttnn.concat([k_tail, k], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_cat = ttnn.concat([v_tail, v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for t in (q_pad, k_tail, v_tail, q, k, v):
+                ttnn.deallocate(t)
+        else:
+            q_cat, k_cat, v_cat = q, k, v
+
+        _sp("sliding_sdpa")
+        full = self._sdpa_ops()[0](
+            q_cat,
+            k_cat,
+            v_cat,
+            is_causal=True,
+            scale=self.scale,
+            sliding_window_size=self.window,
+            attention_sink=self.sink,
+            program_config=self._sliding_program_config(hist + seq),
+            compute_kernel_config=_sdpa_compute_config(sliding=True),
+        )
+        for t in (q_cat, k_cat, v_cat):
+            ttnn.deallocate(t)
+        if hist:
+            attn = ttnn.slice(full, [0, 0, hist, 0], [1, nq, hist + seq, VW])
+            ttnn.deallocate(full)
+        else:
+            attn = full
+
+        _sp("o_proj")
+        a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*128]
+        ttnn.deallocate(attn)
+        o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(a)
+        _sp("ccl")
+        # 2x2: cluster_axis=None reduces over axis 1 then axis 0 (all_reduce.cpp), i.e. all 4 TP ranks.
+        out = ttnn.all_reduce(o, cluster_axis=None)
+        ttnn.deallocate(o)
+        return out
+
+    def free(self):
+        super().free()
+        if self.sink is not None:
+            ttnn.deallocate(self.sink)

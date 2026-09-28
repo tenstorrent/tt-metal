@@ -214,3 +214,23 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Default gate (2x2) already passes because the device norm module covers every norm step: out 0.999995 / rel 0.0031, step rel 0.0029 / ratio
   [0.9935, 1.0061]. The first `FAIL pcc=0` lines come from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_01_attn_norm.py`
+
+## C.sliding_moe.attention.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attention.py` (same golden,
+  s4096 chunk 1, layer 1). Only the docstring changed. The gate is pcc_attention_L01 >= 0.99. The test also asserts: output finite, rel L2 <= 0.02 over
+  the whole chunk and over the first 128 rows, per-token norm ratio in [0.95, 1.05], and worst per-token rel L2 <= 0.08. It also asserts that the output
+  is closer to the CPU reference at window 128 than at 127 or 129 (off-by-one windows fall inside the device noise for every size check).
+  The mutation measurements are in the docstring.
+- BRINGUP_IMPL=reference: PCC 0.999989, rel 0.0047, first 128 rows 0.0042, ratio [0.9825, 1.0147], worst row 0.0176,
+  vs window 127 0.0085 and vs window 129 0.0093, PASS. BRINGUP_IMPL=stub: PCC 0, FAIL.
+- Default gate (2x2): NotImplementedError from `tt/model.py` ("sliding attention not ported to 2x2 yet"). This is expected until the implement step.
+  Implement note: follow the prior's `mimo_v2_6_d_p/tt/attention.py:TtSlidingAttention`. It uses a power-of-two SDPA scale with the true scale
+  folded into Q, a sink pre-divided by the same power, HiFi4 (see known issues), and a norm ratio limit of 1.05. P.2 on 1x4 reached 1.046.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attention.py`
+
+## C.sliding_moe.attention implement (attempt 1)
+- Ported `TtKVCacheSliding` + `TtSlidingAttention` from the prior's `tt/attention.py` into `tt/attention.py` (appended; `import math` restored). Only change: o_proj reduce `ttnn.all_reduce(cluster_axis=None)` (axis 1 then axis 0). Mappers unchanged (`ShardTensorToMesh` dim over the 2x2 mesh, row-major: chip d = 2*row + col holds Q heads 16d..16d+15, KV heads 2d, 2d+1, sink 16d..16d+15).
+- Carried over: SDPA scale 2^-4 with true_scale/2^-4 folded into the Q rows, sink pre-divided by 2^-4 (bf16-exact), window tail = last 128 cache rows via `ttnn.slice` + q_pad concat, V at 128 through `ttnn.bringup.scaled_dot_product_attention`, preset S (HiFi4, fp32 dest off, exact exp).
+- `tt/model.py`: `build_attention` builds TtSlidingAttention for sliding layers (swa_rope_theta, sink bias); `new_kv_cache` returns TtKVCacheSliding for them. `hooks.py`: `DEVICE_STEPS["sliding_moe"] = {"attention"}`.
+- Gate: pcc 0.999912, rel 0.0134, first-128 rel 0.0116, norm ratio [0.9635, 1.0457], worst row 0.046; closer to window 128 (0.0128) than 127 (0.0161) / 129 (0.0146). Same numbers as the 1x4 prior's preset S.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attention.py`
