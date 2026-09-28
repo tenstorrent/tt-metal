@@ -184,7 +184,7 @@ constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
             return (1024 >> 4);
         default:
             return ((1024 >> 4) + (64 >> 4));
-    };
+    }
 }
 
 constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
@@ -200,7 +200,7 @@ constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
@@ -213,7 +213,7 @@ constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static bool IS_A_FORMAT(std::uint32_t format)
@@ -228,7 +228,7 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
@@ -246,7 +246,7 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
 
         default:
             return datum_count;
-    };
+    }
 }
 
 // Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
@@ -342,6 +342,11 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
+    // nextafter steps the bit pattern, so the step is one ULP of the destination format rather
+    // than a fixed epsilon. bfloat16 carries its mantissa in the top 16 bits of the fp32 dest
+    // register, so it needs its own variant.
+    NEXTAFTER      = 43,
+    NEXTAFTER_BF16 = 44,
 };
 
 enum class PackMode : std::uint8_t

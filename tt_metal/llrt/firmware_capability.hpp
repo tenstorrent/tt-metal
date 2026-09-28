@@ -12,18 +12,20 @@
 namespace tt::tt_metal {
 
 struct FirmwareVersions {
-    std::optional<tt::umd::semver_t> eth_fw;
+    std::optional<tt::umd::SemVer> eth_fw;
     std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle;
 };
 
 struct FirmwareCapabilityRequest {
     bool enable_2_erisc_mode = false;
     bool dram_programmable_cores = false;
+    bool eth_ptp_trace = false;
 };
 
 struct FirmwareCapabilityResult {
     bool enable_2_erisc_mode = false;
     bool dram_programmable_cores = false;
+    bool eth_ptp_trace = false;
 };
 
 /**

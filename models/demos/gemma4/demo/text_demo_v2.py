@@ -14,8 +14,10 @@ mirroring how Gemma3 / tt_transformers models are run:
 Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
-  * Host sampling (greedy argmax / top-p): Gemma4 does not expose on-device
-    sampling through the demo path, so logits are read back and sampled on host.
+  * On-device sampling by default (``GEMMA4_HOST_SAMPLE=0``) — matches product
+    ``decode_only`` (force-argmax AG). Set ``GEMMA4_HOST_SAMPLE=1`` for the
+    slower host path (full 262k vocab AG each step; useful if device-sample +
+    decode-trace misbehaves).
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -26,8 +28,12 @@ applied automatically because they live in the shared model code that
 ``Gemma4Generator.from_pretrained`` builds.
 
 Usage:
-    HF_MODEL=google/gemma-4-31B-it pytest \
+    HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 pytest \
         models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv
+
+    # Long-context (defaults pick bounded/chunk for coherency; device sample):
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-12B-it pytest \
+        models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k" -s --timeout 1800
 
     # Override prompts / lengths from the CLI:
     HF_MODEL=google/gemma-4-31B-it pytest \
@@ -47,14 +53,58 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.demo.sampling_utils import (
+    build_device_sampling_params,
+    log_sampling_mode,
+    model_can_sample_on_device,
+)
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.generator_trace import should_auto_enable_bounded_sliding
+from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model_config import determine_device_name
 
 _CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
+
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
+
+
+def _mesh_device_param():
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Named SKUs map explicitly (so ``2x4`` / ``BHGLX`` stay DP layouts). Unset /
+    unknown → ``(1, N)`` over all visible devices so a LoudBox opens full 1×8
+    TP instead of a 4-chip subset. Set ``MESH_DEVICE`` for non-line meshes.
+    """
+    env = os.environ.get("MESH_DEVICE")
+    if env in _MESH_DEVICE_SHAPES:
+        return _MESH_DEVICE_SHAPES[env]
+    if env and "x" in env.lower():
+        try:
+            rows, cols = env.lower().split("x", 1)
+            return (int(rows), int(cols))
+        except ValueError:
+            pass
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        n = 4
+    return (1, max(1, n))
 
 
 def _model_path():
@@ -142,21 +192,76 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
-def _device_params():
-    """Blackhole needs a larger trace region; keep a single command queue (host sampling).
+def _default_ccl_packet_bytes():
+    """Leave Fabric's default packet size.
 
-    The batch-32 decode trace is the largest (~228 MB at capture), so the
-    Blackhole trace region is sized above that with margin. ``GEMMA4_TRACE_REGION_SIZE``
-    overrides it for configs that need a different budget.
+    This used to return 4x the CCL page width (5376 for 31B, 3840 for 12B) to
+    satisfy the ``validate_packet_size`` "suboptimal packet size" warning. That
+    warning optimises single-op page packing, but measured end-to-end it costs
+    both TTFT and decode on P150x8 -- the tuned values are *slower* than the
+    Fabric default:
+
+        12B / P150x8 / long-context-4k, batch-1
+          packet 3840 (old default) : TTFT 543.7 ms, 44.62 tok/s/user
+          Fabric default (4352)     : TTFT 461.6 ms, 46.86 tok/s/user
+
+    Gains hold across ISLs (4k/32k/128k) on 12B and 31B. Blackhole-only path;
+    Wormhole already used the Fabric default and is unaffected. Set
+    ``GEMMA4_CCL_PACKET_BYTES`` to pin a value (e.g. to reproduce the old
+    behaviour or re-sweep).
     """
-    if is_blackhole():
-        trace_region_size = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-        return {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": trace_region_size,
-            "num_command_queues": 1,
-        }
-    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
+    return None
+
+
+def _device_params():
+    """Blackhole needs a larger trace region; CQ count is env-tunable.
+
+    Default ``num_command_queues=1`` (safe with host or on-device sampling).
+    Set ``GEMMA4_NUM_CQS=2`` for serving/H2D-bound workloads once sampling stays
+    on-device (Phase D3); measure batched users, not single-stream 128k TTFT.
+    ``GEMMA4_TRACE_REGION_SIZE`` overrides the BH trace budget.
+
+    CCL residual knobs (set before pytest collection):
+      ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
+        regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
+      ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
+        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
+        Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
+    ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
+    fragmenting the main L1 pool).
+    """
+    num_cqs = max(1, int(os.environ.get("GEMMA4_NUM_CQS", "1")))
+    fabric_env = os.environ.get("GEMMA4_FABRIC", "1d").strip().lower()
+    if fabric_env in ("ring", "1d_ring", "fabric_1d_ring"):
+        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+    else:
+        fabric_config = ttnn.FabricConfig.FABRIC_1D
+
+    params = {
+        "fabric_config": fabric_config,
+        "num_command_queues": num_cqs,
+        # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+    }
+    # Wormhole has 12 GB/ASIC vs Blackhole's 32 GB, so the trace budget is much
+    # tighter, but 30 MB is not enough for the 31B/26B decode+prefill traces on
+    # T3K (WH-T3K nightly EngineCore OOM). Honour GEMMA4_TRACE_REGION_SIZE on
+    # both arches; only the default differs.
+    default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
+
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is not None:
+        router = ttnn.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = pkt_bytes
+        params["fabric_router_config"] = router
+    return params
 
 
 # Parameters mirror the Gemma3 demo layout (subset): a latency config, a long-context
@@ -191,7 +296,12 @@ def _device_params():
             False,
             True,
         ),
-        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling)
+        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling).
+            # max_seq_len=4096 (short prompts). True-batched B≥8 wedges on P150x8
+            # after the first all_gather — Gemma4Generator microbatches at ≤4
+            # users. Hetero actual lengths in one pad bucket are OK: per-slot
+            # valid_seq_lens cap KV fill so pad rows are not written (see
+            # attention/prefill.py).
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
             4096,
@@ -218,12 +328,14 @@ def _device_params():
             True,
         ),
         # NOTE on long-context-32k/64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
-        #   Per-(model, device) cutovers on QB2 (P150x4 / P300x2):
-        #     31B: bounded @ 64k, chunked @ 256k
-        #     12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
-        #     E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
+        #   Coherence target: 4k–128k on QB2 + LoudBox (12B/31B) and P150 (≤12B).
+        #   Defaults (MESH_DEVICE + HF_MODEL) — no extra env needed:
+        #     QB2: 31B bounded @ 64k, chunk=2048 @ ≥128k; 12B/26B unbound→128k
+        #     P150x8: 31B/26B unbound→64k, bounded+chunk=2048 @ ≥128k
+        #             (unbounded 128k → "lapped…"); 12B/E2B/E4B unbound→256k
+        #     P150: E2B/E4B unbound→256k; 12B bounded+chunked @ ≥64k →256k
         #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
-        #   GEMMA4_DEMO_SINGLE_CHUNK.
+        #   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
         (  # long-context-32k
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
             True,
@@ -306,17 +418,8 @@ def _device_params():
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+        # MESH_DEVICE → (rows, cols); unset → (1, N) over all visible devices.
+        _mesh_device_param()
     ],
     indirect=True,
 )
@@ -353,6 +456,11 @@ def test_demo_text(
     # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
     # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
     batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
+    # Prefetcher bring-up: GEMMA4_DECODE_TRACE=0 disables Metal Trace capture.
+    _decode_trace = os.environ.get("GEMMA4_DECODE_TRACE")
+    if _decode_trace is not None:
+        enable_trace = _decode_trace.lower() in ("1", "true", "yes")
+        logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
 
     # ── Speculative-decoding dispatch ────────────────────────────────────────
     # `--speculative` reroutes the demo through the it-assistant drafter +
@@ -361,7 +469,10 @@ def test_demo_text(
     if request.config.getoption("--speculative"):
         draft_len = request.config.getoption("--spec-draft-len")
         if draft_len is None:
-            draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+            # auto-K: the optimum depends on available context (see
+            # spec_decode.auto_draft_len). Prompt length is known below, so
+            # defer to the resolver at call time.
+            draft_len = None
         if batch_size != 1:
             # Batched (B>1) spec-decode: drafts each user at batch=1 and runs ONE
             # batched packed verify over all users (KV-amortization win). Greedy,
@@ -416,27 +527,32 @@ def test_demo_text(
     block_size = page_params["page_block_size"]
     needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
     configured_blocks = page_params.get("page_max_num_blocks")
+
+    # Sliding-cache + prefill chunk from GEMMA4_LONG_CONTEXT_POLICY (model × device).
+    # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    bounded_sliding = lc["bounded_sliding"]
+
     if batch_size <= 1 or configured_blocks is None:
         page_max_num_blocks = needed_blocks
+    elif bounded_sliding:
+        # ``build_hybrid_page_tables`` gives each user its own full-attention
+        # range [u*ceil(max_seq_len/block), (u+1)*...), so the pool must hold
+        # batch * ceil(max_seq_len/block). The tuned value is a *shared* pool
+        # that the non-hybrid ``create_tt_page_table`` partitions across users;
+        # using it with hybrid tables puts users 1..B-1 past the end of the pool.
+        page_max_num_blocks = max(int(configured_blocks), needed_blocks)
     else:
         page_max_num_blocks = configured_blocks
     paged_attention_config = (
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
-    # Sliding-cache mode from GEMMA4_LONG_CONTEXT_POLICY (per model × device).
-    # Override bounded with GEMMA4_BOUNDED_SLIDING=0/1.
-    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
-    if _bs_env is None:
-        bounded_sliding = should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_path)
-    else:
-        bounded_sliding = _bs_env.lower() in ("1", "true", "yes")
-    bounded_sliding = bounded_sliding and paged_attention
-
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
         f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
-        f"bounded_sliding={bounded_sliding})..."
+        f"bounded_sliding={bounded_sliding}, prefill_chunk={lc['prefill_chunk']}, "
+        f"policy={lc['policy_source']})..."
     )
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -460,6 +576,16 @@ def test_demo_text(
 
         n_layers = num_layers or model_args.num_hidden_layers
         sliding_mask = [model_args.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+        # The page table MUST match the allocation: a layer the model exempted
+        # from bounding (Gemma4Model._spec_unbounded_layer) owns a full-length
+        # cache, so marking it sliding here hands it a 16-block table whose
+        # zero-padded tail clobbers block 0 past the window. Normally None here
+        # (the exemption is spec-decode opt-in) -- this keeps the two in sync if
+        # it is ever enabled on the plain path.
+        _exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+        if _exempt is not None and 0 <= _exempt < n_layers:
+            sliding_mask[_exempt] = False
+            logger.info(f"Hybrid page tables: layer {_exempt} on the full pool (model exempted it from bounding)")
         per_layer_pts = build_hybrid_page_tables(
             n_layers,
             sliding_mask,
@@ -469,26 +595,54 @@ def test_demo_text(
             sliding_window=model_args.sliding_window,
         )
         generator.model[0]._active_page_tables_per_layer = per_layer_pts
+        # Sequential prefill forces ``user_id=0``, so the generator recovers each
+        # user's row by matching the legacy ``page_table`` against the per-layer
+        # stash. ``create_tt_page_table`` builds block IDs independently of
+        # ``build_hybrid_page_tables``, so that match always failed and every
+        # user fell through to row 0. Point the legacy table at a
+        # *full-attention* per-layer table: it is the table full-attn layers
+        # already address, so semantics are unchanged and the match succeeds.
+        # (Using a sliding table here instead breaks full-attn addressing.)
+        full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+        if full_idxs:
+            page_table = per_layer_pts[full_idxs[0]]
+        else:
+            # Reduced all-sliding models (GEMMA4_NUM_LAYERS <= 5) have no
+            # full-attention table; match against the first sliding table —
+            # with no full layers there is nothing it can mis-address.
+            page_table = per_layer_pts[0]
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────
-    # Prefill tracing buys ~nothing (prefill runs only a handful of times) and its
-    # trace buffers scale with chunk_size×batch, overflowing the trace region at
-    # long context (≥4K) with no perf gain. Gate prefill tracing off above a
-    # threshold (decode stays traced); GEMMA4_PREFILL_TRACE_MAX_SEQ overrides.
+    # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
+    # scale with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
+    # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_trace and not prefill_enable_trace:
         logger.info(
             f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ to override."
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
+    # Default on-device sample (product decode_only parity). Opt into host with
+    # GEMMA4_HOST_SAMPLE=1 if device-sample + decode-trace misbehaves.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
+    greedy_only = temperature <= 0
+    log_sampling_mode(can_sample, sampling_params)
+
     logger.info("Warming up prefill...")
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=prefill_enable_trace,
-        can_sample_on_device=False,
-        greedy_only=True,
+        can_sample_on_device=can_sample,
+        greedy_only=greedy_only,
+        decode_page_table=page_table,
     )
     logger.info("Warmup complete")
 
@@ -505,15 +659,20 @@ def test_demo_text(
 
     logger.info("Starting prefill...")
     profiler.start("inference_prefill")
-    prefill_logits = generator.prefill_forward_text(
+    prefill_out = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         warmup_prefill=False,
         enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
     )
-    prefilled_token = _host_sample(prefill_logits, temperature, top_p)
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample(prefill_out, temperature, top_p)
     profiler.end("inference_prefill")
     logger.info("Prefill finished")
 
@@ -533,15 +692,18 @@ def test_demo_text(
     profiler.start("inference_decode")
     while users_decoding:
         profiler.start(f"inference_decode_time_{iteration}")
-        logits, _ = generator.decode_forward(
+        decode_out, _ = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=enable_trace,
             page_table=page_table,
             kv_cache=tt_kv_cache,
-            sampling_params=None,  # host sampling
+            sampling_params=device_sampling_params,
         )
-        out_tok = _host_sample(logits, temperature, top_p)
+        if device_sampling_params is not None:
+            out_tok = decode_out.long().view(batch_size, 1)
+        else:
+            out_tok = _host_sample(decode_out, temperature, top_p)
         profiler.end(f"inference_decode_time_{iteration}")
 
         current_pos += 1
@@ -638,6 +800,62 @@ def test_demo_text(
 # ══════════════════════════════════════════════════════════════════════════
 
 
+def _spec_install_hybrid_page_tables(
+    generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
+):
+    """Bounded sliding needs PER-LAYER page tables; mirrors the plain demo path.
+
+    Sliding layers index a small bounded pool (sliding_window/block_size blocks),
+    full-attention layers the full pool. Without these the paged ops see a table
+    sized for the full context and reject the ring
+    ("cache_position_modulo must fit in max_num_blocks_per_seq * block_size").
+
+    Returns the legacy page table to keep using (a FULL-attention per-layer
+    table, so user-row matching succeeds and full-attn addressing is unchanged).
+    """
+    from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
+
+    # generator.model_args is a LIST (one per DP model); accept either form.
+    margs = model_args[0] if isinstance(model_args, (list, tuple)) else model_args
+    n_layers = num_layers or margs.num_hidden_layers
+    sliding_mask = [margs.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+    # Keep the drafter-visible sliding layer on the FULL pool: the model exempts it
+    # from bounding (Gemma4Model._spec_unbounded_layer) so the KV-shared drafter
+    # reads unbounded positions, and its page table has to match that allocation.
+    exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+    if exempt is not None and 0 <= exempt < n_layers:
+        sliding_mask[exempt] = False
+        logger.info(f"Hybrid page tables: layer {exempt} on the full pool (spec-decode drafter layer)")
+    per_layer_pts = build_hybrid_page_tables(
+        n_layers,
+        sliding_mask,
+        num_users=batch_size,
+        block_size=block_size,
+        max_seq_len=max_seq_len,
+        sliding_window=margs.sliding_window,
+    )
+    generator.model[0]._active_page_tables_per_layer = per_layer_pts
+    full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+    if full_idxs:
+        page_table = per_layer_pts[full_idxs[0]]
+    logger.info(f"Spec-decode bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
+    return page_table
+
+
+def _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True):
+    """Bounded-vs-unbounded sliding KV for the spec-decode path.
+
+    Defers to the same GEMMA4_LONG_CONTEXT_POLICY resolver the plain demo uses,
+    so long-context spec decode gets the memory profile the model needs (31B at
+    >=128k does not fit unbounded).
+    """
+    # No silent fallback: at >=128k the 31B model does NOT fit unbounded, so
+    # continuing after a policy-resolution failure serves a broken memory
+    # profile. Fail fast instead (review finding on tt-metal#56048).
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    return bool(lc["bounded_sliding"])
+
+
 def _run_spec_decode(
     prompt,
     instruct,
@@ -673,14 +891,40 @@ def _run_spec_decode(
     temperature = sampling_params.get("temperature", 0)
     top_p = sampling_params.get("top_p", 1.0)
     top_k = sampling_params.get("top_k", 0)
+    # auto-K resolved once the prompt is known (below, after tokenization);
+    # seed with the short-prompt default so anything reading it early is sane.
+    _draft_len_requested = draft_len
     if draft_len is None:
-        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", "3").replace("auto", "3"))
     batch_size = 1
 
     block_size = page_params["page_block_size"]
+    # KV mode for this ISL (policy-driven; the drafter inherits the ring modulo)
+    _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
     paged_attention_config = PagedAttentionConfig(
         block_size=block_size, max_num_blocks=batch_size * math.ceil(max_seq_len / block_size)
     )
+    # Opt in to the last-sliding-layer exemption BEFORE the model is built: the
+    # KV-shared drafter cross-attends that layer, so it must hold unbounded
+    # positions. Off by default because it corrupts (and needlessly enlarges)
+    # plain bounded decode -- see Gemma4Model._spec_unbounded_layer.
+    if _spec_bounded:
+        # Ring headroom for the speculative writes at p+1..p+K: without it each
+        # draft evicts a still-in-window token (measured: K=5 corrupts from the
+        # first token at 32k, K=1 stays correct).
+        # 16 blocks (=1024) rather than the 1 block K needs: the ring must stay a
+        # POWER OF TWO. Chunk starts must be multiples of the ring (paged_fill_cache
+        # has no start offset) AND of SDPA's q_chunk_size; a 1088 ring (2^6*17)
+        # makes those mutually satisfiable only every 8704 tokens, and SDPA
+        # TT_FATALs on chunk_start_idx % q_chunk_size. 2048 satisfies both.
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
+        # NOTE: the last-sliding-layer exemption (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER)
+        # is intentionally NOT enabled any more. The drafter inherits the ring
+        # modulo and reads the ring directly (measured equivalent: 1.86/5 vs
+        # 1.94/5 at 32k), and the PACKED verify requires uniform per-type pools:
+        # one sliding layer on the full pool would receive the ring-shaped mask
+        # and ring hot pages against an absolute cache. Uniform rings also save
+        # the exemption's 0.54 GB/device at 256k.
 
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -689,17 +933,32 @@ def _run_spec_decode(
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
-        bounded_sliding_kv_cache=False,  # spec-decode needs unbounded sliding KV
+        # Spec decode used to force UNBOUNDED sliding KV because the drafter
+        # cross-attends the target's caches with absolute positions. The drafter
+        # now inherits the target's ring modulo (assistant/model.py), so the
+        # normal long-context policy applies and >=128k (which requires bounded
+        # on 31B) is reachable. GEMMA4_BOUNDED_SLIDING still overrides.
+        bounded_sliding_kv_cache=_spec_bounded,
     )
     target = generator.model[0]
     model_args = generator.model_args
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
+    if _spec_bounded:
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
+        )
+        # (The prefill-chunk floor for the bounded last-chunk expansion lives in
+        # resolve_gemma4_prefill_chunk_size: it must apply while model_args is
+        # built, not after -- setting the env here was too late to be read.)
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (decode/spec traces stay on).
+    # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
+    # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -725,6 +984,11 @@ def _run_spec_decode(
         prefill_logits.deallocate(True)
 
     prompt_len = int(decoding_pos[0])
+    if _draft_len_requested is None:
+        from models.demos.gemma4.tt.spec_decode import auto_draft_len
+
+        draft_len = auto_draft_len(prompt_len)
+        logger.info(f"Spec-decode auto-K: prompt_len={prompt_len} -> draft_len={draft_len}")
     anchor_pos = prompt_len - 1
     anchor_token = int(encoded_prompts[0][anchor_pos])
 
@@ -754,6 +1018,7 @@ def _run_spec_decode(
         mesh_config=target.mesh_config,
         ccl_manager=target.ccl_manager,
         assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
     )
 
     spec = SpeculativeDecoder(
@@ -771,7 +1036,12 @@ def _run_spec_decode(
     # whole iteration is ONE metal trace replayed per step (K draft steps +
     # verify fused — avoids the distinct-CCL-trace interleave deadlock). Sampling
     # (temp>0) falls back to the host-readback generate for batch=1.
-    use_fused = batch_size == 1 and ((not temperature) or temperature <= 0)
+    # GEMMA4_SPEC_FUSED=0 forces the host generate() loop (draft + packed
+    # verify as separate calls) -- the validation vehicle for the packed
+    # verify's bounded-ring support before it is wired into the fused trace.
+    use_fused = (
+        batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
+    )
     # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
     # SLOWER than plain decode); the single fused Metal trace removes that
     # overhead (>3x, exceeding plain decode). Default tracing to the demo's
@@ -868,13 +1138,27 @@ def _run_spec_decode_batched(
     temperature = sampling_params.get("temperature", 0)
     if temperature and temperature > 0:
         pytest.skip("batched spec-decode supports greedy only (set temperature=0)")
+    _env_k = os.environ.get("GEMMA4_SPEC_DRAFT_LEN")
+    _auto_requested = draft_len is None and (_env_k is None or _env_k.strip().lower() == "auto")
     if draft_len is None:
-        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        # "auto" mirrors the solo path: seed the short-prompt default so
+        # anything reading draft_len early is sane, then defer to
+        # auto_draft_len_batched below (previously int("auto") raised here
+        # before the auto-override could run).
+        draft_len = 3 if _auto_requested else int(_env_k)
 
     block_size = page_params["page_block_size"]
     blocks_per_user = math.ceil(max_seq_len / block_size)
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=B * blocks_per_user)
 
+    _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
+    if _spec_bounded:
+        # Same opt-in the single-user spec path takes (see _run_spec_decode):
+        # the verify's speculative writes at p+1..p+K need ring headroom or they
+        # evict still-in-window tokens. Must be set BEFORE the model is built.
+        # (The drafter-layer exemption is deliberately NOT set: packed verify
+        # needs uniform per-type pools -- see the note in _run_spec_decode.)
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -882,17 +1166,34 @@ def _run_spec_decode_batched(
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
-        bounded_sliding_kv_cache=False,  # spec-decode needs unbounded sliding KV
+        # Spec decode used to force UNBOUNDED sliding KV because the drafter
+        # cross-attends the target's caches with absolute positions. The drafter
+        # now inherits the target's ring modulo (assistant/model.py), so the
+        # normal long-context policy applies and >=128k (which requires bounded
+        # on 31B) is reachable. GEMMA4_BOUNDED_SLIDING still overrides.
+        bounded_sliding_kv_cache=_spec_bounded,
     )
     target = generator.model[0]
     model_args = generator.model_args
 
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
+    if _spec_bounded:
+        # Bounded sliding needs PER-LAYER page tables (sliding layers index the
+        # small ring pool, full layers the full pool). Without them the flat
+        # table does not span the ring and prefill dies in paged_fill_cache with
+        # a TT_FATAL. build_hybrid_page_tables(num_users=B) gives every user its
+        # OWN ring, which is what B>1 requires.
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, B, block_size, max_seq_len, page_table
+        )
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (the batched decode trace stays on).
+    # (≥4K); gate it off above a threshold (the batched decode trace stays on),
+    # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -932,12 +1233,29 @@ def _run_spec_decode_batched(
         )
         max_generated_tokens = max(1, _safe_gen)
 
+    # Batch-aware K: the verify's B*(K+1) rows hit a hard 32-row cliff and past
+    # the compute knee no K wins (see auto_draft_len_batched for the measured
+    # table). K == 0 => speculation cannot beat plain batched decode here.
+    from models.demos.gemma4.tt.spec_decode import auto_draft_len_batched
+
+    _auto_k = auto_draft_len_batched(max(prompt_lens) if prompt_lens else None, B)
+    if _auto_requested and draft_len != _auto_k:
+        logger.info(f"Spec-decode batch-aware K: B={B} -> draft_len {draft_len} -> {_auto_k}")
+        draft_len = _auto_k
+    if draft_len < 1:
+        pytest.skip(
+            f"Speculative decode is a measured REGRESSION at B={B} (compute-bound; "
+            "aggregate 0.58-0.75x of plain batched decode at B=32 for every K). "
+            "Run plain batched decode instead, or force GEMMA4_SPEC_DRAFT_LEN."
+        )
+
     _, assistant = create_assistant_model(
         mesh_device=mesh_device,
         target_model=target,
         mesh_config=target.mesh_config,
         ccl_manager=target.ccl_manager,
         assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
         max_local_batch_size=B,
     )
 
@@ -1000,19 +1318,7 @@ def _run_spec_decode_batched(
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
-    ],
+    [_mesh_device_param()],
     indirect=True,
 )
 def test_demo_spec_decode(mesh_device, reset_seeds):

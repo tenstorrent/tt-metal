@@ -33,6 +33,7 @@ namespace ckernel {
  * backwards compatibility.
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then transpose_init(icb). See "
     "api/compute/transpose.h.")]] ALWI void
@@ -49,12 +50,12 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(icb)));
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else if (is_8bit_int) {
         // 8-bit integer (Int8/UInt8) transpose needs the int-FPU (ELWADD) A2D reconstruct path,
@@ -64,15 +65,15 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               BroadcastType::NONE,
               true /*is_int_fpu_en*/>(icb)));
     } else {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     }
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb, icb)));
 #else
     // Quasar has no unpack-to-dest transpose path (TODO: tt-llk#1559)
     const bool enable_unpack_to_dest =
@@ -86,18 +87,18 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
             EltwiseBinaryReuseDestType::NONE,
             false /*unpack_to_dest*/>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/, icb)));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb, icb)));
 #endif
 #endif
 
 #ifndef ARCH_QUASAR
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
+    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
 #else
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
 #endif

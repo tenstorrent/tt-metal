@@ -416,7 +416,6 @@ tags:
           and deadlocks in the routing network.
       - q: How do I choose which virtual channel to use?
         a: >
-          In most cases the default VC assignment is correct. Custom VC selection is
-          useful when you need to separate latency-critical control traffic from
-          bulk data traffic, or when routing constraints require specific VC
-          assignments to avoid deadlock.
+          In most cases the default VC assignment is correct. Custom VC selection can be used
+          in some cases such as avoiding deadlocks or separating different traffic classes.
+          There are 4 VCs for unicast and 2 VCs for multicast.

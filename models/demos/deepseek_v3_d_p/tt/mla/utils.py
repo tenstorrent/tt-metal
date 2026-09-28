@@ -111,6 +111,32 @@ def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> lis
     return positions
 
 
+def llama4_scale_host(
+    kv_actual_isl: int,
+    sp: int,
+    chunk_local: int,
+    heads_local: int,
+    width: int,
+    beta: float,
+    orig_max: int,
+) -> torch.Tensor:
+    """Mistral's per-position query temperature for one chunk: [1, heads_local, sp*chunk_local, width].
+
+    ``1 + beta*ln(1 + floor(pos/orig_max))``, where the row -> position map is
+    ``rotated_chip_positions``, NOT ``kv_actual_isl + row``: a rotated chunk's rows are scattered
+    across chips, and the two coincide only when kv_actual_isl is slab-aligned. Chip-major flatten, to
+    match an SP shard over dim 2. fp32 -- the term sits just above 1.0 and adjacent windows are ~0.01
+    apart by 50k. Callers cast.
+    """
+    positions = rotated_chip_positions(kv_actual_isl, sp, chunk_local)
+    flat = torch.tensor(
+        [positions[c][r] for c in range(sp) for r in range(chunk_local)],
+        dtype=torch.float32,
+    )
+    scale = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+    return scale.view(1, 1, sp * chunk_local, 1).expand(1, heads_local, -1, width)
+
+
 def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int, chunk_local: int) -> list[int]:
     """Per-chip count of REAL (non-pad) rows carried by a rotated chunk, keyed off
     rotated_chip_positions so it cannot drift from the writer kernel.
@@ -131,6 +157,27 @@ def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int,
         sum(1 for p in row if kv_actual_isl <= p < valid_end)
         for row in rotated_chip_positions(kv_actual_isl, sp, chunk_local)
     ]
+
+
+def rotated_row_of_position(kv_actual_isl: int, sp: int, chunk_local: int, global_pos: int) -> int | None:
+    """The chip-major flat row ``chip * chunk_local + local`` carrying ``global_pos``, or None.
+
+    Inverse of ``rotated_chip_positions``, keyed off it so it cannot drift from the writer kernel.
+    """
+    for c, row in enumerate(rotated_chip_positions(kv_actual_isl, sp, chunk_local)):
+        for r, p in enumerate(row):
+            if p == global_pos:
+                return c * chunk_local + r
+    return None
+
+
+def rotated_rows_are_contiguous(kv_actual_isl: int, chunk_local: int) -> bool:
+    """Does every chip's rotated row carry a CONTIGUOUS run of positions?
+
+    True exactly when kv_actual_isl is a multiple of chunk_local. Consumers that shift by a ROW to
+    mean a shift by a POSITION -- the MTP union window is one -- are only correct where this holds.
+    """
+    return kv_actual_isl % chunk_local == 0
 
 
 def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
@@ -174,7 +221,8 @@ def global_to_local_token_id(
     """Convert a global token ID to a device ID and local token ID.
 
     Args:
-        global_token_id: The global token position across the full sequence.
+        global_token_id: Index into the sequence ``seq_len`` describes -- a global position for a
+            whole sequence, a chip-major flat ROW for one chunk (see ``rotated_row_of_position``).
         sp_factor: Number of devices in the sequence parallel group.
         seq_len: Total sequence length across all devices.
         is_balanced: If True (default), uses zigzag (striped) attention where the sequence

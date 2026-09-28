@@ -29,6 +29,25 @@ def _sharded_cfg(shape, strategy):
     return ttnn.create_sharded_memory_config(list(shape), grid, strategy, ttnn.ShardOrientation.ROW_MAJOR)
 
 
+def _block_sharded_cfg(shape, grid_y=2, grid_x=4):
+    # Rectangular grid (grid_y != grid_x) by default: a square grid can't distinguish a correct
+    # BLOCK row/col shard enumeration from a transposed one, so a rectangular grid actually
+    # exercises that axis.
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    return ttnn.create_sharded_memory_config(
+        list(shape), grid, ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR
+    )
+
+
+def _dram_height_sharded_cfg(collapsed_h, width):
+    """HEIGHT_SHARDED config in DRAM. DRAM has a narrow core grid, so a single DRAM core
+    (whole tensor in one shard) is the portable choice - mirrors the untilize/roll universal-IO
+    files' DRAM-sharded convention."""
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    spec = ttnn.ShardSpec(grid, [collapsed_h, width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, spec)
+
+
 # Interleaved: L1 / DRAM / mixed buffer locations
 @pytest.mark.parametrize("in_mc", [L1, DRAM], ids=["in_L1", "in_DRAM"])
 @pytest.mark.parametrize("out_mc", [L1, DRAM], ids=["out_L1", "out_DRAM"])
@@ -190,6 +209,109 @@ def test_sharded_fallback(device, strategy, dim, sharded_output):
     out_mc = _sharded_cfg(torch_result.shape, strategy) if sharded_output else None
     out = ttnn.repeat_interleave(x, 2, dim=dim, memory_config=out_mc)
     assert out.memory_config().is_sharded() == sharded_output
+    assert_equal(torch_result, ttnn.to_torch(out))
+
+
+# ---------------------------------------------------------------------------
+# BLOCK-sharded input (doc-flagged gap: no BLOCK coverage existed)
+# ---------------------------------------------------------------------------
+
+
+# BLOCK-sharded ROW_MAJOR 4D input -> native upsample fast-path (same code path as HEIGHT/WIDTH).
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("dim", [1, 2])
+@pytest.mark.parametrize("repeats", [2, 3])
+def test_sharded_native_block_hw(device, dim, repeats):
+    shape = (1, 32, 8, 32)  # [N, H, W, C]; collapsed height = 256, width = 32 (2x4 block grid)
+    torch_input = torch.rand(*shape, dtype=torch.bfloat16)
+    torch_result = torch.repeat_interleave(torch_input, repeats, dim=dim)
+    x = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    x = ttnn.to_memory_config(x, _block_sharded_cfg(shape))
+    out = ttnn.repeat_interleave(x, repeats, dim=dim)
+    # Native upsample fast-path must keep the output sharded (its whole purpose); a silent demotion
+    # to the interleaved round-trip fallback should fail here rather than pass on values alone.
+    assert out.memory_config().is_sharded()
+    assert_equal(torch_result, ttnn.to_torch(out))
+
+
+# BLOCK-sharded TILE input -> round-trip fallback (DRAM interleaved), optional explicit sharded out.
+@pytest.mark.parametrize("dim", [2, 3])
+@pytest.mark.parametrize("sharded_output", [False, True])
+def test_sharded_block_fallback(device, dim, sharded_output):
+    shape = (1, 1, 256, 128)
+    torch_input = torch.rand(*shape, dtype=torch.bfloat16)
+    torch_result = torch.repeat_interleave(torch_input, 2, dim=dim)
+    x = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    x = ttnn.to_memory_config(x, _block_sharded_cfg(shape))
+    out_mc = _block_sharded_cfg(torch_result.shape) if sharded_output else None
+    out = ttnn.repeat_interleave(x, 2, dim=dim, memory_config=out_mc)
+    assert out.memory_config().is_sharded() == sharded_output
+    assert_equal(torch_result, ttnn.to_torch(out))
+
+
+# ---------------------------------------------------------------------------
+# DRAM-sharded input (doc-flagged gap + doc claim: "L1 OOM")
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("dim", [2, 3])
+@pytest.mark.parametrize("repeats", [2, 3])
+def test_sharded_dram_input(device, layout, dim, repeats):
+    """DRAM HEIGHT-sharded input. Regression test for the is_l1() guard: both layouts must take
+    the interleaved DRAM round-trip fallback, since upsample requires an L1-resident input and
+    a DRAM-sharded input previously crashed it. Whole tensor in one DRAM-core shard; dims are
+    tile-aligned (128x64) so the single-core spec is valid."""
+    shape = (1, 1, 128, 64)  # collapsed height = 128, width = 64 (both tile-aligned)
+    collapsed_h = shape[0] * shape[1] * shape[2]
+    torch_input = torch.rand(*shape, dtype=torch.bfloat16)
+    torch_result = torch.repeat_interleave(torch_input, repeats, dim=dim)
+    x = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device)
+    x = ttnn.to_memory_config(x, _dram_height_sharded_cfg(collapsed_h, shape[3]))
+    assert x.memory_config().buffer_type == ttnn.BufferType.DRAM
+    out = ttnn.repeat_interleave(x, repeats, dim=dim)
+    # Pin the routing: with no memory_config, the fallback returns interleaved DRAM. Asserting the
+    # output is NOT sharded is what makes this a routing regression test - if the is_l1() guard were
+    # reverted, a ROW_MAJOR input would take the native path (sharded out, or crash), failing here.
+    assert not out.memory_config().is_sharded()
+    assert_equal(torch_result, ttnn.to_torch(out))
+
+
+# ---------------------------------------------------------------------------
+# ND-sharded input (doc-flagged gap)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("dim", [1, 2])
+@pytest.mark.parametrize("repeats", [2, 3])
+@pytest.mark.parametrize(
+    "input_shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_sharded_nd_input(device, layout, dim, repeats, input_shard_orientation):
+    """ND-sharded input, both layouts:
+    - TILE unshards to interleaved DRAM immediately (round-trip fallback), so orientation is a
+      no-op there but keeps the fallback path covered.
+    - ROW_MAJOR rank-4 L1 ND-sharded passes the is_l1() guard and goes native via upsample
+      (FLOAT_GENERAL path, since the integer path doesn't support ND sharding), staying sharded.
+    This is the ND case the guard actually interacts with."""
+    shape = [2, 4, 128, 128]
+    shard_dims = [len(shape) - 2, len(shape) - 1]
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))})
+    tensor_spec = ttnn.TensorSpec(
+        shape=shape, dtype=ttnn.bfloat16, layout=layout, buffer_type=ttnn.BufferType.L1
+    ).sharded_across_dims(shard_dims, shard_core_grid, input_shard_orientation)
+    assert tensor_spec.memory_config.nd_shard_spec is not None
+
+    torch_input = torch.rand(*shape, dtype=torch.bfloat16)
+    torch_result = torch.repeat_interleave(torch_input, repeats, dim=dim)
+    x = ttnn.from_torch(torch_input, spec=tensor_spec, device=device)
+    out = ttnn.repeat_interleave(x, repeats, dim=dim)
+    # Pin the routing per layout: ROW_MAJOR goes native (stays sharded), TILE takes the interleaved
+    # DRAM round-trip fallback (returns interleaved DRAM, i.e. not sharded).
+    assert out.memory_config().is_sharded() == (layout == ttnn.ROW_MAJOR_LAYOUT)
     assert_equal(torch_result, ttnn.to_torch(out))
 
 

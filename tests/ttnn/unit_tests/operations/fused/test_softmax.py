@@ -391,6 +391,7 @@ def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
         ttnn.scale_mask_softmax_in_place(input_tensor, 1.0, attention_mask_t, program_config=program_config)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [24, 32, 64])
 @pytest.mark.parametrize("w", [42, 32, 64])
@@ -422,6 +423,7 @@ def test_softmax(device, batch_size, h, w, dim):
     )
 
 
+@pytest.mark.merge_gate
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)

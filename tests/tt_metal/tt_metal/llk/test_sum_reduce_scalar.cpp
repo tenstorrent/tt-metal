@@ -22,6 +22,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 #include "llk_device_fixture.hpp"
@@ -50,6 +51,9 @@ struct SumReduceScalarConfig {
     bool dst_full_sync = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
+    bool use_constant_input = false;
+    uint16_t constant_input_bits = 0;
+    bool expect_exact_zero = false;
 };
 
 bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
@@ -132,20 +136,20 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     SetRuntimeArgs(program, sum_reduce_kernel, core, {config.num_tiles, std::bit_cast<uint32_t>(config.scaler)});
 
     uint32_t byte_size = config.num_tiles * tile_byte_size;
-    auto packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    std::vector<uint32_t> packed_input;
+    if (config.use_constant_input) {
+        const uint32_t packed_value =
+            (static_cast<uint32_t>(config.constant_input_bits) << 16) | config.constant_input_bits;
+        packed_input.assign(byte_size / sizeof(uint32_t), packed_value);
+    } else {
+        packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+            0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    }
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, packed_input, /*blocking=*/true);
 
-    // Wrap the program into a MeshWorkload and dispatch via the mesh command queue.
-    // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
@@ -153,12 +157,14 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     auto u16_src_vec = u16_from_u32_vector(packed_input);
 
     float golden_scalar = 0.0f;
-    for (uint16_t packed : u16_src_vec) {
-        golden_scalar += static_cast<float>(std::bit_cast<bfloat16>(packed));
+    if (!config.expect_exact_zero) {
+        for (uint16_t packed : u16_src_vec) {
+            golden_scalar += static_cast<float>(std::bit_cast<bfloat16>(packed));
+        }
+        // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
+        // collapse), so it multiplies the result twice.
+        golden_scalar *= config.scaler * config.scaler;
     }
-    // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
-    // collapse), so it multiplies the result twice.
-    golden_scalar *= config.scaler * config.scaler;
 
     // The reduced scalar lives in element [0] of the output tile, in the output CB's
     // format: raw fp32 with native fp32 DEST, otherwise the low bfloat16 of word 0.
@@ -190,6 +196,9 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     const float rel_tol = (config.math_fidelity == MathFidelity::LoFi) ? 0.05f : 0.01f;
     const float abs_tol = 0.01f;
     const float tolerance = std::max(rel_tol * std::abs(golden_scalar), abs_tol);
+    if (config.expect_exact_zero) {
+        return device_scalar == 0.0f;
+    }
     return std::abs(device_scalar - golden_scalar) < tolerance;
 }
 
@@ -207,8 +216,7 @@ class SumReduceScalarBlazeShapeTest : public LLKMeshDeviceSingleCardFixture,
                                       public testing::WithParamInterface<SumReduceScalarConfig> {};
 
 TEST_P(SumReduceScalarBlazeShapeTest, SumReduceScalarBlazeShape) {
-    auto& mesh_device = *devices_[0];
-    ASSERT_TRUE(run_sum_reduce_scalar_test(mesh_device, GetParam()));
+    ASSERT_TRUE(run_sum_reduce_scalar_test(this->device(), GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -248,10 +256,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarFp32DestTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 TEST_P(SumReduceScalarFp32DestTest, SumReduceScalarFp32Dest) {
-    auto& mesh_device = *devices_[0];
     int num_tiles = GetParam();
     ASSERT_TRUE(run_sum_reduce_scalar_test(
-        mesh_device, {.num_tiles = num_tiles, .tile_height = 32, .fp32_dest_acc = true, .dst_full_sync = true}));
+        this->device(), {.num_tiles = num_tiles, .tile_height = 32, .fp32_dest_acc = true, .dst_full_sync = true}));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -268,10 +275,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarLoFiTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
 
 TEST_P(SumReduceScalarLoFiTest, SumReduceScalarLoFi) {
-    auto& mesh_device = *devices_[0];
     bool fp32_dest_acc = GetParam();
     ASSERT_TRUE(run_sum_reduce_scalar_test(
-        mesh_device,
+        this->device(),
         {.num_tiles = 8,
          .tile_height = 32,
          .fp32_dest_acc = fp32_dest_acc,
@@ -291,10 +297,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarScalerTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
 
 TEST_P(SumReduceScalarScalerTest, SumReduceScalarScaler) {
-    auto& mesh_device = *devices_[0];
     bool doubling = GetParam();
     ASSERT_TRUE(run_sum_reduce_scalar_test(
-        mesh_device,
+        this->device(),
         {.num_tiles = 4,
          .tile_height = 32,
          .scaler = doubling ? 2.0f : 0.5f,
@@ -309,3 +314,19 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<bool>& info) {
         return info.param ? "SumReduceScalar_Scaler_2_fp32dest" : "SumReduceScalar_Scaler_0p5";
     });
+
+class SumReduceScalarZeroFlagTest : public LLKMeshDeviceSingleCardFixture {};
+
+TEST_F(SumReduceScalarZeroFlagTest, RestoresDefaultAfterCopyBeforeDenormalScaler) {
+    constexpr uint16_t largest_finite_bfloat16 = 0x7f7f;
+    const float denormal_scaler = static_cast<float>(std::bit_cast<bfloat16>(uint16_t{1}));
+
+    ASSERT_TRUE(run_sum_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = 1,
+         .tile_height = 32,
+         .scaler = denormal_scaler,
+         .use_constant_input = true,
+         .constant_input_bits = largest_finite_bfloat16,
+         .expect_exact_zero = true}));
+}

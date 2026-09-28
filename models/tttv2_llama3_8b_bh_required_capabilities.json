@@ -1,0 +1,1075 @@
+{
+  "$schema": "tttv2_bh_required_capabilities.schema.json",
+  "schema_version": 1,
+  "contract_id": "tttv2_llama3_8b_bh_required_capabilities_v1",
+  "model": {
+    "package": "llama3_8b",
+    "hf_model_id": "meta-llama/Llama-3.1-8B-Instruct",
+    "demo_entry_point": "models/common/tests/demos/llama3_8b/demo.py"
+  },
+  "authority": {
+    "plan": "tttv2_bh_support_plan.md:632-878",
+    "integration_contract": "models/common/llm_runtime/tttv2_demo_to_vllm_integration_skill.md",
+    "source_files": [
+      "models/common/tests/demos/llama3_8b/demo.py",
+      "models/common/models/llama3_8b/hf_adaptor.py",
+      "models/common/models/llama3_8b/generator.py"
+    ]
+  },
+  "scope": {
+    "declaration_state": "pre_acceptance",
+    "immutability": "This file permanently declares source-required coverage. Characterization, observations, metrics, floors, and current dispositions live outside this contract and may never remove a requirement.",
+    "acceptance_rule": "Each requirement must be resolved in characterization/completion evidence as PASS or explicitly approved APPROVED_UNSUPPORTED_GEOMETRY. FAIL or BLOCKED there prevents completion without mutating this declaration."
+  },
+  "geometries": [
+    {
+      "id": "p150_tp1_dp1",
+      "ci_sku": "bh_p150",
+      "mesh_name": "P150",
+      "mesh_shape": [
+        1,
+        1
+      ],
+      "dies": 1,
+      "tp_per_lane": 1,
+      "dp": 1,
+      "fabric_config": null,
+      "role": "required"
+    },
+    {
+      "id": "p150x4_tp4_dp1",
+      "ci_sku": "bh_quietbox_2",
+      "mesh_name": "P150x4",
+      "mesh_shape": [
+        1,
+        4
+      ],
+      "dies": 4,
+      "tp_per_lane": 4,
+      "dp": 1,
+      "fabric_config": "FABRIC_1D_RING",
+      "role": "required"
+    },
+    {
+      "id": "p150x4_tp1_dp4",
+      "ci_sku": "bh_quietbox_2",
+      "mesh_name": "P150x4",
+      "mesh_shape": [
+        1,
+        4
+      ],
+      "dies": 4,
+      "tp_per_lane": 1,
+      "dp": 4,
+      "fabric_config": "FABRIC_1D_RING",
+      "role": "required"
+    },
+    {
+      "id": "p300_tp1_dp2",
+      "ci_sku": "bh_p300",
+      "mesh_name": "P300",
+      "mesh_shape": [
+        1,
+        2
+      ],
+      "dies": 2,
+      "tp_per_lane": 1,
+      "dp": 2,
+      "fabric_config": "FABRIC_1D_RING",
+      "role": "additive_functional"
+    },
+    {
+      "id": "p150x2_p300_standin",
+      "ci_sku": "none",
+      "mesh_name": "P300",
+      "mesh_shape": [
+        1,
+        2
+      ],
+      "dies": 2,
+      "tp_per_lane": 1,
+      "dp": 2,
+      "fabric_config": "FABRIC_1D_RING",
+      "role": "development_standin"
+    }
+  ],
+  "demo_requirements": [
+    {
+      "id": "p150.performance.token_accuracy",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "performance",
+      "demo_case": "token-accuracy",
+      "source_parameter_id": "token-accuracy-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-token-accuracy-repeat_batch-1-prefetcher-off-P150]",
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "token_accuracy",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, token_accuracy, quality gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 0,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150.accuracy.token_accuracy",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "accuracy",
+      "demo_case": "token-accuracy",
+      "source_parameter_id": "token-accuracy-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-token-accuracy-repeat_batch-1-prefetcher-off-P150]",
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "token_accuracy",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, token_accuracy, quality gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 0,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150.performance.batch_1",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "performance",
+      "demo_case": "batch-1",
+      "source_parameter_id": "batch-1",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-batch-1-P150]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150.accuracy.batch_1",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "accuracy",
+      "demo_case": "batch-1",
+      "source_parameter_id": "batch-1",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-batch-1-P150]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150.performance.batch_32",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "performance",
+      "demo_case": "batch-32",
+      "source_parameter_id": "batch-32-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-batch-32-repeat_batch-1-prefetcher-off-P150]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150.accuracy.batch_32",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "accuracy",
+      "demo_case": "batch-32",
+      "source_parameter_id": "batch-32-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-batch-32-repeat_batch-1-prefetcher-off-P150]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150.performance.eval_32_repeat_3",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "performance",
+      "demo_case": "eval-32-repeat-3",
+      "source_parameter_id": "eval-32-repeat_batch-3-prefetcher-off-perf-report-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-eval-32-repeat_batch-3-prefetcher-off-perf-report-off-P150]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": false
+    },
+    {
+      "id": "p150.accuracy.eval_32_repeat_3",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "accuracy",
+      "demo_case": "eval-32-repeat-3",
+      "source_parameter_id": "eval-32-repeat_batch-3-prefetcher-off-perf-report-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-eval-32-repeat_batch-3-prefetcher-off-perf-report-off-P150]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": false
+    },
+    {
+      "id": "p150.performance.eval_32_repeat_1",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "performance",
+      "demo_case": "eval-32-repeat-1",
+      "source_parameter_id": "eval-32-repeat_batch-1-prefetcher-off-perf-report-on",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-P150]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150.accuracy.eval_32_repeat_1",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "accuracy",
+      "demo_case": "eval-32-repeat-1",
+      "source_parameter_id": "eval-32-repeat_batch-1-prefetcher-off-perf-report-on",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-P150]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.performance.token_accuracy",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "token-accuracy",
+      "source_parameter_id": "token-accuracy-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-token-accuracy-repeat_batch-1-prefetcher-off-P150X4]",
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "token_accuracy",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, token_accuracy, quality gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 0,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.accuracy.token_accuracy",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "token-accuracy",
+      "source_parameter_id": "token-accuracy-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-token-accuracy-repeat_batch-1-prefetcher-off-P150X4]",
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "token_accuracy",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, token_accuracy, quality gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 0,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.performance.batch_1",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "batch-1",
+      "source_parameter_id": "batch-1",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-batch-1-P150X4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.accuracy.batch_1",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "batch-1",
+      "source_parameter_id": "batch-1",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-batch-1-P150X4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 1,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.performance.batch_32",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "batch-32",
+      "source_parameter_id": "batch-32-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-batch-32-repeat_batch-1-prefetcher-off-P150X4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.accuracy.batch_32",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "batch-32",
+      "source_parameter_id": "batch-32-repeat_batch-1-prefetcher-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-batch-32-repeat_batch-1-prefetcher-off-P150X4]",
+      "dp": 1,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.performance.eval_32_repeat_3",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "eval-32-repeat-3",
+      "source_parameter_id": "eval-32-repeat_batch-3-prefetcher-off-perf-report-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-eval-32-repeat_batch-3-prefetcher-off-perf-report-off-P150X4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.accuracy.eval_32_repeat_3",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "eval-32-repeat-3",
+      "source_parameter_id": "eval-32-repeat_batch-3-prefetcher-off-perf-report-off",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-eval-32-repeat_batch-3-prefetcher-off-perf-report-off-P150X4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 3,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.performance.eval_32_repeat_1",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "eval-32-repeat-1",
+      "source_parameter_id": "eval-32-repeat_batch-1-prefetcher-off-perf-report-on",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-P150X4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.accuracy.eval_32_repeat_1",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "eval-32-repeat-1",
+      "source_parameter_id": "eval-32-repeat_batch-1-prefetcher-off-perf-report-on",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-P150X4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "performance"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, performance gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 32,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": true
+    },
+    {
+      "id": "p150x4.performance.ci_b1_dp4",
+      "geometry_id": "p150x4_tp1_dp4",
+      "profile": "performance",
+      "demo_case": "ci-b1-DP-4",
+      "source_parameter_id": "ci-b1-DP-4",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-ci-b1-DP-4-P150X4]",
+      "dp": 4,
+      "trace_mode": "all",
+      "context_bucket": 4096,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 4,
+      "decode_tokens": 2048,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150x4.accuracy.ci_b1_dp4",
+      "geometry_id": "p150x4_tp1_dp4",
+      "profile": "accuracy",
+      "demo_case": "ci-b1-DP-4",
+      "source_parameter_id": "ci-b1-DP-4",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-ci-b1-DP-4-P150X4]",
+      "dp": 4,
+      "trace_mode": "all",
+      "context_bucket": 4096,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 4,
+      "decode_tokens": 2048,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p300.performance.ci_b1_dp2",
+      "geometry_id": "p300_tp1_dp2",
+      "profile": "performance",
+      "demo_case": "ci-b1-DP-2",
+      "source_parameter_id": "ci-b1-DP-2",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-performance-ci-b1-DP-2-P300]",
+      "dp": 2,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 2,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p300.accuracy.ci_b1_dp2",
+      "geometry_id": "p300_tp1_dp2",
+      "profile": "accuracy",
+      "demo_case": "ci-b1-DP-2",
+      "source_parameter_id": "ci-b1-DP-2",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[blackhole-accuracy-ci-b1-DP-2-P300]",
+      "dp": 2,
+      "trace_mode": "all",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional gates; performance gates use independently frozen real-SKU floors.",
+      "batch_size": 2,
+      "decode_tokens": 200,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
+      "id": "p150.performance.seeded_cross_cardinality",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "performance",
+      "demo_case": "seeded-cross-cardinality",
+      "source_parameter_id": "seeded-cross-cardinality",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b_bh_seeded_cross_cardinality[blackhole-performance-P150]",
+      "batch_size": 32,
+      "decode_tokens": 32,
+      "repeat_batches": 1,
+      "report_perf": false,
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the performance profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
+    },
+    {
+      "id": "p150.accuracy.seeded_cross_cardinality",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "accuracy",
+      "demo_case": "seeded-cross-cardinality",
+      "source_parameter_id": "seeded-cross-cardinality",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b_bh_seeded_cross_cardinality[blackhole-accuracy-P150]",
+      "batch_size": 32,
+      "decode_tokens": 32,
+      "repeat_batches": 1,
+      "report_perf": false,
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
+    },
+    {
+      "id": "p150x4.performance.seeded_cross_cardinality",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "performance",
+      "demo_case": "seeded-cross-cardinality",
+      "source_parameter_id": "seeded-cross-cardinality",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b_bh_seeded_cross_cardinality[blackhole-performance-P150X4]",
+      "batch_size": 32,
+      "decode_tokens": 32,
+      "repeat_batches": 1,
+      "report_perf": false,
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the performance profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
+    },
+    {
+      "id": "p150x4.accuracy.seeded_cross_cardinality",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "seeded-cross-cardinality",
+      "source_parameter_id": "seeded-cross-cardinality",
+      "node_id": "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b_bh_seeded_cross_cardinality[blackhole-accuracy-P150X4]",
+      "batch_size": 32,
+      "decode_tokens": 32,
+      "repeat_batches": 1,
+      "report_perf": false,
+      "dp": 1,
+      "trace_mode": "none",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism",
+        "quality"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
+    }
+  ],
+  "serving_requirements": [
+    {
+      "row_id": "p150_dp1_decode_only",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "decode_only",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "trace_prefill_buckets": [],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": true,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    },
+    {
+      "row_id": "p150_dp1_all",
+      "geometry_id": "p150_tp1_dp1",
+      "profile": "all",
+      "dp": 1,
+      "trace_mode": "all",
+      "trace_prefill_buckets": [
+        128,
+        1024
+      ],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": false,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    },
+    {
+      "row_id": "p150x4_dp1_decode_only",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "decode_only",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "trace_prefill_buckets": [],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": false,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    },
+    {
+      "row_id": "p150x4_dp1_all",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "all",
+      "dp": 1,
+      "trace_mode": "all",
+      "trace_prefill_buckets": [
+        128,
+        1024
+      ],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": false,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    },
+    {
+      "row_id": "p150x4_dp4_decode_only",
+      "geometry_id": "p150x4_tp1_dp4",
+      "profile": "decode_only",
+      "dp": 4,
+      "trace_mode": "decode_only",
+      "trace_prefill_buckets": [],
+      "context_requirements": [
+        {
+          "bucket": null,
+          "bucket_rule": "highest characterization-proven per-lane bucket, capped by min(model context ceiling, 32768)",
+          "required_subcases": [
+            "long_prefill",
+            "chunked_prefill",
+            "cached_prefill"
+          ],
+          "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+          "acceptance_condition": "Characterization freezes a supported context bucket, then Tier 1 proves exact token counts plus long-, chunked-, and cached-prefill evidence before acceptance expectations are frozen."
+        }
+      ],
+      "cached_prefill": "required",
+      "chunked_prefill": "required",
+      "tier0_smoke": false,
+      "tier1_performance": "required",
+      "tier2_quality": "required_human_review",
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Canonical row passes every declared tier and context subcase with immutable LaunchSpec/provenance, exact trace/program evidence, clean lifecycle, frozen independent performance gates, and human-reviewed Tier-2 quality.",
+      "model_optimization_profile": "performance"
+    }
+  ],
+  "cross_cutting_requirements": [
+    {
+      "id": "cross_cardinality_invariance",
+      "capability": "A fixed request set with fixed per-request seeds must execute exact token-ID comparisons with batched prefill at admission cardinalities 1, 2, 4, and 32, using 32 true active-batch-1 sequential-prefill controls, and record either INVARIANT or BATCHED_PREFILL_REJECTED.",
+      "applies_to": [
+        "p150_tp1_dp1",
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "For every listed geometry and both profiles, either disposition satisfies experiment completion only when every control and candidate output is complete. BATCHED_PREFILL_REJECTED is a completed negative disposition and does not pass invariance; malformed or incomplete execution, skips, xfails, or missing rows fail."
+    },
+    {
+      "id": "disable_batched_prefill_policy",
+      "capability": "The executor must explicitly disable batched prefill whenever device sampling is enabled; BH determinism-sensitive execution follows the recorded INVARIANT or BATCHED_PREFILL_REJECTED verdict and retains sequential prefill unless batch invariance is proven.",
+      "applies_to": [
+        "p150_tp1_dp1",
+        "p150x4_tp4_dp1",
+        "p150x4_tp1_dp4"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Production remains sequential after BATCHED_PREFILL_REJECTED on any required geometry; policy may be reconsidered only after INVARIANT evidence for every required geometry and profile. This retained-policy requirement is independent of completed experiment disposition."
+    },
+    {
+      "id": "p150x4_ring_probe",
+      "capability": "Explicit FABRIC_1D_RING and model Ring CCL topology must pass the Phase-0 probe and remain pinned per demo and serving row.",
+      "applies_to": [
+        "p150x4_tp4_dp1",
+        "p150x4_tp1_dp4"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    },
+    {
+      "id": "central_trace_region",
+      "capability": "Every required P150, P150x4, and P300 trace mode must use the central trace-region resolver; actual TTTv2 capture sizes are measured per real SKU and models/model_trace_region_sizes.yaml is updated where they differ from inherited values. Dynamic allocation is a provisional development fallback, not a substitute for the required measurement record.",
+      "applies_to": [
+        "p150_tp1_dp1",
+        "p150x4_tp4_dp1",
+        "p150x4_tp1_dp4",
+        "p300_tp1_dp2"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    },
+    {
+      "id": "fail_closed_performance",
+      "capability": "A missing or incomplete metric floor must not block BH model execution or observational measurement, but the resulting measurements cannot establish performance acceptance. Every complete declared floor remains enforced, every failed meets_target result fails, and performance acceptance requires an independently justified, frozen floor.",
+      "applies_to": [
+        "p150_tp1_dp1",
+        "p150x4_tp4_dp1"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence may record observational measurements when a floor is missing or incomplete, but records performance acceptance only when a complete independently frozen floor exists and every declared target passes."
+    },
+    {
+      "id": "cold_warm_cache",
+      "capability": "Every required demo case must pass cold-write and warm-read cache runs without implicit fallback; each serving row pins and validates its cache root.",
+      "applies_to": [
+        "p150_tp1_dp1",
+        "p150x4_tp4_dp1",
+        "p150x4_tp1_dp4"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    },
+    {
+      "id": "exact_collection",
+      "capability": "Every required node must have an exact pytest --collect-only ID, nonzero passes, and zero unexpected skips/xfails.",
+      "applies_to": [
+        "p150_tp1_dp1",
+        "p150x4_tp4_dp1",
+        "p150x4_tp1_dp4",
+        "p300_tp1_dp2"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+    }
+  ],
+  "excluded_or_deferred": [
+    {
+      "id": "p100",
+      "classification": "post_v1_stretch",
+      "reason": "No active CI leg or P100 card is available; 7-wide DRAM handling does not itself grant model acceptance.",
+      "acceptance_effect": "Excluded from v1 completion and retained as an explicit post-v1 follow-up."
+    },
+    {
+      "id": "p300_128k_dp2",
+      "classification": "post_v1_stretch",
+      "reason": "V1 requires only additive functional ci-b1-DP-2 at max_seq_len 1024; full max_seq_len 131072 parity remains deferred.",
+      "acceptance_effect": "The TTTv1 128k LFC leg remains and is not replaced by the reduced v1 node."
+    },
+    {
+      "id": "p300_vllm",
+      "classification": "out_of_scope",
+      "reason": "The plan explicitly defines no P300 vLLM row in v1.",
+      "acceptance_effect": "No serving row or central performance target may be created for P300 in v1."
+    },
+    {
+      "id": "p150x2_standin_acceptance",
+      "classification": "development_only",
+      "reason": "A loudbox P150_X2 submesh resolves as P300 policy but is not real bh_p300 provenance.",
+      "acceptance_effect": "Its passing functional runs cannot satisfy the real P300 additive leg."
+    },
+    {
+      "id": "p150x8_and_bh_galaxy",
+      "classification": "out_of_scope",
+      "reason": "This initiative migrates models_e2e_tests.yaml only; release_tests loudbox/Galaxy legs are follow-up work.",
+      "acceptance_effect": "No P150x8 or BH Galaxy row is required for v1."
+    },
+    {
+      "id": "tttv1_hf_rope",
+      "classification": "retained_tttv1",
+      "reason": "The --use_hf_rope leg remains TTTv1 until issue #51374; TTTv2 DRAM prefetcher is a documented non-goal.",
+      "acceptance_effect": "Neither leg may be silently claimed as migrated TTTv2 coverage."
+    }
+  ]
+}

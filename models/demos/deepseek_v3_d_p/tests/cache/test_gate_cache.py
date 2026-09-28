@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import shutil
 from pathlib import Path
 
@@ -49,6 +50,18 @@ def create_gate_input(config, mesh_device):
     )
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_mode = params["gate_mode"]
+
+    if not on_ci:
+        return False
+    if gate_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -63,8 +76,8 @@ def create_gate_input(config, mesh_device):
 )
 @pytest.mark.parametrize(
     "gate_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.HOST_MATMUL, GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL],
-    ids=["device_gate", "host_matmul", "host_grouped_gate", "host_all"],
+    [GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_ALL],
+    ids=["device_fp32", "host_all"],
 )
 def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     """Test: weights → cold cache → warm cache produce identical outputs."""

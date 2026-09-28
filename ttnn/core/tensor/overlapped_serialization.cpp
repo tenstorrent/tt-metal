@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <cerrno>
 #include <string>
-#include <string_view>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -22,32 +21,11 @@
 #include <tt_stl/cleanup.hpp>
 
 #include "tensor/flatbuffer/overlapped_tensor_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_file_layout.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn {
-using tt::tt_metal::HostBuffer;
 using tt::tt_metal::MemoryPin;
-
-namespace {
-
-void safe_fwrite(const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {
-    TT_FATAL(bytes > 0, "Expected to write > 0 bytes to file");
-    const size_t written = fwrite(buffer, 1, bytes, file);
-    TT_FATAL(
-        written == bytes,
-        "Failed to write {} to \"{}\": wrote {}/{} bytes (ferror={}, errno={} \"{}\")",
-        what,
-        filename,
-        written,
-        bytes,
-        ferror(file),
-        errno,
-        strerror(errno));
-}
-
-constexpr std::uint32_t kOverlappedFlatbufferAlignment = alignof(std::uint64_t);
-
-}  // namespace
 
 void dump_overlapped_tensors(const std::string& file_name, const std::vector<OverlappedTensorView>& views) {
     TT_FATAL(!views.empty(), "Need at least one view to serialize");
@@ -84,24 +62,12 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
             }
         });
 
-        std::vector<HostBuffer> buffers;
+        std::vector<SerializedTensorBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
         auto root_offset = ttnn::overlapped_tensors_to_flatbuffer(cpu_views, builder, buffers);
-        builder.Align(kOverlappedFlatbufferAlignment);
         builder.Finish(root_offset);
 
-        const uint64_t header_size = builder.GetSize();
-        safe_fwrite(&header_size, sizeof(header_size), output_file, file_name, "header size");
-        safe_fwrite(builder.GetBufferPointer(), header_size, output_file, file_name, "header");
-
-        for (const auto& buffer : buffers) {
-            auto buffer_view = buffer.view_bytes();
-            TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during serialization");
-            safe_fwrite(buffer_view.data(), buffer_view.size(), output_file, file_name, "tensor data");
-        }
-
-        TT_FATAL(
-            fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
+        write_tensor_file(output_file, file_name, builder, buffers);
     }
     ctx->barrier();
 }
@@ -148,8 +114,9 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
 
     std::byte* data_region = file_data + data_offset;
     TT_FATAL(
-        (reinterpret_cast<uintptr_t>(data_region) & (kOverlappedFlatbufferAlignment - 1)) == 0,
-        "Tensor data pointer must be 8-byte aligned!");
+        (reinterpret_cast<uintptr_t>(data_region) & (kMinTensorDataAlignment - 1)) == 0,
+        "Tensor data pointer must be {}-byte aligned!",
+        kMinTensorDataAlignment);
 
     auto views =
         ttnn::overlapped_tensors_from_flatbuffer(fb_root, ttsl::Span<std::byte>(data_region, data_size), memory_pin);

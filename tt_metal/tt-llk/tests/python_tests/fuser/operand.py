@@ -3,11 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import ClassVar, List, Optional, Tuple
+from enum import Enum
+from typing import List, Optional, Tuple
 
 import torch
 from helpers.device_io import read_from_device, write_to_device
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
+from helpers.pack import (
+    pack_bfp8_b,
+    pack_bfp16,
+    pack_fp8_e4m3,
+    pack_fp16,
+    pack_fp32,
+    pack_int8,
+    pack_int16,
+    pack_int32,
+    pack_uint8,
+    pack_uint16,
+    pack_uint32,
+)
 from helpers.stimuli_generator import (
     StimuliSpec,
     default_spec_for_format,
@@ -22,44 +36,57 @@ from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
 
+L1_PACKERS = {
+    DataFormat.Float16: pack_fp16,
+    DataFormat.Float16_b: pack_bfp16,
+    DataFormat.Float32: pack_fp32,
+    DataFormat.Bfp8_b: pack_bfp8_b,
+    DataFormat.Int32: pack_int32,
+    DataFormat.UInt32: pack_uint32,
+    DataFormat.Int16: pack_int16,
+    DataFormat.UInt16: pack_uint16,
+    DataFormat.Fp8_e4m3: pack_fp8_e4m3,
+    DataFormat.Int8: pack_int8,
+    DataFormat.UInt8: pack_uint8,
+}
+
+
+class BfdResource(Enum):
+    UNP0 = "ckernel::trisc::BfdResource::Unp0"
+    UNP1 = "ckernel::trisc::BfdResource::Unp1"
+    PACK0 = "ckernel::trisc::BfdResource::Pack0"
+
+
+class L1AccessMode(Enum):
+    CONTINUOUS = "ckernel::trisc::L1AccessMode::Continuous"
+    STRIDED = "ckernel::trisc::L1AccessMode::Strided"
+
+
+def bfd_current(engine: BfdResource) -> str:
+    return f"ckernel::trisc::bfd_current<{engine.value}>()"
+
 
 @dataclass
 class Operand:
-    _next_buf_desc_id: ClassVar[int] = 0
-    MAX_OPERANDS_NUM: ClassVar[int] = 32
-
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
-    tile_shape: TileShape = field(
-        default_factory=lambda: construct_tile_shape(
-            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
-        )
-    )
+    tile_shape: TileShape
     l1_address: Optional[int] = None
-    is_input: bool = False
     is_output: bool = False
-    sfpu: bool = True
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
-    const_value: Optional[float] = None
+    intervals: Optional[List[Tuple[float, float]]] = None
     l1_golden: Optional[torch.Tensor] = None
-    tile_count: Optional[int] = None
-    tile_count_x: Optional[int] = None
-    tile_count_y: Optional[int] = None
-    tile_size: Optional[int] = None
+    tile_count: int = field(init=False)
+    tile_count_x: int = field(init=False)
+    tile_count_y: int = field(init=False)
+    tile_size: int = field(init=False)
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
-    buf_desc_id: Optional[int] = None
 
     def __post_init__(self):
-        self.buf_desc_id = Operand._next_buf_desc_id
-        if self.buf_desc_id >= Operand.MAX_OPERANDS_NUM:
-            raise ValueError(
-                f"buf_desc_id {self.buf_desc_id} exceeds maximum of {Operand.MAX_OPERANDS_NUM - 1} for operand '{self.name}'"
-            )
-        Operand._next_buf_desc_id += 1
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
         self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
         self.tile_count = self.tile_count_x * self.tile_count_y
@@ -88,8 +115,15 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
-        if self.const_value is not None:
-            spec = StimuliSpec.constant(self.const_value)
+        if self.intervals is not None:
+            if (
+                len(self.intervals) == 1
+                and self.intervals[0][0] == self.intervals[0][1]
+                and not self.data_format.is_integer()
+            ):
+                spec = StimuliSpec.constant(self.intervals[0][0])
+            else:
+                spec = StimuliSpec.uniform(intervals=self.intervals)
         else:
             spec = default_spec_for_format(self.data_format)
 
@@ -141,35 +175,7 @@ class Operand:
         Returns:
             List of (address, packed_data) tuples, one per tile.
         """
-        from helpers.pack import (
-            pack_bfp8_b,
-            pack_bfp16,
-            pack_fp8_e4m3,
-            pack_fp16,
-            pack_fp32,
-            pack_int8,
-            pack_int16,
-            pack_int32,
-            pack_uint8,
-            pack_uint16,
-            pack_uint32,
-        )
-
-        packers = {
-            DataFormat.Float16: pack_fp16,
-            DataFormat.Float16_b: pack_bfp16,
-            DataFormat.Float32: pack_fp32,
-            DataFormat.Bfp8_b: pack_bfp8_b,
-            DataFormat.Int32: pack_int32,
-            DataFormat.UInt32: pack_uint32,
-            DataFormat.Int16: pack_int16,
-            DataFormat.UInt16: pack_uint16,
-            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
-            DataFormat.Int8: pack_int8,
-            DataFormat.UInt8: pack_uint8,
-        }
-
-        pack_function = packers.get(self.data_format)
+        pack_function = L1_PACKERS.get(self.data_format)
         if not pack_function:
             raise ValueError(f"Unsupported data format: {self.data_format.name}")
 
@@ -213,10 +219,6 @@ class Operand:
     def cpp_name(self) -> str:
         return f"{self.name}_buffer"
 
-    @property
-    def cpp_desc_name(self) -> str:
-        return f"{self.name}_desc"
-
     def cpp_value(self, dest_acc: bool) -> str:
         buffer_size = calculate_tile_size_bytes(
             data_format=self.data_format,
@@ -230,32 +232,29 @@ class Operand:
         )
         return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
-    def cpp_buf_desc_decl(self) -> str:
+    def bfd_alloc_and_program(
+        self,
+        engine: BfdResource,
+        mode: L1AccessMode = L1AccessMode.CONTINUOUS,
+    ) -> str:
         return (
-            f"buffer_descriptor_u {self.cpp_desc_name} = "
-            f"ckernel::trisc::construct_buf_desc("
+            f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
             f"{self.data_format.cpp_underlying_value});\n"
         )
 
-    def emit_buf_desc_table_entry(self) -> str:
-        if self.buf_desc_id is None:
-            return ""
-        return f"ckernel::trisc::_configure_buf_desc_table_({self.buf_desc_id}, {self.cpp_desc_name});\n"
-
 
 class OperandRegistry:
     def __init__(self):
         self.operands: dict[str, Operand] = {}
-        Operand._next_buf_desc_id = 0
 
     def create(
         self,
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
-        const_value: Optional[float] = None,
+        intervals: Optional[List[Tuple[float, float]]] = None,
         tile_dims: Optional[Tuple[int, int]] = None,
     ) -> Operand:
         if name in self.operands:
@@ -282,7 +281,7 @@ class OperandRegistry:
             dimensions=dimensions,
             data_format=data_format,
             is_output=False,
-            const_value=const_value,
+            intervals=intervals,
             tile_shape=tile_shape,
         )
         self.operands[name] = operand
@@ -298,9 +297,6 @@ class OperandRegistry:
             )
 
         return self.operands[name]
-
-    def get_all_inputs(self) -> list[Operand]:
-        return [op for op in self.operands.values() if op.is_input]
 
     def get_all_outputs(self) -> list[Operand]:
         return [op for op in self.operands.values() if op.is_output]
@@ -411,14 +407,6 @@ class OperandRegistry:
             )
 
             output._raw_data = raw_tensor
-
-    @staticmethod
-    def emit_operand_init(operands: list[Operand]) -> str:
-        code = ""
-        for op in operands:
-            code += op.cpp_buf_desc_decl()
-            code += op.emit_buf_desc_table_entry()
-        return code
 
     def generate_cpp(self, dest_acc: bool):
         code = "// Inputs\n"

@@ -367,18 +367,6 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-// Re-point slot 0 of every core's args for one kernel. Shared by the tilize factories' cache-hit
-// hooks so the slot layout the factories all bake has a single home.
-void patch_tilize_kernel_slot0(tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t address) {
-    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
-        for (auto& a : col) {
-            if (a.size() > 0) {
-                a[0] = address;
-            }
-        }
-    }
-}
-
 ttnn::Tensor tilize(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,

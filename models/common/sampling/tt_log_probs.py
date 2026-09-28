@@ -304,16 +304,16 @@ class LogProbsCalculator:
 
     def set_log_probs_mode(
         self,
-        enable_log_probs: bool | list[bool] = False,
-        num_logprobs: int | list[int] | None = None,
+        enable_log_probs: bool | list[bool] | tuple[bool, ...] = False,
+        num_logprobs: int | list[int] | tuple[int, ...] | None = None,
         empty_slots: list[int] | None = None,
     ):
         """Set logprobs mode for the current batch.
 
         Args:
-            enable_log_probs: Boolean or per-user boolean list. If any user has logprobs
+            enable_log_probs: Boolean or per-user boolean list/tuple. If any user has logprobs
                 enabled, the entire batch runs logprobs computation.
-            num_logprobs: Integer or per-user integer list (0-20). Specifies how many
+            num_logprobs: Integer or per-user integer list/tuple (0-20). Specifies how many
                 top logprobs to return per user. 0 means sampled token logprob only.
                 Values > 0 trigger top-k logprobs computation on device.
             empty_slots: Optional list of batch indices at which to apply the new
@@ -322,7 +322,7 @@ class LogProbsCalculator:
         """
         if empty_slots is not None:
             # Partial update: only modify the specified batch positions
-            if isinstance(enable_log_probs, list):
+            if isinstance(enable_log_probs, (list, tuple)):
                 for i, slot in enumerate(empty_slots):
                     self.logprobs_enabled[slot] = enable_log_probs[i]
             else:
@@ -330,7 +330,7 @@ class LogProbsCalculator:
                     self.logprobs_enabled[slot] = enable_log_probs
 
             if num_logprobs is not None:
-                if isinstance(num_logprobs, list):
+                if isinstance(num_logprobs, (list, tuple)):
                     for i, slot in enumerate(empty_slots):
                         self.num_logprobs[slot] = num_logprobs[i]
                 else:
@@ -338,13 +338,13 @@ class LogProbsCalculator:
                         self.num_logprobs[slot] = num_logprobs
         else:
             # Full batch update
-            if isinstance(enable_log_probs, list):
+            if isinstance(enable_log_probs, (list, tuple)):
                 self.logprobs_enabled = list(enable_log_probs)
             else:
                 self.logprobs_enabled = [enable_log_probs] * self.batch_size
 
             if num_logprobs is not None:
-                if isinstance(num_logprobs, list):
+                if isinstance(num_logprobs, (list, tuple)):
                     self.num_logprobs = list(num_logprobs)
                 else:
                     self.num_logprobs = [num_logprobs] * self.batch_size
@@ -509,6 +509,28 @@ class LogProbsCalculator:
         # Subtract and put result to self.output_tensor
         ttnn.subtract(out, log_global_exp_sum, output_tensor=self.output_tensor, **self.common_args)
 
+    def _release_global_stats(self) -> None:
+        """Free the per-call global stats so they do not outlive the call.
+
+        `_compute_global_stats` parks `global_max`/`global_exp_sum` on the instance so the
+        later log-softmax steps can read them, but they are CALL-SCOPED: every call
+        overwrites them and nothing reads them across calls. Left on the instance they keep
+        two device buffers alive indefinitely -- and prefill sampling is UNTRACED, so they are
+        allocated while the prefill/decode traces are live and are still alive at
+        execute_trace. That is the allocation-behind-a-live-trace hazard of #52176, and the
+        trace-allocation tracker (TT_METAL_TRACE_ALLOC_TRACKING=1) names exactly these two
+        buffers: "Found 2 device buffer(s) still alive before trace replay".
+        """
+        for name in ("global_max", "global_exp_sum"):
+            tensor = getattr(self, name, None)
+            if tensor is None:
+                continue
+            try:
+                ttnn.deallocate(tensor)
+            except BaseException as error:  # best-effort, mirrors release()
+                logger.debug(f"Failed to deallocate {name}: {error}")
+            setattr(self, name, None)
+
     def calculate_log_probs(
         self,
         logits_tensor: ttnn.Tensor,
@@ -537,6 +559,8 @@ class LogProbsCalculator:
 
         # Calculate log-probs for each user on each chip and stores in self.output_tensor
         self._calculate_log_probs(relevant_logits)
+
+        self._release_global_stats()
 
         return self.output_tensor
 
@@ -636,6 +660,8 @@ class LogProbsCalculator:
         self._calculate_topk_log_probs_from_values(topk_local_values)
         ttnn.deallocate(topk_local_values)
 
+        self._release_global_stats()
+
         return LogProbsResult(
             topk_logprobs=self.topk_logprobs_output,
             topk_indices=self.topk_indices_output,
@@ -687,15 +713,19 @@ class LogProbsCalculator:
         mesh_composer = self._build_mesh_composer()
 
         topk_logprobs_host = ttnn.to_torch(
-            log_probs_result.topk_logprobs_host
-            if log_probs_result.topk_logprobs_host is not None
-            else log_probs_result.topk_logprobs,
+            (
+                log_probs_result.topk_logprobs_host
+                if log_probs_result.topk_logprobs_host is not None
+                else log_probs_result.topk_logprobs
+            ),
             mesh_composer=mesh_composer,
         )
         topk_indices_host = ttnn.to_torch(
-            log_probs_result.topk_indices_host
-            if log_probs_result.topk_indices_host is not None
-            else log_probs_result.topk_indices,
+            (
+                log_probs_result.topk_indices_host
+                if log_probs_result.topk_indices_host is not None
+                else log_probs_result.topk_indices
+            ),
             mesh_composer=mesh_composer,
         )
         # Remove replicas

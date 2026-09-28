@@ -7,17 +7,20 @@
 """Blackhole Galaxy system diagnostic tool (DRAFT).
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
-reset stability loop, and tt-metal deployment-test gtest invocation.
-Emits a single JSON pass/fail report.
+reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
+first-step tools, and — where the host has the package — the QSFP tests.
+ Emits a single JSON pass/fail report.
 
 Run via run_diag.sh which sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -167,17 +170,151 @@ TESTS = {
     "gddr_full": "*DramDeployment_*",
 }
 
+# Pytest-based tests, keyed like TESTS but run through the repo venv's pytest
+# (python_env/bin/pytest, falling back to PATH) instead of the gtest binary.
+# Each entry is a pytest node id plus its extra args.
+#
+# didt_matmul_galaxy: dI/dt worst-case matmul across the full galaxy mesh (8x4),
+# 1000 workload iterations with a determinism check every 50 (20 checks) —
+# catches droop-induced non-determinism the short deployment gtests don't.
+# Measured 545 s in-suite on a BH galaxy (bh-glx6u-28, 2026-09-01):
+# iterations ~69 ms each, each determinism check ~13 s (reads the full
+# 16k x 16k output back from all 32 chips), plus ~3.5 min cold 32-chip
+# bring-up/compile. Check density is the dominant cost: the same test at 5000 iterations
+# across all four dtype variants (-k galaxy) measures ~2 h. Note a longer
+# soak catches more: a marginal chip on the bench unit failed 2/10 checks at
+# 5000 iterations but passed shorter runs — bump iterations for deep triage.
+PYTESTS = {
+    "didt_matmul_galaxy": {
+        "target": "tests/didt/test_minimal_matmul.py::test_minimal_matmul",
+        "args": [
+            "-k",
+            "galaxy and bf16_HiFi2",
+            "--didt-workload-iterations",
+            "1000",
+            "--determinism-check-interval",
+            "50",
+            "-s",
+            # pytest.ini sets a repo-wide 300s pytest-timeout; this run always
+            # exceeds it (~545s measured). 1200s keeps >2x headroom while still
+            # bounding a standalone deploy run if a device test wedges (the
+            # test-infrastructure wrapper adds its own wall-clock timeout, but
+            # run_diag.sh / container entrypoints invoke this script directly).
+            "--timeout",
+            "1200",
+        ],
+    },
+}
+
 # Tests executed per tier. ETH deployment tests (added in tt-metal #49215 and
 # compiled via tests/tt_metal/tt_metal/deployment/sources.cmake) are enabled here
 # to match the tier layout documented in run_diag.sh:
 #   light  -> eth link_up
 #   medium -> light + eth bandwidth + GDDR fast-pattern
-#   deploy -> full GDDR patterns + eth bandwidth
+#   deploy -> full GDDR patterns + eth bandwidth + didt matmul stress (pytest)
 TIER_TESTS = {
     "light": ["eth_link_up"],
     "medium": ["gddr_fast", "eth_link_up", "eth_bandwidth"],
-    "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth"],
+    "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"],
 }
+
+# Reset run between the gtest phase and the triage phase, per tier. Two reasons
+# it sits there: the triage probes open every chip read-write, so they must not
+# overlap the tests, and the tools have no SIGBUS handler — tt-kmd zaps every
+# mapping on reset, so a reset concurrent with a probe kills it outright rather
+# than being reported. A discrete reset that completes first rules both out.
+#
+# This one is deliberately bare: reset_loop() is called without snapshot_out /
+# post_reset_phases, so it takes no revalidation snapshot and therefore stays
+# out of the post-reset snapshot dedupe in run_diag(). Adding revalidation here
+# means reworking that block, which assumes a single batch of snapshot_after_*
+# phases judged by normalize_health_report() on post[-1].
+POST_TEST_RESET_PLAN = {
+    "light": [],
+    "medium": ["-glx_reset"],
+    "deploy": ["-glx_reset"],
+}
+
+# First-step triage tools, run after POST_TEST_RESET_PLAN. They live in
+# tools/scaleout/kmd_triage: host_side.sh reads host, PCIe and driver state out
+# of sysfs, device_side.sh drives the kmd_triage binary over every chip.
+#
+# Their interface, which is all this phase depends on:
+#   <script> --json <path> -o <path>
+# writes a JSON file {"checks": [{"name", "status", "details", "ip", "data"}]}
+# and a human-readable text report. Status is one of PASS/WARN/FAIL/SKIP; `ip`
+# is one of the IP_ORDER groups (an unrecognised value lands in the dashboard's
+# "other" category rather than breaking). The Phase and its rollup are built
+# here, not there, so FAIL > WARN > PASS stays computed in one place.
+#
+# host_side needs root for the kernel-log scan; device_side does not, and
+# opening the chips as root would be a needless escalation.
+#
+# Timeouts bound a wedged run. host_side is passive bash (32 lspci dumps plus a
+# kernel-log scan); device_side opens each chip and self-bounds every probe at
+# 60 s, so its budget has to cover 5 probes x 32 devices with slack.
+TRIAGE_TOOLS = {
+    "host_side": {"script": "host_side.sh", "root": True, "timeout_s": 600},
+    "device_side": {"script": "device_side.sh", "root": False, "timeout_s": 2400},
+}
+
+TIER_TRIAGE = {
+    "light": [],
+    "medium": ["host_side", "device_side"],
+    "deploy": ["host_side", "device_side"],
+}
+
+# Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. Both
+# count host state accumulated over a boot — correctable AER, kernel-log fault
+# lines — so they WARN on units everything else calls healthy, and one phase
+# WARN is a run WARN. FAIL continues to follow the normal triage gating policy.
+TRIAGE_ADVISORY_WARN = frozenset({"hostside_pcie_aer", "hostside_kernel_log"})
+
+# The scripts' home, relative to the repo root.
+TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"
+
+# Override for the above, so a working copy of the scripts can be run against a
+# deployed checkout without editing anything.
+TRIAGE_DIR_ENV = "HC_TRIAGE_DIR"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QSFP tests — the syseng ETH dump, when the host has it
+# ─────────────────────────────────────────────────────────────────────────────
+
+# `tt-bh-glx-cluster-debug` ships as a .deb built with PyInstaller, so it is one
+# binary on PATH with no repo, no venv and no import path to arrange — which is
+# why this phase probes for a command rather than for a checkout the way the
+# triage phase probes for its scripts. A host that has not had the package
+# installed simply does not have it, and that is a SKIP: an optional tool is
+# lost coverage when it is absent, never a failure.
+QSFP_TOOL_BIN = "tt-bh-glx-cluster-debug"
+
+# `collect` reads one galaxy into a JSONL snapshot: per-ASIC telemetry, the
+# per-port ERISC blobs for all 448 ETH ports, and the QSFP cages over I2C.
+# --parallelize reads the four UBBs' cages at once, about twice as fast, and the
+# cage sweep is where most of a run's time goes.
+QSFP_COLLECT_ARGS = ["collect", "--parallelize"]
+
+# A backstop, not the expected duration: the cage sweep self-bounds at the
+# tool's own 600 s --qsfp-budget and a full run measures ~7 min. It has to stay
+# well inside run_health_check.py's whole-run --timeout-minutes (30 by default),
+# because that one kills the process group and takes the report with it, while
+# overrunning this one only costs this phase.
+QSFP_TIMEOUT_S = 1200
+
+# Tiers that collect a dump. Same shape as TIER_TRIAGE and for the same reason:
+# light is a ~75 s smoke check and a minutes-long ETH sweep does not belong in
+# it. medium and deploy already pay for the triage phase in the same slot.
+TIER_QSFP_TESTS = {
+    "light": False,
+    "medium": True,
+    "deploy": True,
+}
+
+# Where the conversion from the dump's records to checks lives. Kept out of this
+# file because it is pure data shaping with no hardware in it: a stored dump is
+# all it needs, so it can be iterated on and tested at a desk.
+QSFP_INGEST_MODULE = "qsfp_ingest"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result model
@@ -203,6 +340,13 @@ class Phase:
     duration_s: float = 0.0
     checks: list[Check] = field(default_factory=list)
     error: str = ""
+    # False → the phase's findings are recorded at their real status but do not
+    # reach the run's verdict: not the exit code, not the JIRA gate, not the CSV
+    # rollup. For a tool still being validated against the fleet, which has to
+    # report honestly without being able to take nodes out of service. The flag
+    # travels in the JSON so the consumers downstream apply one decision rather
+    # than each keeping its own list of which phases count.
+    gates: bool = True
 
     def add(self, c: Check) -> None:
         self.checks.append(c)
@@ -313,6 +457,89 @@ def take_snapshot(tt_smi: str, out_path: Path) -> dict:
         raise RuntimeError(f"snapshot file not written: {out_path}")
     with out_path.open() as f:
         return json.load(f)
+
+
+def parse_fru_print(text: str) -> list[dict]:
+    """Parse `ipmitool fru print` output into one {field: value} dict per FRU
+    device. Output is `Key : Value` lines; a `FRU Device Description` line
+    starts a new device block. Splitting on the first colon keeps values that
+    themselves contain colons (e.g. mfg date timestamps) intact.
+
+    Unpopulated fields ("---" placeholders on Galaxy BMCs) are dropped, which
+    also disposes of most of the repeated `* Extra` keys; a repeated key with a
+    real value keeps the last occurrence."""
+    devices: list[dict] = []
+    cur: dict | None = None
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key == "FRU Device Description":
+            cur = {"description": value}
+            devices.append(cur)
+        elif cur is not None and key and value and value != "---":
+            cur[key] = value
+    return devices
+
+
+def collect_fru_info(phase: Phase, dry_run: bool) -> None:
+    """Capture the BMC FRU inventory (`ipmitool fru print`) into the report.
+
+    Store-only forensics — board/product part numbers, serials, and mfg dates
+    for correlating failures with specific hardware units. Never degrades the
+    run status: PASS when captured, SKIP when ipmitool / sudo / the BMC is
+    unavailable (e.g. offline --input-snapshot dev runs).
+    """
+    cmd = ["ipmitool", "fru", "print"]
+    if os.geteuid() != 0:
+        # -n: fail immediately rather than hang on a password prompt.
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        cp = run(cmd, dry_run=dry_run, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        phase.add(Check(name="host_fru_info", status=SKIP, details=f"ipmitool unavailable: {e!r}", ip="other"))
+        return
+    if dry_run:
+        phase.add(Check(name="host_fru_info", status=SKIP, details=f"(dry) {' '.join(cmd)}", ip="other"))
+        return
+    if cp.returncode != 0:
+        first_err = ((cp.stderr or cp.stdout or "").strip().splitlines() or ["no output"])[0]
+        phase.add(
+            Check(
+                name="host_fru_info",
+                status=SKIP,
+                details=f"ipmitool fru print rc={cp.returncode}: {first_err}",
+                ip="other",
+            )
+        )
+        return
+    devices = parse_fru_print(cp.stdout)
+    if not devices:
+        phase.add(Check(name="host_fru_info", status=SKIP, details="no FRU devices parsed from output", ip="other"))
+        return
+    # UBB board serials are the tray serials used for hardware-swap tracking —
+    # surface them in the details; full field set is in data.devices.
+    ubb_serials = [
+        f"{d['description'].split(' ')[0]}={d['Board Serial']}"
+        for d in devices
+        if d.get("description", "").startswith("UBB") and d.get("Board Serial")
+    ]
+    detail_tail = "; ".join(ubb_serials)
+    if not detail_tail:
+        first = devices[0]
+        detail_tail = ", ".join(
+            f"{k}={first[k]}" for k in ("Product Name", "Product Serial", "Board Serial") if first.get(k)
+        )
+    phase.add(
+        Check(
+            name="host_fru_info",
+            status=PASS,
+            details=f"{len(devices)} FRU device(s) captured" + (f"; {detail_tail}" if detail_tail else ""),
+            data={"devices": devices},
+            ip="other",
+        )
+    )
 
 
 def validate_snapshot(snap: dict, phase: Phase) -> str | None:
@@ -1034,6 +1261,7 @@ def reset_loop(
     dry_run: bool,
     snapshot_out: Path | None = None,
     post_reset_phases: list | None = None,
+    logs_dir: Path | None = None,
 ) -> None:
     """Per SYS-4365: first -r, then stick to -glx_reset for subsequent iterations.
 
@@ -1065,6 +1293,20 @@ def reset_loop(
         t0 = time.time()
         cp = run([tt_smi, flag], dry_run=dry_run, capture_output=True, text=True)
         dt = time.time() - t0
+
+        log_path = logs_dir / f"{check_name}.log" if logs_dir is not None else None
+        if log_path is not None and not dry_run:
+            try:
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                log_path.write_text(
+                    f"$ {tt_smi} {flag}\nrc={cp.returncode}  duration={dt:.1f}s\n"
+                    f"\n--- stdout ---\n{cp.stdout or '(empty)'}"
+                    f"\n--- stderr ---\n{cp.stderr or '(empty)'}\n"
+                )
+                log(f"  log:  {log_path}")
+            except OSError as e:
+                log(f"  could not write {log_path}: {e!r}")
+
         # Quick post-reset enum check
         if dry_run:
             post_count = EXPECTED_CHIP_COUNT
@@ -1078,6 +1320,13 @@ def reset_loop(
                 post_count = -1
         status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
         _emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
+
+        # A failed reset is the one case where the console should say why
+        # without the reader having to go and open the log.
+        if status == FAIL and not dry_run:
+            text = (cp.stderr or "").strip() or (cp.stdout or "").strip()
+            for line in text.splitlines()[-5:]:
+                log(f"  ! {line}")
         phase.add(
             Check(
                 name=check_name,
@@ -1176,6 +1425,144 @@ GTEST_OK_RE = re.compile(r"\[\s*OK\s*\]\s+(\S+\.\S+)")
 GTEST_FAIL_RE = re.compile(r"\[\s*FAILED\s*\]\s+(\S+\.\S+)")
 
 
+# pytest progress markers. Counts come from the end-of-run summary line
+# ("===== 3 passed, 1 failed, 2 deselected in 600.12s ====="); failing node ids
+# from the short-summary "FAILED tests/..." lines and, for fixture/collection
+# errors, the "ERROR tests/..." lines.
+PYTEST_COUNT_RE = re.compile(r"(\d+) (passed|failed|error)")
+PYTEST_FAILED_LINE_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)")
+
+
+def parse_pytest_summary_counts(line: str) -> tuple[int, int] | None:
+    """Extract (passed, failed) from a pytest end-of-run summary line, or None
+    if the line isn't one. Fixture/collection `error` counts fold into failed.
+    A "no tests ran" summary carries no counts and returns None — callers'
+    zero-initialized counts then record the run as FAIL, not a silent PASS."""
+    if not line.startswith("=") or not (" passed" in line or " failed" in line or " error" in line):
+        return None
+    counts = {word: int(num) for num, word in PYTEST_COUNT_RE.findall(line)}
+    return counts.get("passed", 0), counts.get("failed", 0) + counts.get("error", 0)
+
+
+def resolve_pytest(tt_metal: Path) -> str | None:
+    """Prefer the repo venv's pytest (has ttnn + test deps); fall back to PATH."""
+    venv_pytest = tt_metal / "python_env" / "bin" / "pytest"
+    if venv_pytest.is_file():
+        return str(venv_pytest)
+    return shutil.which("pytest")
+
+
+def run_pytest_test(
+    name: str, spec: dict, tt_metal: Path, env: dict, phase: Phase, dry_run: bool, logs_dir: Path
+) -> None:
+    """Run one PYTESTS entry, mirroring the gtest flow: stream output to the
+    per-test log, count testcases, and record a Check with the same
+    `passed=N failed=N` details format the CSV analyzer parses."""
+    pytest_bin = resolve_pytest(tt_metal)
+    if pytest_bin is None:
+        if dry_run:
+            pytest_bin = "pytest"  # display-only; nothing is executed
+        else:
+            phase.add(
+                Check(
+                    name=name,
+                    status=FAIL,
+                    details=f"pytest not found ({tt_metal}/python_env/bin/pytest or PATH)",
+                    ip="other",
+                )
+            )
+            return
+
+    # cmd is built exclusively from the hardcoded PYTESTS table and the
+    # repo-resolved pytest binary — no user-controlled input — and is executed
+    # as an argv list (no shell).
+    target = spec["target"]
+    cmd = [pytest_bin, target, *spec["args"]]
+    test_env = env.copy()
+    test_env.setdefault("PYTHONPATH", str(tt_metal))
+    log_path = logs_dir / f"{name}.log"
+    # shlex.join keeps args with spaces (-k "galaxy and bf16_HiFi2") copy-pasteable
+    cmdline = shlex.join(cmd)
+    log(f"--- test '{name}' (pytest) ---")
+    log(f"  cmd:  {cmdline}")
+    log(f"  log:  {log_path}")
+
+    if dry_run:
+        print(f"  {name:30} (dry-run)")
+        phase.add(
+            Check(
+                name=name,
+                status=PASS,
+                ip="other",
+                details=f"(dry) target={target} log={log_path}",
+                data={
+                    "target": target,
+                    "command": cmdline,
+                    "rc": 0,
+                    "duration_s": 0.0,
+                    "log_file": str(log_path),
+                    "testcases": {"passed": 0, "failed": 0, "failures": []},
+                },
+            )
+        )
+        return
+
+    _emit_running(name)
+
+    t0 = time.time()
+    passed = 0
+    failed = 0
+    failures: list[str] = []
+    with log_path.open("w") as logf:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            env=test_env,
+            cwd=str(tt_metal),
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            # All pytest output goes to the log file only — keep the console clean.
+            logf.write(line)
+            if m := PYTEST_FAILED_LINE_RE.match(line):
+                failures.append(m.group(1))
+            elif (counts := parse_pytest_summary_counts(line)) is not None:
+                passed, failed = counts
+        rc = proc.wait()
+    # A node can appear in both a live FAILED line and the short summary.
+    failures = list(dict.fromkeys(failures))
+    dt = time.time() - t0
+
+    # Require passed > 0 so an over-narrow -k expression (0 tests collected,
+    # pytest rc=5) or an unparsed summary can't be recorded as a silent PASS —
+    # same trap as the zero-match gtest filters documented above TESTS.
+    status = PASS if rc == 0 and failed == 0 and passed > 0 else FAIL
+    suffix = f"({dt:.1f}s)"
+    if failed:
+        suffix += f"  passed={passed} failed={failed}"
+    _emit_result(name, status, suffix=suffix)
+    details = f"target={target} rc={rc} dur={dt:.1f}s " f"passed={passed} failed={failed} log={log_path}"
+    phase.add(
+        Check(
+            name=name,
+            status=status,
+            details=details,
+            data={
+                "target": target,
+                "command": cmdline,
+                "rc": rc,
+                "duration_s": dt,
+                "log_file": str(log_path),
+                "testcases": {"passed": passed, "failed": failed, "failures": failures},
+            },
+            ip="other",
+        )
+    )
+
+
 # Console summary helpers
 IP_ORDER = ("board", "pcie", "gddr", "eth", "asic", "fw", "thermal", "other")
 
@@ -1211,7 +1598,9 @@ def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: 
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
     )
-    if binary is None:
+    if binary is None and any(n in TESTS for n in TIER_TESTS[tier]):
+        # Pytest-based entries don't need the gtest binary — record the FAIL
+        # for the gtest set but keep going so they still run.
         phase.add(
             Check(
                 name="deployment_binary_present",
@@ -1220,17 +1609,22 @@ def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: 
                 ip="other",
             )
         )
-        return
 
     env = os.environ.copy()
     env["TT_METAL_HOME"] = str(tt_metal)
     env["TT_METAL_RUNTIME_ROOT"] = str(tt_metal)  # newer name post-rename
-    # LD_LIBRARY_PATH: match the build dir of the binary we picked
-    env.setdefault("LD_LIBRARY_PATH", str(binary.parent.parent.parent / "lib"))
+    if binary is not None:
+        # LD_LIBRARY_PATH: match the build dir of the binary we picked
+        env.setdefault("LD_LIBRARY_PATH", str(binary.parent.parent.parent / "lib"))
 
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     for name in TIER_TESTS[tier]:
+        if name in PYTESTS:
+            run_pytest_test(name, PYTESTS[name], tt_metal, env, phase, dry_run, logs_dir)
+            continue
+        if binary is None:
+            continue
         filt = TESTS[name]
         # `gddr_fast` tier hint: use DRAM_TEST_FAST=1
         test_env = env.copy()
@@ -1329,6 +1723,603 @@ def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 5 — triage tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TRIAGE_STATUSES = (PASS, WARN, FAIL, SKIP)
+
+
+def default_triage_dir() -> Path:
+    """Where the triage scripts live: in this repo, unless overridden.
+
+    They used to be cloned in at run time, so an unset env var meant the phase
+    could only SKIP. Now that they ship here, the default is the checkout this
+    file is part of and the phase runs by default.
+    """
+    raw = os.environ.get(TRIAGE_DIR_ENV, "").strip()
+    return Path(raw) if raw else default_tt_metal_path() / TRIAGE_SUBDIR
+
+
+def normalize_external_check(
+    payload: dict,
+    *,
+    prefix: str,
+    hold_fail_at: str | None = None,
+    hold_warn_at: str | None = None,
+    gating_flag: str = "",
+) -> Check:
+    """Turn one entry of an external tool's JSON into a Check, defensively.
+
+    Shared by every phase that ingests findings produced outside this file — the
+    triage scripts and the QSFP tests' dump — because they write one shape
+    (see ``kmd_triage/triage_json.sh``) and the defences below are properties of
+    ingesting *any* of it, not of either producer.
+
+    Two normalizations are unconditional, both because the report is consumed by
+    code that doesn't know these phases exist:
+
+    * Names get a per-phase prefix. CHECK_CATEGORY, EXCLUDED_CHECKS,
+      ACKNOWLEDGED_CHECKS and _find_check() in the analyzer are all keyed on the
+      bare check name with no phase qualifier, so an unprefixed ``pcie_gen``
+      from an external tool would silently inherit that check's routing.
+    * An unrecognised status becomes WARN. Anything outside PASS/WARN/FAIL/SKIP
+      falls through the analyzer's SEVERITY map to UNKNOWN and won't validate
+      against the CheckStatus enum, so a typo would land as a junk CSV row.
+
+    ``hold_fail_at`` and ``hold_warn_at`` are how a phase says how much authority
+    its tool has yet earned: each names the status to record that finding as, or
+    is None to leave it alone. They are applied to the tool's own verdict and
+    never to each other's output, so holding a FAIL at PASS is one step and not
+    a FAIL quietly sliding down through WARN. Both annotate the details with
+    what was done, because a status that reads lower than the finding beneath it
+    sounds is otherwise indistinguishable from a bug.
+
+    An `ip` outside IP_ORDER is folded to "other" for the same reason:
+    print_phase_summary() iterates IP_ORDER, so an unrecognised group would
+    reach the JSON and the CSV but never appear in the console summary.
+
+    ``console_visible`` is optional and defaults to true, so a producer that
+    never sets it (the triage scripts) is unaffected; a producer that does can
+    keep store-only forensics in the JSON without crowding the console, which is
+    how the snapshot phase treats its own ``gddr_info_*`` counters.
+    """
+    name = str(payload.get("name") or "unnamed")
+    if not name.startswith(prefix):
+        name = f"{prefix}{name}"
+    details = str(payload.get("details") or "")
+    status = str(payload.get("status") or "").upper()
+    if status not in _TRIAGE_STATUSES:
+        details = f"[unrecognised status {payload.get('status')!r}] {details}".rstrip()
+        status = WARN
+    # On the tool's own verdict, so the two are alternatives rather than a chain.
+    if status == FAIL and hold_fail_at:
+        flag = f", {gating_flag} off" if gating_flag else ""
+        details = f"[advisory: FAIL recorded as {hold_fail_at}{flag}] {details}".rstrip()
+        status = hold_fail_at
+    elif status == WARN and hold_warn_at:
+        details = f"[advisory: WARN recorded as {hold_warn_at}] {details}".rstrip()
+        status = hold_warn_at
+    data = payload.get("data")
+    ip = str(payload.get("ip") or "other")
+    return Check(
+        name=name,
+        status=status,
+        details=details,
+        data=data if isinstance(data, dict) else {},
+        ip=ip if ip in IP_ORDER else "other",
+        console_visible=payload.get("console_visible", True) is not False,
+    )
+
+
+def normalize_triage_check(payload: dict, gating: bool) -> Check:
+    """One triage-script finding as a Check. See normalize_external_check.
+
+    TRIAGE_ADVISORY_WARN checks record their WARN as PASS. Keyed on the status
+    the tool wrote, so an unparseable one still lands on WARN; independent of
+    ``--triage-gating``, which decides what a FAIL does and never gated a WARN.
+    """
+    name = str(payload.get("name") or "")
+    advisory_warn = (
+        str(payload.get("status") or "").upper() == WARN and name.removeprefix("triage_") in TRIAGE_ADVISORY_WARN
+    )
+    return normalize_external_check(
+        payload,
+        prefix="triage_",
+        hold_fail_at=None if gating else WARN,
+        hold_warn_at=PASS if advisory_warn else None,
+        gating_flag="--triage-gating",
+    )
+
+
+def normalize_qsfp_check(payload: dict, gating: bool) -> Check:
+    """One QSFP-test finding as a Check. See normalize_external_check.
+
+    Until ``--qsfp-gating`` says otherwise the phase reports only PASS and SKIP:
+    the tool is still being validated against the fleet, and a finding it is not
+    yet trusted to have got right should not be the thing an operator's eye is
+    drawn to. Everything it found is still on the record — the details line is
+    the tool's own, the ``data`` is untouched, and the annotation says what was
+    held — so the fleet data needed to decide whether to turn gating on is
+    collected either way. Both holds lift together; a held FAIL is one step,
+    straight to PASS, so nothing lands on the WARN the phase does not raise.
+    """
+    return normalize_external_check(
+        payload,
+        prefix="qsfp_",
+        hold_fail_at=None if gating else PASS,
+        hold_warn_at=None if gating else PASS,
+        gating_flag="--qsfp-gating",
+    )
+
+
+def run_triage(
+    triage_dir: Path | None,
+    tier: str,
+    phase: Phase,
+    dry_run: bool,
+    logs_dir: Path,
+    gating: bool,
+    tt_metal: Path | None = None,
+) -> None:
+    """Run the triage tools for this tier and fold their findings in.
+
+    Every way of not having them — tier doesn't ask for them, directory or
+    script missing — is a SKIP carrying its reason, never a failure. A SKIP with
+    a reason is the point: a check that silently vanishes reads as coverage we
+    had, and this suite has been bitten by that before (see the zero-match gtest
+    filter note in HEALTH_CHECK.md).
+
+    Tooling breakage (timeout, no JSON, the tool reporting its own failure) is a
+    WARN, not a FAIL: it says nothing about the hardware, only that we didn't get
+    a reading. Findings about the hardware come from the tools' JSON.
+    """
+    tools = TIER_TRIAGE.get(tier, [])
+    if not tools:
+        phase.add(Check(name="triage", status=SKIP, details=f"no triage tools for tier '{tier}'", ip="other"))
+        return
+    if triage_dir is None:
+        phase.add(Check(name="triage", status=SKIP, details="no triage directory given", ip="other"))
+        return
+    if not triage_dir.is_dir():
+        phase.add(Check(name="triage", status=SKIP, details=f"triage scripts absent: {triage_dir}", ip="other"))
+        return
+
+    # device_side.sh locates the kmd_triage binary under $TT_METAL_HOME. Pass
+    # the path the run was told to use rather than trusting the ambient value,
+    # which is what --tt-metal-path is for.
+    env = os.environ.copy()
+    if tt_metal is not None:
+        env["TT_METAL_HOME"] = str(tt_metal)
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    for tool in tools:
+        spec = TRIAGE_TOOLS[tool]
+        run_name = f"triage_{tool}_run"
+        script = triage_dir / spec["script"]
+        if not script.is_file():
+            phase.add(Check(name=run_name, status=SKIP, details=f"not present: {script}", ip="other"))
+            continue
+
+        json_path = logs_dir / f"triage_{tool}.json"
+        text_path = logs_dir / f"triage_{tool}.txt"
+        # A stale file from an earlier run would be read as this run's findings.
+        json_path.unlink(missing_ok=True)
+
+        cmd = ["bash", str(script), "--json", str(json_path), "-o", str(text_path)]
+        if spec["root"] and os.geteuid() != 0:
+            # -n: fail immediately rather than hang on a password prompt.
+            cmd = ["sudo", "-n"] + cmd
+
+        log(f"--- triage '{tool}' ---")
+        log(f"  cmd:  {' '.join(cmd)}")
+        log(f"  log:  {text_path}")
+
+        if dry_run:
+            print(f"  {run_name:30} (dry-run)")
+            phase.add(Check(name=run_name, status=SKIP, details=f"(dry) {' '.join(cmd)}", ip="other"))
+            continue
+
+        _emit_running(run_name)
+        t0 = time.time()
+        timed_out = False
+        try:
+            cp = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=spec["timeout_s"], cwd=str(triage_dir), env=env
+            )
+            rc, out, err = cp.returncode, cp.stdout or "", cp.stderr or ""
+        except subprocess.TimeoutExpired as e:
+            timed_out, rc = True, 124
+            out, err = _as_text(e.stdout), _as_text(e.stderr)
+        except OSError as e:
+            dt = time.time() - t0
+            _emit_result(run_name, SKIP, suffix=f"({dt:.1f}s)")
+            phase.add(Check(name=run_name, status=SKIP, details=f"could not run {script}: {e!r}", ip="other"))
+            continue
+        dt = time.time() - t0
+
+        checks: list[Check] = []
+        parse_error = ""
+        if not json_path.is_file():
+            parse_error = f"tool wrote no {json_path.name}"
+        else:
+            try:
+                payload = json.loads(json_path.read_text())
+                raw = payload.get("checks") if isinstance(payload, dict) else None
+                if isinstance(raw, list):
+                    checks = [normalize_triage_check(c, gating) for c in raw if isinstance(c, dict)]
+                    if not checks:
+                        parse_error = "JSON 'checks' list contains no usable checks"
+                else:
+                    parse_error = "JSON has no 'checks' list"
+            except (OSError, ValueError) as e:
+                parse_error = repr(e)
+
+        if timed_out:
+            status = WARN
+            details = f"timed out after {spec['timeout_s']}s; no findings collected"
+        elif parse_error:
+            status = WARN
+            # Why it produced nothing is the only useful thing left to report,
+            # and it is almost always the tool's first line of stderr (a missing
+            # binary, a permission problem). Without it the console shows only
+            # "no usable findings" and the reason sits unread in the JSON.
+            reason = next((ln.strip() for ln in err.splitlines() if ln.strip()), "")
+            details = f"rc={rc} but no usable findings ({parse_error})"
+            if reason:
+                details += f": {reason[:200]}"
+        elif rc == 3:
+            # The tools reserve 3 for "the script itself failed", as distinct
+            # from their 1/2 which are findings about the hardware.
+            status = WARN
+            details = f"tool reported its own failure (rc=3); {len(checks)} check(s) collected"
+        else:
+            status = PASS
+            details = f"rc={rc} {len(checks)} check(s)"
+        details += f" dur={dt:.1f}s log={text_path}"
+
+        _emit_result(run_name, status, suffix=f"({dt:.1f}s)")
+        phase.add(
+            Check(
+                name=run_name,
+                status=status,
+                details=details,
+                data={
+                    "command": " ".join(cmd),
+                    "rc": rc,
+                    "duration_s": dt,
+                    "timed_out": timed_out,
+                    "checks_collected": len(checks),
+                    "report_file": str(text_path),
+                    "stdout_tail": out[-2000:],
+                    "stderr_tail": err[-2000:],
+                },
+                ip="other",
+            )
+        )
+        for c in checks:
+            phase.add(c)
+
+
+def _as_text(v) -> str:
+    """TimeoutExpired carries whatever was buffered; normalize bytes-or-str."""
+    if v is None:
+        return ""
+    return v.decode(errors="replace") if isinstance(v, bytes) else str(v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6 — QSFP tests (ETH link, cabling and module state)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def import_qsfp_ingest():
+    """The sibling ingest module, or None if it didn't ship with this copy.
+
+    Imported here rather than at module scope because a missing ingest module is
+    lost coverage for one phase, not a broken suite — an unguarded top-level
+    import would turn a partial deployment into a run that produces no report at
+    all. The path guard covers the second way this file is loaded: it normally
+    runs as a script, so its own directory is ``sys.path[0]``, but ``run_diag()``
+    is also a programmatic entry point and an importing caller need not have put
+    the suite directory on the path.
+    """
+    try:
+        return importlib.import_module(QSFP_INGEST_MODULE)
+    except ImportError:
+        pass
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.append(here)
+    try:
+        return importlib.import_module(QSFP_INGEST_MODULE)
+    except ImportError:
+        return None
+
+
+def resolve_qsfp_tool(override: str | None) -> tuple[str | None, str]:
+    """The QSFP collector binary, or None plus the reason this phase can't run.
+
+    A reason rather than an exception, unlike resolve_tt_smi: the tool is
+    optional, so taking a whole diagnostic run down over a package that isn't
+    installed would trade real coverage for none. An override that doesn't
+    resolve is reported as its own case, since an operator who passed a path
+    meant it and should not have it silently ignored.
+    """
+    if override:
+        candidate = Path(override)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate), ""
+        return None, f"--qsfp-tool-path={override} is not an executable file"
+    found = shutil.which(QSFP_TOOL_BIN)
+    if found:
+        return found, ""
+    return None, (
+        f"{QSFP_TOOL_BIN} not on PATH — it ships in the syseng cluster-debug .deb, "
+        f"so a host without that package collects no ETH dump"
+    )
+
+
+# tt-smi's board_id prefix and the collector's board_id bit field are two reads
+# of one 64-bit register down two independent paths, so they agree or one of
+# them is wrong. Worth stating because the revision selects the collector's
+# internal topology table, and the wrong table resolves 24 confident wrong
+# inter-UBB partners per galaxy — which would surface above as miscabling on a
+# correctly cabled machine.
+QSFP_REV_EQUIVALENT = {
+    "RevA/B": "BH_GALAXY_REV_AB",
+    "RevC": "BH_GALAXY_REV_C",
+}
+
+# The ingest check this cross-check reads its half of the comparison from, after
+# normalize_external_check has applied the phase prefix.
+QSFP_REV_CHECK = "qsfp_board_rev"
+
+
+def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: bool) -> Check:
+    """Compare the dump's board revision against the snapshot phase's.
+
+    The one finding in this phase that this file derives rather than reads out
+    of the dump, since only the runner knows both halves. It still goes out
+    through the same normalizer as everything else here, so one check cannot
+    end up carrying a status the rest of the phase would not have been given.
+    """
+    found = next((c for c in checks if c.name == QSFP_REV_CHECK), None)
+    dump_rev = (found.data or {}).get("rev") if found else None
+    if detected_rev is None or dump_rev in (None, "unknown"):
+        missing = "the tt-smi snapshot" if detected_rev is None else "the dump"
+        payload = {
+            "name": "board_rev_agrees",
+            "status": SKIP,
+            "details": f"no revision to compare: {missing} did not determine one",
+            "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev},
+            "ip": "board",
+        }
+    else:
+        expected = QSFP_REV_EQUIVALENT.get(detected_rev)
+        agrees = expected == dump_rev
+        payload = {
+            "name": "board_rev_agrees",
+            "status": PASS if agrees else FAIL,
+            "details": (
+                f"tt-smi and the dump agree: {detected_rev} == {dump_rev}"
+                if agrees
+                else f"tt-smi read {detected_rev} (expects {expected}) but the dump read {dump_rev}; "
+                f"the dump's internal topology table, and so every partner finding above, is "
+                f"resolved against its own value"
+            ),
+            "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev, "expected_dump_rev": expected},
+            "ip": "board",
+        }
+    return normalize_qsfp_check(payload, gating)
+
+
+def run_qsfp_tests(
+    tier: str,
+    phase: Phase,
+    dry_run: bool,
+    logs_dir: Path,
+    gating: bool = False,
+    binary_override: str | None = None,
+    descriptor: Path | None = None,
+    reason: str | None = None,
+    detected_rev: str | None = None,
+) -> None:
+    """Run the QSFP tests: collect an ETH dump and fold its findings in.
+
+    The dump answers a question nothing else in this suite reaches: the
+    snapshot phase reads ``ETH_LIVE_STATUS`` out of tt-smi telemetry, a bitmask
+    per chip, and the eth gtests push traffic over links that already came up —
+    neither can say *which far end* a port is actually talking to. The dump
+    carries the expected partner and the firmware's own ``remote_info`` on every
+    one of the 448 port records, so a miscabled or half-trained link is a
+    comparison rather than an inference. Its cage and module records are also
+    the only inventory of what is physically plugged in.
+
+    By default the phase reports only **SKIP** and **PASS**, because the tool is
+    still being validated against the fleet:
+
+    * **SKIP** — no reading was taken. The tier doesn't ask for one, the package
+      isn't installed, the module that reads the dump is missing, the collect
+      timed out, or the dump would not parse. Always with the reason attached,
+      on the same reasoning as the triage phase: a check that silently vanishes
+      reads as coverage we had.
+    * **PASS** — a reading was taken. Whatever the dump found is in the check's
+      details and data, annotated with what was held, but it is not yet allowed
+      to draw the eye of someone triaging a rack.
+
+    ``--qsfp-gating`` is the one switch that changes this, and it changes it
+    completely: findings then report at their real severity and the phase gates
+    the run like any other. Turning it on is the decision to be made once there
+    is enough fleet data to say the findings are right, which is why the phase
+    collects that data from the first run either way.
+    """
+    if not TIER_QSFP_TESTS.get(tier, False):
+        phase.add(
+            Check(
+                name="qsfp_collect",
+                status=SKIP,
+                details=f"no QSFP tests for tier '{tier}'",
+                ip="other",
+            )
+        )
+        return
+
+    binary, unavailable = resolve_qsfp_tool(binary_override)
+    if binary is None:
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=unavailable, ip="other"))
+        return
+
+    ingest = import_qsfp_ingest()
+    if ingest is None:
+        # Collecting a dump nothing will read would spend minutes of hardware
+        # access to produce a file and no findings.
+        phase.add(
+            Check(
+                name="qsfp_collect",
+                status=SKIP,
+                details=f"{QSFP_INGEST_MODULE}.py is not importable beside diag_runner.py",
+                ip="other",
+            )
+        )
+        return
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    # Named for the host rather than the tool's default host+UTC stamp so the
+    # artifact collector and a ticket reader see a predictable filename. The
+    # collector insists on the .jsonl suffix, which is also what keeps a
+    # truncated dump readable up to its last newline. The hostname is reduced to
+    # filename-safe characters because it reaches this path from the system, not
+    # from the caller, and a separator in it would write outside logs_dir.
+    safe_host = re.sub(r"[^A-Za-z0-9._-]", "_", socket.gethostname()) or "unknown"
+    dump_path = logs_dir / f"qsfp_dump_{safe_host}.jsonl"
+    log_path = logs_dir / "qsfp.log"
+    text_path = logs_dir / "qsfp.txt"
+    # A dump left by an earlier run would be read as this run's ETH state.
+    dump_path.unlink(missing_ok=True)
+
+    cmd = [binary, *QSFP_COLLECT_ARGS, "--out", str(dump_path)]
+    if descriptor is not None:
+        cmd += ["--factory-descriptor-path", str(descriptor)]
+    # Free text on the envelope. Recording why a dump exists is what the field
+    # is for, and a dump found later with no reason on it is a dump nobody can
+    # place.
+    cmd += ["--reason", reason or f"tt-metal health check, {tier} tier"]
+
+    log("--- qsfp tests: collect ---")
+    log(f"  cmd:  {shlex.join(cmd)}")
+    log(f"  dump: {dump_path}")
+
+    if dry_run:
+        print(f"  {'qsfp_collect':30} (dry-run)")
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=f"(dry) {shlex.join(cmd)}", ip="other"))
+        return
+
+    _emit_running("qsfp_collect")
+    t0 = time.time()
+    timed_out = False
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=QSFP_TIMEOUT_S)
+        rc, out, err = cp.returncode, cp.stdout or "", cp.stderr or ""
+    except subprocess.TimeoutExpired as e:
+        timed_out, rc = True, 124
+        out, err = _as_text(e.stdout), _as_text(e.stderr)
+    except OSError as e:
+        dt = time.time() - t0
+        _emit_result("qsfp_collect", SKIP, suffix=f"({dt:.1f}s)")
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=f"could not run {binary}: {e!r}", ip="other"))
+        return
+    dt = time.time() - t0
+
+    try:
+        log_path.write_text(
+            f"$ {shlex.join(cmd)}\nrc={rc}  duration={dt:.1f}s\n"
+            f"\n--- stdout ---\n{out or '(empty)'}"
+            f"\n--- stderr ---\n{err or '(empty)'}\n"
+        )
+    except OSError as e:
+        log(f"  could not write {log_path}: {e!r}")
+
+    # The dump, not the exit code, is what this phase is here for. `collect`
+    # exits non-zero only when nothing at all could be collected — a descriptor
+    # it couldn't open, a BMC that wouldn't answer and a cage sweep that fell
+    # over are all recorded in the dump as findings and still exit 0 — so a
+    # readable dump after a non-zero exit is still worth reading, and a clean
+    # exit with no dump is still a failure to collect.
+    checks: list[Check] = []
+    problem = ""
+    records: list = []
+    malformed = 0
+    if timed_out:
+        log("  timed out; leaving the partial dump unread")
+    elif not dump_path.is_file():
+        problem = f"wrote no {dump_path.name}"
+    else:
+        try:
+            records, malformed = ingest.load_dump(dump_path)
+            payload = ingest.build_report(records, malformed)
+            checks = [normalize_qsfp_check(c, gating) for c in payload.get("checks", []) if isinstance(c, dict)]
+            if not checks:
+                problem = "the dump yielded no usable checks"
+        except (OSError, ValueError) as e:
+            problem = repr(e)
+        else:
+            # The readable copy is a convenience for whoever opens the ticket;
+            # losing it must not cost the findings themselves, which are already
+            # in hand and on their way to the report.
+            try:
+                text_path.write_text(ingest.render(payload, source=str(dump_path)))
+            except OSError as e:
+                log(f"  could not write {text_path}: {e!r}")
+
+    if timed_out:
+        status = SKIP
+        details = f"timed out after {QSFP_TIMEOUT_S}s; " + (
+            "the partial dump is kept as an artifact but not read" if dump_path.is_file() else "no dump was written"
+        )
+    elif problem:
+        status = SKIP
+        # Why it produced nothing is the only useful thing left to report, and
+        # it is almost always the tool's first line of stderr.
+        first = next((ln.strip() for ln in err.splitlines() if ln.strip()), "")
+        details = f"rc={rc} but no usable findings ({problem})"
+        if first:
+            details += f": {first[:200]}"
+    else:
+        status = PASS
+        details = f"rc={rc} {len(records)} record(s), {len(checks)} check(s)"
+    details += f" dur={dt:.1f}s log={log_path}"
+
+    _emit_result("qsfp_collect", status, suffix=f"({dt:.1f}s)")
+    phase.add(
+        Check(
+            name="qsfp_collect",
+            status=status,
+            details=details,
+            data={
+                "command": shlex.join(cmd),
+                "rc": rc,
+                "duration_s": dt,
+                "timed_out": timed_out,
+                "records": len(records),
+                "malformed_lines": malformed,
+                "checks_collected": len(checks),
+                "dump_file": str(dump_path),
+                "dump_bytes": dump_path.stat().st_size if dump_path.is_file() else 0,
+                "report_file": str(text_path),
+                "stdout_tail": out[-2000:],
+                "stderr_tail": err[-2000:],
+            },
+            ip="other",
+        )
+    )
+    for c in checks:
+        phase.add(c)
+    if checks:
+        phase.add(qsfp_rev_crosscheck(checks, detected_rev, gating))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1347,6 +2338,52 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
     ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
     ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
+    ap.add_argument(
+        "--skip-triage",
+        action="store_true",
+        help="Skip the post-test reset and the triage tools entirely.",
+    )
+    ap.add_argument(
+        "--triage-dir",
+        type=Path,
+        default=default_triage_dir(),
+        help=f"Directory holding the triage scripts. Default: ${TRIAGE_DIR_ENV}, else <repo>/{TRIAGE_SUBDIR}.",
+    )
+    ap.add_argument(
+        "--triage-gating",
+        action="store_true",
+        help=(
+            "Let triage FAILs gate the run. Off by default: triage FAILs are held at WARN so a "
+            "tool still bedding in cannot ticket the fleet. Findings are recorded either way."
+        ),
+    )
+    ap.add_argument(
+        "--skip-qsfp-tests",
+        action="store_true",
+        help="Skip the QSFP tests entirely.",
+    )
+    ap.add_argument(
+        "--qsfp-tool-path",
+        help=f"The {QSFP_TOOL_BIN} binary. Default: whatever is on PATH (the syseng .deb installs it).",
+    )
+    ap.add_argument(
+        "--qsfp-descriptor",
+        type=Path,
+        help=(
+            "factory_system_descriptor.textproto, which gives the cage-attached links an expected "
+            "partner. Without one only the soldered internal links are checked against a topology, "
+            "and the cabling checks say so rather than reporting coverage they don't have."
+        ),
+    )
+    ap.add_argument(
+        "--qsfp-gating",
+        action="store_true",
+        help=(
+            "Let QSFP test FAILs gate the run. Off by default for the same reason as "
+            "--triage-gating: findings are recorded either way, but a tool still bedding in "
+            "cannot ticket the fleet."
+        ),
+    )
     ap.add_argument(
         "--input-snapshot", type=Path, help="Use pre-captured tt-smi snapshot JSON instead of live tt-smi call."
     )
@@ -1370,13 +2407,20 @@ def run_diag(
     dry_run: bool = False,
     skip_reset: bool = False,
     skip_tests: bool = False,
+    skip_triage: bool = False,
+    skip_qsfp_tests: bool = False,
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
     tt_metal_path: Path | None = None,
+    triage_dir: Path | None = None,
+    triage_gating: bool = False,
+    qsfp_tool_path: str | None = None,
+    qsfp_descriptor: Path | None = None,
+    qsfp_gating: bool = False,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full diagnostic pipeline (snapshot → reset loop → gtests).
+    """Run the full pipeline (snapshot → resets → gtests → triage → QSFP tests).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -1415,10 +2459,22 @@ def run_diag(
     except Exception as e:
         snap_phase.error = repr(e)
         snap_phase.add(Check(name="snapshot_capture", status=FAIL, details=repr(e)))
+    # Host FRU inventory (BMC identity: part numbers, serials, mfg dates) —
+    # store-only forensics alongside the chip-level snapshot checks; runs even
+    # when the tt-smi snapshot itself failed.
+    collect_fru_info(snap_phase, dry_run)
     snap_phase.duration_s = time.time() - t0
     snap_phase.rollup()
     report["phases"]["snapshot"] = asdict(snap_phase)
     print_phase_summary("snapshot", report["phases"]["snapshot"])
+
+    # Where every phase drops its raw tool output. Derived once: the reset
+    # and gtest phases both write here, and collect_run_artifacts() attaches
+    # whatever it finds, so a phase that writes elsewhere silently loses its
+    # logs off the ticket.
+    output_dir = output.resolve().parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir = output_dir / "logs"
 
     # Phase 2: reset loop + per-reset snapshot revalidations
     reset_phase = Phase(name="reset_loop")
@@ -1438,6 +2494,7 @@ def run_diag(
                 dry_run,
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
+                logs_dir=logs_dir,
             )
         except Exception as e:
             reset_phase.error = repr(e)
@@ -1506,7 +2563,6 @@ def run_diag(
         test_phase.add(Check(name="tests", status=SKIP, details="--skip-tests"))
     else:
         try:
-            logs_dir = output.resolve().parent / "logs"
             run_tests(tt_metal_path, tier, test_phase, dry_run, logs_dir)
         except Exception as e:
             test_phase.error = repr(e)
@@ -1517,10 +2573,110 @@ def run_diag(
     # tests phase prints its own per-test lines as they run — no inline summary.
     print(f"  {'tests':14} {test_phase.status:5} ({test_phase.duration_s:.1f}s)", flush=True)
 
+    # Phase 4: post-test reset. Bare — no revalidation snapshot, so it stays out
+    # of the post-reset dedupe above. Its job is to hand phase 5 a freshly reset
+    # unit and to guarantee the triage probes, which open every chip read-write,
+    # never run concurrently with the tests.
+    logs_dir = output.resolve().parent / "logs"
+    post_test_plan = [] if (skip_triage or skip_reset) else POST_TEST_RESET_PLAN.get(tier, [])
+    if post_test_plan:
+        post_reset_phase = Phase(name="post_test_reset")
+        t0 = time.time()
+        try:
+            tt_smi = resolve_tt_smi(tt_smi_path)
+            reset_loop(tt_smi, post_test_plan, post_reset_phase, dry_run)
+        except Exception as e:
+            post_reset_phase.error = repr(e)
+            post_reset_phase.add(Check(name="post_test_reset", status=FAIL, details=repr(e), ip="other"))
+        # reset_loop names every check reset_*, which report.py classifies as a
+        # reset op and drops from the verdict. That is right for the pre-test
+        # loop, where a bad reset still surfaces in the tests and the final
+        # snapshot — but nothing runs after this one, so a reset that broke
+        # enumeration here would leave no trace on the verdict. Restate the
+        # outcome under a name that counts.
+        broke = [c.name for c in post_reset_phase.checks if c.status == FAIL]
+        post_reset_phase.add(
+            Check(
+                name="post_test_reset_ok",
+                status=FAIL if broke else PASS,
+                details=(
+                    f"post-test reset left the unit degraded: {', '.join(broke)}"
+                    if broke
+                    else f"unit healthy after {' '.join(post_test_plan)}"
+                ),
+                ip="other",
+            )
+        )
+        post_reset_phase.duration_s = time.time() - t0
+        post_reset_phase.rollup()
+        report["phases"]["post_test_reset"] = asdict(post_reset_phase)
+        print(
+            f"  {'post_test_reset':14} {post_reset_phase.status:5} ({post_reset_phase.duration_s:.1f}s)",
+            flush=True,
+        )
+
+    # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
+    triage_phase = Phase(name="triage")
+    t0 = time.time()
+    if skip_triage:
+        triage_phase.add(Check(name="triage", status=SKIP, details="--skip-triage", ip="other"))
+    else:
+        try:
+            run_triage(triage_dir, tier, triage_phase, dry_run, logs_dir, triage_gating, tt_metal_path)
+        except Exception as e:
+            # Never let the triage phase take the run down: a crash here is lost
+            # coverage, not a hardware finding.
+            triage_phase.error = repr(e)
+            triage_phase.add(Check(name="triage", status=WARN, details=repr(e), ip="other"))
+    triage_phase.duration_s = time.time() - t0
+    triage_phase.rollup()
+    report["phases"]["triage"] = asdict(triage_phase)
+    print_phase_summary("triage", report["phases"]["triage"])
+
+    # Phase 6: the QSFP tests, when the host has the package. Last,
+    # and after the post-test reset for the same two reasons the triage phase
+    # sits there: it opens every chip, so it must not overlap the tests, and the
+    # tool has no SIGBUS handler, so a concurrent reset would kill it outright
+    # rather than being reported. Reading the links after that reset is also the
+    # reading that matters — it is the state the machine is being left in.
+    # The tool is still being validated against the fleet, so its findings are
+    # recorded at their real severity but do not vote: --qsfp-gating is what
+    # lets them, once the fleet data says they can be trusted.
+    qsfp_phase = Phase(name="qsfp_tests", gates=qsfp_gating)
+    t0 = time.time()
+    if skip_qsfp_tests:
+        qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details="--skip-qsfp-tests", ip="other"))
+    else:
+        try:
+            run_qsfp_tests(
+                tier,
+                qsfp_phase,
+                dry_run,
+                logs_dir,
+                qsfp_gating,
+                binary_override=qsfp_tool_path,
+                descriptor=qsfp_descriptor,
+                detected_rev=report.get("detected_board_rev"),
+            )
+        except Exception as e:
+            # Same rule as triage: a crash in an optional phase is lost
+            # coverage, not a hardware finding, and must not take the run down.
+            qsfp_phase.error = repr(e)
+            qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details=repr(e), ip="other"))
+    qsfp_phase.duration_s = time.time() - t0
+    if any(c.status != SKIP for c in qsfp_phase.checks):
+        qsfp_phase.rollup()
+    report["phases"]["qsfp_tests"] = asdict(qsfp_phase)
+    print_phase_summary("qsfp_tests", report["phases"]["qsfp_tests"])
+
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
-    statuses = [p["status"] for p in report["phases"].values()]
+    # Only phases that gate reach the verdict. A non-gating phase still rolls up
+    # and still prints, so its findings are as visible as anyone else's — it
+    # simply has no vote, which is the one honest way to carry a tool whose
+    # findings are worth recording before they are worth acting on.
+    statuses = [p["status"] for p in report["phases"].values() if p.get("gates", True)]
     if FAIL in statuses:
         report["overall_status"] = FAIL
     elif WARN in statuses:
@@ -1528,6 +2684,9 @@ def run_diag(
     else:
         report["overall_status"] = PASS
 
+    # Only the phases that write logs create this directory, and any of them can
+    # be skipped — don't lose a completed run's report to a missing parent dir.
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2))
     log(f"wrote report: {output} (overall={report['overall_status']})")
 
@@ -1536,17 +2695,23 @@ def run_diag(
     print("  " + "─" * 70)
     print(f"  OVERALL        {report['overall_status']}")
     # Per-phase rollup. For non-PASS phases, list the offending checks (ip:name=status).
+    # A phase that does not gate says so on its own line: otherwise a reader
+    # seeing a FAIL here above an OVERALL that is not FAIL would reasonably
+    # conclude the report had contradicted itself.
     for phase_name, p in report["phases"].items():
         status = p["status"]
+        # Only worth saying when there is something for it to explain: a passing
+        # phase that does not gate looks no different from one that does.
+        note = "" if p.get("gates", True) or status == PASS else "  (does not gate)"
         if status == PASS:
-            print(f"    {phase_name:11} {status}")
+            print(f"    {phase_name:14} {status}")
             continue
         bad = [c for c in p["checks"] if c["status"] in (WARN, FAIL)]
         if bad:
             items = ", ".join(f"{c.get('ip','other')}:{c['name']}={c['status']}" for c in bad)
-            print(f"    {phase_name:11} {status} — {items}")
+            print(f"    {phase_name:14} {status}{note} — {items}")
         else:
-            print(f"    {phase_name:11} {status}")
+            print(f"    {phase_name:14} {status}{note}")
 
     return (0 if report["overall_status"] != FAIL else 1), report
 
@@ -1558,9 +2723,16 @@ def main() -> int:
         dry_run=args.dry_run,
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
+        skip_triage=args.skip_triage,
+        skip_qsfp_tests=args.skip_qsfp_tests,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,
+        triage_dir=args.triage_dir,
+        triage_gating=args.triage_gating,
+        qsfp_tool_path=args.qsfp_tool_path,
+        qsfp_descriptor=args.qsfp_descriptor,
+        qsfp_gating=args.qsfp_gating,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )
