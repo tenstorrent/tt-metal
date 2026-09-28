@@ -2266,3 +2266,22 @@ very adds that in-place accelerates, so the combination (+0.229) is worse than i
  [1,H,S,S] on the unchunked path; [1,H,slab,slab] once chunking applies, which is the
  normal case and is why it stays small (4.2 MB) at any utterance length.
 ```
+
+### [gpt-29] `_MM_GRID` — 11x7, re-gridded from 12x6 for the 11x10 p150b
+
+On 2026-09-28 the reservation moved to a p150b whose firmware enables 12 of 14 Tensix columns, so
+`compute_with_storage_grid_size()` returns 11x10 and 6.52's `(12, 6)` raised
+`compute_with_storage_grid_size (12, 6) must fit within device grid (11, 10)` in the first decode
+matmul (bringup repo BUG-14).
+
+11x7 is the grid that changes nothing but placement: 77 cores, and every shape keeps the
+`per_core_N` it had over 12x6's 72 (wqkv 3, wo 2, w1/w3 4, w2 2 tiles). Each output tile is still
+reduced over the full K on one core, so the result is bit-identical. Measured, not inferred: the
+short/medium/long table (neutral_male, seed 0) reproduced frame counts 26/194/499 exactly at
+31.1/26.6/26.2 ms/frame against the 13x10 card's 32.7/31.6/27.3 -- no slowdown, because a decode
+matmul never uses more than 72 cores and the chip's 8 DRAM banks are all there. 11x7 also fits the
+13x10 card, so one constant serves both. STATUS.md 6.78.
+
+`check_device_grid` runs in `TtVoxtralGPT.__init__` and names every hardcoded grid that does not fit,
+instead of the bare TT_FATAL a smaller card produced. `test_tt_defaults.py` pins that the grid fits
+11x10 and that every `per_core_N` is still 12x6's: a grid that changes one is a numerics change.

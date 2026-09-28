@@ -47,16 +47,28 @@ SEED = 0
 # Per-language floor on the MEAN MOS of that language's clips, and a floor for any single clip (a
 # mean over twelve clips barely moves when one turns to noise).
 #
-# NOT YET SET. They must come from a three-seed sweep of the language set on a FULL 13x10 p150b,
-# and the card this was written on reported 11x10 and could not run the model (bringup repo,
-# VOXTRAL_TTS_BUGS.md BUG-14). The one existing draw -- seed 0, 2026-09-01, re-scored bit-identical
-# on 2026-09-28 -- reads ar 4.6743, de 4.7056, en 4.7019, es 4.7201, fr 4.7026, hi 4.5878,
-# it 4.6709, nl 4.7511, pt 4.6801, worst clip 4.356 (hi). One draw is not a spread, so it is recorded
-# here and in VOXTRAL_TTS_NEXT_STEPS.md rather than turned into floors.
-MOS_FLOOR = {}
-CLIP_FLOOR = None
-_FLOORS_PENDING = pytest.mark.skip(
-    reason="MOS floors not yet measured -- see VOXTRAL_TTS_NEXT_STEPS.md (per-language MOS gate)")
+# From a three-seed sweep of the language set (360 clips, 2026-09-28, STATUS 6.78), by a rule fixed
+# before the data existed: floor = the lowest of the three seed means - 0.05, which is wider than
+# every language's measured seed spread (widest: hi 0.046, fr 0.037). A numerics change reshuffles
+# trajectories the way a new seed does, so a floor inside the seed spread would fail healthy builds.
+#
+#   lang   seed 0   seed 1   seed 2   spread   floor
+#   ar     4.6743   4.6639   4.6699   0.011    4.61
+#   de     4.7057   4.7073   4.7199   0.014    4.66
+#   en     4.7018   4.6941   4.6911   0.011    4.64
+#   es     4.7201   4.7260   4.7218   0.006    4.67
+#   fr     4.7026   4.6807   4.7176   0.037    4.63
+#   hi     4.5878   4.5785   4.5423   0.046    4.49
+#   it     4.6709   4.6693   4.6665   0.004    4.62
+#   nl     4.7511   4.7609   4.7572   0.010    4.70
+#   pt     4.6801   4.6727   4.6672   0.013    4.62
+#
+# The gate runs seed 0. These are comparable to THEMSELVES over time, not to each other: DistillMOS
+# is trained mostly on English, so hi's lower level may be partly the predictor (STATUS 6.76).
+MOS_FLOOR = {"ar": 4.61, "de": 4.66, "en": 4.64, "es": 4.67, "fr": 4.63, "hi": 4.49, "it": 4.62,
+             "nl": 4.70, "pt": 4.62}
+# The worst single clip over all 360 (4.221, hi_male, seed 2) minus 0.25.
+CLIP_FLOOR = 3.97
 
 # The predictor's own calibration, measured 2026-09-28 on the ASR calibration fixture decoded by the
 # fp32 codec: speech 4.706-4.738 (all four clips), silence 1.969, noise at speech RMS 1.198.
@@ -65,7 +77,6 @@ SPEECH_MIN, NON_SPEECH_MAX, SEPARATION_MIN = 4.0, 2.5, 2.0
 pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
 
 
-@_FLOORS_PENDING
 def test_every_language_has_a_floor():
     """Host-side, so a language added to the corpus without a floor fails here and costs nothing."""
     missing, extra = sorted(set(WER_SENTENCES) - set(MOS_FLOOR)), sorted(set(MOS_FLOOR) - set(WER_SENTENCES))
@@ -109,7 +120,6 @@ def scored(tmp_path_factory):
     return _score(out)
 
 
-@_FLOORS_PENDING
 @pytest.mark.slow
 @pytest.mark.timeout(7200)
 def test_every_language_was_scored(scored):
@@ -121,7 +131,6 @@ def test_every_language_was_scored(scored):
     assert min(per.values()) >= 2, f"a language was scored on fewer than two clips: {per}"
 
 
-@_FLOORS_PENDING
 @pytest.mark.slow
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("lang", sorted(WER_SENTENCES))
@@ -133,7 +142,6 @@ def test_mos_per_language(scored, lang):
     assert m >= MOS_FLOOR[lang], f"{lang}: mean MOS {m:.4f} below its floor {MOS_FLOOR[lang]}"
 
 
-@_FLOORS_PENDING
 @pytest.mark.slow
 @pytest.mark.timeout(7200)
 def test_no_clip_collapses(scored):

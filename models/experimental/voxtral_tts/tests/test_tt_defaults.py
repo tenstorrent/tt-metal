@@ -139,11 +139,33 @@ def test_sharded_norm_is_decode_only_and_legally_shaped():
 def test_wo_does_not_get_the_n150_hand_tuned_config_back():
     """6.25 hand-tuned _WO_PRG for the N150 (+0.196 ms/frame); 6.43 found it buys nothing here and
     deleted it. wo DOES now carry a program config again, but not that one -- it takes the shared
-    12x6 decode config from 6.52, whose reason is the reduction-depth collapse, not wo's shape.
+    11x7 decode config (6.52's 12x6, re-gridded in 6.78), whose reason is the reduction-depth collapse, not wo's shape.
     Keep the two claims apart: the N150 constant stays dead."""
     assert not hasattr(gpt, "_WO_PRG"), "the N150's hand-tuned wo config is back -- 6.43"
     assert not hasattr(gpt, "_WO_GRID")
     assert gpt.DECODE_PRG["wo"] is gpt._PRG_WO
+
+
+def test_decode_matmul_grid_fits_the_smaller_card_and_keeps_the_12x6_split():
+    """_MM_GRID moved 12x6 -> 11x7 when the reservation landed on a p150b with two Tensix columns
+    fused off (11x10). The move is only free because every shape keeps the per_core_N it had on
+    12x6: each output tile is still reduced over the full K on one core, so the output is
+    bit-identical -- frame counts 26/194/499 reproduced exactly. STATUS.md 6.78.
+
+    A grid that changes any per_core_N changes which core reduces what, and so the numerics:
+    that is a model change needing the full quality gate, not a tidy-up."""
+    import math
+
+    assert gpt._MM_GRID[0] <= 11 and gpt._MM_GRID[1] <= 10, (
+        f"_MM_GRID {gpt._MM_GRID} does not fit the 11x10 p150b this port runs on")
+    was = 12 * 6
+    ntiles = {"wqkv": 6144, "wo": 3072, "w1": 9216, "w3": 9216, "w2": 3072}
+    for name, n in ntiles.items():
+        exp = math.ceil(n // gpt.TILE / was)
+        assert gpt.DECODE_PRG[name].per_core_N == exp, (
+            f"{name}: per_core_N {gpt.DECODE_PRG[name].per_core_N} != 12x6's {exp} -- not bit-exact")
+        cores = math.ceil(n // gpt.TILE / exp)
+        assert cores <= gpt._MM_GRID[0] * gpt._MM_GRID[1], f"{name} needs {cores} cores"
 
 
 def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
