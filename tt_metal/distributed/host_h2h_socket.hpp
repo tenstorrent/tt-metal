@@ -91,12 +91,6 @@ public:
         uint64_t flushes = 0;
         uint64_t flushes_tiny = 0;    // covered less than one page: paid in full for nothing
         uint64_t flushes_held = 0;    // withheld: below the watermark and more was coming
-        // Should stay 0. Every flush progress depends on is released by an event, so a
-        // deadline flush means an event that should have fired did not.
-        uint64_t flushes_by_deadline = 0;
-        uint64_t credits_held = 0;    // credit publishes withheld: under the release batch
-        uint64_t demand_raised = 0;   // times WE told a peer we were gated on its credits
-        uint64_t demand_served = 0;   // times a peer's raise released our credits early
         uint64_t pending_sum = 0;     // bytes covered, summed over every flush
         uint64_t pending_max = 0;     // most bytes a single flush ever covered
         uint64_t flush_ns = 0;        // time inside flush_dirty(); zero unless collect_timing
