@@ -1888,6 +1888,14 @@ def _tt_poly_declared_erf_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_hardshrink_bw(x):
+    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
+    result = np.zeros(raw.shape, dtype=bool)
+    for first, stop in ((16129, 32768), (48897, 65536)):
+        result |= (raw >= first) & (raw < stop)
+    return result.astype(np.float64) * 1.0
+
+
 def _tt_poly_declared_hardsigmoid_bw(x):
     raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
     result = np.zeros(raw.shape, dtype=bool)
@@ -1930,6 +1938,22 @@ def _tt_poly_declared_hardswish_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_hardtanh_bw(x):
+    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
+    result = np.zeros(raw.shape, dtype=bool)
+    for first, stop in ((0, 16256), (32641, 49024), (65409, 65536)):
+        result |= (raw >= first) & (raw < stop)
+    return result.astype(np.float64) * 1.0
+
+
+def _tt_poly_declared_softshrink_bw(x):
+    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
+    result = np.zeros(raw.shape, dtype=bool)
+    for first, stop in ((16129, 32641), (48897, 65409)):
+        result |= (raw >= first) & (raw < stop)
+    return result.astype(np.float64) * 1.0
+
+
 @pytest.mark.memory_layout("debug")
 @pytest.mark.skipif(
     str(TestConfig.CHIP_ARCH) not in ("blackhole", "wormhole"),
@@ -1941,8 +1965,11 @@ def _tt_poly_declared_hardswish_bw(x):
         ("celu_bw", False, _tt_poly_declared_celu_bw, ()),
         ("elu_bw", False, _tt_poly_declared_elu_bw, ()),
         ("erf_bw", False, _tt_poly_declared_erf_bw, ()),
+        ("hardshrink_bw", True, _tt_poly_declared_hardshrink_bw, ()),
         ("hardsigmoid_bw", False, _tt_poly_declared_hardsigmoid_bw, ()),
         ("hardswish_bw", False, _tt_poly_declared_hardswish_bw, (-3.0, -1.5, 3.0)),
+        ("hardtanh_bw", True, _tt_poly_declared_hardtanh_bw, ()),
+        ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),
     ],
 )
 def test_tt_poly_generated_backward_bf16_llk(
