@@ -2606,10 +2606,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool use_rotated_q_split =
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
+        // Split KV grouping executes a prefix of the ring_size ordinals scheduled here: grouping
+        // requires every source active, so ordinal == ring_iter and the last executed ordinal
+        // normalizes. The group size is chosen per dispatch, so the schedule stays ring_size long.
         remainder_changes_owner && build_kv_chains && ksplit_count == 1 &&
-        // Split KV (fused full-mesh gather) walks R sources per Q ring slot, possibly grouped into
-        // fewer SDPA iterations; the rotated schedule assumes one iteration per transport rank.
-        args.kv_stripe_split == 1 &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
         // Only streaming compute consumes rotated IDs. The reader loads a sink for the

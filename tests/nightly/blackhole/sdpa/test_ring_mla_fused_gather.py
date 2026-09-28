@@ -380,6 +380,32 @@ def test_ring_mla_split_kv_packed_widths(depth, k_chunk):
     test_ring_mla_split_kv_geometry(depth, 8, 0, True, 32, k_chunk, 4)
 
 
+@pytest.mark.parametrize(
+    "depth,prefix_offset,metadata,q_chunk,k_chunk,effective_n,trace_replay",
+    [
+        pytest.param(5, 0, False, 32, 352, None, False, id="grouped-inplace-scalar"),
+        pytest.param(3, 288, True, 64, 640, None, False, id="grouped-materialized-metadata"),
+        pytest.param(8, 32, True, 32, 352, None, True, id="grouped-inplace-trace"),
+        pytest.param(1, 0, False, 32, 352, 32, False, id="per-source-fallback"),
+    ],
+)
+def test_ring_mla_split_kv_rotated_q_split(depth, prefix_offset, metadata, q_chunk, k_chunk, effective_n, trace_replay):
+    # 32 local heads leave float Q chunks on the Blackhole SDPA grid (256 chunks at Q32 and
+    # 128 at Q64 over 110 cores), so the rotated Q split migrates them between grid rows.
+    # Grouped traversal executes only ring_size / TP of the scheduled ordinals.
+    test_ring_mla_split_kv_geometry(
+        depth,
+        8,
+        prefix_offset,
+        metadata,
+        q_chunk,
+        k_chunk,
+        32,
+        effective_n=effective_n,
+        trace_replay=trace_replay,
+    )
+
+
 def test_ring_mla_split_kv_ordinary_mesh():
     test_ring_mla_split_kv_geometry(5, 8, 32, True, 32, 352, 4, ordinary_mesh=True)
 

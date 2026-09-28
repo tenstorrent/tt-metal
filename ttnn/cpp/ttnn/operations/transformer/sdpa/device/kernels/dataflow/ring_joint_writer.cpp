@@ -904,6 +904,8 @@ void kernel_main() {
             uint32_t rotated_has_mig_in_float = 0;
             uint32_t rotated_float_dest = kRotatedNoDest;
             if constexpr (rotated_q_split_enabled) {
+                // Grouped split-KV runs only with a full active mask, where ordinal == ring_iter.
+                ASSERT(!packed_sources || active_ring_iter_mask == (~uint32_t{0} >> (32 - ring_size)));
                 rotated_ordinal = rotated_active_ordinal(active_ring_iter_mask, ring_iter);
                 const uint32_t rotated_iter_base =
                     ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
