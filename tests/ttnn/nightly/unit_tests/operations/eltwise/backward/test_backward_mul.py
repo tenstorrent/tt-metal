@@ -160,7 +160,7 @@ def test_bw_mul_scalar_opt_output(input_shapes, scalar, device):
 
 
 # ---------------------------------------------------------------------------
-# broadcast triples — grad_out.shape == broadcast(input, other) per autograd contract
+# broadcast triples — grad_out.shape == broadcast(input, other)
 # ---------------------------------------------------------------------------
 
 

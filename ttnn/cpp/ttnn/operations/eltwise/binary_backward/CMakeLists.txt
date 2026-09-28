@@ -15,7 +15,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE binary_backward_kernels device/kernels/*.cpp)
+file(GLOB_RECURSE binary_backward_kernels CONFIGURE_DEPENDS device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_eltwise_binary_backward

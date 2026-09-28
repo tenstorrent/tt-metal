@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the shared binary_backward device operation (issue #56601).
+"""Tests for the shared binary_backward device operation.
 
 Exercises MUL_BW as the first op routed through the shared device op. Covers
 dtypes x shapes vs torch, mixed operand dtypes (input vs other vs grad_output),
@@ -196,8 +196,18 @@ def test_mul_bw_preallocated(preallocate, device):
             f"other_grad buffer_address diverged (out={out[1].buffer_address()} "
             f"preallocated={other_grad.buffer_address()}); op ignored the preallocated tensor"
         )
-    assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
-    assert_with_pcc(grad_b_pt, ttnn.to_torch(out[1]).float(), 0.999)
+    # ULP oracle instead of PCC 0.999: PCC hides real per-element error, and the
+    # device path must match the composite ttnn::multiply to within a fixed ULP bound.
+    assert_with_ulp(
+        expected_result=grad_a_pt.to(torch.bfloat16),
+        actual_result=ttnn.to_torch(out[0]).to(torch.bfloat16),
+        ulp_threshold=1,
+    )
+    assert_with_ulp(
+        expected_result=grad_b_pt.to(torch.bfloat16),
+        actual_result=ttnn.to_torch(out[1]).to(torch.bfloat16),
+        ulp_threshold=1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -217,18 +227,26 @@ def test_mul_bw_partial_mask_routes_to_composite(mask, device):
 
     grad_a_pt, grad_b_pt = _torch_mul_bw(g_pt, a_pt, b_pt)
     if mask[0]:
-        assert_with_pcc(grad_a_pt, ttnn.to_torch(out[0]).float(), 0.999)
+        assert_with_ulp(
+            expected_result=grad_a_pt.to(torch.bfloat16),
+            actual_result=ttnn.to_torch(out[0]).to(torch.bfloat16),
+            ulp_threshold=1,
+        )
     if mask[1]:
-        assert_with_pcc(grad_b_pt, ttnn.to_torch(out[1]).float(), 0.999)
+        assert_with_ulp(
+            expected_result=grad_b_pt.to(torch.bfloat16),
+            actual_result=ttnn.to_torch(out[1]).to(torch.bfloat16),
+            ulp_threshold=1,
+        )
 
 
 # ---------------------------------------------------------------------------
-# broadcasting operands — PyTorch autograd parity via composite reduce_to_shape
+# broadcasting operands — operand-shape grads via composite reduce_to_shape
 # ---------------------------------------------------------------------------
 
 
-def _torch_autograd_mul_bw(g_pt, a_pt, b_pt):
-    # Ground truth: exactly what AccumulateGrad does on the CPU side of PyTorch autograd.
+def _torch_ref_mul_bw(g_pt, a_pt, b_pt):
+    # Ground truth via the CPU reference: builds grads at operand shape.
     a = a_pt.detach().clone().float().requires_grad_(True)
     b = b_pt.detach().clone().float().requires_grad_(True)
     (a * b).backward(g_pt.float())
@@ -254,23 +272,21 @@ def _torch_autograd_mul_bw(g_pt, a_pt, b_pt):
     ],
     ids=lambda v: v if isinstance(v, str) else None,
 )
-def test_mul_bw_broadcast_matches_pytorch_autograd(grad_shape, input_shape, other_shape, label, device):
-    # PyTorch parity: composite mul_bw's reduce_to_shape must return grads at operand
-    # shapes matching torch.autograd's AccumulateGrad, not the broadcast shape.
+def test_mul_bw_broadcast_returns_operand_shape_grads(grad_shape, input_shape, other_shape, label, device):
+    # Composite mul_bw's reduce_to_shape must return grads at operand shape, not the
+    # broadcast shape (silently-broadcast-shape grads were the pre-existing bug).
     mc = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt(input_shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
     b_pt, b_tt = _pt_and_tt(other_shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
     g_pt, g_tt = _pt_and_tt(grad_shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
 
-    grad_a_pt, grad_b_pt = _torch_autograd_mul_bw(g_pt, a_pt, b_pt)
+    grad_a_pt, grad_b_pt = _torch_ref_mul_bw(g_pt, a_pt, b_pt)
 
     out = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=mc)
 
-    # Shape parity first — silently-broadcast-shape grads were the pre-existing bug.
-    assert list(out[0].shape) == list(a_pt.shape), (
-        f"[{label}] input_grad shape={list(out[0].shape)} != input shape={list(a_pt.shape)}; "
-        f"composite reduce_to_shape must match PyTorch AccumulateGrad's shape contract"
-    )
+    assert list(out[0].shape) == list(
+        a_pt.shape
+    ), f"[{label}] input_grad shape={list(out[0].shape)} != input shape={list(a_pt.shape)}"
     assert list(out[1].shape) == list(
         b_pt.shape
     ), f"[{label}] other_grad shape={list(out[1].shape)} != other shape={list(b_pt.shape)}"
@@ -289,7 +305,7 @@ def test_mul_bw_broadcast_with_preallocated_operand_shape(device):
     input_grad = ttnn.empty_like(a_tt)
     other_grad = ttnn.empty_like(b_tt)
 
-    grad_a_pt, grad_b_pt = _torch_autograd_mul_bw(g_pt, a_pt, b_pt)
+    grad_a_pt, grad_b_pt = _torch_ref_mul_bw(g_pt, a_pt, b_pt)
 
     out = ttnn.mul_bw(
         g_tt,
@@ -396,8 +412,8 @@ def test_mul_bw_alternating_prealloc_slot_isolates_program_cache(device):
 
 @pytest.mark.parametrize("bad_role", ["grad", "input", "other"])
 def test_mul_bw_int_operand_raises(bad_role, device, expect_error):
-    # PyTorch autograd also throws on int/uint gradient requests; mul_bw matches that
-    # instead of routing to a silent composite via mul_int_tile.
+    # int/uint gradient requests are non-differentiable and rejected here instead of
+    # routing to a silent composite via mul_int_tile.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
     _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
@@ -418,8 +434,8 @@ def test_mul_bw_int_operand_raises(bad_role, device, expect_error):
 
 
 def test_mul_bw_all_int32_operands_raise(device, expect_error):
-    # Pure int32 for all three: PyTorch would raise on any of these having requires_grad;
-    # ttnn matches so no silent-composite mul_int_tile masquerading as a valid backward.
+    # Pure int32 for all three: rejected here rather than dispatching a silent-composite
+    # mul_int_tile that would masquerade as a valid backward.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
     torch.manual_seed(51)

@@ -45,6 +45,15 @@ ttsl::SmallVector<int64_t> broadcast_reduce_axes(const ttnn::Shape& operand_shap
     for (size_t i = 0; i < grad_rank; ++i) {
         const uint32_t operand_dim = (i < rank_diff) ? 1u : operand_shape[i - rank_diff];
         const uint32_t grad_dim = grad_shape[i];
+        TT_FATAL(
+            operand_dim == 1u || operand_dim == grad_dim,
+            "binary_backward: operand shape {} not broadcastable to grad shape {} at axis {} "
+            "(operand_dim={}, grad_dim={}); expected operand_dim == 1 or == grad_dim.",
+            operand_shape,
+            grad_shape,
+            i,
+            operand_dim,
+            grad_dim);
         if (operand_dim != grad_dim) {
             axes.push_back(static_cast<int64_t>(i));
         }
