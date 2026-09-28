@@ -396,3 +396,9 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; h_mid rel 0.0023, coef 1.0000). BRINGUP_IMPL=stub: FAIL on every check.
 - The default gate already passes (all three steps are registered on device): pcc_swap_out 0.999989, out rel 0.0047 / first rows 0.0043, attention rel 0.0049, h_mid rel 0.0042 / first rows 0.0042, ratio [0.9998, 1.0031], coef 1.0007, attn rel 0.0028. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_03_attn_residual.py`
+
+## C.full_moe.ffn_norm.test.1 (test review)
+- Replaced the rendered test with the prior's frozen reviewed test (`mimo_v2_6_d_p/tests/bringup/test_c_full_moe_ffn_norm.py`), unchanged. The golden is shared and the harness API is the same.
+- Checks: PCC >= spec component threshold (0.99), output finite, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]. PCC alone misses sum-vs-mean, `1 + w`, and zeroed rows (known_issues "PCC alone does not gate a component").
+- Measured: reference PCC 0.999997, rel 0.002365, ratio [0.9974, 1.0021]; stub PCC 0.0 (fails); default gate PASS, PCC 0.999996.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_ffn_norm.py` (`BRINGUP_IMPL=reference|stub` for the freeze checks).
