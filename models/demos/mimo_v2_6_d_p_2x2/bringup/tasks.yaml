@@ -637,6 +637,13 @@ tasks:
     - attention
     - attn_residual
     layer: 1
+  frozen:
+    at: '2026-09-28T05:59:33'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_03_attn_residual.py: e5228753d0474ef51966a36a1d6ce11cf4fda595e1bfeb89e38abe07c2566c42
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.sliding_moe.ffn_norm
   title: sliding_moe ffn_norm (norm) on device, layer 1
   step: implement
