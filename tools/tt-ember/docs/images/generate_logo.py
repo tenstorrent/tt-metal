@@ -18,40 +18,51 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 
 OUT_DIR = Path(__file__).resolve().parent
-FONT    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 # ---------- palette / scale ----------
-SS       = 3                      # supersample factor
-EMBER    = (238, 78, 34, 255)     # flame orange  (#EE4E22)
-GRAY     = (128, 130, 133, 255)   # wordmark gray (#808285)
-ICON_W, ICON_H = 1000, 1200       # icon design box
+SS = 3  # supersample factor
+EMBER = (238, 78, 34, 255)  # flame orange  (#EE4E22)
+GRAY = (128, 130, 133, 255)  # wordmark gray (#808285)
+ICON_W, ICON_H = 1000, 1200  # icon design box
+
 
 # ---------- flame geometry (edges are vertical, horizontal, or 45 deg only) ----------
 def mirror_half(half):
     """Right-side points (x>=500, top->bottom) -> full closed symmetric polygon."""
     return half + [(1000 - x, y) for (x, y) in reversed(half)]
 
+
 OUTER_HALF = [
-    (500, 260),   # apex
-    (620, 380),   # 45 down-right (tip flare)
-    (620, 470),   # vertical
-    (760, 610),   # 45 widen -> half-width 260
-    (760, 820),   # vertical (fat mid wall)
-    (680, 900),   # 45 pull in
-    (680, 940),   # vertical
+    (500, 260),  # apex
+    (620, 380),  # 45 down-right (tip flare)
+    (620, 470),  # vertical
+    (760, 610),  # 45 widen -> half-width 260
+    (760, 820),  # vertical (fat mid wall)
+    (680, 900),  # 45 pull in
+    (680, 940),  # vertical
     (600, 1020),  # 45 chamfer to base
     (500, 1020),  # horizontal to base center
 ]
 INNER_HALF = [
-    (500, 430), (600, 530), (600, 580), (690, 670), (690, 810),
-    (620, 880), (620, 915), (555, 980), (500, 980),
+    (500, 430),
+    (600, 530),
+    (600, 580),
+    (690, 670),
+    (690, 810),
+    (620, 880),
+    (620, 915),
+    (555, 980),
+    (500, 980),
 ]
-FLAME       = mirror_half(OUTER_HALF)
+FLAME = mirror_half(OUTER_HALF)
 INNER_FLAME = mirror_half(INNER_HALF)
-CORE        = [(500, 740), (560, 800), (500, 860), (440, 800)]  # ember spark diamond
+CORE = [(500, 740), (560, 800), (500, 860), (440, 800)]  # ember spark diamond
+
 
 def sc(poly):
     return [(x * SS, y * SS) for (x, y) in poly]
+
 
 def render_icon():
     W, H = ICON_W * SS, ICON_H * SS
@@ -64,6 +75,7 @@ def render_icon():
     img.putalpha(ImageChops.subtract(img.getchannel("A"), hole))
     dr.polygon(sc(CORE), fill=EMBER)  # ember spark floats in the hole
     return img
+
 
 # ---------- wordmark:  superscript TT + EMBER + superscript TM ----------
 def render_wordmark(target_w):
@@ -86,6 +98,7 @@ def render_wordmark(target_w):
     tmp = tmp.crop(tmp.getbbox())
     return tmp.resize((target_w, max(1, round(tmp.height * target_w / tmp.width))), Image.LANCZOS)
 
+
 def build_lockup():
     icon = render_icon()
     icon_w = 1500
@@ -98,6 +111,7 @@ def build_lockup():
     canvas.alpha_composite(icon, ((CW - icon.width) // 2, pad))
     canvas.alpha_composite(word, ((CW - word.width) // 2, pad + icon.height + gap))
     return canvas
+
 
 if __name__ == "__main__":
     build_lockup().save(OUT_DIR / "tt_ember_logo.png")

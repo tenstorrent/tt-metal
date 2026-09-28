@@ -102,9 +102,7 @@ def validate_subdir_name(subdir: str) -> str:
         raise argparse.ArgumentTypeError("Subdirectory name must not be empty.")
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", subdir):
-        raise argparse.ArgumentTypeError(
-            "Invalid --subdir value. Allowed characters: letters, numbers, '_', '-', '.'."
-        )
+        raise argparse.ArgumentTypeError("Invalid --subdir value. Allowed characters: letters, numbers, '_', '-', '.'.")
 
     if subdir in {".", ".."}:
         raise argparse.ArgumentTypeError("Invalid --subdir value.")
@@ -637,9 +635,7 @@ def compute_kernel_utilization_rows(
                 overhead_s = float("nan")
 
             wait_pct = (wait_s / lifetime_s * 100.0) if lifetime_s > 0 and np.isfinite(wait_s) else float("nan")
-            active_pct = (
-                (active_s / lifetime_s * 100.0) if lifetime_s > 0 and np.isfinite(active_s) else float("nan")
-            )
+            active_pct = (active_s / lifetime_s * 100.0) if lifetime_s > 0 and np.isfinite(active_s) else float("nan")
             overhead_pct = (
                 (overhead_s / lifetime_s * 100.0) if lifetime_s > 0 and np.isfinite(overhead_s) else float("nan")
             )
@@ -780,17 +776,13 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
             series_keys.append(key)
 
     for kernel, risc in series_keys:
-        series_rows = [
-            r for r in agg if r["kernel"] == kernel and r["risc"] == risc and r["core_count"] > 0
-        ]
+        series_rows = [r for r in agg if r["kernel"] == kernel and r["risc"] == risc and r["core_count"] > 0]
         if not series_rows:
             continue
 
         grids = [str(r["grid"]) for r in series_rows]
         wait_pct = [float(r["avg_wait_pct"]) if np.isfinite(r["avg_wait_pct"]) else 0.0 for r in series_rows]
-        active_pct = [
-            float(r["avg_active_pct"]) if np.isfinite(r["avg_active_pct"]) else 0.0 for r in series_rows
-        ]
+        active_pct = [float(r["avg_active_pct"]) if np.isfinite(r["avg_active_pct"]) else 0.0 for r in series_rows]
         overhead_pct = [
             float(r["avg_overhead_pct"]) if np.isfinite(r["avg_overhead_pct"]) else 0.0 for r in series_rows
         ]
@@ -857,9 +849,7 @@ def aggregate_combined_utilization(rows: List[Dict[str, object]]) -> List[Dict[s
             subset = [
                 r
                 for r in rows
-                if str(r["grid"]) == grid
-                and str(r["kernel"]) == kernel
-                and (risc is None or str(r["risc"]) == risc)
+                if str(r["grid"]) == grid and str(r["kernel"]) == kernel and (risc is None or str(r["risc"]) == risc)
             ]
             active_s_vals = [r["active_s"] for r in subset if np.isfinite(r["active_s"])]
             wait_s_vals = [r["wait_s"] for r in subset if np.isfinite(r["wait_s"])]
@@ -1053,7 +1043,7 @@ def drop_startup_transient(
     if budget_ms <= 0.0:
         return samples, 0.0
 
-    back_half = [s.tdc_a for s in samples[len(samples) // 2:]]
+    back_half = [s.tdc_a for s in samples[len(samples) // 2 :]]
     steady = float(np.median(back_half))
     mad = float(np.median([abs(c - steady) for c in back_half]))
     # TDC is reported as whole amps, so MAD collapses to 0 on a flat window; the floor keeps
@@ -1156,9 +1146,7 @@ def attach_dynamic_baseline(
         return results
 
     reference_base_current_a = (
-        pause_base_currents[0]
-        if pause_base_currents and np.isfinite(pause_base_currents[0])
-        else float("nan")
+        pause_base_currents[0] if pause_base_currents and np.isfinite(pause_base_currents[0]) else float("nan")
     )
 
     out: List[Dict[str, object]] = []
@@ -1188,18 +1176,14 @@ def attach_dynamic_baseline(
             if np.isfinite(dynamic_avg_current_a) and np.isfinite(window_s)
             else float("nan")
         )
-        dynamic_charge_avg_mah = (
-            dynamic_charge_avg_as / 3.6 if np.isfinite(dynamic_charge_avg_as) else float("nan")
-        )
+        dynamic_charge_avg_mah = dynamic_charge_avg_as / 3.6 if np.isfinite(dynamic_charge_avg_as) else float("nan")
 
         dynamic_charge_peak_as = (
             dynamic_peak_current_a * window_s
             if np.isfinite(dynamic_peak_current_a) and np.isfinite(window_s)
             else float("nan")
         )
-        dynamic_charge_peak_mah = (
-            dynamic_charge_peak_as / 3.6 if np.isfinite(dynamic_charge_peak_as) else float("nan")
-        )
+        dynamic_charge_peak_mah = dynamic_charge_peak_as / 3.6 if np.isfinite(dynamic_charge_peak_as) else float("nan")
 
         rr["base_current_a"] = base_current_a
         rr["dynamic_avg_current_a"] = dynamic_avg_current_a
@@ -1257,9 +1241,7 @@ def compute_interval_metrics(
 
         interval_samples = samples_in_interval(raw_samples, adj_start, adj_end)
 
-        interval_samples, settle_trim_ms = drop_startup_transient(
-            interval_samples, settle_max_ms
-        )
+        interval_samples, settle_trim_ms = drop_startup_transient(interval_samples, settle_max_ms)
         if settle_trim_ms > 0.0:
             adj_start = interval_samples[0].ts
 
@@ -1544,6 +1526,7 @@ def plot_dual_metric(
     fig.savefig(out_path, dpi=dpi)
     plt.close(fig)
 
+
 def plot_compute_charge_vs_cores(
     cores: List[int],
     grids: List[str],
@@ -1823,7 +1806,6 @@ def copy_input_file(src: Path, dst_dir: Path) -> Path:
     if src == dst_path:
         return dst_path
 
-
     shutil.copy2(src, dst_path)
     return dst_path
 
@@ -1884,10 +1866,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--program-csv",
         type=Path,
         default=None,
-        help=(
-            "Optional output CSV file path. If omitted, default is "
-            "<output>/<subdir>/program_intervals.csv"
-        ),
+        help=("Optional output CSV file path. If omitted, default is " "<output>/<subdir>/program_intervals.csv"),
     )
     ap.add_argument(
         "--device-profiler-csv",
