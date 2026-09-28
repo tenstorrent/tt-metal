@@ -197,6 +197,8 @@ def global_ring_prefill_attention(
             max_k_splits=k_splits,
             # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+            # Global attention's bf16 running sums span the whole prefix; the op ignores this where K is split.
+            segmented_accumulation=True,
         )
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
     # logical_n survives a 2-chunk run and then fails "gather dim 2 too small".
@@ -252,7 +254,14 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
 
 
 def ring_prefill_program_config(
-    mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size, max_k_splits=1, matmul_math_fidelity=None
+    mesh_device,
+    ccl_manager,
+    head_dim,
+    q_chunk_size,
+    k_chunk_size,
+    max_k_splits=1,
+    matmul_math_fidelity=None,
+    segmented_accumulation=False,
 ):
     """SDPA program config for the ring path.
 
@@ -271,6 +280,7 @@ def ring_prefill_program_config(
         exp_approx_mode=False,
         max_k_splits=max_k_splits,
         matmul_math_fidelity=matmul_math_fidelity,
+        segmented_accumulation=segmented_accumulation,
     )
 
 
