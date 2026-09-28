@@ -139,6 +139,15 @@ protected:
                 *config_.mesh_shape);
         }
 
+        // Fabric requires at least 2 participating chips.
+        const auto requested_mesh_shape = config_.mesh_shape.value_or(system_mesh_shape);
+        if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED && requested_mesh_shape.mesh_size() < 2) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping MeshDevice test suite: fabric config {} requires at least 2 chips, but the mesh shape is {}",
+                config_.fabric_config,
+                requested_mesh_shape);
+        }
+
         init_max_cbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
@@ -157,7 +166,7 @@ protected:
                 config_.fabric_udm_mode);
         }
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
+            MeshDeviceConfig(requested_mesh_shape, config_.mesh_offset),
             config_.l1_small_size,
             config_.trace_region_size,
             config_.num_cqs,

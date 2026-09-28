@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "noc_debugging_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -406,7 +407,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<uint32_t> published;
-        detail::ReadFromDeviceL1(mesh_device->get_devices()[0], locker_core, scratch_addr, sizeof(uint32_t), published);
+        slow_dispatch::ReadFromL1(*mesh_device, locker_core, scratch_addr, sizeof(uint32_t), published);
         ASSERT_FALSE(published.empty());
         const uint32_t cb_base = published[0];
         ASSERT_GT(cb_base, 0u) << "locker did not publish its locked CB base";
@@ -1026,9 +1027,8 @@ void run_dfb_region_cleared_between_launches_test(
         /*producer_processor=*/DataMovementProcessor::RISCV_0,
         /*publish_ring_base_addr=*/publish_addr);
 
-    IDevice* device = mesh_device->get_devices()[0];
     std::vector<uint32_t> published;
-    detail::ReadFromDeviceL1(device, CoreCoord{core.x, core.y}, publish_addr, sizeof(uint32_t), published);
+    slow_dispatch::ReadFromL1(*mesh_device, CoreCoord{core.x, core.y}, publish_addr, sizeof(uint32_t), published);
     ASSERT_FALSE(published.empty());
     const uint32_t ring_base = published[0];
     ASSERT_GT(ring_base, 0u) << "launch 1 did not publish its DFB ring base";

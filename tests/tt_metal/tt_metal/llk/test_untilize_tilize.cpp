@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <functional>
@@ -33,6 +34,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tile.hpp>
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -98,9 +100,12 @@ struct TestConfig {
     std::uint32_t num_tiles_r;
     // Block width in tiles:
     std::uint32_t num_tiles_c;
-    std::uint32_t num_faces_per_tile = 4;
+    // Face grid. Default 2x2 is a full 32x32 tile.
+    std::uint32_t tile_shape_in_faces_r = 2;
+    std::uint32_t tile_shape_in_faces_c = 2;
     // Face height in datums:
     std::uint32_t face_r_dim = 16;
+    // (Face width is always 16 in this test)
     std::optional<UntilizeType> untilize_type = std::nullopt;
     std::optional<TilizeType> tilize_type = std::nullopt;
     tt::DataFormat input_fmt = tt::DataFormat::Float16_b;
@@ -124,7 +129,7 @@ static void validate_result(
         .num_tiles_c_dim = test_config.num_tiles_c,
         .face_r_dim = test_config.face_r_dim,
         .face_c_dim = 16,
-        .num_faces = test_config.num_faces_per_tile,
+        .num_faces = static_cast<int>(test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c),
         .datum_bytes = tt::datum_size(test_config.input_fmt),
     };
 
@@ -246,18 +251,24 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
     };
     if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST &&
         !test_config.explicit_untilize_geometry) {
-        // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
-        output_dfb_spec.unpack_face_geometry_metadata =
-            tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+        // DST untilize reads the face layout from the output CB metadata (no explicit kernel args).
+        output_dfb_spec.tile_format_metadata = Tile::from_face_grid(
+            test_config.tile_shape_in_faces_r,
+            test_config.tile_shape_in_faces_c,
+            {test_config.face_r_dim, constants::FACE_WIDTH});
     } else if (
         test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A &&
-        (test_config.num_faces_per_tile != 4 || test_config.face_r_dim != 16)) {
+        (test_config.tile_shape_in_faces_r != 2 || test_config.tile_shape_in_faces_c != 2 ||
+         test_config.face_r_dim != 16)) {
         // Tiny/shortened-face tilize (e.g. 16x32, or face_r_dim < 16): the unpack/pack LLKs read the
-        // tile's face geometry from the CB metadata, so tag both the input and output buffers with it.
-        // Gate on either fewer faces or a shorter face row dim so shortened four-face tiles are caught too.
-        const auto fg = tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
-        input_dfb_spec.unpack_face_geometry_metadata = fg;
-        output_dfb_spec.unpack_face_geometry_metadata = fg;
+        // tile's face layout from the CB metadata, so tag both the input and output buffers with it.
+        // Gate on either a non-2x2 face grid or a shorter face row dim so shortened four-face tiles are caught too.
+        const auto tile = Tile::from_face_grid(
+            test_config.tile_shape_in_faces_r,
+            test_config.tile_shape_in_faces_c,
+            {test_config.face_r_dim, constants::FACE_WIDTH});
+        input_dfb_spec.tile_format_metadata = tile;
+        output_dfb_spec.tile_format_metadata = tile;
     }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
@@ -337,8 +348,9 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.explicit_untilize_geometry) {
+        const auto num_faces = test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c;
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
-        compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(test_config.num_faces_per_tile));
+        compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
     }
     if (test_config.fp32_dest_acc_en) {
@@ -851,11 +863,12 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
 // Exercises llk_unpack_tilize_block with a 16x32 tiny tile across multiple tile-rows, using a
 // nonzero input_tile_index (tilize_across_tile_rows.cpp) so the cross-tile-row stride is hit.
 TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
+    constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 2;
     constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
     constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
-    // 16x32 tiny tile = one face-row, TILE_WIDTH/FACE_WIDTH face-columns.
-    constexpr std::uint32_t num_faces = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
-    constexpr std::uint32_t tile_bytes = num_faces * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
     // num_tiles_r >= 2 so the cross-tile-row stride in llk_unpack_tilize_block is exercised.
     vector<vector<std::uint32_t>> num_tiles = {{2, 1}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
@@ -867,7 +880,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
                 .output_single_tile_size = tile_bytes,
                 .num_tiles_r = num_tile[0],
                 .num_tiles_c = num_tile[1],
-                .num_faces_per_tile = num_faces,
+                .tile_shape_in_faces_r = tile_shape_in_faces_r,
+                .tile_shape_in_faces_c = tile_shape_in_faces_c,
                 .face_r_dim = face_r_dim,
                 .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
@@ -930,7 +944,7 @@ static void run_quasar_tilize_untilize_test(
     bool fp32_dest_acc_en,
     tt::DataFormat input_data_format,
     tt::DataFormat output_data_format,
-    std::uint32_t num_faces = 4,
+    std::array<uint32_t, 2> tile_shape_in_faces = {2, 2},
     std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT,
     bool tilize_cross_tile_rows = false) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
@@ -939,7 +953,8 @@ static void run_quasar_tilize_untilize_test(
     const experimental::NodeCoord node{0, 0};
 
     constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
-    const bool tiny_tile = (num_faces != 4 || face_r_dim != 16);
+    const uint32_t num_faces = tile_shape_in_faces[0] * tile_shape_in_faces[1];
+    const bool tiny_tile = (tile_shape_in_faces != std::array<uint32_t, 2>{2, 2} || face_r_dim != 16);
 
     bool is_8bit_integer = (input_data_format == tt::DataFormat::Int8 || input_data_format == tt::DataFormat::UInt8);
     std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
@@ -986,9 +1001,10 @@ static void run_quasar_tilize_untilize_test(
         .data_format_metadata = output_data_format,
     };
     if (tiny_tile) {
-        const auto fg = tt::tt_metal::FaceGeometry{face_r_dim, num_faces};
-        input_dfb_spec.unpack_face_geometry_metadata = fg;
-        output_dfb_spec.unpack_face_geometry_metadata = fg;
+        const auto tile =
+            Tile::from_face_grid(tile_shape_in_faces[0], tile_shape_in_faces[1], {face_r_dim, constants::FACE_WIDTH});
+        input_dfb_spec.tile_format_metadata = tile;
+        output_dfb_spec.tile_format_metadata = tile;
     }
 
     experimental::KernelSpec reader_spec{
@@ -1241,10 +1257,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
 }
 
 // Pack Untilize tiny tile (1x32, 2x32) via pack_untilize_block (unpack in the loop).
-// {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
+// {faces_r, faces_c, face_r_dim}: 1x32 = {1, 2, 1}, 2x32 = {1, 2, 2}.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
-    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    std::vector<std::array<uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
     for (auto& cfg : test_configs) {
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
@@ -1257,18 +1273,18 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) 
                     /*fp32_dest_acc_en=*/false,
                     tt::DataFormat::Float16_b,
                     tt::DataFormat::Float16_b,
-                    /*num_faces=*/geo[0],
-                    /*face_r_dim=*/geo[1]);
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
             }
         }
     }
 }
 
 // Pack Untilize Dst tiny tile (1x32, 2x32): tiles pre-loaded into dest via copy_tile.
-// {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
+// {faces_r, faces_c, face_r_dim}: 1x32 = {1, 2, 1}, 2x32 = {1, 2, 2}.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
-    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    std::vector<std::array<uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
     for (auto& cfg : test_configs) {
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
@@ -1281,8 +1297,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTil
                     /*fp32_dest_acc_en=*/false,
                     tt::DataFormat::Float16_b,
                     tt::DataFormat::Float16_b,
-                    /*num_faces=*/geo[0],
-                    /*face_r_dim=*/geo[1]);
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
             }
         }
     }
@@ -1315,10 +1331,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
 }
 
 // Unpack Tilize tiny tile (1x32, 2x32) via tilize_block.
-// {num_faces, face_r_dim}: 1x32 = {2, 1}, 2x32 = {2, 2}.
+// {faces_r, faces_c, face_r_dim}: 1x32 = {1, 2, 1}, 2x32 = {1, 2, 2}.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTile) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
-    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    std::vector<std::array<uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
     for (auto& cfg : test_configs) {
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
@@ -1331,8 +1347,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTile) 
                     /*fp32_dest_acc_en=*/false,
                     tt::DataFormat::Float16_b,
                     tt::DataFormat::Float16_b,
-                    /*num_faces=*/geo[0],
-                    /*face_r_dim=*/geo[1]);
+                    /*tile_shape_in_faces=*/{geo[0], geo[1]},
+                    /*face_r_dim=*/geo[2]);
             }
         }
     }
@@ -1342,7 +1358,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTile) 
 // (tilize_across_tile_rows.cpp), so the cross-tile-row stride in llk_unpack_tilize_block is
 // exercised, like the Blackhole TensixComputeUnpackTilizeTinyTile16x32 test.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCrossTileRows) {
-    std::vector<vector<std::uint32_t>> geometries = {{2, 1}, {2, 2}};
+    std::vector<std::array<uint32_t, 3>> geometries = {{1, 2, 1}, {1, 2, 2}};
     std::vector<vector<std::uint32_t>> test_configs = {{2, 1}, {2, 2}};
     for (auto& geometry : geometries) {
         for (auto& cfg : test_configs) {
@@ -1356,8 +1372,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCr
                     false,
                     tt::DataFormat::Float16_b,
                     tt::DataFormat::Float16_b,
-                    geometry[0],
-                    geometry[1],
+                    /*tile_shape_in_faces=*/{geometry[0], geometry[1]},
+                    /*face_r_dim=*/geometry[2],
                     /*tilize_cross_tile_rows=*/true);
             }
         }
@@ -1605,23 +1621,33 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
 }
 
 // Tests pack_untilize with tiny tile dims.
-// Row dim 1x32, which is faces = 2, rows = 1
-// Row dim 1x16, which is faces = 1, rows = 1
+// 1x16 = 1x1 faces of height 1; 1x32 = 1x2 faces of height 1.
 TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
-    vector<vector<std::uint32_t>> test_config_values = {{1, 1, 1, 1}, {1, 1, 2, 1}, {1, 2, 2, 1}};
+    struct TinyTileCase {
+        std::uint32_t num_tiles_r;
+        std::uint32_t num_tiles_c;
+        std::uint32_t tile_shape_in_faces_r;
+        std::uint32_t tile_shape_in_faces_c;
+        std::uint32_t face_r_dim;
+    };
+    const std::vector<TinyTileCase> test_cases = {
+        {.num_tiles_r = 1, .num_tiles_c = 1, .tile_shape_in_faces_r = 1, .tile_shape_in_faces_c = 1, .face_r_dim = 1},
+        {.num_tiles_r = 1, .num_tiles_c = 1, .tile_shape_in_faces_r = 1, .tile_shape_in_faces_c = 2, .face_r_dim = 1},
+        {.num_tiles_r = 1, .num_tiles_c = 2, .tile_shape_in_faces_r = 1, .tile_shape_in_faces_c = 2, .face_r_dim = 1},
+    };
     std::uint32_t face_c_dim = 16;
-    for (auto test_config_value : test_config_values) {
+    for (const auto& test_case : test_cases) {
         for (bool dst_full_sync_en : {true, false}) {
-            std::uint32_t num_faces_per_tile = test_config_value[2];
-            std::uint32_t face_r_dim = test_config_value[3];
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .input_single_tile_size = 2 * 1024,
-                .output_single_tile_size = 2 * num_faces_per_tile * face_r_dim * face_c_dim,
-                .num_tiles_r = test_config_value[0],
-                .num_tiles_c = test_config_value[1],
-                .num_faces_per_tile = num_faces_per_tile,
-                .face_r_dim = face_r_dim,
+                .output_single_tile_size = 2 * test_case.tile_shape_in_faces_r * test_case.tile_shape_in_faces_c *
+                                           test_case.face_r_dim * face_c_dim,
+                .num_tiles_r = test_case.num_tiles_r,
+                .num_tiles_c = test_case.num_tiles_c,
+                .tile_shape_in_faces_r = test_case.tile_shape_in_faces_r,
+                .tile_shape_in_faces_c = test_case.tile_shape_in_faces_c,
+                .face_r_dim = test_case.face_r_dim,
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                 .output_fmt = tt::DataFormat::Float16_b,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
@@ -1637,6 +1663,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
         // copy_tile populates full 16x16 face slots. One/two-face tiny tiles
         // select their leading rows; the four-face case uses the full shape.
         // Short four-face SDPA layouts require a different DEST producer.
+        // One face is 1x1, two faces are 1x2, four faces are 2x2.
+        const std::uint32_t faces_r = num_faces > 2 ? 2 : 1;
+        const std::uint32_t faces_c = num_faces == 1 ? 1 : 2;
         const auto face_heights = num_faces == 4 ? vector<std::uint32_t>{16} : vector<std::uint32_t>{1, 8, 16};
         const auto narrow_modes = num_faces == 1 ? vector<bool>{false, true} : vector<bool>{false};
         for (const auto face_rows : face_heights) {
@@ -1658,7 +1687,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
                             .output_single_tile_size = 2 * num_faces * face_rows * 16,
                             .num_tiles_r = 3,
                             .num_tiles_c = width,
-                            .num_faces_per_tile = num_faces,
+                            .tile_shape_in_faces_r = faces_r,
+                            .tile_shape_in_faces_c = faces_c,
                             .face_r_dim = face_rows,
                             .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                             .golden_function = ::unit_tests::compute::gold_standard_untilize};

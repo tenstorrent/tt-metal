@@ -13,62 +13,7 @@ Sentinel for a masked block id is -1 (0xFFFFFFFF as uint32 bits), used as a cont
 import torch
 
 import ttnn
-
-SENTINEL = -1  # masked/invalid block id; contiguous tail per (group, query) row
-BLK_KV = 128  # MSA block size in tokens (= 4 tile-rows)
-
-
-def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=False, chunk_start_idx=0):
-    """MSA block-sparse reference: attend the selected blocks, softmax, then PV with separate V.
-
-        q       [B, H, S, d]            (post-rope, post-qk-norm — done upstream)
-        k, v    [B, n_kv, T, d]         (separate tensors; T % blk_kv == 0)
-        indices [B, n_kv, S, topk]      block-ids per (group, query); SENTINEL (-1) = masked, contiguous tail
-        -> out  [B, H, S, v_dim]        (v_dim = v.shape[-1])
-
-    `causal=True` enables a token-level causality — required for correctness on the diagonal block,
-    whose selected tokens after the query position are future and must not be attended.
-
-    Query heads sharing a KV head also share that KV head's block selection. All-masked rows return 0.
-    """
-    B, H, S, d = q.shape
-    n_kv, T = k.shape[1], k.shape[2]
-    topk = indices.shape[-1]
-    G = H // n_kv
-    nblk = T // blk_kv
-    assert T % blk_kv == 0 and H % n_kv == 0
-
-    qf, kf, vf = q.float(), k.float(), v.float()
-    v_dim = vf.shape[-1]
-
-    # block_mask[b, g, s, blk] — set True only for valid (non-sentinel) selected blocks (flat index_put so a
-    # sentinel clamped to block 0 can never overwrite a genuinely-selected block 0).
-    block_mask = torch.zeros(B, n_kv, S, nblk, dtype=torch.bool)
-    valid = indices >= 0
-    idx_safe = torch.where(valid, indices, torch.zeros_like(indices)).long()
-    flat_mask = block_mask.view(-1, nblk)
-    flat_valid = valid.reshape(-1, topk)
-    flat_idx = idx_safe.reshape(-1, topk)
-    row = torch.arange(flat_mask.shape[0]).unsqueeze(1)
-    flat_mask[row.expand_as(flat_idx)[flat_valid], flat_idx[flat_valid]] = True
-
-    token_mask = block_mask.repeat_interleave(blk_kv, dim=3)  # [B,n_kv,S,T]
-    token_mask = token_mask.repeat_interleave(G, dim=1)  # [B,H,S,T]
-    kf = kf.repeat_interleave(G, dim=1)  # [B,H,T,d]
-    vf = vf.repeat_interleave(G, dim=1)  # [B,H,T,d]
-
-    scores = torch.einsum("bhsd,bhtd->bhst", qf * scale, kf)  # [B,H,S,T]
-    scores = scores.masked_fill(~token_mask, float("-inf"))
-    if causal:
-        # Strictly-future keys (only ever inside the diagonal block; past blocks are all <= query pos).
-        q_pos = (torch.arange(S) + chunk_start_idx).view(1, 1, S, 1)
-        kv_pos = torch.arange(T).view(1, 1, 1, T)
-        scores = scores.masked_fill(kv_pos > q_pos, float("-inf"))
-
-    row_has_value = (scores > float("-inf")).any(dim=-1, keepdim=True)
-    scores = torch.where(row_has_value, scores, torch.zeros_like(scores))
-    attn = torch.where(row_has_value, scores.softmax(dim=-1, dtype=torch.float32), torch.zeros_like(scores))
-    return torch.einsum("bhst,bhtd->bhsd", attn, vf[..., :v_dim])  # [B,H,S,v_dim]
+from ttnn.operations.transformer_golden import BLK_KV, SENTINEL, sparse_attention_ref_msa
 
 
 def sparse_attention_ref_msa_sampled_tokens(

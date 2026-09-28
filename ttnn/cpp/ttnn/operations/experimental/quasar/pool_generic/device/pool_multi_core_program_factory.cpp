@@ -371,7 +371,6 @@ DataflowBufferSpec local_dfb(
     uint32_t page_size,
     uint32_t num_pages,
     tt::DataFormat df,
-    std::optional<FaceGeometry> face = std::nullopt,
     std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
     return DataflowBufferSpec{
         .unique_id = id,
@@ -379,7 +378,6 @@ DataflowBufferSpec local_dfb(
         .num_entries = num_pages,
         .data_format_metadata = df,
         .tile_format_metadata = tile,
-        .unpack_face_geometry_metadata = face,
     };
 }
 
@@ -390,7 +388,6 @@ DataflowBufferSpec borrowed_dfb(
     uint32_t num_pages,
     tt::DataFormat df,
     const TensorParamName& borrowed_from,
-    std::optional<FaceGeometry> face = std::nullopt,
     std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
     return DataflowBufferSpec{
         .unique_id = id,
@@ -398,7 +395,6 @@ DataflowBufferSpec borrowed_dfb(
         .num_entries = num_pages,
         .data_format_metadata = df,
         .tile_format_metadata = tile,
-        .unpack_face_geometry_metadata = face,
         .borrowed_from = borrowed_from,
     };
 }
@@ -724,7 +720,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // z_dim is 4" (ckernel_trisc_common.h). num_faces=1 gives the (x=16, y=1, z=1) descriptor the LLK
     // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
     // full 32x32 4-face geometry below -- that operand genuinely needs it.)
-    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 1};
+    const auto scalar_tile = tt::tt_metal::Tile::from_face_grid(1, 1, {1, tt::constants::FACE_WIDTH});
     const uint32_t window_size_hw = kernel_h * kernel_w;
     // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
     // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
@@ -743,6 +739,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         raw_face_r_pow2 <<= 1;
     }
     const uint32_t raw_face_r = raw_face_r_pow2;
+    const std::array<uint32_t, 2> raw_face_shape = {raw_face_r, tt::constants::FACE_WIDTH};
     // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
     // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
     // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
@@ -752,21 +749,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
     // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
     // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
-    const uint32_t num_faces_in_input_tile_for_cb = 4u;
-    const std::optional<FaceGeometry> input_face_geometry =
-        return_indices
-            ? std::nullopt
-            : std::optional{FaceGeometry{.face_r_dim = raw_face_r, .num_faces = num_faces_in_input_tile_for_cb}};
+    const auto input_tile =
+        return_indices ? std::nullopt : std::optional{tt::tt_metal::Tile::from_face_grid(2, 2, raw_face_shape)};
 
-    constexpr uint32_t pack_untilize_face_r_dim = 1;
+    // Single-row faces: one 1x16 face, or two of them side by side (a 1x32 tile).
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
     const bool single_partial_fits_in_face = last_tile_is_partial && in_c <= tt::constants::FACE_WIDTH;
-    const uint32_t pack_untilize_num_faces = single_partial_fits_in_face ? 1u : 2u;
-    const auto pack_untilize_face =
-        FaceGeometry{.face_r_dim = pack_untilize_face_r_dim, .num_faces = pack_untilize_num_faces};
-    const std::optional<tt::tt_metal::Tile> pack_untilize_tile =
-        single_partial_fits_in_face ? std::optional{tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH}, false)}
-                                    : std::nullopt;
+    const auto pack_untilize_tile = single_partial_fits_in_face
+                                        ? tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH})
+                                        : tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH});
 
     std::vector<DataflowBufferSpec> dfbs;
 
@@ -777,7 +768,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
-        DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
+        DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_tile));
     // clear value CB (one entry per reader thread: each lane fills and reads its own copy)
     dfbs.push_back(
         local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, cb_sizes.clear_value_cb_npages, params.data_format));
@@ -817,7 +808,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
     // input CB
     dfbs.push_back(
-        local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
+        local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_tile));
 
     // MPWI scratch / index CBs
     if (return_indices) {
@@ -852,7 +843,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             cb_sizes.pre_tilize_cb_pagesize,
             cb_sizes.pre_tilize_cb_npages,
             params.data_format,
-            pack_untilize_face,
             pack_untilize_tile);
         pre.advanced_options.alias_with = {DFB_FAST_TILIZE};
         DataflowBufferSpec fast = local_dfb(
@@ -871,8 +861,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             cb_sizes.out_cb_npages,
             params.output_data_format,
             OUTPUT_TENSOR,
-            is_output_tiled ? std::nullopt : std::optional{pack_untilize_face},
-            is_output_tiled ? std::nullopt : pack_untilize_tile));
+            is_output_tiled ? std::nullopt : std::optional{pack_untilize_tile}));
     } else {
         // Row-major output: compute packs into the scratch DFB and the reader writes the shard via
         // DFB_OUT_SHARD, so out_cb is census-only -- no kernel touches its pages. Its natural page
@@ -885,19 +874,17 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // [DEBUG scratch] local (non-borrowed) pack-untilize target, same spec as out_cb's RM view, so the
     // compute kernel can pack the reduced DEST into it and DPRINT the result in isolation (remove after).
     if (!return_indices) {
-        // [DEBUG scratch 32x32] FULL-TILE pack target: face geometry {face_r_dim=16, num_faces=4} so the
+        // [DEBUG scratch 32x32] FULL-TILE pack target: the default 32x32 tile (four 16x16 faces) so the
         // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
         // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
         const uint32_t scratch_npages = params.num_threads_per_cluster;
         const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-        const auto scratch_full_face = FaceGeometry{.face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 4};
         dfbs.push_back(local_dfb(
             DFB_SCRATCH_0,
             scratch_pagesize,
             scratch_npages,
             params.output_data_format,
-            std::optional{scratch_full_face},
-            std::nullopt));
+            tt::tt_metal::Tile()));
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
         // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
         const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;

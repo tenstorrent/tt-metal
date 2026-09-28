@@ -447,7 +447,6 @@ public:
         Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
-        auto* device = mesh_device->get_devices()[0];
         program.impl().compile(mesh_device.get());
 
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -458,8 +457,8 @@ public:
         const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
         const auto& build_state =
-            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(mesh_device.get()))
+                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         return build_state.get_target_out_path(kernel->get_full_kernel_name());
     }

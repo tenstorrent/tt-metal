@@ -57,6 +57,7 @@
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -197,12 +198,11 @@ bool cb_config_successful(
     // to read from
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    auto* device = mesh_device->get_devices()[0];
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
+            slow_dispatch::ReadFromL1(
+                *mesh_device,
                 core_coord,
                 workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
@@ -349,7 +349,6 @@ bool test_dummy_EnqueueProgram_with_sems(
     distributed::EnqueueMeshWorkload(cq, workload, is_blocking_op);
     Finish(cq);
 
-    auto* device = mesh_device->get_devices()[0];
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
@@ -365,8 +364,7 @@ bool test_dummy_EnqueueProgram_with_sems(
             const uint32_t semaphore_buffer_size =
                 program_config.num_sems * MetalContext::instance().hal().get_alignment(HalMemType::L1);
             uint32_t semaphore_base = workload.get_sem_base_addr(mesh_device, core_coord, CoreType::WORKER);
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
+            slow_dispatch::ReadFromL1(*mesh_device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
                  i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
                 const bool is_semaphore_value_correct =
@@ -416,7 +414,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    auto* device = mesh_device->get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -495,18 +492,26 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> dm_kernel0_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, rta_base_dm0, dm_kernel0_args.size() * sizeof(uint32_t), dm_kernel0_args_readback);
+            slow_dispatch::ReadFromL1(
+                *mesh_device,
+                core_coord,
+                rta_base_dm0,
+                dm_kernel0_args.size() * sizeof(uint32_t),
+                dm_kernel0_args_readback);
             pass &= (dm_kernel0_args == dm_kernel0_args_readback);
 
             vector<uint32_t> dm_kernel1_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, rta_base_dm1, dm_kernel1_args.size() * sizeof(uint32_t), dm_kernel1_args_readback);
+            slow_dispatch::ReadFromL1(
+                *mesh_device,
+                core_coord,
+                rta_base_dm1,
+                dm_kernel1_args.size() * sizeof(uint32_t),
+                dm_kernel1_args_readback);
             pass &= (dm_kernel1_args == dm_kernel1_args_readback);
 
             vector<uint32_t> compute_kernel_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
+            slow_dispatch::ReadFromL1(
+                *mesh_device,
                 core_coord,
                 rta_base_compute,
                 compute_kernel_args.size() * sizeof(uint32_t),
@@ -528,7 +533,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -637,13 +641,13 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             for (const CoreCoord& core_coord : range) {
                 for (uint32_t base : rta_bases) {
                     std::vector<uint32_t> unique_readback;
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device, core_coord, base, unique_args.size() * sizeof(uint32_t), unique_readback);
+                    slow_dispatch::ReadFromL1(
+                        *mesh_device, core_coord, base, unique_args.size() * sizeof(uint32_t), unique_readback);
                     pass &= (unique_args == unique_readback);
 
                     std::vector<uint32_t> common_readback;
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device,
+                    slow_dispatch::ReadFromL1(
+                        *mesh_device,
                         core_coord,
                         base + kCommonRTASeparation,
                         common_args.size() * sizeof(uint32_t),
@@ -663,7 +667,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 // Verify RT args for a core at a given address by comparing to expected values.
 bool verify_rt_args(
     bool unique,
-    IDevice* device,
+    distributed::MeshDevice& mesh_device,
     CoreCoord logical_core,
     HalProgrammableCoreType core_type,
     uint32_t addr,
@@ -672,12 +676,13 @@ bool verify_rt_args(
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const auto device_id = mesh_device.get_device_ids()[0];
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     auto noc_xy = (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH)
-                      ? device->ethernet_core_from_logical_core(logical_core)
-                      : device->worker_core_from_logical_core(logical_core);
+                      ? mesh_device.get_devices()[0]->ethernet_core_from_logical_core(logical_core)
+                      : mesh_device.worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+        device_id, noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(
         tt::LogTest,
         "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
@@ -779,12 +784,11 @@ bool test_increment_runtime_args_sanity(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
     Program program;
     bool pass = true;
 
-    auto configured_kernels =
-        create_increment_kernels(device, program, program_configs, processor, num_unique_rt_args, num_common_rt_args);
+    auto configured_kernels = create_increment_kernels(
+        mesh_device.get(), program, program_configs, processor, num_unique_rt_args, num_common_rt_args);
 
     // Args will be at this addr in L1
     uint32_t unique_args_addr = configured_kernels.unique_args_addr;
@@ -835,7 +839,7 @@ bool test_increment_runtime_args_sanity(
                     CoreCoord core_coord(x, y);
                     pass &= verify_rt_args(
                         true,
-                        device,
+                        *mesh_device,
                         core_coord,
                         processor.core_type,
                         unique_args_addr,
@@ -843,7 +847,7 @@ bool test_increment_runtime_args_sanity(
                         unique_arg_incr_val);
                     pass &= verify_rt_args(
                         false,
-                        device,
+                        *mesh_device,
                         core_coord,
                         processor.core_type,
                         common_args_addr,
@@ -1055,7 +1059,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
     uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
-    for (const auto& device : devices_) {
+    for (auto& device : devices_) {
         distributed::MeshWorkload workload;
         Program program;
 
@@ -1074,9 +1078,8 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
         vector<uint32_t> cb_config_vector;
 
-        auto address = program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, CoreType::WORKER);
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
+        auto address = workload.get_cb_base_addr(device, core_coord, CoreType::WORKER);
+        slow_dispatch::ReadFromL1(*device, core_coord, address, cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
@@ -1683,7 +1686,6 @@ TEST_F(UnitMeshCQFixture, TensixLargeCommonRuntimeArgsLargeMulticast) {
 TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsPatchedAcrossRuns) {
     constexpr uint32_t kNumArgs = 1100;  // > 1024 words → large-unicast path
     for (const auto& device : devices_) {
-        auto* dev = device->get_devices()[0];
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set(cr);
@@ -1732,7 +1734,7 @@ TEST_F(UnitMeshCQFixture, TensixLargeUniqueRuntimeArgsPatchedAcrossRuns) {
 
             for (const CoreCoord& core : cr) {
                 std::vector<uint32_t> readback;
-                tt::tt_metal::detail::ReadFromDeviceL1(dev, core, rta_base, kNumArgs * sizeof(uint32_t), readback);
+                slow_dispatch::ReadFromL1(*device, core, rta_base, kNumArgs * sizeof(uint32_t), readback);
                 EXPECT_EQ(readback, make_args(core, phase)) << "core " << core.str() << " phase " << phase;
             }
         }

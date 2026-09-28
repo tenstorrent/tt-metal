@@ -180,7 +180,10 @@ template <SemScope scope>
 __attribute__((always_inline)) inline void wait(std::uintptr_t l1_offset, std::uint32_t value) {
     if constexpr (scope == SemScope::DM_LOCAL_CACHED) {
         WAYPOINT("NSW");
-        while (load<scope>(l1_offset) != value) {
+        {
+            SYNC_WAIT("SYNC-SEM-WAIT", l1_offset);
+            while (load<scope>(l1_offset) != value) {
+            }
         }
         WAYPOINT("NSD");
     } else {
@@ -192,7 +195,10 @@ template <SemScope scope>
 __attribute__((always_inline)) inline void wait_min(std::uintptr_t l1_offset, std::uint32_t value) {
     if constexpr (scope == SemScope::DM_LOCAL_CACHED) {
         WAYPOINT("NSMW");
-        while (load<scope>(l1_offset) < value) {
+        {
+            SYNC_WAIT("SYNC-SEM-WAIT", l1_offset);
+            while (load<scope>(l1_offset) < value) {
+            }
         }
         WAYPOINT("NSMD");
     } else {

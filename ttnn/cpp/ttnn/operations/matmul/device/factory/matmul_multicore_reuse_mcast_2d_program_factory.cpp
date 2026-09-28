@@ -402,6 +402,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // dram_sharded factory. No-op on Wormhole and for tiles already >= dram_alignment.
     uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
+    operations::matmul::utilities::validate_block_sharded_output_batch(output_is_sharded, B, per_core_M, per_core_N);
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
@@ -1984,14 +1985,7 @@ create_program_mcast_in0_in1(
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    TT_FATAL(
-        !(output_is_sharded && B > 1),
-        "Block-sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
-        "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * per_core_N "
-        "= {} tiles without draining. Use fuse_batch=True.",
-        B,
-        per_core_M * per_core_N,
-        B * per_core_M * per_core_N);
+    operations::matmul::utilities::validate_block_sharded_output_batch(output_is_sharded, B, per_core_M, per_core_N);
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;

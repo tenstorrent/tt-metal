@@ -314,9 +314,9 @@ def reshard_expert_weights_nd(tt_expert, mesh_device) -> None:
             projs[i] = to_dram_nd_sharded(w, mesh_device)
 
 
-# Per-model dims as (id_prefix, config, extended_model), each run at its own (emb_dim,
+# Per-model dims as (id_prefix, config, extended), each run at its own (emb_dim,
 # MOE_INTERMEDIATE_SIZE). DeepSeek V3 is the baseline and runs by default; every other model is
-# gated behind @pytest.mark.extended_model.
+# `extended` is retained for callers that still gate on it; the tests here run every model.
 SINGLE_EXPERT_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("minimax_m27", MiniMaxM27Config, True),
@@ -372,21 +372,18 @@ _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
 def _isl_params(active_sweep, only_models=None):
     """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over
     `active_sweep`, all against the fixed _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so
-    non-baseline models stay gated behind the extended_model marker; `only_models` restricts to a
-    subset of model names."""
+    every model runs; `only_models` restricts to a subset of model names."""
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         for active in active_sweep:
-            marks = (pytest.mark.extended_model,) if extended else ()
             params.append(
                 pytest.param(
                     _ISL_ALLOCATED_TOKENS,
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    marks=marks,
                     id=f"{name}-isl-{active}",
                 )
             )
@@ -454,7 +451,6 @@ _K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Kimi K3 routed expert: SiTU-GLU activation at the post-projection dims.
@@ -503,7 +499,6 @@ _K3_SATURATION_TOKENS = 512
 
 
 @pytest.mark.parametrize("weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _K3_SATURATION_CASES)
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_k3_saturated(
     device, weight_scale: float, weights_dtype, pcc_threshold: float, min_cap_frac: tuple[float, float]
@@ -566,7 +561,6 @@ _DSV4_CLAMP_TOKENS = 512
 # Both layouts: row-major is what production feeds the routed expert, and it tilizes inside the
 # per-chunk loop, between BINARY_ACT_INIT() and the BINARY_ACT_TILE calls.
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="clamped SiLU-GLU routed expert is Blackhole-only")
 def test_single_routed_expert_dsv4_clamped(
     device,

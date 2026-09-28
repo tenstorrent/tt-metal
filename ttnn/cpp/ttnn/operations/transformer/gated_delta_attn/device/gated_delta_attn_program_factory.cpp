@@ -6,7 +6,7 @@
 // Parallelism: one Tensix core per head.
 // Each core: forward substitution (using pre-computed L_inv) + inter-chunk state scan.
 
-#include "ttnn/operations/transformer/gated_delta_attn/device/gated_delta_attn_program_factory.hpp"
+#include "ttnn/operations/transformer/gated_delta_attn/device/gated_delta_attn_device_operation.hpp"
 
 #include <optional>
 #include <set>
@@ -15,6 +15,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
@@ -24,9 +25,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactory::create(
-    const GatedDeltaAttnSeqParams& attrs, const GatedDeltaAttnSeqInputs& in, std::vector<Tensor>& outputs) {
-    Program program{};
+ProgramDescriptor GatedDeltaAttnSeqDeviceOperation::create_descriptor(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    ProgramDescriptor desc;
 
     const uint32_t BH = attrs.num_heads;
     const uint32_t NC = attrs.num_chunks;
@@ -75,9 +76,15 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     // -----------------------------------------------------------------------
     auto make_cb = [&](uint32_t idx, tt::DataFormat fmt, uint32_t n_tiles, uint32_t n_bufs = 1) {
         uint32_t sz = n_tiles * n_bufs * tt::tile_size(fmt);
-        CircularBufferConfig cfg(sz, {{idx, fmt}});
-        cfg.set_page_size(idx, tt::tile_size(fmt));
-        CreateCircularBuffer(program, cores, cfg);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = sz,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = fmt,
+                .page_size = tt::tile_size(fmt),
+            }}},
+        });
     };
 
     // Per-chunk inputs — single-buffered to stay within L1 budget (1.5 MB).
@@ -148,107 +155,64 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(outputs[1].buffer()).append_to(writer_ct_args);
 
-    auto reader_id = CreateKernel(
-        program,
-        kdir + "dataflow/reader_gated_delta_attn.cpp",
-        cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kdir + "dataflow/reader_gated_delta_attn.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config =
+        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
 
-    auto writer_id = CreateKernel(
-        program,
-        kdir + "dataflow/writer_gated_delta_attn.cpp",
-        cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kdir + "dataflow/writer_gated_delta_attn.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config =
+        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
 
-    auto compute_id = CreateKernel(
-        program,
-        kdir + "compute/gated_delta_attn.cpp",
-        cores,
-        ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = ct_args});
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kdir + "compute/gated_delta_attn.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = cores;
+    compute_desc.compile_time_args = ct_args;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::HiFi2,
+        .fp32_dest_acc_en = true,
+        .math_approx_mode = false,
+    };
 
     // -----------------------------------------------------------------------
     // Per-core runtime arguments
     // -----------------------------------------------------------------------
-    uint32_t lu_addr = in.L_unit.buffer()->address();
-    uint32_t vbs_addr = in.v_beta_sc.buffer()->address();
-    uint32_t kbs_addr = in.k_bd_sc.buffer()->address();
-    uint32_t att_addr = in.intra_attn.buffer()->address();
-    uint32_t qdec_addr = in.q_decay.buffer()->address();
-    uint32_t kdt_addr = in.k_decay_t.buffer()->address();
-    uint32_t dle_addr = in.dl_exp.buffer()->address();
-    uint32_t linv_addr = in.L_inv.buffer()->address();
-    uint32_t s0_addr = in.initial_state.has_value() ? in.initial_state->buffer()->address() : 0u;
-
-    uint32_t out_addr = outputs[0].buffer()->address();
-    uint32_t state_addr = outputs[1].buffer()->address();
+    // Every address is declared as a Buffer* binding; an absent initial_state passes a null Buffer*,
+    // which emits 0 and registers no binding.
+    Buffer* s0_buffer = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
 
     for (uint32_t h = 0; h < BH; h++) {
         auto& core = head_cores[h];
-        SetRuntimeArgs(
-            program,
-            reader_id,
+        reader_desc.emplace_runtime_args(
             core,
-            {h, NC, lu_addr, vbs_addr, kbs_addr, att_addr, qdec_addr, kdt_addr, dle_addr, linv_addr, s0_addr});
-        SetRuntimeArgs(program, writer_id, core, {h, NC, out_addr, state_addr});
-        SetRuntimeArgs(program, compute_id, core, {NC});
+            {h,
+             NC,
+             in.L_unit.buffer(),
+             in.v_beta_sc.buffer(),
+             in.k_bd_sc.buffer(),
+             in.intra_attn.buffer(),
+             in.q_decay.buffer(),
+             in.k_decay_t.buffer(),
+             in.dl_exp.buffer(),
+             in.L_inv.buffer(),
+             s0_buffer});
+        writer_desc.emplace_runtime_args(core, {h, NC, outputs[0].buffer(), outputs[1].buffer()});
+        compute_desc.emplace_runtime_args(core, {NC});
     }
 
-    return cached_program_t{
-        std::move(program),
-        {
-            .reader_kernel_id = reader_id,
-            .writer_kernel_id = writer_id,
-            .compute_kernel_id = compute_id,
-            .grid_y = grid_y,
-            .num_cores = BH,
-        }};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void GatedDeltaAttnSeqProgramFactory::override_runtime_arguments(
-    cached_program_t& cached,
-    const GatedDeltaAttnSeqParams& attrs,
-    const GatedDeltaAttnSeqInputs& in,
-    std::vector<Tensor>& outputs) {
-    auto& program = cached.program;
-    auto& sv = cached.shared_variables;
-    const uint32_t BH = attrs.num_heads;
-    const uint32_t grid_y = sv.grid_y;
-
-    uint32_t lu_addr = in.L_unit.buffer()->address();
-    uint32_t vbs_addr = in.v_beta_sc.buffer()->address();
-    uint32_t kbs_addr = in.k_bd_sc.buffer()->address();
-    uint32_t att_addr = in.intra_attn.buffer()->address();
-    uint32_t qdec_addr = in.q_decay.buffer()->address();
-    uint32_t kdt_addr = in.k_decay_t.buffer()->address();
-    uint32_t dle_addr = in.dl_exp.buffer()->address();
-    uint32_t linv_addr = in.L_inv.buffer()->address();
-    uint32_t s0_addr = in.initial_state.has_value() ? in.initial_state->buffer()->address() : 0u;
-    uint32_t out_addr = outputs[0].buffer()->address();
-    uint32_t state_addr = outputs[1].buffer()->address();
-
-    for (uint32_t h = 0; h < BH; h++) {
-        CoreCoord core{h / grid_y, h % grid_y};
-        auto& ra = GetRuntimeArgs(program, sv.reader_kernel_id, core);
-        ra[2] = lu_addr;
-        ra[3] = vbs_addr;
-        ra[4] = kbs_addr;
-        ra[5] = att_addr;
-        ra[6] = qdec_addr;
-        ra[7] = kdt_addr;
-        ra[8] = dle_addr;
-        ra[9] = linv_addr;
-        ra[10] = s0_addr;
-
-        auto& wa = GetRuntimeArgs(program, sv.writer_kernel_id, core);
-        wa[2] = out_addr;
-        wa[3] = state_addr;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

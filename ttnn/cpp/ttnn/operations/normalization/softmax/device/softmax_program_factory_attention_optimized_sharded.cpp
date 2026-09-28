@@ -89,7 +89,6 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         "Invalid softmax sharded program config for given tensor and sharding shape");
     SoftmaxShardedMultiCoreProgramConfig program_config =
         std::get<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config);
-    std::uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
 
     // single tile sizes
     std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
@@ -377,7 +376,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             {{"block_h", program_config.block_h},
              {"block_w", program_config.block_w},
              {"subblock_w", program_config.subblock_w},
-             {"num_subblocks_w", num_subblocks_w}},
+             {"causal_mask", static_cast<std::uint32_t>(attributes.is_causal_mask)},
+             {"sharded_causal_mask", static_cast<std::uint32_t>(mask_sharded_resident)}},
         .hw_config = compute_hw,
     };
 

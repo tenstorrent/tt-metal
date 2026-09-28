@@ -12,6 +12,7 @@ runner startup (full model load + kernel JIT) once PER scenario.
 
 import contextlib
 import glob
+import json
 import os
 import signal
 import subprocess
@@ -163,6 +164,14 @@ SCENARIOS = {
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
 }
+
+# Keep the Llama golden prerequisite out of the existing Kimi/GLM CI scenarios.
+# Select the Llama acceptance case explicitly with PREFILL_MODEL=llama_3p1_8b.
+if os.environ.get("PREFILL_MODEL") == "llama_3p1_8b":
+    from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
+
+    SCENARIOS = {"llama31": prefill_runner_scenario()}
+    validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["llama31"])
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
@@ -388,7 +397,12 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H="1", **extra)
+    env = _scenario_env(
+        sc,
+        PREFILL_MOCK_MIGRATION="1",
+        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get("PREFILL_LAYER_ACK_D2H", "1"),
+        **extra,
+    )
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":
@@ -472,22 +486,26 @@ def _scenario_params():
 
 
 @pytest.mark.parametrize("scenario", _scenario_params())
+# A fresh runner publishes the cache; the producer compares each resident slot to its golden.
 def test_producer_runner_pcc(scenario, tmp_path):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
     KV PCC gate to pass (the producer exits non-zero if any resident slot is below threshold)."""
     sc = SCENARIOS[scenario]
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
-    trace_env = {}
+    trace_env = {"PREFILL_PCC_SUMMARY_DIR": str(tmp_path / "pcc")}
     if "prompt_file" in sc:
         model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
         trace_env["PREFILL_MODEL"] = model
-        reuse_dir = os.environ.get("PREFILL_REUSE_TRACE_DIR")
-        if reuse_dir and os.path.exists(os.path.join(reuse_dir, "metadata.json")):
-            trace_dir = reuse_dir
-        else:
-            trace_dir = str(tmp_path / "prompt_trace")
-            _generate_prompt_trace(trace_dir, sc["isl"], sc["prompt_file"], model)
-        trace_env["PREFILL_TRACE_DIR"] = trace_dir
+        from models.demos.common.prefill.runners.trace_utils import ensure_trace
+
+        output = tmp_path / "prompt_trace"
+
+        def generate():
+            _generate_prompt_trace(str(output), sc["isl"], sc["prompt_file"], model)
+            return output
+
+        trace_dir = ensure_trace(os.environ.get("PREFILL_REUSE_TRACE_DIR") or output, sc["isl"], generate)
+        trace_env["PREFILL_TRACE_DIR"] = str(trace_dir)
     with _running_runner(scenario, sc, **trace_env) as runner_stream:
         env = _scenario_env(sc, PREFILL_PRODUCER_CHECK_PCC="1", **trace_env, **sc["producer"])
         producer_stream = _ChildStream("producer", prod_log)
@@ -525,3 +543,6 @@ def test_producer_runner_pcc(scenario, tmp_path):
             # already in the log verbatim would land in it four times over, ~800 lines of pure noise.
             + ("" if _STREAM_LOGS else f" Runner tail:\n{_tail(runner_stream.log_path)}")
         )
+        if "expected_slots" in sc:
+            verdict = json.loads((tmp_path / "pcc" / "rank0.json").read_text())
+            assert verdict["ok"] and verdict["slots_checked"] == sc["expected_slots"], verdict

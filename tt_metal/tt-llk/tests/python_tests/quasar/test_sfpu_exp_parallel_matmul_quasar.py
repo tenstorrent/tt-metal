@@ -9,6 +9,8 @@ TRISC3: UNP_S -> SrcS -> exp -> PACK1 -> buffer_Res.
 Both outputs verified after a single configuration.run().
 """
 
+import os
+
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
@@ -25,6 +27,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
+    SfpuSrcsImpl,
     Transpose,
     format_dict,
 )
@@ -48,6 +51,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    SFPU_SRCS_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -62,6 +66,14 @@ from quasar.test_eltwise_unary_sfpu_quasar import (
 DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
+)
+
+
+# ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
+SFPU_SRCS_IMPLS = (
+    (SfpuSrcsImpl.Sfpi,)
+    if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1"
+    else tuple(SfpuSrcsImpl)
 )
 
 
@@ -105,17 +117,19 @@ def generate_parallel_matmul_exp_combinations(
                         dest_sync,
                     ):
                         continue
-                    combinations.append(
-                        (
-                            fmt,
-                            dest_acc,
-                            dest_sync,
-                            implied_math_format,
-                            runtime(exp_input_dimensions),
-                            runtime(input_A_dimensions),
-                            runtime(input_B_dimensions),
+                    for sfpu_srcs_impl in SFPU_SRCS_IMPLS:
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                dest_sync,
+                                implied_math_format,
+                                sfpu_srcs_impl,
+                                runtime(exp_input_dimensions),
+                                runtime(input_A_dimensions),
+                                runtime(input_B_dimensions),
+                            )
                         )
-                    )
     return combinations
 
 
@@ -140,6 +154,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
         dest_acc,
         dest_sync,
         implied_math_format,
+        sfpu_srcs_impl,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
@@ -253,6 +268,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
+            SFPU_SRCS_IMPL(sfpu_srcs_impl),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
