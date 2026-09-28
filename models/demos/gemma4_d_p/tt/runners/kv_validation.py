@@ -38,7 +38,7 @@ def load_prepared_gpu_cache_heads(path, layer, real_len):
                 raise ValueError(f"Layer {layer}: invalid prepared GPU KV shape {shape} for {real_len} tokens")
             if rows.get_dtype() != "BF16":
                 raise ValueError(f"Layer {layer}: prepared GPU KV must be BF16")
-            result[config] = rows[:real_len].float()
+            result[config] = rows[:real_len]
     return result
 
 
@@ -76,7 +76,7 @@ def golden_cache_heads(key, value, layer, real_len):
     for tensor in (key, value):
         if tensor.ndim != 4 or tensor.shape[:2] != (1, heads) or tensor.shape[2] < real_len or tensor.shape[3] != width:
             raise ValueError(f"Layer {layer}: expected golden [1, {heads}, >= {real_len}, {width}], got {tensor.shape}")
-    key, value = key[0, :, :real_len].float(), value[0, :, :real_len].float()
+    key, value = key[0, :, :real_len], value[0, :, :real_len]
     if global_layer:
         packed = pack_global_kv_reference(key, value)
         return {head: packed[head] for head in range(4)}

@@ -324,6 +324,8 @@ def test_prepared_gpu_reference_preserves_heads_and_prefixes(tmp_path, layer):
         actual = load_gpu_cache_heads(prepared, layer, tokens)
         assert actual.keys() == expected.keys()
         for config in expected:
+            assert expected[config].dtype == torch.bfloat16
+            assert actual[config].dtype == torch.bfloat16
             assert actual[config].is_contiguous()
             assert torch.equal(actual[config], expected[config])
 
