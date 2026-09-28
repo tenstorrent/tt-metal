@@ -51,3 +51,33 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Device gate (2x2, attn_norm module already implemented): out PCC 0.999999, rel L2 0.00169, step rel L2 0.00174,
   ratio [0.9956, 1.0027], PASS. The first block of pcc=0 lines comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_01_attn_norm.py`
+
+## C.full_dense.attention.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attention.py`
+  (same golden, s4096 chunk 1 with a 2048-row KV prefix). Only the docstring changed. The gate is pcc_attention_L00 >= 0.99.
+  The test also asserts: output finite, whole-chunk rel L2 <= 0.015, rel L2 on the first 128 rows <= 0.015, and the per-token norm ratio in
+  [0.97, 1.03]. Why: RoPE positions from 0, a non-causal mask, a 1/sqrt(128) scale and a missing KV prefix all pass PCC 0.99
+  (measurements are in the docstring). It also asserts that the chunk starts after 0.
+- BRINGUP_IMPL=reference: PCC 0.999999, rel 0.00170, first 128 rows 0.00172, ratio [0.9992, 1.0008], PASS.
+  BRINGUP_IMPL=stub: PCC 0, FAIL.
+- Default gate (2x2 device): NotImplementedError from hooks.device_component, which is expected until the implement step.
+  The implement step must keep device rel L2 well under 0.015. Gemma device attention measured 0.005-0.008.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py`
+
+## C.full_dense.attention.implement.1 (implement role), 2026-09-28
+- New `tt/attention.py`: `TtFullAttention` + `TtKVCacheFull` copied from the 1x4 prior `mimo_v2_6_d_p/tt/attention.py`.
+  The sliding class is not copied yet; it has its own task. Changes for 2x2:
+  - The o_proj reduce is `ttnn.all_reduce(cluster_axis=None)`. all_reduce.cpp runs axis 1 then axis 0 on a non-line mesh.
+  - `ShardTensorToMesh(dim)` on the 2x2 mesh shards over the flattened mesh in row-major order, so chip d = 2*row + col
+    holds TP rank d (Q heads 16d..16d+15, KV head d). The weight and cache code is unchanged from 1x4.
+- SDPA precision: the owner rule says every matmul runs at HiFi4, and preset A is HiFi2. I added preset `A4` (A's streaming kernel,
+  fp32 dest off, approx exp, q512/k128, at HiFi4) and made it the full-layer default (`FULL_SDPA_DEFAULT`).
+  `MIMO_SDPA_CFG=A` selects the prior's HiFi2 preset. The perf step should measure the cost (per known_issues, HiFi4 at q512/k128
+  costs about 1.6x SDPA time at 51k on 1x4).
+- `tt/model.py`: new `build_attention` (full layers only; sliding raises NotImplementedError) and `new_kv_cache`.
+- `hooks.py`: `device_component("attention")` builds a fresh device cache per call and loads the golden prefix, as the prior does.
+  `DEVICE_STEPS.full_dense` now contains `attention`. The hybrid state keeps device KV caches for layers whose attention runs on device
+  (`ctx.extra["dev_cache"]`).
+- Gate: pcc_attention_L00 0.999988, rel_l2 0.008036, first 128 rows 0.007031, row_norm_ratio [1.0018, 1.0115], PASS.
+  The first `FAIL pcc=0.000000` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py`
