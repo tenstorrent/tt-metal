@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, AsyncIterator, Iterator, TextIO
+from typing import Optional, AsyncIterator, Iterator, Iterable, TextIO, TypeVar
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from asyncio import StreamReader
@@ -423,6 +423,14 @@ async def parse_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> list[
     return evs
 
 
+T = TypeVar("T")
+
+
+async def async_iter(it: Iterable[T]) -> AsyncIterator[T]:
+    for i in it:
+        yield i
+
+
 def publish_link(test, link: TestedLink, srcsn, dstsn, *args):
     payload = {
         "test": test,
@@ -439,7 +447,7 @@ def publish_link(test, link: TestedLink, srcsn, dstsn, *args):
     print(args)
 
 
-def parse_evs(evs: Iterator[Event]) -> Iterator[TestRun]:
+async def parse_evs(evs: AsyncIterator[Event]) -> AsyncIterator[TestRun]:
     test: str = ""
     sdev: str = ""
     sdevbdf: str = ""
@@ -465,7 +473,7 @@ def parse_evs(evs: Iterator[Event]) -> Iterator[TestRun]:
     noprocs = [drambidir]
 
     # it = iter(evs)
-    for e in evs:
+    async for e in evs:
         if e.typ == EventType.TESTSTART:
             test = e.extra["name"]
             sdev = sdevbdf = rdev = rdevbdf = score = rcore = ltype = proc = ""
@@ -560,7 +568,8 @@ def parse_evs(evs: Iterator[Event]) -> Iterator[TestRun]:
             print("The test timed out, you should reset the card! (tt-smi -r)", file=sys.stderr)
             exit(1)
 
-    yield from runs
+    for r in runs:
+        yield r
 
 
 def prepare_filter(tests: list[TestCase]) -> str:
@@ -883,8 +892,12 @@ async def main():
 
         exit_status, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
 
+    runs = []
+    async for e in parse_evs(async_iter(evs)):
+        runs.append(e)
+
     # pprint.pp(evs)
-    runs = list(parse_evs(evs))
+    # runs = list(e async for e in parse_evs(evs))
     # pprint.pp(runs)
     # print(runs_to_json(runs, sort_keys=True, indent=4))
 
