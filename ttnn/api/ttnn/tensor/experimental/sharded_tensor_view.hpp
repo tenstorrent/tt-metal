@@ -12,10 +12,16 @@
 namespace ttnn::experimental {
 
 /**
- * Create a sharded SRAM tensor view at a byte offset within an owner tensor.
+ * Create a sharded L1 tensor view that starts `shard_offset` bytes into each shard of `owner`.
  *
- * The result retains the owner's MeshBuffer. The view specification must use
- * the owner's allocation mode and a subset of its worker cores.
+ * `owner` must be a device tensor replicated across its mesh that owns its allocation or is itself a view created by
+ * this function; reinterpreted tensors are rejected. `tensor_spec` must describe L1 storage with the owner's
+ * allocation mode and a subset of its worker cores, and each view shard must fit within the owner shard at an aligned
+ * offset.
+ *
+ * The view keeps the owner's allocation alive while it exists. Explicitly deallocating the owner frees that memory and
+ * invalidates every view created from it, directly or through other views. Deallocating a view invalidates the views
+ * created from it and releases only that view's hold on the owner's allocation.
  */
 Tensor create_sharded_tensor_view(
     const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
