@@ -193,7 +193,8 @@ def _get_valid_formats(dest_acc):
     """
     Filter formats based on dest accumulation:
     - dest accumulation Yes keeps Float32 inputs, plus Int8 to Int8
-    - dest accumulation No drops exponent-B inputs that pack directly to Float16
+    - dest accumulation No drops exponent-B inputs that pack directly to Float16,
+      and Float16 -> Bfp4_b (packer reads dest as Float16_b)
     """
     all_formats = input_output_formats(
         [
@@ -216,6 +217,10 @@ def _get_valid_formats(dest_acc):
         for formats in all_formats
         if not is_format_combination_outlier(
             formats.input_format, formats.output_format, dest_acc
+        )
+        and not (
+            formats.input_format == DataFormat.Float16
+            and formats.output_format == DataFormat.Bfp4_b
         )
     ]
 

@@ -18,7 +18,7 @@ from quasar.test_eltwise_binary_quasar import (
     eltwise_binary_implied_math_formats,
     eltwise_binary_input_dimensions,
     eltwise_binary_tile_dimensions,
-    skip_if_quasar_eltwise_binary_hangs,
+    skip_if_quasar_eltwise_binary_unsupported,
 )
 from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise_binary
 from quasar.test_eltwise_binary_quasar import (
@@ -65,7 +65,7 @@ def test_perf_eltwise_binary_quasar(
     loop_factor,
     is_perf,
 ):
-    skip_if_quasar_eltwise_binary_hangs(tile_dimensions)
+    skip_if_quasar_eltwise_binary_unsupported(tile_dimensions, input_dimensions)
 
     run_eltwise_binary(
         formats,

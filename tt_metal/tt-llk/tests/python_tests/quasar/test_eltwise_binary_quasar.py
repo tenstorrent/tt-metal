@@ -77,8 +77,10 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
 ELTWISE_MATH_ROWS = 8
 
 
-def skip_if_quasar_eltwise_binary_hangs(tile_dimensions) -> None:
-    """Skip tiles whose math MOP never runs, so unpack dvalid is never cleared."""
+def skip_if_quasar_eltwise_binary_unsupported(
+    tile_dimensions, input_dimensions
+) -> None:
+    """Skip cases the full-tile Quasar binary path cannot run. See #57902."""
     tile_shape = construct_tile_shape(tile_dimensions)
     dest_rows = tile_shape.total_num_faces() * tile_shape.face_r_dim
     if dest_rows < ELTWISE_MATH_ROWS:
@@ -87,6 +89,18 @@ def skip_if_quasar_eltwise_binary_hangs(tile_dimensions) -> None:
             f"faces*face_r_dim={dest_rows} < {ELTWISE_MATH_ROWS} "
             f"(tile {list(tile_dimensions)}). See tenstorrent/tt-metal#57902"
         )
+    tile = tuple(tile_dimensions)
+    if tile == (32, 32):
+        return
+    tile_rows, tile_cols = tile
+    tile_count = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
+    if tile == (16, 16) and tile_count == 1:
+        return
+    pytest.skip(
+        "Quasar eltwise binary unpack and dest addressing are 32x32-only, "
+        f"plus single-tile 16x16 (tile {list(tile_dimensions)}, "
+        f"{tile_count} tiles). See tenstorrent/tt-metal#57902"
+    )
 
 
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
@@ -192,7 +206,7 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
-    skip_if_quasar_eltwise_binary_hangs(tile_dimensions)
+    skip_if_quasar_eltwise_binary_unsupported(tile_dimensions, input_dimensions)
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
