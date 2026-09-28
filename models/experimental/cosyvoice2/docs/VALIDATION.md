@@ -136,6 +136,119 @@ calls 2–4.
   the F0 predictor and source path alone. This process also recompiled HiFT for lengths the demo had compiled (see
   above).
 
+## Bucketing (2026-09-27)
+
+Non-streaming geometries are bucketed and warmed at start-up (`tt/pipeline.py`, module docstring), because each new
+exact length cost minutes of first-sight work.
+
+**The bucket sets.** Upstream splits text into segments of at most 80 tokens and allows 20 speech tokens per text
+token, so the flow sees at most 750 prompt + 1,600 generated tokens, and HiFT 3,200 mel frames.
+- **HiFT can't take the top of that range in one pass.** At 3,200 frames, `ttnn.concat` inside HiFT needs a
+  1,536,032-byte circular-buffer page against 1,393,440 bytes of L1 per core (`TT_FATAL`), which puts the
+  single-pass limit near 2,900 frames (58 s).
+- **Nor can it take 2,560 frames alongside the warmed set.** With every smaller bucket warmed and resident, the
+  2,560-frame bucket failed to allocate: it needed 118 MB of contiguous DRAM per bank, and the largest free block was
+  106 MB (2026-09-27, the first cold warm-up). 2,048 frames had run in the same process.
+- **So a segment's speech is capped at 1,024 tokens** (2,048 frames, 41 s): `CosyVoice2Config.max_segment_speech_tokens`.
+  It binds only when a segment of more than 51 text tokens has not ended after 41 s.
+- **Past the cap, the pipeline raises `SegmentTooLong`, naming the segment's length**, rather than truncating the
+  speech or failing inside a device op (`test_pipeline_api.py::test_segment_past_the_cap_raises`). The LLM runs one
+  step past the cap, which tells a segment of exactly 1,024 tokens from a longer one. `tokens_to_mel` and
+  `mel_to_wav` refuse more than the cap before any device work.
+- **The resulting sets** step by one unit up to 8 units, then the step doubles every 8 steps (`tiered_buckets`):
+
+  | stage | buckets |
+  |---|---|
+  | flow tokens | 15 buckets, 64 … 1792, strictly above prompt + generated |
+  | HiFT mel frames | 12 buckets, 128 … 2048, at or above the mel length |
+  | LLM prefill | 8 lengths, 128 … 1024; it already padded to multiples of 128 |
+
+  The LLM's prefix embedding lookups pad to 128 as well.
+- **Probe, first sight on a cold kernel cache:** flow at 1,024 and 2,350 tokens ran in 73 s and 101 s; HiFT at
+  2,048 frames in 447 s.
+
+**Flow: bucketed vs exact length, with the padding masked** (`test_flow_checkpoint.py::test_device_nonstreaming_bucketed_flow_matches_exact_real_checkpoint`):
+- The encoder zeroes the padded rows after its embed, as upstream zero-pads before the look-ahead conv, and adds a
+  key-padding bias in both attention stacks.
+- The CFM runs its masked attention path with an all-zero chunk term, which is upstream's non-streaming mask.
+- The naive control runs the same padded tokens with no masks.
+
+| input | valid → bucket | bucketed vs exact: max \|diff\|, PCC | naive control: max \|diff\|, PCC |
+|---|---|---|---|
+| real corpus prompt (175 tokens) | 251 → 256 | 0.000, 1.000000 | 2.89, 0.9927 |
+| real corpus prompt | 251 → 320 | 0.150, 0.999846 | 2.36, 0.9830 |
+| real corpus prompt | 320 → 384 | 0.177, 0.999813 | 3.58, 0.9825 |
+| the test's synthetic inputs | 156 → 192 | 0.254, 0.999696 | 3.78, 0.9547 |
+| the test's synthetic inputs | 310 → 384 | 0.229, 0.999665 | 3.95, 0.9548 |
+
+The test gates on max |diff| ≤ 0.4 and PCC ≥ 0.9995. The control fails it by a factor of 6 or more.
+
+**HiFT: padding with silence, the tail it touches.** The mel is padded with `log(1e-5)`, the mel's own silence floor
+(the quietest frames of real prompts sit exactly there), and the audio is trimmed back. The measurement injects
+torch F0 (D16) and uses the same sine noise over the valid region. It separates two effects:
+- **leakage:** silence padding vs zero padding at the same bucket, so the kernels are identical and any difference is
+  the pad content reaching back into the valid audio;
+- **geometry:** bucketed vs exact length. A different length runs different kernel blockings, so this adds rounding
+  differences everywhere, which the NSF source's running phase accumulates.
+
+The scale column is TT against the fp32 torch reference.
+
+| mel (real speech) | valid → bucket | leakage: max \|diff\|, reach from the end | bucketed vs exact: PCC | TT vs torch: PCC | log-mel L1, bucketed vs exact: whole / last 160 ms | log-mel L1, TT vs torch: whole / last 160 ms |
+|---|---|---|---|---|---|---|
+| 121-127105-0003 prompt | 150 → 256 | 0.197, 294 ms | 0.9908 | 0.99943 | 0.027 / 0.218 | 0.030 / 0.034 |
+| 121-127105-0003 prompt | 300 → 384 | 0.190, 379 ms | 0.9954 | 0.99929 | 0.023 / 0.269 | 0.038 / 0.038 |
+| 260-123286-0014 prompt | 150 → 256 | 0.287, 219 ms | 0.9836 | 0.99960 | 0.031 / 0.198 | 0.036 / 0.036 |
+| 260-123286-0014 prompt | 300 → 384 | 0.072, 238 ms | 0.9994 | 0.99960 | 0.023 / 0.247 | 0.039 / 0.047 |
+
+- **The padding reaches back 0.22–0.38 s.**
+- **Over the whole utterance**, bucketing's spectral error (0.023–0.031) is no larger than the port's own error
+  against torch (0.030–0.039).
+- **In the last 160 ms it is 0.20–0.27, about 6× the port's own.** These mels are cut mid-speech, the worst case.
+  A generated utterance usually ends in trailing silence. Whether the tail matters is checked end to end by the
+  Stage 1 WER/SIM re-score.
+
+## Start-up: warming the bucket set (2026-09-28)
+
+`warmup_buckets()` in two fresh processes, one after the other. `TT_METAL_CACHE` pointed at a new directory, so the
+first started from an empty kernel cache. The second is identical: same code, configuration and device parameters.
+The measurement script (notes branch, `scripts/2026-09-28/warmup_measure.py`) times each geometry, the conv safety
+checks (`_verify_and_resolve`) and the weight preparation (`_prepared`), and counts kernel binaries on disk.
+
+| process | kernel binaries compiled | warm-up s | LLM s | flow s | HiFT s | conv safety checks s | conv weight prep s |
+|---|---|---|---|---|---|---|---|
+| first, empty kernel cache | 19,068 | 4,561 | 146 | 945 | 3,469 | 1,628 | 25 |
+| second, identical | **0** | **577** | 2.5 | 96 | 443 | 182 | 23 |
+
+Pipeline construction took 17 s and 13 s before that. Per bucket, first process / second: LLM prefill 12–23 s /
+0.2–0.3 s; flow 47–110 s / 2–20 s; HiFT 173–374 s / 7–151 s.
+
+- **Kernel compilation is the cold cost.** The disk cache saves 3,984 of the 4,561 s (87 %). The first process's
+  check time includes compiling the reference convs' kernels.
+- **With every kernel on disk, start-up is 9.6 minutes, and nothing compiles.** The second process allocated
+  exactly as the first: the same DRAM figures, to 0.1 MiB, after every geometry. So every conv kernel that carries
+  a DRAM address in its compile-time arguments matched its binary on disk (see "Device memory and determinism"
+  above).
+- **The conv safety checks rerun in every process: 182 s, 32 % of the warm start-up.** They are not dead weight.
+  Both processes found the same 43 disagreements, geometry for geometry:
+  - **20 were real corruption of the fast path** (the prepared weight; tenstorrent/tt-metal#55545's class).
+    Relative error against a float64 host conv:
+
+    | conv | where | prepared weight | raw weight, used instead |
+    |---|---|---|---|
+    | `Conv1d(128->128, k=11)`, 6 resblock convs | the 640-frame bucket (length 5,120) | 1.0–2.6 | 0.003–0.005 |
+    | `Conv1d(18->256, k=30, s=15)`, the first source downsampling | every bucket from 640 to 2,048 frames | 7.7 | 0.0018 |
+    | `Conv1d(18->128, k=6, s=3)`, the second | every bucket from 896 to 2,048 frames | 0.14–0.19 | 0.0020 |
+
+  - **23 were the reference's own error.** The raw-weight / safe-config reference was off by 0.05–0.10 while the
+    fast path was at 0.004–0.005, and the float64 host conv kept the fast path. These arbitrations are most of the
+    check time at long lengths.
+- **HiFT is 77 % of the warm start-up.** Its two largest buckets (1,792 and 2,048 frames) take 254 s of it.
+
+**Eviction cannot fire.** The warmed set holds 416 MiB of DRAM per bank (82 MiB after construction), and 601 MiB per
+bank stays free. Across the warm-up's 3,060 conv-cache inserts, free DRAM never dropped below 559 MiB per bank.
+The old eviction threshold was 150 MB free, so it would never have fired either. In bucketed mode the threshold is
+0, so eviction is off (`test_geometry_cache.py::test_threshold_override_zero_never_evicts`).
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch

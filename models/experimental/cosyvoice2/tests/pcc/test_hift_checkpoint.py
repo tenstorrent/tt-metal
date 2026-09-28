@@ -113,3 +113,59 @@ def test_source_linear_weight_shape_matches_harmonic_num():
     hift_sd = load_checkpoint_file("hift.pt")
     assert hift_sd["m_source.l_linear.weight"].shape == (1, 9)  # harmonic_num=8 -> 9 components
     assert hift_sd["m_source.l_linear.bias"].shape == (1,)
+
+
+# HiFT bucketing (tt/pipeline.py pads the mel to a bucket with silence and trims the audio). HiFT's convs look
+# ahead, so the padding reaches back into the valid audio. Measured 2026-09-27 on real speech mels: 0.22-0.38 s
+# (docs/VALIDATION.md). This pins the reach: past REACH_S from the end, the pad content changes nothing.
+REACH_S, REACH_TOL = 0.5, 1e-3
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_device_hift_bucket_padding_reach_real_checkpoint(device):
+    """Silence padding vs zero padding at the SAME bucket (same kernels), torch F0 injected (D16), same sine noise
+    over the valid region: any difference is the pad content leaking backwards. It must vanish (<= REACH_TOL)
+    everywhere except the last REACH_S of the valid audio, and must be visible inside it (else the check is blind)."""
+    import math
+
+    import ttnn
+    from models.experimental.cosyvoice2.tt.checkpoint import load_checkpoint_file, sub_state_dict
+    from models.experimental.cosyvoice2.tt.hifigan.f0_predictor import TorchConvRNNF0PredictorRef
+    from models.experimental.cosyvoice2.tt.hifigan.generator import (
+        TorchHiFTDecodeRef,
+        TorchHiFTGeneratorInferenceRef,
+        TtHiFTDecoder,
+        TtHiFTGenerator,
+    )
+
+    hift_sd = load_checkpoint_file("hift.pt")
+    decode_ref = TorchHiFTDecodeRef.from_checkpoint(hift_sd)
+    f0_ref = TorchConvRNNF0PredictorRef.from_checkpoint(sub_state_dict(hift_sd, "f0_predictor."))
+    ref = TorchHiFTGeneratorInferenceRef(
+        decode_ref, f0_ref, hift_sd["m_source.l_linear.weight"], hift_sd["m_source.l_linear.bias"]
+    )
+    gen = TtHiFTGenerator(device, ref, TtHiFTDecoder(device, decode_ref, dtype=ttnn.float32), dtype=ttnn.float32)
+
+    frames, bucket = 150, 256
+    g = torch.Generator().manual_seed(0)
+    mel = (torch.randn(1, frames, 80, generator=g) * 2.0 - 6.0).clamp(min=math.log(1e-5))
+    n = frames * 480
+    noise = torch.cat([torch.randn(1, n, 9, generator=g), torch.zeros(1, (bucket - frames) * 480, 9)], dim=1)
+
+    def padded_run(value):
+        padded = torch.cat([mel, torch.full((1, bucket - frames, 80), value)], dim=1)
+        with torch.no_grad():
+            f0 = f0_ref(padded.transpose(1, 2)).reshape(1, bucket, 1)
+        f0_dev = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        noise_dev = ttnn.from_torch(noise, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        s, _, _ = gen.source(ttnn.repeat_interleave(f0_dev, gen.upsample_scale, dim=1), sine_noise=noise_dev)
+        mel_dev = ttnn.from_torch(padded, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.to_torch(gen.decoder.decode(mel_dev, s, bucket, 1)).reshape(-1).float()[:n]
+
+    leak = (padded_run(math.log(1e-5)) - padded_run(0.0)).abs()
+    tail = int(REACH_S * 24000)
+    over = torch.nonzero(leak > REACH_TOL)
+    reach = (n - over[0].item()) / 24000 if len(over) else 0.0
+    print(f"\n  pad content reaches {reach * 1000:.0f} ms back from the end; max |diff| {leak.max().item():.3g}")
+    assert leak[: n - tail].max().item() <= REACH_TOL, f"padding leaks {reach:.3f} s back, past {REACH_S} s"
+    assert leak[n - tail :].max().item() > REACH_TOL, "no leakage at all near the end: the check cannot see anything"

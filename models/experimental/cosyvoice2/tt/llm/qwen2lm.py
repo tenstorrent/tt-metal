@@ -291,16 +291,27 @@ class TtQwen2LM:
     # speech_embedding), so a value returned here is bit-identical to what the
     # production per-token path would embed, not a host-side shortcut.
     # ------------------------------------------------------------------
+    @staticmethod
+    def _lookup_ids(ids: torch.Tensor) -> torch.Tensor:
+        """`ids` [1, N] as the lookup runs them: N > 1 is padded with id 0 to a multiple of PREFILL_SEQ_MULTIPLE, so
+        prefix lookups meet one of a few warmed shapes instead of a new one per utterance (a lookup is per row, so
+        the first N rows are unchanged). A single id, the decode step's, stays as it is."""
+        n = ids.shape[-1]
+        return (
+            ids if n <= 1 else torch.nn.functional.pad(ids.reshape(1, n), (0, _round_up(n, PREFILL_SEQ_MULTIPLE) - n))
+        )
+
     def embed_text_tokens_host(self, ids: torch.Tensor) -> torch.Tensor:
         """ids: torch [1, N] -> torch [1, N, dim], via the real Qwen2 embed_tokens table."""
+        looked_up = self._lookup_ids(ids)
         ids_dev = ttnn.from_torch(
-            ids.reshape(1, 1, 1, -1).to(torch.int32),
+            looked_up.reshape(1, 1, 1, -1).to(torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
         )
         out = ttnn.to_torch(self.text_embedding(ids_dev)).float()
-        return out.reshape(1, ids.shape[-1], self.args.dim)
+        return out.reshape(1, looked_up.shape[-1], self.args.dim)[:, : ids.shape[-1]]
 
     def embed_llm_tokens_host(self, ids: torch.Tensor) -> torch.Tensor:
         """ids: torch [1, N] (values in {0=sos, 1=task_id}) -> torch [1, N, dim]."""
@@ -315,14 +326,15 @@ class TtQwen2LM:
 
     def embed_speech_tokens_host(self, ids: torch.Tensor) -> torch.Tensor:
         """ids: torch [1, N] speech token ids -> torch [1, N, dim]."""
+        looked_up = self._lookup_ids(ids)
         ids_dev = ttnn.from_torch(
-            ids.reshape(1, 1, 1, -1).to(torch.int32),
+            looked_up.reshape(1, 1, 1, -1).to(torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
         )
         out = ttnn.to_torch(self.speech_embedding(ids_dev)).float()
-        return out.reshape(1, ids.shape[-1], self.args.dim)
+        return out.reshape(1, looked_up.shape[-1], self.args.dim)[:, : ids.shape[-1]]
 
     # ------------------------------------------------------------------
     # Sequence assembly

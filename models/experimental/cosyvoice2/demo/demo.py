@@ -4,7 +4,7 @@
 """Synthesize the fixed corpus on a Tenstorrent device: wavs, results.json and a timing table.
 
     python models/experimental/cosyvoice2/demo/demo.py --inputs <dir> --out <dir> [--cases a,b] [--seed 1986] \\
-        [--config reported|eager] [--hift-source-dtype float32|bfloat16] [--no-warmup]
+        [--config reported|eager] [--hift-source-dtype float32|bfloat16] [--warmup buckets|sentence|none]
 
 `--inputs` (or `COSYVOICE2_INPUTS`) is the directory `scripts/prepare_inputs.py` wrote: one `.npz` per corpus
 case, made once in the reference venv, because the frontend (ONNX speech tokenizer, CAM++, mel filterbank) is not
@@ -16,11 +16,14 @@ The output directory has the layout `scripts/run_reference.py` writes, so one sc
 PyTorch reference and this port alike. The table reports each utterance's device-synchronized stage times and its
 RTF (wall time / audio time).
 
-Warm or cold: by default the demo first synthesizes one throwaway sentence and reports it separately as the
-process's cold call (kernel compilation, first use of everything). The corpus utterances that follow are warm in
-that sense, and distinct: each is a different sentence with a different length, so each still meets the flow's
-and vocoder's new geometries for the first time, as a real request would.
+Warm-up (`--warmup`):
+- `buckets` (the default, and the Stage 1 protocol): `warmup_buckets()` runs every flow and HiFT bucket and every
+  LLM prefill length once, in a fixed order, before the first request. Its time is reported as the start-up cost.
+  Every corpus utterance that follows is a distinct sentence that lands in an already-warmed bucket.
+- `sentence`: one throwaway sentence first, reported as the process's cold call.
+- `none`: the first corpus utterance is the cold first request.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -76,7 +79,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1986)
     ap.add_argument("--config", choices=("reported", "eager"), default="reported")
     ap.add_argument("--hift-source-dtype", choices=("float32", "bfloat16"), default=None)
-    ap.add_argument("--no-warmup", action="store_true")
+    ap.add_argument("--warmup", choices=("buckets", "sentence", "none"), default="buckets")
     args = ap.parse_args()
     if not args.inputs:
         raise SystemExit("pass --inputs (or set COSYVOICE2_INPUTS) to scripts/prepare_inputs.py's --out-dir")
@@ -110,7 +113,17 @@ def main() -> int:
         build_s = time.perf_counter() - t0
         print(f"built in {build_s:.1f} s; config {json.dumps(cfg.describe())}", flush=True)
         mem0 = device_memory(device)
-        if not args.no_warmup:
+        warmup_s = warmup_clock = None
+        if args.warmup == "buckets":
+            t0 = time.perf_counter()
+            warmup_clock = pipe.warmup_buckets()
+            warmup_s = time.perf_counter() - t0
+            parts = {k: sum(v for n, v in warmup_clock.items() if n.startswith(k)) for k in ("llm", "flow", "hift")}
+            print(
+                f"warmed every bucket in {warmup_s:.1f} s: " + ", ".join(f"{k} {v:.1f} s" for k, v in parts.items()),
+                flush=True,
+            )
+        elif args.warmup == "sentence":
             cold = pipe.warmup(ctxs[0])
             lines.append(row("(warm-up, cold: first call in this process)", cold))
             print(lines[-1], flush=True)
@@ -139,11 +152,12 @@ def main() -> int:
             )
             lines.append(row(case["case_id"], syn))
             print(lines[-1], f" DRAM {mem['dram'] / 2**20:.1f} MiB/bank, L1_SMALL {mem['l1_small']} B/bank", flush=True)
+        evictions = pipe.conv_cache_evictions()
         pipe.release()
     finally:
         ttnn.close_device(device)
 
-    warm = results  # every corpus utterance runs after the warm-up call
+    warm = results  # every corpus utterance; after the warm-up unless --warmup none
     total_wall, total_audio = sum(r["wall_s"] for r in warm), sum(r["audio_s"] for r in warm)
     run = {
         "backend": "ttnn",
@@ -151,8 +165,16 @@ def main() -> int:
         "meta": {
             "config": cfg.describe(),
             "build_s": round(build_s, 1),
-            "warmup": None if cold is None else {"audio_s": round(cold.audio_s, 3), "wall_s": round(cold.wall_s, 3)},
+            "warmup": args.warmup,
+            "warmup_buckets_s": None if warmup_s is None else round(warmup_s, 1),
+            "warmup_buckets_by_geometry_s": (
+                None if warmup_clock is None else {k: round(v, 2) for k, v in warmup_clock.items()}
+            ),
+            "warmup_sentence": (
+                None if cold is None else {"audio_s": round(cold.audio_s, 3), "wall_s": round(cold.wall_s, 3)}
+            ),
             "device_memory_before_first_call": mem0,
+            "conv_cache_evictions": evictions,
             "rtf_aggregate": round(total_wall / total_audio, 3),
         },
         "results": results,
@@ -163,7 +185,8 @@ def main() -> int:
     summary = (
         f"{table}\n\nDistinct utterances: {len(warm)}, audio {total_audio:.2f} s, wall {total_wall:.2f} s, "
         f"aggregate RTF {total_wall / total_audio:.3f}, worst {max(r['rtf'] for r in warm):.3f}. "
-        f"Config: {args.config}, HiFT F0/source {cfg.hift_source_dtype}, seed {args.seed}."
+        f"Config: {args.config}, HiFT F0/source {cfg.hift_source_dtype}, bucketing {cfg.bucketing}, "
+        f"warm-up {args.warmup}" + ("" if warmup_s is None else f" ({warmup_s:.1f} s)") + f", seed {args.seed}."
     )
     with open(os.path.join(args.out, "timings.md"), "w") as fh:
         fh.write(summary + "\n")

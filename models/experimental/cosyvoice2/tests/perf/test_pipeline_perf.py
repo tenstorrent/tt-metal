@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Non-streaming RTF on distinct utterances (Stage 1's "RTF < 1.0"), enforced through tests/perf/gates.py.
 
-The corpus's six LibriSpeech targets (scripts/corpus.py; prompts from `scripts/prepare_inputs.py`, skipped without
-`COSYVOICE2_INPUTS`), each synthesized once through `CosyVoice2TTNN.synthesize` in the reported configuration,
-after one warm-up call in the process. Each utterance is a different sentence with a different length, so each is
-timed as a real request would be, first-sight geometries included; none is a repeat of an earlier one. The
-figure gated is the worst per-utterance RTF; the table and the aggregate are printed for docs/VALIDATION.md.
-"""
+The Stage 1 protocol (docs/VALIDATION.md): distinct utterances with warmed buckets.
+- `CosyVoice2TTNN` in the reported configuration (bucketed) runs `warmup_buckets()` first. Its time is printed as
+  the start-up cost.
+- It then synthesizes the corpus's six LibriSpeech targets once each (scripts/corpus.py; prompts from
+  `scripts/prepare_inputs.py`, skipped without `COSYVOICE2_INPUTS`).
+- Each target is a different sentence landing in an already-warmed bucket, and none repeats an earlier request.
 
+The gated figure is the worst per-utterance RTF; the table and the aggregate are printed too.
+"""
 from __future__ import annotations
 
 import glob
 import os
+import time
 
 import pytest
 
@@ -37,15 +40,19 @@ def test_device_nonstreaming_rtf_distinct_utterances(device):
     assert len(ctxs) == 6
     pipe = CosyVoice2TTNN(device)
     try:
-        cold = pipe.warmup(ctxs[0])
+        t0 = time.perf_counter()
+        pipe.warmup_buckets()
+        warmup_s = time.perf_counter() - t0
         runs = [
             (c.meta["case"]["case_id"], pipe.synthesize(c, c.meta["case"]["text"], rng=RandomSources(llm_seed=SEED)))
             for c in ctxs
         ]
     finally:
         pipe.release()
+    # the protocol's premise: every request ran on warmed geometries, none of which was evicted
+    assert pipe.conv_cache_evictions() == 0
 
-    print(f"\n  warm-up (cold) call: audio {cold.audio_s:.2f} s, wall {cold.wall_s:.2f} s, RTF {cold.rtf:.3f}")
+    print(f"\n  start-up: warmed every bucket in {warmup_s:.1f} s")
     print("  | case | audio s | tokens | wall s | RTF |")
     for cid, syn in runs:
         print(f"  | {cid} | {syn.audio_s:.2f} | {len(syn.tokens)} | {syn.wall_s:.3f} | {syn.rtf:.3f} |")

@@ -25,6 +25,7 @@ referenced).
 """
 from __future__ import annotations
 
+import contextlib
 import os
 from collections import OrderedDict
 from typing import Any
@@ -37,8 +38,27 @@ import ttnn
 _DEFAULT_THRESHOLD_MB = 150
 
 
+_THRESHOLD_OVERRIDE_MB: int | None = None
+
+
 def dram_free_threshold_mb() -> int:
+    if _THRESHOLD_OVERRIDE_MB is not None:
+        return _THRESHOLD_OVERRIDE_MB
     return int(os.environ.get("COSYVOICE2_DRAM_FREE_THRESHOLD_MB", _DEFAULT_THRESHOLD_MB))
+
+
+@contextlib.contextmanager
+def threshold_override(mb: int | None):
+    """Caches constructed within this block use `mb` (None: the environment's / the default). 0 disables eviction:
+    free DRAM is never below 0. The bucketed pipeline uses 0. Its geometry set is finite and warmed at start-up,
+    so an eviction could only ever throw away a warmed geometry's prepared weights. The next request at that
+    geometry would re-prepare and re-verify them mid-request."""
+    global _THRESHOLD_OVERRIDE_MB
+    previous, _THRESHOLD_OVERRIDE_MB = _THRESHOLD_OVERRIDE_MB, mb
+    try:
+        yield
+    finally:
+        _THRESHOLD_OVERRIDE_MB = previous
 
 
 class GeometryWeightCache:
@@ -57,6 +77,7 @@ class GeometryWeightCache:
         self.device = device
         self._threshold_bytes = (threshold_mb if threshold_mb is not None else dram_free_threshold_mb()) * 1024 * 1024
         self._entries: OrderedDict[Any, tuple[list, Any]] = OrderedDict()
+        self.evictions = 0  # entries evicted for DRAM pressure (not `pop`/`clear`)
 
     def _free_bytes_per_bank(self) -> int:
         return ttnn.get_memory_view(self.device, ttnn.BufferType.DRAM).total_bytes_free_per_bank
@@ -118,6 +139,7 @@ class GeometryWeightCache:
             if victim is None:  # only `protect` (or nothing) left -- can't evict further
                 return
             self.pop(victim)
+            self.evictions += 1
 
     def __len__(self) -> int:
         return len(self._entries)

@@ -19,6 +19,7 @@ collapses it at construction.
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import torch
@@ -44,8 +45,28 @@ def config_tensors_in_dram() -> bool:
     before the models are built. Measured: L1_SMALL stays at 0.00 KB across seven different utterance lengths
     with no cache clearing, and outputs are bit-identical with it on or off (max |diff| 0.0 on all six conv
     types).
+
+    `config_tensors_in_dram_override` sets it explicitly for the modules built inside it (the pipeline passes its
+    config's value, so the environment variable cannot change a pipeline run).
     """
+    if _CONFIG_IN_DRAM_OVERRIDE is not None:
+        return _CONFIG_IN_DRAM_OVERRIDE
     return os.environ.get("COSYVOICE2_CONV_CONFIG_IN_DRAM", "1") == "1"
+
+
+_CONFIG_IN_DRAM_OVERRIDE: bool | None = None
+
+
+@contextlib.contextmanager
+def config_tensors_in_dram_override(value: bool | None):
+    """Within this block, `config_tensors_in_dram()` returns `value` (None: the environment's). Read at construction
+    time, so it applies to the modules constructed inside the block."""
+    global _CONFIG_IN_DRAM_OVERRIDE
+    previous, _CONFIG_IN_DRAM_OVERRIDE = _CONFIG_IN_DRAM_OVERRIDE, value
+    try:
+        yield
+    finally:
+        _CONFIG_IN_DRAM_OVERRIDE = previous
 
 
 def accurate_compute_config(device):

@@ -12,7 +12,8 @@ Device (real checkpoint, the corpus's prompts from `scripts/prepare_inputs.py`; 
 - repeating the first three calls with the same seeds gives the same tokens and audio;
 - device memory does not grow. CosyVoice1's L1_SMALL grew with every new vocoder geometry until a 32 KB bank was
   exhausted. Here conv config tensors live in DRAM, so L1_SMALL must stay flat. The DRAM that new geometries add
-  (prepared conv weights, cached per geometry) must stop growing once those geometries repeat.
+  (prepared conv weights, cached per geometry) must stop growing once those geometries repeat;
+- nothing is evicted from the conv caches: the pipeline is bucketed, and bucketed caches never evict.
 The per-call memory table is printed, for docs/VALIDATION.md.
 """
 
@@ -32,10 +33,67 @@ SEED = 1986
 
 def test_context_budget_covers_the_prompt_limit():
     cfg = CosyVoice2Config.reported()
-    # sos + (128 prompt-text + 100 segment tokens) + task + 750 prompt speech tokens, plus 20 x 100 new tokens
-    assert cfg.max_seq_len() == 3072
-    assert (cfg.min_tokens_for(52), cfg.max_tokens_for(52)) == (104, 1040)
+    # sos + (128 prompt-text + 80 segment tokens) + task + 750 prompt speech tokens, plus the 1,024-token speech cap
+    # and the one LLM step past it
+    assert cfg.max_seq_len() == 2048
+    assert cfg.max_tokens_for(80) == 1024  # 20 x 80 = 1,600 capped at the HiFT single-pass limit
+    assert (cfg.min_tokens_for(51), cfg.max_tokens_for(51), cfg.llm_steps_for(51)) == (102, 1020, 1020)
+    assert (cfg.max_tokens_for(52), cfg.llm_steps_for(52)) == (1024, 1025)  # 20 x 52 = 1,040: the cap binds
     assert CosyVoice2Config.eager().llm_decode_trace is False
+
+
+def test_bucket_sets_cover_the_budget(expect_error):
+    from models.experimental.cosyvoice2.tt.pipeline import bucket_at_least, bucket_for
+
+    cfg = CosyVoice2Config.reported()
+    flow, hift = cfg.flow_token_buckets(), cfg.hift_frame_buckets()
+    # the longest flow input: 750 prompt + 1,024 generated tokens; HiFT: 2 frames per generated token, its top
+    # bucket exactly the cap
+    assert flow[-1] > 750 + 1024 and hift[-1] == 2 * 1024
+    assert flow == sorted(set(flow)) and hift == sorted(set(hift))
+    assert (len(flow), len(hift), len(cfg.llm_prefill_lengths())) == (15, 12, 8)
+    assert bucket_at_least(2048, hift) == 2048 and bucket_at_least(1793, hift) == 2048
+    # strictly above: an exact fit still gets a padded position, so it takes the warmed (masked) path
+    assert bucket_for(255, flow) == 256 and bucket_for(256, flow) == 320
+    with expect_error(ValueError, "exceeds the largest bucket"):
+        bucket_for(flow[-1], flow)
+
+
+def test_segment_past_the_cap_raises(expect_error):
+    """Past `max_segment_speech_tokens`, each stage raises `SegmentTooLong` with the segment's length, before any
+    device work: the LLM once the speech has not ended by the cap, the flow and HiFT given more than the cap."""
+    from types import SimpleNamespace
+
+    import torch
+
+    from models.experimental.cosyvoice2.tt.pipeline import CosyVoice2TTNN, SegmentTooLong
+
+    class NeverEnds:
+        """The LLM's `generate`, with the speech running to whatever step limit it is given."""
+
+        def __init__(self):
+            self.max_tokens = []
+
+        def generate(self, ids, speech, *, max_tokens, **_):
+            self.max_tokens.append(max_tokens)
+            return [0] * max_tokens
+
+    cfg = CosyVoice2Config.reported()
+    pipe = object.__new__(CosyVoice2TTNN)  # the stages' refusals only; no device
+    pipe.config, pipe.llm = cfg, NeverEnds()
+    no_prompt = SimpleNamespace(prompt_text_ids=None, llm_prompt_speech_tokens=None)
+
+    # 52 text tokens allow 1,040 speech tokens upstream: the cap binds, the LLM runs one step past it, and raises
+    with expect_error(SegmentTooLong, "52 text tokens had not ended after 1025 speech tokens: past .*=1024 .41.0"):
+        pipe.text_to_tokens(no_prompt, [0] * 52)
+    # 51 allow 1,020: upstream's own limit binds first and ends the segment there, as upstream does
+    assert len(pipe.text_to_tokens(no_prompt, [0] * 51)) == 1020
+    assert pipe.llm.max_tokens == [1025, 1020]
+
+    with expect_error(SegmentTooLong, "a segment of 1025 speech tokens: past max_segment_speech_tokens=1024"):
+        pipe.tokens_to_mel([0] * 1025, no_prompt)
+    with expect_error(SegmentTooLong, "a mel of 2049 frames: past max_segment_speech_tokens=1024 .41.0.* 2048 mel"):
+        pipe.mel_to_wav(torch.zeros(1, 2049, 80), rng=None)
 
 
 def test_environment_switches_are_refused(monkeypatch, expect_error):
@@ -96,6 +154,7 @@ def test_device_consecutive_utterances_of_different_lengths(device):
     finally:
         pipe.release()
 
+    assert pipe.conv_cache_evictions() == 0
     l1_small = [m["l1_small"] for m in mems]
     assert len(set(l1_small)) == 1, f"L1_SMALL changed across calls: {l1_small}"
     dram_second_pass = [m["dram"] for m in mems[len(ctxs) - 1 :]]

@@ -13,6 +13,8 @@ module docstring.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -227,3 +229,22 @@ def test_release_caches_then_reuse_stays_correct(device):
     rel = float((got2 - want).norm() / want.norm())
     print(f"\n  rel err after release_caches() + reuse: {rel:.4f}")
     assert rel < 0.01, rel
+
+
+def test_threshold_override_zero_never_evicts(monkeypatch):
+    """The bucketed pipeline builds its conv caches under `threshold_override(0)`: however DRAM-tight the device
+    looks, a warmed geometry's prepared weights are never evicted. Host-only: free DRAM is faked as 0 bytes, the
+    tightest it can be. The control, the old 150 MB threshold, evicts all but the newest entry under the same
+    reading."""
+    from models.experimental.cosyvoice2.tt import geometry_cache as gc
+
+    monkeypatch.setattr(gc.GeometryWeightCache, "_free_bytes_per_bank", lambda self: 0)
+    with gc.threshold_override(0):
+        bucketed = gc.GeometryWeightCache(device=None)
+    unbucketed = gc.GeometryWeightCache(device=None, threshold_mb=150)
+    for key in range(5):
+        bucketed.put(key, [], key)
+        unbucketed.put(key, [], key)
+    assert (len(bucketed), bucketed.evictions) == (5, 0)
+    assert (len(unbucketed), unbucketed.evictions) == (1, 4)
+    assert gc.dram_free_threshold_mb() == int(os.environ.get("COSYVOICE2_DRAM_FREE_THRESHOLD_MB", 150))  # restored
