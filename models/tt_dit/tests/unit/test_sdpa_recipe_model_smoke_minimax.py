@@ -165,7 +165,9 @@ class _SdpaCapture:
             result = orig(q, k, v, *args, **kwargs)
             out = result[0] if isinstance(result, tuple) else result
             call = dict(q=self._host(q), k=self._host(k), v=self._host(v), out=self._host(out))
-            call["logical_n"] = kwargs.get("logical_n")
+            logical_n = kwargs.get("logical_n")
+            # The model passes logical_n as a [1, 1, 1, 1] uint32 device tensor; the test records its value.
+            call["logical_n"] = self.logical_n if isinstance(logical_n, ttnn.Tensor) else logical_n
             if self._unprepared:  # LOW_PRECISION: also keep the pre-preparation bf16 Q/K/V
                 assert len(self._unprepared) == 3
                 call["q0"], call["k0"], call["v0"] = self._unprepared
@@ -315,7 +317,15 @@ def test_minimax_h3_attention_ring_sp2_recipes(mesh_device, N, hidden, num_heads
             assert path == "ring_joint", f"expected ring joint SDPA on 1x2, got {path}"
 
             tt_x = bf16_tensor_2dshard(x_pad.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
-            tt_out = tt_model(tt_x, N=N, rope_cos=upload_table(tcos), rope_sin=upload_table(tsin))
+            capture.logical_n = N
+            logical_n = from_torch(
+                torch.tensor([N], dtype=torch.int64).reshape(1, 1, 1, 1),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=[..., None, None],
+            )
+            tt_out = tt_model(tt_x, logical_n=logical_n, rope_cos=upload_table(tcos), rope_sin=upload_table(tsin))
             out = ttnn.to_torch(
                 tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
