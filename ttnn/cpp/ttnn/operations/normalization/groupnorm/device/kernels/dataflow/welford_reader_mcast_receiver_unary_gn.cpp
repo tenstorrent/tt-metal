@@ -170,6 +170,8 @@ void kernel_main() {
                             noc.async_read_barrier();
                             dfb_in0.push_back(1);
                             if constexpr (welford_fp32_alias) {
+                                // Mirror the push on the shared-SRAM alias; the read above filled both
+                                // views, but compute waits on dfb_in0_welford independently of dfb_in0.
                                 dfb_in0_welford.reserve_back(1);
                                 dfb_in0_welford.push_back(1);
                             }
