@@ -331,3 +331,13 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Registered: `tt/model.py:build_experts`, hooks `_experts_module` / `_experts_host_fn`, `device_component` step `experts`, HybridDeviceModel override, `DEVICE_STEPS["sliding_moe"]` += experts. `MIMO_EXPERTS_MODE=loop|unified_lofi` for comparison.
 - Gate: pcc_experts_L01 0.999984, rel L2 0.0059, norm ratio [0.9935, 1.0070], worst row 0.0150. PASS (first `FAIL pcc=0` line is the precompile collect pass).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_experts.py`
+
+## S.sliding_moe.06 test (attempt 1)
+- Replaced the rendered template with the 1x4 prior's frozen swap 06 body (same golden/reference), with this run's
+  owner-widened attention limits (rel L2 0.022, norm ratio [0.95, 1.08]), as swap 02-05. Experts checks: vs golden
+  PCC >= 0.99, rel L2 <= 0.03; vs the CPU experts on the device ffn_norm + router ("iso") rel L2 <= 0.03, per-token
+  norm ratio [0.97, 1.03], worst row rel L2 <= 0.1; plus swap 05's checks and block out rel L2 <= 0.01.
+- BRINGUP_IMPL=reference passes (experts golden rel 0.0126); BRINGUP_IMPL=stub fails every check.
+- Gate (device): pcc_swap_out 0.999992, out rel 0.0040 / first rows 0.0030; experts pcc 0.99984, rel 0.0181 golden /
+  0.0054 iso, ratio [0.9946, 1.0055], worst row 0.015; attention rel 0.0193. 1 passed.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_06_experts.py`
