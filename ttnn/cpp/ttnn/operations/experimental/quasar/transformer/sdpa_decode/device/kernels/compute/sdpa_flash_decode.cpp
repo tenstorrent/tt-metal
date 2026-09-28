@@ -612,7 +612,11 @@ void kernel_main() {
             // pop (:758) — posted=1/acked=2 underflow. The running max is left in cur_max (see the :709
             // comment) and finalize pops cur_max instead. WH/BH keep the unconditional carry (byte-identical
             // to mainline); with-children Quasar keeps it too (the tree consumes prev_max).
-#ifdef ARCH_QUASAR
+            // ATTENTION-SINK builds also keep the unconditional carry: the sink finalization block below reads
+            // dfb_prev_max (via max_block, :737), so dropping the terminal carry would leave that DFB empty and
+            // the sink finalize would wait on it forever (single-core sink decode hang). The sink path's own
+            // Quasar guard handles the final pop, so keeping the carry here is safe.
+#if defined(ARCH_QUASAR) && !defined(USE_ATTENTION_SINK)
             const bool carry_prev_max = (k_chunk + 1 < k_chunk_end) || (num_active_children > 0);
 #else
             constexpr bool carry_prev_max = true;
