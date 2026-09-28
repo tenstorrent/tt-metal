@@ -290,3 +290,12 @@ def test_the_drained_run_releases_each_read():
     cmd = probes.build_tracy_command("t.py", None, "/tmp/out", plugins=("x",), mid_run_dump=True)
     assert cmd.index("--dump-device-data-mid-run") < cmd.index("-m", 3), "a tracy option, before -m pytest"
     assert "--dump-device-data-mid-run" not in probes.build_tracy_command("t.py", None, "/tmp/out")
+
+
+def test_a_half_built_proxy_does_not_recurse():
+    import copy
+
+    proxy = pd.FastOperation(lambda: "r", lambda: "r")
+    assert copy.copy(proxy)() == "r"
+    with pytest.raises(AttributeError):  # allow-pytest.raises: no expect_error fixture
+        pd.FastOperation.__new__(pd.FastOperation).anything

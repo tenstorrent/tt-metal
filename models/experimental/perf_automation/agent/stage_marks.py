@@ -493,8 +493,8 @@ def _strip_mark_pass(text: str):
 
 
 # The one line of the pass that calls into this module -- the line whose ARGUMENTS changed when the
-# device stopped being passed by name. Read out of the template, so it cannot drift from it.
-_MARK_PASS_CALL_KEY = "mark_stages_in_scope("
+# device stopped being passed by name. Named from the function itself, so a rename cannot drift.
+_MARK_PASS_CALL_KEY = mark_stages_in_scope.__name__ + "("
 _MARK_PASS_BIND_RE = re.compile(r"bind=([A-Za-z_][A-Za-z0-9_]*)")
 _REFRESHED = "refreshed the per-stage pass call (template changed)"
 

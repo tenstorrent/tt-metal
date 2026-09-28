@@ -103,7 +103,12 @@ class FastOperation:
         return self._tt_call(*a, **k)
 
     def __getattr__(self, name):
+        if name.startswith("_tt_"):  # not yet set (a copy mid-construction): never recurse
+            raise AttributeError(name)
         return getattr(self._tt_op, name)
+
+
+_OP_TYPE_NAME = FastOperation.__name__  # the type name every ttnn op wrapper selects by
 
 
 class ProfilerDrain:
@@ -169,7 +174,7 @@ class ProfilerDrain:
         for mod in mods:
             for n in dir(mod):
                 op = getattr(mod, n, None)
-                if type(op).__name__ == "FastOperation":
+                if type(op).__name__ == _OP_TYPE_NAME:
                     self._orig.append((mod, n, op))
                     setattr(mod, n, FastOperation(op, self._wrap(op)))
         if self._orig and callable(self._read_fn):
