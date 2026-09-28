@@ -15,6 +15,15 @@
 
 namespace ttnn::transformer {
 
+// Explicit numerical recipes. Omit precision to preserve the legacy API's
+// independent compute/program controls and broader platform/feature support.
+enum class SDPAPrecision : uint8_t { FAST, STANDARD, BALANCED, ACCURATE, LOW_PRECISION };
+
+// Out-of-place rounding for LOW_PRECISION inputs: Q to 7 significant bits, K/V to 5 (BF16/BFP8) or onto
+// the BFP4 grid. SDPA never prepares inputs itself; the caller applies this after its own Q transforms and
+// before caching or communicating K/V. A plain cast to BFP8/BFP4 is not equivalent.
+ttnn::Tensor prepare_sdpa_input(const ttnn::Tensor& input, bool is_query, DataType dtype = DataType::BFLOAT16);
+
 // A logical (unpadded) sequence length: a host scalar, or a single-valued device tensor read on-device so
 // the value can change between replays of one captured trace.
 using LogicalLength = std::variant<std::size_t, ttnn::Tensor>;
@@ -43,7 +52,8 @@ ttnn::Tensor scaled_dot_product_attention(
     bool output_concat_heads = false,
     /// Non causal with attn_mask only. [Bm, Hm, ceil(Sq / q_chunk), ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR, nonzero
     /// where a (q chunk, k chunk) block of the mask has a visible entry; the other blocks are skipped.
-    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt);
+    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -93,7 +103,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
