@@ -537,55 +537,37 @@ _ULP_MEASURE_PATH: Optional[str] = None
 
 
 def _record_ulp_measurement(distance, *, mask, output_data_format) -> None:
-    """The worst measurable lane of one comparison, tagged with the variant it belongs to.
+    """Append the worst measurable lane of one comparison, tagged with its variant.
 
-    ``ulp_stats`` rather than a bare ``max()``, so the number recorded is the one the log
-    reports: unmeasurable lanes excluded, floor-rescued lanes masked out, and the
-    caller's own ``mask=`` respected. The key comes from ``accuracy_contract``'s last
-    query rather than from the test id, because the dedicated per-op sweeps (div,
-    signbit) name their op in the function rather than in the parameters, and the edge
-    sweeps do not parametrise ``approx_mode`` at all.
-
-    Three ways that association can be wrong, and none of them writes a row: the query
-    was never made, it was made in a different test, or a second lookup arrived before
-    this one consumed the first. Losing a datapoint is recoverable; a budget folded back
-    under the wrong variant is not.
+    ``ulp_stats`` rather than a bare ``max()``, so the number is the one the log
+    reports: unmeasurable lanes excluded and the caller's ``mask`` respected. The
+    variant is ``accuracy_contract``'s last query, consumed here so a comparison that
+    never went through the registry cannot inherit it. No row is written when the query
+    is missing, ambiguous, or from another test: a lost datapoint is recoverable, a
+    budget folded back under the wrong variant is not.
     """
     if not _ULP_MEASURE_PATH:
         return
     from . import sfpu_accuracy_budget as budget
 
-    # Consumed, not just read: a comparison that never went through the registry must
-    # not inherit the previous one's key.
     query, budget.LAST_QUERY = budget.LAST_QUERY, None
     ambiguous, budget.PENDING_AMBIGUOUS = budget.PENDING_AMBIGUOUS, False
-    if query is None or ambiguous:
+    if query is None or ambiguous or query[0] != budget._current_test():
         return
     test_id, op, in_fmt, out_fmt, approx, dest = query
-    if test_id != budget._current_test():
-        return
     stats = ulp_stats(distance, mask)
+    row = {
+        "test": test_id,
+        "op": op,
+        "in": getattr(in_fmt, "name", None),
+        "out": getattr(out_fmt, "name", None) or output_data_format.name,
+        "approx": getattr(approx, "name", None),
+        "dest": getattr(dest, "name", None),
+        # `lanes` and `unmeasurable` too: max 0 over 0 lanes is not a bit-exact cell.
+        **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
+    }
     with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    # The test the *query* was made in, checked against the current
-                    # one above, so the row and its key cannot come from different tests.
-                    "test": test_id,
-                    "op": op,
-                    "in": getattr(in_fmt, "name", None),
-                    "out": getattr(out_fmt, "name", None) or output_data_format.name,
-                    "approx": getattr(approx, "name", None),
-                    "dest": getattr(dest, "name", None),
-                    # `lanes` and `unmeasurable` alongside `max`, because `ulp_stats`
-                    # reports max 0 over 0 lanes when every selected lane is
-                    # unmeasurable -- indistinguishable from a bit-exact cell, and the
-                    # fold-back keeps a measured 0 at 0 rather than widening it to 1.
-                    **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
-                }
-            )
-            + "\n"
-        )
+        handle.write(json.dumps(row) + "\n")
 
 
 # Per-format params for _mxfp_block_aware_compare:
@@ -993,14 +975,9 @@ def passed_test(
         and ulp_distances is None
         and has_ulp_gate(output_data_format)
     ):
-        # The op has no step budget, so nothing above measured one -- and this is exactly
-        # where the report earns its keep: it is the ops still on the tolerance metric
-        # whose drift no number is watching. Measured after the verdict and never read
-        # back into it.
-        #
-        # One distance for both consumers: split in two, `--ulp-report` alone computed a
-        # full-tensor distance for the recorder to discard and then computed the
-        # identical tensor again for the message, neither of them lazily.
+        # No step budget, so nothing above measured one; these are the ops on the
+        # tolerance metric whose drift no number watches. Measured after the verdict,
+        # never read back into it, and one distance serves both consumers.
         unenrolled = ulp_distance(golden_tensor, res_tensor)
         _record_ulp_measurement(
             unenrolled, mask=None, output_data_format=output_data_format
