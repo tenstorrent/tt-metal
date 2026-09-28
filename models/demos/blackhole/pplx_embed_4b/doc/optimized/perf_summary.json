@@ -434,5 +434,52 @@
       "bs16": 0.8144,
       "bs32": 0.8146
     }
+  },
+  "bs8_qkv_l1_heads_v3_20260928": {
+    "heads_op_us_per_call_standalone_bs16_shapes": {
+      "note": "cos/sin in L1 as in the model; traced; v3 bit-identical to v1",
+      "v1": {
+        "l1_in": 304.7,
+        "dram_in": 327.6
+      },
+      "v2": {
+        "l1_in": 298.5,
+        "dram_in": 324.1
+      },
+      "v3": {
+        "l1_in": 214.2,
+        "dram_in": 372.3
+      }
+    },
+    "bs8_sustained_run_3_alternating_rounds": {
+      "host": "8x p150b host",
+      "qkv_l1_only_chip0": {
+        "cold_off": 102.1,
+        "cold_on": 100.3,
+        "sustained_off": 116.1,
+        "sustained_on": 114.4
+      },
+      "v3_on_top_chip1": {
+        "cold_off": 100.3,
+        "cold_on": 98.7,
+        "sustained_off": 116.6,
+        "sustained_on": 115.5
+      },
+      "both_vs_neither_chip0": {
+        "neither": {
+          "cold": 102.2,
+          "sustained": 116.2,
+          "aiclk_mhz": 1228
+        },
+        "both": {
+          "cold": 98.8,
+          "sustained": 113.1,
+          "aiclk_mhz": 1203
+        },
+        "baseline_env": "TT_PREFILL_QKV_L1=0 QWEN_FUSED_COMPUTE_V3=0"
+      }
+    },
+    "stsb_spearman_bs8": 0.8114,
+    "note": "bs16 QKV output does not fit next to the QKV matmul's CBs at 8,8,8 (NEGATIVE_RESULTS 56); v3 with a DRAM input is slower than v1"
   }
 }
