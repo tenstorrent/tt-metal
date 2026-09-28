@@ -267,7 +267,8 @@ inline void calculate_sfpu_binary_div(
             v_else {
                 result = vinf;
                 result = sfpi::copysgn(result, in0);
-                result = sfpi::copysgn(result, sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1)));
+                result = sfpi::copysgn(
+                    result, sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1)));
             }
             v_endif;
         }
@@ -279,7 +280,8 @@ inline void calculate_sfpu_binary_div(
         v_if(sfpi::as<sfpi::vInt>(abs_in1) == sfpi::as<sfpi::vInt>(vinf)) {
             v_if(sfpi::as<sfpi::vInt>(abs_in0) < sfpi::as<sfpi::vInt>(vinf)) {
                 result = 0.0f;
-                result = sfpi::copysgn(result, sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1)));
+                result = sfpi::copysgn(
+                    result, sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1)));
             }
             v_endif;
         }
@@ -287,9 +289,13 @@ inline void calculate_sfpu_binary_div(
 
         // NaN in either operand propagates. It used to come out of the residual step by
         // accident, so skipping that step for a non-finite divisor lost it for 0 / NaN.
-        v_if(sfpi::as<sfpi::vInt>(abs_in0) > sfpi::as<sfpi::vInt>(vinf)) { result = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(sfpi::as<sfpi::vInt>(abs_in0) > sfpi::as<sfpi::vInt>(vinf)) {
+            result = std::numeric_limits<float>::quiet_NaN();
+        }
         v_endif;
-        v_if(sfpi::as<sfpi::vInt>(abs_in1) > sfpi::as<sfpi::vInt>(vinf)) { result = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(sfpi::as<sfpi::vInt>(abs_in1) > sfpi::as<sfpi::vInt>(vinf)) {
+            result = std::numeric_limits<float>::quiet_NaN();
+        }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
