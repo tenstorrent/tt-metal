@@ -1787,6 +1787,53 @@ class EMA_ALPHA_BETA(TemplateParameter):
 
 
 @dataclass
+class WELFORD_CONFIG(TemplateParameter):
+    """Compile-time knobs for the Welford SFPU drivers (sfpu_welford_test/perf.cpp).
+
+    ``lut_size`` selects ``_calculate_welfords_tile_<lut_size>``: 0 is the RISC-side
+    1.0f/(idx+1) fallback (ttnn welford_reduce_{w,h,hw}), a non-zero size is the
+    reciprocal-LUT variant (ttnn layernorm/groupnorm). ``finalize_raw`` stores the raw
+    mean/M2 pair (``_store_mean_m2_to_dst_``) instead of mean/variance in row layout.
+    ``last_start_row``/``last_num_rows`` route the last tile through
+    ``_calculate_welfords_partial_tile_``; ``last_num_rows == 32`` with
+    ``last_start_row == 0`` keeps the full-tile path for every tile.
+    """
+
+    lut_size: int = 0
+    finalize_raw: bool = False
+    last_start_row: int = 0
+    last_num_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t WELFORD_LUT_SIZE = {self.lut_size};",
+            f"constexpr bool WELFORD_FINALIZE_RAW = {str(self.finalize_raw).lower()};",
+            f"constexpr std::uint32_t WELFORD_LAST_START_ROW = {self.last_start_row};",
+            f"constexpr std::uint32_t WELFORD_LAST_NUM_ROWS = {self.last_num_rows};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class WELFORD_PERF_CONFIG(TemplateParameter):
+    """Compile-time knobs for sources/sfpu_welford_perf.cpp.
+
+    ``reciprocal_lut_size`` is WELFORD_CONFIG.lut_size; ``datacopy_only`` drops the Welford call so the
+    TILE_LOOP measures the per-tile datacopy alone (the flat control).
+    """
+
+    reciprocal_lut_size: int = 0
+    datacopy_only: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t WELFORD_LUT_SIZE = {self.reciprocal_lut_size};",
+            f"constexpr bool WELFORD_DATACOPY_ONLY = {str(self.datacopy_only).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 
