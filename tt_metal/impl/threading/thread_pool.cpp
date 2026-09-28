@@ -8,8 +8,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstddef>
+#include <fstream>
 #include <future>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -31,12 +34,55 @@ namespace tt::tt_metal {
 
 namespace thread_binding {
 
-std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
+// Physical core of a logical CPU, as (package, core). Returns nullopt when sysfs does not say.
+std::optional<std::pair<int, int>> physical_core_of_cpu(int cpu) {
+    const std::string topology = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/";
+    int package = -1;
+    int core = -1;
+    std::ifstream(topology + "physical_package_id") >> package;
+    std::ifstream(topology + "core_id") >> core;
+    if (package < 0 || core < 0) {
+        return std::nullopt;
+    }
+    return std::pair{package, core};
+}
+
+// Drops the logical CPUs of the last `reserved_cores` physical cores of a NUMA node, so that threads outside the
+// pools always have whole cores to run on. Keeps at least one core for the pools.
+std::vector<uint32_t> without_reserved_cores(const std::vector<uint32_t>& cpus, uint32_t reserved_cores) {
+    std::vector<std::pair<int, int>> cores;
+    std::vector<std::optional<std::pair<int, int>>> core_of_cpu;
+    for (auto cpu : cpus) {
+        auto core = physical_core_of_cpu(cpu);
+        if (!core) {
+            return cpus;
+        }
+        core_of_cpu.push_back(core);
+        if (std::find(cores.begin(), cores.end(), *core) == cores.end()) {
+            cores.push_back(*core);
+        }
+    }
+    const size_t kept_cores = cores.size() - std::min<size_t>(reserved_cores, cores.size() - 1);
+    std::vector<uint32_t> kept;
+    for (size_t i = 0; i < cpus.size(); i++) {
+        if (std::find(cores.begin(), cores.begin() + kept_cores, *core_of_cpu[i]) != cores.begin() + kept_cores) {
+            kept.push_back(cpus[i]);
+        }
+    }
+    return kept;
+}
+
+std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(uint32_t reserved_cores) {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
     if (numa_available() != -1) {
         for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
             int node = numa_node_of_cpu(cpu);
             cpu_cores_per_numa_node[node].push_back(cpu);
+        }
+    }
+    if (reserved_cores > 0) {
+        for (auto& [node, cpus] : cpu_cores_per_numa_node) {
+            cpus = without_reserved_cores(cpus, reserved_cores);
         }
     }
     return cpu_cores_per_numa_node;
@@ -57,7 +103,8 @@ bool balanced_physical_device_numa(ContextId context_id) {
 }
 
 uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
-    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node =
+        get_cpu_cores_per_numa_node(MetalContext::instance(context_id).rtoptions().get_thread_pool_reserved_cores());
     static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
