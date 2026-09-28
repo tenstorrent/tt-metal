@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
+#include <tuple>
 
 #include "metal/common/const_utils.hpp"
 
@@ -24,6 +25,13 @@ struct operation_attributes_t {
     StochasticRounding stochastic_rounding{StochasticRounding::Disabled};
     // Host-drawn entropy, spread over the cores by the program factory. Engaged iff SR is enabled.
     std::optional<uint32_t> stochastic_rounding_seed{std::nullopt};
+
+    // Only these fields affect the compiled program. All optimizer scalars and the stochastic-rounding seed are
+    // refreshed by override_runtime_arguments and must not fragment the program cache.
+    static constexpr auto attribute_names = std::forward_as_tuple("amsgrad", "stochastic_rounding");
+    auto attribute_values() const {
+        return std::forward_as_tuple(amsgrad, stochastic_rounding);
+    }
 };
 
 struct tensor_args_t {
@@ -33,6 +41,12 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("param", "grad", "exp_avg", "exp_avg_sq", "max_exp_avg_sq");
+    auto attribute_values() const {
+        return std::forward_as_tuple(param, grad, exp_avg, exp_avg_sq, max_exp_avg_sq);
+    }
 };
 
 using tensor_return_value_t = ttnn::Tensor;

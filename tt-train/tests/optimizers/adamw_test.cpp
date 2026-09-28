@@ -7,10 +7,16 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+#include <string_view>
+#include <tt-metalium/bfloat16.hpp>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/optimizers/adamw/device/adamw_device_operation.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct AdamWCase {
@@ -58,6 +64,48 @@ protected:
 
 static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
+}
+
+static ttnn::Tensor make_adamw_test_tensor(
+    const ttnn::Shape& shape,
+    float value,
+    const tt::tt_metal::Alignment& alignment = {},
+    const tt::tt_metal::Tile& tile = {}) {
+    const auto layout = tt::tt_metal::TensorLayout(
+        ttnn::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(ttnn::Layout::TILE, tile),
+        ttnn::DRAM_MEMORY_CONFIG,
+        alignment);
+    const auto spec = tt::tt_metal::TensorSpec(shape, layout);
+    return ttnn::Tensor::from_vector(
+        std::vector<bfloat16>(shape.volume(), bfloat16(value)), spec, &ttml::autograd::ctx().get_device());
+}
+
+static ttnn::Tensor make_empty_adamw_test_tensor(const ttnn::Shape& shape, const tt::tt_metal::Tile& tile) {
+    const auto layout = tt::tt_metal::TensorLayout(
+        ttnn::DataType::BFLOAT16, tt::tt_metal::PageConfig(ttnn::Layout::TILE, tile), ttnn::DRAM_MEMORY_CONFIG);
+    return ttnn::create_device_tensor(tt::tt_metal::TensorSpec(shape, layout), &ttml::autograd::ctx().get_device());
+}
+
+static ttnn::Tensor run_adamw_primitive(
+    const ttnn::Tensor& param,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq = std::nullopt) {
+    return ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        max_exp_avg_sq,
+        /* lr */ 1e-3f,
+        /* beta1 */ 0.9f,
+        /* beta2 */ 0.999f,
+        /* beta1_pow */ 0.9f,
+        /* beta2_pow */ 0.999f,
+        /* epsilon */ 1e-8f,
+        /* weight_decay */ 0.0f);
 }
 
 // CPU reference implementation of AdamW
@@ -579,6 +627,33 @@ TEST_F(AdamWStateDictTest, BetaSettersRecomputeBiasCorrection) {
 
 using AdamWValidationTest = AdamWStateDictTest;
 
+namespace {
+
+using AdamWDeviceOperation = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
+using AdamWAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<AdamWDeviceOperation>;
+
+void expect_adamw_validation_error_on_miss_and_hit(
+    const AdamWDeviceOperation::operation_attributes_t& attributes,
+    const AdamWDeviceOperation::tensor_args_t& tensor_args,
+    std::string_view expected_diagnostic) {
+    auto expect_error = [&](auto&& validate, std::string_view path) {
+        try {
+            validate();
+            ADD_FAILURE() << path << " validation unexpectedly accepted an unsafe AdamW contract";
+        } catch (const std::runtime_error& error) {
+            EXPECT_NE(std::string_view(error.what()).find(expected_diagnostic), std::string_view::npos)
+                << path << " validation raised the wrong diagnostic: " << error.what();
+        } catch (...) {
+            ADD_FAILURE() << path << " validation raised a non-runtime_error exception";
+        }
+    };
+
+    expect_error([&] { AdamWAdapter::validate_on_program_cache_miss(attributes, tensor_args); }, "program-cache miss");
+    expect_error([&] { AdamWAdapter::validate_on_program_cache_hit(attributes, tensor_args); }, "program-cache hit");
+}
+
+}  // namespace
+
 TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     using namespace ttml;
 
@@ -604,6 +679,162 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* beta2_pow */ 0.999f,
         /* epsilon */ 1e-8f,
         /* weight_decay */ 0.0f));
+}
+
+TEST_F(AdamWValidationTest, RejectsNonCanonicalTileGeometry) {
+    constexpr std::string_view expected_diagnostic = "must use the canonical 32x32 tile without transposition";
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const auto non_canonical_tile = tt::tt_metal::Tile({16, 32});
+    auto param = make_empty_adamw_test_tensor(shape, non_canonical_tile);
+    auto grad = make_empty_adamw_test_tensor(shape, non_canonical_tile);
+    auto exp_avg = make_empty_adamw_test_tensor(shape, non_canonical_tile);
+    auto exp_avg_sq = make_empty_adamw_test_tensor(shape, non_canonical_tile);
+    const auto attributes = AdamWDeviceOperation::operation_attributes_t{};
+    const auto tensor_args = AdamWDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .exp_avg = exp_avg,
+        .exp_avg_sq = exp_avg_sq,
+        .max_exp_avg_sq = std::nullopt,
+    };
+
+    expect_adamw_validation_error_on_miss_and_hit(attributes, tensor_args, expected_diagnostic);
+}
+
+TEST_F(AdamWValidationTest, RejectsTransposedCanonicalTile) {
+    constexpr std::string_view expected_diagnostic = "must use the canonical 32x32 tile without transposition";
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const auto transposed_tile = tt::tt_metal::Tile({32, 32}, /* transpose_tile */ true);
+    auto param = make_empty_adamw_test_tensor(shape, transposed_tile);
+    auto grad = make_empty_adamw_test_tensor(shape, transposed_tile);
+    auto exp_avg = make_empty_adamw_test_tensor(shape, transposed_tile);
+    auto exp_avg_sq = make_empty_adamw_test_tensor(shape, transposed_tile);
+    const auto attributes = AdamWDeviceOperation::operation_attributes_t{};
+    const auto tensor_args = AdamWDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .exp_avg = exp_avg,
+        .exp_avg_sq = exp_avg_sq,
+        .max_exp_avg_sq = std::nullopt,
+    };
+
+    expect_adamw_validation_error_on_miss_and_hit(attributes, tensor_args, expected_diagnostic);
+}
+
+TEST_F(AdamWValidationTest, DirectValidationRejectsOptionalModeMismatch) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto param = make_adamw_test_tensor(shape, 1.0F);
+    auto grad = make_adamw_test_tensor(shape, 0.1F);
+    auto exp_avg = make_adamw_test_tensor(shape, 0.0F);
+    auto exp_avg_sq = make_adamw_test_tensor(shape, 0.5F);
+    auto max_exp_avg_sq = make_adamw_test_tensor(shape, 0.5F);
+
+    auto expect_mode_mismatch = [&](bool amsgrad,
+                                    const std::optional<ttnn::Tensor>& max_state,
+                                    ttml::metal::StochasticRounding stochastic_rounding,
+                                    std::optional<uint32_t> seed,
+                                    std::string_view expected_diagnostic) {
+        const auto attributes = AdamWDeviceOperation::operation_attributes_t{
+            .lr = 1e-3F,
+            .beta1 = 0.9F,
+            .beta2 = 0.999F,
+            .beta1_pow = 0.9F,
+            .beta2_pow = 0.999F,
+            .epsilon = 1e-8F,
+            .weight_decay = 0.0F,
+            .amsgrad = amsgrad,
+            .stochastic_rounding = stochastic_rounding,
+            .stochastic_rounding_seed = seed,
+        };
+        const auto tensor_args = AdamWDeviceOperation::tensor_args_t{
+            .param = param,
+            .grad = grad,
+            .exp_avg = exp_avg,
+            .exp_avg_sq = exp_avg_sq,
+            .max_exp_avg_sq = max_state,
+        };
+        expect_adamw_validation_error_on_miss_and_hit(attributes, tensor_args, expected_diagnostic);
+    };
+
+    constexpr std::string_view amsgrad_diagnostic =
+        "requires a max exponential-average-squared buffer iff AMSGrad is enabled";
+    constexpr std::string_view stochastic_rounding_diagnostic =
+        "requires a stochastic-rounding seed iff stochastic rounding is enabled";
+
+    expect_mode_mismatch(
+        /* amsgrad */ true, std::nullopt, ttml::metal::StochasticRounding::Disabled, std::nullopt, amsgrad_diagnostic);
+    expect_mode_mismatch(
+        /* amsgrad */ false,
+        max_exp_avg_sq,
+        ttml::metal::StochasticRounding::Disabled,
+        std::nullopt,
+        amsgrad_diagnostic);
+    expect_mode_mismatch(
+        /* amsgrad */ false,
+        std::nullopt,
+        ttml::metal::StochasticRounding::Enabled,
+        std::nullopt,
+        stochastic_rounding_diagnostic);
+    expect_mode_mismatch(
+        /* amsgrad */ false,
+        std::nullopt,
+        ttml::metal::StochasticRounding::Disabled,
+        123U,
+        stochastic_rounding_diagnostic);
+}
+
+TEST_F(AdamWValidationTest, WarmCacheSeparatesPaddedGeometryAndReusesExactSpecs) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    const ttnn::Shape shape{1, 1, 64, 33};
+    const tt::tt_metal::Alignment overpadded_alignment({32, 96});
+    auto make_inputs = [&](const tt::tt_metal::Alignment& alignment) {
+        return std::array{
+            make_adamw_test_tensor(shape, 1.0F, alignment),
+            make_adamw_test_tensor(shape, 0.1F, alignment),
+            make_adamw_test_tensor(shape, 0.0F, alignment),
+            make_adamw_test_tensor(shape, 0.5F, alignment)};
+    };
+
+    auto default_inputs = make_inputs({});
+    auto warm_inputs = make_inputs(overpadded_alignment);
+    ASSERT_NE(default_inputs[0].padded_shape(), warm_inputs[0].padded_shape());
+    ASSERT_EQ(default_inputs[0].logical_shape(), warm_inputs[0].logical_shape());
+
+    const auto entries_before_default = device->num_program_cache_entries();
+    run_adamw_primitive(default_inputs[0], default_inputs[1], default_inputs[2], default_inputs[3]);
+    const auto entries_after_default = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_default, entries_before_default + 1U);
+
+    const auto entries_before_warm = device->num_program_cache_entries();
+    run_adamw_primitive(warm_inputs[0], warm_inputs[1], warm_inputs[2], warm_inputs[3]);
+    const auto entries_after_warm = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_warm, entries_before_warm + 1U)
+        << "different padded geometry must compile a distinct AdamW program";
+
+    auto hit_inputs = make_inputs(overpadded_alignment);
+    const auto entries_before_hit = device->num_program_cache_entries();
+    run_adamw_primitive(hit_inputs[0], hit_inputs[1], hit_inputs[2], hit_inputs[3]);
+    const auto entries_after_hit = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_hit, entries_before_hit) << "identical TensorSpecs must reuse the cached AdamW program";
+
+    const auto warm_param = ttml::core::to_vector<float>(warm_inputs[0]);
+    const auto warm_exp_avg = ttml::core::to_vector<float>(warm_inputs[2]);
+    const auto warm_exp_avg_sq = ttml::core::to_vector<float>(warm_inputs[3]);
+    EXPECT_EQ(ttml::core::to_vector<float>(hit_inputs[0]), warm_param);
+    EXPECT_EQ(ttml::core::to_vector<float>(hit_inputs[2]), warm_exp_avg);
+    EXPECT_EQ(ttml::core::to_vector<float>(hit_inputs[3]), warm_exp_avg_sq);
+
+    auto cold_inputs = make_inputs(overpadded_alignment);
+    device->clear_program_cache();
+    run_adamw_primitive(cold_inputs[0], cold_inputs[1], cold_inputs[2], cold_inputs[3]);
+    EXPECT_EQ(ttml::core::to_vector<float>(cold_inputs[0]), warm_param);
+    EXPECT_EQ(ttml::core::to_vector<float>(cold_inputs[2]), warm_exp_avg);
+    EXPECT_EQ(ttml::core::to_vector<float>(cold_inputs[3]), warm_exp_avg_sq);
+
+    device->clear_program_cache();
 }
 
 // ====================================================================

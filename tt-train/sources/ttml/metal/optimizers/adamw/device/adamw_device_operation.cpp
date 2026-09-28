@@ -10,6 +10,18 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::adamw::device {
+namespace {
+
+bool is_canonical_tile(const tt::tt_metal::Tile& tile) {
+    const tt::tt_metal::Tile canonical_tile{};
+    return tile.get_tile_shape() == canonical_tile.get_tile_shape() &&
+           tile.get_face_shape() == canonical_tile.get_face_shape() &&
+           tile.get_num_faces() == canonical_tile.get_num_faces() &&
+           tile.get_transpose_within_face() == canonical_tile.get_transpose_within_face() &&
+           tile.get_transpose_of_faces() == canonical_tile.get_transpose_of_faces();
+}
+
+}  // namespace
 
 void AdamWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -41,6 +53,11 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
+            is_canonical_tile(tensor.tensor_spec().tile()),
+            "Tensor '{}' must use the canonical 32x32 tile without transposition",
+            name);
+
+        TT_FATAL(
             tensor.dtype() == required_dtype,
             "Tensor '{}' must have data type '{}', but got '{}'",
             name,
@@ -52,6 +69,13 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+
+        TT_FATAL(tensor.device() == param.device(), "Tensor '{}' must reside on the parameter's MeshDevice", name);
+
+        TT_FATAL(
+            tensor.tensor_topology() == param.tensor_topology(),
+            "Tensor '{}' must match the parameter's device coordinates and topology",
+            name);
 
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
@@ -94,6 +118,14 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         "Got stochastic_rounding=Enabled with parameter dtype '{}'",
         enchantum::to_string(param_dtype));
 
+    TT_FATAL(
+        args.amsgrad == max_exp_avg_sq.has_value(),
+        "AdamW requires a max exponential-average-squared buffer iff AMSGrad is enabled");
+
+    TT_FATAL(
+        (args.stochastic_rounding == StochasticRounding::Enabled) == args.stochastic_rounding_seed.has_value(),
+        "AdamW requires a stochastic-rounding seed iff stochastic rounding is enabled");
+
     // Validate all tensors
     check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
     // Gradient is always bf16
@@ -121,19 +153,6 @@ AdamWDeviceOperation::tensor_return_value_t AdamWDeviceOperation::create_output_
 std::vector<tt::tt_metal::TensorTopology> AdamWDeviceOperation::compute_output_topologies(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return {tensor_args.param.tensor_topology()};
-}
-
-ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto amsgrad = args.amsgrad;
-    auto stochastic_rounding = args.stochastic_rounding;
-    auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
 }
 
 }  // namespace ttml::metal::optimizers::adamw::device
