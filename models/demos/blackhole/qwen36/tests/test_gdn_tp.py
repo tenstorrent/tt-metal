@@ -25,6 +25,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
+from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import _OUTER_L1_BUDGET_BYTES, wh_decode_fork_applies
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
@@ -668,3 +669,33 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
+
+
+@parametrize_mesh_tp()
+def test_gdn_decode_fork_budget_boundary(mesh_device, reset_seeds, ensure_gc):
+    """Pin the fork/upstream gate exactly at its L1 budget.
+
+    ``wh_decode_fork_applies`` is correctness-critical, not a perf switch: above the budget the
+    decode falls back to the shared kernel, which on Wormhole saturates for this shape and makes
+    every GDN decode return zeros. The budget is an inclusive ``<=``, and this model's per-device
+    decode shape lands EXACTLY on it at B=16/fp32 (4 kv-heads x gqa 2 x 128 x 128 x 4B = 8 MiB),
+    so an off-by-one in the comparison silently moves B=16 onto the zeros path. The PCC tests
+    either side of the boundary (B=1/B=8 take the fork, B=32 takes upstream) cannot see that flip;
+    this can.
+    """
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    Nk, gqa, Dk, Dv = 4, 2, 128, 128  # per device at TP=4
+    at_budget = _OUTER_L1_BUDGET_BYTES // ((Nk * gqa) * Dk * Dv * 4)
+    assert at_budget * (Nk * gqa) * Dk * Dv * 4 == _OUTER_L1_BUDGET_BYTES, "shape no longer lands on the budget"
+
+    applies = lambda b: wh_decode_fork_applies(b, Nk, Dk, Dv, gqa_repeat=gqa, high_precision=True)
+    if tpc.is_blackhole():
+        assert not applies(1) and not applies(at_budget), "Blackhole must always take the shared kernel"
+        return
+    assert applies(at_budget), f"B={at_budget} sits exactly on the budget and must take the fork"
+    assert not applies(at_budget + 1), f"B={at_budget + 1} is one row over the budget and must fall back"
+    assert applies(1), "the smallest decode shape must take the fork"
+    # bf16 halves the outer product, so the boundary doubles.
+    assert wh_decode_fork_applies(2 * at_budget, Nk, Dk, Dv, gqa_repeat=gqa, high_precision=False)
+    assert not wh_decode_fork_applies(2 * at_budget + 1, Nk, Dk, Dv, gqa_repeat=gqa, high_precision=False)

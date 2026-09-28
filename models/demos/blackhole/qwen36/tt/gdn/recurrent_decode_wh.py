@@ -94,10 +94,11 @@ def recurrent_gated_delta_rule_decode_wh(
 ):
     """Wormhole variant of recurrent_gated_delta_rule_decode_ttnn.
 
-    Identical to upstream except: q is NOT typecast to fp32 up front. It stays in its native dtype
-    through L2-norm, the scale multiply, and the reshape to q_row (cheaper at bf16's data width),
-    and is only cast to match h's dtype (fp32 under high_precision) immediately before the final
-    q @ h matmul -- required so the matmul sees matching operand dtypes, not for accuracy. Every
+    Identical to upstream except: q is NOT typecast to fp32 at all. It stays in its native dtype
+    through L2-norm, the scale multiply, the reshape to q_row (cheaper at bf16's data width) and
+    into the final q @ h matmul, which takes the mixed (bf16, fp32) operands directly -- casting to
+    match h would be pure cost. q feeds only the read-only o = q @ h and is never written back into
+    the state, so leaving it narrow cannot cause the drift high_precision exists to prevent. Every
     other value (k, v, beta, g, h) follows the exact same fp32 path as upstream. When
     high_precision=False this is bit-identical to upstream (no casts happen either way).
     """

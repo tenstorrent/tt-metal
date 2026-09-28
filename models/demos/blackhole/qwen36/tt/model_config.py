@@ -45,6 +45,13 @@ class Qwen36ModelArgs(ModelArgs):
         # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR
 
+        # Per-model store for the MoE gate's persistent L1 buffers, shared across this model's MoE
+        # layers (see moe/router.py::_share_gate_buffers). It lives here, not in a module-level
+        # dict, so its lifetime is the model's: a process-global keyed on id(mesh_device) would
+        # hand a new device the buffers of a closed one whenever CPython recycles the address,
+        # which pytest does routinely when a fixture opens and closes a mesh per test.
+        self.moe_gate_buffers = {}
+
         # Qwen3.5-specific params from HF text config (base sets dim, heads, layers, etc.).
         text_config = self.hf_config.get_text_config()
 
