@@ -399,6 +399,28 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderl
     EXPECT_EQ(released.address(), address);
 }
 
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewReleaseDropsRetainedOwner) {
+    constexpr uint32_t viewOffset = 4096;
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    uint32_t ownerAddress = 0;
+    DeviceStorage viewStorage = [&] {
+        Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+        ownerAddress = owner.buffer()->address();
+        Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, viewOffset);
+        return view.device_storage();
+    }();
+
+    {
+        MeshTensor released = viewStorage.release_mesh_tensor();
+    }
+
+    EXPECT_FALSE(viewStorage.is_allocated());
+    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), ownerAddress)
+        << "a released view's empty storage must not keep its source allocation reserved";
+}
+
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorLeavesDefaultConstructedState) {
     auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec());
     DeviceStorage storage(std::move(mesh_tensor));

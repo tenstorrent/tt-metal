@@ -151,8 +151,7 @@ DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<tt::tt_metal::
 
 DeviceStorage::DeviceStorage(
     const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
-    DeviceStorage(
-        other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
+    DeviceStorage(other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
 
 DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
     DeviceStorage(
@@ -226,6 +225,7 @@ MeshTensor DeviceStorage::release_mesh_tensor() {
             [](const auto&) -> MeshTensor { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
     mesh_tensor_holder_->state_ = MeshTensorHolder::DeallocatedDefaultConstructed{};
+    mesh_tensor_holder_->retained_owner_.reset();
     return result;
 }
 
