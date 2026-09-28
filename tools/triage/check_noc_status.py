@@ -38,12 +38,12 @@ def check_noc_status(
     elfs_cache: ElfsCache,
     noc_id: NocId = NocId.NOC0,
 ):
-    risc_name = risc_debug.risc_location.risc_name
-    location = risc_debug.risc_location.location
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
     and stores them in dictionary creating summary of checking process
     """
+    risc_name = risc_debug.risc_location.risc_name
+    location = risc_debug.risc_location.location
 
     dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_debug.risc_location)
 
