@@ -611,10 +611,24 @@ inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
     }
 }
 
+// SFPSWAP mode 9 (sfpi SFPSWAP_MOD1_VEC_MAX_MIN, not in p_sfpswap): ALL_ROWS_MAX with the
+// max/min destinations exchanged. It is what ALL_ROWS_MAX becomes under the SFPU_CONTROL_REG
+// swap-reversal bit (0x100), including which way exactly-equal values (and, with index tracking,
+// their indices) go -- so it reverses a compare-exchange with the same tie behaviour as the
+// former SFPCONFIG 0x104 write, which plain operand exchange does not.
+constexpr std::uint32_t TOPK_SFPSWAP_ALL_ROWS_MIN = sfpi::SFPSWAP_MOD1_VEC_MAX_MIN;
+
 // Stable compare-exchange for one register pair. Values are the primary key; on exact value
 // ties the paired index registers (LREG4+n tracks LREGn) are compare-exchanged so ties resolve
-// by index. VD ^= VC leaves 0 only in tied lanes, providing the tie predicate; the second XOR
-// restores VD. INDEX_MIN_TO_VD selects the index-swap operand order to match the sort direction.
+// by index. INDEX_MIN_TO_VD selects the index-swap operand order to match the sort direction.
+//
+// Tie predicate: SFPLE with SET_CC (SFPLE(0, a, b, 1): flag &= (b <= a)) compares in the same
+// sign-magnitude total order SFPSWAP sorts by (-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN,
+// denormals and NaN payloads distinct, nothing flushed), so (a <= b) && (b <= a) holds exactly
+// when the two words are bitwise equal -- the lanes the former XOR + SETCC(EQ0) + restoring XOR
+// selected. After a whole-vector SFPSWAP the order of every lane is already known (ALL_ROWS_MAX:
+// VC >= VD; mode 9: VC <= VD), so one SFPLE in the other direction is the tie; the sub-vector
+// modes put the maximum in different registers per row and need both.
 template <std::uint32_t VC, std::uint32_t VD, std::uint32_t MODE, bool INDEX_MIN_TO_VD>
 TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
 {
@@ -627,9 +641,15 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
     // Predicate lanes where compared values are exactly equal. Lanes-on/flags-true CC state
     // is an entry invariant established once per LLK entry point (see the STABLE_SORT branch
     // of _bitonic_topk_{phases_steps,merge,rebuild}) and re-established by the trailing
-    // SFPENCC of every comparator body.
-    TTI_SFPXOR(0, VC, VD, 0);
-    TTI_SFPSETCC(0, VD, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    // SFPENCC of every comparator body; chained SET_CC compares AND into it.
+    if constexpr (MODE != TOPK_SFPSWAP_ALL_ROWS_MIN)
+    {
+        TTI_SFPLE(0, VD, VC, 1); // flag &= (VC <= VD)
+    }
+    if constexpr (MODE != p_sfpswap::ALL_ROWS_MAX)
+    {
+        TTI_SFPLE(0, VC, VD, 1); // flag &= (VD <= VC)
+    }
 
     // Secondary key: index compare-exchange under the tie mask.
     if constexpr (INDEX_MIN_TO_VD)
@@ -641,9 +661,6 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
         TTI_SFPSWAP(0, IDX_VD, IDX_VC, MODE);
     }
     TOPK_SFPENCC_ALL_LANES_ON();
-
-    // Restore values after the XOR scratch operation.
-    TTI_SFPXOR(0, VC, VD, 0);
 }
 
 // Runtime-polarity wrapper for stable compare sites shared by ascending and descending sorts.
@@ -652,13 +669,6 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_min_to_vd()
 {
     topk_cmp_swap_stable_directional<VC, VD, MODE, TIE_ORDER != TopkTieOrder::Descending>();
 }
-
-// SFPSWAP mode 9 (sfpi SFPSWAP_MOD1_VEC_MAX_MIN, not in p_sfpswap): ALL_ROWS_MAX with the
-// max/min destinations exchanged. It is what ALL_ROWS_MAX becomes under the SFPU_CONTROL_REG
-// swap-reversal bit (0x100), including which way exactly-equal values (and, with index tracking,
-// their indices) go -- so it reverses a compare-exchange with the same tie behaviour as the
-// former SFPCONFIG 0x104 write, which plain operand exchange does not.
-constexpr std::uint32_t TOPK_SFPSWAP_ALL_ROWS_MIN = sfpi::SFPSWAP_MOD1_VEC_MAX_MIN;
 
 // Phase 3 steps 4 and 3 for one 16-datum group, followed by the transpose into step-2/1 layout.
 // REV reverses the sort direction by swapping in mode 9 for ALL_ROWS_MAX (for STABLE_SORT on the
