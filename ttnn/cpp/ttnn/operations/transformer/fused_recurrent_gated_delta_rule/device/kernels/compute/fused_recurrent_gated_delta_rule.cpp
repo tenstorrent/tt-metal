@@ -35,12 +35,10 @@ constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13;
 // fp32 DST tiles available per tile_regs_acquire (half-sync).
 constexpr uint32_t DST_TILES = 4;
 
-inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
-inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
-
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must already be available.
 void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer cb_o(o);
+    cb_o.reserve_back(Mt * Nt);
     matmul_init(a, b, tr ? 1 : 0);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
@@ -55,7 +53,7 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    cb_o.push_back(Mt * Nt);
 }
 
 // S_new[Kt,Vt] = sd + kcol[Kt,1] (x) u[1,Vt]. Each DST tile is seeded with sd and the rank-1
@@ -64,9 +62,11 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
 template <uint32_t Kt, uint32_t Vt>
 void rank1_update(uint32_t sd, uint32_t kcol, uint32_t u, uint32_t o, bool emit_state) {
     constexpr uint32_t kv = Kt * Vt;
-    cb_reserve_back(o, kv);
+    CircularBuffer cb_o(o);
+    CircularBuffer cb_st(cb_state);
+    cb_o.reserve_back(kv);
     if (emit_state) {
-        cb_reserve_back(cb_state, kv);
+        cb_st.reserve_back(kv);
     }
     for (uint32_t mi = 0; mi < Kt; mi++) {
         for (uint32_t n0 = 0; n0 < Vt; n0 += DST_TILES) {
@@ -91,9 +91,9 @@ void rank1_update(uint32_t sd, uint32_t kcol, uint32_t u, uint32_t o, bool emit_
             tile_regs_release();
         }
     }
-    cb_push_back(o, kv);
+    cb_o.push_back(kv);
     if (emit_state) {
-        cb_push_back(cb_state, kv);
+        cb_st.push_back(kv);
     }
 }
 
@@ -103,7 +103,8 @@ void rank1_update(uint32_t sd, uint32_t kcol, uint32_t u, uint32_t o, bool emit_
 // row 0 is scaled by beta and the zero padding rows stay zero.
 void delta_rule_residual(uint32_t a, uint32_t b, uint32_t beta, uint32_t o, uint32_t n) {
     constexpr uint32_t per_batch = DST_TILES - 1;  // the last DST slot holds beta
-    cb_reserve_back(o, n);
+    CircularBuffer cb_o(o);
+    cb_o.reserve_back(n);
     for (uint32_t i0 = 0; i0 < n; i0 += per_batch) {
         const uint32_t nn = (n - i0 < per_batch) ? (n - i0) : per_batch;
         tile_regs_acquire();
@@ -124,12 +125,13 @@ void delta_rule_residual(uint32_t a, uint32_t b, uint32_t beta, uint32_t o, uint
         }
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    cb_o.push_back(n);
 }
 
 // out = A * scalar, n tiles. scalar is the [0,0] element of the single `scal` tile.
 void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer cb_o(o);
+    cb_o.reserve_back(n);
     mul_tiles_bcast_scalar_init_short(a, scal);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
@@ -139,12 +141,13 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    cb_o.push_back(n);
 }
 
 // out[Kt,1] = transpose of in[1,Kt]: transpose each of the Kt tiles. (in must be available.)
 void transpose_block(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer cb_o(o);
+    cb_o.reserve_back(n);
     transpose_init(in);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
@@ -154,7 +157,7 @@ void transpose_block(uint32_t in, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    cb_o.push_back(n);
 }
 
 }  // namespace
@@ -171,49 +174,53 @@ void kernel_main() {
     // for every op below; no per-op data-format reconfig is needed.
     compute_kernel_hw_startup(cb_q, cb_v, cb_out);
 
+    CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(cb_decay), beta(cb_beta);
+    CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u), kcol(cb_kcol);
+
     for (uint32_t t = 0; t < T; t++) {
-        const uint32_t cur_S = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
-        const uint32_t nxt_S = (t & 1u) ? cb_s3 : cb_s2;
+        const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
+        const uint32_t nxt_S_id = (t & 1u) ? cb_s3 : cb_s2;
+        CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
         const bool last = (t == T - 1);
 
         // sd = cur_S * decay  (decay before read)
-        WAIT(cb_decay, 1);
-        WAIT(cur_S, kv);
-        bcast_scalar_mul(cur_S, cb_decay, cb_sd, kv);
-        POP(cb_decay, 1);
-        POP(cur_S, kv);
-        WAIT(cb_sd, kv);
+        decay.wait_front(1);
+        cur_S.wait_front(kv);
+        bcast_scalar_mul(cur_S_id, cb_decay, cb_sd, kv);
+        decay.pop_front(1);
+        cur_S.pop_front(kv);
+        sd.wait_front(kv);
 
         // vread = k . sd  ([1,V])
-        WAIT(cb_k, Kt);
+        k.wait_front(Kt);
         mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
-        WAIT(cb_vread, Vt);
+        vread.wait_front(Vt);
 
         // u = beta * (v - vread)
-        WAIT(cb_v, Vt);
-        WAIT(cb_beta, 1);
+        v.wait_front(Vt);
+        beta.wait_front(1);
         delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
-        POP(cb_v, Vt);
-        POP(cb_vread, Vt);
-        POP(cb_beta, 1);
-        WAIT(cb_u, Vt);
+        v.pop_front(Vt);
+        vread.pop_front(Vt);
+        beta.pop_front(1);
+        u.wait_front(Vt);
 
         // kcol = transpose(k) ([K,1])
         transpose_block(cb_k, cb_kcol, Kt);
-        POP(cb_k, Kt);
-        WAIT(cb_kcol, Kt);
+        k.pop_front(Kt);
+        kcol.wait_front(Kt);
 
         // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
-        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S, per_token || last);
-        POP(cb_kcol, Kt);
-        POP(cb_u, Vt);
-        POP(cb_sd, kv);
-        WAIT(nxt_S, kv);
+        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, per_token || last);
+        kcol.pop_front(Kt);
+        u.pop_front(Vt);
+        sd.pop_front(kv);
+        nxt_S.wait_front(kv);
 
         // o = q . S_new  (read from POST-update state)
-        WAIT(cb_q, Kt);
-        mm(cb_q, nxt_S, cb_out, 1, Kt, Vt, false);
-        POP(cb_q, Kt);
+        q.wait_front(Kt);
+        mm(cb_q, nxt_S_id, cb_out, 1, Kt, Vt, false);
+        q.pop_front(Kt);
 
         // nxt_S is intentionally NOT popped: the next iteration reads it as cur_S.
     }
