@@ -1,6 +1,9 @@
 name: "LLK perf"
 
 on:
+  push:
+    branches:
+      - "perf-trial/sol-revert-both"
   schedule:
     # Run every night at 3AM UTC
     - cron: '0 3 * * *'
@@ -50,19 +53,20 @@ jobs:
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       # Scheduled runs have no dispatch inputs, so retain the existing behavior.
-      architecture: ${{ inputs.architecture || 'all' }}
+      architecture: all
+      ref: b66c1726f37a7560aa859ccd3c046663030a4eb3
       # A scheduled run is the nightly by definition; a manual run says so.
-      pipeline: ${{ github.event_name == 'schedule' && 'nightly' || inputs.pipeline }}
+      pipeline: nightly
       # Nightly runs always use speed-of-light; manual runs use the checkbox.
-      speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
+      speed-of-light: true
       # Nightly runs always publish; manual runs use the checkbox.
-      upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
+      upload-to-warehouse: false
     secrets: inherit
 
   gate:
     name: "Gate ${{ matrix.arch }} (speed of light)"
     needs: llk-perf-tests
-    if: ${{ always() && github.event_name == 'schedule' }}
+    if: ${{ always() }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +93,7 @@ jobs:
 
   llk-perf-summary:
     name: "LLK perf summary"
-    if: always()
+    if: false
     needs:
       - llk-perf-tests
     runs-on: ubuntu-slim
@@ -102,7 +106,7 @@ jobs:
   report-status:
     name: "Report status"
     runs-on: ubuntu-slim
-    if: always()
+    if: false
     needs: llk-perf-summary
     steps:
       - name: Checkout repository
