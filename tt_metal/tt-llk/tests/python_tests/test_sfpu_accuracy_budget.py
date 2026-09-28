@@ -329,6 +329,9 @@ def test_a_more_specific_key_wins_over_the_default(broad, narrow):
 
 
 def test_specificity_counts_every_set_dimension():
+    """The only comparison of two non-DEFAULT keys. The Fill rows stack 1-, 2- and
+    4-field keys on one op, and only an equal-specificity tie raises, so a miscount
+    would silently repoint budgets."""
     table = {
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
         BudgetKey(
@@ -509,6 +512,32 @@ def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(enrolled):
         accuracy_contract(op, output_format=DataFormat.Float32, arch="wormhole")
 
 
+def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch):
+    """``--ulp-measure`` files a reading under the last variant looked up, and refuses
+    two lookups racing one comparison -- but only within one test. The exhaustive sweep
+    resolves a contract and then skips a tolerance cell; flagging that dropped every
+    reading that followed a skip (40 of 130 tests, measured)."""
+    import helpers.sfpu_accuracy_budget as budget
+
+    def resolve(test_id):
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{test_id} (call)")
+        accuracy_contract(
+            MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+        )
+
+    monkeypatch.setattr(budget, "LAST_QUERY", None)
+    monkeypatch.setattr(budget, "PENDING_AMBIGUOUS", False)
+
+    resolve("t_one")
+    resolve("t_two")
+    assert not budget.PENDING_AMBIGUOUS
+    assert budget.LAST_QUERY[0] == "t_two"
+
+    resolve("t_three")
+    resolve("t_three")
+    assert budget.PENDING_AMBIGUOUS
+
+
 def test_arch_must_be_passed_explicitly():
     """The one dimension whose numbers do not transfer cannot default to Wormhole."""
     with _refuses("arch", TypeError):
@@ -622,20 +651,17 @@ def test_enrolled_ops_is_sorted_and_stable():
     assert len(set(ops)) == len(ops)
 
 
-#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, and SfpuElwmul, past the usable
-#: ceiling on every float column (measurements on its YAML rows). GeluTanh and
-#: Tanhshrink are not here since their Float16 cells measured inside it with the fp16
-#: subnormal band flushed. Sign and Heaviside
-#: are not here: they carry step budgets on the cells their rows name, and only their
-#: op-wide row is tolerance.
+#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair and two binaries
+#: whose per-format tolerances moved into the table. Sign and Heaviside are not here:
+#: they carry step budgets on the cells their rows name, and only their op-wide row is
+#: tolerance. Nor are GeluTanh, Tanhshrink and SfpuElwmul: per variant, some of their
+#: cells are inside the ceiling, and the rest fall through to tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.SfpuElwmul,
     }
 )
 
