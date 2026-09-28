@@ -495,6 +495,9 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
+    # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
   model: qwen3.6-27b
   model_family: Qwen
@@ -513,6 +516,9 @@
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 3600 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
+    # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
   model: qwen3.6-35b-a3b
   model_family: Qwen
   skus:

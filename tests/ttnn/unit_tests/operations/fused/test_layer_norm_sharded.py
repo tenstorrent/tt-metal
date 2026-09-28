@@ -14,6 +14,8 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_layer_norm_sharded,
     create_sharded_mem_config,
+    ttnn_rms_norm_sharded,
+    make_sharded_norm_mem_config,
     run_sharded_norm_logical_width_multicore,
     cores_of,
     non_rectangular_width_shard_config,
@@ -986,3 +988,27 @@ def test_layer_norm_sharded_fp32_large_offset(device, base, two_stage, has_resid
         atol=_LARGE_OFFSET_MAX_ABS_ERR,
         frobenius_threshold=_LARGE_OFFSET_MAX_ABS_ERR,
     )
+
+
+# subblock_w = 0 used to reach block_w % subblock_w in validate_on_program_cache_miss, a modulo by zero on
+# the host that killed the process with SIGFPE rather than raising. layer_norm and rms_norm share that
+# validation, and the Welford path runs it too.
+@pytest.mark.parametrize("norm, use_welford", [("layer_norm", False), ("layer_norm", True), ("rms_norm", False)])
+def test_layer_norm_sharded_subblock_w_zero(device, expect_error, norm, use_welford):
+    torch.manual_seed(0)
+    num_cores_w, h, shard_w = 4, 64, 64
+    sharded_mem_config = make_sharded_norm_mem_config(num_cores_w, h, shard_w)
+    tt_input = ttnn.from_torch(
+        generate_input_tensor(h, num_cores_w * shard_w, "random", torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    with expect_error(RuntimeError, "subblock_w must be greater than 0"):
+        if norm == "layer_norm":
+            ttnn_layer_norm_sharded(
+                device, tt_input, use_welford, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=0
+            )
+        else:
+            ttnn_rms_norm_sharded(device, tt_input, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=0)
