@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <fmt/core.h>
+#include <fmt/format.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
@@ -278,6 +279,28 @@ int main(int argc, char* argv[]) {
         "Output block: {}x{} tiles  |  {} blocks  |  {:.3f} DRAM tile reads per multiply "
         "(1x1 baseline = 2.000)\n",
         block_m, block_n, total_output_blocks, reads_per_multiply);
+
+    // One line with every effective knob, so the log of any run says exactly what was measured
+    // regardless of which env vars were used to get there.
+    {
+        const char* pc = std::getenv("POWER_CASE");
+        fmt::print(
+            "Effective knobs: POWER_CASE={} reader={} compute={} writer={} write_amplification_pct={} "
+            "op={} block={}x{} mode={} shape={}x{}x{} iterations={}\n",
+            (pc != nullptr && *pc != '\0') ? pc : "unset",
+            power_cfg.disable_reader ? "idle" : "real",
+            power_cfg.disable_compute ? "idle" : "real",
+            power_cfg.disable_writer ? "idle" : "real",
+            power_cfg.write_amplification_pct,
+            power_cfg.op,
+            block_m,
+            block_n,
+            fixed_tiles_per_core > 0 ? fmt::format("fixed({})", fixed_tiles_per_core) : std::string("split"),
+            M,
+            N,
+            K,
+            num_iterations);
+    }
 
     // The writer normally issues 1 NoC write per output tile while the reader issues 2*Kt reads.
     // Amplification re-writes the same tile to the same address to load the write-side NoC path
