@@ -647,9 +647,9 @@ def flow_fused_sdpa() -> bool:
 
     Masking: `streaming=True` passes the full `[B, 1, T, T]` padding + chunk-causal bias as SDPA's
     `attn_mask` (correct, and faster than the explicit chain -- see `TtBasicTransformerBlock`).
-    `streaming=False` passes `attn_mask=None`, i.e. assumes an all-ones padding mask, which holds for
-    the whole non-streaming inference path; `TtCausalConditionalCFM.forward` refuses a partial mask in
-    that one combination (non-streaming + fused SDPA) rather than silently ignoring it. On by default;
+    `streaming=False` with an all-ones mask passes `attn_mask=None`. With a partial (bucket-padded) mask,
+    `TtCausalConditionalCFM.forward` takes the masked path instead, with an all-zero chunk term, so the
+    padding is never silently ignored. On by default;
     `COSYVOICE2_FLOW_SDPA=0` turns it off. Read at construction time."""
     return os.environ.get("COSYVOICE2_FLOW_SDPA", "1") == "1"
 
@@ -1078,20 +1078,19 @@ class TtCausalConditionalCFM:
         conditioning tensors (mu/spks/cond/mask) are uploaded once, CFG-doubled, and
         reused every Euler step; only x and t change per step.
 
-        A partial (padded) mask is refused in exactly one case: non-streaming with fused SDPA on.
-        That is the only combination whose attention never sees the mask (`attn_mask=None`, see
-        `flow_fused_sdpa`). Streaming always hands the full padding + chunk-causal bias to whichever
-        attention path is active, and the non-streaming explicit chain adds the padding row, so both
-        honor a partial mask.
+        A partial (padded) mask is honored in every mode. Streaming hands the full padding + chunk-causal bias to
+        whichever attention path is active. Non-streaming with a partial mask (bucketing) does the same with an
+        all-zero chunk term, which is upstream's non-streaming key-padding mask. The traced solve refuses a
+        partial non-streaming mask (`NotImplementedError`); the pipeline runs the CFM eager.
         """
-        if flow_fused_sdpa() and not streaming and not bool((mask_t != 0).all()):
-            raise ValueError(
-                "Non-streaming fused flow SDPA (COSYVOICE2_FLOW_SDPA, on by default) runs attention without a mask, "
-                "so a padded/partial mask would be silently ignored. Use streaming=True (masked SDPA) or "
-                "COSYVOICE2_FLOW_SDPA=0 for padded inputs."
-            )
+        # Non-streaming with a partial mask (bucketing: padded frames after the valid ones) runs the masked
+        # attention path with an all-zero chunk term: every valid query attends to every valid key and to no padded
+        # one, which is upstream's non-streaming `add_optional_chunk_mask` (the key-padding mask alone).
+        padded = not streaming and not bool((mask_t != 0).all())
         if use_trace is None:
             use_trace = self.use_trace
+        if padded and use_trace:
+            raise NotImplementedError("the traced CFM solve does not take a padded non-streaming mask; use_trace=False")
         t_len = mu_t.shape[1]
         z = self.rand_noise[:, :t_len, :].to(mu_t.dtype)
         t_span = torch.linspace(0, 1, n_timesteps + 1, dtype=mu_t.dtype)
@@ -1133,16 +1132,30 @@ class TtCausalConditionalCFM:
 
         if use_trace:
             return self._forward_traced(mu_dev, spks_dev, cond_dev, mask_dev, z, t_span, t_len, streaming)
-        result = self._solve_eager(mu_dev, spks_dev, cond_dev, mask_dev, z, t_span, t_len, streaming)
+        result = self._solve_eager(mu_dev, spks_dev, cond_dev, mask_dev, z, t_span, t_len, streaming, padded=padded)
         for t in (mu_dev, spks_dev, cond_dev, mask_dev):
             ttnn.deallocate(t)
         return result
 
-    def _solve_eager(self, mu_dev, spks_dev, cond_dev, mask_dev, z, t_span, t_len: int, streaming: bool):
+    def _solve_eager(
+        self, mu_dev, spks_dev, cond_dev, mask_dev, z, t_span, t_len: int, streaming: bool, padded: bool = False
+    ):
         """The untraced Euler loop (host CFG blend + update) on already-uploaded conditioning. Used by
         `use_trace=False` and as the traced path's fallback. The streaming chunk-causal term is uploaded
-        once per solve, not once per step."""
-        chunk_bias = self.estimator.chunk_bias_device(t_len) if streaming else None
+        once per solve, not once per step. `padded` (non-streaming, bucketed) takes the masked attention path
+        with an all-zero chunk term, so only the key-padding term masks anything."""
+        if streaming:
+            chunk_bias = self.estimator.chunk_bias_device(t_len)
+        elif padded:
+            chunk_bias = ttnn.zeros(
+                (1, 1, t_len, t_len),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            chunk_bias = None
         t = t_span[0].unsqueeze(0)
         dt = t_span[1] - t_span[0]
         x = z

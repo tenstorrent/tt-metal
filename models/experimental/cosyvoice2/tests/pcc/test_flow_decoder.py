@@ -469,11 +469,11 @@ def test_streaming_reference_is_chunk_causal():
     assert torch.allclose(out[:, :50], base[:, :50], atol=1e-6, rtol=0)
 
 
-def test_cfm_partial_mask_guard(expect_error):
-    """The one combination that must refuse a partial mask is non-streaming + fused SDPA: its
-    attention runs with `attn_mask=None`. Streaming hands SDPA the full padding + chunk-causal bias,
-    and the explicit chain adds the padding row, so neither is refused. Host-only: the guard runs
-    before anything touches a device; getting past it is detected at the first upload."""
+def test_cfm_partial_mask_is_honored_not_refused(expect_error):
+    """A partial (bucket-padded) mask goes through in every eager mode. Streaming hands SDPA the full padding +
+    chunk-causal bias; non-streaming now does the same with an all-zero chunk term (bucketing), where it used to
+    refuse. Only the traced solve refuses a partial non-streaming mask. Host-only: nothing touches a device, and
+    getting past the checks is detected at the first upload."""
     import os
     from unittest import mock
 
@@ -491,13 +491,13 @@ def test_cfm_partial_mask_guard(expect_error):
     tt_cfm = TtCausalConditionalCFM(None, None, torch.zeros(1, 64, 80), cfm_ref, use_trace=False)
     mu, cond, spks, mask = _streaming_inputs(64, 40, seed=0)
     with mock.patch.object(decoder_mod.ttnn, "from_torch", upload):
-        with mock.patch.dict(os.environ, {"COSYVOICE2_FLOW_SDPA": "1"}):
-            with expect_error(ValueError, "silently ignored"):
-                tt_cfm.forward(mu, mask, 2, spks, cond, streaming=False)
-        for env, streaming in (("1", True), ("0", False)):
-            with mock.patch.dict(os.environ, {"COSYVOICE2_FLOW_SDPA": env}):
-                with expect_error(PastGuard, "past the guard"):
-                    tt_cfm.forward(mu, mask, 2, spks, cond, streaming=streaming)
+        for env in ("1", "0"):
+            for streaming in (True, False):
+                with mock.patch.dict(os.environ, {"COSYVOICE2_FLOW_SDPA": env}):
+                    with expect_error(PastGuard, "past the guard"):
+                        tt_cfm.forward(mu, mask, 2, spks, cond, streaming=streaming)
+        with expect_error(NotImplementedError, "traced CFM solve"):
+            tt_cfm.forward(mu, mask, 2, spks, cond, streaming=False, use_trace=True)
 
 
 @needs_l1_small

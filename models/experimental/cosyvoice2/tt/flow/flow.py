@@ -235,15 +235,33 @@ class TtCausalMaskedDiffWithXvec:
         return ttnn.to_torch(spks).float().reshape(1, -1)
 
     def inference(
-        self, token: torch.Tensor, prompt_token: torch.Tensor, prompt_feat: torch.Tensor, embedding: torch.Tensor
+        self,
+        token: torch.Tensor,
+        prompt_token: torch.Tensor,
+        prompt_feat: torch.Tensor,
+        embedding: torch.Tensor,
+        bucket_tokens: int | None = None,
     ):
         """Same signature/semantics as `CausalMaskedDiffWithXvecRef.inference` --
         see its docstring. All host-facing args/return are torch tensors; device
-        tensors stay internal."""
+        tensors stay internal.
+
+        `bucket_tokens` (>= prompt + generated tokens): run at that fixed geometry instead of the exact length,
+        so every utterance whose length falls in the bucket meets the same, already-warmed shapes. The token
+        sequence is padded at the end. The encoder masks the padding (zeroed after its embed, as upstream's own
+        zero pad; key-padding bias in both attention stacks), and so does the CFM (a partial mask: padding-only
+        attention bias, and the causal convs never read ahead). The output is the valid frames only, the same
+        shape as the exact-length call's.
+        """
         assert token.shape[0] == 1
         spks = self._xvec(embedding)
 
         full_token = torch.cat([prompt_token, token], dim=1)
+        n_valid = full_token.shape[1]
+        if bucket_tokens is not None:
+            if bucket_tokens < n_valid:
+                raise ValueError(f"bucket_tokens {bucket_tokens} < {n_valid} tokens")
+            full_token = torch.nn.functional.pad(full_token, (0, bucket_tokens - n_valid))
         ids_dev = ttnn.from_torch(
             full_token.reshape(1, 1, 1, -1).clamp(min=0).to(torch.int32),
             dtype=ttnn.uint32,
@@ -252,18 +270,20 @@ class TtCausalMaskedDiffWithXvec:
         )
         tok_emb_dev = self.input_embedding(ids_dev)
 
-        h_dev = self.encoder(tok_emb_dev, full_token.shape[1], 1)
+        h_dev = self.encoder(tok_emb_dev, full_token.shape[1], 1, valid_length=n_valid)
         t_len2 = h_dev.shape[1]
-        mel_len1, mel_len2 = prompt_feat.shape[1], t_len2 - prompt_feat.shape[1]
+        valid2 = n_valid * t_len2 // full_token.shape[1]  # the encoder upsamples x2; its valid rows come first
+        mel_len1, mel_len2 = prompt_feat.shape[1], valid2 - prompt_feat.shape[1]
         h_dev = ttnn.linear(h_dev, self.encoder_proj_w, bias=self.encoder_proj_b)
         mu = ttnn.to_torch(h_dev).float().reshape(1, t_len2, self.output_size)
 
-        conds = torch.zeros(1, mel_len1 + mel_len2, self.output_size, dtype=mu.dtype)
+        conds = torch.zeros(1, t_len2, self.output_size, dtype=mu.dtype)
         conds[:, :mel_len1] = prompt_feat
-        mask = torch.ones(1, mel_len1 + mel_len2, 1, dtype=mu.dtype)
+        mask = torch.zeros(1, t_len2, 1, dtype=mu.dtype)
+        mask[:, :valid2] = 1.0
 
         feat = self.decoder.forward(mu, mask, N_TIMESTEPS, spks, conds)
-        feat = feat[:, mel_len1:, :]
+        feat = feat[:, mel_len1:valid2, :]
         assert feat.shape[1] == mel_len2
         return feat
 

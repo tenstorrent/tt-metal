@@ -198,3 +198,51 @@ def test_device_streaming_encoder_final_chunk_real_checkpoint(device, monkeypatc
     assert ok(vs_ref), vs_ref
     assert ok(vs_exact), vs_exact
     assert not ok(control), f"negative control passed the gate: {control}"
+
+
+# Non-streaming bucketing (tt/flow/flow.py `bucket_tokens`), real weights, bucketed vs exact-length over the valid
+# frames. Measured 2026-09-27:
+# - a real corpus prompt (175 tokens): max |diff| 0.150 / 0.177, PCC 0.99985 / 0.99981 at 69 / 64 padded positions,
+#   and 0.0 at 5;
+# - this test's synthetic inputs: max |diff| 0.254 / 0.229, PCC 0.999696 / 0.999665.
+# The naive control (the padding run as content, no masks): max |diff| 2.4-3.9, PCC 0.955-0.983. The gate sits
+# between, with at least 1.6x headroom on the bucketed side and 6x on the control's.
+BUCKETED_MAX_ABS, BUCKETED_PCC = 0.4, 0.9995
+
+
+@needs_l1_small
+@pytest.mark.parametrize("n_prompt, n_gen, bucket", [(96, 60, 192), (160, 150, 384)])
+def test_device_nonstreaming_bucketed_flow_matches_exact_real_checkpoint(device, n_prompt, n_gen, bucket):
+    """`inference(..., bucket_tokens=B)` against the exact-length call, real `flow.pt`, bf16 (the pipeline's), over
+    the valid frames. The negative control runs the same padded tokens with no masks at all (the padding treated as
+    content) and must fail the same gate: the masks are what make bucketing exact enough."""
+    import ttnn
+    from models.experimental.cosyvoice2.tt.checkpoint import load_checkpoint_file
+    from models.experimental.cosyvoice2.tt.flow.flow import CausalMaskedDiffWithXvecRef, TtCausalMaskedDiffWithXvec
+
+    ref = CausalMaskedDiffWithXvecRef.from_checkpoint(load_checkpoint_file("flow.pt"))
+    ref.eval()
+    g = torch.Generator().manual_seed(n_prompt + n_gen)
+    prompt_token = torch.randint(0, 6561, (1, n_prompt), generator=g)
+    token = torch.randint(0, 6561, (1, n_gen), generator=g)
+    # a speech-like log-mel prompt: around -6, floored at CosyVoice2's log(1e-5)
+    prompt_feat = (torch.randn(1, 2 * n_prompt, 80, generator=g) * 2.0 - 6.0).clamp(min=-11.5129)
+    embedding = torch.randn(1, 192, generator=g)
+
+    flow = TtCausalMaskedDiffWithXvec(device, ref, dtype=ttnn.bfloat16)
+    exact = flow.inference(token, prompt_token, prompt_feat, embedding)
+    bucketed = flow.inference(token, prompt_token, prompt_feat, embedding, bucket_tokens=bucket)
+    padded = torch.nn.functional.pad(token, (0, bucket - n_prompt - n_gen))
+    naive = flow.inference(padded, prompt_token, prompt_feat, embedding)[:, : 2 * n_gen]
+
+    assert bucketed.shape == exact.shape == (1, 2 * n_gen, 80)
+    got = {}
+    for name, out in (("bucketed", bucketed), ("naive control", naive)):
+        max_abs = (out - exact).abs().max().item()
+        pcc = float(comp_pcc(exact, out, BUCKETED_PCC)[1])
+        got[name] = (max_abs <= BUCKETED_MAX_ABS and pcc >= BUCKETED_PCC, max_abs, pcc)
+        print(
+            f"\n  {n_prompt}+{n_gen} tokens in a {bucket} bucket, {name} vs exact: max|diff| {max_abs:.4f}, PCC {pcc:.6f}"
+        )
+    assert got["bucketed"][0], got["bucketed"]
+    assert not got["naive control"][0], f"negative control passed the gate: {got['naive control']}"
