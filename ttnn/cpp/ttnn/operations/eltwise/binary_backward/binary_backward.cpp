@@ -322,15 +322,83 @@ std::vector<std::optional<Tensor>> sub_bw(
 }
 
 std::vector<std::optional<Tensor>> sub_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& input_grad,
-    const std::optional<Tensor>& other_grad) {
-    return ttnn::subalpha_bw(
-        grad_tensor, input_a, other, 1.0f, are_required_outputs, output_mem_config, input_grad, other_grad);
+    const std::optional<Tensor>& input_grad_in,
+    const std::optional<Tensor>& other_grad_in) {
+    std::optional<Tensor> input_grad = input_grad_in;
+    std::optional<Tensor> other_grad = other_grad_in;
+    const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
+        operations::binary_backward::BinaryBackwardOpType::SUB_BW,
+        grad_tensor_arg,
+        input_tensor_arg,
+        other_tensor_arg,
+        input_grad,
+        other_grad);
+    TT_FATAL(!hard.has_value(), "{}", hard.value_or(std::string{}));
+    const auto soft = operations::binary_backward::BinaryBackwardDeviceOperation::soft_fallback_reason(
+        operations::binary_backward::BinaryBackwardOpType::SUB_BW,
+        grad_tensor_arg,
+        input_tensor_arg,
+        other_tensor_arg,
+        output_mem_config,
+        {are_required_outputs.at(0), are_required_outputs.at(1)},
+        input_grad,
+        other_grad);
+    if (!soft.has_value()) {
+        auto outs = operations::binary_backward::launch_binary_backward(
+            operations::binary_backward::BinaryBackwardOpType::SUB_BW,
+            grad_tensor_arg,
+            input_tensor_arg,
+            other_tensor_arg,
+            tt::tt_metal::DataType::INVALID,
+            output_mem_config.value_or(input_tensor_arg.memory_config()),
+            {true, true},
+            input_grad,
+            other_grad);
+        return {outs[0], outs[1]};
+    }
+
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad,
+        other_grad,
+        input_tensor_arg,
+        other_tensor_arg,
+        {are_required_outputs[0], are_required_outputs[1]},
+        output_mem_config);
+
+    // d(a-b)/da = grad, d(a-b)/db = -grad. Broadcast reduce writes grads at operand shape.
+    const auto input_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        input_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
+    const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        other_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
+
+    if (are_required_outputs.at(0)) {
+        if (input_needs_reduce) {
+            Tensor grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                grad_tensor_arg, input_tensor_arg.logical_shape(), output_mem_config);
+            ttnn::assign(grad_a, input_grad.value());
+        } else {
+            ttnn::assign(grad_tensor_arg, input_grad.value());
+        }
+        result[0] = input_grad;
+    }
+    if (are_required_outputs.at(1)) {
+        if (other_needs_reduce) {
+            Tensor grad_b = ttnn::neg(grad_tensor_arg, output_mem_config);
+            grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                grad_b, other_tensor_arg.logical_shape(), output_mem_config);
+            ttnn::assign(grad_b, other_grad.value());
+        } else {
+            ttnn::neg(grad_tensor_arg, output_mem_config, other_grad);
+        }
+        result[1] = other_grad;
+    }
+    return result;
 }
 
 std::vector<ComplexTensor> sub_bw(
