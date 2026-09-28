@@ -18,6 +18,13 @@ Public surface:
                                                 (cached in .refcache.pt)
 - ``create_icl_embedding_ttnn(...)``         – build ICL embedding for prefill
 - ``decode_audio(codes, decoder_weights)``   – Mimi decode → 24 kHz waveform
+- ``decode_icl_audio(ref_codes, codes, decoder_weights, ref_state=None)``
+                                              – ICL decode: ref as decoder context,
+                                                reference audio cut off (use this
+                                                for run_inference output)
+- ``prepare_icl_decoder_state(ref_codes, decoder_weights)``
+                                              – per-voice decoder state; pass as
+                                                ref_state to skip re-decoding the ref
 - ``load_weights()``                         – HF download (main + speech_tokenizer)
 - ``allocate_kv_cache(...)``, ``deallocate_kv_cache(...)``
 
@@ -137,11 +144,12 @@ class TTSConfig:
     greedy: bool = False
     repetition_penalty: float = 1.0  # >1.0 discourages repetition (e.g., 1.1-1.3)
 
-    # Post-processing: trim reference echo from start of generated audio.
-    # ICL TTS models briefly reproduce the reference speaker's last word
-    # before transitioning to the target text. Trim those leading codec frames.
-    # Default 4 frames = 0.32s at 12.5fps. Set to 0 to disable.
-    trim_codec_frames: int = 4
+    # Deprecated: codec frames to drop from the start of generated codes.
+    # Not read anywhere in this package. Reference-echo suppression is done by
+    # decoding cat([ref_codes, codes]) and cutting ref_len/total_len of the
+    # waveform (HF qwen3_tts_model.py; see demo_pure_reference_tts.py). A fixed
+    # frame trim on top of that deletes the first 0.08s/frame of target speech.
+    trim_codec_frames: int = 0
 
     # Model dims
     hidden_size: int = 2048
@@ -2702,7 +2710,7 @@ def run_inference(
     avg_talker = sum(talker_times_ms) / len(talker_times_ms) if talker_times_ms else 0
     avg_cp = sum(cp_times_ms) / len(cp_times_ms) if cp_times_ms else 0
     inference_ms = prefill_ms + decode_ms
-    audio_duration = num_frames / 12.0
+    audio_duration = num_frames / 12.5  # 1920 samples/frame at 24 kHz
 
     lines = [
         f"{'Phase':<35} {'Time (ms)':>10}",
@@ -2745,3 +2753,54 @@ def decode_audio(codes: torch.Tensor, decoder_weights: dict) -> torch.Tensor:
     print(f"  Audio duration: {audio.shape[-1] / 24000:.2f}s")
 
     return audio
+
+
+def prepare_icl_decoder_state(ref_codes: torch.Tensor, decoder_weights: dict) -> dict:
+    """Decoder state after the reference codes, for ``decode_icl_audio(..., ref_state=...)``.
+
+    Depends only on the reference, so compute it once per voice and reuse it for every request.
+    """
+    from models.demos.qwen3_tts.reference.functional import (
+        SpeechTokenizerDecoderConfig,
+        speech_tokenizer_decoder_prefill,
+    )
+
+    with torch.no_grad():
+        return speech_tokenizer_decoder_prefill(
+            ref_codes.clamp(max=2047).T.unsqueeze(0), decoder_weights, SpeechTokenizerDecoderConfig()
+        )
+
+
+def decode_icl_audio(
+    ref_codes: torch.Tensor, codes: torch.Tensor, decoder_weights: dict, ref_state: Optional[dict] = None
+) -> torch.Tensor:
+    """Decode ICL-generated codes to audio, matching HF Qwen3-TTS ``generate_voice_clone``.
+
+    The generated codes continue the reference codes, so the decoder needs the
+    reference as left context. HF decodes ``cat([ref_codes, codes])`` and cuts the
+    reference's share of the waveform; that cut is also what removes reference echo.
+    Do not additionally trim leading codec frames, which deletes the start of the
+    target speech (0.08s per frame).
+
+    The decoder is causal, so this computes the same audio without decoding the
+    reference to a waveform: the reference only runs through the decoder front-end
+    (``prepare_icl_decoder_state``), and only the generated frames are decoded.
+
+    Args:
+        ref_codes: [ref_len, 16] reference codes (as passed to create_icl_embedding_ttnn)
+        codes: [num_frames, 16] generated codes from run_inference
+        ref_state: optional ``prepare_icl_decoder_state(ref_codes, ...)`` result to reuse
+    Returns:
+        Waveform tensor [1, 1, num_frames * 1920] of the generated speech only.
+    """
+    from models.demos.qwen3_tts.reference.functional import (
+        SpeechTokenizerDecoderConfig,
+        speech_tokenizer_decoder_continue,
+    )
+
+    if ref_state is None:
+        ref_state = prepare_icl_decoder_state(ref_codes, decoder_weights)
+    with torch.no_grad():
+        return speech_tokenizer_decoder_continue(
+            ref_state, codes.clamp(max=2047).T.unsqueeze(0), decoder_weights, SpeechTokenizerDecoderConfig()
+        )

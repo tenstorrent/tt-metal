@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""
+ICL post-processing gate for qwen3_tts (host only, no device).
+
+Generated codes must come back as exactly ``num_frames * 1920`` samples of
+target speech: nothing trimmed from the head, and decoded with the reference
+codes as decoder context (HF ``generate_voice_clone``).
+
+Run:
+    pytest -s -v models/demos/qwen3_tts/tests/test_qwen3_tts_icl_decode.py
+"""
+
+from pathlib import Path
+
+import pytest
+import torch
+
+from models.demos.qwen3_tts.tt.server import TTSConfig, decode_audio, decode_icl_audio, prepare_icl_decoder_state
+
+SAMPLES_PER_FRAME = 1920  # 24 kHz / 12.5 fps
+REF_CACHE = Path(__file__).resolve().parents[1] / "demo" / "jim_reference.refcache.pt"
+
+
+@pytest.fixture(scope="module")
+def decoder_weights():
+    from huggingface_hub import hf_hub_download
+    from safetensors.torch import load_file
+
+    sd = load_file(hf_hub_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", "speech_tokenizer/model.safetensors"))
+    return {k[8:]: v.float() for k, v in sd.items() if k.startswith("decoder.")}
+
+
+def test_no_default_codec_frame_trim():
+    assert TTSConfig().trim_codec_frames == 0
+
+
+@pytest.mark.parametrize("split", [15, 35])
+def test_decode_icl_audio_keeps_every_generated_frame(decoder_weights, split):
+    # Real speech codes stand in for (reference, generated continuation).
+    codes_all = torch.load(REF_CACHE, weights_only=True)["ref_codes"].long()
+    ref_codes, gen_codes = codes_all[:split], codes_all[split:]
+
+    audio = decode_icl_audio(ref_codes, gen_codes, decoder_weights).squeeze()
+    assert audio.shape[-1] == gen_codes.shape[0] * SAMPLES_PER_FRAME
+
+    # Must equal the generated span of one full-context decode.
+    expected = decode_audio(codes_all, decoder_weights).squeeze()[split * SAMPLES_PER_FRAME :]
+    torch.testing.assert_close(audio, expected, atol=1e-4, rtol=0)
+
+
+def test_decoder_is_causal_past_sliding_window(decoder_weights):
+    # The official decoder is causal (causal convs + sliding-window causal attention),
+    # so a prefix decodes identically whatever follows it, including once the total
+    # length exceeds the 72-frame attention window.
+    codes = torch.load(REF_CACHE, weights_only=True)["ref_codes"].long()
+    prefix = codes[:40]
+    joint = torch.cat([codes, codes])  # 102 frames > sliding_window
+    alone = decode_audio(prefix, decoder_weights).squeeze()
+    within = decode_audio(joint, decoder_weights).squeeze()[: alone.shape[-1]]
+    torch.testing.assert_close(alone, within, atol=1e-4, rtol=0)
+
+
+def test_cached_reference_state_is_reusable(decoder_weights):
+    # One precomputed reference state serves many continuations, each matching a full decode.
+    codes_all = torch.load(REF_CACHE, weights_only=True)["ref_codes"].long()
+    ref_codes = codes_all[:30]
+    state = prepare_icl_decoder_state(ref_codes, decoder_weights)
+    for gen_codes in (codes_all[30:], codes_all[:21], torch.cat([codes_all, codes_all])):
+        audio = decode_icl_audio(ref_codes, gen_codes, decoder_weights, ref_state=state).squeeze()
+        full = decode_audio(torch.cat([ref_codes, gen_codes]), decoder_weights).squeeze()
+        torch.testing.assert_close(audio, full[ref_codes.shape[0] * SAMPLES_PER_FRAME :], atol=1e-4, rtol=0)

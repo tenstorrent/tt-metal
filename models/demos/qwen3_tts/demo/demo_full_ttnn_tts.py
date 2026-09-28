@@ -76,7 +76,7 @@ def run_full_ttnn_tts(
     use_2cq: bool = False,
     seed: Optional[int] = None,
     ref_cache: str = None,
-    trim_frames: int = 4,
+    trim_frames: int = 0,
     load_cpu_inputs: str = None,
     hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
 ):
@@ -413,8 +413,8 @@ def main():
     parser.add_argument(
         "--trim-frames",
         type=int,
-        default=4,
-        help="Codec frames to trim from start (removes reference echo, default: 4)",
+        default=0,
+        help="Deprecated, no effect: reference echo is removed by the HF-style ref cut after decode (default: 0)",
     )
     parser.add_argument("--no-kv-cache", action="store_true", help="Disable KV cache (slower)")
     parser.add_argument("--no-trace", action="store_true", help="Disable trace (use non-traced KV cache decode)")
