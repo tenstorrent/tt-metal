@@ -137,6 +137,22 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationInvalidates
     EXPECT_THROW(view.device_storage().get_mesh_buffer(), std::exception);
 }
 
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewOwnerDeallocationReclaimsMemory) {
+    constexpr uint32_t viewOffset = 4096;
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    const uint32_t ownerAddress = owner.buffer()->address();
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, viewOffset);
+
+    owner.deallocate(/*force=*/true);
+
+    EXPECT_FALSE(view.is_allocated());
+    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), ownerAddress)
+        << "explicit owner deallocation must release the allocation while views of it still exist";
+}
+
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationReleasesRetainedOwner) {
     constexpr uint32_t viewOffset = 4096;
     const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
@@ -199,6 +215,7 @@ TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewInvalidatedByIntermedi
 
 TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewInvalidatedByOwnerDeallocation) {
     Tensor owner = ttnn::create_device_tensor(make_nested_owner_spec(), mesh_device_.get());
+    const uint32_t owner_address = owner.buffer()->address();
     Tensor outer = ttnn::experimental::create_sharded_tensor_view(owner, make_nested_outer_spec(), kOuterViewOffset);
     Tensor inner = ttnn::experimental::create_sharded_tensor_view(outer, make_nested_inner_spec(), kInnerViewOffset);
 
@@ -207,6 +224,9 @@ TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewInvalidatedByOwnerDeal
     EXPECT_FALSE(outer.is_allocated());
     EXPECT_FALSE(inner.is_allocated());
     EXPECT_THROW(inner.device_storage().get_mesh_buffer(), std::exception);
+    Tensor replacement = ttnn::create_device_tensor(make_nested_owner_spec(), mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), owner_address)
+        << "explicit owner deallocation must release the allocation while nested views of it still exist";
 }
 
 TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewDeallocationPreservesSources) {

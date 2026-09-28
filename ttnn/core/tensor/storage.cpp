@@ -13,6 +13,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
+#include "tt_metal/impl/tensor/mesh_tensor_impl.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
@@ -109,6 +110,15 @@ struct DeviceStorage::MeshTensorHolder {
                 allocated->mesh_tensor_.tensor_spec(), tt::tt_metal::get_tensor_topology(allocated->mesh_tensor_)};
         }
         retained_owner_.reset();
+    }
+
+    // Retained views share this holder's MeshBuffer, so dropping the MeshTensor alone would keep the memory
+    // reserved until every view is destroyed. Only the holder that owns the allocation may call this.
+    void deallocate_device_memory() {
+        if (auto* allocated = std::get_if<Allocated>(&state_)) {
+            allocated->mesh_tensor_.impl().raw_mesh_buffer()->deallocate();
+        }
+        deallocate();
     }
 };
 
@@ -245,7 +255,7 @@ void DeviceStorage::deallocate() {
     }
 
     if (!mesh_tensor_holder_->is_retained_view()) {
-        get_root_mesh_tensor()->deallocate();
+        get_root_mesh_tensor()->deallocate_device_memory();
     }
     mesh_tensor_holder_->deallocate();
 }
