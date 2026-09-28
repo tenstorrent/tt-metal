@@ -103,6 +103,15 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
+    // loop; as literals inside the loop they would be re-materialised on every row (G09-P4).
+    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
+    sfpi::vFloat log_c;
+    sfpi::vFloat log_d;
+    if constexpr (BINOP == BinaryOp::XLOGY) {
+        log_c = LogPoly::C;
+        log_d = LogPoly::D;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -127,7 +136,7 @@ inline void calculate_sfpu_binary(
             v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                _calculate_log_body_<false>(0, dst_index_out);
+                _calculate_log_body_(log_c, log_d, dst_index_out);
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
