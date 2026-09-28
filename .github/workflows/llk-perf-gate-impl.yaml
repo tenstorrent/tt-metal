@@ -403,6 +403,10 @@ jobs:
             ${{ inputs.speed_of_light == 'true'
                 && 'speed of light' || 'non speed-of-light' }}
           GATE_NAME: ${{ inputs.gate_name }}
+          TRIGGER: >-
+            ${{ github.event_name == 'schedule' && 'nightly'
+                || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
+                || github.event_name }}
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -463,6 +467,7 @@ jobs:
             --commit "$COMMIT_SHA" \
             --mode "$MODE" \
             --gate-name "$GATE_NAME" \
+            --trigger "$TRIGGER" \
             --note "$NOTE" \
             --out slack_payload.json && exit 0
 

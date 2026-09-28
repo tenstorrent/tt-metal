@@ -237,3 +237,11 @@ def test_the_merge_gate_names_itself_and_carries_the_note():
 def test_no_note_adds_no_line():
     text = build_text("clean", [], _CTX)
     assert "*LLK perf gate passed*" in text and ":hourglass:" not in text
+
+
+def test_a_run_without_a_pr_names_what_started_it():
+    ctx = {**_CTX, "pr_number": "", "trigger": "manual run on some/branch"}
+    assert (
+        "(manual run on some/branch)" in build_text("skipped", [], ctx).splitlines()[0]
+    )
+    assert "(nightly)" in build_text("skipped", [], {**_CTX, "pr_number": ""})

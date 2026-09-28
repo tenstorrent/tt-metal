@@ -178,7 +178,7 @@ def _subject(ctx):
         if b
     ]
     return (
-        "(nightly)",
+        f"({_escape(ctx.get('trigger') or 'nightly')})",
         " · ".join(bits) or "scheduled run",
         ctx.get("run_types") or "?",
     )
@@ -272,6 +272,9 @@ def main(argv=None):
     ap.add_argument("--commit", default="")
     ap.add_argument("--mode", default="")
     ap.add_argument("--gate-name", default="LLK perf gate")
+    ap.add_argument(
+        "--trigger", default="nightly", help="what started a run with no PR"
+    )
     ap.add_argument("--note", default="", help="one extra line, e.g. a stale baseline")
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
@@ -306,6 +309,7 @@ def main(argv=None):
         "baseline_sha": a.baseline_sha,
         "reason": reason,
         "gate_name": a.gate_name,
+        "trigger": a.trigger,
         "note": a.note,
     }
     text = build_text(status, rows, ctx)
