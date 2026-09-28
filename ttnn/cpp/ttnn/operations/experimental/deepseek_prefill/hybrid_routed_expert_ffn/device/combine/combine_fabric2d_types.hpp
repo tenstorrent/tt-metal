@@ -28,9 +28,6 @@ struct CombineFabric2dParams {
     // The routed expert's hybrid_token_threshold. Experts are walked in the order the routed expert
     // finishes them -- count > threshold first, then the rest -- and it MUST be the value that op used.
     uint32_t hybrid_token_threshold = 0;
-    // Overlapped with the routed expert in one program: before reading an expert's rows, wait until the
-    // routed expert reports it written. Off when the op runs alone, where the rows are there at launch.
-    bool wait_for_routed_expert = false;
     // How many routed-expert writer cores report to the collector, each once per expert slot per pass.
     uint32_t routed_expert_writers = 0;
     // The routed expert's cores, one rectangle, and the global semaphore on them the collector sets once it
