@@ -1058,46 +1058,50 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const auto input_address = input.buffer()->address();
     const auto intermediate_address = intermed.buffer()->address();
     const auto output_address = output.buffer()->address();
+    const auto penult_address = penult_intermediate.has_value() ? penult_intermediate->buffer()->address() : 0;
+    const auto barrier_address = barrier_semaphore.has_value() ? barrier_semaphore->address() : 0;
+    const auto ack_semaphore_address = semaphore.at(num_directions_per_link).address();
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            const auto semaphore_address = semaphore.at(dir).address();
+            const auto opposite_semaphore_address = normalized_dim == 0 ? 0 : semaphore.at(!dir).address();
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
 
                 // sender reader
-                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
+                auto* worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y].data();
                 if (normalized_dim == 0) {
                     worker_reader_sender_runtime_args[0] = input_address;
                     worker_reader_sender_runtime_args[1] = intermediate_address;
-                    worker_reader_sender_runtime_args[2] = semaphore.at(dir).address();
+                    worker_reader_sender_runtime_args[2] = semaphore_address;
                 } else {
                     worker_reader_sender_runtime_args[0] = input_address;
                     worker_reader_sender_runtime_args[1] = intermediate_address;
                     worker_reader_sender_runtime_args[2] = output_address;
-                    worker_reader_sender_runtime_args[3] = semaphore.at(dir).address();
-                    worker_reader_sender_runtime_args[4] = semaphore.at(!dir).address();
+                    worker_reader_sender_runtime_args[3] = semaphore_address;
+                    worker_reader_sender_runtime_args[4] = opposite_semaphore_address;
                     if (penult_intermediate.has_value()) {
                         // Contiguous staging layout only, and it must be patched: the penult intermediate is
                         // an op output now, so it is reallocated on every invocation and its address is
                         // not stable across program-cache hits. The builder checks the list against this
                         // index; the fused-op args are appended after it, so the position is fixed.
                         worker_reader_sender_runtime_args
-                            [operations::experimental::ccl::detail::RING_READER_PENULT_ADDR_ARG_IDX] =
-                                penult_intermediate->buffer()->address();
+                            [operations::experimental::ccl::detail::RING_READER_PENULT_ADDR_ARG_IDX] = penult_address;
                     }
                 }
                 // sender writer
-                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
+                auto* worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y].data();
                 // Both layouts now carry the opposite-direction core coords at indices 4/5, so the
                 // dim-0 and non-dim-0 writer arg lists agree up to index 15.
                 worker_writer_sender_runtime_args[0] = intermediate_address;
                 worker_writer_sender_runtime_args[1] = output_address;
-                worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
-                worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
+                worker_writer_sender_runtime_args[6] = semaphore_address;
+                worker_writer_sender_runtime_args[7] = ack_semaphore_address;
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[9] = barrier_address;
                 }
                 if (penult_intermediate.has_value()) {
                     // The builder checks the writer list against this index; the mux/fabric connection
@@ -1105,8 +1109,7 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                     // this arg, and penult_intermediate is only set there (reduce_scatter_use_contiguous_interm
                     // returns false for scatter dim 0).
                     worker_writer_sender_runtime_args
-                        [operations::experimental::ccl::detail::RING_WRITER_PENULT_ADDR_ARG_IDX] =
-                            penult_intermediate->buffer()->address();
+                        [operations::experimental::ccl::detail::RING_WRITER_PENULT_ADDR_ARG_IDX] = penult_address;
                 }
             }
         }

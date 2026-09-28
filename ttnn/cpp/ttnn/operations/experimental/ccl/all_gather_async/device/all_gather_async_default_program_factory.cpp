@@ -840,31 +840,32 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
     const Tensor& input,
     const Tensor& output) {
     // Update runtime arguments for all worker cores
+    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    const auto input_address = input.buffer()->address();
+    const auto output_address = output.buffer()->address();
+    const auto barrier_address = barrier_semaphore.has_value() ? barrier_semaphore->address() : 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            const auto semaphore_address = semaphore.at(dir).address();
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 tt::tt_metal::CoreCoord core =
                     all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-
-                const auto& out_ready_semaphore = semaphore.at(dir);
-
                 // sender reader
-                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
+                auto* worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y].data();
+                worker_reader_sender_runtime_args[0] = input_address;
+                worker_reader_sender_runtime_args[1] = output_address;
+                worker_reader_sender_runtime_args[2] = semaphore_address;
 
                 // sender writer
-                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
+                auto* worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y].data();
+                worker_writer_sender_runtime_args[0] = output_address;
+                worker_writer_sender_runtime_args[3] = semaphore_address;
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[5] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[5] = barrier_address;
                 }
             }
         }

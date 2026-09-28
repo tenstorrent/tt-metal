@@ -695,7 +695,7 @@ class TtPrefillBlock(LightweightModule):
                 return None, kv_cache, None
             return None, kv_cache
 
-        x = ttnn.add(x, mla_out)
+        x = ttnn.add_(x, mla_out)
         ttnn.deallocate(mla_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
@@ -724,7 +724,7 @@ class TtPrefillBlock(LightweightModule):
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
         ttnn.deallocate(ffn_norm_out)
-        x = ttnn.add(x, ffn_out)
+        x = ttnn.add_(x, ffn_out)
         ttnn.deallocate(ffn_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)

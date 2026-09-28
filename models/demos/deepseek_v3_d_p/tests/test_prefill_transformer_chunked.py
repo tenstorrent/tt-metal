@@ -28,6 +28,7 @@ import json
 import os
 import statistics
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
@@ -462,6 +463,7 @@ def _preload_kvpe_prefix_from_trace(
     host_dtype,
     host_layout,
     tp_shard_kv=False,
+    first_layer_idx=0,
 ):
     """Preload the first `preload_isl` tokens of each layer's prior KV into the block-cyclic device KVPE
     cache, so a chunk measured at KV depth preload_isl attends to REAL prior KV (representative MoE routing)
@@ -494,9 +496,12 @@ def _preload_kvpe_prefix_from_trace(
         cache_host = torch.zeros(num_layers, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
     gen = torch.Generator().manual_seed(1234)  # deterministic random tail
     for i in range(num_layers):
+        global_idx = first_layer_idx + i
         kv_prior = torch.randn(preload_isl, kvpe_dim, generator=gen).to(torch.bfloat16)
         if real_len > 0:
-            real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
+            real = _load_layer_rows(
+                trace_dir, layout, "kv_cache", global_idx, f"kv_post_transform_layer_{global_idx}", 0, real_len
+            )
             real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
         bc = blockcyclic_cache_host(kv_prior, stripes, CHUNK, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
@@ -542,6 +547,7 @@ def _preload_indexer_k_prefix_from_trace(
     mesh_device,
     sp_axis,
     tp_shard_kv=False,
+    first_layer_idx=0,
 ):
     """Preload the first `preload_isl` tokens of the DSA indexer key cache from the golden dsa/indexer_k
     trace, so a measured chunk at KV depth preload_isl has a REAL indexer prefix (representative top-k
@@ -553,11 +559,16 @@ def _preload_indexer_k_prefix_from_trace(
     decode-compatible Hadamard before writing it; no RoPE re-interleave is needed (unlike KVPE's k_pe
     half-split -> interleaved). Rows past the trace are random (timing-representative). Mirrors
     _preload_kvpe_prefix_from_trace otherwise."""
-    full_layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
+    full_layers = [
+        i
+        for i in range(first_layer_idx, first_layer_idx + num_layers)
+        if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()
+    ]
     if not full_layers:
         logger.info(f"no indexer_k golden in trace {trace_dir}; leaving the indexer prefix zero")
         return
-    num_slots = full_indexer_rank(config, num_layers)
+    base_slot = full_indexer_rank(config, first_layer_idx)
+    num_slots = full_indexer_rank(config, first_layer_idx + num_layers) - base_slot
     real_len = min(preload_isl, trace_len)
     rand_len = preload_isl - real_len
     logger.info(
@@ -582,7 +593,7 @@ def _preload_indexer_k_prefix_from_trace(
             real = _load_layer_rows(trace_dir, layout, "dsa", i, f"indexer_k_layer_{i}", 0, real_len)
             idx_prior[:real_len] = real.to(torch.bfloat16)
         idx_prior = (idx_prior.float() @ index_hadamard).to(torch.bfloat16)
-        slot = full_indexer_rank(config, i)
+        slot = full_indexer_rank(config, i) - base_slot
         bc = blockcyclic_cache_host(idx_prior, stripes, CHUNK, seq_len_cache, index_head_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
             cache_host[slot] = _to_tp_stripe_major(bc, sp, tp, local, index_head_dim, seq_len_cache)
@@ -1557,6 +1568,10 @@ def run_chunked_transformer_updated(
     determinism_check=False,
     kv_pcc_threshold=None,
     seq_cache=None,
+    kv_only_last_layer=True,
+    perf_warmup_iters=1,
+    first_layer_idx=0,
+    profile_host_ops=False,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1614,8 +1629,8 @@ def run_chunked_transformer_updated(
         PASS/FAIL). Returns (failures, table_lines): failures are the human-readable out-of-band messages
         (empty if all chunks pass or there is no baseline) so the caller can assert after the table is
         printed; table_lines is the rendered table for the caller to emit as a summary."""
-        # Iteration 0 includes compile/JIT effects; exclude it from perf stats.
-        samples = iteration_chunk_times[1:]
+        # Exclude compilation and any additional warmup iterations requested by microbenchmarks.
+        samples = iteration_chunk_times[perf_warmup_iters:]
         if not samples:
             logger.warning("No post-warmup iterations available for chunk timing stats (need num_iters >= 2)")
             return [], []
@@ -1661,7 +1676,18 @@ def run_chunked_transformer_updated(
             rows.append(row)
 
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
-        logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
+        logger.info(
+            f"chunk timing stats computed over {len(samples)} iterations ({perf_warmup_iters} warmups omitted){margin_note}"
+        )
+        if not kv_only_last_layer:
+            for chunk_idx in range(n_chunks):
+                measured_ms = [row[chunk_idx] * 1000 for row in samples]
+                print(
+                    f"FULL_LAYER_TIMING layer={first_layer_idx} mode={'traced' if use_trace else 'untraced'} "
+                    f"chunk={chunk_idx} warmups={perf_warmup_iters} measured={len(measured_ms)} "
+                    f"median_ms={statistics.median(measured_ms):.3f} min_ms={min(measured_ms):.3f} "
+                    f"max_ms={max(measured_ms):.3f}"
+                )
         return failures, render_table(headers, rows)
 
     profiler.clear()
@@ -1775,6 +1801,8 @@ def run_chunked_transformer_updated(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        first_layer_idx=first_layer_idx,
+        is_first_rank=first_layer_idx == 0,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -1796,12 +1824,11 @@ def run_chunked_transformer_updated(
         weight_cache_path=effective_cache_path,
         is_chunked=True,
         slot_num=1,
-        # Run the last layer kv-only: the populated KV cache is this runner's output, so the last layer's
-        # Q/SDPA/output projection and FFN/MoE are dead work that would otherwise land inside the
-        # measured per-chunk time. Set for BOTH modes, not just use_trace, so traced and untraced
-        # timings measure the same work and stay comparable. (The forward is device-only regardless:
-        # there is no norm / LM-head tail with a host read anymore.)
-        kv_only_last_layer=True,
+        # Production measurements use KV-only for the last layer. A focused diagnostic can disable it
+        # to time one complete layer, including its attention output and FFN.
+        kv_only_last_layer=kv_only_last_layer,
+        first_layer_idx=first_layer_idx,
+        is_first_rank=first_layer_idx == 0,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
 
@@ -1908,7 +1935,8 @@ def run_chunked_transformer_updated(
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
             tp_axis=tp_axis if tp_shard_kv else None,
-            num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
+            num_kvpe_cache_layers=full_indexer_rank(config, first_layer_idx + num_layers)
+            - full_indexer_rank(config, first_layer_idx),
             num_users=1,
             dtype=ttnn.bfloat8_b,
         )
@@ -1935,6 +1963,7 @@ def run_chunked_transformer_updated(
             cache_format.storage_dtype,
             cache_format.storage_layout,
             tp_shard_kv=tp_shard_kv,
+            first_layer_idx=first_layer_idx,
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(
@@ -1951,6 +1980,7 @@ def run_chunked_transformer_updated(
                 mesh_device,
                 sp_axis,
                 tp_shard_kv=tp_shard_kv,
+                first_layer_idx=first_layer_idx,
             )
 
     _seed_preload()
@@ -1958,6 +1988,12 @@ def run_chunked_transformer_updated(
     # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
     # make the block-cyclic rotation degenerate to a plain per-chip reshape.
     chunk_tok_host = []
+    input_is_embedded = first_layer_idx != 0
+    input_dtype = ttnn.bfloat16 if input_is_embedded else ttnn.uint32
+    input_layout = ttnn.TILE_LAYOUT if input_is_embedded else ttnn.ROW_MAJOR_LAYOUT
+    input_mapper = ttnn.ShardTensor2dMesh(
+        mesh_device, mesh_shape=tuple(mesh_shape), dims=(-2, -1) if input_is_embedded else (0, None)
+    )
     # Per-chunk inverse of the block-cyclic rotation, needed only by the per-layer PCC comparison to put
     # a layer's host snapshot back into natural chunk order. Built here alongside `flat` so the
     # permutation has exactly one derivation.
@@ -1966,7 +2002,20 @@ def run_chunked_transformer_updated(
         kv_actual = preload_isl + c * CHUNK
         positions = rotated_chip_positions(kv_actual, sp, chunk_local)
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
-        chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
+        if input_is_embedded:
+            assert trace_dir is not None, "single nonzero layer needs the golden input hidden state"
+            hidden = _load_layer_rows(
+                trace_dir,
+                variant.prefill_trace_layout,
+                "hidden_states",
+                first_layer_idx - 1,
+                f"decoder_output_layer_{first_layer_idx - 1}",
+                kv_actual,
+                kv_actual + CHUNK,
+            )
+            chunk_tok_host.append(hidden[flat - kv_actual].reshape(1, 1, CHUNK, emb_dim).to(torch.bfloat16))
+        else:
+            chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
         chunk_local_pos.append(flat - kv_actual)  # permutation of [0, CHUNK)
 
     mesh_device.enable_program_cache()
@@ -1981,10 +2030,10 @@ def run_chunked_transformer_updated(
         warm_tokens = ttnn.from_torch(
             chunk_tok_host[0],
             device=mesh_device,
-            dtype=ttnn.uint32,
+            dtype=input_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            layout=input_layout,
+            mesh_mapper=input_mapper,
         )
         # Warm at the measured region's first offset (preload_isl) so the JITted programs match exactly.
         transformer.forward(
@@ -1996,6 +2045,7 @@ def run_chunked_transformer_updated(
             cache_user_id=0,
             return_intermediates=False,
             index_kv_cache=tt_index_kv_cache,
+            input_is_embedded=input_is_embedded,
         )
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_tokens)
@@ -2038,10 +2088,10 @@ def run_chunked_transformer_updated(
         trace_input = ttnn.from_torch(
             chunk_tok_host[0],
             device=mesh_device,
-            dtype=ttnn.uint32,
+            dtype=input_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            layout=input_layout,
+            mesh_mapper=input_mapper,
         )
         # ChunkMetadata, not a bare 3-tuple: the replay reads llama4_scale at a captured address
         # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant -- including,
@@ -2055,9 +2105,9 @@ def run_chunked_transformer_updated(
         host_tok = [
             ttnn.from_torch(
                 chunk_tok_host[c],
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+                dtype=input_dtype,
+                layout=input_layout,
+                mesh_mapper=input_mapper,
             )
             for c in range(n_chunks)
         ]
@@ -2073,6 +2123,7 @@ def run_chunked_transformer_updated(
                 return_intermediates=False,
                 metadata=trace_metadata,
                 index_kv_cache=tt_index_kv_cache,
+                input_is_embedded=input_is_embedded,
             )
 
         trace_controller = SubDeviceTraceController(mesh_device)
@@ -2104,6 +2155,73 @@ def run_chunked_transformer_updated(
         pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
     det_baseline = None
     det_failures = []
+
+    host_op_samples = []
+    if profile_host_ops:
+        assert not use_trace and n_chunks == 1, "host-op attribution targets one untraced chunk"
+        assert ttnn.CONFIG.enable_fast_runtime_mode, "host-op attribution requires FastOperation"
+        from ttnn.decorators import FastOperation
+
+        original_fast_call = FastOperation.__call__
+        current_op_calls = None
+        op_stack = []
+        phase_stack = []
+        phase_frames = []
+        current_phase_wall_ns = None
+        block = transformer.layers[0]
+        phase_targets = [
+            (block.attn_norm, "forward", "attention norm"),
+            (block.mla, "forward", "MLA projections and KV packing"),
+            (block.mla._indexer, "forward", "sparse indexer"),
+            (block.mla._indexer, "score", "sparse indexer"),
+            (block.mla, "_attention", "sparse attention"),
+            (block.mla, "_sparse_chunked_attn_overlapped", "sparse attention"),
+            (block.mla, "_o_proj_epilogue", "attention output projection"),
+            (block.ffn_norm, "forward", "FFN norm"),
+            (block, "_moe_path", "MoE glue"),
+            (block.ffn.gate, "forward", "MoE gate"),
+            (block.ffn.routing_setup, "forward", "MoE routing setup"),
+            (block.ffn.dispatch_module, "forward", "MoE dispatch"),
+            (block.ffn.shared_expert, "forward", "MoE shared expert"),
+            (block.ffn.routed_expert, "forward", "MoE routed experts"),
+            (block.ffn.combine_module, "forward", "MoE combine"),
+            (block.ffn.reduce_module, "forward", "MoE post-combine reduce"),
+        ]
+        import models.demos.deepseek_v3_d_p.tt.tt_prefill_block as block_module
+
+        phase_targets.append((block_module, "zero_pad_and_ack", "KV pad and ack"))
+
+        def phase_wrapper(original, phase):
+            def wrapped(*args, **kwargs):
+                started = time.perf_counter_ns()
+                frame = [started, 0]
+                phase_frames.append(frame)
+                phase_stack.append(phase)
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    elapsed = time.perf_counter_ns() - started
+                    phase_frames.pop()
+                    if phase_frames:
+                        phase_frames[-1][1] += elapsed
+                    current_phase_wall_ns[phase] += elapsed - frame[1]
+                    phase_stack.pop()
+
+            return wrapped
+
+        def timed_fast_call(operation, *args, **kwargs):
+            started = time.perf_counter_ns()
+            frame = [started, 0]
+            op_stack.append(frame)
+            try:
+                return original_fast_call(operation, *args, **kwargs)
+            finally:
+                elapsed = time.perf_counter_ns() - started
+                op_stack.pop()
+                if op_stack:
+                    op_stack[-1][1] += elapsed
+                phase = phase_stack[-1] if phase_stack else "block residual and glue"
+                current_op_calls[(phase, operation.python_fully_qualified_name)].append(elapsed - frame[1])
 
     profiler.start("tt_forward")
     for it in range(num_iters):
@@ -2143,10 +2261,10 @@ def run_chunked_transformer_updated(
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
                 device=mesh_device,
-                dtype=ttnn.uint32,
+                dtype=input_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+                layout=input_layout,
+                mesh_mapper=input_mapper,
             )
             chunk_start = time.time()
             # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
@@ -2156,17 +2274,36 @@ def run_chunked_transformer_updated(
             # intermediates dict, or None when none were requested -- no first_token: the transformer has
             # no norm / LM-head / sampling tail.
             reset_fused_ring_host_timing()
-            layer_outputs = transformer.forward(
-                tt_tokens,
-                tt_kvpe_cache,
-                actual_isl=CHUNK,
-                actual_start=kv_actual,
-                actual_end=kv_actual + CHUNK,
-                cache_user_id=0,
-                return_intermediates=check_layer_pcc,
-                index_kv_cache=tt_index_kv_cache,
-            )
+            measure_host_ops = profile_host_ops and it >= perf_warmup_iters
+            if measure_host_ops:
+                current_op_calls = defaultdict(list)
+                current_phase_wall_ns = defaultdict(int)
+                saved_phase_methods = [(obj, attr, getattr(obj, attr)) for obj, attr, _ in phase_targets]
+                for obj, attr, phase in phase_targets:
+                    setattr(obj, attr, phase_wrapper(getattr(obj, attr), phase))
+                FastOperation.__call__ = timed_fast_call
+            forward_start_ns = time.perf_counter_ns()
+            try:
+                layer_outputs = transformer.forward(
+                    tt_tokens,
+                    tt_kvpe_cache,
+                    actual_isl=CHUNK,
+                    actual_start=kv_actual,
+                    actual_end=kv_actual + CHUNK,
+                    cache_user_id=0,
+                    return_intermediates=check_layer_pcc,
+                    index_kv_cache=tt_index_kv_cache,
+                    input_is_embedded=input_is_embedded,
+                )
+            finally:
+                forward_end_ns = time.perf_counter_ns()
+                if measure_host_ops:
+                    FastOperation.__call__ = original_fast_call
+                    for obj, attr, original in saved_phase_methods:
+                        setattr(obj, attr, original)
+            sync_start_ns = time.perf_counter_ns()
             ttnn.synchronize_device(mesh_device)
+            sync_end_ns = time.perf_counter_ns()
             if check_layer_pcc:
                 # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
                 # each iteration replays the same chunks into the same cache region).
@@ -2190,9 +2327,29 @@ def run_chunked_transformer_updated(
                     if pcc < LAYER_PCC_THRESHOLD:
                         logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
             fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
+            dealloc_start_ns = time.perf_counter_ns()
             ttnn.deallocate(tt_tokens)
+            dealloc_end_ns = time.perf_counter_ns()
             chunk_seconds = time.time() - chunk_start
             chunk_times.append(chunk_seconds)
+            if measure_host_ops:
+                op_ns = sum(sum(times) for times in current_op_calls.values())
+                forward_ns = forward_end_ns - forward_start_ns
+                assert op_ns <= forward_ns, (op_ns, forward_ns)
+                host_op_samples.append(
+                    {
+                        "chunk_ns": round(chunk_seconds * 1e9),
+                        "forward_ns": forward_ns,
+                        "op_ns": op_ns,
+                        "outside_op_ns": forward_ns - op_ns,
+                        "sync_ns": sync_end_ns - sync_start_ns,
+                        "dealloc_ns": dealloc_end_ns - dealloc_start_ns,
+                        "calls": {key: times[:] for key, times in current_op_calls.items()},
+                        "phase_wall_ns": dict(current_phase_wall_ns),
+                    }
+                )
+                current_op_calls = None
+                current_phase_wall_ns = None
             logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
             if fused_host_calls:
                 logger.info(
@@ -2225,6 +2382,47 @@ def run_chunked_transformer_updated(
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
+
+    if host_op_samples:
+        best = min(host_op_samples, key=lambda sample: sample["chunk_ns"])
+        rows = [
+            {
+                "phase": phase,
+                "operation": name,
+                "count": len(times),
+                "sum_ns": sum(times),
+                "avg_ns": sum(times) / len(times),
+            }
+            for (phase, name), times in best["calls"].items()
+        ]
+        rows.sort(key=lambda row: -row["sum_ns"])
+        phase_totals = defaultdict(lambda: {"count": 0, "sum_ns": 0})
+        for row in rows:
+            phase_totals[row["phase"]]["count"] += row["count"]
+            phase_totals[row["phase"]]["sum_ns"] += row["sum_ns"]
+        for phase, wall_ns in best["phase_wall_ns"].items():
+            phase_totals[phase]["wall_ns"] = wall_ns
+            phase_totals[phase]["outside_op_ns"] = wall_ns - phase_totals[phase]["sum_ns"]
+        summary = {
+            "method": "fastest measured chunk after ten warmups; exclusive FastOperation call time",
+            "measured_runs": len(host_op_samples),
+            "best_chunk_ns": best["chunk_ns"],
+            "median_chunk_ns": statistics.median(sample["chunk_ns"] for sample in host_op_samples),
+            "forward_ns": best["forward_ns"],
+            "op_ns": best["op_ns"],
+            "outside_op_forward_ns": best["outside_op_ns"],
+            "sync_ns": best["sync_ns"],
+            "dealloc_ns": best["dealloc_ns"],
+            "other_chunk_ns": best["chunk_ns"] - best["forward_ns"] - best["sync_ns"] - best["dealloc_ns"],
+            "op_count": sum(row["count"] for row in rows),
+            "phases": dict(phase_totals),
+            "rows": rows,
+        }
+        print("HOST_OP_BREAKDOWN " + json.dumps(summary, sort_keys=True))
+        output_path = os.environ.get("TT_PREFILL_HOST_OPS_JSON")
+        if output_path:
+            with open(output_path, "w") as output_file:
+                json.dump(summary, output_file, indent=2, sort_keys=True)
 
     if determinism_check:
         assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
@@ -2265,11 +2463,17 @@ def run_chunked_transformer_updated(
         # first. It is derived now, so a job runs exactly one layout and no suffix is needed -- and the
         # dense path's filename stays byte-identical, keeping the cross-run perf-trend history continuous.
         kv_suffix = "_tpkv" if tp_shard_kv else ""
+        layer_suffix = f"_from{first_layer_idx}" if first_layer_idx else ""
+        layer_label = (
+            f"L{num_layers}"
+            if first_layer_idx == 0
+            else f"layers {first_layer_idx}..{first_layer_idx + num_layers - 1}"
+        )
         kv_label = ", TP-sharded KV" if tp_shard_kv else ""
         emit_summary(
             "perf",
-            f"{variant.name}_L{num_layers}_c{n_chunks}_i{num_iters}_p{preload_isl}{kv_suffix}",
-            f"Chunk timing — {variant.name} (L{num_layers}, {n_chunks} chunks, {num_iters} iters, "
+            f"{variant.name}_L{num_layers}{layer_suffix}_c{n_chunks}_i{num_iters}_p{preload_isl}{kv_suffix}",
+            f"Chunk timing — {variant.name} ({layer_label}, {n_chunks} chunks, {num_iters} iters, "
             f"preload {preload_isl}{kv_label})",
             perf_table_lines + ["", "phase timings:"] + timing_lines,
         )
@@ -2954,6 +3158,54 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         perf_margin=resolved_perf_margin,
         preload_isl=preload_isl,
         use_trace=use_trace,
+        kv_only_last_layer=os.environ.get("TT_PREFILL_FULL_LAST_LAYER") != "1",
+        perf_warmup_iters=10 if os.environ.get("TT_PREFILL_FULL_LAST_LAYER") == "1" and num_iters >= 20 else 1,
+    )
+
+
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_prefill_single_moe_layer_perf(
+    variant, config_only, mesh_device, device_params, weight_cache_path, num_links, use_trace
+):
+    """Full L6: sparse indexer + attention + MoE, using real L5 hidden and a 50k KV/index prefix."""
+    run_chunked_transformer_updated(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers=1,
+        n_chunks=1,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        num_iters=20,
+        routing_use_l1_small_for_semaphores=True,
+        preload_isl=10 * CHUNK,
+        use_trace=use_trace,
+        kv_only_last_layer=False,
+        perf_warmup_iters=10,
+        first_layer_idx=6,
+        profile_host_ops=os.environ.get("TT_PREFILL_HOST_OPS") == "1" and not use_trace,
     )
 
 

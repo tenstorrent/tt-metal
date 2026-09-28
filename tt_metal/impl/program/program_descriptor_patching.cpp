@@ -259,7 +259,10 @@ void apply_resolved_bindings(
             prev_core = b.core;
             first = false;
         }
-        (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
+        // resolve_bindings validated every slot against the cached program. The
+        // runtime-arg layout is fixed on cache hits, so avoid a bounds check for
+        // every address replicated across worker cores.
+        current_data->data()[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
         UpdateDynamicCircularBufferAddress(

@@ -175,6 +175,7 @@ uint32_t CircularBufferImpl::address() const {
 
 void CircularBufferImpl::assign_global_address() {
     globally_allocated_address_ = config_.shadow_global_buffer->address() + config_.address_offset();
+    ++config_generation_;
 }
 
 void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
@@ -185,6 +186,7 @@ void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCi
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
     this->globally_allocated_address_ = global_circular_buffer.buffer_address();
     this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
+    ++config_generation_;
 }
 
 DeviceAddr CircularBufferImpl::config_address() const { return this->global_circular_buffer_config_address_; }
