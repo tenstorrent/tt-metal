@@ -1689,6 +1689,8 @@ def run_ring_joint_sdpa_chunked(
     attention_sink_values: torch.Tensor = None,
     max_k_splits: int = 1,
     matmul_math_fidelity=None,
+    segmented_accumulation: bool = False,
+    kv_mean_offset: float = 0.0,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1807,6 +1809,9 @@ def run_ring_joint_sdpa_chunked(
         else:
             Q_full = fa_rand(b, nhq, total_seq, d_q)
             K_full = fa_rand(b, nhk, total_seq, d_k)
+            if kv_mean_offset:
+                # Real K/V rows share a mean direction, so the running output grows coherently with the prefix.
+                K_full = K_full + kv_mean_offset * torch.randn(1, 1, 1, d_k).abs()
 
         if use_ring_mla:
             # Latent V: K's first d_v columns (MLA), or its last d_v when K is wider than Q (packed KV).
@@ -1815,6 +1820,8 @@ def run_ring_joint_sdpa_chunked(
             V_full = deterministic_input_tensor(b, nhv, total_seq, d_v, offset=0.375)
         else:
             V_full = fa_rand(b, nhv, total_seq, d_v)
+            if kv_mean_offset:
+                V_full = V_full + kv_mean_offset * torch.randn(1, 1, 1, d_v).abs()
 
         operator_sink = None
         if use_attention_sink:
@@ -1877,6 +1884,7 @@ def run_ring_joint_sdpa_chunked(
                 exp_approx_mode=False,
                 max_k_splits=max_k_splits,
                 matmul_math_fidelity=matmul_math_fidelity,
+                segmented_accumulation=segmented_accumulation,
             )
             for q_chunk, k_chunk in qk_configs
         }
@@ -4610,6 +4618,180 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
     finally:
         if trace_id is not None:
             ttnn.release_trace(mesh_device, trace_id)
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.timeout(900)
+def test_ring_mla_segmented_accumulation_matches_unsegmented():
+    """Segmented accumulation on the KV-pad-rotated ring_mla path must match the unsegmented result, at Gemma4's
+    global shape (1024 tokens per device, packed 640-wide K/V, q96/k256). At chunk 0 a device's later shards lie
+    wholly after its queries, so their segments are fully masked."""
+    num_chunks = 2
+    mesh_config = MESH_CONFIG
+    sp_size = mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={sp_size}")
+
+    chunk_size_local = 1024
+    chunk_size_global = chunk_size_local * sp_size
+    new_actual_isl = chunk_size_global
+    total_seq = new_actual_isl * num_chunks
+
+    b, local_heads, nhk = 1, 8, 1
+    nhq = local_heads * mesh_config.tp_size
+    d_q, d_k, d_v = 512, 640, 512
+    cache_batch = 2
+    slot_id = 1  # non-zero: a dropped/stale slot read lands on the garbage slot, not silently on ours
+
+    # Buffers sized for the longest chunk, as the model does.
+    max_cache_slabs = max(2, math.ceil(total_seq / chunk_size_global) + 1)
+    persistent_seq_len = sp_size * max_cache_slabs * chunk_size_local
+    max_input_cache_slabs = max(
+        max(2, math.ceil(((i + 1) * new_actual_isl) / chunk_size_global)) for i in range(num_chunks)
+    )
+    stable_kv_input_seq_len = sp_size * max_input_cache_slabs * chunk_size_local
+    stable_cache_seq_per_dev = stable_kv_input_seq_len // sp_size
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED)
+    q_full = fa_rand(b, nhq, total_seq, d_q)
+    kv_full = fa_rand(b, nhk, total_seq, d_k)
+
+    # Per-chunk host inputs, so both configs see byte-identical device inputs.
+    chunks = []
+    for i in range(num_chunks):
+        kv_actual_isl = i * new_actual_isl
+        logical_n = kv_actual_isl + new_actual_isl
+        q_host, kv_host, valid_rows, kv_valid_per_dev, _ = build_kv_pad_rotation_mla_inputs(
+            kv_full[:, :, :kv_actual_isl, :],
+            q_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_actual_isl,
+            sp_size,
+            chunk_size_local,
+        )
+        cache_seq_per_dev = kv_host.shape[2] // sp_size
+        assert stable_kv_input_seq_len >= kv_host.shape[2] and persistent_seq_len > kv_host.shape[2]
+        # Embed this chunk's rotated KV into the stable physical layout; the untouched remainder is
+        # garbage that must not leak into the result.
+        kv_input_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_cache_seq_per_dev, d_k) * 100
+        active = kv_input_per_dev[slot_id : slot_id + 1, :, :, :cache_seq_per_dev, :]
+        active.copy_(
+            torch.where(
+                kv_valid_per_dev.reshape(1, 1, sp_size, cache_seq_per_dev, 1),
+                kv_host.reshape(1, nhk, sp_size, cache_seq_per_dev, d_k),
+                active,
+            )
+        )
+        chunks.append(
+            {
+                "kv_actual_isl": kv_actual_isl,
+                "logical_n": logical_n,
+                "q_host": q_host,
+                "kv_host": kv_input_per_dev.reshape(cache_batch, nhk, stable_kv_input_seq_len, d_k),
+                "valid_rows": valid_rows,
+            }
+        )
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    try:
+        mesh_device.enable_program_cache()
+
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2
+        persistent_shard_dims = [None, None]
+
+        def host_sharded(host_tensor, dims, dtype=ttnn.bfloat16):
+            return ttnn.from_torch(
+                host_tensor,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        def upload(host_tensor, dims, dtype=ttnn.bfloat16):
+            return ttnn.from_torch(
+                host_tensor,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        # Allocated once and refreshed per chunk, as the model does.
+        tt_q = upload(chunks[0]["q_host"], q_shard_dims)
+        tt_kv = upload(chunks[0]["kv_host"], kv_shard_dims, ttnn.bfloat8_b)
+        persistent_output_buffer_kv = upload(
+            torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims, ttnn.bfloat8_b
+        )
+        zeros_persistent_host = host_sharded(
+            torch.zeros(cache_batch, nhk, persistent_seq_len, d_k), persistent_shard_dims, ttnn.bfloat8_b
+        )
+
+        def load_chunk(i):
+            ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["q_host"], q_shard_dims), tt_q)
+            ttnn.copy_host_to_device_tensor(host_sharded(chunks[i]["kv_host"], kv_shard_dims, ttnn.bfloat8_b), tt_kv)
+            ttnn.copy_host_to_device_tensor(zeros_persistent_host, persistent_output_buffer_kv)
+
+        program_configs = [
+            ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                q_chunk_size=96,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+                segmented_accumulation=segmented,
+            )
+            for segmented in (False, True)
+        ]
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        def call(*, logical_n, kv_actual_isl, program_config):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=persistent_output_buffer_kv,
+                head_dim_v=d_v,
+                logical_n=logical_n,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                kv_cache_batch_idx=slot_id,
+                kv_actual_isl=kv_actual_isl,
+            )
+            return tt_out
+
+        for i, chunk in enumerate(chunks):
+            load_chunk(i)
+            outputs = []
+            for program_config in program_configs:
+                out = call(
+                    logical_n=chunk["logical_n"],
+                    kv_actual_isl=chunk["kv_actual_isl"],
+                    program_config=program_config,
+                )
+                outputs.append(ttnn.to_torch(out, mesh_composer=composer)[:, :, chunk["valid_rows"], :d_v])
+                ttnn.deallocate(out)
+            unsegmented, segmented = outputs
+            assert torch.isfinite(segmented).all(), f"chunk {i}: segmented output is not finite"
+            pcc_passed, pcc = comp_pcc(unsegmented, segmented, 0.9999)
+            assert pcc_passed, f"chunk {i} (kv_actual_isl={chunk['kv_actual_isl']}): segmented vs unsegmented PCC {pcc}"
+    finally:
         close_ring_joint_sdpa_runtime(runtime)
 
 
@@ -7579,4 +7761,25 @@ def test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy(tokens_per_devi
         max_k_splits=max_k_splits,
         use_ring_mla=True,
         matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+
+
+@pytest.mark.timeout(1800)
+def test_ring_joint_attention_gemma4_global_segmented_accuracy():
+    """Gemma4's unsplit global attention (chunk 8192, q96, packed K/V, LoFi) over a 64k prefix whose K/V rows share
+    a mean direction, so the running output grows with the prefix. Segmented, RMSE stays near 0.03 at every chunk;
+    unsegmented it passes the bound at the fifth chunk and reaches 0.07 at the eighth."""
+    tokens_per_device = 1024
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
+        chunk_size=chunk_size,
+        total_seq=8 * chunk_size,
+        qk_configs=[(96, 256)],
+        use_ring_mla=True,
+        matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+        segmented_accumulation=True,
+        kv_mean_offset=1.0,
+        rmse_threshold=0.05,
     )
