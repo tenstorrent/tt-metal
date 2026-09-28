@@ -347,10 +347,12 @@ private:
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
 
-    // Fills mesh_node_to_pgd_host_group for one flattened mesh variant from the descriptor's flattened
-    // HOSTS groupings, by the chip slots each of them names.
-    void assign_pgd_host_groups(
-        GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const;
+    // Builds the host-group variants of one flattened mesh: always the mesh with its host groups attributed by
+    // slot-repetition rounds (mesh_node_to_pgd_host_group), plus, for a mesh that fits inside one declared host,
+    // one "_hostedge" copy per declared host whose tray tiling straddles it, split at the host's tray edge so a
+    // cross-host mesh aligns its ranks one-per-host along the physical seam. The caller commits all returned.
+    std::vector<GroupingInfo> build_pgd_host_group_variants(
+        const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const;
 
     // Helper to get ASIC count for a grouping name (from cache)
     uint32_t get_grouping_asic_count(const std::string& grouping_name) const;

@@ -1091,10 +1091,8 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
 
 namespace tt::tt_fabric {
 
-void PhysicalGroupingDescriptor::assign_pgd_host_groups(
-    GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
-    flattened_mesh.mesh_node_to_pgd_host_group.clear();
-
+std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_variants(
+    const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
     // A grouping's chips in node order, each with the slot it names. A slot left unspecified names no chip,
     // so it is dropped: there is nothing there to attribute to a host.
     auto named_slots_of = [](const GroupingInfo& grouping) {
@@ -1114,6 +1112,10 @@ void PhysicalGroupingDescriptor::assign_pgd_host_groups(
         return named_slots;
     };
 
+    // Variant 0 (always returned): the mesh with its host groups attributed by slot-repetition rounds.
+    GroupingInfo rounds_variant = flattened_mesh;
+    rounds_variant.mesh_node_to_pgd_host_group.clear();
+
     // Topology variants of one declared host hold the same chips, differing only in how they are wired,
     // so the distinct slot sets are the hosts.
     std::vector<std::set<tt::tt_metal::ASICPosition>> host_slots;
@@ -1126,32 +1128,131 @@ void PhysicalGroupingDescriptor::assign_pgd_host_groups(
             host_slots.push_back(std::move(slots));
         }
     }
-    if (host_slots.empty()) {
-        return;
+    if (!host_slots.empty()) {
+        // Two hosts of one machine carry the same tray labels, since a descriptor describes a host once and the
+        // machine repeats it, so the slots alone cannot tell them apart. What does tell them apart is repetition:
+        // a host holds each of its slots once, so the nth time a slot comes round it belongs to that host's nth
+        // copy. Counting rounds is what separates a mesh spanning two hosts into two groups.
+        std::map<std::pair<std::size_t, tt::tt_metal::ASICPosition>, std::size_t> rounds_seen;
+        std::map<std::pair<std::size_t, std::size_t>, uint32_t> group_of_host_round;
+        for (const auto& [node_id, slot] : named_slots_of(flattened_mesh)) {
+            std::vector<std::size_t> holders;
+            for (std::size_t host = 0; host < host_slots.size(); ++host) {
+                if (host_slots[host].contains(slot)) {
+                    holders.push_back(host);
+                }
+            }
+            // A slot no declared host holds, or one several of them claim, cannot be attributed to a host.
+            if (holders.size() != 1) {
+                continue;
+            }
+            const std::size_t round = rounds_seen[{holders.front(), slot}]++;
+            rounds_variant.mesh_node_to_pgd_host_group[node_id] =
+                group_of_host_round
+                    .try_emplace({holders.front(), round}, static_cast<uint32_t>(group_of_host_round.size()))
+                    .first->second;
+        }
     }
 
-    // Two hosts of one machine carry the same tray labels, since a descriptor describes a host once and the
-    // machine repeats it, so the slots alone cannot tell them apart. What does tell them apart is repetition:
-    // a host holds each of its slots once, so the nth time a slot comes round it belongs to that host's nth
-    // copy. Counting rounds is what separates a mesh spanning two hosts into two groups.
-    std::map<std::pair<std::size_t, tt::tt_metal::ASICPosition>, std::size_t> rounds_seen;
-    std::map<std::pair<std::size_t, std::size_t>, uint32_t> group_of_host_round;
-    for (const auto& [node_id, slot] : named_slots_of(flattened_mesh)) {
-        std::vector<std::size_t> holders;
-        for (std::size_t host = 0; host < host_slots.size(); ++host) {
-            if (host_slots[host].contains(slot)) {
-                holders.push_back(host);
-            }
-        }
-        // A slot no declared host holds, or one several of them claim, cannot be attributed to a host.
-        if (holders.size() != 1) {
+    std::vector<GroupingInfo> variants;
+    variants.push_back(std::move(rounds_variant));
+
+    if (std::getenv("TT_METAL_HOST_BOUNDARY_PROTO") == nullptr) {
+        return variants;
+    }
+
+    // Host-boundary variants: for a mesh that fits inside one declared host, add one copy per declared host whose
+    // tray tiling straddles the mesh, split at the host's grid-column edge. The slot-repetition rounds above
+    // cannot express a cross-host mesh whose two halves sit on different trays; splitting at the host's own tray
+    // edge does, so a cross-host mesh aligns its ranks one-per-host along the physical seam.
+    //
+    // Only the flattened hosts the machine actually holds are used. Each chip already carries its tray_id, and
+    // those hosts were flattened in row-major tile order, so ordering each tray by its first chip recovers the
+    // tile grid. Cutting that grid down its column midline is the two physical halves (rev-C galaxy
+    // [t2,t4,t1,t3] over [2,2] -> {t2,t1}={1,2} | {t4,t3}={3,4}).
+    struct HostEdge {
+        std::map<uint32_t, uint32_t> tray_to_side;  // tray id -> 0/1 host half (its column in the host tile grid)
+        uint32_t host_asics = 0;
+    };
+    std::vector<HostEdge> host_edges;
+    for (const GroupingInfo& declared_host : flattened_declared_hosts) {
+        if (declared_host.instance_tile_layout_dims.size() != 2) {
             continue;
         }
-        const std::size_t round = rounds_seen[{holders.front(), slot}]++;
-        flattened_mesh.mesh_node_to_pgd_host_group[node_id] =
-            group_of_host_round.try_emplace({holders.front(), round}, static_cast<uint32_t>(group_of_host_round.size()))
-                .first->second;
+        const int tile_rows = declared_host.instance_tile_layout_dims[0];
+        const int tile_cols = declared_host.instance_tile_layout_dims[1];
+        if (tile_rows < 1 || tile_cols < 2) {
+            continue;
+        }
+        const int tile_count = tile_rows * tile_cols;
+        std::map<uint32_t, GroupingChipId> first_node_of_tray;
+        for (GroupingChipId node_id : declared_host.adjacency_graph.get_nodes()) {
+            if (node_id >= declared_host.items.size()) {
+                continue;
+            }
+            const uint32_t tray = *declared_host.items[node_id].tray_id;
+            if (tray == 0) {
+                continue;
+            }
+            const auto [it, inserted] = first_node_of_tray.try_emplace(tray, node_id);
+            if (!inserted && node_id < it->second) {
+                it->second = node_id;
+            }
+        }
+        // One tray per tile. A host that does not flatten to that (unset trays, or one tray repeated) has no
+        // column edge to cut.
+        if (static_cast<int>(first_node_of_tray.size()) != tile_count) {
+            continue;
+        }
+        std::vector<std::pair<GroupingChipId, uint32_t>> trays_in_tile_order;
+        trays_in_tile_order.reserve(first_node_of_tray.size());
+        for (const auto& [tray, first_node] : first_node_of_tray) {
+            trays_in_tile_order.emplace_back(first_node, tray);
+        }
+        std::sort(trays_in_tile_order.begin(), trays_in_tile_order.end());
+
+        HostEdge edge;
+        edge.host_asics = declared_host.asic_count;
+        for (int tile = 0; tile < tile_count; ++tile) {
+            const uint32_t side = (tile % tile_cols) < (tile_cols / 2) ? 0u : 1u;
+            edge.tray_to_side.emplace(trays_in_tile_order[tile].second, side);
+        }
+        const bool already_recorded = std::any_of(host_edges.begin(), host_edges.end(), [&](const HostEdge& existing) {
+            return existing.host_asics == edge.host_asics && existing.tray_to_side == edge.tray_to_side;
+        });
+        if (!already_recorded) {
+            host_edges.push_back(std::move(edge));
+        }
     }
+
+    for (const HostEdge& edge : host_edges) {
+        if (flattened_mesh.asic_count == 0 || flattened_mesh.asic_count >= edge.host_asics) {
+            continue;
+        }
+        GroupingInfo hb = flattened_mesh;
+        hb.mesh_node_to_pgd_host_group.clear();
+        uint32_t n0 = 0;
+        uint32_t n1 = 0;
+        bool all_mapped = true;
+        for (uint32_t n : hb.adjacency_graph.get_nodes()) {
+            if (n >= hb.items.size()) {
+                continue;
+            }
+            const auto side_it = edge.tray_to_side.find(*hb.items[n].tray_id);
+            if (side_it == edge.tray_to_side.end()) {
+                all_mapped = false;
+                break;
+            }
+            hb.mesh_node_to_pgd_host_group[n] = side_it->second;
+            (side_it->second == 0 ? n0 : n1)++;
+        }
+        // Only emit when every chip mapped and the mesh actually straddles this host's edge (both sides used).
+        if (all_mapped && n0 != 0 && n1 != 0) {
+            hb.name = flattened_mesh.name + "_hostedge";
+            variants.push_back(std::move(hb));
+        }
+    }
+    return variants;
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(

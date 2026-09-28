@@ -1473,14 +1473,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
                 for (auto& meshe : meshes) {
-                    // 4. The host each of this variant's chips sits on, by comparing its slots with the
-                    // declared hosts above. Done once per variant here rather than per MGD instance
-                    // below, since it says something about the variant alone.
-                    // A mesh no declared host holds gets no groups, and step 5 then has nothing to hold its
-                    // ranks against and leaves it to the PSD's own hosts further down.
-                    assign_pgd_host_groups(meshe, flattened_declared_hosts);
-
-                    mesh_flat_groupings[mesh_group_info.name].push_back(std::move(meshe));
+                    // 4. The host each of this variant's chips sits on, by comparing its slots with the declared
+                    // hosts above. Done once per variant here rather than per MGD instance below, since it says
+                    // something about the variant alone. Returns the rounds-attributed variant plus any host-edge
+                    // copies (cross-host meshes split at the declared host's tray edge); all are committed.
+                    for (auto& variant : build_pgd_host_group_variants(meshe, flattened_declared_hosts)) {
+                        mesh_flat_groupings[mesh_group_info.name].push_back(std::move(variant));
+                    }
                 }
             }
         }
@@ -2309,7 +2308,8 @@ private:
                 validation_mode_,
                 nullptr,
                 &state,
-                /*unique_shapes=*/false);
+                /*unique_shapes=*/false);  // This HAS to be false or else some solutions will not be in the right
+                                           // orientation
             if (mappings.empty()) {
                 break;
             }
@@ -3170,9 +3170,10 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     reset();
     AdjacencyGraph<const Candidate*> seat_graph =
         build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
-    if (!(build_sat_placement_constraints(
-              *owner_->pools_, *owner_->physical_system_descriptor_, owner_->constraints_) &&
-          owner_->apply_extra_constraints(owner_->constraints_))) {
+    const bool built =
+        build_sat_placement_constraints(*owner_->pools_, *owner_->physical_system_descriptor_, owner_->constraints_);
+    const bool extra = built && owner_->apply_extra_constraints(owner_->constraints_);
+    if (!(built && extra)) {
         return false;
     }
     if (drop_cap) {
