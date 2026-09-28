@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_device_operation.hpp"
+#include <bit>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
@@ -407,6 +408,19 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     bool tt_poly_fp32_dest = operation_attributes.fp32_dest_acc_en;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+#if !defined(TT_POLY_LLK_DISABLE)
+    if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
+        !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
+        ops_chain[0].type() == UnaryOpType::RELU_MIN && ops_chain[0].get_params_if<float>().size() == 1 &&
+        std::bit_cast<uint32_t>(ops_chain[0].get_param_if<float>(0).value()) == 0x00000000u &&
+        (unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "relu_min_tt_poly_bf16_tile_init();" ||
+         unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "relu_min_tt_poly_bf16_tile_init<false>();") &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0)) {
+        unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";
+        unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "relu_min_tt_poly_bf16_program_init();";
+        unary_defines["SFPU_OP_PROGRAM_FINISH_0"] = "relu_min_tt_poly_bf16_program_finish();";
+    }
+#endif
 #if !defined(TT_POLY_LLK_DISABLE)
     if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
         !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
