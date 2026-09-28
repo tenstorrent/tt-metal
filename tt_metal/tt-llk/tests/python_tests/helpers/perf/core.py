@@ -819,6 +819,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_vector_ext: bool = False,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -853,6 +854,7 @@ class PerfConfig(TestConfig):
             l1_acc,
             skip_build_header,
             compile_time_formats,
+            requires_vector_ext=requires_vector_ext,
         )
 
     @staticmethod
