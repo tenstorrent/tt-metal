@@ -213,8 +213,8 @@ private:
     // 2. Externally owned - a view over an existing address; it owns no allocation.
     // 3. Deallocated.
     // 4. Per-core owned - each device buffer owns its own per-core allocation.
-    // 5. Retained view - a view at an offset within an owner MeshBuffer that it keeps alive. Deallocating the view
-    //    releases that reference; the view reports deallocated once its owner is deallocated.
+    // 5. Retained view - aliases an offset within an owner MeshBuffer and holds a strong reference to it. Deallocating
+    //    the view releases that reference; the view is invalidated once its owner is deallocated.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };

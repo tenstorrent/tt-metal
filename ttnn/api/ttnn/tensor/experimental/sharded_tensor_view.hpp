@@ -19,10 +19,10 @@ namespace ttnn::experimental {
  * allocation mode and a subset of its worker cores, and each view shard must fit within the owner shard at an aligned
  * offset.
  *
- * The view keeps the owner's allocation alive while it exists. Explicitly deallocating the owner frees that memory and
- * invalidates every view created from it, directly or through other views. Deallocating a view invalidates the views
- * created from it and releases only that view's hold on the owner's allocation. The full ownership model is described
- * with DeviceStorage in ttnn/tensor/storage.hpp.
+ * The view holds a strong reference to `owner`, which stays alive while the view exists. Explicitly deallocating
+ * `owner` frees its memory and invalidates every view created from it, directly or through other views. Deallocating
+ * a view releases only its reference to `owner` and invalidates the views created from it. The full ownership model
+ * is described with DeviceStorage in ttnn/tensor/storage.hpp.
  */
 Tensor create_sharded_tensor_view(
     const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
