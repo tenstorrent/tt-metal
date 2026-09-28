@@ -1225,17 +1225,15 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -k "pcc-prompt_5k and no_determinism and iter1" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_mistral4_prefill_block_chunked -vvv --tb=short
     '
   test_type: mistral4_prefill_block
   test_tags: [mistral4, block]
   test_group: module
   skus:
     bh_sc1:
-      # PROVISIONAL -- must be re-sized from a CI run before merge. The previous 6 was measured on a
-      # run where every row skipped (the non_balanced CI skip had no Mistral exemption), so it timed
-      # nothing. The `-k` pins the two PCC rows, random and pretrained, at iter1; the full matrix is
-      # 24 runnable rows and would not fit any sane budget.
+      # PROVISIONAL -- must be re-sized from a CI run before merge. The chunked test has a single
+      # row (fabric2d-mesh-8x4, layer 1 MoE, 11 chunks), so no `-k` is needed.
       timeout: 40
       tier: 2
       release_ready: false
