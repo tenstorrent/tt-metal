@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <string_view>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -1254,6 +1256,17 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // The descriptor framework allocates KernelHandles when materializing the
     // descriptor into a Program; runtime-arg auto-patching on cache hits removes
     // the need to expose those handles back to the caller.
+    // Perf experiment: RING_SDPA_COMPUTE_ONLY=1 stubs the gather out (kernels return at entry).
+    if (const char* compute_only = std::getenv("RING_SDPA_COMPUTE_ONLY");
+        compute_only != nullptr && std::string_view(compute_only) == "1") {
+        for (auto* kernel :
+             {&sender_reader_forward_kernel,
+              &sender_writer_forward_kernel,
+              &sender_reader_backward_kernel,
+              &sender_writer_backward_kernel}) {
+            kernel->defines.emplace_back("RING_SDPA_COMPUTE_ONLY", "1");
+        }
+    }
     desc.kernels.push_back(std::move(sender_reader_forward_kernel));
     desc.kernels.push_back(std::move(sender_writer_forward_kernel));
     desc.kernels.push_back(std::move(sender_reader_backward_kernel));

@@ -17,6 +17,14 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
+// Perf experiment (RING_SDPA_COMPUTE_ONLY=1 on the host): every DRAM/NoC transfer is skipped while the
+// CB handshakes stay, so compute runs on stale L1 and the kernel time is compute-only.
+#ifdef RING_SDPA_COMPUTE_ONLY
+constexpr bool sdpa_compute_only = true;
+#else
+constexpr bool sdpa_compute_only = false;
+#endif
+
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
@@ -1493,6 +1501,9 @@ __attribute__((noinline)) void fetch_block(
     const uint32_t tile_bytes,
     const bool transpose,
     const uint32_t barrier_threshold = 0) {
+    if constexpr (sdpa_compute_only) {
+        return;
+    }
     Noc noc;
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
@@ -1552,9 +1563,11 @@ void write_block(
     const uint32_t inner_ptr_stride = tile_bytes;
 
     cb.wait_front(num_tiles);
-    cat_addr_generator.issue_writes(
-        noc, dst_slice, end_seq_tile, cb.get_read_ptr(), outer_ptr_stride, inner_ptr_stride);
-    noc.async_write_barrier();
+    if constexpr (!sdpa_compute_only) {
+        cat_addr_generator.issue_writes(
+            noc, dst_slice, end_seq_tile, cb.get_read_ptr(), outer_ptr_stride, inner_ptr_stride);
+        noc.async_write_barrier();
+    }
     cb.pop_front(num_tiles);
 }
 
@@ -1680,7 +1693,9 @@ void write_block_row_grouped_trid(
             dst_slice.d2_start + rg * sbh + rows_this_group,
             dst_slice.d3_start,
             dst_slice.d3_end);
-        if constexpr (all_rows_valid) {
+        if constexpr (sdpa_compute_only) {
+            // no-op: output stays in L1
+        } else if constexpr (all_rows_valid) {
             cat_addr_generator.issue_writes_no_padding(
                 noc, group_slice, cb.get_read_ptr(), outer_stride, tile_bytes, flush_trid);
         } else {

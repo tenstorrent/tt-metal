@@ -30,6 +30,10 @@ struct RingSDPAOpReceiver {
     template <typename ReadArg>
     RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx, ReadArg read_arg) :
         wait_for_op_signal(wait_for_op_signal) {
+#ifdef RING_SDPA_COMPUTE_ONLY
+        // Perf experiment: the fused all-gather is stubbed out, so never wait for its signals.
+        this->wait_for_op_signal = false;
+#endif
         uint32_t ring_size = read_arg(rt_args_idx++);
         uint32_t ring_index = read_arg(rt_args_idx++);
         uint32_t forward_writes_expected = read_arg(rt_args_idx++);

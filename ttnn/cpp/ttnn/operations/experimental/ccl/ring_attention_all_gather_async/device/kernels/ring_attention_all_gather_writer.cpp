@@ -138,6 +138,9 @@ FORCE_INLINE void discard_bank_owned_slices(
 }
 
 void kernel_main() {
+#ifdef RING_SDPA_COMPUTE_ONLY
+    return;  // Perf experiment: the fused all-gather is stubbed out (ring_joint_sdpa_program_factory.cpp).
+#endif
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr uint32_t kMetaArgsOffset = has_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()

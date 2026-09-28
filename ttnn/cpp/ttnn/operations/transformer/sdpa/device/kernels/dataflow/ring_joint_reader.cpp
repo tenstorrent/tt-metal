@@ -203,6 +203,10 @@ template <uint32_t cb_v_in, uint32_t v_cb_entry_tiles, uint32_t Sk_chunk_t, uint
 inline void materialize_v_prefix_from_k(Noc noc, uint32_t kt_base_addr, uint32_t rows_to_materialize) {
     CircularBuffer cb_v(cb_v_in);
     cb_v.reserve_back(v_cb_entry_tiles);
+    if constexpr (sdpa_compute_only) {
+        cb_v.push_back(v_cb_entry_tiles);
+        return;
+    }
     uint32_t v_write_ptr = cb_v.get_write_ptr();
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
@@ -1118,7 +1122,7 @@ void kernel_main() {
                 }
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 bool received_k_from_chain = false;
-                if constexpr (!has_sliding_window) {
+                if constexpr (!has_sliding_window && !sdpa_compute_only) {
                     if (k_chain.should_receive(k_chain_head)) {
                         k_chain.receive(noc);
                         received_k_from_chain = true;
@@ -1153,7 +1157,7 @@ void kernel_main() {
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
-                if constexpr (!has_sliding_window) {
+                if constexpr (!has_sliding_window && !sdpa_compute_only) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
                         k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                     }
@@ -1171,7 +1175,7 @@ void kernel_main() {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(2 * v_cb_entry_tiles);
-                        if (v_chain.should_receive(nv)) {
+                        if (!sdpa_compute_only && v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                         }
                     }
@@ -1262,7 +1266,7 @@ void kernel_main() {
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
                     bool received_v_from_chain = false;
-                    if constexpr (!has_sliding_window) {
+                    if constexpr (!has_sliding_window && !sdpa_compute_only) {
                         if (v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                             received_v_from_chain = true;
@@ -1294,7 +1298,7 @@ void kernel_main() {
 
                     // Forward V to next core(s) before push_back — prevents compute from
                     // popping the buffer while the mcast is still reading from it.
-                    if constexpr (!has_sliding_window) {
+                    if constexpr (!has_sliding_window && !sdpa_compute_only) {
                         if (v_chain.should_forward(nv, q_iter_local)) {
                             v_chain.forward(noc, cb_v_start_address);
                         }

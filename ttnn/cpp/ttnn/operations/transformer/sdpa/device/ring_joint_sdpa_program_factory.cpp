@@ -20,10 +20,12 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <deque>
 #include <limits>
 
@@ -1778,6 +1780,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
+    // Perf experiment: RING_SDPA_COMPUTE_ONLY=1 skips every DRAM/NoC/fabric transfer in the reader, writer
+    // and fused all-gather (CB handshakes kept), leaving compute-only kernel time. Results are garbage.
+    if (const char* compute_only = std::getenv("RING_SDPA_COMPUTE_ONLY");
+        compute_only != nullptr && std::string_view(compute_only) == "1") {
+        defines["RING_SDPA_COMPUTE_ONLY"] = "1";
+    }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
