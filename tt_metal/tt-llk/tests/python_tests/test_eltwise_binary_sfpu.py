@@ -754,7 +754,7 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc):
 )
 def test_eltwise_binary_sfpu_div_no_nan(formats, dest_acc):
     # The divide kernel with its zero-divisor arm. Away from zero it must match div; the zero
-    # divisor itself, signed zeros and non-finite operands are driven by the edge sweep.
+    # divisor itself is driven below and by the edge sweep.
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
@@ -766,9 +766,9 @@ def test_eltwise_binary_sfpu_div_no_nan(formats, dest_acc):
     )
 
 
-# Finite dividends over both signed zeros. The edge sweep pairs B = 0 only with a zero or
-# non-finite dividend, so the case that defines div_no_nan, a finite x over +/-0, is driven
-# here. Every value is exact in bfloat16 so each format sees the same pairs.
+# Finite dividends over both signed zeros. The edge sweep pairs B = 0 only with a zero
+# dividend, so the case that defines div_no_nan, a finite x over +/-0, is driven here. Every
+# value is exact in bfloat16 so each format sees the same pairs.
 _DIV_NO_NAN_ZERO_DIVISOR_PAIRS = [
     (a, b)
     for a in (0.0, -0.0, 1.0, -1.0, 3.5, -0.75, 2.0**-126, -(2.0**100), 2.0**127)
