@@ -25,7 +25,10 @@ regression.
 
 The swap is a pytest plugin (``-p models.demos.common.bringup.testing.fork_source``, env ``BRINGUP_FORK_SWAP``: a
 JSON dict): each original attribute (``ttnn.<...>``) is replaced by the fork's object for the session, so tests and the
-Python wrappers they call reach the fork without being edited. Enum types can be swapped the same way.
+Python wrappers they call reach the fork without being edited. Enum types can be swapped the same way. When the tests
+still hand the original enum to other original ops, keep the enum and convert it at the fork op instead: a swap value
+``{op: ttnn.bringup.x, convert_enums: {ttnn.OrigEnum: ttnn.bringup.OrigEnum}}`` wraps the fork op so each argument
+of an original enum type becomes the fork enum's member of the same name.
 
 An entry's ``unskip`` (env ``BRINGUP_FORK_UNSKIP``) removes the collection-time skip marks whose reason contains that
 text, in both runs. Use it only where a conftest's hardware table is known to be too conservative for this box (the
@@ -83,14 +86,38 @@ def _with_source_golden(new, old):
     return new
 
 
+def _converting_enums(op, enums: dict):
+    """``op`` with every argument that is a member of an original enum type replaced by the fork enum's member of the
+    same name (``{original type: fork type}``), for a fork that binds its own copy of an enum the source's callers
+    still use elsewhere (so the type itself cannot be swapped)."""
+    import functools
+
+    def conv(v):
+        for o, n in enums.items():
+            if isinstance(v, o):
+                return getattr(n, v.name)
+        return v
+
+    @functools.wraps(op)
+    def wrapper(*args, **kwargs):
+        return op(*[conv(a) for a in args], **{k: conv(v) for k, v in kwargs.items()})
+
+    return wrapper
+
+
 def pytest_configure(config):
     swap = json.loads(os.environ.get(ENV) or "{}")
     for orig, new in swap.items():
         parent, name = _resolve(orig)
-        nparent, nname = _resolve(new)
+        spec = new if isinstance(new, dict) else {"op": new}
+        nparent, nname = _resolve(spec["op"])
+        obj = getattr(nparent, nname)
+        if spec.get("convert_enums"):
+            enums = {getattr(*_resolve(o)): getattr(*_resolve(n)) for o, n in spec["convert_enums"].items()}
+            obj = _converting_enums(obj, enums)
         old = getattr(parent, name)
         _SAVED.append((parent, name, old))
-        setattr(parent, name, _with_source_golden(getattr(nparent, nname), old))
+        setattr(parent, name, _with_source_golden(obj, old))
     if swap:
         print(f"FORK_SWAP: {len(swap)} name(s) point at the fork: {sorted(swap)}")
 
