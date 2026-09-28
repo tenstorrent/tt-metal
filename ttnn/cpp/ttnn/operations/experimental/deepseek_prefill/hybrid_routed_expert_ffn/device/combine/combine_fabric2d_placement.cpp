@@ -144,8 +144,7 @@ DevicePlacement decide_device_placement(
     const ttnn::MeshCoordinate& coord,
     uint32_t axis,
     uint32_t num_links,
-    uint32_t untilizers_per_group,
-    bool with_collector) {
+    uint32_t untilizers_per_group) {
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
@@ -220,10 +219,7 @@ DevicePlacement decide_device_placement(
         decide_untilizers(
             placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node, untilizers_per_group),
         std::nullopt};
-    if (with_collector) {
-        placement.collector =
-            decide_collector(placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node);
-    }
+    placement.collector = decide_collector(placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node);
     return placement;
 }
 
@@ -244,13 +240,12 @@ uint32_t untilizers_per_group() {
 }
 
 MeshPlacement decide_placement(
-    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group, bool with_collector) {
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group) {
     TT_FATAL(mesh != nullptr, "combine_fabric2d: mesh device is null");
 
     MeshPlacement placement;
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
-        placement.emplace(
-            coord, decide_device_placement(mesh, coord, axis, num_links, untilizers_per_group, with_collector));
+        placement.emplace(coord, decide_device_placement(mesh, coord, axis, num_links, untilizers_per_group));
     }
     return placement;
 }
