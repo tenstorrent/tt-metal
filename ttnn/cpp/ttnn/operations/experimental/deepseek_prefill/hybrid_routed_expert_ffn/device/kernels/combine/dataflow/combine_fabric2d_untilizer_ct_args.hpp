@@ -50,7 +50,7 @@ struct UntilizerCtArgs {
     uint32_t expert_threshold;
     // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
     uint32_t expert_table_page_base;
-    // The routed expert's per-expert readiness count on this core, or NO_READY_GATE when the op runs alone.
+    // The routed expert's per-expert readiness count on this core.
     uint32_t ready_sem;
 
 #ifndef KERNEL_BUILD

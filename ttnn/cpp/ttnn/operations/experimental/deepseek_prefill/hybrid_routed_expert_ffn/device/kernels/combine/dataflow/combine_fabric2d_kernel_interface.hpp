@@ -170,7 +170,6 @@ constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
 
 // A `ready_sem` of this value means the op runs alone: nothing to wait for before reading an expert.
-constexpr uint32_t NO_READY_GATE = 0xFFFFFFFFu;
 
 // L1 stride of one global_expert_idx_table row in a control region, which the tables' end is aligned to as
 // well. A row is only experts_per_chip words, but a DRAM read needs a 64-byte-aligned L1 destination.
