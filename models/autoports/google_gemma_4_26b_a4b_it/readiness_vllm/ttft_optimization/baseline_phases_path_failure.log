@@ -1,0 +1,37 @@
+2026-09-28 08:25:32.892 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-28 08:25:32.892 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-28 08:25:32.892 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-28 08:25:32.892 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-28 08:25:32.897 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-28 08:25:32.897 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-28 08:25:32.975 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-28 08:25:32.975 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-28 08:25:32.975 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-28 08:25:32.975 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-28 08:25:32.977 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-28 08:25:32.980 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-28 08:25:33.110 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-28 08:25:33.110 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-28 08:25:33.110 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-28 08:25:33.110 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-28 08:25:33.110 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-28 08:25:33.114 | warning  |          Fabric | Failed to export physical chip mesh coordinate mapping: filesystem error: cannot create directories: Permission denied [/home/container_app_user/logs/generated/fabric] (control_plane.cpp:621)
+2026-09-28 08:25:33.114 | warning  |          Fabric | Failed to export ASIC to Fabric node ID mapping: filesystem error: cannot create directories: Permission denied [/home/container_app_user/logs/generated/fabric] (control_plane.cpp:630)
+2026-09-28 08:25:33.114 | warning  |          Fabric | Failed to export inter-mesh port assignment: filesystem error: cannot create directories: Permission denied [/home/container_app_user/logs/generated/fabric] (control_plane.cpp:651)
+2026-09-28 08:25:33.114 | warning  |       Inspector | Failed to create logging directory: /home/container_app_user/logs/generated/inspector. Error: filesystem error: cannot create directories: Permission denied [/home/container_app_user/logs/generated/inspector]
+
+You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality. (logger.cpp:39)
+2026-09-28 08:25:33.163 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_prefill.py", line 193, in <module>
+    main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_prefill.py", line 42, in main
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1024**3)
+  File "/home/container_app_user/tt-metal/ttnn/ttnn/distributed/distributed.py", line 671, in open_mesh_device
+    return ttnn._ttnn.multi_device.open_mesh_device(
+RuntimeError: filesystem error: cannot create directories: Permission denied [/home/container_app_user/logs/generated/watcher/]
+2026-09-28 08:25:33.925 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-28 08:25:33.925 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-28 08:25:34.411 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-28 08:25:34.411 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-28 08:25:34.411 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

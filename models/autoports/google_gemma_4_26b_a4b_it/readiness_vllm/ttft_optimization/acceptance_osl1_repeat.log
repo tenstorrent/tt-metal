@@ -1,0 +1,4 @@
+RUN s128-o1-c1.json
+{"completed": 10, "median_ttft_ms": 96.68883681297302, "p99_ttft_ms": 100.93400489538908, "mean_tpot_ms": 0.0, "median_itl_ms": 0.0}
+RUN s128-o128-c1.json
+{"completed": 3, "median_ttft_ms": 101.32535453885794, "p99_ttft_ms": 104.50524533167481, "mean_tpot_ms": 19.201197307019097, "median_itl_ms": 18.977059051394463}

@@ -3,6 +3,7 @@
 """Host checks that persistent state slots cannot redirect paged KV writes."""
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -12,6 +13,7 @@ from vllm_tt_plugin.model_runner import TTModelRunner
 import ttnn
 from models.autoports.google_gemma_4_26b_a4b_it.tt.generator import Gemma4Generator
 from models.autoports.google_gemma_4_26b_a4b_it.tt.generator_vllm import AutoportGemma4ForCausalLM
+from models.common.sampling.generator import SamplingParams as DeviceSamplingParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.worker.gpu_input_batch import CachedRequestState
@@ -106,3 +108,51 @@ def test_prefill_cache_rows_are_compact_despite_live_state_slots(monkeypatch, he
     runner.submit_prefill(model_input, [new_requests])
 
     assert selected == expected
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+def test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns(monkeypatch, batch):
+    """A compact token batch can arrive with the full 32-row serving tables."""
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda value: [value])
+    monkeypatch.setattr(ttnn, "to_torch", lambda value: value)
+    sliding = torch.arange(32 * 8192, dtype=torch.int32).reshape(32, 8192)
+    full = sliding + 1000000
+    tables = [sliding] * 30
+    tables[5] = full
+    snapshots = [sliding.clone(), full.clone()]
+    cache = object()
+    generator = SimpleNamespace(
+        mesh=None,
+        model=SimpleNamespace(layer_indices=(0, 5)),
+        prefill_trace_enabled=True,
+        prefill_prepared={},
+        _release_trace=Mock(),
+        serving_prefill_eligible=Mock(return_value=True),
+        can_reuse_serving_prefill=Mock(return_value=True),
+        configure_sampling=Mock(),
+        serving_prefill_tokens=Mock(return_value=torch.arange(32, dtype=torch.int32)),
+    )
+    adapter = AutoportGemma4ForCausalLM(generator, 32)
+    params = DeviceSamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+    output = adapter.prefill_forward(
+        torch.full((batch, 128), 100),
+        sliding,
+        cache,
+        [128] * batch,
+        sampling_params=params,
+        page_tables_per_layer=tables,
+        empty_slots=list(range(7, 7 + batch)),
+    )
+    assert output.flatten().tolist() == list(range(batch))
+    for method in (generator.can_reuse_serving_prefill, generator.serving_prefill_tokens):
+        method.assert_called_once()
+        kwargs = method.call_args.kwargs
+        assert kwargs["kv_cache"] is cache
+        assert kwargs["prompt_lens"] == [128] * batch
+        for observed, original in zip(kwargs["page_table"], (sliding, full)):
+            assert observed.shape == (batch, 8192)
+            assert observed.data_ptr() == original.data_ptr()
+            assert torch.equal(observed, original[:batch])
+    assert generator.configure_sampling.call_args.kwargs["_reuse_trace"] is True
+    assert torch.equal(sliding, snapshots[0])
+    assert torch.equal(full, snapshots[1])

@@ -1,0 +1,136 @@
+{
+  "scope": "Reduced layers 0 and 5, direct adapter; synchronized timings are not real-server TTFT",
+  "layers": [
+    0,
+    5
+  ],
+  "max_seq_len": 2048,
+  "trace_region_size": 1073741824,
+  "baseline_only": true,
+  "skipped": [],
+  "eager_phases": [
+    {
+      "label": "first_use",
+      "length": 32,
+      "configure_ms": 0.558752566576004,
+      "model_ms": 861.1301491037011,
+      "sampling_ms": 45.27353588491678,
+      "read_ms": 0.23681111633777618,
+      "token": 47,
+      "sum_ms": 907.1992486715317
+    },
+    {
+      "label": "warm_1",
+      "length": 32,
+      "configure_ms": 0.633634626865387,
+      "model_ms": 7.857440039515495,
+      "sampling_ms": 1.083720475435257,
+      "read_ms": 0.08310750126838684,
+      "token": 47,
+      "sum_ms": 9.657902643084526
+    },
+    {
+      "label": "warm_2",
+      "length": 32,
+      "configure_ms": 0.37732813507318497,
+      "model_ms": 6.122482009232044,
+      "sampling_ms": 0.8436935022473335,
+      "read_ms": 0.09234528988599777,
+      "token": 47,
+      "sum_ms": 7.4358489364385605
+    },
+    {
+      "label": "first_use",
+      "length": 128,
+      "configure_ms": 0.3782697021961212,
+      "model_ms": 545.8892099559307,
+      "sampling_ms": 2.389964647591114,
+      "read_ms": 0.1569986343383789,
+      "token": 143,
+      "sum_ms": 548.8144429400563
+    },
+    {
+      "label": "warm_1",
+      "length": 128,
+      "configure_ms": 0.5910433828830719,
+      "model_ms": 9.691517800092697,
+      "sampling_ms": 0.9790407493710518,
+      "read_ms": 0.11478923261165619,
+      "token": 143,
+      "sum_ms": 11.376391164958477
+    },
+    {
+      "label": "warm_2",
+      "length": 128,
+      "configure_ms": 0.5327733233571053,
+      "model_ms": 8.21653287857771,
+      "sampling_ms": 0.8411994203925133,
+      "read_ms": 0.08914992213249207,
+      "token": 143,
+      "sum_ms": 9.67965554445982
+    },
+    {
+      "label": "first_use",
+      "length": 129,
+      "configure_ms": 0.4060119390487671,
+      "model_ms": 529.1261961683631,
+      "sampling_ms": 1.1600255966186523,
+      "read_ms": 0.16020424664020538,
+      "token": 63,
+      "sum_ms": 530.8524379506707
+    },
+    {
+      "label": "warm_1",
+      "length": 129,
+      "configure_ms": 0.5559278652071953,
+      "model_ms": 10.218088515102863,
+      "sampling_ms": 0.9158020839095116,
+      "read_ms": 0.09135343134403229,
+      "token": 63,
+      "sum_ms": 11.781171895563602
+    },
+    {
+      "label": "warm_2",
+      "length": 129,
+      "configure_ms": 0.4983879625797272,
+      "model_ms": 10.022115893661976,
+      "sampling_ms": 0.8462294936180115,
+      "read_ms": 0.07506273686885834,
+      "token": 63,
+      "sum_ms": 11.441796086728573
+    },
+    {
+      "label": "first_use",
+      "length": 256,
+      "configure_ms": 0.37211738526821136,
+      "model_ms": 540.9198217093945,
+      "sampling_ms": 1.1837203055620193,
+      "read_ms": 0.25878194719552994,
+      "token": 267,
+      "sum_ms": 542.7344413474202
+    },
+    {
+      "label": "warm_1",
+      "length": 256,
+      "configure_ms": 0.5818363279104233,
+      "model_ms": 12.824616394937038,
+      "sampling_ms": 0.9718779474496841,
+      "read_ms": 0.10446924716234207,
+      "token": 267,
+      "sum_ms": 14.482799917459488
+    },
+    {
+      "label": "warm_2",
+      "length": 256,
+      "configure_ms": 0.46765897423028946,
+      "model_ms": 11.429262347519398,
+      "sampling_ms": 0.8514588698744774,
+      "read_ms": 0.08912943303585052,
+      "token": 267,
+      "sum_ms": 12.837509624660015
+    }
+  ],
+  "controls": [],
+  "traced": [],
+  "passed": true
+}

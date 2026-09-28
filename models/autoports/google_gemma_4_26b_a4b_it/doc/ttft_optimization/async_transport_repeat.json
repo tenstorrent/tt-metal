@@ -1,0 +1,115 @@
+{
+  "scope": "C1 host-clock decomposition; runner prefill includes host work and device wait, not pure device time",
+  "clock": "time.perf_counter on the same host; native start_times and observer timestamp_ns",
+  "events": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/selected_async/events_repeat.json",
+  "events_publication": "The oversized events original is published as events_repeat.json.gz in the same directory; decompress to reconstruct the exact source. publication_manifest.json records both archive and original SHA256.",
+  "benchmark": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/selected_async_repeat/s128-o16-c1.json",
+  "rows": [
+    {
+      "index": 0,
+      "request_id": "cmpl-gemma4-s128-o16-c1-0-0-a93b590b",
+      "ttft_ms": 104.3906919658184,
+      "client_to_prefill_dispatch_ms": 2.364411950111389,
+      "runner_prefill_ms": 94.778019,
+      "prefill_completion_to_client_token_ms": 7.248261012136936,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.193839
+    },
+    {
+      "index": 1,
+      "request_id": "cmpl-gemma4-s128-o16-c1-1-0-bf53021d",
+      "ttft_ms": 102.04423405230045,
+      "client_to_prefill_dispatch_ms": 2.716151997447014,
+      "runner_prefill_ms": 92.487147,
+      "prefill_completion_to_client_token_ms": 6.840934976935387,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.159764
+    },
+    {
+      "index": 2,
+      "request_id": "cmpl-gemma4-s128-o16-c1-2-0-977502ef",
+      "ttft_ms": 105.39449192583561,
+      "client_to_prefill_dispatch_ms": 2.8235455974936485,
+      "runner_prefill_ms": 93.753648,
+      "prefill_completion_to_client_token_ms": 8.817298337817192,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.209579
+    },
+    {
+      "index": 3,
+      "request_id": "cmpl-gemma4-s128-o16-c1-3-0-9d9e7952",
+      "ttft_ms": 105.78970517963171,
+      "client_to_prefill_dispatch_ms": 2.5979671627283096,
+      "runner_prefill_ms": 96.45437,
+      "prefill_completion_to_client_token_ms": 6.737368181347847,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.163551
+    },
+    {
+      "index": 4,
+      "request_id": "cmpl-gemma4-s128-o16-c1-4-0-b760e935",
+      "ttft_ms": 104.19536847621202,
+      "client_to_prefill_dispatch_ms": 2.6318607851862907,
+      "runner_prefill_ms": 94.078697,
+      "prefill_completion_to_client_token_ms": 7.484810426831245,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.20474
+    },
+    {
+      "index": 5,
+      "request_id": "cmpl-gemma4-s128-o16-c1-5-0-8bbd1846",
+      "ttft_ms": 109.01622846722603,
+      "client_to_prefill_dispatch_ms": 2.8201602399349213,
+      "runner_prefill_ms": 95.511755,
+      "prefill_completion_to_client_token_ms": 10.684313252568245,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.21003
+    },
+    {
+      "index": 6,
+      "request_id": "cmpl-gemma4-s128-o16-c1-6-0-91685e0b",
+      "ttft_ms": 108.39026607573032,
+      "client_to_prefill_dispatch_ms": 2.644173800945282,
+      "runner_prefill_ms": 95.453394,
+      "prefill_completion_to_client_token_ms": 10.292698629200459,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.238655
+    },
+    {
+      "index": 7,
+      "request_id": "cmpl-gemma4-s128-o16-c1-7-0-983cc841",
+      "ttft_ms": 110.63283775001764,
+      "client_to_prefill_dispatch_ms": 2.6786718517541885,
+      "runner_prefill_ms": 93.198841,
+      "prefill_completion_to_client_token_ms": 14.755325391888618,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.274303
+    },
+    {
+      "index": 8,
+      "request_id": "cmpl-gemma4-s128-o16-c1-8-0-ad97926c",
+      "ttft_ms": 109.40349474549294,
+      "client_to_prefill_dispatch_ms": 2.657630480825901,
+      "runner_prefill_ms": 95.837345,
+      "prefill_completion_to_client_token_ms": 10.908519849181175,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.203818
+    },
+    {
+      "index": 9,
+      "request_id": "cmpl-gemma4-s128-o16-c1-9-0-b8b47f92",
+      "ttft_ms": 100.37402249872684,
+      "client_to_prefill_dispatch_ms": 2.5956016033887863,
+      "runner_prefill_ms": 93.220263,
+      "prefill_completion_to_client_token_ms": 4.558158107101917,
+      "decode_completions": 15,
+      "first_decode_dispatch_after_prefill_ms": 0.248553
+    }
+  ],
+  "medians": {
+    "ttft_ms": 105.59209855273366,
+    "client_to_prefill_dispatch_ms": 2.6509021408855915,
+    "runner_prefill_ms": 94.428358,
+    "prefill_completion_to_client_token_ms": 8.151054382324219
+  }
+}

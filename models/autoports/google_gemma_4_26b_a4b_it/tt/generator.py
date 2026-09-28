@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Readiness generator with separate model and common-sampler decode traces."""
 
+import os
 import secrets
 import time
 from types import SimpleNamespace
@@ -92,6 +93,25 @@ class Gemma4Generator(Generator):
             format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
         )
         self.trace_id = None
+        self.prefill_trace_enabled = os.environ.get("GEMMA4_PREFILL_TRACE", "1") == "1"
+        self.prefill_prepared = None
+        self.prefill_trace_id = None
+        self.prefill_sampling_trace_id = None
+        print(f"PREFILL_TRACE_POLICY enabled={self.prefill_trace_enabled} max_length=1024 entries=1", flush=True)
+        policies = {
+            (
+                layer.layer.moe.experts.prefill.short_prefill_batch_tokens,
+                tuple(
+                    (rows, configs[0].in0_block_w, configs[1].in0_block_w, configs[1].per_core_N)
+                    for rows, configs in layer.layer.moe.experts.prefill.prefill_configs.items()
+                ),
+            )
+            for layer in self.model.layers
+        }
+        print(
+            f"PREFILL_EXPERT_POLICIES {sorted(policies)} fields=(rows,gateK,downK,downN) wider_rows=128..256",
+            flush=True,
+        )
         self._trace_returns_logits = False
         self.output_trace_id = None
         self.output_buffer = None
@@ -152,6 +172,15 @@ class Gemma4Generator(Generator):
             self._release_trace()
         temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
         self.sampled_mode = any(value != 0.0 for value in temperatures)
+        if getattr(self, "prefill_prepared", None) is not None and (
+            self.host_sampling
+            or self.sampled_mode
+            or any(value != 0 for value in formatted.presence_penalty + formatted.frequency_penalty)
+            or any(value != 1 for value in formatted.repetition_penalty)
+            or any(formatted.enable_log_probs)
+        ):
+            self._release_trace()
+            self.prefill_prepared = None
         self._reset_sampling_seeds(formatted.seed, seed_offsets)
         self.sampler.reset_sampling_params(formatted)
         if prompt_tokens is not None:
@@ -196,6 +225,10 @@ class Gemma4Generator(Generator):
         return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1)).float()
 
     def _release_trace(self):
+        for name in ("prefill_trace_id", "prefill_sampling_trace_id"):
+            if (trace := getattr(self, name, None)) is not None:
+                ttnn.release_trace(self.mesh, trace)
+                setattr(self, name, None)
         if self.output_trace_id is not None:
             ttnn.release_trace(self.mesh, self.output_trace_id)
             self.output_trace_id = None
@@ -239,6 +272,151 @@ class Gemma4Generator(Generator):
 
     def teardown(self):
         self._release_trace()
+        self.prefill_prepared = None
+
+    def serving_prefill_eligible(self, params):
+        """The bounded fast path currently covers canonical greedy sampling."""
+        if not self.prefill_trace_enabled:
+            return False
+        formatted = self._validate_sampling(params)
+        temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
+        return (
+            all(value == 0 for value in temperatures)
+            and all(value == 0 for value in formatted.presence_penalty)
+            and all(value == 0 for value in formatted.frequency_penalty)
+            and all(value == 1 for value in formatted.repetition_penalty)
+            and not any(formatted.enable_log_probs)
+        )
+
+    def _serving_prefill_key(self, tokens, page_table, kv_cache, prompt_lens):
+        if not self.prefill_trace_enabled or len(prompt_lens) != 1 or tokens.shape[0] != 1:
+            return None
+        length = int(prompt_lens[0])
+        if not 1 <= length <= min(1024, tokens.shape[1], self.model.max_seq_len):
+            return None
+        tables = self._tables(page_table)
+        if any(not isinstance(table, torch.Tensor) or table.ndim != 2 or table.shape[0] != 1 for table in tables):
+            return None
+        return (length, id(kv_cache), tuple(id(t) for pair in kv_cache for t in pair), self._table_shapes(page_table))
+
+    def can_reuse_serving_prefill(self, tokens, *, page_table, kv_cache, prompt_lens):
+        key = self._serving_prefill_key(tokens, page_table, kv_cache, prompt_lens)
+        return bool(
+            key is not None
+            and self.prefill_prepared is not None
+            and self.prefill_prepared["key"] == key
+            and self.prefill_trace_id is not None
+            and self.prefill_sampling_trace_id is not None
+        )
+
+    def can_reuse_serving_decode(self, params):
+        """Allow padded scheduler parameters to refresh a compatible graph.
+
+        Prefill has compact parameter rows; decode pads them to max_num_seqs.
+        Their repr differs even when the live request has unchanged sampling.
+        The model graph also fixes whether device seeds advance, so that mode
+        must match independently of the sampler's persistent parameter values.
+        """
+        if self.prefill_prepared is None or self.trace_id is None or self._trace_returns_logits:
+            return False
+        formatted = self._validate_sampling(params)
+        temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
+        return (
+            self._trace_sampled_mode == any(value != 0 for value in temperatures)
+            and not self.sampler._penalties_active
+            and not self.sampler._log_probs_active
+            and all(value == 0 for value in formatted.presence_penalty)
+            and all(value == 0 for value in formatted.frequency_penalty)
+            and all(value == 1 for value in formatted.repetition_penalty)
+            and not any(formatted.enable_log_probs)
+        )
+
+    def _prefill_trace_step(self):
+        state = self.prefill_prepared
+        logits = self.model.prefill_forward(
+            state["tokens"], page_table=state["tables"], kv_cache=state["cache"], user_id=0
+        )
+        ttnn.copy(self._sampler_logits(logits), state["logits"])
+
+    def _prefill_sampling_step(self):
+        state = self.prefill_prepared
+        self.sampler.sample(state["logits"], tt_out_tok=state["output"], enable_trace=False)
+
+    def serving_prefill_tokens(self, tokens, *, page_table, kv_cache, prompt_lens):
+        """Own one exact-length prefill graph, with an eager general fallback."""
+        key = self._serving_prefill_key(tokens, page_table, kv_cache, prompt_lens)
+        # Also enforce eligibility for direct generator callers: the adapter
+        # check alone must not allow a sampled/penalized graph to be captured.
+        if self.host_sampling or self.sampled_mode or self.sampler._penalties_active or self.sampler._log_probs_active:
+            key = None
+        if key is None:
+            logits = self.prefill_forward(tokens, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens)
+            return self.sample_prefill(logits)
+        if self.prefill_prepared is None or self.prefill_prepared["key"] != key:
+            self._release_trace()
+            self.prefill_prepared = None
+            self.prefill_prepared = dict(
+                key=key,
+                cache=kv_cache,
+                tokens=self.model.upload(
+                    tokens[:, : key[0]].reshape(1, 1, 1, key[0]).int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+                tables=self._upload_page_tables(page_table),
+                table_host=self._clone_tables(page_table),
+                logits=self.model.upload(torch.zeros(1, 1, 32, self.model.config.vocab_size // 4)),
+                output=self.model.upload(
+                    torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+            )
+        state = self.prefill_prepared
+        self._copy(tokens[:, : key[0]].reshape(1, 1, 1, key[0]).int(), state["tokens"], "prefill_token_refreshes")
+        changed = False
+        for host, previous, device in zip(
+            self._tables(page_table), self._tables(state["table_host"]), self._tables(state["tables"])
+        ):
+            if not torch.equal(host, previous):
+                self._copy(host, device, "prefill_page_refreshes")
+                changed = True
+        if changed:
+            state["table_host"] = self._clone_tables(page_table)
+        # OSL1 workloads never enter decode warmup. On their second matching
+        # request, the existing prefill programs and persistent outputs are
+        # already warm, so they can own a prefill-only trace. A later decode
+        # bind releases it before allocating decode state and recapturing.
+        if self.prefill_trace_id is None and state.get("warmed", False):
+            self._capture_prefill()
+        if self.prefill_trace_id is None:
+            self._prefill_trace_step()
+            self._prefill_sampling_step()
+            state["warmed"] = True
+            self.counters["prefill_eager_calls"] = self.counters.get("prefill_eager_calls", 0) + 1
+        else:
+            ttnn.execute_trace(self.mesh, self.prefill_trace_id, cq_id=0, blocking=False)
+            ttnn.execute_trace(self.mesh, self.prefill_sampling_trace_id, cq_id=0, blocking=False)
+            self.counters["prefill_replays"] = self.counters.get("prefill_replays", 0) + 1
+        self.last_log_probs = None
+        return state["output"]
+
+    def _capture_prefill(self):
+        if self.prefill_prepared is None:
+            return
+        # Prepared inputs/output predate decode warmup. Capture records the
+        # already-warmed prefill graph without mutating the live decode cache.
+        try:
+            for name, step in (
+                ("prefill_trace_id", self._prefill_trace_step),
+                ("prefill_sampling_trace_id", self._prefill_sampling_step),
+            ):
+                trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                setattr(self, name, trace)
+                try:
+                    step()
+                finally:
+                    ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+        except BaseException:
+            self._release_trace()
+            raise
+        self.counters["prefill_captures"] = self.counters.get("prefill_captures", 0) + 1
 
     def _standalone_cache(self, context, *, reuse_trace=False):
         # New prompt signatures can compile prefill programs. Release decode
@@ -254,6 +432,9 @@ class Gemma4Generator(Generator):
         return self.owned_table
 
     def prefill_forward(self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, slots=None):
+        if getattr(self, "prefill_prepared", None) is not None:
+            self._release_trace()
+            self.prefill_prepared = None
         slots = list(range(len(prompt_lens))) if slots is None else list(slots)
         if len(slots) != len(prompt_lens) or tokens.shape[0] != len(slots):
             raise ValueError("Prompt, slot and batch dimensions differ")
@@ -354,6 +535,8 @@ class Gemma4Generator(Generator):
             raise ValueError("Decode position outside the page table; only -1 denotes an inactive slot")
         self._release_trace()
         self.batch = batch
+        if self.prefill_prepared is not None and (batch != 1 or self.prefill_prepared["cache"] is not kv_cache):
+            self.prefill_prepared = None
         self.active_slots = tuple(i for i, value in enumerate(positions.tolist()) if value >= 0)
         if not self.active_slots or any(value >= self.model.max_seq_len for value in positions.tolist()):
             raise ValueError("Decode needs a valid active slot; -1 marks inactive positions")
@@ -376,6 +559,7 @@ class Gemma4Generator(Generator):
 
     def _capture(self, *, return_logits=False):
         self._trace_returns_logits = return_logits
+        self._trace_sampled_mode = self.sampled_mode
         if not return_logits:
             self._format_tokens()
         initial_tokens = ttnn.clone(self.tokens)
@@ -396,6 +580,7 @@ class Gemma4Generator(Generator):
         ttnn.end_trace_capture(self.mesh, self.trace_id, cq_id=0)
         if not return_logits:
             self.sampler.capture_trace(self.trace_logits, tt_out_tok=self.tokens, skip_precompile=True)
+            self._capture_prefill()
         ttnn.copy(initial_tokens, self.tokens)
         ttnn.copy(initial_positions, self.positions)
         ttnn.copy(initial_cache_positions, self.cache_positions)

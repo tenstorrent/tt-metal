@@ -1,0 +1,125 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+# Archived test of a rejected experiment; not part of the deployment test suite.
+"""CPU-only contracts for the opt-in first-decode scheduling handoff."""
+
+from types import SimpleNamespace
+from unittest.mock import Mock, call
+
+import pytest
+import torch
+
+from models.autoports.google_gemma_4_26b_a4b_it.tt import generator_vllm as adapter_module
+
+
+@pytest.fixture
+def handoff(monkeypatch):
+    monkeypatch.setenv("GEMMA4_PREFILL_HANDOFF_YIELD", "1")
+    monkeypatch.delenv("GEMMA4_AUTOPORT_TTFT_DIAGNOSTICS", raising=False)
+    monkeypatch.delenv("GEMMA4_BENCHMARK_CONTROL", raising=False)
+    output = torch.tensor([[7]], dtype=torch.int32)
+    gen = SimpleNamespace(
+        mesh=None,
+        prefill_trace_enabled=True,
+        prefill_prepared=object(),
+        serving_prefill_eligible=Mock(return_value=True),
+        can_reuse_serving_prefill=Mock(return_value=True),
+        can_reuse_serving_decode=Mock(return_value=True),
+        configure_sampling=Mock(),
+        restore_sampling_state=Mock(),
+        serving_prefill_tokens=Mock(return_value=output),
+        prefill_forward=Mock(return_value=output),
+        sample_prefill=Mock(return_value=output),
+        decode_forward=Mock(return_value=output),
+        _release_trace=Mock(),
+    )
+    adapter = adapter_module.AutoportGemma4ForCausalLM(gen, 32)
+    adapter._select_sampling_mode = Mock(return_value=False)
+    adapter._tables = lambda page_table, per_layer: (page_table,)
+    adapter._read_host_logits = Mock(return_value=output)
+    monkeypatch.setattr(adapter_module.ttnn, "get_device_tensors", lambda value: [value])
+    monkeypatch.setattr(adapter_module.ttnn, "to_torch", lambda value: value)
+    sleep = Mock()
+    monkeypatch.setattr(adapter_module.time, "sleep", sleep)
+    return adapter, gen, sleep
+
+
+def prefill(adapter, batch=1):
+    return adapter.prefill_forward(
+        torch.ones(batch, 32, dtype=torch.int32), torch.zeros(32, 8, dtype=torch.int32), object(), [32] * batch
+    )
+
+
+def decode(adapter, *, positions=(32, -1), read_from_device=False):
+    return adapter.decode_forward(
+        torch.ones(len(positions), 1, dtype=torch.int32),
+        torch.tensor(positions),
+        torch.zeros(32, 8, dtype=torch.int32),
+        object(),
+        read_from_device=read_from_device,
+    )
+
+
+def test_handoff_yields_once_after_each_successful_prefill(handoff):
+    adapter, gen, sleep = handoff
+    prefill(adapter)
+    assert adapter._prefill_handoff_pending
+    sleep.side_effect = lambda seconds: gen.decode_forward.assert_not_called()
+    assert decode(adapter).item() == 7
+    assert not adapter._prefill_handoff_pending
+    sleep.side_effect = None
+    decode(adapter)
+    assert sleep.call_args_list == [call(0)]
+    prefill(adapter)
+    decode(adapter)
+    assert sleep.call_args_list == [call(0), call(0)]
+
+
+@pytest.mark.parametrize("mode", ["disabled", "steady", "multiple", "host", "sync"])
+def test_unsupported_decode_consumes_handoff_without_yield(handoff, mode):
+    adapter, _, sleep = handoff
+    prefill(adapter)
+    adapter.prefill_handoff_yield = mode != "disabled"
+    if mode == "steady":
+        adapter._prefill_handoff_pending = False
+    adapter._select_sampling_mode.return_value = mode == "host"
+    decode(adapter, positions=(32, 32) if mode == "multiple" else (32, -1), read_from_device=mode == "sync")
+    assert not adapter._prefill_handoff_pending
+    adapter.prefill_handoff_yield = True
+    adapter._select_sampling_mode.return_value = False
+    decode(adapter)
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("fallback", ["host", "sampled", "trace_disabled", "unprepared", "batch", "error"])
+def test_new_prefill_clears_previous_handoff_even_on_fallback_or_error(handoff, fallback):
+    adapter, gen, sleep = handoff
+    prefill(adapter)
+    assert adapter._prefill_handoff_pending
+    adapter._select_sampling_mode.return_value = fallback == "host"
+    gen.serving_prefill_eligible.return_value = fallback != "sampled"
+    gen.prefill_trace_enabled = fallback != "trace_disabled"
+    if fallback == "unprepared":
+        gen.prefill_prepared = None
+    if fallback == "error":
+        gen.serving_prefill_tokens.side_effect = RuntimeError("prefill failed")
+        with pytest.raises(RuntimeError, match="prefill failed"):
+            prefill(adapter)
+    else:
+        prefill(adapter, batch=2 if fallback == "batch" else 1)
+    assert not adapter._prefill_handoff_pending
+    adapter._select_sampling_mode.return_value = False
+    decode(adapter)
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [None, "0", "true", "1"])
+def test_handoff_requires_explicit_environment_opt_in(handoff, monkeypatch, value):
+    _, gen, _ = handoff
+    if value is None:
+        monkeypatch.delenv("GEMMA4_PREFILL_HANDOFF_YIELD", raising=False)
+    else:
+        monkeypatch.setenv("GEMMA4_PREFILL_HANDOFF_YIELD", value)
+    adapter = adapter_module.AutoportGemma4ForCausalLM(gen, 32)
+    assert adapter.prefill_handoff_yield is (value == "1")
+    assert not adapter._prefill_handoff_pending

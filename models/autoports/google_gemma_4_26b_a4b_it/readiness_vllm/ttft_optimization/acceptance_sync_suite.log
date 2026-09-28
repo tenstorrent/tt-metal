@@ -1,0 +1,78 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+=== Running qualitative prompts from /home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/runtime/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+  Prompt mode: chat
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : 'Data flows through nodes, Patterns emerge from the noise, Learning how to see.'
+    Sampled: 'Data flows through code, Patterns emerge from the noise, Learning how to see.'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : 'To understand the difference, imagine you are teaching a child how to identify d'
+    Sampled: 'To understand the difference, imagine you are teaching a child how to recognize '
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : 'Once upon a time, in a faraway kingdom, there lived a curious young inventor who'
+    Sampled: 'Once upon a time, in a faraway kingdom, there lived a curious young inventor who'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : 'While there are technically four statements (the Zeroth, First, Second, and Thir'
+    Sampled: 'While the laws of thermodynamics are often numbered 0 through 3, they are collec'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : 'There are a few ways to say this depending on the level of formality:  **1. Form'
+    Sampled: 'The most common ways to say this in French are:  **Informal (to a friend or fami'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : 'There are several ways to implement a Fibonacci function in Python, depending on'
+    Sampled: 'Depending on your needs (performance, simplicity, or memory efficiency), there a'
+
+Saved 6 completions to /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+=== Running vLLM serving benchmark: single_user_decode ===
+  prompt_len=128, output_len=128, num_requests=1, concurrency=1, temperature=0.0
+  comparison_scope: Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.
+  command: /home/container_app_user/tt-metal/python_env/bin/vllm bench serve --backend vllm --model google/gemma-4-26B-A4B-it --base-url http://127.0.0.1:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0
+  log: /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_benchmark.log
+
+=== Serving benchmark summary: single_user_decode ===
+  Requests : 1/1 completed
+  TTFT     : P50=148.0ms  P99=148.0ms
+  TPOT     : mean=24.5ms  P99=24.5ms
+  ITL      : P50=20.1ms  P99=21.5ms
+  Output   : 39.3 tok/s aggregate
+  Decode   : 40.8 t/s/u from mean TPOT
+  Raw      : /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_result.json
+  Summary  : /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_benchmark.json
+
+=== Running vLLM serving benchmark: ci_serving_burst ===
+  prompt_len=100, output_len=100, num_requests=32, concurrency=None, temperature=0.0
+  comparison_scope: vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT.
+  command: /home/container_app_user/tt-metal/python_env/bin/vllm bench serve --backend vllm --model google/gemma-4-26B-A4B-it --base-url http://127.0.0.1:8000 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_ci_serving_result.json --temperature 0.0
+  log: /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_ci_serving_benchmark.log
+
+=== Serving benchmark summary: ci_serving_burst ===
+  Requests : 32/32 completed
+  TTFT     : P50=4157.4ms  P99=4158.6ms
+  TPOT     : mean=791.1ms  P99=817.7ms
+  ITL      : P50=681.4ms  P99=4229.9ms
+  Output   : 38.9 tok/s aggregate
+  Decode   : 1.3 t/s/u from mean TPOT
+  Raw      : /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_ci_serving_result.json
+  Summary  : /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_ci_serving_benchmark.json
+
+=== Running plugin sampling tests ===
+  profile: full (1 target(s))
+  tt-max-num-seqs: 32
+  cmd: /home/container_app_user/tt-metal/python_env/bin/python -m pytest /workspace/tt-metal/vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://127.0.0.1:8000 --tt-model-name=google/gemma-4-26B-A4B-it --tt-max-num-seqs=32
+  log: /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/sampling_tests.log
+  PASS
+
+============================================================
+vLLM checks complete. Results in /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm
+============================================================

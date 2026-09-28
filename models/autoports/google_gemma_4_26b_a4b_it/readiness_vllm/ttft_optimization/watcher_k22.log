@@ -1,0 +1,122 @@
+2026-09-28 09:44:21.773 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-28 09:44:21.773 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-28 09:44:21.773 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-28 09:44:21.773 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-28 09:44:21.778 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-28 09:44:21.779 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-28 09:44:21.859 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-28 09:44:21.859 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-28 09:44:21.859 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-28 09:44:21.859 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-28 09:44:21.861 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-28 09:44:22.127 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-28 09:44:22.258 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-28 09:44:22.258 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-28 09:44:22.258 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-28 09:44:22.259 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-28 09:44:22.259 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-28 09:44:22.321 | info     |       LLRuntime | Watcher log file: /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/watcher_k22_runtime/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-09-28 09:44:22.321 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:568)
+2026-09-28 09:44:22.321 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:22.326 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:22.327 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-28 09:44:22.333 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:22.338 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:22.372 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-28 09:44:22.372 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+LAYER_READY 0
+2026-09-28 09:44:32.447 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:32.452 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:32.456 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:32.461 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+LAYER_READY 5
+MODEL_READY
+PREFILL_TRACE_POLICY enabled=True max_length=1024 entries=1
+PREFILL_EXPERT_POLICIES [(32, ((32, 22),))] physical_rows=128..256
+2026-09-28 09:44:40.212 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-28 09:44:40.213 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.213 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.213 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.213 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.217 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-28 09:44:40.217 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.217 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.217 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:40.217 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-28 09:44:42.473 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:42.478 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:42.482 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:42.487 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:44:52.496 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:52.501 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:52.506 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:44:52.510 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:02.520 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:02.525 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:02.530 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:02.534 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:12.544 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:12.549 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:12.554 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:12.558 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:22.568 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:22.573 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:22.578 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:22.583 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:32.593 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:32.597 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:32.602 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:32.607 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+LOGITS_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:42.617 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:42.622 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:42.627 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:42.631 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+LOGITS_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:52.641 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:52.646 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:52.651 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:45:52.655 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+SPLIT_TRACE_READY
+SPLIT_TRACE_READY
+2026-09-28 09:45:57.684 | info     |    BuildKernels | JIT cache stats: 2215/2230 hits (99.3%) [2215 cached, 1963 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-28 09:45:57.684 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-28 09:45:57.689 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:616)
+2026-09-28 09:45:57.708 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-28 09:45:57.708 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-28 09:45:58.228 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-28 09:45:58.229 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-28 09:45:58.229 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

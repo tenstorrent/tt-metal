@@ -1,0 +1,9 @@
+# Generated kernel/engine caches and low-level logs remain local.
+**/vllm_cache/
+**/runtime/
+*_runtime/
+# Oversized observer originals stay local; deterministic .gz originals and the
+# publication manifest preserve their exact bytes below the repository size cap.
+/early_handoff/events.json
+/handoff_async/events.json
+/selected_async/events_repeat.json

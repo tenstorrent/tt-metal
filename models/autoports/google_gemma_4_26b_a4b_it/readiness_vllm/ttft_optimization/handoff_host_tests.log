@@ -1,0 +1,97 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /home/container_app_user/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, cov-7.0.0, dash-2.15.0, repeat-0.9.4, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 16 items
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_yields_once_after_each_successful_prefill PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[disabled] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[steady] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[multiple] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[host] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[sync] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[host] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[sampled] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[trace_disabled] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[unprepared] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[batch] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[error] PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[None] PREFILL_HANDOFF_YIELD enabled=True
+PREFILL_HANDOFF_YIELD enabled=False
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[0] PREFILL_HANDOFF_YIELD enabled=True
+PREFILL_HANDOFF_YIELD enabled=False
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[true] PREFILL_HANDOFF_YIELD enabled=True
+PREFILL_HANDOFF_YIELD enabled=False
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[1] PREFILL_HANDOFF_YIELD enabled=True
+PREFILL_HANDOFF_YIELD enabled=True
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.40s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[unprepared]
+0.33s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[host]
+0.28s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[trace_disabled]
+0.27s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[sampled]
+0.27s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_yields_once_after_each_successful_prefill
+0.26s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[steady]
+0.25s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[host]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[1]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[sync]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[disabled]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[multiple]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[None]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[true]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[batch]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[0]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[error]
+
+(9 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_yields_once_after_each_successful_prefill
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[disabled]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[steady]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[multiple]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[host]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_unsupported_decode_consumes_handoff_without_yield[sync]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[host]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[sampled]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[trace_disabled]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[unprepared]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[batch]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_new_prefill_clears_previous_handoff_even_on_fallback_or_error[error]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[None]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[true]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_handoff.py::test_handoff_requires_explicit_environment_opt_in[1]
+======================== 16 passed, 2 warnings in 5.15s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

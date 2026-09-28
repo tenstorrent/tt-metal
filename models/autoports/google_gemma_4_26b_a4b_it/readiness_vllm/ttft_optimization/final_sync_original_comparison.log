@@ -1,0 +1,410 @@
+{
+  "scope": "Warmed end-to-end native vLLM serving; no device-profiler timings",
+  "occupancy_warmup_note": "Original C1 has3 explicit native warmups, original C8/C32 zero warmups and no optional readiness request. Final synchronous C1 has10 warmups, C8/C32 full occupancy warmup bursts. Includes implementation and scheduler changes; consult separately matched controls, not an isolated kernel gain.",
+  "device_prefill_ms": null,
+  "device_decode_ms": null,
+  "rows": [
+    {
+      "shape": "s100-o100-c32",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline/s100-o100-c32.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s100-o100-c32.json",
+      "baseline_sha256": "a283f7d3ddbbdb7782a39a638b18474d9c0dbbd869bc6d2f472fa708e4630838",
+      "candidate_sha256": "05b4c3d8c7386d30b613a19f7d2ddb018a938a0bbb8b44a8a1728275b2e5b745",
+      "completed": [
+        32,
+        32
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 14971.166097093374,
+        "candidate": 4124.1058595478535
+      },
+      "p99_ttft_ms": {
+        "baseline": 14972.063107509166,
+        "candidate": 4125.135116940364
+      },
+      "mean_tpot_ms": {
+        "baseline": 681.9622100179786,
+        "candidate": 789.8281299711365
+      },
+      "median_itl_ms": {
+        "baseline": 677.1862134337425,
+        "candidate": 681.3535746186972
+      },
+      "mean_e2el_ms": {
+        "baseline": 82145.9250653279,
+        "candidate": 82197.89331129869
+      },
+      "output_throughput": {
+        "baseline": 38.95416004625912,
+        "candidate": 38.92954344788265
+      },
+      "ttft_reduction_percent": 72.4530084510348
+    },
+    {
+      "shape": "s127-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s127-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s127-o16-c1.json",
+      "baseline_sha256": "86aba71ab5c5c7e8d60be1cd7c81e5689123bbf60a889865ebead98eb4631d7c",
+      "candidate_sha256": "cce1ab9e6fe00d08c03244520eed4822468826976e768c29766fb67175a1e6ac",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 428.94880985841155,
+        "candidate": 119.40398020669818
+      },
+      "p99_ttft_ms": {
+        "baseline": 467.42517290636897,
+        "candidate": 124.26180924288929
+      },
+      "mean_tpot_ms": {
+        "baseline": 19.21706578383843,
+        "candidate": 20.18029867981871
+      },
+      "median_itl_ms": {
+        "baseline": 18.969221971929073,
+        "candidate": 20.046664401888847
+      },
+      "mean_e2el_ms": {
+        "baseline": 720.6576146185398,
+        "candidate": 420.3790470957756
+      },
+      "output_throughput": {
+        "baseline": 22.195111870324478,
+        "candidate": 38.04038439895653
+      },
+      "ttft_reduction_percent": 72.16358281863252
+    },
+    {
+      "shape": "s128-o128-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s128-o128-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s128-o128-c1.json",
+      "baseline_sha256": "9c370b94971fc3c0e4e83d9d10c1f37d0748d9eca3c16dee2839eb48e7af350e",
+      "candidate_sha256": "6c89abe72f468a5d93ec3e4b9dc561f8b44e8177f475ee3444ede8ea12e249a5",
+      "completed": [
+        3,
+        3
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 419.10529136657715,
+        "candidate": 95.24080157279968
+      },
+      "p99_ttft_ms": {
+        "baseline": 427.16604828834534,
+        "candidate": 95.28540777042508
+      },
+      "mean_tpot_ms": {
+        "baseline": 19.07914406143305,
+        "candidate": 20.37326702383638
+      },
+      "median_itl_ms": {
+        "baseline": 18.976750783622265,
+        "candidate": 20.125320181250572
+      },
+      "mean_e2el_ms": {
+        "baseline": 2844.1783863430223,
+        "candidate": 2682.508955709636
+      },
+      "output_throughput": {
+        "baseline": 44.99990270857896,
+        "candidate": 47.71215809571182
+      },
+      "ttft_reduction_percent": 77.27520899050263
+    },
+    {
+      "shape": "s128-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s128-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s128-o16-c1.json",
+      "baseline_sha256": "f24bf6487d03d296977f2e5980d4bd725f51922496a0e66d101348e7f3d91b52",
+      "candidate_sha256": "8a9c8734aec5f3db82526c9fe191f69572d5a7675c521c0a4813a532c12ba484",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 424.9854409135878,
+        "candidate": 107.18609672039747
+      },
+      "p99_ttft_ms": {
+        "baseline": 458.0078171938658,
+        "candidate": 112.39058820530772
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.857831731438637,
+        "candidate": 20.529505517333746
+      },
+      "median_itl_ms": {
+        "baseline": 18.9523808658123,
+        "candidate": 20.200250204652548
+      },
+      "mean_e2el_ms": {
+        "baseline": 710.4517622850835,
+        "candidate": 415.1312223635614
+      },
+      "output_throughput": {
+        "baseline": 22.513689115208013,
+        "candidate": 38.520077238096334
+      },
+      "ttft_reduction_percent": 74.77887795638824
+    },
+    {
+      "shape": "s128-o32-c8",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline/s128-o32-c8.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s128-o32-c8.json",
+      "baseline_sha256": "53705fd500d52fe87d143fc967373bfecc4020771ef10cbb2ecbf1f5d96b8d76",
+      "candidate_sha256": "addbe9085c60da709787722643c106c74bc8beb4e49690935d8ba7359df89fa7",
+      "completed": [
+        8,
+        8
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 3745.7269160076976,
+        "candidate": 1001.7950912006199
+      },
+      "p99_ttft_ms": {
+        "baseline": 3746.0038873180747,
+        "candidate": 1001.9059622101485
+      },
+      "mean_tpot_ms": {
+        "baseline": 188.68324351346783,
+        "candidate": 271.0645144820334
+      },
+      "median_itl_ms": {
+        "baseline": 177.7339819818735,
+        "candidate": 180.78402476385236
+      },
+      "mean_e2el_ms": {
+        "baseline": 9255.003389320336,
+        "candidate": 9301.902637351304
+      },
+      "output_throughput": {
+        "baseline": 27.65870704117656,
+        "candidate": 27.519319132517154
+      },
+      "ttft_reduction_percent": 73.2549885866116
+    },
+    {
+      "shape": "s129-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s129-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s129-o16-c1.json",
+      "baseline_sha256": "7194f81addde37573a27d331bd23f49a82b9b4a418a67b0efcf496f06c33eac5",
+      "candidate_sha256": "d4a332bedfbdba62409fb0790974ac3b8665d0828ca7476a55e6baa04dc635e1",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 435.96965866163373,
+        "candidate": 111.41722928732634
+      },
+      "p99_ttft_ms": {
+        "baseline": 447.09003263153136,
+        "candidate": 114.52917251735926
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.871328172584377,
+        "candidate": 20.441186800599098
+      },
+      "median_itl_ms": {
+        "baseline": 18.955306615680456,
+        "candidate": 20.151822362095118
+      },
+      "mean_e2el_ms": {
+        "baseline": 719.2486293613911,
+        "candidate": 417.9211650043726
+      },
+      "output_throughput": {
+        "baseline": 22.238778875518957,
+        "candidate": 38.26373094868935
+      },
+      "ttft_reduction_percent": 74.44381115205087
+    },
+    {
+      "shape": "s256-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s256-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s256-o16-c1.json",
+      "baseline_sha256": "9ebd065bee59bc7e56d4c972ecc25cdb443893f3220ec70f70aa116b984e7d63",
+      "candidate_sha256": "0113dd01f408cd9fd2fc101dec3bbde105e0fa4dfa5d78fecb690451105887ba",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 469.48289731517434,
+        "candidate": 174.16530661284924
+      },
+      "p99_ttft_ms": {
+        "baseline": 474.8060617689043,
+        "candidate": 179.4161666277796
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.957754485309128,
+        "candidate": 20.097813246150807
+      },
+      "median_itl_ms": {
+        "baseline": 19.059536512941122,
+        "candidate": 20.2473858371377
+      },
+      "mean_e2el_ms": {
+        "baseline": 754.1477487422526,
+        "candidate": 474.1096149198711
+      },
+      "output_throughput": {
+        "baseline": 21.209834445487743,
+        "candidate": 33.73191890830657
+      },
+      "ttft_reduction_percent": 62.902736689910085
+    },
+    {
+      "shape": "s32-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s32-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s32-o16-c1.json",
+      "baseline_sha256": "94aac876005a4be912e389b3461153e9dfaa94582314de8f2c06a10d4da1f51a",
+      "candidate_sha256": "013d16b584124e5a727a03936e8a7f18a7029b86a7a0df964eed440a1a900acd",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 384.3230437487364,
+        "candidate": 65.08732261136174
+      },
+      "p99_ttft_ms": {
+        "baseline": 396.24396812170744,
+        "candidate": 74.81443080119789
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.9152363439401,
+        "candidate": 20.17408339306712
+      },
+      "median_itl_ms": {
+        "baseline": 18.976363353431225,
+        "candidate": 20.128510892391205
+      },
+      "mean_e2el_ms": {
+        "baseline": 668.6058668419719,
+        "candidate": 367.6933543756604
+      },
+      "output_throughput": {
+        "baseline": 23.92238824712745,
+        "candidate": 43.48882763586851
+      },
+      "ttft_reduction_percent": 83.06442362224975
+    },
+    {
+      "shape": "s33-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s33-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s33-o16-c1.json",
+      "baseline_sha256": "8f490b64831a80e09efb081c2290538755ac4efadb456f5cf59d00a73c80caa2",
+      "candidate_sha256": "5b1dccaea8e46d2a175a62aeb8050cf8336a57cabeaf29d6d26eaa89b515a8c7",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 395.4601902514696,
+        "candidate": 76.6061251051724
+      },
+      "p99_ttft_ms": {
+        "baseline": 462.2164803277701,
+        "candidate": 86.24570758081973
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.892901744693518,
+        "candidate": 20.449166304121412
+      },
+      "median_itl_ms": {
+        "baseline": 18.988937605172396,
+        "candidate": 20.25199495255947
+      },
+      "mean_e2el_ms": {
+        "baseline": 686.2021630629897,
+        "candidate": 383.69914842769504
+      },
+      "output_throughput": {
+        "baseline": 23.308550827236612,
+        "candidate": 41.67544471663515
+      },
+      "ttft_reduction_percent": 80.62861269134088
+    },
+    {
+      "shape": "s64-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s64-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_matrix/s64-o16-c1.json",
+      "baseline_sha256": "2f1ff9e64e153b0daea1b261d0cbb3299058218f21b07c919ede4015a21482ca",
+      "candidate_sha256": "ca61ec4d18a658a233fc17b2932d79d847cade56fbc82519b935385cb35ea938",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 396.4192047715187,
+        "candidate": 80.89325251057744
+      },
+      "p99_ttft_ms": {
+        "baseline": 400.80648980103433,
+        "candidate": 87.62745400890708
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.793097455054525,
+        "candidate": 20.29196680213014
+      },
+      "median_itl_ms": {
+        "baseline": 18.93793698400259,
+        "candidate": 20.126283634454012
+      },
+      "mean_e2el_ms": {
+        "baseline": 677.1140004508197,
+        "candidate": 384.89577742293477
+      },
+      "output_throughput": {
+        "baseline": 23.62188659581058,
+        "candidate": 41.54494574081886
+      },
+      "ttft_reduction_percent": 79.59401271762268
+    }
+  ],
+  "all_outputs_equal": true,
+  "all_lengths_equal": true
+}

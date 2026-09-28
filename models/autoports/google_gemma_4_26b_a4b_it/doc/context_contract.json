@@ -426,6 +426,42 @@
     "review": "datatype_sweep/stage_review.md",
     "implementation_commit": "e9d0a0a5f9584060e4b4b905c1f2c6621086815d"
   },
+  "ttft_optimization": {
+    "status": "local_clean_pass_remote_qualification_blocked_vllm_publish_access",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "prefill_trace_max_logical_length": 1024,
+    "prefill_trace_entries": 1,
+    "prefill_trace_eligibility": "B1 canonical greedy without penalties/logprobs; exact logical length, external cache identities and table shapes; all other cases retain eager prefill",
+    "short_expert_batch_policy": "Inherited 32 rows by default; expert prefill gate K22 and row32 down44-core grid11x4/N2/K22 selected by full-model geometry sweep and real-weight boundary checks; decode unchanged. Wider experimental override is not the deployment default. Latency-priority deployment selects synchronous scheduling; async remains the separately measured throughput profile.",
+    "trace_region_size": 1000000000,
+    "persistent_tensor_payload_delta_bound_bytes_per_device": 5181568,
+    "payload_components_bytes_per_device": {
+      "prefill_logits_bf16_32_by_65536": 4194304,
+      "prefill_tables_30_by_1_by_8192_int32": 983040,
+      "prefill_tokens_1024_uint32": 4096,
+      "prefill_output_32_uint32": 128,
+      "additional_expert_ownership_indices_all30_layers_uint16": 0
+    },
+    "memory_basis": "Source-derived payload bound, excludes allocator alignment and trace-command storage; existing1GB trace region and inherited2GiB reserve unchanged. No new weights/KV/RoPE or default expert ownership storage. Host page-table snapshots add at most983040 bytes. Rejected128-row expert candidate added552960 persistent ownership bytes and17301504 transient down-output bytes per chip; neither is in the default32-row path. K22/down44 change kernel circular buffers and per-core geometry, not persistent tensor shapes; no allocator-peak claim.",
+    "current_validation_scope": "watcher_down44 reduced layers0/5 passes12controls24traced12transitions4prefill-only cases; expert_down_geometry passes68 real-weight isolated-layer boundary rows, all bitexact including replay; full30-layer async and selected sync matrices complete primary128/128/C1 and C8/C32 bursts. All26 sync matrix/repeat rows preserve optimized async output texts and lengths. Selected sync sampling passes72 tests/1 expected skip;18greedy and6seed71 sampled chat controls exactly match legacy. Prior maximum-context evidence remains inherited, not newly reexecuted by these short-context probes. Independent acceptance and remote qualification remain in progress.",
+    "perf_summary": "ttft_optimization/perf_summary.json",
+    "long_context_path": "Lengths beyond1024 use existing eager prefill and release bounded state; full262144 context/cache allocation and nonaligned logical lengths remain supported",
+    "evidence": [
+      "../readiness_vllm/ttft_optimization/transitions.json",
+      "../readiness_vllm/ttft_optimization/watcher_k22.json",
+      "../readiness_vllm/ttft_optimization/full_candidates_context.json",
+      "../readiness_vllm/ttft_optimization/full_gate.json",
+      "../readiness_vllm/ttft_optimization/full_geometry.json",
+      "../readiness_vllm/ttft_optimization/watcher_down44.json",
+      "../readiness_vllm/ttft_optimization/expert_down_geometry.json",
+      "../readiness_vllm/ttft_optimization/acceptance_matrix/s128-o128-c1.json",
+      "../readiness_vllm/ttft_optimization/acceptance_matrix/s100-o100-c32.json",
+      "../readiness_vllm/ttft_optimization/acceptance_suite/readiness_vllm/vllm_benchmark.json"
+    ]
+  },
   "optimized_vllm": {
     "status": "clean-pass",
     "supported_context": 262144,

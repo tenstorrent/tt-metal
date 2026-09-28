@@ -1,0 +1,49 @@
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/ttft_qualitative_replay.py", line 80, in main
+    save()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/ttft_qualitative_replay.py", line 61, in save
+    args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+  File "/usr/lib/python3.10/json/__init__.py", line 238, in dumps
+    **kw).encode(obj)
+  File "/usr/lib/python3.10/json/encoder.py", line 201, in encode
+    chunks = list(chunks)
+  File "/usr/lib/python3.10/json/encoder.py", line 431, in _iterencode
+    yield from _iterencode_dict(o, _current_indent_level)
+  File "/usr/lib/python3.10/json/encoder.py", line 405, in _iterencode_dict
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 325, in _iterencode_list
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 405, in _iterencode_dict
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 438, in _iterencode
+    o = _default(o)
+  File "/usr/lib/python3.10/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type BatchEncoding is not JSON serializable
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/ttft_qualitative_replay.py", line 123, in <module>
+    main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/ttft_qualitative_replay.py", line 119, in main
+    save()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/ttft_qualitative_replay.py", line 61, in save
+    args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+  File "/usr/lib/python3.10/json/__init__.py", line 238, in dumps
+    **kw).encode(obj)
+  File "/usr/lib/python3.10/json/encoder.py", line 201, in encode
+    chunks = list(chunks)
+  File "/usr/lib/python3.10/json/encoder.py", line 431, in _iterencode
+    yield from _iterencode_dict(o, _current_indent_level)
+  File "/usr/lib/python3.10/json/encoder.py", line 405, in _iterencode_dict
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 325, in _iterencode_list
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 405, in _iterencode_dict
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 438, in _iterencode
+    o = _default(o)
+  File "/usr/lib/python3.10/json/encoder.py", line 179, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type BatchEncoding is not JSON serializable

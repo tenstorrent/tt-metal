@@ -1,0 +1,77 @@
+INFO 09-28 10:24:27 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 09-28 10:24:27 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 09-28 10:24:27 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 09-28 10:24:28 [__init__.py:237] Platform plugin tt is activated
+INFO 09-28 10:24:31 [importing.py:53] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 09-28 10:24:31 [importing.py:88] Triton not installed or not compatible; certain GPU-related functions will not be available.
+2026-09-28 10:24:31.527 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-28 10:24:31.527 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-28 10:24:31.527 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-28 10:24:31.527 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-28 10:24:31.532 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-28 10:24:31.533 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-28 10:24:31.611 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-28 10:24:31.611 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-28 10:24:31.611 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-28 10:24:31.611 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-28 10:24:31.613 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-28 10:24:31.836 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-28 10:24:31.978 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-28 10:24:31.978 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-28 10:24:31.978 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-28 10:24:31.978 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-28 10:24:31.978 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-28 10:24:32.022 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-28 10:24:32.062 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-28 10:24:32.062 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+LAYER_READY 0
+LAYER_READY 1
+LAYER_READY 2
+LAYER_READY 3
+LAYER_READY 4
+LAYER_READY 5
+LAYER_READY 6
+LAYER_READY 7
+LAYER_READY 8
+LAYER_READY 9
+LAYER_READY 10
+LAYER_READY 11
+LAYER_READY 12
+LAYER_READY 13
+LAYER_READY 14
+LAYER_READY 15
+LAYER_READY 16
+LAYER_READY 17
+LAYER_READY 18
+LAYER_READY 19
+LAYER_READY 20
+LAYER_READY 21
+LAYER_READY 22
+LAYER_READY 23
+LAYER_READY 24
+LAYER_READY 25
+LAYER_READY 26
+LAYER_READY 27
+LAYER_READY 28
+LAYER_READY 29
+MODEL_READY
+PREFILL_TRACE_POLICY enabled=True max_length=1024 entries=1
+PREFILL_EXPERT_POLICIES [(128, ((32, 22), (64, 11), (96, 11), (128, 11))), (128, ((32, 22), (64, 22), (96, 22), (128, 22)))] physical_rows=128..256
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_full_candidates.py", line 413, in <module>
+    main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_full_candidates.py", line 198, in main
+    assert all(
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_full_candidates.py", line 199, in <genexpr>
+    tuple(shard.shape[-2:]) == expected_shape for shard in ttnn.get_device_tensors(weight)
+TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+    1. __getitem__(self, arg: int, /) -> int
+
+Invoked with types: ttnn._ttnn.types.Shape, slice
+2026-09-28 10:27:06.213 | info     |    BuildKernels | JIT cache stats: 336/336 hits (100.0%) [336 cached, 94 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-28 10:27:06.213 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-28 10:27:06.242 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-28 10:27:06.242 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-28 10:27:06.719 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-28 10:27:06.719 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-28 10:27:06.719 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

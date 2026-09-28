@@ -1,0 +1,53 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /home/container_app_user/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, cov-7.0.0, dash-2.15.0, repeat-0.9.4, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 11 items
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[1-expected_chunks0] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[32-expected_chunks1] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[64-expected_chunks2] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[96-expected_chunks3] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[128-expected_chunks4] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[160-expected_chunks5] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[192-expected_chunks6] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[224-expected_chunks7] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[256-expected_chunks8] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[288-expected_chunks9] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[1024-expected_chunks10] PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /workspace/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.22s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[64-expected_chunks2]
+0.22s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[96-expected_chunks3]
+0.22s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[1-expected_chunks0]
+0.22s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[192-expected_chunks6]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[128-expected_chunks4]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[32-expected_chunks1]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[288-expected_chunks9]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[224-expected_chunks7]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[160-expected_chunks5]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[1024-expected_chunks10]
+0.21s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[256-expected_chunks8]
+
+(14 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[1-expected_chunks0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[32-expected_chunks1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[64-expected_chunks2]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[96-expected_chunks3]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[128-expected_chunks4]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[160-expected_chunks5]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[192-expected_chunks6]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[224-expected_chunks7]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[256-expected_chunks8]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[288-expected_chunks9]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_expert_policy.py::test_short_prefill_policy_preserves_rows_and_bounds[1024-expected_chunks10]
+============================== 11 passed in 3.07s ==============================
