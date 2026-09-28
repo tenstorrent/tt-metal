@@ -210,8 +210,9 @@ void run_push_and_pop(
         .unique_id = experimental::KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
     receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = pipe_names, .accessor_name = "in"}};
     receiver.compile_time_args = {{"num_entries", num_entries}};
-    receiver.hw_config =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+    receiver.hw_config = experimental::DataMovementHardwareConfig{
+        .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
     experimental::ProgramSpec spec{
         .name = "dram_sender_pipe_receiver",
         .kernels = {std::move(receiver)},
@@ -568,8 +569,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) 
             .unique_id = experimental::KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
         receiver.advanced_options.prefetcher_pipe_bindings = {{{name}, "in"}};
         receiver.compile_time_args = {{"num_entries", 1u}};
-        receiver.hw_config =
-            experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        receiver.hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
         experimental::ProgramSpec spec{
             .name = "entry_size_consumer",
             .kernels = {std::move(receiver)},

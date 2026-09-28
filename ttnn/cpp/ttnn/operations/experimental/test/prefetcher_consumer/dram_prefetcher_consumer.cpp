@@ -113,8 +113,9 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
         receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
         receiver.compile_time_args = {
             {"num_iters", operation_attributes.num_iters}, {"hold_cycles", operation_attributes.hold_cycles}};
-        receiver.hw_config =
-            metal_exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        receiver.hw_config = metal_exp::DataMovementHardwareConfig{
+            .config_1xx = metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
         metal_exp::ProgramSpec spec{
             .name = "dram_prefetcher_pipe_consumer",
             .kernels = {std::move(receiver)},
