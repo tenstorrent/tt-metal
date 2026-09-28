@@ -22,7 +22,8 @@ DO NOT DELETE.  What this pins:
      statistics CBs fp32 at fp32 DEST"), on both builders.  With the DEST fold on (x_squared_wt < WT_CHUNK) each
      of its tiles is a sum of several squares and it is fp32; without the fold (a partial last tile, a chunk with
      no divisor 2..SQ_FOLD_GROUP) it holds single x^2 tiles and keeps the intermediate format.  cb_normalized is
-     read once and is always the intermediate format.  The partial-width 0/1 mask in cb_scaler follows
+     read once and is always the intermediate format; since CHANGELOG 5 it exists only at 16-bit DEST (at fp32
+     DEST the weight / bias are applied in DEST, test_rms_norm_ttnn_pc_in_dest.py).  The partial-width 0/1 mask in cb_scaler follows
      cb_x_squared (it is unpacked in that format; a bf16 mask read as fp32 scales the output, which is what the
      source tests' w=4022 / w=200 cases caught).  At fp32_dest_acc_en=False nothing is fp32, so that program is
      the one it was.
@@ -97,7 +98,8 @@ def test_cb_x_squared_is_fp32_only_as_an_accumulator(device, builder, fp32, W, m
     bf16, f32 = ttnn.tile_size(ttnn.bfloat16), ttnn.tile_size(ttnn.float32)
     want_sq = f32 if (fp32 and folded) else bf16
     assert page[PD.CB_X_SQUARED] == want_sq
-    assert page[PD.CB_NORMALIZED] == bf16
+    # CHANGELOG 5: at fp32 DEST the weight is applied in DEST and cb_normalized is not allocated
+    assert page.get(PD.CB_NORMALIZED) == (None if fp32 else bf16)
     # the partial-width mask is read in cb_x_squared's format; a full-width build keeps the bf16 1.0 scaler
     assert page[PD.CB_SCALER] == (want_sq if W % 32 else bf16)
 
@@ -108,7 +110,7 @@ DEVICE_CASES = [
     (2048, 4096, "gamma"),  # MiMo's shape, 64 x 2, folded
     (2048, 4096, "residual_gamma"),  # 43 x 3, odd, prime chunk: no fold (bf16 cb_x_squared)
     (2048, 2848, "residual_gamma"),  # 45 x 2, odd, folded
-    (2048, 5120, "gamma"),  # 40 x 4, folded
+    (2048, 5120, "gamma"),  # 40 x 4, folded (54 x 3 since CHANGELOG 5)
     (1024, 7168, "none"),  # 75 x 3, odd, folded
     (2048, 4022, "residual_gamma"),  # 42 x 3, partial last tile: no fold (the source test's shape)
 ]
@@ -174,8 +176,9 @@ PRECISION_CASES = [
 def test_precision_against_float64(device, H, W, mode, fp32):
     """rel L2 vs a float64 reference with a random weight.  Measured at CHANGELOG 4 (HiFi4): fp32 DEST 0.00168
     (no weight) / 0.00237 (weight: y is rounded to bf16 in cb_normalized and again on the output) / 0.0029-0.0030
-    (residual: t is rounded too); 16-bit DEST 0.0036-0.0056.  Native ttnn.rms_norm on the same inputs: fp32 DEST
-    0.0017-0.0020, 16-bit DEST 0.016-0.044."""
+    (residual: t is rounded too); 16-bit DEST 0.0036-0.0056.  CHANGELOG 5 (weight applied in DEST, y rounded
+    once): fp32 DEST 0.0017 with a weight, 0.0023-0.0024 with a residual (t's own rounding; the reference here is the exact
+    x + r).  Native ttnn.rms_norm on the same inputs: fp32 DEST 0.0017-0.0020, 16-bit DEST 0.016-0.044."""
     torch.manual_seed(0)
     x = torch.randn(1, 1, H, W) * (0.5 + torch.rand(1, 1, H, 1) * 4)
     r = torch.randn(1, 1, H, W) if "residual" in mode else None
@@ -204,5 +207,5 @@ def test_precision_against_float64(device, H, W, mode, fp32):
         ref = ref * w.bfloat16().double()
     rel = ((y - ref).norm() / ref.norm()).item()
     print(f"{H}x{W} {mode} fp32_dest={fp32}: rel L2 {rel:.5f}")
-    lim = (0.0035 if "residual" in mode else 0.0028) if fp32 else 0.0065
+    lim = (0.0028 if "residual" in mode else 0.0021) if fp32 else 0.0065
     assert rel < lim, f"rel L2 {rel:.5f} >= {lim}"
