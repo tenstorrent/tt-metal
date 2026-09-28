@@ -174,3 +174,14 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Device gate (2x2): pcc_swap_out 0.999994, out rel 0.0048, mlp rel 0.0037 ratio [0.9968, 1.0076], mlp vs CPU rel 0.0034 worst row
   0.0048, PASS.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_05_mlp.py`
+
+## C.full_dense.mlp_residual.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp_residual.py` (same golden,
+  out = h_mid + mlp_out). Its checks: PCC >= 0.99, output size, finite, rel L2 <= 0.01, per-token norm ratio [0.99, 1.01].
+  Added the addend check from this run's attn_residual test: on delta = out - h_mid, coefficient <delta, mlp_out>/||mlp_out||^2 must be
+  in [0.95, 1.05] and ||delta - mlp_out||/||mlp_out|| <= 0.3. The docstring records the prior's mutation measurements (2x, zeroed rows,
+  h_mid + 0.5 mlp_out 0.987, and others).
+- BRINGUP_IMPL=reference: PCC 0.999998, rel 0.0021, ratio [0.9991, 1.0009], coef 1.0000, PASS. BRINGUP_IMPL=stub: PCC 0, FAIL.
+- The default gate (2x2) already passes because the device residual module exists: PCC 0.999997, rel 0.0028, ratio [1.0003, 1.0023], coef 1.0020,
+  mlp term rel 0.0038. The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp_residual.py`
