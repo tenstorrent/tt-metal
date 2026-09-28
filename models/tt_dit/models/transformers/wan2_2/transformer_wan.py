@@ -49,6 +49,7 @@ class WanTransformerBlock(Module):
         is_fsdp: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        small_n_projection: str = "agmm",
     ) -> None:
         super().__init__()
 
@@ -85,6 +86,7 @@ class WanTransformerBlock(Module):
             is_self=True,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
+            small_n_projection=small_n_projection,
         )
 
         self.attn2 = WanAttention(
@@ -98,6 +100,7 @@ class WanTransformerBlock(Module):
             is_self=False,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
+            small_n_projection=small_n_projection,
         )
 
         self.norm2 = (
@@ -385,6 +388,7 @@ class WanTransformer3DModel(Module):
         output_dtype: ttnn.DataType = ttnn.float32,
         lora_enabled: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
+        small_n_projection: str = "agmm",
     ) -> None:
         super().__init__()
 
@@ -393,6 +397,10 @@ class WanTransformer3DModel(Module):
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
         self.lora_enabled = lora_enabled
+        # "agmm" | "mmrs": how to_out / cross-attention to_q are computed (WanAttention). The
+        # weight layout differs (N- vs K-fractured), so the weight cache is keyed on it too
+        # (WanCheckpoint.load).
+        self.small_n_projection = small_n_projection
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
@@ -449,6 +457,7 @@ class WanTransformer3DModel(Module):
                 is_fsdp=is_fsdp,
                 lora_enabled=lora_enabled,
                 sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+                small_n_projection=small_n_projection,
             )
             for i in range(num_layers)
         )
@@ -1072,6 +1081,7 @@ class WanCheckpoint:
         model_type: str,
         lora_enabled: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
+        small_n_projection: str = "agmm",
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -1080,7 +1090,8 @@ class WanCheckpoint:
         ``sdpa_chunk_size_overrides`` layers on top of the ``WanAttention`` chunk table,
         which is keyed only on ``(is_blackhole, sp, tp)`` and is therefore shared with the
         14B at the same parallelism. Retuning a single variant goes through here so the
-        other one does not move.
+        other one does not move. ``small_n_projection`` ("agmm" | "mmrs") picks the form of
+        the D-fractured projections (``WanAttention``), likewise per variant.
         """
         c = self._config
         return WanTransformer3DModel(
@@ -1103,6 +1114,7 @@ class WanCheckpoint:
             model_type=model_type,
             lora_enabled=lora_enabled,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            small_n_projection=small_n_projection,
         )
 
     def load(
@@ -1113,12 +1125,22 @@ class WanCheckpoint:
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
     ) -> None:
-        """Load (or reload) weights for a previously-built transformer."""
+        """Load (or reload) weights for a previously-built transformer.
+
+        The weight cache (`TT_DIT_CACHE_DIR`) is keyed on model name, subfolder, parallelism and
+        dtype only, and a stale layout fails loudly on load (shape mismatch) with no fallback.
+        The row-parallel projections of `small_n_projection="mmrs"` store to_out / to_q
+        K-fractured instead of N-fractured, so that layout gets its own cache subfolder and both
+        can coexist on disk.
+        """
+        cache_subfolder = self._subfolder
+        if getattr(model, "small_n_projection", "agmm") != "agmm":
+            cache_subfolder = f"{self._subfolder}_smallN-{model.small_n_projection}"
         cache.load_model(
             tt_model=model,
             get_torch_state_dict=lambda: self._state_dict,
             model_name=os.path.basename(self._name),
-            subfolder=self._subfolder,
+            subfolder=cache_subfolder,
             parallel_config=parallel_config,
             mesh_shape=tuple(mesh_device.shape),
             mesh_device=mesh_device,
