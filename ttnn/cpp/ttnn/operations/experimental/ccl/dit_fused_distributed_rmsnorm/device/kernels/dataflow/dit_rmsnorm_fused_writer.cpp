@@ -89,12 +89,12 @@ void kernel_main() {
     // size_t arg_idx (not uint32_t) so it can bind to FabricConnectionManager::build_from_args
     // which takes the index by reference and advances it past the fabric rt args.
     size_t arg_idx = 0;
-    const uint32_t output_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     // trans_mat base address for the writer-side scalar/trans_mat population
     // (only read when fuse_rope). 0 when no RoPE.
-    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t transformation_mat_addr = get_common_arg_val<uint32_t>(1);
 
     Noc noc;
     CircularBuffer cb_output(output_cb);

@@ -1793,10 +1793,13 @@ void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_
         program.impl().invalidate_circular_buffer_allocation();
     }
     circular_buffer->config().set_total_size(total_size);
+    circular_buffer->mark_config_changed();
 }
 
 void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
-    program.impl().get_circular_buffer(cb_handle)->config().set_page_size(buffer_index, page_size);
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    circular_buffer->config().set_page_size(buffer_index, page_size);
+    circular_buffer->mark_config_changed();
 }
 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer) {

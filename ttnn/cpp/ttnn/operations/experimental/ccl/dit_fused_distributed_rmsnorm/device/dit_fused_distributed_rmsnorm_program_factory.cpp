@@ -1249,6 +1249,15 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
+        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         forwarder_kernel_ids[f] = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
@@ -1390,35 +1399,31 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // Per-worker runtime args (contiguous tile-row split).
     // ------------------------------------------------------------------------
-    std::optional<size_t> stats_dram_addr_writer_arg_idx;  // worker-writer stats_dram slot (override refresh)
+    // Buffer bindings are uniform across workers; keep row ranges and forwarder
+    // routing in per-core args so a cache hit updates each binding only once.
+    SetCommonRuntimeArgs(
+        program, reader_kernel_id, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
+    if (use_mux) {
+        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
+    } else {
+        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
+    }
     for (uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
         const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
-        std::vector<uint32_t> reader_rt_args = {
-            input_addr,
-            weight_addr,
-            bias_addr,
-            rope_cos_addr,
-            rope_sin_addr,
-            tile_row_start,
-            tile_row_end,
-            recip_addr_rt};  // RT 7: recip LUT DRAM addr (0 when unused; refreshed on cache hit)
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end});
 
         std::vector<uint32_t> writer_rt_args;
         if (!use_mux) {
-            // is_tp_1 drain-only writer: output_addr, start, end, trans_mat (rt[3]).
-            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
+            writer_rt_args = {tile_row_start, tile_row_end};
         } else {
             // worker-writer: output, start, end, trans_mat, stats_dram (rt[4]),
             // forwarder NoC x/y, my_forwarder_index, my_slot.
             const uint32_t f = worker_forwarder(i);
-            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
-            stats_dram_addr_writer_arg_idx = writer_rt_args.size();
-            writer_rt_args.push_back(stats_dram_addr);
+            writer_rt_args = {tile_row_start, tile_row_end};
             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].x));
             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
             writer_rt_args.push_back(f);
@@ -1484,8 +1489,6 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             .compute_kernel_ids = {compute_kernel_id},
             .forwarder_kernel_ids = forwarder_kernel_ids,
             .forwarder_cores = forwarder_cores,
-            .cores = worker_cores,
-            .stats_dram_addr_writer_arg_idx = stats_dram_addr_writer_arg_idx,
         }};
 }
 
@@ -1498,9 +1501,19 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
+    // The physical route is fixed for a cached workload. Resolve ring
+    // availability only here, not on every invocation of the operator.
+    auto resolved_args = operation_attributes;
+    if (resolved_args.ring_size > 1 && !resolved_args.per_head_norm) {
+        resolved_args.topology =
+            ttnn::ccl::get_usable_topology(tensor_args.input, resolved_args.topology, resolved_args.cluster_axis);
+    } else {
+        resolved_args.topology = ttnn::ccl::Topology::Linear;
+    }
+
     for (const auto& range : tensor_coords.ranges()) {
         for (const auto& coord : range) {
-            auto cached = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+            auto cached = create_at(resolved_args, coord, tensor_args, tensor_return_value);
             workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached.program));
             shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached.shared_variables));
         }
@@ -1524,11 +1537,7 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         tensor_args.rope_cos.has_value() ? tensor_args.rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr =
         tensor_args.rope_sin.has_value() ? tensor_args.rope_sin.value().buffer()->address() : 0;
-    // Stats DRAM scratch is reallocated per launch (it's a regular device
-    // tensor), so its address changes and must be refreshed on cache hits.
-    // The worker writer reads it from a fixed runtime-arg slot whose host-side
-    // index is captured in shared.stats_dram_addr_writer_arg_idx (set at
-    // create_at time, only on the all-gather path).
+    // Stats DRAM scratch and the output are refreshed on each cache hit.
     const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
     // Recip LUT tensor is also a regular (caller-owned) device tensor; refresh its addr.
     const uint32_t recip_addr =
@@ -1539,25 +1548,19 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         const auto& reader_kernel_id = shared.reader_kernel_ids[0];
         const auto& writer_kernel_id = shared.writer_kernel_ids[0];
 
-        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        auto& reader_common = GetCommonRuntimeArgs(program, reader_kernel_id);
+        reader_common[0] = input_addr;
+        reader_common[1] = weight_addr;
+        reader_common[2] = bias_addr;
+        reader_common[3] = rope_cos_addr;
+        reader_common[4] = rope_sin_addr;
+        reader_common[5] = recip_addr;
 
-        for (const auto& core : shared.cores) {
-            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-            reader_args[0] = input_addr;
-            reader_args[1] = weight_addr;
-            reader_args[2] = bias_addr;
-            reader_args[3] = rope_cos_addr;
-            reader_args[4] = rope_sin_addr;
-            reader_args[7] = recip_addr;  // RT 7: recip LUT DRAM addr
-
-            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-            writer_args[0] = output_addr;
-            writer_args[3] = trans_mat_addr;  // worker-writer + drain-only writer: trans_mat at rt[3]
-            if (shared.stats_dram_addr_writer_arg_idx.has_value()) {
-                // worker-writer (AG path): stats_dram scratch at rt[4].
-                writer_args[shared.stats_dram_addr_writer_arg_idx.value()] = stats_dram_addr;
-            }
+        auto& writer_common = GetCommonRuntimeArgs(program, writer_kernel_id);
+        writer_common[0] = output_addr;
+        writer_common[1] = trans_mat_addr;
+        if (writer_common.size() > 2) {
+            writer_common[2] = stats_dram_addr;
         }
         // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
         // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:

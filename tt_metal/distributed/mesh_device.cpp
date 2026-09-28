@@ -22,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -1726,6 +1727,12 @@ bool MeshDeviceImpl::initialize_impl(
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    // The real-time profiler starts automatically on eligible hardware. Allow a
+    // serving process to run without its device initialization and D2H socket.
+    if (const char* disabled = std::getenv("TT_METAL_DISABLE_REALTIME_PROFILER");
+        disabled != nullptr && disabled[0] == '1' && disabled[1] == '\0') {
+        return;
+    }
     if (realtime_profiler_) {
         return;
     }

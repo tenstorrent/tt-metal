@@ -24,6 +24,7 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     auto* rope_buffer = args.rope.buffer();
     auto* output_buffer = output.buffer();
     const uint32_t rows = args.latent.logical_volume() / packed::LATENT_WIDTH;
+    const bool rope_tiled = args.rope.layout() == Layout::TILE;
 
     Program program;
     const auto grid = args.latent.device()->compute_with_storage_grid_size();
@@ -31,15 +32,31 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     auto cores = corerange_to_cores(all_cores, num_cores, true);
 
     constexpr uint32_t cb_scratch = CBIndex::c_0;
+    constexpr uint32_t cb_rope_tiles = CBIndex::c_1;
     constexpr uint32_t scratch_bytes = packed::LATENT_WIDTH;
     CreateCircularBuffer(
         program,
         all_cores,
         CircularBufferConfig(scratch_bytes, {{cb_scratch, DataFormat::UInt8}})
             .set_page_size(cb_scratch, scratch_bytes));
+    if (rope_tiled) {
+        constexpr uint32_t rope_tile_pair_bytes = 2 * 32 * 32 * sizeof(uint16_t);
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(rope_tile_pair_bytes, {{cb_rope_tiles, DataFormat::UInt8}})
+                .set_page_size(cb_rope_tiles, rope_tile_pair_bytes));
+    }
 
     std::vector<uint32_t> compile_args = {
-        cb_scratch, packed::LATENT_WIDTH, packed::SCALE_WIDTH * sizeof(float), packed::ROPE_WIDTH * sizeof(uint16_t)};
+        cb_scratch,
+        packed::LATENT_WIDTH,
+        packed::SCALE_WIDTH * sizeof(float),
+        packed::ROPE_WIDTH * sizeof(uint16_t),
+        static_cast<uint32_t>(rope_tiled),
+        cb_rope_tiles,
+        args.rope.logical_shape()[-2],
+        args.rope.padded_shape()[-2] / 32};
     TensorAccessorArgs(latent_buffer).append_to(compile_args);
     TensorAccessorArgs(scale_buffer).append_to(compile_args);
     TensorAccessorArgs(rope_buffer).append_to(compile_args);
