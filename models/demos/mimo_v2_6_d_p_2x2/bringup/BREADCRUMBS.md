@@ -313,3 +313,21 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate (device): pcc_swap_out 0.999993, out rel 0.0039; attention rel 0.0193 (limit 0.022); router overlap 0.99725 /
   0.99921, matched rel 0.00144 / 0.00158, row sums [0.9980, 1.0020]. 1 passed.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_05_router.py`
+
+## C.sliding_moe.experts.test.1 (2026-09-28)
+- Replaced the rendered test with the prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py` (same golden). The only change is a docstring line saying it was adopted. Every check is on the gathered [2048, 4096] output, so none depends on the mesh shape.
+- Checks: PCC >= 0.99 (gated), finite output, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03], worst per-token rel L2 <= 0.1. The docstring records the known gaps: dropping expert 255, dropping one token's smallest pair, and a x1.02 scale all pass.
+- BRINGUP_IMPL=reference: pcc 0.999997, rel 0.0023, ratio [0.9954, 1.0037], worst row 0.0050: PASS. BRINGUP_IMPL=stub: pcc 0.0: FAIL.
+- Default gate: fails with NotImplementedError, because there is no device experts module yet (that is the implement step).
+- For the implementer: start from `mimo_v2_6_d_p/tt/experts.py:TtExperts._unified_experts` (`ttnn.bringup.unified_routed_expert_moe`, high_precision=True, HiFi4 + fp32 dest, ROW_MAJOR bf16 x). The default fused Silu path fails the norm-ratio check (see known issues). On 2x2, dispatch and combine must be set up for 2D fabric: DeepSeek 2D dispatch groups (see repo_map Proposed).
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_experts.py`
+
+## C.sliding_moe.experts.implement.1 (2026-09-28)
+- New `tt/experts.py` (ported from the prior's `tt/experts.py`, modes unified / loop / unified_lofi; 'fused' dropped). Layout per components.yaml: DeepSeek 2D EP, dispatch axis 0 (2 chips per group), 2 groups = columns, chip (r, c) holds experts 128c + 64r .. +63 (ExpertMapping col-major, gathered by TtRoutedExpert with ShardTensor2dMesh dims (0, 1)).
+- Forward: `mesh_partition(dim -2, cluster_axis 0)` of x and the dense routing -> `ttnn.topk` on the row half -> masked_bincount -> `ttnn.bringup.offset_cumsum(cluster_axis 0)` -> `ttnn.bringup.dispatch` (DGS 2, fabric, Linear) -> `ttnn.bringup.unified_routed_expert_moe` (Silu, bfp8 weights, bf16 ROW_MAJOR x, high_precision, HiFi4 + fp32 dest) -> `ttnn.bringup.combine` (init_zeros) -> `post_combine_reduce` called directly -> `all_reduce(cluster_axis 1)` -> `all_gather(dim -2, cluster_axis 0)`.
+- Decision: post_combine_reduce directly instead of TtReduceModule, because TtReduceModule reduce-scatters whenever its axis has >1 device (both axes do on 2x2); known_issues Proposed entry added. The all_reduce + all_gather variant from the components note was picked over reduce_scatter + two all_gathers.
+- Sizes: per-expert cap = S (2 x S/2), capacity factor 8 via compute_constants(S/2, 256, 8, 4, 2, 8); dispatch/combine modules cached per chunk length (no host transfers per chunk). No fork changes: with 2 devices on the dispatch axis the forks run as the source ops.
+- Weights: mxfp4 dequantized per expert at load (LazyExpertWeights), bfp8 cache under `generated/mimo_v2_6_d_p_2x2/tt_cache/experts` (separate from the 1x4 cache: device order differs). First build ~75 s for layer 1.
+- Registered: `tt/model.py:build_experts`, hooks `_experts_module` / `_experts_host_fn`, `device_component` step `experts`, HybridDeviceModel override, `DEVICE_STEPS["sliding_moe"]` += experts. `MIMO_EXPERTS_MODE=loop|unified_lofi` for comparison.
+- Gate: pcc_experts_L01 0.999984, rel L2 0.0059, norm ratio [0.9935, 1.0070], worst row 0.0150. PASS (first `FAIL pcc=0` line is the precompile collect pass).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_experts.py`
