@@ -219,9 +219,12 @@ class Qwen36Model:
         self._vis_zero_mask_host = None  # cached host zero mask for the clear (text/tail) path
 
         # MTP drafter; built only when the checkpoint has mtp.* weights and the config declares an MTP head.
+        # Wormhole-only for now: spec decode is untuned on Blackhole and would silently replace its
+        # plain decode path. QWEN36_MTP=1 opts a Blackhole run in for bring-up.
         self.mtp = None
         self._mtp_kv_cache = None
-        if getattr(args, "has_mtp", False) and "mtp.fc.weight" in state_dict:
+        _mtp_arch_ok = not is_blackhole() or os.environ.get("QWEN36_MTP") == "1"
+        if _mtp_arch_ok and getattr(args, "has_mtp", False) and "mtp.fc.weight" in state_dict:
             from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTP
 
             logger.info("Building MTP (multi-token prediction) drafter head...")
