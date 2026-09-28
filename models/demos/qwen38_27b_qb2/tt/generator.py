@@ -34,7 +34,7 @@ class Qwen38Generator:
         args = SimpleNamespace(
             vocab_size=model.config.vocab_size,
             padded_vocab_size=model.config.vocab_size,
-            cluster_shape=(1, 4),
+            cluster_shape=tuple(model.mesh.shape),
             max_batch_size=32,
             max_top_k=32,
             pad_logits_to_power_of_2=False,

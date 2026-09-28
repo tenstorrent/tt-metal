@@ -16,7 +16,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, resolve_mesh_tp
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 MODEL_ID = "Qwen/Qwen3.8-27B"
@@ -63,7 +63,7 @@ class ModelCache:
 
 class Qwen38Model:
     def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
-        validate_qb2_mesh(mesh_device)
+        resolve_mesh_tp(mesh_device)
         self.precision = load_precision(precision_config)
         self.mesh = mesh_device
         self.snapshot = Path(snapshot or checkpoint_path())

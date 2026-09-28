@@ -17,28 +17,35 @@ from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
 
+# (arch, cluster_type, device count, mesh shape) -> tensor-parallel width. Keyed on the whole
+# tuple rather than the device count alone so a mis-shaped or mis-wired mesh is rejected before
+# any weight conversion or device allocation, which is what the entry points rely on.
+_SUPPORTED_MESHES = {
+    (ttnn.Arch.BLACKHOLE, ttnn.cluster.ClusterType.P300_X2, 4, (1, 4)): 4,
+    (ttnn.Arch.WORMHOLE_B0, ttnn.cluster.ClusterType.T3K, 8, (1, 8)): 8,
+}
 
-def validate_qb2_mesh(mesh_device):
-    """Reject unsupported hardware before checkpoint conversion or device allocation."""
-    arch = mesh_device.arch()
-    cluster_type = ttnn.cluster.get_cluster_type()
-    num_devices = mesh_device.get_num_devices()
-    mesh_shape = tuple(mesh_device.shape)
-    if (
-        arch != ttnn.Arch.BLACKHOLE
-        or cluster_type != ttnn.cluster.ClusterType.P300_X2
-        or num_devices != 4
-        or mesh_shape != (1, 4)
-    ):
+_SUPPORTED_MESH_TEXT = "a Blackhole P300_X2 QB2 in a (1, 4) mesh or a Wormhole T3K in a (1, 8) mesh"
+
+
+def resolve_mesh_tp(mesh_device):
+    """Tensor-parallel width for a qualified mesh; raises on any other hardware."""
+    key = (
+        mesh_device.arch(),
+        ttnn.cluster.get_cluster_type(),
+        mesh_device.get_num_devices(),
+        tuple(mesh_device.shape),
+    )
+    tp = _SUPPORTED_MESHES.get(key)
+    if tp is None:
         raise ValueError(
-            "Qwen3.8-27B requires a Blackhole P300_X2 QB2 with four devices in a (1, 4) mesh; "
-            f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
+            f"Qwen3.8-27B requires {_SUPPORTED_MESH_TEXT}; got arch={key[0]}, "
+            f"cluster_type={key[1]}, num_devices={key[2]}, mesh_shape={key[3]}"
         )
+    return tp
 
 
 class Qwen38TPDecoder(Qwen38Decoder):
-    TP = 4
-
     def _role(self, name):
         if name.removesuffix(".weight") == "mlp.interleaved_gate_up":
             return "gate"
@@ -48,10 +55,11 @@ class Qwen38TPDecoder(Qwen38Decoder):
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, ccl=None):
         import torch
 
-        validate_qb2_mesh(mesh_device)
+        tp = resolve_mesh_tp(mesh_device)
         if ccl is not None and ccl.mesh_device is not mesh_device:
             raise ValueError("The shared CCL context must belong to this mesh")
         self = cls()
+        self.TP = tp
         self.device = mesh_device
         self.layer_idx = layer_idx
         self.kind = hf_config.layer_types[layer_idx]
