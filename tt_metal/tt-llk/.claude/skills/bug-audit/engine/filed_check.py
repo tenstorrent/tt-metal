@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Before filing: find which open findings are ALREADY reported on GitHub, by anyone, as an issue or a PR.
 
-  filed_check.py [--run DIR] candidates [--limit 12] [--max N]   # search GitHub per finding; prints filed-wave.js args
+  filed_check.py [--run DIR] candidates [--limit 12] [--max N] [--local 'issues/*.jsonl,prs/*.jsonl,other/repo=other_issues/*.jsonl']   # search GitHub per finding; prints filed-wave.js args
   filed_check.py [--run DIR] persist <raw>             # record the judges' matches as dispositions
   filed_check.py [--run DIR] show
 
@@ -15,9 +15,12 @@ whether any candidate reports the SAME defect. `persist` records each match with
   fixed_upstream a PR fixing it merged AFTER the audited commit    -> closed; re-check on current main before any work
 A finding with no match stays open and is safe to file. Arch copies (dedup.py) travel with their canonical finding,
 so a Wormhole+Blackhole bug is checked, and later filed, once, with every site listed.
-GitHub's search API allows about 30 requests a minute; this pauses between findings.
+GitHub's search API allows about 30 requests a minute, so the live search pauses between findings (hours for hundreds
+of findings). For large runs, pass --local with current dumps of every issue and PR (mining/fetch_repo.py): the same
+matching, offline, in seconds.
 """
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -117,8 +120,53 @@ def gh_search(kind, query, limit):
     )
 
 
+def local_corpus(globs):
+    """Issues and PRs from local dumps (mining/fetch_repo.py or fetch_search.py JSONL), for a fast offline search."""
+    import glob as _g
+
+    items = {}
+    for spec in globs:
+        # "owner/name=glob" searches another repo's dumps (e.g. where the code used to live); plain "glob" = this repo
+        repo, _, pat = spec.rpartition("=") if "=" in spec else ("", "", spec)
+        repo = repo or st["repo"]
+        for f in _g.glob(pat):
+            for ln in open(f):
+                if not ln.strip():
+                    continue
+                x = json.loads(ln)
+                is_pr = "mergedAt" in x or "mergeCommit" in x
+                kind = "pr" if is_pr else "issue"
+                state = (
+                    "MERGED"
+                    if (is_pr and x.get("mergedAt"))
+                    else (
+                        x.get("state") or ("CLOSED" if x.get("closedAt") else "OPEN")
+                    ).upper()
+                )
+                items[(repo, kind, x["number"])] = {
+                    "number": x["number"],
+                    "title": x.get("title", ""),
+                    "state": state,
+                    "kind": kind,
+                    "url": f"https://github.com/{repo}/{'pull' if is_pr else 'issues'}/{x['number']}",
+                    "repo": repo,
+                    "body": (x.get("body") or "")[:3000],
+                    "_text": (
+                        (x.get("title") or "") + "\n" + (x.get("body") or "")
+                    ).lower(),
+                }
+    return list(items.values())
+
+
 if argv[0] == "candidates":
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 12
+    corpus = None
+    if "--local" in argv:
+        corpus = local_corpus(argv[argv.index("--local") + 1].split(","))
+        print(
+            f"offline search over {len(corpus)} local issues/PRs (refresh the dumps first: they must be current)",
+            file=sys.stderr,
+        )
     conf = load(os.path.join(out, "CONFIRMED.json"), [])
     disp = load(os.path.join(out, "dispositions.json"), {})
     todo = [
@@ -131,24 +179,45 @@ if argv[0] == "candidates":
     paths = []
     for i, f in enumerate(todo):
         k = key_of(f)
-        p = os.path.join(cdir, re.sub(r"[^A-Za-z0-9_.-]", "_", k) + ".json")
+        slug = re.sub(r"[^A-Za-z0-9_.-]", "_", k)[
+            -80:
+        ]  # long locations overflow the filesystem's name limit
+        p = os.path.join(
+            cdir, f"{slug}-{hashlib.sha1(k.encode()).hexdigest()[:10]}.json"
+        )
         if os.path.exists(p):
             paths.append(p)
             continue
         base = os.path.basename(f["file"])
         found = {}
-        for q in [base] + [f"{base} {t}" for t in idents(f)[:2]] + idents(f)[:1]:
-            for kind in ("issues", "prs"):
-                for it in gh_search(kind, q, limit):
-                    found.setdefault(
-                        (kind, it["number"]),
-                        {
-                            **it,
-                            "kind": kind[:-1],
-                            "body": (it.get("body") or "")[:3000],
-                        },
-                    )
-            time.sleep(2.2)
+        if corpus is not None:
+            # offline: rank every issue/PR by how many of the finding's anchors it mentions (file name counts double)
+            anchors = [base.lower()] + [t.lower() for t in idents(f)]
+            scored = []
+            for it in corpus:
+                sc = 2 * (anchors[0] in it["_text"]) + sum(
+                    1 for t in anchors[1:] if t in it["_text"]
+                )
+                if sc >= 2:
+                    scored.append((sc, it))
+            scored.sort(key=lambda x: -x[0])
+            for sc, it in scored[:limit]:
+                found[(it["repo"], it["kind"], it["number"])] = {
+                    k: v for k, v in it.items() if k != "_text"
+                }
+        else:
+            for q in [base] + [f"{base} {t}" for t in idents(f)[:2]] + idents(f)[:1]:
+                for kind in ("issues", "prs"):
+                    for it in gh_search(kind, q, limit):
+                        found.setdefault(
+                            (kind, it["number"]),
+                            {
+                                **it,
+                                "kind": kind[:-1],
+                                "body": (it.get("body") or "")[:3000],
+                            },
+                        )
+                time.sleep(2.2)
         rec = {
             "key": k,
             "finding": {

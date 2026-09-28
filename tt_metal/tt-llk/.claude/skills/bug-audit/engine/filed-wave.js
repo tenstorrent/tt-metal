@@ -8,6 +8,8 @@ export const meta = {
 // clang-format off: repo-wide clang-format mangles JS (splits `return {...}`, so ASI returns undefined)
 
 const A = typeof args === 'string' ? JSON.parse(args) : args
+// inputs as a list, or {input_dir, n} for numbered copies c0000.json ... (large runs)
+if (!A.inputs && A.input_dir) A.inputs = Array.from({ length: A.n }, (_, i) => `${A.input_dir}/c${String(i).padStart(4, '0')}.json`)
 if (!Array.isArray(A.inputs)) throw new Error('args.inputs must be an array of paths from filed_check.py candidates')
 
 const SCHEMA = {

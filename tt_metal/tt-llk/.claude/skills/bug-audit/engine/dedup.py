@@ -77,12 +77,15 @@ path = os.path.join(out, "dedup.json")
 
 
 def confirmed():
+    """Confirmed findings AFTER consolidation: CONFIRMED.json applies recheck outcomes on top of the wave verdicts
+    (a finding promoted by recheck.py is still "uncertain" in its verdict file)."""
+    conf = load(os.path.join(out, "CONFIRMED.json"))
+    if conf is None:
+        sys.exit("no CONFIRMED.json: run consolidate.py first")
     rows = {}
-    for fn in sorted(os.listdir(os.path.join(out, "verdicts"))):
-        if fn.endswith(".json"):
-            for f in load(os.path.join(out, "verdicts", fn), {}).get("findings", []):
-                if f["status"] == "confirmed":
-                    rows.setdefault(key_of(f), f)
+    for f in conf:
+        if not f.get("duplicate_of"):
+            rows.setdefault(key_of(f), f)
     return rows
 
 

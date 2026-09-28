@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Second look at the candidates a wave could not settle, and at a sample of the ones it killed.
 
-  recheck.py [--run DIR] queue [--refuted-sample 0.1] [--seed 1] [--max N]
+  recheck.py [--run DIR] queue [--refuted-sample 0.1] [--seed 1] [--max N] [--to-dir DIR]
   recheck.py [--run DIR] persist <raw_output.json>
   recheck.py [--run DIR] report
 
@@ -81,7 +81,23 @@ if argv[0] == "queue":
     todo = [k for k, v in rc.items() if v["outcome"] == "queued"][
         : opt("--max", 10**9, int)
     ]
-    print(json.dumps({"run": out, "root": st["root"], "items": [rc[k] for k in todo]}))
+    if "--to-dir" in argv:
+        # large waves: one small file per item, so the workflow args stay tiny (dir + count)
+        d = os.path.abspath(argv[argv.index("--to-dir") + 1])
+        os.makedirs(d, exist_ok=True)
+        index = {}
+        for i, k in enumerate(todo):
+            p = os.path.join(d, f"c{i:04d}.json")
+            save(p, rc[k])
+            index[p] = k
+        save(os.path.join(d, "index.json"), index)
+        print(
+            json.dumps({"run": out, "root": st["root"], "items_dir": d, "n": len(todo)})
+        )
+    else:
+        print(
+            json.dumps({"run": out, "root": st["root"], "items": [rc[k] for k in todo]})
+        )
     print(
         f"# queued {added} new; {len(todo)} handed to this recheck wave",
         file=sys.stderr,
@@ -92,8 +108,11 @@ elif argv[0] == "persist":
     if isinstance(r, str):
         r = json.loads(r)
     n = 0
+    index = {}
     for item in r.get("items", []):
-        key = key_of(item["finding"])
+        if "path" in item and not index:
+            index = load(os.path.join(os.path.dirname(item["path"]), "index.json"), {})
+        key = index.get(item.get("path")) or key_of(item["finding"])
         if key in rc:
             rc[key].update(
                 outcome=item["outcome"], votes=item["votes"], reasons=item["reasons"]

@@ -46,6 +46,12 @@ for f in rows:
     if rc and rc.get("outcome") in ("confirmed", "refuted", "uncertain"):
         f["status_wave"], f["status"] = f["status"], rc["outcome"]
         f["recheck"] = rc
+        f["votes"] = rc.get("votes") or f.get("votes", {})
+# a site-grounded fix written after verification replaces the candidate's placeholder fix
+fixes = load(os.path.join(out, "suggested_fixes.json"), {})
+for f in rows:
+    if key_of(f) in fixes:
+        f["suggested_fix"] = fixes[key_of(f)]
 
 by_status = collections.defaultdict(dict)
 for f in rows:
@@ -150,10 +156,24 @@ def detail(fh, fs):
         fh.write(
             f"### {i}. [{f['severity'].upper()}] `{key_of(f)}` — {f['category']}\n\n**{f['summary']}**\n\n"
         )
+        # a history-sibling candidate's scenario/evidence describe the PAST bug it resembles, not this site
+        past = f.get("source") == "history-sibling"
         fh.write(
-            f"*Failure scenario:* {f['failure_scenario']}\n\n*Evidence:* {f['evidence']}\n\n"
+            f"*{'Past bug this resembles' if past else 'Failure scenario'}:* {f['failure_scenario']}\n\n"
+            f"*{'Past fix and audit check' if past else 'Evidence'}:* {f['evidence']}\n\n"
         )
         fh.write(f"*Suggested fix:* {f['suggested_fix']}\n\n")
+        confirmations = [
+            r
+            for r in (f.get("recheck") or {}).get("reasons", [])
+            if r.startswith("[confirmed]")
+        ]
+        if confirmations:
+            fh.write(
+                f"<details><summary><i>Verification in the current code</i> "
+                f"({len(confirmations)} verifier write-ups; first shown)</summary>\n\n"
+                f"{confirmations[0]}\n\n</details>\n\n"
+            )
         if f.get("merged_sites"):
             fh.write(
                 f"*Merged sites: this ONE bug is present at {1 + len(f['merged_sites'])} sites; every site needs its fix:*\n\n"
