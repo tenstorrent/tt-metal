@@ -95,24 +95,22 @@ inline void compact_idma_per_row(
     }
 }
 
+// Length and NoC coordinates are STICKY in the read state set by the caller: the one-packet
+// path writes only the low address word. So this takes neither -- passing them per call would
+// look like it configured something it does not, and an edit to those arguments alone would
+// silently have no effect. The coordinate fields below are required by the endpoint struct
+// and are ignored by this path.
 inline void compact_noc_per_row(
     const Noc& noc,
-    std::uint32_t noc_x,
-    std::uint32_t noc_y,
     std::uint32_t src_base,
     std::uint32_t dst_base,
-    std::uint32_t row_bytes,
     std::uint32_t num_rows,
     std::uint32_t src_stride,
     std::uint32_t dst_stride) {
     UnicastEndpoint ep;
     for (std::uint32_t r = 0; r < num_rows; r++) {
         noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-            ep,
-            ep,
-            row_bytes,
-            {.noc_x = noc_x, .noc_y = noc_y, .addr = src_base + r * src_stride},
-            {.addr = dst_base + r * dst_stride});
+            ep, ep, 0, {.addr = src_base + r * src_stride}, {.addr = dst_base + r * dst_stride});
     }
     noc.async_read_barrier();
 }
@@ -139,11 +137,9 @@ void kernel_main() {
         num_channels = CMDBUF_NUM_IDMA_VCS;
     }
     const bool use_idma = engine_mode == ENGINE_IDMA_PER_ROW;
-
-    const std::uint32_t noc_x = dest_coords >> 16;
-    const std::uint32_t noc_y = dest_coords & 0xFFFF;
-
-    Noc noc(noc_index);
+    // Anything else would have fallen through to the NOC branch and reported as a passing NOC
+    // run, which would hide a runtime-arg plumbing mistake rather than surface it.
+    ASSERT(use_idma || engine_mode == ENGINE_NOC_PER_ROW);
 
     // Wait for stage 1's whole block, then take its base. The DFB is pushed exactly once and
     // never wraps, so the rows are contiguous from the read pointer.
@@ -191,10 +187,10 @@ void kernel_main() {
         // every call. Rows here are at most 512 B against a 65536 B burst limit, so one-packet
         // is legal, and it is what makes this baseline the cheapest NOC read rather than
         // merely a cheap one.
+        Noc noc;  // defaults to noc_index
         noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-            ep, out_row_bytes, {.noc_x = noc_x, .noc_y = noc_y, .addr = src_base});
-        compact_noc_per_row(
-            noc, noc_x, noc_y, src_base, dst_addr, out_row_bytes, num_rows, pad_row_bytes, out_row_bytes);
+            ep, out_row_bytes, {.noc_x = dest_coords >> 16, .noc_y = dest_coords & 0xFFFF, .addr = src_base});
+        compact_noc_per_row(noc, src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes);
     }
 
     pad.pop_front(num_rows);

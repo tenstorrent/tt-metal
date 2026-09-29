@@ -30,7 +30,6 @@
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
-#include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
@@ -160,6 +159,14 @@ bool run_narrow_row(
         "ct_dim {} exceeds the {} these buffers were sized for",
         cfg.ct_dim,
         buffers.max_ct_dim);
+    // The other half of the shape. Above TILE_W, matrix_w exceeds pad_w and the gather reads
+    // past the pad DFB and writes past out_l1; at 0, out_row_bytes is 0 and the kernel issues
+    // a zero-length transfer that never acks, so it spins forever.
+    TT_FATAL(
+        cfg.last_tile_w >= 1 && cfg.last_tile_w <= TILE_W,
+        "last_tile_w {} must be in [1, {}]",
+        cfg.last_tile_w,
+        TILE_W);
 
     const std::uint32_t ct_dim = cfg.ct_dim;
     const std::uint32_t pad_w = ct_dim * TILE_W;                             // padded row, datums
@@ -169,6 +176,9 @@ bool run_narrow_row(
     const std::uint32_t out_bytes = OUT_ROWS * out_row_bytes;
 
     const std::uint32_t out_addr = buffers.out_l1->address();
+    // Narrowed deliberately: the runtime-arg table is uint32_t, and the conversion inside
+    // std::pair's constructor would otherwise be silent.
+    const std::uint32_t src_addr = static_cast<std::uint32_t>(buffers.src_dram->address());
 
     // The NOC engine reads this core's own L1 (loopback), so it needs PHYSICAL noc coords --
     // logical {0,0} is physical (0,1) on the 1x3 emu.
@@ -262,10 +272,7 @@ bool run_narrow_row(
             .kernel = READER,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
-                {{"src_addr", src_dram->address()},
-                 {"src_bank_id", 0u},
-                 {"num_tiles", ct_dim},
-                 {"dram_page_stride", TILE_BYTES}}),
+                {{"src_addr", src_addr}, {"src_bank_id", 0u}, {"num_tiles", ct_dim}, {"dram_page_stride", TILE_BYTES}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -296,6 +303,19 @@ bool run_narrow_row(
     const std::uint32_t read_bytes = out_bytes + GUARD_BYTES;
     std::vector<std::uint32_t> out_words;
     tt_metal::detail::ReadFromDeviceL1(device, CORE, out_addr, read_bytes, out_words);
+    // Guard the dereference below: a failed read leaves out_words empty, and data() would be
+    // null. Checking the size also catches a short read, which would otherwise score the
+    // untouched tail as a clean guard band.
+    if (out_words.size() * sizeof(std::uint32_t) < read_bytes) {
+        log_error(
+            tt::LogTest,
+            "ct_dim={} last_tile_w={}: L1 read-back returned {} B, expected {} B",
+            ct_dim,
+            cfg.last_tile_w,
+            out_words.size() * sizeof(std::uint32_t),
+            read_bytes);
+        return false;
+    }
     const auto* out_datums = reinterpret_cast<const std::uint16_t*>(out_words.data());
 
     std::uint32_t bad = 0;
@@ -393,35 +413,52 @@ TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/2);
-    for (std::uint32_t last_tile_w : {1u, 2u, 3u, 4u, 12u, 20u}) {
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = 2, .last_tile_w = last_tile_w}))
-            << "last_tile_w=" << last_tile_w;
+    // ct_dim 1 is the case that actually tests the claim: it produces 2 B to 40 B rows, below
+    // RV_PACR's 16 B floor. At ct_dim 2 the leading full tile keeps every row at 66 B or
+    // wider, which would let a reintroduced minimum width pass unnoticed.
+    for (std::uint32_t ct_dim : {1u, 2u}) {
+        for (std::uint32_t last_tile_w : {1u, 2u, 3u, 4u, 12u, 20u}) {
+            EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w}))
+                << "ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
+        }
     }
 }
 
 // The iDMA gather and the NOC-read-per-row workaround must produce identical, correct output
-// on the same shape. That is what makes the timing comparison in README.md like-for-like: the
-// baseline is not a straw man but the same operation, verified. One channel is also covered,
-// because it is the configuration that must NOT be shipped (data-bound past ~100 B/row, and
-// slower than the workaround above ~347 B/row) and it still has to be correct.
+// on the same shape. That is what makes a timing comparison between them like-for-like: the
+// baseline is the same operation, verified, not a straw man.
+//
+// The shapes are chosen so the comparison is not only over easy widths: 32 B and 504 B rows
+// are 8-byte multiples, and 70 B (ct_dim 2, last_tile_w 3) puts every odd destination row at
+// a 2 mod 4 offset. Quasar's NOC_L1_READ_ALIGNMENT_BYTES is 1, so the NOC arm can cover that
+// and acts as a real cross-check on the iDMA placement rather than a redundant one.
+//
+// One channel is covered too. It is the configuration that must NOT be shipped -- data-bound
+// past roughly 100 B/row, and slower than the workaround on long rows -- but it still has to
+// be correct.
 TEST_F(QuasarNarrowRowUntilize, EngineParity) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    for (std::uint32_t ct_dim : {1u, 8u}) {
-        const std::uint32_t last_tile_w = ct_dim == 1 ? 16u : LAST_W_252;
-        const RunConfig base{.ct_dim = ct_dim, .last_tile_w = last_tile_w};
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, base)) << "iDMA 8ch ct_dim=" << ct_dim;
+    struct Shape {
+        std::uint32_t ct_dim;
+        std::uint32_t last_tile_w;
+    };
+    for (const Shape& sh : {Shape{1, 16}, Shape{2, 3}, Shape{8, LAST_W_252}}) {
+        const RunConfig base{.ct_dim = sh.ct_dim, .last_tile_w = sh.last_tile_w};
+        const std::uint32_t row_bytes = ((sh.ct_dim - 1) * TILE_W + sh.last_tile_w) * DATUM_BYTES;
+
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, base)) << "iDMA 8ch, " << row_bytes << " B/row";
 
         RunConfig one_channel = base;
         one_channel.num_channels = 1;
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, one_channel)) << "iDMA 1ch ct_dim=" << ct_dim;
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, one_channel)) << "iDMA 1ch, " << row_bytes << " B/row";
 
         RunConfig workaround = base;
         workaround.engine_mode = ENGINE_NOC;
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, workaround)) << "NOC ct_dim=" << ct_dim;
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, workaround)) << "NOC, " << row_bytes << " B/row";
     }
 }
 

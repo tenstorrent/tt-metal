@@ -3,17 +3,21 @@
 End-to-end narrow-row pack-untilize on Quasar: **stock hardware pack-untilize, then an iDMA
 gather to squeeze out the padding.** Every shape is verified datum for datum against a golden.
 
-**Measured: 2.5–2.9× faster than the current workaround**, at every one of 23 row widths from
-2 B to 512 B per row. For a 32×252 `Float16_b` matrix: 786 → 313 cycles.
+**The performance claim is currently withdrawn pending a re-measure.** A development sweep
+over 23 row widths put the iDMA gather at 2.5–2.9× the NOC-read-per-row workaround, but that
+baseline was on the NOC *any-len* read path: the default `max_page_size` is
+`NOC_MAX_BURST_SIZE + 1`, so every call rewrote the length register and ran a burst-splitting
+loop. Rows here are at most 512 B against a 65536 B burst limit, so the one-packet path was
+always available; the kernel now selects it explicitly. The workaround is therefore faster
+than the 785 cyc/block that sweep recorded, and **every ratio derived from it is an
+overstatement of unknown size** — including the crossover width and the whole-operation
+figures further down.
 
-> **The numbers below predate a fix to the NOC baseline and are pending a re-measure.** The
-> baseline was using the NOC any-len read path (the default `max_page_size` is
-> `NOC_MAX_BURST_SIZE + 1`), which rewrites the length register and runs a burst-splitting loop
-> on every call. Rows here are at most 512 B against a 65536 B burst limit, so the one-packet
-> path was always available; the kernel now selects it explicitly. The workaround is therefore
-> faster than 785 cyc/block and **the ratio below is an overstatement of unknown size.** The
-> shape of the result — both engines issue-bound, the workaround payload-blind, one channel
-> crossing it at long rows — is structural and should survive; the multiplier may not.
+What should survive a re-measure is the *shape* of the result, which is structural rather than
+a matter of degree: both engines are issue-bound at these sizes, the workaround's cost is
+independent of payload, and a single iDMA channel becomes data-bound at one VC's 16 B/cycle
+and loses to the workaround on long rows. The numbers in "Development measurements" below are
+kept for that shape, clearly marked, and should not be quoted as a speed-up.
 
 ## The problem
 
@@ -98,7 +102,7 @@ neither iDMA example uses and which is worth 3.6× at 512 B/row.
   and on Quasar DM it carries `MEM_L1_UNCACHED_BASE`. The NOC API strips that alias itself;
   the overlay cmdbuf API does not. Hence `l1_phys()` in the kernel.
 
-## Measured results (emu-quasar-1x3)
+## Development measurements (emu-quasar-1x3) — superseded baseline, see above
 
 A 23-width sweep was run during development; it is not part of the shipped test, which keeps
 28 runs of correctness coverage. Two of three curves are flat, and that is the whole result:
