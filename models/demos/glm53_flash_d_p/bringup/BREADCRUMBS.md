@@ -89,3 +89,42 @@ Result: plan_fits 1, unplaced_tensors 0, plan_errors 0, component_errors 0, ledg
 for the person's approval).
 
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`.
+
+## C.kda_dense.attn_hc test (attempt 1)
+
+Reviewed the rendered component test for attn_hc (layer 0, s4096 chunk 1). Kept the gated PCC and added per-part checks,
+because whole-output PCC passes several real bugs (measured on the golden with a host script: comb transposed 0.9958,
+softmax over the wrong axis 0.9987, 10 Sinkhorn iterations 0.9958, swapped pre/post scales 0.9958, a zeroed row 0.9997).
+- Per part (pre / post / comb): rel L2 <= 0.03 / 0.03 / 0.02 and max abs <= 0.15 / 0.2 / 0.1.
+- Comb column sums within 0.01 of 1; pre in (0, 1], post in [0, 2], comb >= 0.
+- Headroom: bf16, bfp8 or tf32 projection operands give rel <= 0.002. A pessimistic random mix error at PCC 0.9989
+  (the TT fp32-matmul ceiling from deepseek_v3_d_p test_mhc.py) gives pre rel 0.025, comb max abs 0.061.
+- Not caught (small effect): 19 iterations, hc_eps 0, pre without +1e-6.
+- The golden attn_hc is bf16-rounded values stored as fp32. Comb row sums are only 0.92..1.08 even after 20 iterations,
+  so don't assert row sums.
+- Implement: the output must be [2048, 24] (or reshapeable), comb row-major (comb[i, j] at column 8 + 4i + j).
+Results: reference passes (PCC 0.999999, part rel ~0.0013, column sums 1.00000). Stub fails (PCC 0). The gate in
+device mode fails with NotImplementedError until the implement step adds the module.
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py`
+
+## C.kda_dense.attn_hc implement (attempt 1)
+
+What was done:
+- `tt/mhc.py:TtHcWeights` (+ `build_hc(mesh, loader, cfg, layer, "attn"|"ffn")`): replicated, no CCL. Input
+  `[1, 1, S, 4H]` (streams packed along the last dim, the same memory as the reference's token-major `[S * 4, H]`),
+  bf16 -> `ttnn.typecast` fp32 -> DeepSeek `tt_mhc._project` (fp32 matmul HiFi4 + fp32 acc, RMS rsqrt applied after
+  the linear, eps 1e-5) -> `mhc_split_sinkhorn` (consts from `tt_mhc.build_consts`, n 4, 20 iters, eps 1e-6) ->
+  `ttnn.concat` [pre | post | comb] -> `[1, 1, S, 24]` fp32. Weights and consts uploaded once at load.
+- `tt/common.py`: `hifi4_config`, `replicate` / `replicated_to_host` (load time and harness boundary only).
+- `hooks.py`: `device_component` handles `attn_hc` and `ffn_hc` (same module, other weights); `DEVICE_STEPS`
+  (kda_dense: attn_hc) and a `HybridDeviceModel` (CPU reference + DEVICE_STEPS, host in / out per step) as
+  `device_model` until assemble.
+
+Decisions: the kernel's comb output is already row-major (entry (i, j) at column 4i + j), as DeepSeek's op test
+reshapes it `[T, n, n]` against the row-major reference; no reorder needed. The harness uploads the residual as bf16
+(the planned device residual dtype).
+
+Result: pcc_attn_hc_L00 0.999999; rel L2 pre 0.0014 / post 0.0013 / comb 0.0016; max abs <= 4.9e-3; comb column
+sums [0.9974, 1.0009].
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py`
