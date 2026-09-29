@@ -1318,3 +1318,54 @@ Results:
 - Reference passes (exact). Stub fails.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_11_router.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.experts test (attempt 1)
+
+Reviewed the rendered experts test for dsa_moe layer 3 and rewrote it in the style of the kda_dense mlp and dsa_moe router
+tests. The gated metric is unchanged: pcc_experts_L03 (PCC >= 0.99, chunk 1).
+- Sensitivity: host script /tmp/glm_exp_test/sens.py, sens2.py (CPU only, not kept). About 2 s per experts forward;
+  the layer-3 experts are eager, so the reference loads in ~6 s. The numbers are in the test docstring.
+- The floor is the CPU reference on the bf16 golden inputs: rel 0.0023 (the golden came from the fp32 router).
+  A model of the planned device path scores rel 0.0070, ratio [0.9942, 1.0066], worst row 0.011. That path is bfp8
+  weights with 16-value blocks along the output dim, and bf16 x / h / y / out.
+- Checks, on chunk 1 and chunk 0:
+  - rel L2 <= 0.012 and per-token ratio [0.985, 1.015]. These fail bfp8 x + h (the fused kernel's default path,
+    0.0135 / [0.983, 1.015]), so the implement step needs `high_precision=True` as components.yaml plans.
+  - Worst row <= 0.025. This is the only golden check that sees missing clamps (0.036 / 0.060) and a dropped small
+    expert (0.70).
+  - Coefficient [0.997, 1.003] (bf16-truncated weights 0.9934).
+  - Every 128-row block's coefficient in [0.995, 1.005]: the sequence is split over mesh rows, and a half scaled x1.005
+    passes the global coefficient.
+- Clamp probe: 8 * x vs the CPU reference of the same input, rel <= 0.015, ratio [0.985, 1.015], worst row <= 0.025,
+  coefficient [0.997, 1.003]. Device-like 0.0083; no clamp 0.58.
+- Known gap: dropping a single token's smallest pair (worst row 0.0085..0.024) cannot be told from device noise.
+Results:
+- Reference passes: 0.999997 / 0.0023 / [0.9965, 1.0038] / 0.0042; the probe is exact.
+- Stub fails (PCC 0).
+- The gate (device) fails with `NotImplementedError: no device module for experts yet`, as expected before the
+  implement step.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_experts.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.experts implement (attempt 1)
+
+- `tt/experts.py:TtExperts`, a port of `mimo_v2_6_d_p_2x2/tt/experts.py`: mesh_partition over rows -> topk of the
+  dense routing half -> masked_bincount -> `ttnn.bringup.offset_cumsum` / `dispatch` (group size 2, axis 0, FABRIC_2D)
+  -> `ttnn.bringup.unified_routed_expert_moe` (ClampedSiluGlu, high_precision=True, HiFi4 + fp32 dest, bfp8 weights,
+  bf16 ROW_MAJOR x) -> `ttnn.bringup.combine` -> post_combine_reduce -> all_reduce axis 1 -> all_gather axis 0.
+  Registered in `hooks.py` (`_experts_host_fn`, `_device_step`) and added to `DEVICE_STEPS["dsa_moe"]`.
+- Verified: 72 local / 288 global experts work with the unchanged forks (no fork edit). ClampedSiluGlu's kernel limit is
+  fixed at 10, matching `swiglu_limit`; the module asserts it.
+- Weights: `PackedExpert` dequantizes fp8 per expert on the host; the bfp8 cache is at
+  `generated/glm53_flash_d_p/tt_cache/experts/layer_3.experts.BFLOAT8_B.*`. The first build takes about 55 s, and a
+  cache load under 1 s.
+- The cross-group all_reduce runs in fp32 (typecast -> all_reduce -> typecast). With bf16 the coefficient was 1.00097
+  and rel 0.00775; with fp32 they are 1.00052 and 0.00772. This is the known bf16 all_reduce upward bias.
+- Gate: PCC 0.999970, rel 0.0077, ratio [0.9947, 1.0062], worst row 0.0117, coefficient 1.00052, blocks
+  [1.00005, 1.00102]. Chunk 0: 0.999970, rel 0.0077, ratio [0.9939, 1.0066]. Clamp probe: rel 0.0091, ratio
+  [0.9990, 1.0034]. About 17 s warm.
+- Probe (deleted): the golden rows tiled to S = 8192 / 5120 / 2048 all give rel 0.0077, coefficient 1.0005, and are
+  deterministic over 2 reps. So every ladder chunk length runs.
+- `GLM_EXPERTS_MODE=loop` keeps the per-expert fallback: extract -> ttnn.linear fp32 -> min / clamp -> silu * u ->
+  down -> insert. It was not run on this gate.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_experts.py`
