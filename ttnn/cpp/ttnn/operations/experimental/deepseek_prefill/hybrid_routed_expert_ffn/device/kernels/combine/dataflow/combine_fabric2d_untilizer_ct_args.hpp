@@ -141,6 +141,14 @@ struct UntilizerCtArgs {
         expert_table_page_base(get_compile_time_arg_val(18)),
         ready_sem(get_compile_time_arg_val(19)) {}
 
+    // Program semaphores: the routed expert's arena occupies the L1 the standalone op places these in.
+    // The framework re-initialises them every launch, so nothing is reset here.
+    volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(peer_word));
+    }
+    uint32_t produced_addr_value() const { return get_semaphore(produced_sem); }
+    void reset_freed_counter(volatile tt_l1_ptr uint32_t*) const {}
+
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(6);  // num_destinations
     static constexpr uint32_t accessor_base =

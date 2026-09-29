@@ -127,6 +127,14 @@ struct UntilizerCtArgs {
         tile_bytes(get_compile_time_arg_val(15)),
         block_tiles(get_compile_time_arg_val(16)) {}
 
+    // The ring counters are hand-placed L1 here, so this op owns their lifetime and hands the next
+    // launch a zeroed pair.
+    volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_word);
+    }
+    uint32_t produced_addr_value() const { return produced_addr; }
+    void reset_freed_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
+
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(6);  // num_destinations
     static constexpr uint32_t accessor_base =
