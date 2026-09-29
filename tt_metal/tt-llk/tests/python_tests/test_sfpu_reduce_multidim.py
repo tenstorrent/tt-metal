@@ -45,6 +45,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    REDUCE_ORDER,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
     generate_input_dim,
@@ -83,6 +84,18 @@ MULTIDIM_FORMATS = [
     DataFormat.UInt32,
     DataFormat.Float16_b,
 ]
+
+
+def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[int]:
+    """Pass orders (REDUCE_ORDER in the kernel) under the single shared init: 0 = column then row,
+    1 = row then column, 2 = column, row, column. Orders 1 and 2 are MAX/MIN only -- there every order
+    leaves the tile extreme at [0][0] -- and put a column reduce after a row reduce, which is what
+    breaks if the row path writes the replay slots holding the column path's LOADMACRO window
+    (float/UInt32) or leaves an SFPSWAP direction the column path does not expect (signed Int32).
+    """
+    if reduce_pool in (ReducePool.Max, ReducePool.Min):
+        return [0, 1, 2]
+    return [0]
 
 
 def get_multidim_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
@@ -149,6 +162,7 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
 @parametrize(
     formats=[InputOutputFormat(fmt, fmt) for fmt in MULTIDIM_FORMATS],
     reduce_pool=lambda formats: get_multidim_pools(formats),
+    reduce_order=lambda reduce_pool: get_multidim_reduce_orders(reduce_pool),
     num_row_tiles=ROW_TILE_COUNTS,
     dest_acc=[DestAccumulation.Yes],
     input_bounds=lambda formats: get_multidim_input_bounds(formats),
@@ -156,6 +170,7 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
 def test_sfpu_reduce_multidim(
     formats,
     reduce_pool,
+    reduce_order,
     num_row_tiles,
     dest_acc,
     input_bounds,
@@ -214,6 +229,7 @@ def test_sfpu_reduce_multidim(
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
             REDUCE_POOL_TYPE(reduce_pool),
+            REDUCE_ORDER(reduce_order),
         ],
         runtimes=[
             NUM_BLOCKS(num_blocks),

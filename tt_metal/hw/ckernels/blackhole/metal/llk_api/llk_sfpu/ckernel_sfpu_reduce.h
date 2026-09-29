@@ -296,27 +296,22 @@ inline void perform_reduce_col_sum_avg() {
 // Both pairs are interleaved instruction by instruction: on Blackhole this hides no latency (after an
 // SFPSHFT2 rotate or an SFPSWAP the SFPU accepts only SFPNOP on the next cycle and auto-stalls anything
 // else), but it costs nothing and keeps every consumer two instructions behind its producer, so the
-// recorded sequences need no explicit SFPNOPs.
+// sequences need no explicit SFPNOPs.
 //
-// Both horizontal reduces are exactly HORIZONTAL_REDUCE_REPLAY_LEN instructions. The MAX/MIN one is
-// recorded into the replay buffer once by the matching init and replayed per 8-row group (the float row
-// MAX/MIN path used to re-record 16 slots at slot 0 on every calculate_reduce, on top of the LOADMACRO
-// column window). The SUM one is issued inline: recording it would cost ~25 cycles per init, and ttnn
-// re-inits before every single-tile sfpu_reduce, which would cancel its 24-cycle-per-tile saving; the
-// row SUM body is SFPU-bound, not issue-bound, so replaying it buys nothing (measured on p100a).
-// Replay slot layout (REPLAY_BUF_SIZE = 32 per thread):
-//   SUM/AVG init (init_reduce_sum_avg):       [0, 9)  column tree-add windows
-//   MAX/MIN init (init_reduce_max_min):       [0, 11) LOADMACRO column window   [12, 32) horizontal_reduce_max
-//   MAX/MIN init (init_reduce_max_min_int32): [0, 3)  manual 3-swap window      [12, 32) horizontal_reduce_max
-// The row window sits above the column windows so that a single shared init followed by a column reduce
-// and then a row reduce (the multi-axis lowering, see sfpu_reduce_multidim_test.cpp) never has one path
-// overwrite the other's slots.
-
-constexpr std::uint32_t HORIZONTAL_REDUCE_REPLAY_LEN = 20;
-constexpr std::uint32_t HORIZONTAL_REDUCE_MAX_REPLAY_START = 12;
-static_assert(
-    HORIZONTAL_REDUCE_MAX_REPLAY_START + HORIZONTAL_REDUCE_REPLAY_LEN <= REPLAY_BUF_SIZE,
-    "row MAX/MIN horizontal reduce must fit the replay buffer above the LOADMACRO column window");
+// Both horizontal reduces are exactly 20 instructions and are issued inline; neither is recorded into the
+// replay buffer. Measured on Blackhole (perf_sfpu_reduce.py, MATH_ISOLATE): the row bodies are
+// SFPU-bound, not issue-bound, so replaying them gives the same TILE_LOOP as issuing them inline, while
+// recording costs ~25-28 cycles per init -- and ttnn re-inits before every single-tile sfpu_reduce.
+// Keeping the row MAX/MIN path free of replay also means it never writes replay slots: the float row
+// MAX/MIN path used to re-record slots [0, 16) on every calculate_reduce, which clobbered the LOADMACRO
+// column window [0, 11) recorded by init_reduce_max_min, so a column MAX/MIN after a row MAX/MIN under
+// one shared init replayed rotate/swap instructions instead (sfpu_reduce_multidim_test.cpp REDUCE_ORDER
+// row->col guards this). Replay slots used by the reduce kernels (REPLAY_BUF_SIZE = 32 per thread;
+// ckernel::math::replay_buf_offset = 16 marks where the FPU ops' own windows start):
+//   init_reduce_sum_avg:                [0, 9)   column tree-add windows; row SUM/AVG replays [0, 6)
+//   init_reduce_max_min:                [0, 11)  LOADMACRO column window (float, UInt32)
+//   init_reduce_max_min_int32:          [0, 3)   manual 3-swap window (UInt16 in 32-bit Dest)
+//   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 column window; the signed row path is inline
 
 /**
  * @brief Rotate LREG1 and LREG5 right by one column, in place (one butterfly step for both pairs).
@@ -375,7 +370,11 @@ inline void horizontal_reduce_swap() {
 
 /**
  * @brief Horizontal SUM of the two accumulators, 20 instructions (14 SFPSHFT2 + 6 adds), issued inline
- *        by the row SUM/AVG kernels once per 8-row group.
+ *        once per 8-row group by the row SUM/AVG kernels and by _softmax_k_
+ *        (tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_softmax_k.h).
+ *
+ * Contract: in LREG0 / LREG4 = per-column partials of the two 4-row groups; out LREG0 / LREG4 = the
+ * 8-column sum, replicated in every column; LREG1 / LREG5 are clobbered; no other register is touched.
  *
  *   Stage 1: Rotate by 4 and add -> 8 partial sums (cols 0-7) become 4 duplicated pair sums.
  *   Stage 2: Rotate by 2 and add -> pair sums become 2 duplicated quad sums.
@@ -385,11 +384,11 @@ inline void horizontal_reduce_swap() {
  */
 template <bool is_integer_mode>
 inline void horizontal_reduce() {
-    horizontal_reduce_rotate<4>();
+    horizontal_reduce_rotate<4 /*shift*/>();
     horizontal_reduce_add<is_integer_mode>();
-    horizontal_reduce_rotate<2>();
+    horizontal_reduce_rotate<2 /*shift*/>();
     horizontal_reduce_add<is_integer_mode>();
-    horizontal_reduce_rotate<1>();
+    horizontal_reduce_rotate<1 /*shift*/>();
     horizontal_reduce_add<is_integer_mode>();
 
     // LREG0 (every column) = sum of all elements in the first 4 rows of this 8-row block
@@ -397,37 +396,24 @@ inline void horizontal_reduce() {
 }
 
 /**
- * @brief Horizontal MAX/MIN of the two accumulators, 20 instructions (14 SFPSHFT2 + 6 SFPSWAP).
- *        Same butterfly as horizontal_reduce with compare-and-swap in place of add; the SFPSWAP
- *        direction (MAX or MIN) is whatever SFPCONFIG bit 8 says at replay time. Emitted into the
- *        replay buffer by record_horizontal_reduce_max; never issued inline.
+ * @brief Horizontal MAX/MIN of the two accumulators, 20 instructions (14 SFPSHFT2 + 6 SFPSWAP), issued
+ *        inline once per 8-row group by the float / UInt32 / UInt16 row MAX/MIN kernels. Same butterfly
+ *        as horizontal_reduce with compare-and-swap in place of add; the SFPSWAP direction (MAX or MIN)
+ *        is whatever SFPCONFIG bit 8 says at issue time.
+ *
+ * Contract: in LREG0 / LREG4 = per-column extremes of the two 4-row groups; out LREG0 / LREG4 = the
+ * 8-column extreme, replicated in every column; LREG1 / LREG5 are clobbered; no replay slot is written.
  */
-inline void horizontal_reduce_max_body() {
-    horizontal_reduce_rotate<4>();
+inline void horizontal_reduce_max() {
+    horizontal_reduce_rotate<4 /*shift*/>();
     horizontal_reduce_swap();
-    horizontal_reduce_rotate<2>();
+    horizontal_reduce_rotate<2 /*shift*/>();
     horizontal_reduce_swap();
-    horizontal_reduce_rotate<1>();
+    horizontal_reduce_rotate<1 /*shift*/>();
     horizontal_reduce_swap();
 
     // LREG0 / LREG4 (every column) = extreme over all 8 columns of the first / next 4-row group
 }
-
-/**
- * @brief Records horizontal_reduce_max_body into replay slots [HORIZONTAL_REDUCE_MAX_REPLAY_START, +20).
- *        Called once by init_reduce_max_min / init_reduce_max_min_int32 (i.e. by every init that can
- *        precede a float/UInt32/UInt16 row MAX/MIN); horizontal_reduce_max replays it per 8-row group.
- */
-inline void record_horizontal_reduce_max() {
-    lltt::record(HORIZONTAL_REDUCE_MAX_REPLAY_START, HORIZONTAL_REDUCE_REPLAY_LEN);
-    horizontal_reduce_max_body();
-}
-
-/**
- * @brief Executes the horizontal MAX/MIN reduction of LREG0 and LREG4 from the replay buffer.
- *        record_horizontal_reduce_max() must have run (from init) since the last replay-buffer rewrite.
- */
-inline void horizontal_reduce_max() { lltt::replay(HORIZONTAL_REDUCE_MAX_REPLAY_START, HORIZONTAL_REDUCE_REPLAY_LEN); }
 
 /**
  * @brief Row-wise maximum reduction for a single 32x32 tile.
@@ -439,7 +425,7 @@ inline void horizontal_reduce_max() { lltt::replay(HORIZONTAL_REDUCE_MAX_REPLAY_
  * 1. Load 4 rows from left face (even cols) and 4 rows from right face (odd cols) into LREG0-3
  * 2. Load the next 4 rows into LREG4-7
  * 3. Use vertical SFPSWAP to reduce LREG pairs down (keeping max between left/right face columns)
- * 4. Use horizontal_reduce_max (replayed) to fold the 8 SFPU columns; every column then holds the row max
+ * 4. Use horizontal_reduce_max to fold the 8 SFPU columns; every column then holds the row max
  * 5. Store the per-row max, reading column 0
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
@@ -749,9 +735,8 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
         TTI_SFPCONFIG(0, 0xF, 0);
     }
 
-    // The horizontal MAX/MIN reduce is replayed from slots recorded by init_reduce_max_min /
-    // init_reduce_max_min_int32 (HORIZONTAL_REDUCE_MAX_REPLAY_START); nothing is recorded here, so the
-    // column LOADMACRO window in slots [0, 11) survives a row reduce that follows a column reduce.
+    // The horizontal MAX/MIN reduce is issued inline and nothing is recorded here, so the column LOADMACRO
+    // window in replay slots [0, 11) survives a row reduce, whichever order the two run in under one init.
 
     // Single column tile => per-tile store is the final packer-visible result, which uses mode 9 only
     // when the OUTPUT is UInt16 in a 32-bit dest (pack_low16); otherwise it is intermediate and stays
@@ -861,10 +846,9 @@ inline void perform_reduce_row_sum_tile(
             // After this: LREG0 contains sum of first 4 rows, LREG4 contains sum of next 4 rows
             lltt::replay(0, 6);
 
-            // Horizontal reduction, issued inline: fold the 8 SFPU columns so every column of LREG0 / LREG4
-            // holds the full row sum of its 4-row group. Not replayed: recording the 20 slots costs ~25
-            // cycles per init, and ttnn re-inits before every sfpu_reduce (one output tile), which would
-            // cancel the per-tile saving; the row SUM body is SFPU-bound, not issue-bound (measured).
+            // Horizontal reduction, issued inline (see the horizontal-reduce section for why it is not
+            // replayed): fold the 8 SFPU columns so every column of LREG0 / LREG4 holds the full row sum
+            // of its 4-row group.
             horizontal_reduce<is_integer_mode>();
 
             // For a single-column-tile AVG the per-tile sum is already the full row sum, so divide it
@@ -1096,9 +1080,6 @@ inline void init_reduce_max_min_int32() {
     TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1);
-
-    // Row MAX/MIN horizontal reduce, in slots above the 3-swap window (init has no reduce_dim).
-    record_horizontal_reduce_max();
 }
 
 /**
@@ -1162,10 +1143,6 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // Dummy loads to increment dest counters
     TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
     TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_5, 0);
-
-    // Row MAX/MIN horizontal reduce, in slots above the LOADMACRO column window (init has no reduce_dim,
-    // so both windows are always recorded and a column reduce followed by a row reduce replays each intact).
-    record_horizontal_reduce_max();
 }
 
 /**
@@ -1529,10 +1506,12 @@ inline void _emit_int32_signed_cswap_() {
 /**
  * @brief Signed-Int32 horizontal MAX/MIN reduction (fully inline, no replay buffer).
  *
- * Mirrors horizontal_reduce_max()'s rotate-and-compare structure, but every compare-and-swap is the
- * two's-complement signed compare-and-swap so INT32_MIN is handled. The two lanes (LREG0/1 and LREG4/5)
- * are emitted sequentially rather than interleaved because each signed compare-and-swap manages its own
- * condition-code state (SFPSETCC/SFPENCC) and must not be interleaved with another.
+ * Same rotate-by-4/2/1 butterfly as horizontal_reduce_max(), in its older copy-then-rotate-in-place form
+ * (SFPMOV into LREG1/LREG5 before each stage), with every compare-and-swap replaced by the two's-complement
+ * signed compare-and-swap so INT32_MIN is handled. Left in that form: this path is dominated by the signed
+ * compare-and-swaps and is the unchanged Int32 MAX control in perf_sfpu_reduce.py. The two lanes (LREG0/1
+ * and LREG4/5) are emitted sequentially rather than interleaved because each signed compare-and-swap
+ * manages its own condition-code state (SFPSETCC/SFPENCC) and must not be interleaved with another.
  */
 inline void horizontal_reduce_max_int32() {
     // Phase 1: rotate by 4 and compare -> 8 values become 4 duplicated pair extrema.
@@ -1714,6 +1693,21 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
 }
 
 /**
+ * @brief Sets the SFPSWAP direction the signed-Int32 column path expects: its compare-and-swaps take
+ *        (HIGH, LOW) operands, so MAX is the inverted direction (SFPCONFIG bit 8 set) and MIN the default,
+ *        the opposite of the row paths' convention. Clobbers LREG0.
+ */
+template <PoolType pool_type>
+inline void set_int32_signed_col_swap_direction() {
+    _init_sfpu_config_reg();
+    if constexpr (pool_type == PoolType::MAX) {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // Load lower 16 bits (bit 8)
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);  // Load upper 16 bits
+        TTI_SFPCONFIG(0, 0xF, 0);
+    }
+}
+
+/**
  * @brief Init for the two's-complement signed Int32 column MAX/MIN reduce. Sets the MAX/MIN swap
  *        direction and records a replay buffer that reduces LREG4-7 -> LREG4 via three signed
  *        compare-and-swaps. Used instead of the sign-magnitude path so INT32_MIN is handled correctly.
@@ -1722,12 +1716,7 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
  */
 template <PoolType pool_type>
 inline void init_reduce_max_min_int32_signed() {
-    _init_sfpu_config_reg();
-    if constexpr (pool_type == PoolType::MAX) {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // Load lower 16 bits (bit 8)
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);  // Load upper 16 bits
-        TTI_SFPCONFIG(0, 0xF, 0);
-    }
+    set_int32_signed_col_swap_direction<pool_type>();
 
     lltt::record(0, 3 * INT32_SIGNED_CSWAP_LEN);
     _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
@@ -1762,6 +1751,11 @@ inline void calculate_reduce_max_min_int32_col() {
         {0, 0, 32, 32},   // j=0: Face 0 and Face 2
         {16, 16, 48, 48}  // j=1: Face 1 and Face 3
     };
+
+    // Re-establish this path's SFPSWAP direction instead of trusting the paired init: under one shared init
+    // a preceding row MAX/MIN (perform_reduce_row_max_min_int32) leaves the row convention in SFPCONFIG
+    // bit 8, which is inverted for this path (sfpu_reduce_multidim_test.cpp REDUCE_ORDER row->col).
+    set_int32_signed_col_swap_direction<pool_type>();
 
     // Where each per-face partial (left in LREG4 by the reduce) is parked so it survives the remaining
     // face loads (which clobber LREG4-7). The order matches the LREG0-3 layout the transpose expects.
