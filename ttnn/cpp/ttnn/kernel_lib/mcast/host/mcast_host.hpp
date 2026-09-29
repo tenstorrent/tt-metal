@@ -110,8 +110,8 @@ enum class McastSenderPlacement { Uniform, Staggered };
 struct McastConfig {
     tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
     bool handshake = true;
-    // nullopt means all receivers; an empty set means no acknowledgments.
-    // The current sender never acknowledges itself. Chain forwarding requires
+    // nullopt means all receivers send the ready signal; an empty set means none do.
+    // The current sender never sends the ready signal to itself. Chain forwarding requires
     // all receivers and therefore accepts only nullopt or the full receiver set.
     std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
