@@ -16,6 +16,8 @@ set_target_properties(
             api
 )
 
+file(GLOB_RECURSE kernels device/kernels/*.cpp)
+
 target_sources(
     ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed
     PUBLIC
@@ -23,6 +25,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_ROTARY_EMBEDDING_INDEXED_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         device/rotary_embedding_indexed_device_operation.cpp
         rotary_embedding_indexed.cpp
@@ -34,6 +40,16 @@ target_link_libraries(
         TT::Metalium
     PUBLIC
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed
+    FILE_SET
+    kernels
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed LIBRARY COMPONENT tar)

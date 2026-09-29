@@ -154,9 +154,9 @@ def _get_unary_golden_table():
 
 
 def register_ttnn_cpp_unary_function(unary_function):
-    name_to_golden_function = _get_unary_golden_table()
-
     def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
+        # PyTorch is optional; resolve its functions only when a golden is called.
+        name_to_golden_function = _get_unary_golden_table()
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
         # Preserve operation-specific positional parameters while discarding TTNN-only kwargs.
         return torch_function(input_tensor, *args)

@@ -11,7 +11,6 @@ from pathlib import Path
 from shutil import copyfile
 
 from loguru import logger
-
 from tracy.common import PROFILER_DEVICE_SIDE_LOG, generate_logs_folder
 
 # Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
@@ -34,6 +33,12 @@ PERF_COUNTER_BH_ONLY_GROUPS = {"l1_2", "l1_3", "l1_4", "l1_5"}
 PERF_COUNTER_MAX_GROUPS_PER_PASS = 3
 # PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
 PERF_COUNTER_MARKER_ID = "9090"
+# Device-log column positions used when merging passes.
+PERF_COUNTER_TIMER_ID_COL = 4
+PERF_COUNTER_TIMESTAMP_COL = 5
+PERF_COUNTER_RUN_HOST_ID_COL = 7
+PERF_COUNTER_TRACE_ID_COL = 8
+PERF_COUNTER_TRACE_ID_COUNTER_COL = 9
 # Environment variables that name the device architecture without opening the device.
 ARCH_ENV_VARS = ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
 
@@ -159,15 +164,50 @@ def plan_perf_counter_capture(requested_groups, multipass, can_replay):
     return bitfields
 
 
+def _counter_row_fields(line):
+    """Split a device-log line and return its fields if it is a perf-counter row, else None."""
+    # column 4 is timer_id; perf-counter rows carry PERF_COUNTER_MARKER_ID there.
+    fields = line.split(",")
+    if (
+        len(fields) > PERF_COUNTER_TRACE_ID_COUNTER_COL
+        and fields[PERF_COUNTER_TIMER_ID_COL].strip() == PERF_COUNTER_MARKER_ID
+    ):
+        return fields
+    return None
+
+
+def _op_key(fields):
+    # device, core, run host id and the trace replay a traced op belongs to; every RISC of the core reads out the
+    # same op, so the RISC is not part of it
+    return tuple(
+        fields[c].strip()
+        for c in (0, 1, 2, PERF_COUNTER_RUN_HOST_ID_COL, PERF_COUNTER_TRACE_ID_COL, PERF_COUNTER_TRACE_ID_COUNTER_COL)
+    )
+
+
 def merge_perf_counter_device_logs(pass_csvs, out_csv):
-    """Merge per-pass device logs: pass 0 whole, later passes contribute only their perf-counter rows."""
-    merged = list(Path(pass_csvs[0]).read_text().splitlines(keepends=True))
+    """Merge per-pass device logs: pass 0 whole, later passes add their counter rows re-timestamped onto pass 0."""
+    base = Path(pass_csvs[0]).read_text().splitlines(keepends=True)
+    anchors = {}
+    for line in base:
+        fields = _counter_row_fields(line)
+        if fields:
+            anchors.setdefault(_op_key(fields), fields[PERF_COUNTER_TIMESTAMP_COL].strip())
+
+    merged, unanchored = list(base), 0
     for extra in pass_csvs[1:]:
         for line in Path(extra).read_text().splitlines(keepends=True):
-            # column 4 is timer_id; perf-counter rows carry PERF_COUNTER_MARKER_ID there.
-            fields = line.split(",")
-            if len(fields) > 4 and fields[4].strip() == PERF_COUNTER_MARKER_ID:
-                merged.append(line)
+            fields = _counter_row_fields(line)
+            if not fields:
+                continue
+            anchor = anchors.get(_op_key(fields))
+            if anchor is None:
+                unanchored += 1
+                continue
+            fields[PERF_COUNTER_TIMESTAMP_COL] = anchor
+            merged.append(",".join(fields))
+    if unanchored:
+        logger.warning(f"Dropped {unanchored} perf-counter rows with no matching op in pass 0")
     Path(out_csv).write_text("".join(merged))
 
 

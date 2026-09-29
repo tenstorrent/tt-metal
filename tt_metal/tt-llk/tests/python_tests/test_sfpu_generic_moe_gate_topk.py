@@ -6,15 +6,18 @@ Generic MoE-gate top-k SFPU test.
 Covers tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h
 and its two implementation halves (_top8.h, _top16.h):
 `_init_generic_moe_gate_topk_` / `_generic_moe_gate_topk_<normalize,
-num_selected_experts, num_total_experts, zero_tail, full_sort>`.
+num_selected_experts, num_total_experts, zero_tail, full_sort, generate_indices,
+do_extra_scale, scores_include_bias>`.
 
 Semantics (the DeepSeek biased gate)
 ------------------------------------
 * Experts are selected by their BIASED score (DEST tile 2 = score + bias).
-* What comes back is the ORIGINAL score (carried as the HI16 payload alongside the
-  expert id in LO16) and the expert id.
+* The default returns the ORIGINAL score; `scores_include_bias=True` returns the
+  BIASED score. The selected payload travels in HI16 alongside the expert id in LO16.
 * With `normalize`, each winner score is rescaled by
-  `scale / (sum_of_selected_original_scores + eps)`.
+  `scale / (sum_of_selected_payload_scores + eps)`.
+* `generate_indices=False` preserves a caller-supplied mapping. The test fixture
+  seeds `id ^ 0x8055`, covering both non-identity indices and the hot/cold bit flag.
 
 Layout, for num_total_experts == 256
 ------------------------------------
@@ -51,7 +54,7 @@ on the top-8 path; the intermediate 9-15 path still performs the final 16-row so
 because truncation requires the requested winners to occupy the leading rows. The
 checks are:
   1. the live winner id set == the golden top-N id set, for the N above;
-  2. every returned score matches the normalized original score of the id it is
+  2. every returned score matches the selected payload score of the id it is
      paired with -- this is the check that would catch a payload/key mix-up, which is
      the interesting failure mode for a bitonic sort carrying a payload;
   3. the blanked tail rows, when there are any, hold exactly id 0 and score 0.0;
@@ -74,16 +77,14 @@ separately.
 
 The original sweep uses 256 experts. The partial-face regression covers counts
 from 16 through 240, with deliberately large inactive keys to exercise padding.
+Biased-payload cases use spread-out winning keys so normalized weights remain
+sensitive to payload swaps; 512/1024-expert cases place winners on every face.
 
 Configurations left uncovered
 -----------------------------
 * `dest_acc` is pinned No, structurally: the kernel carries the expert id in the LO16
   and the score in the HI16 of one DEST word, which only exists for a 16-bit DEST
   format. A 32-bit DEST leaves no room for the payload.
-* `generate_indices` is pinned true -- the driver instantiates
-  `_generic_moe_gate_topk_` with five of its six template arguments, so the kernel
-  always numbers the experts itself and the caller-supplied index-mapping path is not
-  reached. See MOE_GATE_TOPK in helpers/test_variant_parameters.py.
 """
 
 import torch
@@ -109,6 +110,7 @@ NUM_RESULT_TILES = 2  # winner scores, winner indices
 
 EPS_BITS = 0x00000000  # 0.0f -- all scores are positive so the sum never vanishes
 SCALE_BITS = 0x3F800000  # 1.0f
+INDEX_MAPPING_MASK = 0x8055  # permuted index with the hot/cold flag set
 
 # Winner rows each path emits, whatever num_selected_experts asked for.
 TOP8_WINNERS = 8
@@ -135,7 +137,7 @@ def _distinct_bf16_keys() -> torch.Tensor:
     """256 consecutive bfloat16 encodings starting at 1.0, shuffled.
 
     bfloat16 has 7 fraction bits, so [1, 2) holds only 128 distinct values, spaced
-    1/128 apart -- keys spaced 1/256 would collapse in pairs the moment _face0_tile
+    1/128 apart -- keys spaced 1/256 would collapse in pairs the moment _expert_tile
     casts them to the format the hardware compares in, reintroducing exactly the ties
     this is meant to avoid (while the golden still sorted the un-collapsed fp32
     values). Walking consecutive bf16 bit patterns instead -- 0x3F80..0x407F, i.e.
@@ -147,10 +149,15 @@ def _distinct_bf16_keys() -> torch.Tensor:
     return keys[torch.randperm(NUM_TOTAL_EXPERTS)]
 
 
-def _face0_tile(values: torch.Tensor, torch_format) -> torch.Tensor:
-    """Place 256 values row-major into face 0 of a [32, 32] tile; rest zero."""
+def _expert_tile(values: torch.Tensor, torch_format) -> torch.Tensor:
+    """Place face-ordered expert values into a [32, 32] tile; rest zero."""
     tile = torch.zeros((TILE_DIM, TILE_DIM), dtype=torch.float32)
-    tile[:FACE_DIM, :FACE_DIM] = values.reshape(FACE_DIM, FACE_DIM)
+    for face, values_in_face in enumerate(values.split(FACE_DIM * FACE_DIM)):
+        row = (face // 2) * FACE_DIM
+        col = (face % 2) * FACE_DIM
+        tile[row : row + FACE_DIM, col : col + FACE_DIM] = values_in_face.reshape(
+            FACE_DIM, FACE_DIM
+        )
     return tile.to(torch_format)
 
 
@@ -158,7 +165,9 @@ def _bits_to_float(bits: int) -> float:
     return torch.tensor([bits], dtype=torch.int32).view(torch.float32).item()
 
 
-def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
+def assert_odd_columns_untouched(
+    result_indices, result_scores, scores, rows, generate_indices
+):
     """The top-8 winner store writes only the even columns; the odd ones stay intact.
 
     That makes the odd columns a direct readout of two things the test otherwise has
@@ -175,6 +184,8 @@ def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
         for col in range(1, FACE_DIM, 2):
             got_id = int(result_indices[row, col].item())
             want_id = FACE_DIM * row + col
+            if not generate_indices:
+                want_id ^= INDEX_MAPPING_MASK
             assert got_id == want_id, (
                 f"indices: odd column [{row}, {col}] should still hold its generated "
                 f"id {want_id}, got {got_id}"
@@ -212,12 +223,71 @@ def test_sfpu_generic_moe_gate_partial_face(
     _check_moe_gate(num_selected_experts, True, normalize, True, num_total_experts)
 
 
+@blackhole_only
+@parametrize(
+    num_total_experts=[80, 128, 256],
+    num_selected_experts=[4, 12],
+    normalize=[False, True],
+    full_sort=[False, True],
+    scores_include_bias=[False, True],
+    generate_indices=[False, True],
+)
+def test_sfpu_generic_moe_gate_biased_scores(
+    num_total_experts,
+    num_selected_experts,
+    normalize,
+    full_sort,
+    scores_include_bias,
+    generate_indices,
+):
+    """Biased payloads retain index pairing, normalization, padding and zero tails.
+
+    The winning biased keys are spaced far enough apart that returning uniform
+    normalized weights or swapping adjacent payloads fails the elementwise check.
+    Original scores are independent and smaller than all winning biased keys.
+    """
+    _check_moe_gate(
+        num_selected_experts,
+        full_sort,
+        normalize,
+        True,
+        num_total_experts,
+        scores_include_bias=scores_include_bias,
+        generate_indices=generate_indices,
+        spread_biased_scores=True,
+    )
+
+
+@blackhole_only
+@parametrize(
+    num_total_experts=[512, 1024],
+    num_selected_experts=[4, 12],
+    normalize=[False, True],
+)
+def test_sfpu_generic_moe_gate_biased_scores_multiple_faces(
+    num_total_experts, num_selected_experts, normalize
+):
+    """Copy biased payloads across all active faces before the global merge."""
+    _check_moe_gate(
+        num_selected_experts,
+        True,
+        normalize,
+        True,
+        num_total_experts,
+        scores_include_bias=True,
+        spread_biased_scores=True,
+    )
+
+
 def _check_moe_gate(
     num_selected_experts,
     full_sort,
     normalize,
     zero_tail,
     num_total_experts=NUM_TOTAL_EXPERTS,
+    scores_include_bias=False,
+    generate_indices=True,
+    spread_biased_scores=False,
 ):
     torch.manual_seed(0)
 
@@ -227,18 +297,48 @@ def _check_moe_gate(
     # Sort keys: distinct by construction. Raw scores: independent, positive, and
     # deliberately on a different scale from the keys so that reporting the key
     # instead of the score would be caught.
-    biased = _distinct_bf16_keys()
+    expert_storage_size = max(NUM_TOTAL_EXPERTS, num_total_experts)
+    biased = (
+        _distinct_bf16_keys()
+        if num_total_experts <= NUM_TOTAL_EXPERTS
+        else torch.zeros(expert_storage_size)
+    )
+    if spread_biased_scores:
+        # Keep the top 16 keys at least 5% apart, including after normalization:
+        # 1.0, 1.25, ..., 4.75. Quantize smaller keys before building the golden.
+        # Shuffle only active experts so even the 80-expert padding case exercises
+        # all 16 well-separated winners rather than a random subset.
+        lower_keys = torch.arange(1, num_total_experts - 15) / (4 * num_total_experts)
+        winning_keys = 1.0 + torch.arange(TOP16_WINNERS) / 4
+        active_keys = torch.cat((lower_keys, winning_keys))
+        biased[:num_total_experts] = active_keys[torch.randperm(num_total_experts)]
+        if num_total_experts > NUM_TOTAL_EXPERTS:
+            # Interleave winning ranks between faces so even top-4 must collect
+            # payloads from every active face, including the last copy offsets.
+            num_faces = num_total_experts // NUM_TOTAL_EXPERTS
+            ranks = torch.arange(TOP16_WINNERS)
+            winner_positions = (
+                (ranks % num_faces) * NUM_TOTAL_EXPERTS
+                + NUM_TOTAL_EXPERTS
+                - 1
+                - ((TOP16_WINNERS - 1 - ranks) // num_faces) * 17
+            )
+            lower_positions = torch.ones(num_total_experts, dtype=torch.bool)
+            lower_positions[winner_positions] = False
+            biased[:num_total_experts][lower_positions] = lower_keys
+            biased[winner_positions] = winning_keys
+        biased = biased.to(torch_format).to(torch.float32)
     # Without the SFPU's -inf padding these inactive experts would win.
     biased[num_total_experts:] = 1000.0
     scores = (
-        torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
+        torch.empty(expert_storage_size, dtype=torch.float32)
         .uniform_(0.05, 0.95)
         .to(torch_format)
         .to(torch.float32)
     )
 
-    scores_tile = _face0_tile(scores, torch_format)
-    biased_tile = _face0_tile(biased, torch_format)
+    scores_tile = _expert_tile(scores, torch_format)
+    biased_tile = _expert_tile(biased, torch_format)
 
     src_A = torch.cat(
         [
@@ -260,6 +360,8 @@ def _check_moe_gate(
                 normalize=normalize,
                 zero_tail=zero_tail,
                 full_sort=full_sort,
+                generate_indices=generate_indices,
+                scores_include_bias=scores_include_bias,
             ),
             MOE_GATE_NORMALIZE_PARAMS(eps_bits=EPS_BITS, scale_bits=SCALE_BITS),
         ],
@@ -306,15 +408,18 @@ def _check_moe_gate(
     golden_generator = get_golden_generator(MoeGateTopkGolden)
     scale = _bits_to_float(SCALE_BITS)
     eps = _bits_to_float(EPS_BITS)
-    golden_ids, _ = golden_generator(
+    payload = biased if scores_include_bias else scores
+    golden_positions, _ = golden_generator(
         biased[:num_total_experts],
-        scores[:num_total_experts],
+        payload[:num_total_experts],
         num_winners,
         normalize,
         eps=eps,
         scale=scale,
     )
 
+    index_mask = 0 if generate_indices else INDEX_MAPPING_MASK
+    golden_ids = [position ^ index_mask for position in golden_positions]
     got_ids = [int(result_indices[row, 0].item()) for row in range(num_winners)]
     got_scores = torch.tensor(
         [result_scores[row, 0].item() for row in range(num_winners)],
@@ -327,17 +432,30 @@ def _check_moe_gate(
         f"  golden {sorted(golden_ids)}"
     )
 
-    # Pairing check: each returned score must be the normalized original score of the
+    # Pairing check: each returned score must be the selected payload of the
     # expert id it came back with. This is what catches a key/payload mix-up. Asked for
     # in the order the device returned, but normalized over the golden winner set --
     # which, when the tail is blanked, is the live winners only, since the kernel blanks
     # before `_generic_moe_gate_normalize_` sums the rows.
     expected_paired = golden_generator.scores_for_ids(
-        got_ids, golden_ids, scores, normalize, eps=eps, scale=scale
+        [expert_id ^ index_mask for expert_id in got_ids],
+        golden_positions,
+        payload,
+        normalize,
+        eps=eps,
+        scale=scale,
     )
-    assert passed_test(
-        expected_paired, got_scores, formats.output_format, print_errors=True
-    ), "returned scores are not the (normalized) original scores of the returned ids"
+    if scores_include_bias and not normalize:
+        # Copying the BF16 payload through the paired sort is exact.
+        torch.testing.assert_close(got_scores, expected_paired, rtol=0, atol=0)
+    elif scores_include_bias:
+        # Account for reciprocal approximation and BF16 store rounding while
+        # requiring each paired weight to match independently of correlation.
+        torch.testing.assert_close(got_scores, expected_paired, rtol=1 / 64, atol=0)
+    else:
+        assert passed_test(
+            expected_paired, got_scores, formats.output_format, print_errors=True
+        ), "returned scores are not the (normalized) original scores of the returned ids"
 
     # full_sort must keep each score paired with its id while ordering by biased key.
     if full_sort:
@@ -361,5 +479,5 @@ def _check_moe_gate(
         # All eight emitted rows, blanked ones included -- the tail zeroing hits the
         # even-column payload, never the odd columns.
         assert_odd_columns_untouched(
-            result_indices, result_scores, scores, emitted_rows
+            result_indices, result_scores, payload, emitted_rows, generate_indices
         )

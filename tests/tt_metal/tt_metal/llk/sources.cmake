@@ -11,6 +11,7 @@ set(UNIT_TESTS_LLK_SRC
     test_deepseek_binary_dest_reuse.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
+    test_generic_moe_gate_compute.cpp
     test_golden_impls.cpp
     test_hadamard_compute.cpp
     test_mul_reduce_scalar.cpp
@@ -18,12 +19,14 @@ set(UNIT_TESTS_LLK_SRC
     test_mxfp6_typecast.cpp
     test_mxfp8_typecast.cpp
     test_mxint_typecast.cpp
+    test_norm_fidelity.cpp
     test_pack_rows.cpp
     test_quasar_mailboxes.cpp
     test_quasar_bfd_datacopy.cpp
     test_reconfig.cpp
     test_reduce.cpp
     test_rmsnorm_chunked.cpp
+    test_rope_fused_compute.cpp
     test_sdpa_reconciliation.cpp
     test_sfpu_binary_bcast.cpp
     test_sfpu_compute.cpp
@@ -36,5 +39,6 @@ set(UNIT_TESTS_LLK_SRC
     test_top32_rm_dev.cpp
     test_transpose.cpp
     test_unary_broadcast.cpp
+    test_unpack_to_dest_bcast_dst_offset.cpp
     test_untilize_tilize.cpp
 )

@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // See the halo reader: appended after the per-output accessors, with a valid fallback offset so the
     // unconditionally-instantiated TensorAccessorArgs<> never names a non-accessor compile arg. Reader and
-    // writer MUST relocate to the same range or their cb_output page counts drift apart.
+    // writer use the same link ranges to keep cb_output page counts equal.
     // The tuple itself has no offset accessor; the last element's next offset is where the
     // accessors end.
     constexpr uint32_t halo_meta_flag_idx = std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
@@ -55,19 +55,22 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_link = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, num_inputs> output_batch_head_stride_pages;
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
-    std::array<uint32_t, num_inputs> input_origin_page;
+    // First page this exchange writes in the receiver's compact buffer: a multi-hop halo gives each hop
+    // its own block (chunked_sliding_halo_hop_dest_row).
+    std::array<uint32_t, num_inputs> output_origin_page;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         output_batch_head_stride_pages[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     if constexpr (has_halo_metadata) {
@@ -75,22 +78,33 @@ void kernel_main() {
         const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
-        const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
-            kv_actual_isl, q_local_tile_rows, ring_size_rt, halo_tile_rows, source_device, cache_local_tile_rows);
+        const auto sources = ring_attention_all_gather::compute_halo_sources(
+            kv_actual_isl,
+            q_local_tile_rows,
+            ring_size_rt,
+            halo_tile_rows,
+            source_device,
+            cache_local_tile_rows,
+            halo_slot_count,
+            hop);
+        const uint32_t tail_tile_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
+            halo_tile_rows, q_local_tile_rows, hop);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t runtime_origin = tail_start_Ht * input_Wt;
-            const uint32_t baked_origin = baked_start_Ht * input_Wt;
-            ring_attention_all_gather::relocate_halo_range(
-                runtime_origin, baked_origin, input_tile_id_start[input_idx], input_tile_id_end[input_idx]);
-            input_origin_page[input_idx] = runtime_origin;
+            const uint32_t pages = sources.count * tail_tile_rows * input_Wt;
+            ASSERT(pages <= output_batch_head_stride_pages[input_idx]);
+            const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
+            input_tile_id_start[input_idx] = range.start;
+            input_tile_id_end[input_idx] = range.end;
         }
     }
 
@@ -99,6 +113,21 @@ void kernel_main() {
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t fabric_args_idx = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(fabric_args_idx);
+
+    // Link hand-off for hops that time-share a fabric link (see RingAttentionNeighborHaloConfig):
+    // wait for the predecessor on this link to close its connection, and wake the successor after
+    // closing ours. Both flags are 0 when this hop owns its link.
+    uint32_t chain_arg_idx = fabric_args_idx;
+    const uint32_t chain_waits = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_signals = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_semaphore_id = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_successor_noc_x = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_successor_noc_y = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uintptr_t chain_semaphore_addr = get_semaphore(chain_semaphore_id);
+
+    if (chain_waits) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chain_semaphore_addr), 1);
+    }
 
     Noc noc_obj;
     CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
@@ -125,7 +154,7 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        // Send the local halo tail directly to the next device's compact output buffer.
+        // Send this hop's halo tail directly to its block of the destination device's compact buffer.
 
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             uint32_t tiles_read = input_tile_id_start[input_idx];
@@ -135,7 +164,7 @@ void kernel_main() {
                 const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                 cb_output.wait_front(packet_size_in_pages);
                 const size_t l1_read_addr = cb_output.get_read_ptr();
-                const uint32_t tile_id = output_batch_head_base + tiles_read - input_origin_page[input_idx];
+                const uint32_t tile_id = output_batch_head_base + output_origin_page[input_idx] + tiles_read;
 
                 if (num_pages_to_read == 2) {
                     const uint32_t second_tile_id = tile_id + 1;
@@ -204,4 +233,11 @@ void kernel_main() {
     noc_obj.async_write_barrier();
 
     fabric_connection.close();
+
+    // The EDM sender channel is free only once close() has persisted its producer cursor, so the
+    // hand-off has to follow the close, not the last payload send.
+    if (chain_signals) {
+        noc_semaphore_inc(get_noc_addr(chain_successor_noc_x, chain_successor_noc_y, chain_semaphore_addr), 1);
+        noc_obj.async_atomic_barrier();
+    }
 }

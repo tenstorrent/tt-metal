@@ -32,6 +32,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
+    metal2_host_api/test_prefetcher_pipe_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
     metal2_host_api/test_scratchpad_hw.cpp
@@ -59,6 +60,7 @@ set(UNIT_TESTS_API_SOURCES
     test_global_circular_buffers.cpp
     test_cross_node_dfb.cpp
     test_prefetcher_pipe.cpp
+    test_prefetcher_pipe_dram_sender.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
@@ -80,6 +82,7 @@ set(UNIT_TESTS_API_SOURCES
     test_simple_l1_buffer.cpp
     test_soc_descriptor.cpp
     test_stream_scratch_register.cpp
+    test_tile.cpp
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
     test_blockfloat_common.cpp
