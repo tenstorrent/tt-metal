@@ -99,3 +99,12 @@ def test_lazy_reference_builds_only_on_use(monkeypatch):
     lazy = orc.LazyReference(small_spec(LAYERS, 512))
     assert not lazy.built and built == []
     assert lazy() == "model" and lazy() == "model" and lazy.built and len(built) == 1
+
+
+def test_mixed_specs_get_their_own_directory():
+    real = _real()
+    mixed = orc.real_spec((20, 36, 37, 38, 39), 2048, checkpoint=Path("/s"), dspark=True, checkpoint_units=("mtp.0",))
+    both = orc.real_spec((20, 36, 37, 38, 39), 2048, checkpoint=Path("/s"), dspark=True)
+    assert wc.weight_cache_dir(mixed, MESH).name.startswith("mixed-")
+    assert wc.weight_cache_dir(mixed, MESH) != wc.weight_cache_dir(both, MESH)  # synthetic backbone: own directory
+    assert wc.weight_cache_dir(both, MESH) == wc.weight_cache_dir(real, MESH)  # same checkpoint weights: shared

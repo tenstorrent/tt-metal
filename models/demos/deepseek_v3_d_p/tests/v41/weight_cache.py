@@ -113,17 +113,21 @@ def _check_roles(spec: OracleSpec) -> None:
 
 
 def source_key(spec: OracleSpec) -> str:
-    if spec.checkpoint is not None:
-        return f"hf:{checkpoint_weights.CHECKPOINT_REPO}@{checkpoint_weights.CHECKPOINT_REVISION}"
+    checkpoint = f"hf:{checkpoint_weights.CHECKPOINT_REPO}@{checkpoint_weights.CHECKPOINT_REVISION}"
     shaping = {k: v for k, v in asdict(spec.args).items() if k not in SCHEDULE_ARGS}
-    return "synthetic:" + orc._digest(spec.seed, shaping, _sha(SYNTHETIC_INIT_SOURCE.read_bytes()))
+    synthetic = "synthetic:" + orc._digest(spec.seed, shaping, _sha(SYNTHETIC_INIT_SOURCE.read_bytes()))
+    if spec.checkpoint is None:
+        return synthetic
+    if spec.checkpoint_units:  # mixed: the named units from the checkpoint, every other unit synthetic
+        return "mixed:" + orc._digest(checkpoint, sorted(spec.checkpoint_units), synthetic)
+    return checkpoint
 
 
 def weight_cache_dir(spec: OracleSpec, mesh_shape, routed_expert_weights_dtype=ttnn.bfloat8_b) -> Path:
     """The device-weight cache directory for the layers of ``spec`` on a mesh of ``mesh_shape`` (sp, tp)."""
     _check_roles(spec)
     sp, tp = tuple(mesh_shape)
-    kind = "real" if spec.checkpoint is not None else "synthetic"
+    kind = source_key(spec).split(":", 1)[0].replace("hf", "real")
     key = orc._digest(source_key(spec), routed_expert_weights_dtype.name, conversion_digest(), [sp, tp])
     return WEIGHT_CACHE / f"{kind}-{key}-mesh{sp}x{tp}"
 
