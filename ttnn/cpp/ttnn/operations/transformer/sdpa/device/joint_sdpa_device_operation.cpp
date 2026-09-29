@@ -115,7 +115,11 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_nqh = joint_q_shape[1];
     const auto joint_nkv = joint_k_shape[1];
 
-    TT_FATAL(nqh == nkv, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", nqh, nkv);
+    TT_FATAL(
+        nkv > 0 && nqh == nkv,
+        "Q num_heads must be equal to K num_heads, and greater than 0. Got Q: {}, K: {}",
+        nqh,
+        nkv);
 
     TT_FATAL(
         joint_nqh == joint_nkv,

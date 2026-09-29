@@ -606,6 +606,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
     const auto N_local_q = q_shape[2];
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
