@@ -31,8 +31,19 @@ def main():
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-subset", action="store_true")
+    parser.add_argument(
+        "--concurrency", type=int, action="append", help="Compare only explicitly selected concurrency rows"
+    )
     args = parser.parse_args()
     control, candidate = load_cohorts(args.control), load_cohorts(args.candidate)
+    excluded = {"control": [], "candidate": []}
+    if args.concurrency:
+        for label, cohorts in (("control", control), ("candidate", candidate)):
+            for shape in list(cohorts):
+                if shape[2] not in args.concurrency:
+                    excluded[label].append(shape)
+                    del cohorts[shape]
+        assert control and candidate, "No cohorts match the requested concurrency filter"
     assert set(candidate) <= set(control), "Candidate contains unmatched shapes"
     if not args.allow_subset:
         assert set(control) == set(candidate), "Incomplete matrix"
@@ -42,6 +53,8 @@ def main():
         "control": str(args.control),
         "candidate": str(args.candidate),
         "allow_subset": args.allow_subset,
+        "concurrency_filter": args.concurrency,
+        "excluded_shapes": excluded,
         "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "rows": [],
         "passed": False,

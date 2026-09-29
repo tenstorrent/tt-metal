@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("mutation", [None, "failed", "text", "short_output", "missing_text", "nan_tpot", "shape"])
+@pytest.mark.parametrize(
+    "mutation", [None, "failed", "text", "short_output", "missing_text", "nan_tpot", "shape", "filtered_extra"]
+)
 def test_ci_comparison_rejects_incomplete_or_changed_results(tmp_path, mutation):
     data = {
         "mean_tpot_ms": 20.0,
@@ -43,6 +45,9 @@ def test_ci_comparison_rejects_incomplete_or_changed_results(tmp_path, mutation)
     elif mutation == "shape":
         filename = filename.replace("isl-16", "isl-32")
     (candidate / filename).write_text(json.dumps(data))
+    if mutation == "filtered_extra":
+        other = dict(data, generated_texts=["different concurrency must not be compared"])
+        (candidate / filename.replace("maxcon-1", "maxcon-8")).write_text(json.dumps(other))
     output = tmp_path / "comparison.json"
     result = subprocess.run(
         [
@@ -54,12 +59,16 @@ def test_ci_comparison_rejects_incomplete_or_changed_results(tmp_path, mutation)
             str(candidate),
             "--output",
             str(output),
+            *(["--concurrency", "1"] if mutation == "filtered_extra" else []),
         ],
         capture_output=True,
         text=True,
     )
-    assert (result.returncode == 0) == (mutation is None), result.stdout + result.stderr
-    if mutation is None:
+    assert (result.returncode == 0) == (mutation in (None, "filtered_extra")), result.stdout + result.stderr
+    if mutation in (None, "filtered_extra"):
         report = json.loads(output.read_text())
         assert report["passed"] and report["rows"][0]["tsu_gain_percent"] == 0
         assert report["rows"][0]["candidate"]["tsu"] == 50
+        if mutation == "filtered_extra":
+            assert report["concurrency_filter"] == [1]
+            assert report["excluded_shapes"]["candidate"] == [[16, 8, 8, 1]]

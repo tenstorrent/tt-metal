@@ -1,0 +1,7 @@
+{
+  "tt-metal-commit": "c9ec3469f1b875e7e5e505660c4421e5126e8dad",
+  "tt-inference-server-commit": "a5722f4",
+  "vllm-commit": "c9cfebc",
+  "tt-inference-server-cloud-image-tag": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221",
+  "tt-inference-server-dev-image-tag": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221"
+}

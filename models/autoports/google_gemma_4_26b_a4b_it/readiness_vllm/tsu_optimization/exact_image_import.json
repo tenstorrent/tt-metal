@@ -1,0 +1,13 @@
+{
+  "ttnn": "/home/container_app_user/tt-metal/ttnn/ttnn/__init__.py",
+  "native": "/home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so",
+  "native_sha256": "be64dd1a0a62daae3c0ecac081f5b8ef4fdf0634080fe88c3fe3624a068e6fb2",
+  "model": "/home/container_app_user/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py",
+  "model_sha256": "1635882a40eff01005d57de94725c5b068d05c5f1a8a289705e27079f736b7f9",
+  "environment": {
+    "TT_METAL_HOME": "/home/container_app_user/tt-metal",
+    "TT_METAL_CACHE": "/tmp/gemma4-exact-metal-cache",
+    "LD_LIBRARY_PATH": "/home/container_app_user/tt-metal/build/lib",
+    "PYTHONPATH": "/home/container_app_user/tt-metal:/home/container_app_user/app"
+  }
+}

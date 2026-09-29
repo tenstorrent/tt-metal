@@ -14,7 +14,7 @@
           "purpose": "C1/C8/C16 five-row shared-batching control",
           "attempts": [
             {"attempt": 1, "job": 109451944217, "status": "failed before image pull: runner checkout EACCES .git/FETCH_HEAD"},
-            {"attempt": 2, "job": 109453348357, "status": "running; checkout and image selection passed, build jobs skipped"}
+            {"attempt": 2, "job": 109453348357, "status": "success; five rows,52 requests,zero failures; build jobs skipped"}
           ],
           "image_input": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:461668dba77e062db3a1dae6743f63dcb8ba1c9b5f88b582c332a5661c680e6f"
         }
@@ -24,8 +24,34 @@
       "tt_metal_sha": "c9ec3469f1b875e7e5e505660c4421e5126e8dad",
       "publication_run": 36576438888,
       "build_job": 109433282221,
-      "status": "building; original pre-intervention C32 benchmark must be cancelled after publication",
-      "reuse_runs": []
+      "status": "published; superseded workflow cancelled, benchmark Run tests skipped",
+      "tag_uri": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221",
+      "digest": "sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd",
+      "platform_manifest_digest": "sha256:ef6feeda5a04577a65ae2a3198a35823231e244bcb92ee1a3a3bae5a3395347e",
+      "publication_evidence": "../../readiness_vllm/tsu_optimization/ci_36576438888/image_publication.txt",
+      "reuse_runs": [
+        {
+          "run": 36584709251,
+          "inference_server_sha": "5723918d1736c2f509ea2332b1b869afc072a2d4",
+          "purpose": "C1/C8/C16 five-row selected shared-batching qualification",
+          "attempts": [
+            {"attempt": 1, "job": 109461946997, "status": "failed before image pull: runner checkout EACCES .git/FETCH_HEAD"},
+            {"attempt": 2, "job": 109463261707, "status": "failed at checkout EACCES on120-qb2-p04t07"},
+            {"attempt": 3, "job": 109464955726, "status": "failed at checkout EACCES on120-qb2-p04t07; no further blind retries"}
+          ],
+          "image_input": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd"
+        }
+      ],
+      "local_reuse": [
+        {
+          "container": "gemma4-tsu-exact",
+          "container_id": "882c650c1d33daad5ce62ef9affc65c86c986c837233e18717e581a7ff7ab5c7",
+          "server_run": "exact_default_async",
+          "purpose": "Exact published-image local qualification while CI runner checkout is blocked",
+          "import_evidence": "../../readiness_vllm/tsu_optimization/exact_image_import.json",
+          "status": "completed five rows/two repeats/104requests,zero failures,all outputs and lengths exact;4KC8 first-use penalty retained in pooled results; no full matrix"
+        }
+      ]
     }
   ]
 }
