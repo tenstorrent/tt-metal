@@ -427,6 +427,41 @@ def _logsigmoid_stimuli_spec():
 # =============================================================================
 
 
+def _assert_against_contract(
+    mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=None
+):
+    """Resolve the op's declared contract for this variant and gate on it.
+
+    Shared by all three drivers in this file. ``BINARY_CUSTOM_TOLERANCES`` used to sit
+    at the top of the file; the numbers now live beside the op in the registry, and an
+    unenrolled op resolves to today's per-format tolerance unchanged. Enrolment is then
+    a table edit rather than a driver edit.
+
+    The whole contract, step budget included: every binary row was measured over this
+    file's own sweeps, so unlike a unary budget from the exhaustive sweep it describes
+    the stimuli it gates.
+
+    *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
+    one would claim a measurement taken for a mode that path does not select. Where the
+    kernel does compile it, passing it is required: a row keyed ``approx: "No"`` would
+    not match an unset query and would silently fall back to the default tolerance.
+    """
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.passed_test_kwargs(),
+    ), "Assert against golden failed"
+
+
 def sfpu_binary(
     formats,
     dest_acc,
