@@ -1197,3 +1197,35 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
+
+## C.moe_full.attn_hc_pre test (attempt 1)
+
+What
+- Replaced the rendered 22-line component test (moe_full layer 1, attn_hc_pre). It keeps the gated
+  pcc_attn_hc_pre_L01 (0.99) and the CPU-bridge assert. It adds asserted checks, copied from the dense_full
+  ffn_hc_pre test with layer-1 limits: finite output and element count; vs golden rel L2 <= 0.005, row norm ratio
+  in [0.994, 1.006], worst row <= 0.01; vs the CPU step on the same inputs rel <= 0.003, worst row <= 0.006; the
+  module run again with each row's pre gates rotated by row mod 4, vs the CPU step: rel <= 0.004, worst row <= 0.01.
+- CPU mutation study in /tmp/hcpre_l1.py (outside the repo). The table is in the test docstring.
+
+Decisions
+- Layer 1 streams are distinct, so no synthetic streams (unlike layer-0 attn_hc_pre). The pre gates are unequal
+  (means 0.026 / 0.013 / 0.83 / 0.49), so streams 0 / 1 swapped is only just over the golden rel limit (0.00504).
+  Its worst row (0.027) and the rotated-gates run (0.105) catch it.
+- The golden limits sit above the golden's own rounding (fp32 CPU step rel 0.0026 / row 0.0050).
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999997, rel 0.0026, ratio [0.99687, 1.00314], row 0.00495).
+- BRINGUP_IMPL=stub: FAIL (PCC 0.0).
+- Gate (device): PASS already. hooks._HC_PRE_STEPS does not depend on the block type, so layer 1 runs the existing
+  tt/ihc.py:TtHcPre. It is fp32 and matches the CPU step exactly (cpu rel 0.0, rotated rel 0.0). moe_full
+  DEVICE_STEPS is still empty (the hybrid is not changed).
+
+Gotchas
+- Not caught: pre + 3e-4 on every gate (rel 0.0028 vs golden). The gates are an input, so the module cannot make
+  that error by itself.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
