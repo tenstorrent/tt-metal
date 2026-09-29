@@ -624,3 +624,18 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
 - Device-model contract (harness docstring): `layer(i, h, 0, state)` starts a new sequence, so a fixed state resets.
 - Selftests: 197 -> 212 (test_mixed_state.py adds 15; the fixture gains `fixture.recurrent_layers`, a linear
   recurrence with an HF twin). 14 of the 15 fail on the pre-F48 code.
+
+## F49 (2026-09-29): gate commits carry the shared paths agents may change (GLM-5.3 run)
+
+- Symptom: GLM-5.3 C.dsa_moe.attention extended the ttnn.bringup sdpa fork (`high_precision` for sparse_sdpa: C++,
+  CHANGELOG, INDEX, source.yaml/baseline, a new unit test) and its gate passed, but the gate commit 3ef3d142602 held
+  only the model files; the fork edits stayed uncommitted in the working tree. Earlier gates had left agents'
+  known_issues.md / repo_map.md entries uncommitted the same way.
+- Cause: `orchestrator.allowed_paths` lets every step write `ttnn/ttnn/bringup` (BRINGUP_OPS) and the knowledge files
+  (common_paths), but `core/gate.py:stage_paths` never listed them, so `git_commit` (explicit paths) skipped them.
+- Fix: stage_paths appends `ttnn/ttnn/bringup` and the two knowledge files when they exist. `git add -A -- <dir>` also
+  picks up new files under the fork (the new unit test).
+- Selftests 212 -> 214 (test_fork_cases: the shared paths are staged and committed, including an untracked test
+  file; missing shared paths are skipped). The first fails on the pre-F49 gate.py.
+- Recovered by hand for GLM: the sdpa fork change and the knowledge entries committed after C.dsa_moe.attention
+  (supervision.md).
