@@ -530,7 +530,9 @@ def test_ttnn_dispatch_combine(
     [
         pytest.param(
             (8, 1),
-            torus_y_device_params(),
+            torus_y_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="fabric2d-torus-y-8x1-1link",
@@ -693,7 +695,9 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, o
     [
         pytest.param(
             (8, 1),
-            torus_y_device_params(),
+            torus_y_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="fabric2d-torus-y-8x1-1link",

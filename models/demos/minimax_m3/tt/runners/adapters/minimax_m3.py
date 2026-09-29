@@ -43,16 +43,17 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
 
 
 class MiniMaxM3Config:
     """Static model-dimension constants the common runner reads: ``NUM_LAYERS`` (its layer-count
     default, overridable with PREFILL_NUM_LAYERS for a partial-model bring-up) and
-    ``FABRIC_PAYLOAD_SIZE`` (the fabric router's max packet payload, mirrored from the embedding dim as
-    in the DeepSeek config); the rest document M3's dimensions for readers."""
+    ``FABRIC_PAYLOAD_SIZE`` (one BF16 embedding row plus routing header, capped at mesh open);
+    the rest document M3's dimensions for readers."""
 
     EMB_SIZE = 6144  # hidden_size
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload (mirrors DeepSeekV3Config convention)
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     NUM_LAYERS = 60
     NUM_ATTENTION_HEADS = 64
     NUM_KEY_VALUE_HEADS = 4

@@ -16,6 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
@@ -50,12 +51,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
     ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped"],
 )
+# The model-shape and mesh axes are crossed independently. DeepSeek and Kimi K3
+# have the same embedding size and therefore the same fabric payload.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 4),
-            torus_x_device_params(),
+            torus_x_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
@@ -63,7 +68,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # The only param an 8-device box can run; torus-x needs a 4-device ring.
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(model_config=DeepSeekV3Config),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
@@ -71,7 +76,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # BH Galaxy, the production shape.
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(model_config=DeepSeekV3Config),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

@@ -32,6 +32,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.attn_res.assertions import assert_bit_identical
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     FABRIC,
@@ -76,23 +77,24 @@ on_mesh = pytest.mark.parametrize("mesh_device, device_params", placements(), in
 # wrapped axis stays wrong for the whole replay and cannot be caught on the other arms.
 _TRACED_BOX = {"trace_region_size": TRACE_REGION_SIZE, "require_exact_physical_num_devices": True}
 
+# Every arm in this Kimi K3 contract test uses K3's payload, including the traced meshes.
 on_traced_mesh = pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param((2, 4), TRACED, id="mesh-2x4"),
         pytest.param(
             (8, 4),
-            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            fabric2d_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
             id="mesh-8x4",
         ),
         pytest.param(
             (8, 4),
-            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            torus_x_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
             id="torusx-mesh-8x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
+            torus_xy_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **_TRACED_BOX),
             id="torusxy-mesh-8x4",
         ),
     ],

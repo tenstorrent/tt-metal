@@ -9,13 +9,15 @@ Single source of truth for model dimension constants.
 Values from HuggingFace config.json for Kimi-K2.6 (text_config).
 """
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
 
 class KimiK26Config:
     """Kimi K2.6 model dimensions."""
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the

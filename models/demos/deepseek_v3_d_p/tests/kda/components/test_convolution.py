@@ -9,6 +9,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
@@ -50,10 +51,10 @@ def _sp_carries(tensor: ttnn.Tensor, device: ttnn.MeshDevice, sp_axis: int, tp_a
 @pytest.mark.parametrize(
     "mesh_device,tp_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4"),
-        pytest.param((4, 2), 1, fabric_1d_device_params(), id="SP4xTP2"),
-        pytest.param((4, 2), 0, fabric_1d_device_params(), id="SP2xTP4-axis1"),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-axis1"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(model_config=KimiK3Config), id="SP2xTP4"),
+        pytest.param((4, 2), 1, fabric_1d_device_params(model_config=KimiK3Config), id="SP4xTP2"),
+        pytest.param((4, 2), 0, fabric_1d_device_params(model_config=KimiK3Config), id="SP2xTP4-axis1"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(model_config=KimiK3Config), id="SP4xTP2-axis1"),
     ],
     indirect=["mesh_device", "device_params"],
 )
