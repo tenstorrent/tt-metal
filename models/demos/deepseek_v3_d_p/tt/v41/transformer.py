@@ -43,6 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.dspark import TtV41DSpark
 from models.demos.deepseek_v3_d_p.tt.v41.head import TP_AXIS, TtV41Embedding, TtV41Head
 from models.demos.deepseek_v3_d_p.tt.v41.mhc import initial_pre_mix
+from models.demos.deepseek_v3_d_p.tt.v41.weights import begin_layer, complete_layer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
 # merge-table rows of the span delimiters (checkpoint names), in table order; the image rows follow them
@@ -118,8 +119,7 @@ class TtV41Transformer(LightweightModule):
             weight_cache_path.mkdir(parents=True, exist_ok=True)
             init_checker(weight_cache_path)
         for layer in self.layers:
-            marker = None if weight_cache_path is None else weight_cache_path / f"layer_{layer}.complete"
-            cached = marker is not None and marker.exists()
+            cached = weight_cache_path is not None and begin_layer(weight_cache_path, layer)
             self.blocks.append(
                 TtV41Block(
                     mesh_device,
@@ -131,8 +131,8 @@ class TtV41Transformer(LightweightModule):
                     weight_cache_path=weight_cache_path,
                 )
             )
-            if marker is not None:
-                marker.touch()
+            if weight_cache_path is not None:
+                complete_layer(weight_cache_path, layer)
         self.head = TtV41Head(mesh_device, config, norm_weight, head_weight)
         self.dspark = None
         if dspark_weights is not None:

@@ -59,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -424,6 +425,34 @@ def build_reference(spec: OracleSpec) -> v41.Transformer:
     return model.eval()
 
 
+class LazyReference:
+    """The reference model for ``spec``, built on first use only: with warm oracle and weight caches a test never
+    builds it. Pass it wherever a ``model`` is accepted; ``built`` tells whether it was needed."""
+
+    def __init__(self, spec: OracleSpec):
+        self.spec, self._model = spec, None
+
+    @property
+    def built(self) -> bool:
+        return self._model is not None
+
+    def __call__(self) -> v41.Transformer:
+        if self._model is None:
+            start = time.perf_counter()
+            self._model = build_reference(self.spec)
+            print(
+                f"oracle: reference built for layers {list(self.spec.layer_ids)} in {time.perf_counter() - start:.1f}s"
+            )
+        return self._model
+
+
+def _model(model, spec: OracleSpec) -> v41.Transformer:
+    """``model`` (a reference or a LazyReference) resolved, else a freshly built reference."""
+    if isinstance(model, LazyReference):
+        return model()
+    return model if model is not None else build_reference(spec)
+
+
 # --------------------------------------------------------------------------------------------- oracle
 
 
@@ -563,7 +592,7 @@ def cache_path(spec: OracleSpec, tokens: torch.Tensor) -> Path:
     return CACHE_DIR / f"oracle-{key}.pt"
 
 
-def oracle(spec: OracleSpec, tokens: torch.Tensor, model: v41.Transformer | None = None) -> dict:
+def oracle(spec: OracleSpec, tokens: torch.Tensor, model: v41.Transformer | LazyReference | None = None) -> dict:
     """Single-shot expected results for ``tokens`` [1, S] (S <= spec.args.max_seq_len), from the disk
     cache or computed (with ``model``, else a freshly built reference) and stored."""
     if tokens.dim() != 2 or tokens.size(0) != 1 or not 0 < tokens.size(1) <= spec.args.max_seq_len:
@@ -571,7 +600,7 @@ def oracle(spec: OracleSpec, tokens: torch.Tensor, model: v41.Transformer | None
     path = cache_path(spec, tokens)
     if path.is_file():
         return torch.load(path)
-    result = _run(model if model is not None else build_reference(spec), spec, tokens)
+    result = _run(_model(model, spec), spec, tokens)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     torch.save(result, tmp)
@@ -584,7 +613,7 @@ def tail_logits(
     spec: OracleSpec,
     tokens: torch.Tensor,
     count: int,
-    model: v41.Transformer | None = None,
+    model: v41.Transformer | LazyReference | None = None,
     noise: tuple[float, float, int] | None = None,
 ) -> torch.Tensor:
     """fp32 logits ``[count, vocab]`` of the last ``count`` positions of a single-shot prefill of ``tokens``
@@ -606,7 +635,7 @@ def noise_drift(
     tokens: torch.Tensor,
     count: int,
     noise: tuple[float, float, int],
-    model: v41.Transformer | None = None,
+    model: v41.Transformer | LazyReference | None = None,
 ) -> dict:
     """{layer id: {"all": pcc, "tail": pcc}}: how far each block output of the prefill under ``noise`` (as
     ``tail_logits``) drifts from the clean ``oracle`` result, over all rows and over the last ``count`` rows: the
@@ -639,7 +668,7 @@ def _noisy_run(spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise)
     """One prefill (with ``noise`` if given): stores and returns the tail logits and, with noise, the drift."""
     if not 0 < count <= tokens.size(1):
         raise ValueError(f"count must be in (0, {tokens.size(1)}], got {count}")
-    model = model if model is not None else build_reference(spec)
+    model = _model(model, spec)
     clean = oracle(spec, tokens, model) if noise is not None else None  # before the noisy run resets the state
     _reset_state(model)
     if spec.checkpoint is None:

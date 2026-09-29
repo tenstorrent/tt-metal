@@ -69,3 +69,33 @@ def test_schedules_of_the_same_weights_share_a_directory():
 def test_positional_specs_are_rejected(expect_error):
     with expect_error(AssertionError, "V4.1 role"):
         wc.weight_cache_dir(orc.small_spec(41), MESH)
+
+
+def test_interrupted_layer_is_rebuilt_not_loaded(tmp_path):
+    # an interrupted build leaves tensorbins without the marker: they are removed, never loaded as a hit
+    partial = tmp_path / "layer_2.routed_expert.local_0_gate_dtype_BFLOAT8_B_layout_TILE.tensorbin"
+    partial.write_bytes(b"truncated")
+    other = tmp_path / "layer_3.gate.weight_dtype_BFLOAT16_layout_TILE.tensorbin"
+    other.write_bytes(b"complete")
+    wc.complete_layer(tmp_path, 3)
+    assert not wc.begin_layer(tmp_path, 2) and not partial.exists()
+    assert wc.begin_layer(tmp_path, 3) and other.exists()
+
+
+def test_host_weights_written_atomically_and_reloaded(tmp_path):
+    import torch
+
+    calls = []
+    compute = lambda: calls.append(1) or {"w": torch.arange(4)}
+    first = wc.host_weights(tmp_path, "layer_2.dense", compute)
+    again = wc.host_weights(tmp_path, "layer_2.dense", compute)
+    assert torch.equal(first["w"], again["w"]) and calls == [1]
+    assert [p.name for p in tmp_path.iterdir()] == ["layer_2.dense.pt"]  # no temp file left
+
+
+def test_lazy_reference_builds_only_on_use(monkeypatch):
+    built = []
+    monkeypatch.setattr(orc, "build_reference", lambda spec: built.append(spec) or "model")
+    lazy = orc.LazyReference(small_spec(LAYERS, 512))
+    assert not lazy.built and built == []
+    assert lazy() == "model" and lazy() == "model" and lazy.built and len(built) == 1

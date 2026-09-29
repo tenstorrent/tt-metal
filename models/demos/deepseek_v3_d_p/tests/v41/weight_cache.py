@@ -29,6 +29,8 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
+import torch
+
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import kernel_cpu
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
@@ -41,6 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.v41 import weights as checkpoint_weights
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
+from models.demos.deepseek_v3_d_p.tt.v41.weights import begin_layer, complete_layer  # noqa: F401 (re-export)
 
 WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
 
@@ -122,3 +125,18 @@ def weight_cache_dir(spec: OracleSpec, mesh_shape, routed_expert_weights_dtype=t
     kind = "real" if spec.checkpoint is not None else "synthetic"
     key = orc._digest(source_key(spec), routed_expert_weights_dtype.name, conversion_digest(), [sp, tp])
     return WEIGHT_CACHE / f"{kind}-{key}-mesh{sp}x{tp}"
+
+
+def host_weights(root: Path, name: str, compute):
+    """Host (torch) weights ``name`` stored in the weight-cache directory ``root``: loaded when present, else
+    ``compute()``d and written atomically (an interrupted write leaves no file). Lets warm runs skip building the
+    reference for the weights that stay on the host path (dense layer weights, embeddings)."""
+    path = root / f"{name}.pt"
+    if path.is_file():
+        return torch.load(path)
+    value = compute()
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f".tmp{os.getpid()}")
+    torch.save(value, tmp)
+    tmp.replace(path)
+    return value

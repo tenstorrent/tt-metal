@@ -304,3 +304,22 @@ def load_layer(ckpt: V41Checkpoint, layer: int, config=DeepSeekV41FlashConfig) -
     weights = load_layer_dense(ckpt, layer, config)
     weights["routed_expert_weights"] = load_routed_experts(ckpt, layer, config)
     return weights
+
+
+# --- device-weight cache markers ---------------------------------------------------------------------------
+
+
+def begin_layer(root: Path, layer: int) -> bool:
+    """Whether ``layer``'s device tensors in the weight-cache directory ``root`` are complete (its marker exists).
+    If not, its files from an interrupted build are removed first, so a partial tensorbin is never loaded as a
+    cache hit (ttnn.as_tensor loads any file present)."""
+    if (root / f"layer_{layer}.complete").exists():
+        return True
+    for stale in root.glob(f"layer_{layer}.*.tensorbin"):
+        stale.unlink()
+    return False
+
+
+def complete_layer(root: Path, layer: int) -> None:
+    """Mark ``layer``'s device tensors in ``root`` complete (after every tensor of the layer is written)."""
+    (root / f"layer_{layer}.complete").touch()

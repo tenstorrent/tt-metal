@@ -30,10 +30,14 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
+from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import MOE_KEYS, device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _unpack
-from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, weight_cache_dir  # noqa: F401 (re-export)
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import (  # noqa: F401 (WEIGHT_CACHE re-export)
+    WEIGHT_CACHE,
+    host_weights,
+    weight_cache_dir,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -72,11 +76,9 @@ MESH = [
 ]
 
 
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("schedule", list(SCHEDULES))
-@pytest.mark.parametrize("case", ["one_chunk", "two_chunks", "padded"])
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
-def test_v41_transformer_small(mesh_device, device_params, case, schedule):
+def setup_small(mesh_device, case, schedule):
+    """Everything before the small prefill: prompt, reference, Engram / DSpark modules and the transformer (device
+    MoE tensors from / into the weight cache). Shared by the test and the cache prepare step (mock mesh)."""
     layers = SCHEDULES[schedule]
     chunk, total = {"one_chunk": (SEQ, SEQ), "two_chunks": (SEQ // 2, SEQ), "padded": (SEQ // 2, SEQ - 12)}[case]
     spec = small_spec(layers, SEQ, dspark=schedule == "dspark")
@@ -122,6 +124,15 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
             engram_hash=engram_hash,
             weight_cache_path=weight_cache_dir(spec, mesh_device.shape),
         )
+    return model, spec, tokens, reference, dspark
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("schedule", list(SCHEDULES))
+@pytest.mark.parametrize("case", ["one_chunk", "two_chunks", "padded"])
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_v41_transformer_small(mesh_device, device_params, case, schedule):
+    model, spec, tokens, reference, dspark = setup_small(mesh_device, case, schedule)
     state = _check(model, spec, tokens, reference, f"{schedule} {case}")
     if dspark is not None:
         result = orc.oracle(spec, tokens, model=reference)
@@ -153,6 +164,20 @@ def _agreement(expected: torch.Tensor, actual: torch.Tensor) -> dict:
     }
 
 
+def reference_data(spec, tokens, reference):
+    """What the gate compares against: the clean oracle, the scored tail logits, the per-layer noisy drifts and the
+    token-agreement floor (all disk-cached; the prepare step fills them outside the device lock)."""
+    scored = min(SCORED, tokens.shape[1])
+    clean = orc.oracle(spec, tokens, reference)
+    expected = orc.tail_logits(spec, tokens, scored, reference)
+    drifts = [orc.noise_drift(spec, tokens, scored, (*NOISE, s), reference) for s in range(NOISE_SEEDS)]
+    token_floor = {k: 1.0 for k in MARGIN}
+    for seed in range(NOISE_SEEDS):
+        noisy = _agreement(expected, orc.tail_logits(spec, tokens, scored, reference, noise=(*NOISE, seed)))
+        token_floor = {k: min(token_floor[k], noisy[k]) for k in token_floor}
+    return clean, expected, drifts, token_floor
+
+
 def _check(model, spec, tokens, reference, name):
     """Two prefills of ``tokens`` [1, S]: bit-identical; each layer's free-running streams (all rows and the last
     SCORED rows) no further from the reference than its drift under the floor noise (worst seed) minus
@@ -171,13 +196,7 @@ def _check(model, spec, tokens, reference, name):
     with _stage(f"{name} prefill (repeat)"):
         logits2, _ = model.prefill(tokens[0], scored)
     with _stage(f"{name} reference (cached unless precomputed)"):
-        clean = orc.oracle(spec, tokens, reference)
-        expected = orc.tail_logits(spec, tokens, scored, reference)
-        drifts = [orc.noise_drift(spec, tokens, scored, (*NOISE, s), reference) for s in range(NOISE_SEEDS)]
-        token_floor = {k: 1.0 for k in MARGIN}
-        for seed in range(NOISE_SEEDS):
-            noisy = _agreement(expected, orc.tail_logits(spec, tokens, scored, reference, noise=(*NOISE, seed)))
-            token_floor = {k: min(token_floor[k], noisy[k]) for k in token_floor}
+        clean, expected, drifts, token_floor = reference_data(spec, tokens, reference)
     assert torch.equal(logits, logits2), "prefill is not bit-identical across repeats"
     tokens_device = _agreement(expected, logits)
     logger.info(
@@ -197,18 +216,12 @@ def _check(model, spec, tokens, reference, name):
     return state
 
 
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("chunks", [1, 2], ids=["one_chunk", "two_chunks"])
-@pytest.mark.parametrize("weights", ["synthetic", "real"])
-@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
-def test_v41_transformer_production(mesh_device, device_params, weights, chunks):
-    """Real dims, layers 0 2 3 20 21 24 (every sharing role and SWA-only; Engram layer 1 needs checkpoint
-    tables, not downloaded). Precompute the reference logits outside the device lock first (``tail_logits``, clean
-    and per noise seed; disk-cached)."""
+def setup_production(mesh_device, weights, chunks):
+    """Everything before the production prefill (see setup_small); None when the checkpoint is not downloaded."""
     layers = SCHEDULES["sharing"]
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
-        pytest.skip("V4.1 checkpoint shards not downloaded")
+        return None
     spec = orc.real_spec(
         layers,
         PRODUCTION_SEQ,
@@ -217,14 +230,25 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
     )
     cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": PRODUCTION_CANDIDATE_BLOCKS})
     tokens = orc.text_tokens(PRODUCTION_SEQ)
-    reference = orc.build_reference(spec) if ckpt is None else None
+    # built only on an oracle or weight-cache miss (warm runs construct no reference model)
+    reference = orc.LazyReference(spec)
+    root = weight_cache_dir(spec, mesh_device.shape)
     if ckpt is None:
-        layer_weights = lambda layer, include_moe: device_weights(reference, layers.index(layer), include_moe)
-        embed, norm, head = (
-            reference.embed.weight.detach(),
-            reference.norm.weight.detach(),
-            reference.head.weight.detach(),
+
+        def layer_weights(layer, include_moe):
+            pos, dense = layers.index(layer), f"layer_{layer}.dense"
+            if not include_moe:
+                return host_weights(root, dense, lambda: device_weights(reference(), pos, include_moe=False))
+            weights = device_weights(reference(), pos)
+            host_weights(root, dense, lambda: {k: v for k, v in weights.items() if k not in MOE_KEYS})
+            return weights
+
+        top = host_weights(
+            root,
+            "top",
+            lambda: {k: getattr(reference(), k).weight.detach() for k in ("embed", "norm", "head")},
         )
+        embed, norm, head = top["embed"], top["norm"], top["head"]
     else:
         layer_weights = lambda layer, include_moe: (load_layer if include_moe else load_layer_dense)(ckpt, layer)
         top = ckpt.read(["embed.weight", "norm.weight", "head.weight"])
@@ -240,6 +264,22 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
             head,
             max_seq_len=PRODUCTION_SEQ,
             chunk=PRODUCTION_SEQ // chunks,
-            weight_cache_path=weight_cache_dir(spec, mesh_device.shape),
+            weight_cache_path=root,
         )
+    return model, spec, tokens, reference
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("chunks", [1, 2], ids=["one_chunk", "two_chunks"])
+@pytest.mark.parametrize("weights", ["synthetic", "real"])
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_v41_transformer_production(mesh_device, device_params, weights, chunks):
+    """Real dims, layers 0 2 3 20 21 24 (every sharing role and SWA-only; Engram layer 1 needs checkpoint
+    tables, not downloaded). Precompute the reference logits outside the device lock first (``tail_logits``, clean
+    and per noise seed; disk-cached)."""
+    setup = setup_production(mesh_device, weights, chunks)
+    if setup is None:
+        pytest.skip("V4.1 checkpoint shards not downloaded")
+    model, spec, tokens, reference = setup
     _check(model, spec, tokens, reference, f"production {weights} chunks={chunks}")
+    logger.info(f"production {weights} chunks={chunks}: reference model built: {reference.built}")

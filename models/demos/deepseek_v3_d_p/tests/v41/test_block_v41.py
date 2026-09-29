@@ -20,6 +20,7 @@ format encodes); the PCC against the FP4-QDQ rows is reported (``compressed_kv_v
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -31,9 +32,15 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
+from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import MOE_KEYS, device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
-from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, weight_cache_dir  # noqa: F401 (re-export)
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import (  # noqa: F401 (WEIGHT_CACHE re-export)
+    WEIGHT_CACHE,
+    begin_layer,
+    complete_layer,
+    host_weights,
+    weight_cache_dir,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
@@ -84,6 +91,83 @@ def _unrounded_compressed_kv(model, spec, layer: int, attn_in: torch.Tensor) -> 
     return latent[0]
 
 
+def setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format):
+    """Everything before the device forward: oracle result, reference-derived expectations, device weights (MoE
+    tensors from / into the weight cache) and the blocks. Shared by the test and the CPU-only cache prepare step
+    (tests/v41/prepare_caches.py), which runs it on a mock mesh so the device run only reads caches."""
+    LAYERS = SCHEDULES[schedule]
+    ckpt = resolve_checkpoint() if weights == "real" else None
+    if weights == "real" and ckpt is None:
+        pytest.skip("V4.1 checkpoint shards not downloaded")
+    if weights == "small":  # same code path at small dims: seconds of CPU oracle, minutes of device time
+        seq = SMALL_SEQ
+        spec, cfg = small_spec(LAYERS, seq), SmallV41Config
+    else:
+        seq = SEQ
+        spec = orc.real_spec(LAYERS, seq, candidate_topk_blocks=96, checkpoint=ckpt.root if ckpt else None)
+        cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": 96})  # match the oracle's candidate count
+    # prompt lengths: full chunks, a padded last chunk (graph.md rule 8), and a prompt shorter than a ratio-2 group
+    # pair plus window edge (empty or single compressed row: top-k empty)
+    valid = {"full": seq, "padded": seq - 12, "tiny": 3}[prompt]
+    if prompt != "full" and weights != "small":
+        pytest.skip("prompt-length edge cases run at small dims")
+    tokens = orc.random_tokens(spec, valid)
+    # built only on an oracle or weight-cache miss (warm runs construct no reference model)
+    reference = orc.LazyReference(spec)
+    result = orc.oracle(spec, tokens, model=reference)
+    fmt = KV_FORMATS[kv_format]
+    unrounded = {}
+    if fmt == MlaKvCacheFormat.SCALED_FP8 and any(l in C.KV_SOURCE_LAYERS for l in LAYERS):
+        for l in (l for l in LAYERS if l in C.KV_SOURCE_LAYERS):
+            base = orc.cache_path(spec, tokens)
+            unrounded[l] = host_weights(
+                base.parent,
+                f"{base.stem}-unrounded-kv{l}",
+                lambda l=l: _unrounded_compressed_kv(reference(), spec, l, result["blocks"][l]["attn_in"]),
+            )
+            # the derivation is the reference's: its FP4 QDQ reproduces the oracle's compressed rows bit for bit
+            fp4 = kernel_cpu.fp4_act_quant(unrounded[l].clone(), 16, True, scale_dtype=torch.float8_e4m3fn)
+            assert torch.equal(fp4, result["shared"][l]["compress_kv"]), l
+
+    # MoE device tensors are cached on disk (tests/v41/weight_cache.py key): the first build converts 1152 expert
+    # matrices per layer on the host (minutes); later builds load them. A marker records a completed layer.
+    cache_root = weight_cache_dir(spec, mesh_device.shape)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    init_checker(cache_root)
+    blocks = {}
+    for i, layer in enumerate(LAYERS):
+        cached = begin_layer(cache_root, layer)
+        if ckpt is not None:
+            w = load_layer_dense(ckpt, layer) if cached else load_layer(ckpt, layer)
+        elif cached:
+            w = host_weights(
+                cache_root, f"layer_{layer}.dense", lambda i=i: device_weights(reference(), i, include_moe=False)
+            )
+        else:
+            w = device_weights(reference(), i)
+            host_weights(
+                cache_root, f"layer_{layer}.dense", lambda w=w: {k: v for k, v in w.items() if k not in MOE_KEYS}
+            )
+        blocks[layer] = TtV41Block(mesh_device, cfg, layer, w, seq // chunks, weight_cache_path=cache_root)
+        complete_layer(cache_root, layer)
+        del w
+    logger.info(f"reference model built: {reference.built}")
+
+    return SimpleNamespace(
+        LAYERS=LAYERS,
+        seq=seq,
+        spec=spec,
+        cfg=cfg,
+        valid=valid,
+        tokens=tokens,
+        result=result,
+        fmt=fmt,
+        unrounded=unrounded,
+        blocks=blocks,
+        reference=reference,
+    )
+
+
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("kv_format", list(KV_FORMATS))
 @pytest.mark.parametrize("prompt", ["full", "padded", "tiny"])
@@ -103,52 +187,11 @@ def _unrounded_compressed_kv(model, spec, layer: int, attn_in: torch.Tensor) -> 
     indirect=True,
 )
 def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule, prompt, kv_format):
-    LAYERS = SCHEDULES[schedule]
-    ckpt = resolve_checkpoint() if weights == "real" else None
-    if weights == "real" and ckpt is None:
-        pytest.skip("V4.1 checkpoint shards not downloaded")
-    if weights == "small":  # same code path at small dims: seconds of CPU oracle, minutes of device time
-        seq = SMALL_SEQ
-        spec, cfg = small_spec(LAYERS, seq), SmallV41Config
-    else:
-        seq = SEQ
-        spec = orc.real_spec(LAYERS, seq, candidate_topk_blocks=96, checkpoint=ckpt.root if ckpt else None)
-        cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": 96})  # match the oracle's candidate count
-    # prompt lengths: full chunks, a padded last chunk (graph.md rule 8), and a prompt shorter than a ratio-2 group
-    # pair plus window edge (empty or single compressed row: top-k empty)
-    valid = {"full": seq, "padded": seq - 12, "tiny": 3}[prompt]
-    if prompt != "full" and weights != "small":
-        pytest.skip("prompt-length edge cases run at small dims")
-    tokens = orc.random_tokens(spec, valid)
-    reference = orc.build_reference(spec) if ckpt is None else None
-    result = orc.oracle(spec, tokens, model=reference)
-    fmt = KV_FORMATS[kv_format]
-    unrounded = {}
-    if fmt == MlaKvCacheFormat.SCALED_FP8 and any(l in C.KV_SOURCE_LAYERS for l in LAYERS):
-        model = reference if reference is not None else orc.build_reference(spec)
-        for l in (l for l in LAYERS if l in C.KV_SOURCE_LAYERS):
-            unrounded[l] = _unrounded_compressed_kv(model, spec, l, result["blocks"][l]["attn_in"])
-            # the derivation is the reference's: its FP4 QDQ reproduces the oracle's compressed rows bit for bit
-            fp4 = kernel_cpu.fp4_act_quant(unrounded[l].clone(), 16, True, scale_dtype=torch.float8_e4m3fn)
-            assert torch.equal(fp4, result["shared"][l]["compress_kv"]), l
+    setup = setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format)
+    LAYERS, seq, spec, cfg, valid, tokens = setup.LAYERS, setup.seq, setup.spec, setup.cfg, setup.valid, setup.tokens
+    result, fmt, unrounded, blocks = setup.result, setup.fmt, setup.unrounded, setup.blocks
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), cfg.HC_MULT
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
-
-    # MoE device tensors are cached on disk (tests/v41/weight_cache.py key): the first build converts 1152 expert
-    # matrices per layer on the host (minutes); later builds load them. A marker records a completed layer.
-    cache_root = weight_cache_dir(spec, mesh_device.shape)
-    cache_root.mkdir(parents=True, exist_ok=True)
-    init_checker(cache_root)
-    blocks = {}
-    for i, layer in enumerate(LAYERS):
-        marker = cache_root / f"layer_{layer}.complete"
-        if ckpt is not None:
-            w = load_layer_dense(ckpt, layer) if marker.exists() else load_layer(ckpt, layer)
-        else:
-            w = device_weights(reference, i, include_moe=not marker.exists())
-        blocks[layer] = TtV41Block(mesh_device, cfg, layer, w, seq // chunks, weight_cache_path=cache_root)
-        marker.touch()
-        del w
 
     def run():
         """All chunks through all layers in execution order; layer inputs teacher-forced per chunk, padded rows
