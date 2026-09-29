@@ -50,9 +50,15 @@ K with no reset in between (see the fallback phase below), so they're ground tru
 skip re-verification. This still isn't an absolute guarantee -- a single hardware run can still be
 flaky -- but it is far stronger evidence than an unverified restore-mode hit.
 
+--splits/--group shard the polluter loop across machines (each machine needs its own --out):
+every shard still sweeps against the FULL victim set, so a shard's own escapes are already
+ground truth for that (polluter, victim) pair -- no merge step is needed beyond concatenating
+each shard's report, same as every other sharded suite in this repo.
+
 Usage:
   python3 pair_sweep.py --worktree DIR --arch blackhole --manifest /path/to/manifest.json \
-      --out /path/to/findings.jsonl [--self-pairs] [--jobs 8] [--timeout 90] [--port 5556]
+      --out /path/to/findings.jsonl [--self-pairs] [--jobs 8] [--timeout 90] [--port 5556] \
+      [--splits N --group G]
 """
 
 import argparse
@@ -225,7 +231,23 @@ def main():
         "ground-truth re-check. Useful for debugging the restore mechanism "
         "itself; the default (verify) is what CI should use.",
     )
+    p.add_argument(
+        "--splits",
+        type=int,
+        default=1,
+        help="shard the polluter loop across this many machines (paired with "
+        "--group). The victim set is never sharded -- every shard tests its "
+        "own slice of polluters against all victims in the manifest.",
+    )
+    p.add_argument(
+        "--group",
+        type=int,
+        default=1,
+        help="1-indexed shard to run, in [1, --splits]",
+    )
     args = p.parse_args()
+    if not 1 <= args.group <= args.splits:
+        p.error(f"--group must be in [1, {args.splits}] (got {args.group})")
 
     with open(args.manifest) as f:
         manifest = json.load(f)
@@ -236,9 +258,14 @@ def main():
     nodeids = [v["test_id"] for v in victims]
     nodeid_by_key = {v["key"]: v["test_id"] for v in victims}
 
+    if args.splits > 1:
+        restore_x = restore_x[args.group - 1 :: args.splits]
+        fallback_x = fallback_x[args.group - 1 :: args.splits]
+
+    shard_note = f" (shard {args.group}/{args.splits})" if args.splits > 1 else ""
     print(
         f"[pair_sweep] victims={len(victims)} restore-mode polluters={len(restore_x)} "
-        f"fallback polluters={len(fallback_x)}",
+        f"fallback polluters={len(fallback_x)}{shard_note}",
         file=sys.stderr,
     )
 

@@ -136,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: cfg-pollution-report-${{ env.CHIP_ARCH }}
+          name: cfg-pollution-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/report.md
             ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/manifest.json
@@ -147,7 +147,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: cfg-pollution-junit-${{ env.CHIP_ARCH }}
+          name: cfg-pollution-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/junit.xml
           if-no-files-found: warn
 
