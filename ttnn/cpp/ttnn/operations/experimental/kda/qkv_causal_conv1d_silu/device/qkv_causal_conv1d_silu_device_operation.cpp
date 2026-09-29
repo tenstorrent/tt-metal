@@ -55,6 +55,58 @@ void check_default_tile_shape(const Tensor& tensor, std::string_view tensor_name
         tile.get_width());
 }
 
+// True when both tensors are backed by the same device buffer.
+bool same_buffer(const Tensor& a, const Tensor& b) {
+    const auto* ba = a.buffer();
+    const auto* bb = b.buffer();
+    if (ba == nullptr || bb == nullptr) {
+        return false;
+    }
+    return ba == bb ||
+           (ba->buffer_type() == bb->buffer_type() && ba->address() == bb->address() && a.device() == b.device());
+}
+
+// conv_state_out (TILE path, return_conv_state): the pre-allocated new_state output.
+void check_conv_state_out(const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in) {
+    using namespace kda_factory_detail;
+    const Tensor& out = *in.conv_state_out;
+    TT_FATAL(
+        attrs.return_conv_state,
+        "qkv_causal_conv1d_silu: conv_state_output needs return_conv_state=True (it is the new_state output)");
+    check_allocated_device_tensor(out, operation_name, "conv_state_output");
+    check_layout(out, Layout::TILE, operation_name, "conv_state_output");
+    check_dtype(out, DataType::BFLOAT16, operation_name, "conv_state_output");
+    check_interleaved(out, operation_name, "conv_state_output");
+    check_default_tile_shape(out, "conv_state_output");
+    check_same_device(in.input, out, operation_name, "conv_state_output");
+    const uint32_t channels = attrs.q_width + attrs.k_width + attrs.v_width;
+    const auto& shape = out.logical_shape();
+    TT_FATAL(
+        shape.rank() == 3 && shape[0] == 1 && shape[1] == 3 && shape[2] == channels,
+        "qkv_causal_conv1d_silu: conv_state_output must be [1,3,Q+K+V] = [1,3,{}], got {}",
+        channels,
+        shape);
+    // The only legal alias is history (the in-place update); the reader reads input and taps while
+    // new_state is being written.
+    for (const auto& [tensor, name] : std::array{
+             std::pair{&in.input, "input"},
+             std::pair{&in.tap0, "tap0"},
+             std::pair{&in.tap1, "tap1"},
+             std::pair{&in.tap2, "tap2"},
+             std::pair{&in.tap3, "tap3"}}) {
+        TT_FATAL(
+            !same_buffer(out, *tensor),
+            "qkv_causal_conv1d_silu: conv_state_output must not share a buffer with {}",
+            name);
+    }
+    const bool aliases_history = in.history.has_value() && same_buffer(out, *in.history);
+    TT_FATAL(
+        attrs.conv_state_inplace == aliases_history,
+        "qkv_causal_conv1d_silu: conv_state_inplace={} does not match the tensors (conv_state_output {} history)",
+        attrs.conv_state_inplace,
+        aliases_history ? "aliases" : "does not alias");
+}
+
 // Shape, width, chunk and config checks shared by the ROW_MAJOR and TILE paths.
 void check_geometry_and_config(const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in) {
     using namespace kda_factory_detail;
@@ -131,6 +183,9 @@ void validate_row_major(const QkvCausalConv1dSiluParams& attrs, const QkvCausalC
         !attrs.return_conv_state,
         "qkv_causal_conv1d_silu: return_conv_state=True requires TILE input; ROW_MAJOR callers own the history "
         "update");
+    TT_FATAL(
+        !in.conv_state_out.has_value() && !attrs.conv_state_inplace,
+        "qkv_causal_conv1d_silu: conv_state_output requires TILE input (and return_conv_state=True)");
     check_geometry_and_config(attrs, in);
 }
 
@@ -160,6 +215,11 @@ void validate_tiled(const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1
     check_tap_tensors(in);
     check_same_device_inputs(in);
     check_geometry_and_config(attrs, in);
+    if (in.conv_state_out.has_value()) {
+        check_conv_state_out(attrs, in);
+    } else {
+        TT_FATAL(!attrs.conv_state_inplace, "qkv_causal_conv1d_silu: conv_state_inplace needs conv_state_output");
+    }
 
     const uint32_t block_tiles = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
     TT_FATAL(
@@ -198,13 +258,16 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
 }
 
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto layout = TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config);
     spec_return_value_t specs = {
         TensorSpec(Shape({1, attrs.sequence, attrs.q_width}), layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.k_width}), layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.v_width}), layout)};
-    if (attrs.return_conv_state) {
+    if (attrs.return_conv_state && in.conv_state_out.has_value()) {
+        // Pre-allocated new_state (conv_state_output): its own spec, whatever its buffer type.
+        specs.push_back(in.conv_state_out->tensor_spec());
+    } else if (attrs.return_conv_state) {
         // new_state: rows 0-2 = x[T-3..T-1]; the tile padding rows 3-31 are zero. It is always
         // DRAM interleaved (design.md section 4.5): output_mem_config applies to q/k/v only.
         const auto state_layout = TensorLayout(
@@ -221,8 +284,13 @@ QkvCausalConv1dSiluOperation::tensor_return_value_t QkvCausalConv1dSiluOperation
     auto specs = compute_output_specs(attrs, in);
     tensor_return_value_t outputs;
     outputs.reserve(specs.size());
-    for (const auto& spec : specs) {
-        outputs.push_back(create_device_tensor(spec, in.input.device()));
+    for (size_t i = 0; i < specs.size(); ++i) {
+        // new_state (index 3): the caller's buffer when given (no allocation).
+        if (i == 3 && in.conv_state_out.has_value()) {
+            outputs.push_back(*in.conv_state_out);
+        } else {
+            outputs.push_back(create_device_tensor(specs[i], in.input.device()));
+        }
     }
     return outputs;
 }
@@ -260,9 +328,13 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t channel_chunk_size,
     bool return_conv_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<Tensor>& conv_state_out) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
+    // In-place conv-state update: the pre-allocated new_state is the history tensor itself.
+    const bool conv_state_inplace =
+        conv_state_out.has_value() && history.has_value() && same_buffer(*conv_state_out, *history);
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(
         QkvCausalConv1dSiluParams{
             .sequence = static_cast<uint32_t>(input_shape[1]),
@@ -271,10 +343,17 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
             .return_conv_state = return_conv_state,
+            .conv_state_inplace = conv_state_inplace,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
-            .input = input, .history = history, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
+            .input = input,
+            .history = history,
+            .tap0 = tap0,
+            .tap1 = tap1,
+            .tap2 = tap2,
+            .tap3 = tap3,
+            .conv_state_out = conv_state_out});
 }
 
 }  // namespace ttnn::experimental::prim

@@ -40,6 +40,10 @@ uint32_t gdn_tinv_resolve(
     ttnn::transformer::ChunkGdnWyInverse wy_inverse, uint32_t chunk_size, const Tensor& any_input);
 // FATAL unless the method is supported for this chunk size on this device.
 void validate_gdn_tinv(uint32_t tinv, uint32_t chunk_size, const Tensor& any_input);
+// A pre-allocated final-state output (scan / fused prims): [BH, K, V] fp32 TILE interleaved, allocated on
+// the device of `any_input`. It may share its buffer with the initial state (in-place state update).
+void validate_gdn_final_state_out(
+    const Tensor& final_state_out, uint32_t BH, uint32_t key_dim, uint32_t val_dim, const Tensor& any_input);
 
 // ---------------------------------------------------------------------------
 // PREP
@@ -170,6 +174,10 @@ struct ChunkGdnScanInputs {
     Tensor dl;                            // [BH, NC, 32, 32] fp32: dl*I, dl = exp(g_sum) of the chunk on the diagonal
     Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    // Pre-allocated final-state output [BH, K, V] fp32 (the op's final_state_output), or absent (a new
+    // tensor is allocated). May share its buffer with initial_state: each scan core reads its s0 V-slice
+    // once, before it writes the same slice of the final state.
+    std::optional<Tensor> final_state_out;
 };
 
 struct ChunkGdnScanProgramFactory {
@@ -207,6 +215,7 @@ std::vector<Tensor> chunk_gdn_scan(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_mcast = true,
-    bool force_serial = false);
+    bool force_serial = false,
+    const std::optional<Tensor>& final_state_out = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -98,6 +98,10 @@ struct ChunkGdnFusedInputs {
     // gb_flat one-hot head selector [1,1,32,32*HV] fp32 TILE; absent unless params.gb_flat.
     std::optional<Tensor> sel;
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    // Pre-allocated final-state output [BH, K, V] fp32 TILE interleaved (the op's final_state_output),
+    // or absent (a new tensor is allocated). May share its buffer with initial_state: receiver (h, v)
+    // reads its s0 slice once, before it writes the same slice of the final state.
+    std::optional<Tensor> final_state_out;
 };
 
 struct ChunkGdnFusedProgramFactory {
@@ -184,6 +188,7 @@ std::vector<Tensor> chunk_gdn_fused(
     bool qk_flat = false,
     uint32_t Hk = 0,
     bool gb_flat = false,
-    const std::optional<Tensor>& sel = std::nullopt);
+    const std::optional<Tensor>& sel = std::nullopt,
+    const std::optional<Tensor>& final_state_out = std::nullopt);
 
 }  // namespace ttnn::prim

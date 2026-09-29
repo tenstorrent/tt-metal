@@ -58,6 +58,25 @@ void validate_gdn_tinv(uint32_t tinv, uint32_t chunk_size, const Tensor& any_inp
         "chunk_gdn: the SFPU WY-inverse solve (wy_inverse=SFPU) is Blackhole-only");
 }
 
+void validate_gdn_final_state_out(
+    const Tensor& out, uint32_t BH, uint32_t key_dim, uint32_t val_dim, const Tensor& any_input) {
+    TT_FATAL(
+        out.storage_type() == StorageType::DEVICE && out.buffer() != nullptr,
+        "chunk_gdn: final_state_out must be an allocated device tensor");
+    TT_FATAL(out.device() == any_input.device(), "chunk_gdn: final_state_out must be on the inputs' device");
+    TT_FATAL(out.dtype() == DataType::FLOAT32, "chunk_gdn: final_state_out must be FLOAT32, got {}", out.dtype());
+    TT_FATAL(out.layout() == Layout::TILE, "chunk_gdn: final_state_out must be TILE layout");
+    TT_FATAL(!out.memory_config().is_sharded(), "chunk_gdn: final_state_out must be interleaved");
+    const auto& s = out.logical_shape();
+    TT_FATAL(
+        s.rank() == 3 && s[0] == BH && s[1] == key_dim && s[2] == val_dim,
+        "chunk_gdn: final_state_out must be [BH, K, V] = [{}, {}, {}], got {}",
+        BH,
+        key_dim,
+        val_dim,
+        s);
+}
+
 ChunkGdnPrepOperation::program_factory_t ChunkGdnPrepOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return ChunkGdnPrepProgramFactory{};
@@ -213,13 +232,16 @@ void ChunkGdnScanOperation::validate_on_program_cache_miss(
     if (in.initial_state.has_value()) {
         check(*in.initial_state, "initial_state", DataType::FLOAT32);
     }
+    if (in.final_state_out.has_value()) {
+        validate_gdn_final_state_out(*in.final_state_out, attrs.BH, attrs.key_dim, attrs.val_dim, in.v_beta);
+    }
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
 }
 
 ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     // o is fp32; the recurrent final state is fp32 too. (A bf16 o output — feeding a bf16 attention
     // result into every GDN layer — measurably degraded full-model quality, so it was removed; the
     // seq path also keeps o fp32.)
@@ -227,6 +249,10 @@ ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
+    if (in.final_state_out.has_value()) {
+        // The pre-allocated final state keeps its own memory config (e.g. DRAM while o goes to L1).
+        return {tt::tt_metal::TensorSpec(o_shape, o_layout), in.final_state_out->tensor_spec()};
+    }
     return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
 }
 
@@ -236,9 +262,9 @@ ChunkGdnScanOperation::tensor_return_value_t ChunkGdnScanOperation::create_outpu
     auto* device = in.v_beta.device();
     std::vector<Tensor> outs;
     outs.reserve(specs.size());
-    for (const auto& spec : specs) {
-        outs.push_back(create_device_tensor(spec, device));
-    }
+    outs.push_back(create_device_tensor(specs[0], device));
+    // final_state: the caller's buffer when given (no allocation), else a new tensor.
+    outs.push_back(in.final_state_out.has_value() ? *in.final_state_out : create_device_tensor(specs[1], device));
     return outs;
 }
 
@@ -256,7 +282,8 @@ std::vector<Tensor> chunk_gdn_scan(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_mcast,
-    bool force_serial) {
+    bool force_serial,
+    const std::optional<Tensor>& final_state_out) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
@@ -280,7 +307,8 @@ std::vector<Tensor> chunk_gdn_scan(
         .k_dec_t = k_dec_t,
         .dl = dl,
         .t_inv = t_inv,
-        .initial_state = initial_state};
+        .initial_state = initial_state,
+        .final_state_out = final_state_out};
     return ttnn::device_operation::launch<ChunkGdnScanOperation>(attrs, tensor_args);
 }
 

@@ -30,7 +30,8 @@ struct QkvCausalConv1dSiluOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
-// Returns {q, k, v}, plus new_state when return_conv_state is true (TILE input only).
+// Returns {q, k, v}, plus new_state when return_conv_state is true (TILE input only). conv_state_out
+// (return_conv_state only): the pre-allocated new_state; it may be `history` itself (in-place update).
 std::vector<Tensor> qkv_causal_conv1d_silu(
     const Tensor& input,
     const std::optional<Tensor>& history,
@@ -44,6 +45,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t channel_chunk_size,
     bool return_conv_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<Tensor>& conv_state_out = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

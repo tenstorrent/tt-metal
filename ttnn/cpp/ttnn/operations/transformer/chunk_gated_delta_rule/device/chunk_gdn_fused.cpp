@@ -82,6 +82,9 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     if (in.initial_state.has_value()) {
         check_fused(*in.initial_state, "initial_state", DataType::FLOAT32);
     }
+    if (in.final_state_out.has_value()) {
+        validate_gdn_final_state_out(*in.final_state_out, attrs.BH, attrs.key_dim, attrs.val_dim, in.q);
+    }
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
@@ -157,13 +160,17 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
 }
 
 ChunkGdnFusedOperation::spec_return_value_t ChunkGdnFusedOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     // EXACTLY ChunkGdnScanOperation::compute_output_specs: o and final_state are both fp32 (a bf16
     // o degraded full-model quality and was removed — see the phased scan op).
     const auto o_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
+    if (in.final_state_out.has_value()) {
+        // The pre-allocated final state keeps its own memory config (e.g. DRAM while o goes to L1).
+        return {tt::tt_metal::TensorSpec(o_shape, o_layout), in.final_state_out->tensor_spec()};
+    }
     return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
 }
 
@@ -173,9 +180,9 @@ ChunkGdnFusedOperation::tensor_return_value_t ChunkGdnFusedOperation::create_out
     auto* device = in.q.device();
     std::vector<Tensor> outs;
     outs.reserve(specs.size());
-    for (const auto& spec : specs) {
-        outs.push_back(create_device_tensor(spec, device));
-    }
+    outs.push_back(create_device_tensor(specs[0], device));
+    // final_state: the caller's buffer when given (no allocation), else a new tensor.
+    outs.push_back(in.final_state_out.has_value() ? *in.final_state_out : create_device_tensor(specs[1], device));
     return outs;
 }
 
@@ -406,7 +413,8 @@ std::vector<Tensor> chunk_gdn_fused(
     bool qk_flat,
     uint32_t Hk,
     bool gb_flat,
-    const std::optional<Tensor>& sel) {
+    const std::optional<Tensor>& sel,
+    const std::optional<Tensor>& final_state_out) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (the fused op consumes prep's inputs).
@@ -494,7 +502,8 @@ std::vector<Tensor> chunk_gdn_fused(
         .ones_c = ones_c,
         .masks_c = masks_c,
         .sel = sel,
-        .initial_state = initial_state};
+        .initial_state = initial_state,
+        .final_state_out = final_state_out};
     return ttnn::device_operation::launch<ChunkGdnFusedOperation>(attrs, tensor_args);
 }
 

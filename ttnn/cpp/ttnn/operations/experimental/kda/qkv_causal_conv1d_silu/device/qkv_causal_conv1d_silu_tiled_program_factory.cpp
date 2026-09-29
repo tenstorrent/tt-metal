@@ -112,7 +112,8 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
     uint32_t channel_chunk_size,
     bool has_history,
     bool return_conv_state,
-    uint32_t tile_size) {
+    uint32_t tile_size,
+    bool conv_state_inplace) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
@@ -161,8 +162,13 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
     TT_FATAL(
         num_steps <= std::numeric_limits<uint32_t>::max(), "{}: too many tiled steps ({})", operation_name, num_steps);
     plan.num_steps = static_cast<uint32_t>(num_steps);
+    TT_FATAL(
+        !conv_state_inplace || (has_history && return_conv_state),
+        "{}: conv_state_inplace needs a history and return_conv_state",
+        operation_name);
     plan.has_history = has_history;
     plan.return_conv_state = return_conv_state;
+    plan.conv_state_inplace = conv_state_inplace;
     plan.tile_size = tile_size;
 
     // DFB table (design.md section 4.5). Entry = one tile.
@@ -207,7 +213,21 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
     plan.scratch_zeros_bytes = zeros_region_bytes;
     plan.scratch_state_offset = round_up_to(plan.scratch_zeros_offset + plan.scratch_zeros_bytes, scratch_alignment);
     plan.scratch_state_bytes = tile_size;
-    plan.scratch_bytes = plan.scratch_state_offset + plan.scratch_state_bytes + plan.scratch_align_slack;
+    uint32_t scratch_end = plan.scratch_state_offset + plan.scratch_state_bytes;
+    if (conv_state_inplace) {
+        // The reader derives the stage address as state + one tile (no extra compile-time arg), so the
+        // stage must start exactly there; the state tile size keeps it 64 B aligned.
+        plan.scratch_stage_offset = plan.scratch_state_offset + plan.scratch_state_bytes;
+        TT_FATAL(
+            plan.scratch_stage_offset % scratch_alignment == 0,
+            "{}: stage offset {} is not {} B aligned",
+            operation_name,
+            plan.scratch_stage_offset,
+            scratch_alignment);
+        plan.scratch_stage_bytes = 2 * halo_half_bytes * B;
+        scratch_end = plan.scratch_stage_offset + plan.scratch_stage_bytes;
+    }
+    plan.scratch_bytes = scratch_end + plan.scratch_align_slack;
     plan.l1_bytes_per_core = plan.dfb_bytes_per_core + plan.scratch_bytes;
 
     // Work split: contiguous block-major step ranges.
@@ -236,7 +256,7 @@ std::string QkvCausalConv1dSiluTiledPlan::to_string() const {
         "qkv_causal_conv1d_silu tiled program plan\n"
         "  geometry: T={} widths=({},{},{}) Mt={} Ct={} (Qt={} Kt={} Vt={}) B={} (channel_chunk_size={}) "
         "blocks={} steps={}\n"
-        "  options: has_history={} return_conv_state={} tile_size={} B\n"
+        "  options: has_history={} return_conv_state={} conv_state_inplace={} tile_size={} B\n"
         "  L1 per core:\n",
         sequence,
         q_width,
@@ -253,6 +273,7 @@ std::string QkvCausalConv1dSiluTiledPlan::to_string() const {
         num_steps,
         has_history ? 1 : 0,
         return_conv_state ? 1 : 0,
+        conv_state_inplace ? 1 : 0,
         tile_size);
     for (const auto& buffer : dataflow_buffers) {
         text += fmt::format(
@@ -266,7 +287,7 @@ std::string QkvCausalConv1dSiluTiledPlan::to_string() const {
     }
     text += fmt::format(
         "    scratchpad scratch (reader only): halo @{} ({} B), zeros @{} ({} B), state @{} ({} B), "
-        "align slack {} B = {} B\n"
+        "stage @{} ({} B), align slack {} B = {} B\n"
         "    DFB total {} B; L1 total {} B ({:.1f} KiB) per core\n"
         "  work split: grid {}x{}, cores={}, steps/core min={} max={}, balance={:.1f}%, max tap loads/core={}",
         scratch_halo_offset,
@@ -275,6 +296,8 @@ std::string QkvCausalConv1dSiluTiledPlan::to_string() const {
         scratch_zeros_bytes,
         scratch_state_offset,
         scratch_state_bytes,
+        scratch_stage_offset,
+        scratch_stage_bytes,
         scratch_align_slack,
         scratch_bytes,
         dfb_bytes_per_core,
@@ -330,7 +353,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
         attrs.channel_chunk_size,
         has_history,
         return_state,
-        tile_size);
+        tile_size,
+        attrs.conv_state_inplace);
     if (const char* print_plan = std::getenv("TT_KDA_QKV_CONV1D_PRINT_PLAN");
         print_plan != nullptr && print_plan[0] != '\0' && print_plan[0] != '0') {
         std::fprintf(stderr, "%s\n", plan.to_string().c_str());
@@ -391,7 +415,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
         .compiler_options =
             {.defines =
                  {{"QKV_CONV_HAS_HISTORY", has_history ? "1" : "0"},
-                  {"QKV_CONV_RETURN_STATE", return_state ? "1" : "0"}}},
+                  {"QKV_CONV_RETURN_STATE", return_state ? "1" : "0"},
+                  {"QKV_CONV_STATE_INPLACE", attrs.conv_state_inplace ? "1" : "0"}}},
         .dfb_bindings =
             {
                 m2::ProducerOf(x_in_dfb_name, "x_in"),

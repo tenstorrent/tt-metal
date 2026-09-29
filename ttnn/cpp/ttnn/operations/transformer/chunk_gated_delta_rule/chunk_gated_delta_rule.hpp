@@ -48,6 +48,12 @@ namespace ttnn::transformer {
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
  * GDN adapter's return_o_bh) should set this to get [BH,T,V] TILE directly and skip a
  * token<->head permute round-trip on both sides.
+ *
+ * final_state_output: an optional pre-allocated final-state tensor (fp32 TILE, interleaved,
+ * [B, HV, K, V] or [B*HV, K, V]). When given, the kernel writes the final state straight into it
+ * (no new state tensor is allocated) and the op returns this tensor as final_state. It may be the
+ * initial_state tensor itself (in-place state update): each scan core reads its own state slice
+ * before it writes the same slice. Requires output_final_state; fused and phased paths only.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -74,6 +80,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // headvec_split_tile permute+reshape. `sel` is the [1,1,32,32*HV] fp32 TILE one-hot head
     // selector (tile h picks head h's column). Fused path only. Build it once on the model/layer
     // (device-resident before trace capture, like eye/tril/ones/masks).
-    const std::optional<ttnn::Tensor>& sel = std::nullopt);
+    const std::optional<ttnn::Tensor>& sel = std::nullopt,
+    const std::optional<ttnn::Tensor>& final_state_output = std::nullopt);
 
 }  // namespace ttnn::transformer

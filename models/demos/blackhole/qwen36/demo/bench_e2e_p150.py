@@ -405,6 +405,12 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
         "DRAM interleaved (bit-exact). run_bench_e2e_p150.sh pins it (runner default 1); 0=DRAM",
     ),
+    "QWEN36_GDN_STATE_INPLACE": (
+        "0",
+        "P9_INT1F (P7_STATECOPY): on the traced chunked prefill the fused FLA op and the KDA conv op write the "
+        "recurrent / conv state straight into the persistent buffers (bit-exact). run_bench_e2e_p150.sh pins it "
+        "(runner default 1); 0=new tensor plus copy",
+    ),
     "QWEN36_FLA_SCAN_FID": (
         "<unset>",
         "R10B experiment hook (chunk_gdn_fused_program_factory.cpp): math-fidelity override for the fused FLA "

@@ -229,7 +229,11 @@ def make_kda_conv1d_fn(
         else None
     )
 
-    def fn(x, conv_state, valid_len=None):
+    def fn(x, conv_state, valid_len=None, conv_state_out=None):
+        # conv_state_out (QWEN36_GDN_STATE_INPLACE, gdn/decode.py): the persistent fused conv-state buffer.
+        # The TILE path passes it to the op as conv_state_output, so new_state is written straight into
+        # it (in place when it is conv_state). The other paths ignore it and return a new tensor, which
+        # the caller copies into the buffer as before.
         B, T, C_in = x.shape[0], x.shape[1], x.shape[2]
         assert B == 1, "kda_conv1d_fn is single-device (B=1) only"
 
@@ -290,6 +294,7 @@ def make_kda_conv1d_fn(
                 memory_config=_tiled_out_mc,
                 compute_kernel_config=_kda_ckc,
                 return_conv_state=True,
+                **({"conv_state_output": conv_state_out} if conv_state_out is not None else {}),
             )
             return (q, k, v), new_state
 
@@ -356,4 +361,5 @@ def make_kda_conv1d_fn(
 
         return (q, k, v), new_state
 
+    fn.accepts_conv_state_out = True  # gdn/decode.py QWEN36_GDN_STATE_INPLACE checks this before passing it
     return fn

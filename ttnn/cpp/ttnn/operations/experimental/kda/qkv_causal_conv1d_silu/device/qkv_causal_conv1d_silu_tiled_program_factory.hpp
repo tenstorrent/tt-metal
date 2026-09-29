@@ -67,9 +67,17 @@
 // Scratch starts uninitialized: before first use the reader zeroes the zeros region (always) and
 // the state tile (with return_conv_state).
 // new_state (return_conv_state): always a DRAM-interleaved TILE [1,3,Q+K+V] tensor, whatever
-//   memory_config says (memory_config applies to q/k/v only). The reader of the step at mt = Mt-1
+//   memory_config says (memory_config applies to q/k/v only), unless the caller passes a
+//   pre-allocated one (conv_state_output). The reader of the step at mt = Mt-1
 //   writes rows 0-2 of each tile from x_in (rows 29-31) and the other rows from the zeroed state
 //   tile in scratch, so rows 3-31 are zero.
+// In-place new_state (conv_state_inplace, reader define QKV_CONV_STATE_INPLACE): new_state is the
+//   history buffer. The history tiles of column block b are read only by the core that owns step
+//   (b, mt = 0), and the core that owns step (b, Mt-1) can be a different core that gets there first,
+//   so the write above could overwrite history before it is read. Instead the owner of (b, 0) writes
+//   block b's new_state after its unit-start barrier (history landed): it reads rows 28-31 of the
+//   input tiles (Mt-1, block b) into the scratch stage region together with the halo, and writes rows
+//   0-2 from there. Same bytes as the write above; no cross-core ordering is needed.
 //
 // Design reference: qwen35_2b_handoff/plan_0925/T6/design.md sections 4.5, 6.1-6.5.
 // ============================================================================
@@ -121,6 +129,7 @@ struct QkvCausalConv1dSiluTiledPlan {
     uint32_t num_steps = 0;   // num_blocks * Mt
     bool has_history = false;
     bool return_conv_state = false;
+    bool conv_state_inplace = false;
     uint32_t tile_size = 0;
 
     // L1 per core. dataflow_buffers order: x_in, shift, weights, partial, out.
@@ -130,6 +139,8 @@ struct QkvCausalConv1dSiluTiledPlan {
     //          tile-row, or rows 0-3 of the history)
     //   zeros: zero source for local NoC copies (the halo when history is None)
     //   state: one new_state tile under construction (rows 3-31 stay zero)
+    //   stage: conv_state_inplace only, right after state (the reader derives it as state + one
+    //          tile): rows 28-31 of the B input tiles of tile-row Mt-1, laid out like the halo
     uint32_t scratch_align_slack = 0;
     uint32_t scratch_halo_offset = 0;
     uint32_t scratch_halo_bytes = 0;
@@ -137,6 +148,8 @@ struct QkvCausalConv1dSiluTiledPlan {
     uint32_t scratch_zeros_bytes = 0;
     uint32_t scratch_state_offset = 0;
     uint32_t scratch_state_bytes = 0;
+    uint32_t scratch_stage_offset = 0;  // 0 and 0 bytes unless conv_state_inplace
+    uint32_t scratch_stage_bytes = 0;
     uint32_t scratch_bytes = 0;  // includes scratch_align_slack
     uint32_t dfb_bytes_per_core = 0;
     uint32_t l1_bytes_per_core = 0;  // DFBs + scratchpad
@@ -163,7 +176,8 @@ QkvCausalConv1dSiluTiledPlan make_qkv_causal_conv1d_silu_tiled_plan(
     uint32_t channel_chunk_size,
     bool has_history,
     bool return_conv_state,
-    uint32_t tile_size);
+    uint32_t tile_size,
+    bool conv_state_inplace = false);
 
 struct QkvCausalConv1dSiluTiledProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(

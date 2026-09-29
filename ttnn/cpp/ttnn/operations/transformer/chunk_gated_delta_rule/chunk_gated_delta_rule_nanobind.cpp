@@ -53,7 +53,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks,
-    const std::optional<ttnn::Tensor>& sel) {
+    const std::optional<ttnn::Tensor>& sel,
+    const std::optional<ttnn::Tensor>& final_state_output) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -74,7 +75,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         tril,
         ones,
         masks,
-        sel);
+        sel,
+        final_state_output);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -381,11 +383,17 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 with a ChunkGdnFusedProgramConfig or with None when the cost model picks fused;
                 phased/mono reject it). Omit it to keep the head-split g/beta path. Build it once
                 on the model/layer (device-resident before trace capture, same as eye/tril/ones/masks).
+            final_state_output (ttnn.Tensor, optional): a pre-allocated final-state tensor, FLOAT32
+                TILE interleaved, [B, HV, K, V] or [B*HV, K, V], any buffer type. The kernel writes the
+                final state straight into it (no new state tensor is allocated) and the op returns it
+                as final_state. It may be the initial_state tensor itself (in-place state update, for
+                a persistent traced state buffer). Needs output_final_state=True; fused and phased
+                paths only (mono rejects it).
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
                 o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
-                final_state [B, HV, K, V] (if output_final_state).
+                final_state [B, HV, K, V] (if output_final_state; final_state_output itself when given).
         )doc";
 
     ttnn::bind_function<"chunk_gated_delta_rule", "ttnn.transformer.">(
@@ -412,7 +420,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none(),
-        nb::arg("sel") = nb::none());
+        nb::arg("sel") = nb::none(),
+        nb::arg("final_state_output") = nb::none());
 
     const auto* prep_doc =
         R"doc(

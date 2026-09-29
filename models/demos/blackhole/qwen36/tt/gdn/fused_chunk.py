@@ -130,6 +130,9 @@ def chunk_gated_delta_rule_fused_adapter(
     # None: the op's own dispatch — fused or phased depending on the cost model.
     wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / SFPU / AUTO: the WY-inverse arithmetic. None = the
     # op's AUTO (the SFPU solve on Blackhole at chunk 32, Horner elsewhere).
+    final_state_out=None,  # QWEN36_GDN_STATE_INPLACE (gdn/decode.py): the persistent fp32 [B,Nv,Dk,Dv]
+    # state buffer; the op writes the final state straight into it (final_state_output) and returns it.
+    # None = the op allocates a new final-state tensor (current path, call unchanged).
 ):
     global _logged_path
     if not _logged_path:
@@ -234,6 +237,7 @@ def chunk_gated_delta_rule_fused_adapter(
         sel=_sel,
         **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
         **_r3_o_kw,
+        **({"final_state_output": final_state_out} if final_state_out is not None else {}),
     )
 
     if return_o_bh:
