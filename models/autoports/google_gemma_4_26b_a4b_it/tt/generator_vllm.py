@@ -26,6 +26,10 @@ class AutoportGemma4ForCausalLM:
         self._sampling_signature = None
         self._sampling_on_host = None
         self._decode_batch = None
+        self.eager_prefill_decode_reuse = os.environ.get("GEMMA4_EAGER_PREFILL_DECODE_REUSE", "1") == "1"
+        self._eager_prefill_key = None
+        self._eager_decode_trace_id = None
+        self._pending_eager_prefill_key = None
         self.allow_host_sampling = os.environ.get("GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING") == "1"
         if os.environ.get("GEMMA4_AUTOPORT_TTFT_DIAGNOSTICS") == "1":
             from models.autoports.google_gemma_4_26b_a4b_it.tools.ttft_diagnostics import install
@@ -171,6 +175,61 @@ class AutoportGemma4ForCausalLM:
         tables = tuple(table[:batch] for table in self._tables(page_table, page_tables_per_layer))
         return None if tokens is None else tokens[:batch], start_pos[:batch], tables
 
+    def _eager_prefill_signature(self, tokens, tables, cache, prompt_lens, sampling_params, counts):
+        gen = self.generator
+        if (
+            not self.eager_prefill_decode_reuse
+            or sampling_params is None
+            or gen.host_sampling
+            or len(prompt_lens) != 1
+            or tokens.shape[0] != 1
+            or not gen.serving_prefill_eligible(sampling_params)
+            or (counts is not None and counts.any())
+            or gen._serving_prefill_key(tokens, tables, cache, prompt_lens) is not None
+        ):
+            return None
+        length = int(prompt_lens[0])
+        if not 1 <= length <= min(tokens.shape[1], gen.model.max_seq_len):
+            return None
+        if any(not isinstance(t, torch.Tensor) or t.ndim != 2 or t.shape[0] < 1 for t in tables):
+            return None
+        # Cache objects own the addresses baked into decode. Values and page IDs
+        # may change, but replacing even one view invalidates the warmed bundle.
+        cache_specs = tuple(
+            (
+                id(t),
+                t.buffer_address(),
+                tuple(t.shape),
+                tuple(t.padded_shape),
+                str(t.dtype),
+                str(t.layout),
+                str(t.memory_config()),
+            )
+            for pair in cache
+            for t in pair
+        )
+        return (
+            id(gen.model),
+            id(cache),
+            cache_specs,
+            length,
+            tuple(tokens.shape),
+            str(tokens.dtype),
+            tuple(tokens.stride()),
+            str(tokens.device),
+            tuple((tuple(t.shape), str(t.dtype), tuple(t.stride()), str(t.device)) for t in tables),
+        )
+
+    def _has_eager_decode_trace(self):
+        gen = self.generator
+        return (
+            self._eager_decode_trace_id is not None
+            and self._eager_decode_trace_id == gen.trace_id
+            and gen.batch == 1
+            and gen.active_slots == (0,)
+            and not gen.host_sampling
+        )
+
     def prefill_forward(
         self,
         tokens,
@@ -208,6 +267,19 @@ class AutoportGemma4ForCausalLM:
         reuse_prefill = trace_prefill and gen.can_reuse_serving_prefill(
             tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens
         )
+        eager_key = self._eager_prefill_signature(tokens, tables, kv_cache, prompt_lens, sampling_params, counts)
+        reuse_eager = (
+            eager_key is not None
+            and eager_key == self._eager_prefill_key
+            and self._has_eager_decode_trace()
+            and gen.cache is kv_cache
+            and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=True)
+        )
+        self._pending_eager_prefill_key = None
+        if not reuse_eager:
+            self._eager_prefill_key = None
+            self._eager_decode_trace_id = None
+        reuse_request = reuse_prefill or reuse_eager
         if on_host:
             gen._release_trace()
         else:
@@ -221,17 +293,20 @@ class AutoportGemma4ForCausalLM:
                 # Re-prefill rebuilds KV state but consumes the next sampling
                 # draw after the retained outputs; prefill does not increment.
                 gen.configure_sampling(
-                    sampling_params, prompt_tokens=prompt_tokens, seed_offsets=counts, _reuse_trace=reuse_prefill
+                    sampling_params, prompt_tokens=prompt_tokens, seed_offsets=counts, _reuse_trace=reuse_request
                 )
                 gen.sampler.reset_output_state(output_tokens)
             else:
                 prompt_tokens = tokens.masked_fill(positions >= prompt_lengths, -1)
-                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, _reuse_trace=reuse_prefill)
+                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, _reuse_trace=reuse_request)
         if trace_prefill:
             output = gen.serving_prefill_tokens(tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens)
             self._sampling_signature = repr(sampling_params) if gen.prefill_prepared is not None else None
             self._decode_batch = None
             host = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).reshape(-1)
+            # The blocking token read completes eager work. Request-local device
+            # tensors die on return, before the retained decode trace replays.
+            self._pending_eager_prefill_key = eager_key
             return host[: len(prompt_lens)].reshape(-1, 1)
         logits = gen.prefill_forward(
             tokens,
@@ -247,6 +322,7 @@ class AutoportGemma4ForCausalLM:
             return self._read_host_logits(logits, len(prompt_lens))
         output = gen.sample_prefill(logits)
         host = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).reshape(-1)
+        self._pending_eager_prefill_key = eager_key
         return host[: len(prompt_lens)].reshape(-1, 1)
 
     def decode_forward(
@@ -294,9 +370,10 @@ class AutoportGemma4ForCausalLM:
                 # decode sample. The last generated token is this step's input.
                 seed_offsets = (counts - 1).clamp_min(0)
             if signature != self._sampling_signature:
-                reuse_trace = getattr(gen, "prefill_prepared", None) is not None and gen.can_reuse_serving_decode(
-                    sampling_params
-                )
+                eager_decode = self._has_eager_decode_trace()
+                reuse_trace = (
+                    getattr(gen, "prefill_prepared", None) is not None or eager_decode
+                ) and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=eager_decode)
                 gen.configure_sampling(
                     sampling_params, prompt_tokens=prompt_tokens, seed_offsets=seed_offsets, _reuse_trace=reuse_trace
                 )
@@ -322,6 +399,17 @@ class AutoportGemma4ForCausalLM:
             enable_trace=enable_trace,
             device_feedback=not reset_batch,
         )
+        if self._pending_eager_prefill_key is not None:
+            if (
+                gen.batch == 1
+                and gen.active_slots == (0,)
+                and id(gen.cache) == self._pending_eager_prefill_key[1]
+                and not gen._trace_returns_logits
+                and gen.serving_prefill_eligible(sampling_params)
+            ):
+                self._eager_prefill_key = self._pending_eager_prefill_key
+                self._eager_decode_trace_id = gen.trace_id
+            self._pending_eager_prefill_key = None
         if not read_from_device:
             return output
         return self.process_decode_output_host(self.read_decode_output(output), is_tokens=True)

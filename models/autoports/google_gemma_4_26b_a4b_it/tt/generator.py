@@ -309,7 +309,7 @@ class Gemma4Generator(Generator):
             and self.prefill_sampling_trace_id is not None
         )
 
-    def can_reuse_serving_decode(self, params):
+    def can_reuse_serving_decode(self, params, *, allow_eager_prefill=False):
         """Allow padded scheduler parameters to refresh a compatible graph.
 
         Prefill has compact parameter rows; decode pads them to max_num_seqs.
@@ -317,7 +317,11 @@ class Gemma4Generator(Generator):
         The model graph also fixes whether device seeds advance, so that mode
         must match independently of the sampler's persistent parameter values.
         """
-        if self.prefill_prepared is None or self.trace_id is None or self._trace_returns_logits:
+        if (
+            (self.prefill_prepared is None and not allow_eager_prefill)
+            or self.trace_id is None
+            or self._trace_returns_logits
+        ):
             return False
         formatted = self._validate_sampling(params)
         temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
@@ -587,6 +591,7 @@ class Gemma4Generator(Generator):
         if initial_seeds is not None:
             ttnn.copy(initial_seeds, self.sampler.tt_sampling.seeds_tt_tensor)
         ttnn.synchronize_device(self.mesh)
+        self.counters["decode_captures"] = self.counters.get("decode_captures", 0) + 1
         print("LOGITS_TRACE_READY" if return_logits else "SPLIT_TRACE_READY", flush=True)
 
     def decode_forward(

@@ -1,0 +1,48 @@
+{
+  "status": "local_selected_default_measured_remote_qualification_pending",
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 4096,
+    "gen_len": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "requests_per_cohort": 4,
+    "cohorts": 2,
+    "warmup_requests_per_cohort": 2
+  },
+  "source": "vllm",
+  "aggregation": "Eight measured requests: arithmetic mean of two equal-sized cohort mean TPOTs; TSU is1000/pooled meanTPOT, not aggregate output throughput",
+  "ttft_ms": 2123.3878504717723,
+  "decode_tps": 50.890350646338376,
+  "decode_ms_per_token_e2e": 19.65009058297678,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "baseline_decode_ms_per_token_e2e": 23.260252369663085,
+  "baseline_decode_tps": 42.99179493474669,
+  "baseline_ttft_ms": 2094.3075857358053,
+  "baseline_e2el_ms": 5048.359636683017,
+  "selected_e2el_ms": 4618.949354509823,
+  "relative_tsu_improvement": 0.18372239920617806,
+  "selected_cohorts": [
+    {"mean_tpot_ms": 19.539479672263457, "tsu": 51.17843549434496, "mean_ttft_ms": 2144.8865171987563, "mean_e2el_ms": 4626.400435576215},
+    {"mean_tpot_ms": 19.7607014936901, "tsu": 50.60549091940464, "mean_ttft_ms": 2101.889183744788, "mean_e2el_ms": 4611.498273443431}
+  ],
+  "selected_source": "../../readiness_vllm/tsu_optimization/selected_async/launch.json",
+  "evidence": "../../readiness_vllm/tsu_optimization/selected_async/chat/summary.json",
+  "baseline_evidence": "../../readiness_vllm/tsu_optimization/baseline_sync/chat/summary.json",
+  "reduced_profile_only": {
+    "scope": "Real layers0/5 plus terminal/sampler/recorder; NOT full-model or serving device duration",
+    "context_capacity": 262144,
+    "input4096_k4_max_rank_window_us": 2548.31,
+    "input128_k1_max_rank_window_us": 2474.7572590460654,
+    "evidence": ["../../readiness_vllm/tsu_optimization/profile_retry/summary.json", "../../readiness_vllm/tsu_optimization/profile_short/summary.json"]
+  },
+  "named_limitations": [
+    "No serving device profiling; full-model device-only duration unmeasured",
+    "Local exact compiled baseline image plus bind-mounted candidate Python; new immutable image still required",
+    "Final long-output/context/concurrency guards and shared qualitative replay pass; remote matrix pending",
+    "Async changes TTFT/TPOT phase attribution, especially at high concurrency; inspect E2EL and steady ITL",
+    "Tiny K1 head gain verified in paired generator controls but not separately resolvable in serving noise",
+    "High-concurrency row serialization remains a separate optimization avenue"
+  ]
+}

@@ -11,6 +11,7 @@ import argparse
 import json
 import statistics
 import time
+from itertools import product
 from pathlib import Path
 from unittest.mock import patch
 
@@ -96,6 +97,8 @@ def benchmark(args, mesh):
     )
     baseline_weight = upload(mesh, weight_host, sharded=True, dtype=getattr(ttnn, args.weight_dtype))
     baseline_pc = _get_lm_head_program_config(mesh, xhost.shape[-2], k, local_n)
+    if args.baseline_block is not None:
+        baseline_pc.in0_block_w = args.baseline_block
 
     def baseline():
         return ttnn.linear(
@@ -161,11 +164,14 @@ def benchmark(args, mesh):
     if args.interleaved_only:
         for grid_name in args.grids:
             grid = ttnn.CoreCoord(*map(int, grid_name.split("x")))
-            per_core_n = (local_n // 32 + grid.x * grid.y - 1) // (grid.x * grid.y)
-            subblock = min(per_core_n, 4)
-            while per_core_n % subblock:
-                subblock -= 1
-            for block in args.blocks:
+            minimum_n = (local_n // 32 + grid.x * grid.y - 1) // (grid.x * grid.y)
+            widths = args.per_core_n or [minimum_n]
+            for block, per_core_n in product(args.blocks, widths):
+                if per_core_n < minimum_n:
+                    raise ValueError(f"per-core N{per_core_n} cannot cover the vocabulary on grid {grid_name}")
+                subblock = min(per_core_n, 4)
+                while per_core_n % subblock:
+                    subblock -= 1
                 pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
                     in0_block_w=block,
@@ -179,8 +185,9 @@ def benchmark(args, mesh):
                 )
 
                 def forward():
+                    hidden = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG) if args.input_memory == "l1" else x
                     return ttnn.linear(
-                        x,
+                        hidden,
                         baseline_weight,
                         dtype=ttnn.bfloat16,
                         compute_kernel_config=compute,
@@ -189,7 +196,11 @@ def benchmark(args, mesh):
                     )
 
                 try:
-                    measure(f"interleaved_g{grid_name}_b{block}", forward, dict(program=str(pc)))
+                    measure(
+                        f"interleaved_g{grid_name}_b{block}_n{per_core_n}_{args.input_memory}",
+                        forward,
+                        dict(program=str(pc), input_memory=args.input_memory),
+                    )
                 except RuntimeError as error:
                     if not any(
                         term in str(error)
@@ -207,7 +218,9 @@ def benchmark(args, mesh):
     banks = mesh.dram_grid_size()
     for chunk in args.chunks:
         for block in args.blocks:
-            geo = geometry(k, chunk, block, banks.x * banks.y, mesh.compute_with_storage_grid_size().x, "bfloat16")
+            geo = geometry(
+                k, chunk, block, banks.x * banks.y, mesh.compute_with_storage_grid_size().x, args.weight_dtype
+            )
             cores, n = geo["input_storage_cores"], geo["physical_MKN"][-1]
             memory = lambda shape: ttnn.create_sharded_memory_config(
                 shape,
@@ -238,7 +251,7 @@ def benchmark(args, mesh):
                         ],
                         -1,
                     )
-                    weights.append(upload(mesh, host, weight_mem, True))
+                    weights.append(upload(mesh, host, weight_mem, True, dtype=getattr(ttnn, args.weight_dtype)))
                     widths.append(width)
                 for readers in args.readers:
                     pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -294,16 +307,17 @@ def main():
     parser.add_argument("--fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="HiFi4")
     parser.add_argument("--interleaved-only", action="store_true")
     parser.add_argument("--grids", nargs="+", default=["11x10"])
+    parser.add_argument("--per-core-n", type=int, nargs="+", help="Interleaved output tile counts per core")
+    parser.add_argument("--input-memory", choices=["dram", "l1"], default="dram")
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--chunks", type=int, nargs="+", default=[8192, 16384])
     parser.add_argument("--blocks", type=int, nargs="+", default=[1, 2, 4, 11, 22])
+    parser.add_argument("--baseline-block", type=int, help="Match the selected production head K block")
     parser.add_argument("--readers", type=int, nargs="+", default=[1, 2, 3])
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--replays", type=int, default=10)
     args = parser.parse_args()
-    if args.weight_dtype != "bfloat16" and not (args.interleaved_only or args.capture):
-        parser.error("Reduced-precision geometry sweep currently requires --interleaved-only")
     torch.set_num_threads(8)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.fixture.parent.mkdir(parents=True, exist_ok=True)

@@ -109,8 +109,8 @@ class Gemma4Model:
         self.head_program = _get_lm_head_program_config(
             mesh_device, 1, self.config.hidden_size, self.config.vocab_size // 4
         )
-        # Precision-locked TP4 real-input sweep: K4 beats K8 on the 11x10 grid.
-        self.head_program.in0_block_w = 4
+        # BFP4/LoFi TP4 decode geometry; evidence: doc/tsu_optimization/work_log.md.
+        self.head_program.in0_block_w = 1
         self.rope_prefill, self.rope_decode = {}, {}
         extent = (self.max_seq_len + 1023) // 1024 * 1024
         rotary = Gemma4TextRotaryEmbedding(self.config)

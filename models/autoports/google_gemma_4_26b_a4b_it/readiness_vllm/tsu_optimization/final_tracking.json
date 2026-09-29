@@ -1,0 +1,887 @@
+{
+  "layers": [
+    0,
+    5
+  ],
+  "scope": "token-equivalence correctness probe",
+  "config": {
+    "output": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/final_tracking.json",
+    "lengths": [
+      4096,
+      4097
+    ],
+    "trace_max_length": 8192,
+    "cache_context": 262144,
+    "decode_steps": 5,
+    "full_model": false,
+    "reuse_eager": true
+  },
+  "source_sha256": {
+    "tests/check_tsu_prefill_trace.py": "5cd9d492daf3a8b841aabce9e52ededaa8c0ee7920215ec89727789afd242a97",
+    "tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+    "tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "tt/generator.py": "92bc9a64bad64cf7f3b4dbda01293824c515030f9f861ee97091350521bb3091",
+    "tt/generator_vllm.py": "ab0aed5cae4ad38ae36fb8717f56eed2a67ec75681ebd1a56ce160ef71e353df",
+    "tt/model.py": "f52a55d7976779dec1f9e011d72c74bbef76d72bad19f44279a8bc4a8be63d8e",
+    "tt/multichip_decoder.py": "ef1716fb826e81ac7ecdf7d6c54ae18eb4c511d095f774a09fbcf87f795c0d75",
+    "tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+    "tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+    "tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+    "tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+    "tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672"
+  },
+  "rows": [
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 774.6543614193797,
+      "decode_ms": [
+        440.4301391914487,
+        369.232838973403,
+        352.97776851803064,
+        346.90743777900934,
+        363.12164831906557
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(6)",
+      "sampling_traces_before": {},
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "program_cache_delta": 6,
+      "repeat": 0,
+      "control": {
+        "length": 4096,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          159,
+          267,
+          4,
+          269,
+          269
+        ],
+        "prefill_ms": 1000.5079414695501,
+        "decode_ms": [
+          739.5922280848026,
+          437.8697741776705,
+          421.55185621231794,
+          417.21831262111664,
+          414.38069846481085
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": null,
+        "trace_after": "MeshTraceId(0)",
+        "sampling_traces_before": {},
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(1)"
+        },
+        "program_cache_delta": 365
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 772.2315955907106,
+      "decode_ms": [
+        448.914366774261,
+        380.1007764413953,
+        356.2545394524932,
+        384.9641587585211,
+        347.5253339856863
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(6)",
+      "trace_after": "MeshTraceId(6)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 4096,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          159,
+          267,
+          4,
+          269,
+          269
+        ],
+        "prefill_ms": 1000.5079414695501,
+        "decode_ms": [
+          739.5922280848026,
+          437.8697741776705,
+          421.55185621231794,
+          417.21831262111664,
+          414.38069846481085
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": null,
+        "trace_after": "MeshTraceId(0)",
+        "sampling_traces_before": {},
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(1)"
+        },
+        "program_cache_delta": 365
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        29,
+        266,
+        1,
+        263
+      ],
+      "prefill_ms": 813.9331070706248,
+      "decode_ms": [
+        374.7879872098565,
+        354.69657089561224,
+        353.54474652558565,
+        389.6907698363066,
+        374.6716557070613
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(6)",
+      "trace_after": "MeshTraceId(6)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 4096,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          29,
+          266,
+          1,
+          263
+        ],
+        "prefill_ms": 814.219449646771,
+        "decode_ms": [
+          424.48091320693493,
+          360.68561114370823,
+          361.57404258847237,
+          366.45815428346395,
+          349.19910319149494
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(0)",
+        "trace_after": "MeshTraceId(2)",
+        "sampling_traces_before": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(1)"
+        },
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(3)"
+        },
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        29,
+        266,
+        1,
+        263
+      ],
+      "prefill_ms": 814.6076695993543,
+      "decode_ms": [
+        376.54305901378393,
+        366.2521494552493,
+        388.355596922338,
+        358.7892847135663,
+        359.85269118100405
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(6)",
+      "trace_after": "MeshTraceId(6)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+      },
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 4096,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          29,
+          266,
+          1,
+          263
+        ],
+        "prefill_ms": 816.5937280282378,
+        "decode_ms": [
+          421.2910681962967,
+          356.681153178215,
+          348.70840795338154,
+          365.5793806537986,
+          358.5343938320875
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(2)",
+        "trace_after": "MeshTraceId(4)",
+        "sampling_traces_before": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(3)"
+        },
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(5)"
+        },
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        15,
+        260,
+        45,
+        2,
+        370
+      ],
+      "prefill_ms": 882.1222381666303,
+      "decode_ms": [
+        415.6771879643202,
+        389.6004231646657,
+        363.57245221734047,
+        363.72341960668564,
+        367.8206233307719
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(14)",
+      "sampling_traces_before": {},
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "program_cache_delta": 3,
+      "repeat": 0,
+      "control": {
+        "length": 4097,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          15,
+          260,
+          45,
+          2,
+          370
+        ],
+        "prefill_ms": 901.4123817905784,
+        "decode_ms": [
+          427.87603475153446,
+          353.9443863555789,
+          370.32437417656183,
+          364.5121455192566,
+          352.7161879464984
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(6)",
+        "trace_after": "MeshTraceId(8)",
+        "sampling_traces_before": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+        },
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(9)"
+        },
+        "program_cache_delta": 67
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        15,
+        260,
+        45,
+        2,
+        370
+      ],
+      "prefill_ms": 881.6197691485286,
+      "decode_ms": [
+        383.6743766441941,
+        368.085365742445,
+        362.79125418514013,
+        376.29670556634665,
+        370.0783420354128
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(14)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 4097,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          15,
+          260,
+          45,
+          2,
+          370
+        ],
+        "prefill_ms": 901.4123817905784,
+        "decode_ms": [
+          427.87603475153446,
+          353.9443863555789,
+          370.32437417656183,
+          364.5121455192566,
+          352.7161879464984
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(6)",
+        "trace_after": "MeshTraceId(8)",
+        "sampling_traces_before": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(7)"
+        },
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(9)"
+        },
+        "program_cache_delta": 67
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        38,
+        260,
+        29,
+        269
+      ],
+      "prefill_ms": 920.9084641188383,
+      "decode_ms": [
+        402.5765461847186,
+        357.8574862331152,
+        358.72243251651525,
+        352.4928577244282,
+        357.76559077203274
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(14)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 4097,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          38,
+          260,
+          29,
+          269
+        ],
+        "prefill_ms": 921.6078240424395,
+        "decode_ms": [
+          425.66703725606203,
+          383.01257882267237,
+          358.6852364242077,
+          369.37674786895514,
+          348.87093398720026
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(8)",
+        "trace_after": "MeshTraceId(10)",
+        "sampling_traces_before": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(9)"
+        },
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(11)"
+        },
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        38,
+        260,
+        29,
+        269
+      ],
+      "prefill_ms": 921.3892156258225,
+      "decode_ms": [
+        382.6108304783702,
+        353.43847051262856,
+        362.91169188916683,
+        374.1926560178399,
+        366.62021465599537
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(14)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 4097,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          38,
+          260,
+          29,
+          269
+        ],
+        "prefill_ms": 921.6239219531417,
+        "decode_ms": [
+          427.6858810335398,
+          366.461805999279,
+          366.66966136544943,
+          381.98643270879984,
+          363.6414436623454
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(10)",
+        "trace_after": "MeshTraceId(12)",
+        "sampling_traces_before": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(11)"
+        },
+        "sampling_traces_after": {
+          "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(13)"
+        },
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 771.8331003561616,
+      "decode_ms": [
+        452.7329998090863,
+        382.81424716115,
+        358.9846221730113,
+        370.852573774755,
+        364.10805862396955
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(16)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(15)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(17)"
+      },
+      "program_cache_delta": 0,
+      "transition": true,
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        15,
+        260,
+        45,
+        2,
+        370
+      ],
+      "prefill_ms": 878.7412205711007,
+      "decode_ms": [
+        419.4303136318922,
+        352.90159471333027,
+        359.2870868742466,
+        342.3793064430356,
+        350.7318627089262
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": "MeshTraceId(16)",
+      "trace_after": "MeshTraceId(18)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(17)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(19)"
+      },
+      "program_cache_delta": 0,
+      "transition": true,
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 771.7989711090922,
+      "decode_ms": [
+        418.8363691791892,
+        350.4466889426112,
+        371.9796594232321,
+        357.3589427396655,
+        351.6889847815037
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": "MeshTraceId(18)",
+      "trace_after": "MeshTraceId(20)",
+      "sampling_traces_before": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(19)"
+      },
+      "sampling_traces_after": {
+        "_TraceKey(penalties_on=False, log_probs_on=False, force_argmax=False, bucket=None)": "MeshTraceId(21)"
+      },
+      "program_cache_delta": 0,
+      "transition": true,
+      "matches_control": true
+    }
+  ],
+  "passed": true
+}
