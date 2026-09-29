@@ -65,7 +65,7 @@ import torch
 import ttnn
 
 from .prompt import PromptContext, RandomSources
-from .text import MODEL_REPO_ID, TextFrontend
+from .text import MODEL_REPO_ID, MODEL_REVISION, TextFrontend
 
 SAMPLE_RATE = 24000
 TOKEN_RATE_HZ = 25
@@ -407,7 +407,7 @@ class CosyVoice2TTNN:
         cache_dir = cache_dir or os.path.join(os.path.expanduser("~"), ".cache", "cosyvoice2_ttnn")
 
         def load(name):
-            path = hf_hub_download(repo_id=MODEL_REPO_ID, filename=name)
+            path = hf_hub_download(repo_id=MODEL_REPO_ID, filename=name, revision=MODEL_REVISION)
             return path, torch.load(path, map_location="cpu")
 
         # LLM: the Qwen2 backbone through tt_transformers (HF_MODEL names the directory ModelArgs loads), plus

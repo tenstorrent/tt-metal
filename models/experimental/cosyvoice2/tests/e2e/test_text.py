@@ -327,3 +327,18 @@ def test_corpus_text_matches_prepare_inputs(frontend):
         assert frontend.encode(prompt_norm) == prompt_ids, case["case_id"]
         if case["lang"] == "en" and not any("\u4e00" <= ch <= "\u9fff" for ch in case["prompt_text"]):
             assert frontend.normalize(case["prompt_text"], split=False) == prompt_norm, case["case_id"]
+
+
+def test_checkpoint_revision_is_pinned_and_shared_with_the_reference_side():
+    """Both sides read the checkpoint at one pinned revision (a full commit hash, never a branch), so neither a new
+    upload to the Hub repo nor a drift between the two constants can change results unnoticed."""
+    import importlib.util
+
+    from models.experimental.cosyvoice2.tt.text import MODEL_REVISION
+
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "reference_env.py")
+    spec = importlib.util.spec_from_file_location("cosyvoice2_reference_env", path)
+    reference_env = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reference_env)  # stdlib imports only at module level
+    assert len(MODEL_REVISION) == 40 and all(c in "0123456789abcdef" for c in MODEL_REVISION), MODEL_REVISION
+    assert reference_env.MODEL_REVISION == MODEL_REVISION

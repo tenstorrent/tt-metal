@@ -1,5 +1,7 @@
 # CosyVoice2 REFERENCE-ONLY requirements (host CPU), install step 2 of 2 -- from PyPI only.
 # Step 1 is requirements-reference-torch.txt (torch/torchaudio 2.11.0+cpu from the PyTorch CPU index).
+# Install this file with the constraints in requirements-reference-lock.txt (`-c`): the complete resolved set,
+# indirect dependencies included, so a rebuild gets exactly the venv the recorded reference came from.
 #
 # NOTHING IN THIS FILE IS INSTALLED TO RUN THE MODEL. It builds the reference venv, a host-only environment with
 # three jobs, all under scripts/: running the upstream frontend over the fixed corpus (prepare_inputs.py), running

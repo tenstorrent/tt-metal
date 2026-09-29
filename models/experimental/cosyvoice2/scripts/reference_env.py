@@ -9,7 +9,8 @@ Never imported by the on-device model or its tests. It makes upstream CosyVoice 
 * `COSYVOICE2_REPO` -- the upstream checkout (cloned with --recursive for third_party/Matcha-TTS); it and its
   Matcha-TTS are put on sys.path here.
 * `COSYVOICE2_MODEL_DIR` -- the FunAudioLLM/CosyVoice2-0.5B snapshot; if unset, resolved from the local
-  Hugging Face cache (populate it with huggingface_hub.snapshot_download first; nothing is downloaded here).
+  Hugging Face cache at the pinned `MODEL_REVISION` (populate it first with
+  `huggingface_hub.snapshot_download(MODEL_REPO_ID, revision=MODEL_REVISION)`; nothing is downloaded here).
 * `LIBRISPEECH_ROOT` -- the directory holding LibriSpeech/test-clean (see corpus.py).
 
 Four compatibility shims (all four also listed in requirements-reference.txt and docs/security.md):
@@ -44,6 +45,9 @@ import types
 
 UPSTREAM_COMMIT = "074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
 MODEL_REPO_ID = "FunAudioLLM/CosyVoice2-0.5B"
+# The same revision as tt/text.py's MODEL_REVISION (a host test checks they agree), so both sides read the same
+# checkpoint and a new upload to the repo can't change a reference output.
+MODEL_REVISION = "eec1ae6c79877dbd9379285cf8789c9e0879293d"
 TRANSFORMERS_VERSION = "5.12.1"  # python_env's; upstream pins 4.51.3, see the module docstring
 
 
@@ -68,7 +72,7 @@ def model_dir() -> str:
         return explicit
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(MODEL_REPO_ID, local_files_only=True)
+    return snapshot_download(MODEL_REPO_ID, revision=MODEL_REVISION, local_files_only=True)
 
 
 def _stub_module(name: str, why: str) -> types.ModuleType:

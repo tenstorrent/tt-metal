@@ -87,7 +87,8 @@ git -C $COSYVOICE2_REPO submodule update --init --recursive
 
 uv venv --python 3.10 $COSYVOICE2_REF_ENV
 VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r models/experimental/cosyvoice2/requirements-reference-torch.txt
-VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r models/experimental/cosyvoice2/requirements-reference.txt
+VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r models/experimental/cosyvoice2/requirements-reference.txt \
+    -c models/experimental/cosyvoice2/requirements-reference-lock.txt
 
 # the checkpoint, at the revision every figure here was measured with
 $REF -c "from huggingface_hub import snapshot_download as s; s('FunAudioLLM/CosyVoice2-0.5B', revision='eec1ae6c79877dbd9379285cf8789c9e0879293d')"

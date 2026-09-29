@@ -24,15 +24,17 @@ from __future__ import annotations
 import torch
 from huggingface_hub import hf_hub_download
 
+from .text import MODEL_REVISION
+
 REPO_ID = "FunAudioLLM/CosyVoice2-0.5B"
 
 
 def load_checkpoint_file(filename: str) -> dict:
     """Download (or reuse the HF cache for) one real file from the real
-    CosyVoice2-0.5B repo and `torch.load` it. `filename` is one of
-    `llm.pt`/`flow.pt`/`hift.pt`/`cosyvoice2.yaml`/etc, exactly as it appears
-    in the real repo listing."""
-    path = hf_hub_download(repo_id=REPO_ID, filename=filename)
+    CosyVoice2-0.5B repo, at the pinned `MODEL_REVISION`, and `torch.load` it.
+    `filename` is one of `llm.pt`/`flow.pt`/`hift.pt`/`cosyvoice2.yaml`/etc,
+    exactly as it appears in the real repo listing."""
+    path = hf_hub_download(repo_id=REPO_ID, filename=filename, revision=MODEL_REVISION)
     return torch.load(path, map_location="cpu")
 
 
@@ -76,7 +78,7 @@ def build_local_qwen2_checkpoint_dir(llm_state_dict: dict, out_dir: str) -> str:
     }
     assert qwen_sd, "no 'llm.*' keys found -- was the wrong state dict passed?"
 
-    config_path = hf_hub_download(repo_id=REPO_ID, filename="CosyVoice-BlankEN/config.json")
+    config_path = hf_hub_download(repo_id=REPO_ID, filename="CosyVoice-BlankEN/config.json", revision=MODEL_REVISION)
     shutil.copy(config_path, f"{out_dir}/config.json")
     with open(f"{out_dir}/config.json") as f:
         assert json.load(f)["tie_word_embeddings"] is True

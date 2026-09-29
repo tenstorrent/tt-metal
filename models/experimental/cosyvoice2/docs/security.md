@@ -68,7 +68,8 @@ also pinned, cloned with `--recursive` (for `third_party/Matcha-TTS`) and pointe
 ```bash
 uv venv --python 3.10 $COSYVOICE2_REF_ENV
 VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference-torch.txt   # CPU index only
-VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference.txt         # PyPI only
+VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference.txt \
+    -c requirements-reference-lock.txt                                               # PyPI only, locked
 uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio                 # both: 2.11.0+cpu
 ```
 
@@ -80,6 +81,11 @@ uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio            
   PEP 440. Without them, uv re-resolved torch to PyPI's default CUDA build (2.14.0 plus about 15 `nvidia-*`
   packages) when another pin allowed it; this was measured on 2026-09-27. After both steps the venv holds no
   `nvidia-*` or CUDA packages.
+- **Step 2 is locked.** `requirements-reference-lock.txt` pins all 109 resolved packages, indirect dependencies
+  included, as constraints.
+  - It was generated from the venv that reproduced the recorded reference on 2026-09-29.
+  - Unlocked, three indirect dependencies had drifted since 2026-09-27: msgpack, platformdirs and regex.
+  - A fresh venv built with the steps above resolves exactly the locked set.
 
 ## Deltas from upstream's `requirements.txt`
 
@@ -109,3 +115,6 @@ The resolved set (`uv pip freeze`, 109 packages) was queried against the [OSV](h
 record (`/v1/vulns/<id>`) was read. The query was re-run after each change on 2026-09-27; the table above is the
 final result. Briefly pinning upstream's transformers 4.51.3 raised the count by 30 OSV records (18 CVEs), which is
 why 5.12.1 stays.
+
+On 2026-09-29 the same query ran on the locked set (`requirements-reference-lock.txt`). It found the same two
+advisories as in the table above (three OSV records, two of them for CVE-2026-59890) and nothing else.

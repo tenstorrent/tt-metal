@@ -5,7 +5,7 @@
 #
 #   uv venv --python 3.10 $COSYVOICE2_REF_ENV
 #   VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference-torch.txt
-#   VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference.txt
+#   VIRTUAL_ENV=$COSYVOICE2_REF_ENV uv pip install -r requirements-reference.txt -c requirements-reference-lock.txt
 #   uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio     # both must say +cpu
 #
 # Pinned to the torch in tt-metal's python_env (2.11.0+cpu), so the reference and the TTNN port share one

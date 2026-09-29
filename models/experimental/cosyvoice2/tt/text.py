@@ -32,6 +32,10 @@ import re
 import regex
 
 MODEL_REPO_ID = "FunAudioLLM/CosyVoice2-0.5B"
+# The checkpoint revision every figure in docs/VALIDATION.md was measured with. Every Hub download of the model
+# (weights, tokenizer, config) asks for it, so a new upload to the repo can't change results.
+# scripts/reference_env.py pins the same revision for the reference side.
+MODEL_REVISION = "eec1ae6c79877dbd9379285cf8789c9e0879293d"
 TOKENIZER_SUBDIR = "CosyVoice-BlankEN"
 TOKENIZER_FILES = ("config.json", "tokenizer_config.json", "vocab.json", "merges.txt")
 
@@ -165,13 +169,15 @@ def is_only_punctuation(text):
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def tokenizer_dir(repo_id: str = MODEL_REPO_ID) -> str:
+def tokenizer_dir(repo_id: str = MODEL_REPO_ID, revision: str = MODEL_REVISION) -> str:
     """The checkpoint's `CosyVoice-BlankEN` directory, holding only the tokenizer files (from the Hugging Face
     cache, downloaded on first use). The 1 GB `model.safetensors` beside them is not needed: CosyVoice2's LLM
     weights come from `llm.pt`."""
     from huggingface_hub import hf_hub_download
 
-    paths = [hf_hub_download(repo_id=repo_id, filename=f"{TOKENIZER_SUBDIR}/{f}") for f in TOKENIZER_FILES]
+    paths = [
+        hf_hub_download(repo_id=repo_id, filename=f"{TOKENIZER_SUBDIR}/{f}", revision=revision) for f in TOKENIZER_FILES
+    ]
     return os.path.dirname(paths[0])
 
 
