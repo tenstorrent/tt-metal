@@ -52,6 +52,9 @@ class KDAProgramConfig:
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # Stage short-lived activations (the QKV slice before its untilize) in L1; only for local
+    # lengths where they fit comfortably.
+    stage_activations_in_l1: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -81,4 +84,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # Galaxy SP8xTP4 at T=5120; other geometries keep DRAM staging (the largest staged
+        # activation, 640x9216 BF16, is ~98 KB per core in L1).
+        stage_activations_in_l1=active_seq_len_local == 640,
     )

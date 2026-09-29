@@ -26,12 +26,14 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_wei
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+def _slice_width(
+    tensor: ttnn.Tensor, start: int, end: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+) -> ttnn.Tensor:
     stop = list(tensor.shape)
     begin = [0] * len(stop)
     begin[-1] = start
     stop[-1] = end
-    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=memory_config)
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:
@@ -156,6 +158,9 @@ class ttKDA:
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        self.staging_memory_config = (
+            ttnn.L1_MEMORY_CONFIG if program_config.stage_activations_in_l1 else ttnn.DRAM_MEMORY_CONFIG
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -303,7 +308,8 @@ class ttKDA:
         )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            qkv=_slice_width(projected, 0, auxiliary_start),
+            # Transient: forward untilizes it to DRAM immediately, which reads faster from L1.
+            qkv=_slice_width(projected, 0, auxiliary_start, memory_config=self.staging_memory_config),
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
             output_gate=_slice_width(
                 projected,
@@ -450,6 +456,7 @@ class ttKDA:
         )
         projected = self._project_inputs(hidden_states)
         qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(projected.qkv)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
