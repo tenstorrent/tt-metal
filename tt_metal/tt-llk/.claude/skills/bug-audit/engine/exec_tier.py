@@ -226,7 +226,7 @@ def pick_tests(files, roots, n, tree):
         for t in grep_tests(["-F", exact], roots, tree):
             named[t] = named.get(t, 0) + 1
         stem = os.path.splitext(os.path.basename(f))[0]
-        hits = grep_tests(["-w", stem], roots, tree)
+        hits = grep_tests(["-wF", stem], roots, tree)
         bucket = generic if len(hits) > GENERIC_STEM else by_stem
         for t in hits:
             bucket[t] = bucket.get(t, 0) + 1
@@ -286,8 +286,10 @@ elif argv[0] == "run":
     steps = (opts("--steps") or ["build,analyze,tests"])[0].split(",")
     # a run configured before --devices existed may carry a reset of a fixed card: never run it
     if (
-        "tests" in steps and (ex.get("tests") or {}).get("cmd") or ex.get("reset_cmd")
-    ) and not DEVICES:
+        "tests" in steps
+        and ((ex.get("tests") or {}).get("cmd") or ex.get("reset_cmd"))
+        and not DEVICES
+    ):
         sys.exit(
             "this run's execution tier names no --devices: re-run `configure` with the cards the user confirmed"
         )

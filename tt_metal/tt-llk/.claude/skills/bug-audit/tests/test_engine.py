@@ -603,6 +603,37 @@ def test_a_second_finding_on_the_same_line_is_kept_not_dropped(rundir):
     )
 
 
+def test_an_unsettled_finding_on_a_confirmed_line_is_kept_but_does_not_raise_severity(
+    rundir,
+):
+    write(
+        str(rundir / "verdicts" / "A-0000.json"),
+        {
+            "findings": [
+                finding("k.cpp", 9, "low", summary="count off by one"),
+                finding(
+                    "k.cpp",
+                    9,
+                    "high",
+                    status="uncertain",
+                    summary="stride uses rows, not tiles",
+                ),
+            ]
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    (f,) = json.load(open(rundir / "CONFIRMED.json"))
+    assert [(m["summary"], m["status"]) for m in f["same_line"]] == [
+        ("stride uses rows, not tiles", "uncertain")
+    ], f
+    assert (
+        f["severity"] == "low"
+    ), "an unsettled finding must not raise a confirmed entry's severity"
+    assert (
+        "uncertain] stride uses rows, not tiles" in open(rundir / "CONFIRMED.md").read()
+    )
+
+
 def test_a_recheck_does_not_overrule_a_later_confirmation(rundir):
     k = ("r.cpp", 4)
     write(
@@ -1274,6 +1305,43 @@ def test_blocked_actions_counts_refused_calls_in_workflow_agent_transcripts(tmp_
     (tmp_path / "projects" / "-some-cwd" / "other").mkdir()
     assert blocked_actions("sid-1", str(tmp_path)) == 2
     assert blocked_actions("sid-2", str(tmp_path)) == 0
+
+
+def test_exec_tier_build_only_run_is_not_blocked_by_an_old_reset(tmp_path):
+    code, out = _configure(tmp_path, "--build", "b=true")
+    assert code == 0, out
+    st_path = tmp_path / "run" / "state.json"
+    st = json.load(open(st_path))
+    st["execution"]["reset_cmd"] = "tt-smi -r 0"  # only the tests step ever resets
+    json.dump(st, open(st_path, "w"))
+    code, o, e = run(
+        os.path.join(ENGINE, "exec_tier.py"),
+        "--run",
+        tmp_path / "run",
+        "run",
+        "--steps",
+        "build",
+    )
+    assert code == 0, o + e
+
+
+def test_exec_tier_matches_a_stem_literally(tmp_path):
+    code, out, _, tree = _exec_run(
+        tmp_path,
+        {"tests/test_ops.py": "op = 'axb'\n", "tests/test_real.py": "a.b\n"},
+        ["src/a.b.c"],
+        "--test-cmd",
+        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "--test-root",
+        "tests",
+        "--devices",
+        "0",
+    )
+    assert code == 0, out
+    # the stem "a.b" must not match "axb", as it would as a regex
+    assert open(os.path.join(tree, "picked.txt")).read().split() == [
+        "tests/test_real.py"
+    ]
 
 
 def test_every_spawn_user_imports_it_before_first_use():

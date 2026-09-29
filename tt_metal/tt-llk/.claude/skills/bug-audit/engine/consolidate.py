@@ -68,7 +68,18 @@ SAME_LINE_FIELDS = (
     "suggested_fix",
     "source",
     "batch",
+    "status",
 )
+
+
+def add_same_line(win, x):
+    same = win.get("same_line", [])
+    if x["summary"] != win["summary"] and all(
+        x["summary"] != y["summary"] for y in same
+    ):
+        win["same_line"] = same + [{fld: x.get(fld) for fld in SAME_LINE_FIELDS}]
+
+
 by_status = collections.defaultdict(dict)
 for f in rows:
     k = key_of(f)
@@ -81,13 +92,14 @@ for f in rows:
     by_status[f["status"]][k] = win
     # file:line is the identity, but a second finding on the line is never dropped: it may be the same defect under
     # another class, or a second defect. It rides on the entry, unjudged, where a reader sees it.
-    same = win.setdefault("same_line", [])
     for x in [lose, *lose.pop("same_line", [])]:
-        if x["summary"] != win["summary"] and all(
-            x["summary"] != y["summary"] for y in same
-        ):
-            same.append({fld: x.get(fld) for fld in SAME_LINE_FIELDS})
+        add_same_line(win, x)
 conf = list(by_status["confirmed"].values())
+# an unsettled finding on a confirmed line is kept on the confirmed entry too, marked with its status
+for s_ in ("needs_recheck", "uncertain"):
+    for k, f in by_status[s_].items():
+        if k in by_status["confirmed"]:
+            add_same_line(by_status["confirmed"][k], f)
 unc = {
     k: f
     for s in ("needs_recheck", "uncertain")
@@ -149,7 +161,11 @@ for (
 ) in (
     conf
 ):  # a merged bug is as severe as its worst site: a HIGH copy must not hide behind a MEDIUM one
-    for m in f.get("merged_sites", []) + f.get("same_line", []):
+    # only a confirmed finding on the line raises the entry's severity, never an unsettled one
+    confirmed_same = [
+        m for m in f.get("same_line", []) if m.get("status") == "confirmed"
+    ]
+    for m in f.get("merged_sites", []) + confirmed_same:
         if SEV_ORDER.get(m["severity"], 3) < SEV_ORDER.get(f["severity"], 3):
             f.setdefault("severity_own", f["severity"])
             f["severity"] = m["severity"]
@@ -239,7 +255,7 @@ def detail(fh, fs):
             )
             for m in f["same_line"]:
                 fh.write(
-                    f"- [{m['category']}, {m['severity']}] {m['summary']}\n"
+                    f"- [{m['category']}, {m['severity']}, {m['status']}] {m['summary']}\n"
                     f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
                 )
             fh.write("\n")
