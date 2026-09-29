@@ -1659,3 +1659,25 @@ Watch: the worst-row margin is about 1.7x (0.0046 of 0.008). Next step: implemen
 `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.02 test (attempt 1)
+Reviewed the rendered swap test (kda_moe layer 4, attn_hc + attn_collapse on device). The rendered file was the bare
+`run_swap_test`. I rebuilt it from the dsa_moe swap 02 test (collapse checks and collapse share) with the kda_moe swap 01
+limits (golden ratio [0.985, 1.015], CPU-block rel 0.004 and ratio [0.985, 1.015], post max abs 6e-3, worst column 0.05).
+Every comparison is now `not x <= lim`, so NaN fails. A flipped-row bound [0.9, 1.1] is added to the CPU-block and
+collapse-share checks.
+- Collapse limits are kept from layer 3 (vs golden 0.01 / [0.985, 1.015] / 0.02; same input 0.0045 / [0.996, 1.004] /
+  0.0065; share flips 24 / rel 0.0015 / [0.995, 1.005]). Re-measured on layer 4 (CPU host script /tmp/kmoe02/sens.py,
+  not kept; the numbers are in the docstring). The layer-4 share is larger than layer 3's (x1.01: 39 flips, ratio
+  1.0055), so the share now also catches a uniform x1.01. The same-input ratio catches x1.005.
+Results:
+- Device passes: PCC 0.999994. Collapse same-input 0.0017 / [0.9998, 1.0001]. Vs golden 0.0071 / [0.9890, 0.9994] /
+  worst row 0.0115. Share 5 flips / 0.00015. Vs the CPU block: 33 flips / 0.0012 / [0.9929, 1.0032].
+- Reference passes. Stub fails (PCC 0 and every check, including the NaN same-input rel).
+- Gotcha: the vs-golden collapse ratio is low on every row. A device probe (not kept)
+  shows why: the device attn_hc has fixed per-column errors on every token (pre cols 0 / 3 x0.995, post col 3 x1.036).
+  These come from attn_hc, not the collapse. Recorded in findings.yaml (attn-hc-per-column-bias-layer4) and
+  known_issues Proposed.
+Watch: the vs-golden ratio low side (0.9890 of 0.985) and the CPU-block flips (33 of 64).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_02_attn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
