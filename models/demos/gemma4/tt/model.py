@@ -1753,7 +1753,7 @@ class Gemma4Model:
         """
         import torch.nn.functional as F
 
-        del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
+        del start_pos, last_token_idx, global_user_id, batched_prefill, kwargs
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
@@ -1777,6 +1777,27 @@ class Gemma4Model:
             mesh_mapper=mesh_mapper,
         )
 
+        # Lane-sharded prefill (galaxy one-instance slice 3b): every column
+        # computes the same prefill, but only the OWNER lane's column may write
+        # real KV. Callers keep passing the per-user [rows, blocks] table plus
+        # ``user_id`` (lane-major global id); this stacks it [lanes, rows,
+        # blocks] with the owner lane's real rows and SCRATCH rows (block 0,
+        # reserved by the lane page-table convention) everywhere else, then
+        # shards dim 0 over the lane axis so each column sees only its view.
+        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+
+        def _lane_stack(table):
+            lanes = self.mesh_config.lanes
+            owner = 0 if user_id is None else (int(user_id) // 32) % lanes
+            stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
+            stacked[owner] = table
+            return stacked
+
+        pt_mapper = mesh_mapper
+        if lane_sharded and page_table is not None:
+            page_table = _lane_stack(page_table)
+            pt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
+
         tt_page_table = None
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -1784,17 +1805,21 @@ class Gemma4Model:
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=pt_mapper,
             )
 
         tt_chunk_page_table = None
         if chunk_page_table is not None:
+            cpt_mapper = mesh_mapper
+            if lane_sharded:
+                chunk_page_table = _lane_stack(chunk_page_table)
+                cpt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=cpt_mapper,
             )
 
         # Device scalar for traced multi-chunk / APC: refresh absolute start via
@@ -2404,14 +2429,27 @@ class Gemma4Model:
         inside the model forward, so a single device tensor contains the
         full vocab.
         """
-        if is_tokens or is_log_probs:
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-            else:
-                torch_out = ttnn.to_torch(tt_out)
-            return torch_out.reshape(-1)[:B]
+        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
 
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        def _lane_shards():
+            # Row-major device order over (rows, cols): row 0 holds one device
+            # per column, i.e. one shard per lane, in lane order.
+            shards = ttnn.get_device_tensors(tt_out)
+            cols = self.mesh_config.mesh_shape[self.mesh_config.sp_axis]
+            return [ttnn.to_torch(shards[c]) for c in range(cols)]
+
+        if is_tokens or is_log_probs:
+            if lane_sharded:
+                torch_out = torch.cat([t.reshape(-1) for t in _lane_shards()], dim=0)
+            elif self.mesh_config is not None and self.mesh_config.tp > 1:
+                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
+            else:
+                torch_out = ttnn.to_torch(tt_out).reshape(-1)
+            return torch_out[:B]
+
+        if lane_sharded:
+            torch_out = torch.cat(_lane_shards(), dim=2)
+        elif self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_out = ttnn.to_torch(tt_out)
