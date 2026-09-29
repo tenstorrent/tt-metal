@@ -3,6 +3,7 @@
 
 #include "chunk_gdn_fused.hpp"
 #include "chunk_gdn_phased.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -466,6 +467,11 @@ std::vector<Tensor> chunk_gdn_fused(
     // row-local layout.
     const bool row_local = program_config.row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, nv, np));
     const uint32_t placement = row_local ? 1u : 0u;
+    // Per-kernel math fidelity, resolved HERE so it is hashed (env var > config field > compute config's HiFi4).
+    const MathFidelity prep_fidelity =
+        gdn_resolve_fidelity(compute_kernel_config, "QWEN36_FLA_PREP_FID", program_config.prep_math_fidelity);
+    const MathFidelity scan_fidelity =
+        gdn_resolve_fidelity(compute_kernel_config, "QWEN36_FLA_SCAN_FID", program_config.scan_math_fidelity);
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
         .num_chunks = num_chunks,
@@ -486,6 +492,8 @@ std::vector<Tensor> chunk_gdn_fused(
         .posted = posted,
         .placement = placement,
         .tinv = tinv,
+        .prep_fidelity = prep_fidelity,
+        .scan_fidelity = scan_fidelity,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,

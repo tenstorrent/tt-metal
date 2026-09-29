@@ -415,9 +415,18 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "<unset>",
         "R10B experiment hook (chunk_gdn_fused_program_factory.cpp): math-fidelity override for the fused FLA "
         "scan/receiver compute kernel only; HiFi4|HiFi3|HiFi2|LoFi, unset=HiFi4 (today's fixed behaviour). "
-        "run_bench_e2e_p150.sh pins it (runner default HiFi3 since P7_INT1D item B2: +/-2% vs f64, -1.7 ms/4k "
-        "vs HiFi4). QWEN36_FLA_PREP_FID is the same hook for the prep/producer kernel; the runner leaves it "
-        "unset (no pin)",
+        "run_bench_e2e_p150.sh pins it only with QWEN36_FLA_SCAN_FID_BY_LEN=0 (then runner default HiFi3 since "
+        "P7_INT1D item B2: +/-2% vs f64, -1.7 ms/4k vs HiFi4); with BY_LEN=1 (runner default) it stays unset, "
+        "because a set env var overrides the by-length choice. QWEN36_FLA_PREP_FID is the same hook for the "
+        "prep/producer kernel; the runner leaves it unset (no pin)",
+    ),
+    "QWEN36_FLA_SCAN_FID_BY_LEN": (
+        "0",
+        "P11_FLALEN (tt/gdn/gated_deltanet.py + tt/model.py): the fused FLA fidelity follows each request's "
+        "prompt length, scan HiFi2 up to 65536 tokens and scan HiFi3 above (prep HiFi4 in both), through the "
+        "hashed ChunkGdnFusedProgramConfig.scan_math_fidelity / prep_math_fidelity; prepare compiles both when "
+        "max_prompt_len > 65536 and the chunk trace is re-captured when a request needs the other one. "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 0=the fixed QWEN36_FLA_SCAN_FID",
     ),
     # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
     "QWEN36_I4_SDPA_EXP_COMPAT": (

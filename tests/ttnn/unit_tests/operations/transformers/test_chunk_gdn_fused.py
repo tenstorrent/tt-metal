@@ -204,9 +204,13 @@ def test_program_config_defaults():
     f = ttnn.ChunkGdnFusedProgramConfig()
     assert (f.num_producers, f.num_receivers, f.row_local) == (None, None, None)
     assert (f.handoff_depth, f.unicast, f.posted) == (2, True, False)
+    assert (f.prep_math_fidelity, f.scan_math_fidelity) == (None, None)
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=4, num_producers=5, row_local=False, handoff_depth=3)
     assert (f.num_receivers, f.num_producers, f.row_local, f.handoff_depth) == (4, 5, False, 3)
     assert "num_receivers=4" in repr(f) and "row_local=False" in repr(f)
+    f = ttnn.ChunkGdnFusedProgramConfig(scan_math_fidelity=ttnn.MathFidelity.HiFi2)
+    assert (f.prep_math_fidelity, f.scan_math_fidelity) == (None, ttnn.MathFidelity.HiFi2)
+    assert "prep_math_fidelity=None" in repr(f) and "scan_math_fidelity=MathFidelity.HiFi2" in repr(f)
     p = ttnn.ChunkGdnPhasedProgramConfig()
     assert (p.use_mcast, p.scan_serial, p.prep_serial) == (True, False, False)
     assert repr(ttnn.ChunkGdnPhasedProgramConfig(use_mcast=False)) == (
@@ -911,6 +915,58 @@ def test_fused_tinv_cache_identity(device):
         for method in (AUTO, SFPU, HORNER):
             _run_op(device, tensors, const_tiles, s0, cfg, method)
         assert device.num_program_cache_entries() == n2, f"{cfg}: revisiting the methods compiled new programs"
+
+
+def test_fused_fidelity_fields(device, monkeypatch):
+    """ChunkGdnFusedProgramConfig.prep_math_fidelity / scan_math_fidelity (P11_FLALEN): each field reaches the
+    hashed attributes (a change compiles exactly one program, a revisit is a cache hit), changes the arithmetic,
+    and gives the same program and bits as the experiment env var of the same value; the env var, when set, wins
+    over the field. Explicit HiFi4 is the default program."""
+    monkeypatch.delenv("QWEN36_FLA_SCAN_FID", raising=False)
+    monkeypatch.delenv("QWEN36_FLA_PREP_FID", raising=False)
+    hk, hv = NP_BH_KV_HEADS
+    _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261005)
+    const_tiles = _const_tiles(device)
+    HIFI4, HIFI3, HIFI2 = ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi2
+
+    o4, fs4 = _run_op(device, tensors, const_tiles, s0, _fused())
+    n4 = device.num_program_cache_entries()
+    o4x, fs4x = _run_op(device, tensors, const_tiles, s0, _fused(scan_math_fidelity=HIFI4, prep_math_fidelity=HIFI4))
+    assert (
+        device.num_program_cache_entries() == n4
+    ), "explicit HiFi4 fields compiled a new program (must be the default)"
+    assert torch.equal(o4x, o4) and torch.equal(fs4x, fs4), "explicit HiFi4 fields changed the output"
+
+    o2, fs2 = _run_op(device, tensors, const_tiles, s0, _fused(scan_math_fidelity=HIFI2))
+    n2 = device.num_program_cache_entries()
+    assert n2 - n4 == 1, f"scan HiFi4 -> HiFi2 compiled {n2 - n4} programs (expected 1: the field must be hashed)"
+    assert not torch.equal(o2, o4), "scan_math_fidelity=HiFi2 did not change o: the field did not reach the kernel"
+    assert _pcc(o4, o2) >= 0.999 and _pcc(fs4, fs2) >= 0.999, "scan HiFi2 is far from HiFi4"
+
+    # The env var with the same value is the same program (cache hit) and the same bits; it wins over the field.
+    monkeypatch.setenv("QWEN36_FLA_SCAN_FID", "HiFi2")
+    o2e, fs2e = _run_op(device, tensors, const_tiles, s0, _fused())
+    o2p, fs2p = _run_op(device, tensors, const_tiles, s0, _fused(scan_math_fidelity=HIFI3))
+    assert device.num_program_cache_entries() == n2, "env QWEN36_FLA_SCAN_FID=HiFi2 compiled a new program"
+    assert torch.equal(o2e, o2) and torch.equal(fs2e, fs2), "env HiFi2 != field HiFi2"
+    assert torch.equal(o2p, o2) and torch.equal(fs2p, fs2), "env HiFi2 did not override field HiFi3"
+    monkeypatch.delenv("QWEN36_FLA_SCAN_FID")
+
+    o3, fs3 = _run_op(device, tensors, const_tiles, s0, _fused(scan_math_fidelity=HIFI3))
+    n3 = device.num_program_cache_entries()
+    assert n3 - n2 == 1, f"scan HiFi3 compiled {n3 - n2} programs (expected 1)"
+    op3, fsp3 = _run_op(device, tensors, const_tiles, s0, _fused(prep_math_fidelity=HIFI3))
+    n5 = device.num_program_cache_entries()
+    assert n5 - n3 == 1, f"prep HiFi3 compiled {n5 - n3} programs (expected 1: the prep field must be hashed)"
+    assert _pcc(o4, op3) >= 0.999, "prep HiFi3 is far from HiFi4"
+    for cfg, (o_ref, fs_ref) in (
+        (_fused(), (o4, fs4)),
+        (_fused(scan_math_fidelity=HIFI2), (o2, fs2)),
+        (_fused(scan_math_fidelity=HIFI3), (o3, fs3)),
+    ):
+        o_r, fs_r = _run_op(device, tensors, const_tiles, s0, cfg)
+        assert torch.equal(o_r, o_ref) and torch.equal(fs_r, fs_ref), f"{cfg}: revisit changed the output"
+    assert device.num_program_cache_entries() == n5, "revisiting the fidelities compiled new programs"
 
 
 def test_fused_tinv_chunk64(device, expect_error):

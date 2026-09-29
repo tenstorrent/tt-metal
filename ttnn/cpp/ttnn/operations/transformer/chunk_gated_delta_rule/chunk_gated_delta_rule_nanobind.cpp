@@ -162,6 +162,18 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
 std::string py_bool(bool b) { return b ? "True" : "False"; }
 std::string py_opt(const std::optional<uint32_t>& v) { return v.has_value() ? std::to_string(*v) : "None"; }
 std::string py_opt(const std::optional<bool>& v) { return v.has_value() ? py_bool(*v) : "None"; }
+std::string py_opt(const std::optional<tt::tt_metal::MathFidelity>& v) {
+    if (!v.has_value()) {
+        return "None";
+    }
+    switch (*v) {
+        case tt::tt_metal::MathFidelity::LoFi: return "MathFidelity.LoFi";
+        case tt::tt_metal::MathFidelity::HiFi2: return "MathFidelity.HiFi2";
+        case tt::tt_metal::MathFidelity::HiFi3: return "MathFidelity.HiFi3";
+        case tt::tt_metal::MathFidelity::HiFi4: return "MathFidelity.HiFi4";
+        default: return "MathFidelity.Invalid";
+    }
+}
 
 }  // namespace
 
@@ -253,32 +265,53 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             unicast (bool): default True. Per-receiver unicast writes; False sends the linked
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
-                in-order delivery; requires unicast.)doc")
+                in-order delivery; requires unicast.
+            prep_math_fidelity (ttnn.MathFidelity, optional): math fidelity of the producer (prep)
+                compute kernel. None: the op's compute_kernel_config fidelity (HiFi4).
+            scan_math_fidelity (ttnn.MathFidelity, optional): math fidelity of the receiver (scan)
+                compute kernel. None: the op's compute_kernel_config fidelity (HiFi4).
+                Unlike the other fields, the two fidelities change the arithmetic. Both are hashed, so a
+                change compiles a new program. The experiment env vars QWEN36_FLA_PREP_FID /
+                QWEN36_FLA_SCAN_FID, when set, take precedence over these fields.)doc")
         .def(
-            nb::init<std::optional<uint32_t>, std::optional<uint32_t>, std::optional<bool>, uint32_t, bool, bool>(),
+            nb::init<
+                std::optional<uint32_t>,
+                std::optional<uint32_t>,
+                std::optional<bool>,
+                uint32_t,
+                bool,
+                bool,
+                std::optional<tt::tt_metal::MathFidelity>,
+                std::optional<tt::tt_metal::MathFidelity>>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
             nb::arg("row_local") = nb::none(),
             nb::arg("handoff_depth") = 2,
             nb::arg("unicast") = true,
-            nb::arg("posted") = false)
+            nb::arg("posted") = false,
+            nb::arg("prep_math_fidelity") = nb::none(),
+            nb::arg("scan_math_fidelity") = nb::none())
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
         .def_rw("handoff_depth", &ChunkGdnFusedProgramConfig::handoff_depth)
         .def_rw("unicast", &ChunkGdnFusedProgramConfig::unicast)
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
+        .def_rw("prep_math_fidelity", &ChunkGdnFusedProgramConfig::prep_math_fidelity)
+        .def_rw("scan_math_fidelity", &ChunkGdnFusedProgramConfig::scan_math_fidelity)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={})",
+                "unicast={}, posted={}, prep_math_fidelity={}, scan_math_fidelity={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
                 c.handoff_depth,
                 py_bool(c.unicast),
-                py_bool(c.posted));
+                py_bool(c.posted),
+                py_opt(c.prep_math_fidelity),
+                py_opt(c.scan_math_fidelity));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program

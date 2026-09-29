@@ -12,6 +12,8 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/base_types.hpp>
+
 namespace ttnn::transformer {
 
 // The original single-kernel op: one core per head runs prep and scan for every chunk. The slowest
@@ -45,6 +47,16 @@ struct ChunkGdnFusedProgramConfig {
     uint32_t handoff_depth = 2;  // hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead
     bool unicast = true;         // per-receiver unicast writes; false = the linked multicast chain
     bool posted = false;         // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // Math fidelity of the producer (prep) and the receiver (scan) compute kernels. nullopt = the op's
+    // compute_kernel_config fidelity (HiFi4, the only value it accepts). Unlike the fields above, these two
+    // change the arithmetic (the recurrent state and the WY inverse stay fp32 in DEST; only the number of
+    // matrix-engine passes per multiply changes). They are the exception to "a program config never
+    // changes bits", kept here because the choice is per fused program: a caller may choose the scan
+    // fidelity per prompt length. Both resolve into the prim's hashed attributes, so a change compiles a
+    // new program. The experiment env vars QWEN36_FLA_PREP_FID / QWEN36_FLA_SCAN_FID, when set, take
+    // precedence over these fields (also hashed: they are read when the attributes are built).
+    std::optional<tt::tt_metal::MathFidelity> prep_math_fidelity;
+    std::optional<tt::tt_metal::MathFidelity> scan_math_fidelity;
 };
 
 using ChunkGdnProgramConfig =

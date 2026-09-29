@@ -40,6 +40,86 @@ def gdn_program_config_from_env():
     return ttnn.ChunkGdnFusedProgramConfig(**_GDN_PCFG_GEOMETRIES[name])
 
 
+# QWEN36_FLA_SCAN_FID_BY_LEN (P11_FLALEN, 2026-09-29; code default "0", runner default "1"): the math fidelity of
+# the fused FLA op follows the request's prompt length. Prompts of up to FLA_SCAN_FID_LEN_MAX tokens (65536): scan
+# (receiver) HiFi2; longer prompts: scan HiFi3 (= the fixed runner default before BY_LEN). The prep (producer) stays
+# HiFi4 in both. Measured: scan HiFi2 = 224.9 vs 249.3 us/call (HiFi3), same needle tokens at 16k/32k/64k but 1 of
+# 6 prompts diverged at 128k (plan_0928/P9_FLAHIFI2); prep HiFi3 with scan HiFi2 = 222.9 vs 224.9 us/call
+# (P11_FLALEN, r3) was not adopted (see _fla_prep_fid_for_scan). The choice (named by its scan fidelity) goes into
+# ChunkGdnFusedProgramConfig.scan_math_fidelity / prep_math_fidelity, which the op hashes, so both programs can
+# live in one process. The model (tt/model.py) picks it per request and re-captures the chunk trace when it changes.
+# "0" = today's fixed behaviour: the config has no fidelity field, so the op runs the env QWEN36_FLA_SCAN_FID /
+# QWEN36_FLA_PREP_FID (the runner pins scan HiFi3 then) or HiFi4. The env vars, when set, still override the
+# fields (experiments).
+# QWEN36_FLA_SCAN_FID_LEN_MAX: TEST-ONLY override of the 65536-token threshold (switch-path tests).
+FLA_SCAN_FID_LEN_MAX_DEFAULT = 65536
+
+
+def _fla_prep_fid_for_scan(scan_fid):
+    """The prep (producer) fidelity paired with a by-length scan fidelity: None for both (the config's own prep
+    field, i.e. HiFi4 on the model's configs). Decision 2026-09-29: prep HiFi3 with scan HiFi2 gained only ~0.07 ms
+    per 4k prompt and scored 46/50 vs 48/50 on the needle gate, so the prep stays HiFi4 (P11_FLALEN)."""
+    return None
+
+
+def fla_scan_fid_by_len_enabled():
+    """True when QWEN36_FLA_SCAN_FID_BY_LEN != "0" (code default "0")."""
+    return os.environ.get("QWEN36_FLA_SCAN_FID_BY_LEN", "0") != "0"
+
+
+def fla_scan_fid_len_max():
+    """Longest prompt (tokens) that runs the FLA scan at HiFi2 (QWEN36_FLA_SCAN_FID_LEN_MAX, default 65536)."""
+    return int(os.environ.get("QWEN36_FLA_SCAN_FID_LEN_MAX", str(FLA_SCAN_FID_LEN_MAX_DEFAULT)))
+
+
+def fla_scan_fidelity_for_len(prompt_len):
+    """The FLA scan fidelity for a request of prompt_len tokens (its prep fidelity follows, see
+    _fla_prep_fid_for_scan), or None when QWEN36_FLA_SCAN_FID_BY_LEN is off."""
+    if not fla_scan_fid_by_len_enabled():
+        return None
+    return ttnn.MathFidelity.HiFi2 if int(prompt_len) <= fla_scan_fid_len_max() else ttnn.MathFidelity.HiFi3
+
+
+def fla_scan_fidelities_up_to(max_len):
+    """Every FLA scan fidelity a request of 1..max_len tokens can use (ordered HiFi2, HiFi3); [] when off."""
+    if not fla_scan_fid_by_len_enabled():
+        return []
+    fids = [ttnn.MathFidelity.HiFi2]
+    if int(max_len) > fla_scan_fid_len_max():
+        fids.append(ttnn.MathFidelity.HiFi3)
+    return fids
+
+
+def fla_fidelity_name(scan_fid):
+    """ "<prep>/<scan>" of a by-length choice, e.g. "HiFi3/HiFi2" (HiFi4 prep when the choice leaves it to the config)."""
+    prep = _fla_prep_fid_for_scan(scan_fid)
+    return f"{prep.name if prep is not None else 'HiFi4'}/{scan_fid.name}"
+
+
+def gdn_program_config_with_scan_fidelity(base, scan_fid):
+    """`base` (the QWEN36_GDN_PCFG config, or None) with scan_math_fidelity = scan_fid and the paired prep fidelity
+    (_fla_prep_fid_for_scan; None keeps base's prep field). scan_fid None -> base unchanged (today's path). base None
+    -> a fused config with the geometry left to the op's cost model (the op's own None default also picks fused on
+    P150; a grid where fused does not fit would fail instead)."""
+    if scan_fid is None:
+        return base
+    prep_fid = _fla_prep_fid_for_scan(scan_fid)
+    if base is None:
+        return ttnn.ChunkGdnFusedProgramConfig(prep_math_fidelity=prep_fid, scan_math_fidelity=scan_fid)
+    if not isinstance(base, ttnn.ChunkGdnFusedProgramConfig):
+        raise TypeError(f"QWEN36_FLA_SCAN_FID_BY_LEN needs a fused program config, got {base!r}")
+    return ttnn.ChunkGdnFusedProgramConfig(
+        num_producers=base.num_producers,
+        num_receivers=base.num_receivers,
+        row_local=base.row_local,
+        handoff_depth=base.handoff_depth,
+        unicast=base.unicast,
+        posted=base.posted,
+        prep_math_fidelity=prep_fid if prep_fid is not None else base.prep_math_fidelity,
+        scan_math_fidelity=scan_fid,
+    )
+
+
 class Qwen36GatedDeltaNet:
     """Gated DeltaNet (linear attention) layer for Qwen3.5-9B.
 
@@ -146,6 +226,14 @@ class Qwen36GatedDeltaNet:
         # program_config for the fused chunk-prefill op (QWEN36_GDN_PCFG, see the top of this file);
         # gdn/decode.py passes it to chunk_gated_delta_rule_fused_adapter. None = the op's cost model.
         self.gdn_program_config = gdn_program_config_from_env()
+        # QWEN36_FLA_SCAN_FID_BY_LEN (see the top of this file): the env config without a fidelity field, and the
+        # scan fidelity currently folded into gdn_program_config (None = no field, today's path). The model sets
+        # it per request (set_fla_scan_fidelity); until then scan HiFi3 / prep HiFi4, the runner's fixed default
+        # before BY_LEN.
+        self._gdn_program_config_base = self.gdn_program_config
+        self.fla_scan_fid = None
+        if fla_scan_fid_by_len_enabled():
+            self.set_fla_scan_fidelity(ttnn.MathFidelity.HiFi3)
 
         self._prefill_progcfg_fn = tpc.make_prefill_progcfg_fn(mesh_device)
         # Decode (T==1) 1D matmul progcfg (see tp_common measured table): GDN out-proj and the
@@ -189,6 +277,15 @@ class Qwen36GatedDeltaNet:
                 self.conv_taps_packed = _df.pack_conv_taps(config, self.weights.fused_conv_weight_taps, mesh_device)
             else:
                 _df.warn_unsupported(why)
+
+    def set_fla_scan_fidelity(self, scan_fid):
+        """QWEN36_FLA_SCAN_FID_BY_LEN: fold scan_fid (a ttnn.MathFidelity, or None = no field) and its paired prep
+        fidelity into the fused FLA op's program config. Every later chunk-mode forward (eager, warm-up or trace capture) runs it; a trace
+        already captured keeps the fidelity it was captured with."""
+        if scan_fid == self.fla_scan_fid:
+            return
+        self.gdn_program_config = gdn_program_config_with_scan_fidelity(self._gdn_program_config_base, scan_fid)
+        self.fla_scan_fid = scan_fid
 
     def ensure_conv_hist(self):
         """Allocate the packed conv history once (outside any trace; its address is baked into the decode trace)."""

@@ -164,6 +164,14 @@
 #   +/-2% vs f64, inside the coherence gate, -1.7 ms/4k vs HiFi4) | HiFi4 | HiFi2 | LoFi; unset (code default) =
 #   HiFi4 exactly (today's fixed behaviour). QWEN36_FLA_PREP_FID is the same hook for the prep/producer kernel;
 #   the runner leaves it unset (no pin) -- the P4_FLARCV producer path is already bit-exact at HiFi4.
+# QWEN36_FLA_SCAN_FID_BY_LEN also survives the reset (P11_FLALEN, tt/gdn/gated_deltanet.py + tt/model.py: the FLA
+#   fidelity follows each request's prompt length -- scan HiFi2 up to 65536 tokens, scan HiFi3 above, prep HiFi4 in
+#   both -- through the hashed ChunkGdnFusedProgramConfig.scan_math_fidelity / prep_math_fidelity fields;
+#   prepare compiles both when max_prompt_len > 65536 and the chunk trace is re-captured when a request needs the
+#   other one): 1 (runner default since P11_FLALEN) = by length; 0 (code default) = the fixed QWEN36_FLA_SCAN_FID
+#   above. With 1 the runner does NOT export QWEN36_FLA_SCAN_FID (the env var overrides the field); an explicit
+#   QWEN36_FLA_SCAN_FID=<fid> with 1 still pins every request's scan to <fid> (experiments; the runner prints a
+#   NOTE). QWEN36_FLA_PREP_FID is never exported by the runner (an explicit one overrides the prep field the same way).
 # Non-QWEN overrides (not touched by the reset): BENCH_GDN_FLAT_GB (default 1) -> QWEN_GDN_FLAT_GB;
 #   BENCH_TRACE_GUARD (default 1) -> QWEN36_TRACE_GUARD + TT_METAL_TRACE_ALLOC_TRACKING=1.
 #
@@ -196,7 +204,7 @@ echo "== branch: $(git rev-parse --abbrev-ref HEAD) commit: $(git rev-parse HEAD
 # 1. Unset EVERY QWEN* var already in the shell, so nothing is inherited from a previous session.
 # (QWEN36_ONDEV_ARGMAX, the QWEN36_I1_* / QWEN36_I2_* / QWEN36_M1_* / QWEN36_M2_* / QWEN36_M3_* / QWEN36_C2_* / QWEN36_R3_* / QWEN36_M4_* / QWEN36_M5_* / QWEN36_I3_* / QWEN36_F_* / QWEN36_N_* / QWEN36_R5_* / QWEN36_MM_* / QWEN36_SGRN_* item flags, QWEN36_GDN_DECODE_FUSED,
 #  QWEN36_GDN_CONV_REPACK, QWEN36_GDN_CONV_KDA_TILED, QWEN36_GDN_PCFG, QWEN36_GDN_WYINV, QWEN36_GDN_GATE_FUSE,
-#  QWEN36_ROPE_L1, QWEN36_GDN_STATE_INPLACE, QWEN36_FLA_SCAN_FID, the QWEN36_I4_*
+#  QWEN36_ROPE_L1, QWEN36_GDN_STATE_INPLACE, QWEN36_FLA_SCAN_FID, QWEN36_FLA_SCAN_FID_BY_LEN, the QWEN36_I4_*
 #  flags, QWEN36_LAYER_RESID_L1 and QWEN36_LAYER_L1_MAX_T are read first and re-exported in section 3.)
 # ---------------------------------------------------------------------------------------------
 ONDEV_ARGMAX="${QWEN36_ONDEV_ARGMAX:-1}"
@@ -422,9 +430,23 @@ case "$STATE_INPLACE" in
   0|1) ;;
   *) echo "ERROR: QWEN36_GDN_STATE_INPLACE must be 0 or 1 (got '$STATE_INPLACE')" >&2; exit 1 ;;
 esac
-FLA_SCAN_FID="${QWEN36_FLA_SCAN_FID:-HiFi3}"  # runner default HiFi3 since P7_INT1D item B2 (code default: unset -> HiFi4)
+FLA_SCAN_FID_BY_LEN="${QWEN36_FLA_SCAN_FID_BY_LEN:-1}"  # runner default 1 since P11_FLALEN (code default: 0)
+case "$FLA_SCAN_FID_BY_LEN" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_FLA_SCAN_FID_BY_LEN must be 0 or 1 (got '$FLA_SCAN_FID_BY_LEN')" >&2; exit 1 ;;
+esac
+# QWEN36_FLA_SCAN_FID: with BY_LEN=0 the runner default HiFi3 (since P7_INT1D item B2; code default: unset -> HiFi4).
+# With BY_LEN=1 it stays unset unless the caller set it (then it overrides the by-length field for every request).
+if [ "$FLA_SCAN_FID_BY_LEN" = "1" ]; then
+  FLA_SCAN_FID="${QWEN36_FLA_SCAN_FID:-}"
+  if [ -n "$FLA_SCAN_FID" ]; then
+    echo "NOTE: QWEN36_FLA_SCAN_FID=$FLA_SCAN_FID is set explicitly: it overrides QWEN36_FLA_SCAN_FID_BY_LEN=1 (every request runs the FLA scan at $FLA_SCAN_FID)" >&2
+  fi
+else
+  FLA_SCAN_FID="${QWEN36_FLA_SCAN_FID:-HiFi3}"
+fi
 case "$FLA_SCAN_FID" in
-  HiFi4|HiFi3|HiFi2|LoFi) ;;
+  ""|HiFi4|HiFi3|HiFi2|LoFi) ;;
   *) echo "ERROR: QWEN36_FLA_SCAN_FID must be HiFi4, HiFi3, HiFi2 or LoFi (got '$FLA_SCAN_FID')" >&2; exit 1 ;;
 esac
 I4_SDPA_Q64="${QWEN36_I4_SDPA_Q64:-1}"  # = ttnn_gated_attention.I4_SDPA_Q64_DEFAULT
@@ -598,7 +620,10 @@ for item in $I3_ITEMS; do
   export "QWEN36_I3_$item=${I3_VALS[$item]}"
   I3_SUMMARY="$I3_SUMMARY QWEN36_I3_$item=${I3_VALS[$item]}"
 done
-export QWEN36_FLA_SCAN_FID="$FLA_SCAN_FID"
+export QWEN36_FLA_SCAN_FID_BY_LEN="$FLA_SCAN_FID_BY_LEN"
+if [ -n "$FLA_SCAN_FID" ]; then
+  export QWEN36_FLA_SCAN_FID="$FLA_SCAN_FID"
+fi  # else left unset (BY_LEN=1 default): the env var would override the by-length field
 export QWEN36_I4_SDPA_EXP_COMPAT="$I4_SDPA_EXP_COMPAT"
 export QWEN36_I4_SDPA_Q64="$I4_SDPA_Q64"
 export QWEN36_LAYER_L1_MAX_T="$LAYER_L1_MAX_T"
@@ -748,7 +773,7 @@ else
   OUT="$RESULTS_DIR/isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--isl "$ISL")
 fi
-echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_GDN_GATE_FUSE=$QWEN36_GDN_GATE_FUSE QWEN36_ROPE_L1=$QWEN36_ROPE_L1 QWEN36_GDN_STATE_INPLACE=$QWEN36_GDN_STATE_INPLACE QWEN36_FLA_SCAN_FID=$QWEN36_FLA_SCAN_FID QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
+echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_GDN_GATE_FUSE=$QWEN36_GDN_GATE_FUSE QWEN36_ROPE_L1=$QWEN36_ROPE_L1 QWEN36_GDN_STATE_INPLACE=$QWEN36_GDN_STATE_INPLACE QWEN36_FLA_SCAN_FID=${QWEN36_FLA_SCAN_FID:-<unset>} QWEN36_FLA_SCAN_FID_BY_LEN=$QWEN36_FLA_SCAN_FID_BY_LEN QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
 
 RUN_LOG="${OUT%.json}.log"
 set +e

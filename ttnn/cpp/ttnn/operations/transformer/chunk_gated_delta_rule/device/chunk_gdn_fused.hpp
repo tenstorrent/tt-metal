@@ -79,6 +79,12 @@ struct ChunkGdnFusedParams {
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_phased.hpp): the op's
     // wy_inverse resolved by gdn_tinv_resolve at attrs construction (hashed), exactly as the phased prep prim.
     uint32_t tinv = 0;
+    // Math fidelity of the producer (prep) and receiver (scan) compute kernels, resolved by
+    // gdn_resolve_fidelity at attrs construction (hashed): env var QWEN36_FLA_PREP_FID /
+    // QWEN36_FLA_SCAN_FID > ChunkGdnFusedProgramConfig::prep_math_fidelity / scan_math_fidelity >
+    // compute_kernel_config (HiFi4).
+    tt::tt_metal::MathFidelity prep_fidelity = tt::tt_metal::MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity scan_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
