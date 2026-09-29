@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
 
 TP_AXIS, SP_AXIS = 1, 0
 
@@ -66,7 +67,6 @@ class TtV41Head(LightweightModule):
         config,
         norm_weight: torch.Tensor,
         head_weight: torch.Tensor,
-        num_links: int = 1,
     ):
         """``norm_weight``: ``norm.weight`` ``[hidden]``; ``head_weight``: bf16 ``head.weight`` ``[vocab, hidden]``."""
         self.mesh_device = mesh_device
@@ -79,7 +79,7 @@ class TtV41Head(LightweightModule):
             torch_weight=norm_weight,
             epsilon=config.RMS_NORM_EPS,
             cluster_axis=TP_AXIS,
-            num_links=num_links,
+            num_links=fabric_num_links(),
             topology=topology,
         )
         self.head = TtLMHead(
@@ -89,7 +89,7 @@ class TtV41Head(LightweightModule):
             emb_dim=config.EMB_SIZE,
             vocab_size=config.VOCAB_SIZE,
             torch_weight=head_weight,
-            num_links=num_links,
+            num_links=fabric_num_links(),
             topology=topology,
             weights_dtype=ttnn.bfloat16,
             compute_kernel_config=HEAD_COMPUTE_CONFIG,

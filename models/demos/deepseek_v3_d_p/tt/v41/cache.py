@@ -34,8 +34,8 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
 from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -246,7 +246,7 @@ class V41PrefillState:
         # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
         self.dspark_rings = None
         self._ccl = get_tt_ccl(mesh_device) if layout.sp > 1 else None
-        self._num_links = 2 if is_blackhole() else 1
+        self._num_links = fabric_num_links()
         self._sp_topology = per_axis_topology()[SP_AXIS]  # Ring only if the opened fabric wraps SP
 
     def kv_format(self, ratio: int) -> MlaKvCacheFormat:
