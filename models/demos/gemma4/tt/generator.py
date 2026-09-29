@@ -1948,10 +1948,21 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             paged_attention_config=paged_attention_config,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
+        # Lane-sharded serving (galaxy one-instance): the generator-visible
+        # batch is the GLOBAL slot space (lanes x per-column batch) with row =
+        # slot identity, while the model/KV stay sized per column. The model
+        # derives the owner lane of a slot from lane_slots (block convention:
+        # lane = slot // lane_slots), matching the decode reshape
+        # [global] -> [lanes, local].
+        _lanes = getattr(getattr(model, "mesh_config", None), "lane_sharded", False) and model.mesh_config.lanes
+        generator_batch = max_batch_size * _lanes if _lanes else max_batch_size
+        if _lanes:
+            model.lane_slots = max_batch_size
+
         _patch_model_args(
             model_args,
             mesh_device=mesh_device,
-            max_batch_size=max_batch_size,
+            max_batch_size=generator_batch,
             max_seq_len=max_seq_len,
             model_path=model_path,
             tokenizer=tokenizer,

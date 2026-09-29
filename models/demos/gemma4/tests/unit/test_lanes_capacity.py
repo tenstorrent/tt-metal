@@ -29,6 +29,7 @@ QA = [
 GEN_TOKENS = 24
 SLOTS_PER_LANE = 32
 ENABLE_TRACE = os.environ.get("G4_CAP_TRACE", "0") == "1"
+DEVICE_SAMPLE = os.environ.get("G4_CAP_DEVSAMPLE", "0") == "1"
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
@@ -37,6 +38,7 @@ def test_lanes_capacity(mesh_device, reset_seeds, request):
     os.environ["GEMMA4_GALAXY_LANES"] = "1"
     os.environ["GEMMA4_CP_PREFILL"] = "0"
 
+    from models.common.sampling.sampling_params import SamplingParams
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -70,16 +72,17 @@ def test_lanes_capacity(mesh_device, reset_seeds, request):
     plens_qa = [int(t.shape[-1]) for t in toks]
     padded = 1 << max(int(max(plens_qa) - 1).bit_length(), 7)
 
-    # User u: lane u % lanes, per-lane slot u // lanes (modulo convention),
-    # question u % 4 (so each lane cycles all four answers down its slots).
+    # Block convention: global slot u IS the decode row; lane = u // 32,
+    # per-lane slot = u % 32. Question u % 4, so each lane's slots cycle all
+    # four answers.
     def lane_of(u):
-        return u % lanes
+        return u // SLOTS_PER_LANE
 
     def slot_of(u):
-        return u // lanes
+        return u % SLOTS_PER_LANE
 
-    def row_of(u):  # decode global row (lane-major)
-        return lane_of(u) * SLOTS_PER_LANE + slot_of(u)
+    def row_of(u):
+        return u
 
     def blocks_of(u):
         s = slot_of(u)
@@ -90,8 +93,8 @@ def test_lanes_capacity(mesh_device, reset_seeds, request):
     positions, cur_tok = {}, {}
     t0 = time.perf_counter()
     total_prefill_tokens = 0
-    for base in range(0, n_users, lanes):
-        group = list(range(base, base + lanes))  # lane_of(u) == u - base
+    for r in range(SLOTS_PER_LANE):
+        group = [lane * SLOTS_PER_LANE + r for lane in range(lanes)]  # one user per lane
         tokens_l = torch.zeros(lanes, padded, dtype=torch.long)
         tables_l = torch.zeros(lanes, 1, blocks_per_user, dtype=torch.int32)
         plens_l = []
@@ -123,21 +126,28 @@ def test_lanes_capacity(mesh_device, reset_seeds, request):
             tokens_g[r] = cur_tok[u]
             pos_g[r] = positions[u]
             pt_g[r] = blocks_of(u)
+        sp = SamplingParams(temperature=0.0, top_k=1, top_p=1.0) if DEVICE_SAMPLE else None
         t0 = time.perf_counter()
-        logits = generator.decode_forward(
+        ret = generator.decode_forward(
             tokens_g.unsqueeze(-1),
             pos_g,
             page_table=pt_g,
             kv_cache=tt_kv_cache,
             enable_trace=ENABLE_TRACE,
             read_from_device=True,
-            sampling_params=None,
+            sampling_params=sp,
         )
-        lg = logits[0] if isinstance(logits, (list, tuple)) else logits
-        lg = lg.reshape(B_g, -1)
+        out0 = ret[0] if isinstance(ret, (list, tuple)) else ret
+        if DEVICE_SAMPLE:
+            next_tok = out0.reshape(-1)[:B_g].to(torch.long)
+        else:
+            lg = out0.reshape(B_g, -1)
         step_times.append(time.perf_counter() - t0)
         for u in range(n_users):
-            nxt = int(torch.argmax(lg[row_of(u)]).item())
+            if DEVICE_SAMPLE:
+                nxt = int(next_tok[row_of(u)].item())
+            else:
+                nxt = int(torch.argmax(lg[row_of(u)]).item())
             outputs[u].append(nxt)
             cur_tok[u] = nxt
             positions[u] += 1
