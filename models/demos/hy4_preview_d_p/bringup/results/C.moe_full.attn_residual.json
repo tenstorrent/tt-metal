@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "add_coef_max_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 1.0000000004177165
+  },
+  "add_coef_min_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 0.9999999992486505
+  },
+  "add_excess_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 9.748296675061474e-06
+  },
+  "add_rel_l2_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 4.865956890419272e-06
+  },
+  "add_worst_row_excess_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 0.00012945038198845823
+  },
+  "pcc_attn_residual_L01": {
+   "t": "2026-09-29T11:59:14",
+   "value": 0.9999970522070221
+  },
+  "rel_l2_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 0.002431320957839489
+  },
+  "row_norm_ratio_max_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 1.0022181272506714
+  },
+  "row_norm_ratio_min_attn_residual_L01": {
+   "t": "2026-09-29T11:59:15",
+   "value": 0.9979602694511414
+  }
+ },
+ "task": "C.moe_full.attn_residual"
+}
