@@ -813,6 +813,13 @@ tasks:
     kind: op
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T06:30:38'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_collapse.py: fc2aafefd5578dfc43de73dd30f7efb1084f0464af827bc77df839b538294311
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.02
   title: 'dsa_moe block with steps 1-2 on device (last: attn_collapse)'
   step: implement
