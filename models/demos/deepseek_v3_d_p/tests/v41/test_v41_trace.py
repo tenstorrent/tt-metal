@@ -2,25 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace capture / replay of one DeepSeek-V4.1 block as a perf-measurement mode (dev-spec D-G (b), bead 8y7.9).
+"""Trace capture / replay of DeepSeek-V4.1 prefill as the perf-measurement mode (dev-spec D-G (b), beads 8y7.9, 8y7.9.2).
 
-Contract: for the same inputs and the same starting state, a traced replay produces outputs and cache contents
-bit-identical to the untraced forward, replays are deterministic, and the replay's wall time is the block's device
-time without host dispatch (reported with the untraced time and the speedup).
+Contract: the prefill forward writes nothing from the host (position tables are device slices of
+``cache.V41ChunkTables``; checked by counting host writes over a steady-state forward, which must be zero), so it is
+captured as is. For the same inputs and starting state a traced replay produces outputs and cache contents
+bit-identical to the untraced forward, replays are deterministic, and the replay's wall time is the device time
+without host dispatch (reported with the untraced time). The MoE's shared-expert / dispatch overlap loads a
+sub-device manager mid-forward, which a trace cannot contain: ``TtV41Moe.set_trace_controller`` routes it through the
+in-tree ``SubDeviceTraceController``, which splits the capture there (the replay is several trace segments).
 
-The prefill forward is not capturable as written: attention and the indexer upload per-chunk host tables
-(RoPE cos/sin, window rows, selection masks) with ``ttnn.from_torch`` inside ``forward``, and a trace forbids host
-writes. For a fixed chunk (fixed start and length) those tables are constant, so this test stages them: a recording
-forward logs every ``from_torch`` of the forward, the tables are uploaded before capture, and the captured forward
-receives the staged tensors in call order (checked equal to what it asks for) and may not deallocate them. The MoE's
-shared-expert / dispatch overlap loads a sub-device manager mid-forward, which a trace cannot contain either; the
-in-tree ``SubDeviceTraceController`` splits the capture at those points (the replay is several trace segments). This
-proves the device program is replay-safe and measures it; production trace needs those tables hoisted out of the
-forward (reported by the bead, not changed here).
+Cases: one block (small dims and real production weights) and the transformer's chunk loop (small dims, several
+chunks, a padded last chunk: embedding, every block, cache writes, state advance; the host-side token upload and
+logits readback stay outside the capture).
 """
 
 import json
 import time
+from dataclasses import asdict
 
 import pytest
 import torch
@@ -33,9 +32,13 @@ from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack
+from models.demos.deepseek_v3_d_p.tests.v41.test_transformer_v41 import WEIGHT_CACHE
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_expert_dtype import BLOCK_CONFIG, _weights
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.mhc import initial_pre_mix
+from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
@@ -53,83 +56,69 @@ MESH = [
 ]
 
 
-class HostTableStager:
-    """Records the host uploads of a forward (``ttnn.from_torch``, and ``ttnn.full`` on a device, which writes from
-    the host too) and serves them pre-staged to a captured forward."""
+class HostWriteGuard:
+    """Counts the host writes (``ttnn.from_torch``; ``ttnn.full`` on a device, which fills on the host) and host reads
+    (``ttnn.to_torch``) made while ``active``; a traced region may contain none."""
 
     def __init__(self, monkeypatch):
-        self.real = {"from_torch": ttnn.from_torch, "full": ttnn.full}
-        self.real_deallocate = ttnn.deallocate
-        self.mode, self.calls, self.staged, self.served, self.errors = "off", [], [], 0, []
-        monkeypatch.setattr(ttnn, "from_torch", lambda *a, **k: self._upload("from_torch", *a, **k))
-        monkeypatch.setattr(ttnn, "full", lambda *a, **k: self._upload("full", *a, **k))
-        monkeypatch.setattr(ttnn, "deallocate", self._deallocate)
+        self.active, self.calls = False, []
+        real = {"from_torch": ttnn.from_torch, "full": ttnn.full, "to_torch": ttnn.to_torch}
 
-    @staticmethod
-    def _key(fn, args, kwargs):
-        """What identifies an upload: the host tensor for from_torch, the fill arguments for full."""
-        if fn == "from_torch":
-            return args[0] if args else kwargs["tensor"]
-        return repr((args, sorted((k, v) for k, v in kwargs.items() if k != "device")))
+        def wrap(name):
+            def call(*args, **kwargs):
+                if self.active and (name != "full" or kwargs.get("device") is not None):
+                    self.calls.append(name)
+                return real[name](*args, **kwargs)
 
-    @staticmethod
-    def _same(a, b) -> bool:
-        if isinstance(a, torch.Tensor):
-            return isinstance(b, torch.Tensor) and a.shape == b.shape and torch.equal(a, b)
-        return a == b
+            return call
 
-    def _upload(self, fn, *args, **kwargs):
-        if fn == "full" and kwargs.get("device") is None:
-            return self.real[fn](*args, **kwargs)  # a host tensor: no device write
-        if self.mode == "record":
-            key = self._key(fn, args, kwargs)
-            self.calls.append((fn, key.clone() if isinstance(key, torch.Tensor) else key, args, kwargs))
-        elif self.mode == "serve":
-            # never raise inside a capture (an open capture hangs the device at teardown): record and check after
-            i = self.served
-            self.served += 1
-            if i >= len(self.staged):
-                self.errors.append(f"unrecorded {fn} upload {i}")
-                return self.staged[-1]
-            if self.calls[i][0] != fn or not self._same(self.calls[i][1], self._key(fn, args, kwargs)):
-                self.errors.append(f"upload {i} ({fn}) differs from the recorded one")
-            return self.staged[i]
-        return self.real[fn](*args, **kwargs)
+        for name in real:
+            monkeypatch.setattr(ttnn, name, wrap(name))
 
-    def _deallocate(self, tensor, *args, **kwargs):
-        if self.mode == "serve" and any(tensor is t for t in self.staged):
-            return None  # staged tables outlive the trace
-        return self.real_deallocate(tensor, *args, **kwargs)
-
-    def stage(self):
-        self.staged = [self.real[fn](*a, **k) for fn, _, a, k in self.calls]
-        self.served, self.errors = 0, []
-
-    def capture(self, mesh_device, forward, moes):
-        """Capture ``forward()`` with the staged tables; the capture is always closed. The MoE's shared-expert /
-        dispatch overlap loads a sub-device manager, which a trace cannot contain: ``SubDeviceTraceController``
-        splits the capture there (``moes``: the ``TtMoe`` instances the forward runs). Returns
-        (controller, outputs); ``controller.replay()`` runs the whole forward."""
-        assert self.staged, "stage() the recorded tables first"
-        controller = SubDeviceTraceController(mesh_device)
-        for moe in moes:
-            moe.set_trace_controller(controller)
-        ttnn.synchronize_device(mesh_device)
-        self.mode = "serve"
-        controller.begin_capture()
+    def count(self, forward):
+        """Run ``forward()`` untraced and return the host transfers it made."""
+        self.active, self.calls = True, []
         try:
-            outs = forward()
+            forward()
         finally:
-            controller.end_capture()
-            self.mode = "off"
-            for moe in moes:
-                moe.set_trace_controller(None)
-        if self.served != len(self.calls):
-            self.errors.append(f"served {self.served} of {len(self.calls)} tables")
-        if self.errors:
-            controller.release()
-            raise AssertionError(f"captured forward differs from the recorded one: {self.errors}")
-        return controller, outs
+            self.active = False
+        return list(self.calls)
+
+
+def capture(mesh_device, forward, moes):
+    """Capture ``forward()`` (the capture is always closed) with the MoEs' sub-device switches split out.
+    Returns (controller, outputs); ``controller.replay()`` runs the whole forward."""
+    controller = SubDeviceTraceController(mesh_device)
+    for moe in moes:
+        moe.set_trace_controller(controller)
+    ttnn.synchronize_device(mesh_device)
+    controller.begin_capture()
+    try:
+        outs = forward()
+    finally:
+        controller.end_capture()
+        for moe in moes:
+            moe.set_trace_controller(None)
+    return controller, outs
+
+
+def _timed_ms(mesh_device, fn, iters=TIMED_ITERS) -> float:
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(iters):
+        fn()
+    ttnn.synchronize_device(mesh_device)
+    return (time.perf_counter() - t0) * 1e3 / iters
+
+
+def _state_tensors(state) -> dict:
+    """Every cache tensor of ``state`` (KV, index-K, window carries)."""
+    tensors = {}
+    for name in ("kv", "index_k", "window_carry"):
+        for key, t in getattr(state, name, {}).items():
+            if t is not None:
+                tensors[f"{name}[{key}]"] = t
+    return tensors
 
 
 def _block_small(mesh_device, device_params, layer: int):
@@ -193,28 +182,22 @@ def test_v41_block_trace(mesh_device, device_params, weights, layer, monkeypatch
 
     def snapshot(outs, state):
         """Outputs and every cache tensor of ``state`` on host (full per-chip bytes)."""
-        tensors = {"x_out": outs[0], "pre_out": outs[1]}
-        for name in ("kv", "index_k", "window_carry"):
-            for key, t in getattr(state, name, {}).items():
-                if t is not None:
-                    tensors[f"{name}[{key}]"] = t
+        tensors = {"x_out": outs[0], "pre_out": outs[1]} | _state_tensors(state)
         return {k: down(t) for k, t in tensors.items()}
 
-    stager = HostTableStager(monkeypatch)
+    guard = HostWriteGuard(monkeypatch)
     block(x, pre, fresh(), seq)  # compiles every program and creates lazily built constants
-    record_state = fresh()
-    stager.mode = "record"
-    block(x, pre, record_state, seq)  # logs a steady-state forward's host tables
-    stager.mode = "off"
+    steady_state = fresh()
+    host_calls = guard.count(lambda: block(x, pre, steady_state, seq))
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"recorded {len(stager.calls)} host tables per forward")
+    logger.info(f"host transfers per forward: {host_calls}")
+    assert not host_calls, f"the forward transfers from/to the host, so it cannot be traced: {host_calls}"
 
     untraced_state = fresh()
     untraced = [snapshot(block(x, pre, untraced_state, seq), untraced_state) for _ in range(2)]
 
     traced_state = fresh()
-    stager.stage()
-    trace, traced_outs = stager.capture(mesh_device, lambda: block(x, pre, traced_state, seq), [block.ffn.moe])
+    trace, traced_outs = capture(mesh_device, lambda: block(x, pre, traced_state, seq), [block.ffn])
     traced = []
     for _ in range(2):
         trace.replay()
@@ -225,17 +208,8 @@ def test_v41_block_trace(mesh_device, device_params, weights, layer, monkeypatch
     ]
 
     timing_state = fresh()
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    for _ in range(TIMED_ITERS):
-        block(x, pre, timing_state, seq)
-    ttnn.synchronize_device(mesh_device)
-    untraced_ms = (time.perf_counter() - t0) * 1e3 / TIMED_ITERS
-    t0 = time.perf_counter()
-    for _ in range(TIMED_ITERS):
-        trace.replay()
-    ttnn.synchronize_device(mesh_device)
-    traced_ms = (time.perf_counter() - t0) * 1e3 / TIMED_ITERS
+    untraced_ms = _timed_ms(mesh_device, lambda: block(x, pre, timing_state, seq))
+    traced_ms = _timed_ms(mesh_device, trace.replay)
     segments = trace.num_segments
     trace.release()
 
@@ -244,7 +218,7 @@ def test_v41_block_trace(mesh_device, device_params, weights, layer, monkeypatch
         "weights": weights,
         "layer": layer,
         "tokens": seq,
-        "host_tables_per_forward": len(stager.calls),
+        "host_transfers_per_forward": len(host_calls),
         "trace_segments": segments,
         "compared": sorted(untraced[0]),
         "bit_identical": not mismatches,
@@ -254,4 +228,99 @@ def test_v41_block_trace(mesh_device, device_params, weights, layer, monkeypatch
         "speedup": round(untraced_ms / traced_ms, 2),
     }
     logger.info(f"V41_TRACE_RESULT {json.dumps(report)}")
+    assert not mismatches, report
+
+
+LOOP_LAYERS = (0, 2, 3, 20, 21, 24)  # every block type: SWA, KV/index source, consumer, candidate source + users
+LOOP_CHUNK, LOOP_TOTAL = SMALL_SEQ // 2, SMALL_SEQ - 12  # two chunks, the last one padded
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_v41_chunk_loop_trace(mesh_device, device_params, monkeypatch):
+    """The transformer's text chunk loop (``TtV41Transformer.prefill`` without the token upload and the logits
+    readback) captured as one trace over all chunks of a prompt."""
+    t0 = time.perf_counter()
+    cfg, layers = SmallV41Config, LOOP_LAYERS
+    spec = small_spec(layers, SMALL_SEQ)
+    reference = orc.build_reference(spec)
+    identity = orc._digest(asdict(spec.args), spec.seed, "synthetic", orc._reference_digest(synthetic=True))
+    model = TtV41Transformer(
+        mesh_device,
+        cfg,
+        list(layers),
+        lambda layer, include_moe: device_weights(reference, layers.index(layer), include_moe),
+        reference.embed.weight.detach(),
+        reference.norm.weight.detach(),
+        reference.head.weight.detach(),
+        max_seq_len=SMALL_SEQ,
+        chunk=LOOP_CHUNK,
+        weight_cache_path=WEIGHT_CACHE / f"small-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
+    )
+    logger.info(f"chunk loop: model built {time.perf_counter() - t0:.1f}s")
+    tokens = orc.text_tokens(LOOP_TOTAL)[0]
+    chunks = -(-LOOP_TOTAL // LOOP_CHUNK)
+    ids = []
+    for c in range(chunks):
+        chunk_tokens = torch.zeros(LOOP_CHUNK, dtype=torch.int64)
+        part = tokens[c * LOOP_CHUNK : (c + 1) * LOOP_CHUNK]
+        chunk_tokens[: part.numel()] = part
+        ids.append(model._token_ids(chunk_tokens))
+    pre0 = initial_pre_mix(mesh_device, cfg, LOOP_CHUNK)
+    fresh = lambda: V41PrefillState(mesh_device, cfg, SMALL_SEQ, LOOP_CHUNK, list(layers))
+
+    def run(state):
+        """The prefill chunk loop from ``state.start`` = 0 -> the last chunk's final collapsed stream (bf16)."""
+        state.start, state.selection = 0, {}
+        while state.start < LOOP_TOTAL:
+            length = min(LOOP_CHUNK, LOOP_TOTAL - state.start)
+            h = model.embedding(ids[state.start // LOOP_CHUNK])
+            x, pre = mhc_expand(ttnn.typecast(h, ttnn.float32), cfg.HC_MULT), pre0
+            for block in model.blocks:
+                x, pre = block(x, pre, state, length)
+            state.advance(length)
+        return ttnn.typecast(model.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
+
+    shape = tuple(mesh_device.shape)
+    down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
+    snapshot = lambda out, state: {k: down(t) for k, t in ({"final": out} | _state_tensors(state)).items()}
+
+    guard = HostWriteGuard(monkeypatch)
+    run(fresh())  # compile
+    steady_state = fresh()
+    host_calls = guard.count(lambda: run(steady_state))
+    ttnn.synchronize_device(mesh_device)
+    assert not host_calls, f"the chunk loop transfers from/to the host, so it cannot be traced: {host_calls}"
+
+    untraced_state = fresh()
+    untraced = [snapshot(run(untraced_state), untraced_state) for _ in range(2)]
+    traced_state = fresh()
+    trace, final = capture(mesh_device, lambda: run(traced_state), [b.ffn for b in model.blocks])
+    traced = []
+    for _ in range(2):
+        trace.replay()
+        traced.append(snapshot(final, traced_state))
+    mismatches = [
+        f"replay {i}: {k}" for i in range(2) for k in untraced[i] if not torch.equal(untraced[i][k], traced[i][k])
+    ]
+    timing_state = fresh()
+    untraced_ms = _timed_ms(mesh_device, lambda: run(timing_state))
+    traced_ms = _timed_ms(mesh_device, trace.replay)
+    segments = trace.num_segments
+    trace.release()
+    report = {
+        "mesh": list(shape),
+        "layers": list(layers),
+        "chunk": LOOP_CHUNK,
+        "tokens": LOOP_TOTAL,
+        "chunks": chunks,
+        "trace_segments": segments,
+        "compared": sorted(untraced[0]),
+        "bit_identical": not mismatches,
+        "mismatches": mismatches,
+        "untraced_ms": round(untraced_ms, 3),
+        "traced_ms": round(traced_ms, 3),
+        "speedup": round(untraced_ms / traced_ms, 2),
+    }
+    logger.info(f"V41_CHUNK_LOOP_TRACE_RESULT {json.dumps(report)}")
     assert not mismatches, report
