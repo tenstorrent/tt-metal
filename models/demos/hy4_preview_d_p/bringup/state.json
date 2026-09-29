@@ -43,6 +43,28 @@
   "started": "2026-09-29T03:56:41",
   "status": "PASS"
  },
+ "G.s56320": {
+  "attempts": 0,
+  "duration_s": 1381.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T04:28:51"
+   }
+  ],
+  "last_run": "2026-09-29T04:28:51",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/G.s56320.log",
+  "metrics": {
+   "cpu_seconds": 1357.3,
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 6
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T04:05:50",
+  "status": "PASS"
+ },
  "R.1": {
   "attempts": 0,
   "duration_s": 9.2,
