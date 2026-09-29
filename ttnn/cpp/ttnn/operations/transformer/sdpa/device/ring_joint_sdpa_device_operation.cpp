@@ -378,6 +378,18 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args);
 
+    // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
+    TT_FATAL(
+        args.get_q_chunk_size() > 0 && args.get_q_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        args.get_q_chunk_size(),
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        args.get_k_chunk_size() > 0 && args.get_k_chunk_size() % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        args.get_k_chunk_size(),
+        tt::constants::TILE_WIDTH);
+
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
@@ -1011,19 +1023,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             NKH,
             NVH);
     }
-
-    // Validate chunk sizes if program config is provided
-
-    TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
-        q_chunk_size,
-        tt::constants::TILE_WIDTH);
-    TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
-        k_chunk_size,
-        tt::constants::TILE_WIDTH);
 
     TT_FATAL(
         N_local_q % tt::constants::TILE_HEIGHT == 0,
