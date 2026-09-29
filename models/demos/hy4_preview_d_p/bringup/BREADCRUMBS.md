@@ -2915,3 +2915,32 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_norm.py
+
+## S.moe_shared.10 test (attempt 1)
+
+What
+- Replaced the rendered swap test (moe_shared layer 2, attn_hc .. ffn_hc_pre + ffn_norm on device) with swap 09
+  (test_swap_moe_shared_09_ffn_hc_pre.py). Every check and limit is kept. Added the ffn_norm checks of
+  test_swap_moe_full_10_ffn_norm.py (`_errors`, `fn_check`, FN_* limits). vs golden: rel <= 0.01, ratio [0.99, 1.01],
+  row <= 0.03. vs the CPU ffn_norm on the device ffn_x: 0.008 / [0.993, 1.007] / 0.015. The module on ffn_x x 0.1 vs
+  CPU: 0.01 / row 0.02. On x 30: 0.006 / [0.993, 1.007] / 0.015.
+
+Decisions
+- Limits unchanged; they are the layer-2 component test's (test_c_moe_shared_ffn_norm.py). A layer-2 CPU block study
+  (/tmp/hy4_ssh10/study.py = /tmp/hy4_sm10/study.py with L = 2 and shared_topk from the golden; log study.log) gave
+  these results. 15 of 24 ffn_norm mutations pass the 0.98 out gate. Swap 09's out / tail rel checks catch 11 of
+  them. eps 1.2e-5, RMS over half the columns (out rel 0.0099), LayerNorm and SP rows 1023 / 1024 swapped pass every
+  out check, and each one fails an ffn_norm check. The bf16-everywhere estimate passes with about 2x margin.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc_swap_out 0.999995; ffn_norm vs CPU, x0.1 and x30 all 0).
+- BRINGUP_IMPL=stub: FAIL (out PCC 0 and every extra check).
+- Gate (device, TtGatheredRmsNorm; nothing to implement, the module already runs for this block type): PASS.
+  pcc_swap_out 0.999978. ffn_norm vs golden 0.00518 [0.99703, 1.00073] row 0.0097; vs CPU 0.00174
+  [0.99914, 1.00065] row 0.0019; x0.1 0.00169 / 0.0019; x30 0.00169 / 0.0019. Tail 0.0026, router 0.99335, out rel
+  0.00670.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
