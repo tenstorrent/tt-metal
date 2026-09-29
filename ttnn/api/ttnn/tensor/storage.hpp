@@ -52,32 +52,20 @@ private:
 // - It represents a MeshTensor at specific coordinates of the MeshDevice.
 //
 // Ownership model:
-// DeviceStorage has shared-ownership semantics, like std::shared_ptr: copies, assignments, and the coordinate-subset
-// constructor share ownership of one reference-counted MeshTensor, and its device memory lives until the last
-// reference is released or it is deallocated explicitly. A storage is one of three kinds:
-// - Owner: constructed from a MeshTensor. It owns its device memory.
-// - Retained view: created by ttnn::experimental::create_sharded_tensor_view, or a reinterpretation of a retained view.
-//   It aliases a subrange of its base and holds a strong reference to it, like the std::shared_ptr aliasing
-//   constructor, so the base stays alive while the view exists. The base is an owner or another retained view.
-// - Reinterpretation: created by Tensor::view or unchecked_reinterpret_layout from an owner or another
-//   reinterpretation. It aliases the owner's memory and holds a strong reference to the owner, but is not
-//   invalidated when the owner is deallocated explicitly; it then dangles, which is_root_allocated() detects.
-// Explicit deallocation and validity:
-// - deallocate() on an owner, or on a reinterpretation of it, frees the owner's device memory immediately, even while
-//   views still reference it. Every copy of the owner and every retained view of it, directly or through other
-//   retained views, is invalidated: is_allocated() returns false and accessors throw. Other reinterpretations of the
-//   owner are not invalidated.
-// - deallocate() on a retained view releases only its reference to its base. The base stays valid; retained views of
-//   the released view are invalidated.
-// - is_sole_owner_of_device_memory() reports whether the storage is uniquely referenced, and Tensor::deallocate()
-//   without force proceeds only then. Force is the default for Python ttnn.deallocate, but not for
-//   Tensor::deallocate or Python Tensor.deallocate. An owner or a reinterpretation is uniquely referenced when no
-//   other storage shares or references it or its owner; a retained view, when no other storage shares or references
-//   the view itself.
-// - release_mesh_tensor() transfers the MeshTensor out of an owner or a reinterpretation. It is rejected for a
-//   retained view, because the MeshTensor alone does not hold the view's reference to its base.
-// - A retained view can be created from an owner or from a retained view created by create_sharded_tensor_view, but
-//   not from a reinterpretation of either, whose MeshBuffer aliases memory without owning or retaining it.
+// Copies, assignments, and the coordinate-subset constructor share ownership of one reference-counted MeshTensor,
+// like std::shared_ptr; device memory lives until the last reference is released or it is deallocated explicitly.
+// - Owner: constructed from a MeshTensor; owns its device memory.
+// - Retained view (create_sharded_tensor_view, or a reinterpretation of a retained view): aliases a subrange of its
+//   base, an owner or another retained view, and holds a strong reference to it. It is invalidated (is_allocated()
+//   returns false, accessors throw) when any base is deallocated; deallocating it releases only its own reference.
+// - Reinterpretation (Tensor::view or unchecked_reinterpret_layout of an owner): aliases the owner's memory and holds
+//   a strong reference to it; deallocating it frees the owner's memory.
+// - deallocate() on an owner frees its memory even while views reference it. Without force, Tensor::deallocate()
+//   proceeds only when the storage is uniquely referenced (is_sole_owner_of_device_memory()); a retained view counts
+//   only references to itself. Python ttnn.deallocate forces by default.
+// - A retained view cannot be released with release_mesh_tensor() or created from a reinterpretation.
+// - Limitation: a reinterpretation is not invalidated when its owner is deallocated, and operations check only
+//   is_allocated(), so using it afterwards accesses freed memory; is_root_allocated() detects this.
 //
 // Invariant:
 // - A default-constructed DeviceStorage acts like a deallocated DeviceStorage. However it is not associated with

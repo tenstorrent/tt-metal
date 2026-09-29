@@ -29,6 +29,8 @@ namespace ttnn::device_operation::detail {
 struct ProgramPreparationResult {
     uint32_t max_program_config_size_bytes = 0;
     uint32_t max_kernel_binary_size_bytes = 0;
+
+    bool operator==(const ProgramPreparationResult&) const = default;
 };
 
 /**

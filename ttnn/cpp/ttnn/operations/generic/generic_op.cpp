@@ -30,11 +30,7 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
 experimental::GenericOpPreparationResult experimental::prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    auto result = ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
-    return {
-        .max_program_config_size_bytes = result.max_program_config_size_bytes,
-        .max_kernel_binary_size_bytes = result.max_kernel_binary_size_bytes,
-    };
+    return ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
 }
 
 experimental::GenericOpPreparationResult experimental::prepare_generic_op(

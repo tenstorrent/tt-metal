@@ -18,6 +18,9 @@ struct ProgramCapacity {
 };
 
 /// Compiles kernels, finalizes program offsets and runtime arguments, and validates capacity without dispatching.
+/// Throws if `mesh_device` is null or has no local devices (an enqueue would do nothing), if `workload` has no
+/// programs or was finalized for another MeshDevice, or if compilation fails, including when its program
+/// configuration does not fit the kernel-configuration buffer.
 ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device);
 
 }  // namespace tt::tt_metal::experimental::program_preparation

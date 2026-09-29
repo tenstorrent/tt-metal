@@ -7,6 +7,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn {
 
@@ -26,12 +27,7 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
 
 namespace experimental {
 
-struct GenericOpPreparationResult {
-    uint32_t max_program_config_size_bytes = 0;
-    uint32_t max_kernel_binary_size_bytes = 0;
-
-    bool operator==(const GenericOpPreparationResult&) const = default;
-};
+using GenericOpPreparationResult = ttnn::device_operation::detail::ProgramPreparationResult;
 
 GenericOpPreparationResult prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
