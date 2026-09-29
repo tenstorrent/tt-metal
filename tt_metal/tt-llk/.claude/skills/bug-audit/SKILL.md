@@ -62,7 +62,9 @@ benchmark and a sibling sweep.
 Full, area and bench runs fan out through the **Workflow** tool. That needs the user's explicit opt-in to
 multi-agent orchestration. Get it, and state the cost first. Measured: one 50-batch wave took about 37M tokens and
 881 agents. A full tt-metal run (about 18,000 files and 4.4M lines with the default extensions, so about 1,250
-batches) is therefore about 25 waves: roughly 0.9B tokens and 22,000 agents. Verification is most of the agent count.
+batches) is therefore about 25 waves: roughly 0.9B tokens and 22,000 agents. That wave was 1-3 file benchmark
+batches, and a real batch gives each hunter more code to read, so treat these as a floor. Verification is most of the
+agent count.
 
 ## Start of every audit: ask the user
 Before `init_run.py`, ask questions 1-4 in one AskUserQuestion call, then question 5 in a second call: its cost
