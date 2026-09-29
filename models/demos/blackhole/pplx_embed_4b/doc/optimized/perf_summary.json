@@ -434,5 +434,424 @@
       "bs16": 0.8144,
       "bs32": 0.8146
     }
+  },
+  "bs8_qkv_l1_heads_v3_20260928": {
+    "heads_op_us_per_call_standalone_bs16_shapes": {
+      "note": "cos/sin in L1 as in the model; traced; v3 bit-identical to v1",
+      "v1": {
+        "l1_in": 304.7,
+        "dram_in": 327.6
+      },
+      "v2": {
+        "l1_in": 298.5,
+        "dram_in": 324.1
+      },
+      "v3": {
+        "l1_in": 214.2,
+        "dram_in": 372.3
+      }
+    },
+    "bs8_sustained_run_3_alternating_rounds": {
+      "host": "8x p150b host",
+      "qkv_l1_only_chip0": {
+        "cold_off": 102.1,
+        "cold_on": 100.3,
+        "sustained_off": 116.1,
+        "sustained_on": 114.4
+      },
+      "v3_on_top_chip1": {
+        "cold_off": 100.3,
+        "cold_on": 98.7,
+        "sustained_off": 116.6,
+        "sustained_on": 115.5
+      },
+      "both_vs_neither_chip0": {
+        "neither": {
+          "cold": 102.2,
+          "sustained": 116.2,
+          "aiclk_mhz": 1228
+        },
+        "both": {
+          "cold": 98.8,
+          "sustained": 113.1,
+          "aiclk_mhz": 1203
+        },
+        "baseline_env": "TT_PREFILL_QKV_L1=0 QWEN_FUSED_COMPUTE_V3=0"
+      }
+    },
+    "stsb_spearman_bs8": 0.8114,
+    "note": "bs16 QKV output does not fit next to the QKV matmul's CBs at 8,8,8 (NEGATIVE_RESULTS 56); v3 with a DRAM input is slower than v1"
+  },
+  "bs16_qkv_l1_sum1_dram_heads_v3_20260928": {
+    "l1_at_qkv_call_bytes_per_core": {
+      "cb_region_start": 111744,
+      "qkv_matmul_cb_end_8_8_8": 595072,
+      "norm_output_low_address": 963264,
+      "free_below_norm_output": 368192,
+      "note": "sum1 in L1 held the norm output low; QKV output needs 446 KiB"
+    },
+    "bs16_sustained_run_3_alternating_rounds_chip0": {
+      "default_before": {
+        "cold": [
+          189.2,
+          189.3,
+          189.4
+        ],
+        "sustained": [
+          222.0,
+          223.4,
+          223.3
+        ],
+        "aiclk_mhz": 1141
+      },
+      "qkv_l1_sum1_dram_v3": {
+        "cold": [
+          186.0,
+          186.1,
+          186.0
+        ],
+        "sustained": [
+          219.3,
+          221.1,
+          220.6
+        ],
+        "aiclk_mhz": 1130
+      }
+    },
+    "defaults_confirmed_best_of_10": {
+      "bs16": 186.1,
+      "bs16_opt_out": 189.4,
+      "bs8": 98.8,
+      "bs8_opt_out": 102.3
+    },
+    "stsb_spearman_bs16": 0.8144
+  },
+  "bs32_qkv_chunks_bs16_prealloc_20260928": {
+    "qkv_mm_us_standalone_model_weights": {
+      "M8192_N6144_L1out": 561.4,
+      "M16384_N3072_L1out": 676.5,
+      "M16384_N6144_DRAMout": 1155.7
+    },
+    "bs32_l1_at_qkv_call_lowest_buffer": {
+      "before": 777216,
+      "with_prealloc": 1149312
+    },
+    "bs32_ff2_out_dram_instead_cold": {
+      "off": 366.1,
+      "on": 371.2
+    },
+    "bs32_chunked_sustained_run_3_alternating_rounds_chip0": {
+      "default_before": {
+        "cold": [
+          367.7,
+          369.2,
+          370.4
+        ],
+        "sustained": [
+          429.7,
+          434.6,
+          435.7
+        ],
+        "aiclk_mhz": 1079
+      },
+      "chunked": {
+        "cold": [
+          361.0,
+          361.6,
+          364.1
+        ],
+        "sustained": [
+          428.8,
+          431.0,
+          431.4
+        ],
+        "aiclk_mhz": 1068
+      }
+    },
+    "bs16_prealloc_sum1_l1_sustained_run_3_alternating_rounds_chip1": {
+      "default_before": {
+        "cold": [
+          186.0,
+          186.0,
+          186.1
+        ],
+        "sustained": [
+          226.9,
+          229.2,
+          228.3
+        ]
+      },
+      "prealloc_sum1_l1": {
+        "cold": [
+          185.2,
+          185.2,
+          185.2
+        ],
+        "sustained": [
+          226.2,
+          227.4,
+          227.3
+        ]
+      }
+    },
+    "defaults_confirmed_best_of_10": {
+      "bs32": 359.1,
+      "bs32_opt_out": 369.0,
+      "bs16": 185.3,
+      "bs16_opt_out": 185.9
+    },
+    "stsb_spearman": {
+      "bs16": 0.8144,
+      "bs32": 0.8146
+    }
+  },
+  "fused_swiglu_pack_thread_last_k_block_20260928": {
+    "ff13_us_standalone": {
+      "bs8_fused": {
+        "old_epilogue": 1435.0,
+        "in_loop_pack": 1049.8,
+        "plain_compute_same_shape": 745.2
+      },
+      "bs16_fused": {
+        "old_epilogue": 2704.8,
+        "in_loop_pack": 1958.7,
+        "plain_compute_same_shape": 1477.3
+      },
+      "bs32": {
+        "unfused_ff1_ff3_silu_mul": 4704,
+        "fused_old_epilogue_4_20_8": 5165.5,
+        "fused_in_loop_4_20_8": 3830.5
+      }
+    },
+    "epilogue_breakdown_bs16_us": {
+      "base": 2709,
+      "copy_pack_only": 1613,
+      "silu_only": 2287,
+      "mul_only": 1964,
+      "inits_hoisted": 2676
+    },
+    "pcc_vs_fp32_torch": {
+      "bs8": [
+        0.98697,
+        0.98697
+      ],
+      "bs16": [
+        0.9869,
+        0.98691
+      ]
+    },
+    "bs32_profile_ms": {
+      "ff1_ff3": 119.46,
+      "silu_mul": 49.11,
+      "ff2_wo": 77.28,
+      "qkv": 39.17,
+      "sdpa": 20.96,
+      "total": 340.5
+    },
+    "sustained_run_3_alternating_rounds": {
+      "bs8_chip0": {
+        "cold": [
+          98.63,
+          85.0
+        ],
+        "sustained": [
+          113.73,
+          103.7
+        ]
+      },
+      "bs16_chip1": {
+        "cold": [
+          185.13,
+          158.33
+        ],
+        "sustained": [
+          225.7,
+          210.4
+        ]
+      },
+      "bs32_chip2": {
+        "cold": [
+          364.13,
+          329.4
+        ],
+        "sustained": [
+          436.27,
+          410.97
+        ]
+      }
+    },
+    "stsb_spearman": {
+      "bs8": 0.8116,
+      "bs16": 0.815,
+      "bs32": 0.8135
+    },
+    "bs32_opt_out_confirm": {
+      "default_fused": 328.7,
+      "QWEN_FUSE_SWIGLU_0": 364.9
+    }
+  },
+  "ff13_fused_blocks_resweep_20260928": {
+    "standalone_us": {
+      "bs8": {
+        "8,8,8_1x8": 1058.4,
+        "8,20,8_1x8": 996.0
+      },
+      "bs16": {
+        "4,20,8_1x4": 1964.8,
+        "4,20,8_1x8": 1927.4
+      },
+      "bs32": {
+        "4,20,8_1x4": 3848.9,
+        "4,20,8_1x8": 3763.7
+      },
+      "bs1": {
+        "2,8,8_1x4": 259.2,
+        "2,20,8_1x2": 214.4
+      }
+    },
+    "sustained_run_3_alternating_rounds": {
+      "bs8": {
+        "cold": [
+          84.97,
+          82.47
+        ],
+        "sustained": [
+          104.1,
+          101.4
+        ]
+      },
+      "bs16": {
+        "cold": [
+          158.3,
+          157.13
+        ],
+        "sustained": [
+          210.7,
+          209.53
+        ]
+      },
+      "bs32": {
+        "cold": [
+          329.33,
+          326.43
+        ],
+        "sustained": [
+          411.07,
+          408.57
+        ]
+      }
+    },
+    "bs1_fused_e2e": {
+      "default_unfused": 15.7,
+      "fused_best_config": 16.0
+    },
+    "stsb_bs8": 0.8114
+  },
+  "ff13_fused_k40_20260929": {
+    "ablation_us_bs8_16_32": {
+      "full": [
+        987.3,
+        1931.2,
+        3758.4
+      ],
+      "no_sfpu": [
+        840.9,
+        1631.0,
+        3104.3
+      ],
+      "sfpu_x2": [
+        1329.5,
+        2611.7,
+        5149.2
+      ],
+      "no_partials_add": [
+        979.6,
+        1911.3,
+        3720.3
+      ],
+      "no_sfpu_no_add": [
+        810.1,
+        1560.7,
+        2951.1
+      ],
+      "compute_only": [
+        929.6,
+        1842.1,
+        3644.6
+      ],
+      "compute_only_no_sfpu": [
+        771.0,
+        1515.8,
+        2999.0
+      ],
+      "compute_only_no_sfpu_no_add": [
+        734.0,
+        1438.6,
+        2842.2
+      ]
+    },
+    "standalone_us": {
+      "bs8": {
+        "8,20,8_1x8": 999.3,
+        "8,40,6_1x6": 881.9,
+        "8,40,8_1x8_l1_clash_in_model": 858.6
+      },
+      "bs16": {
+        "4,20,8_1x8": 1937.2,
+        "4,40,8_1x8": 1703.1,
+        "4,80,4_1x4": 1687.6
+      },
+      "bs32": {
+        "4,20,8_1x8": 3763.4,
+        "4,40,8_1x8": 3276.5,
+        "4,40,4_1x4": 3599.3,
+        "6,40,8_1x8_l1_clash_in_model": 3254.8
+      }
+    },
+    "cold_ab_bs32_ms": {
+      "default": 322.6,
+      "4,40,4_1x4": 316.7,
+      "WO_DRAM": 327.5,
+      "WO_DRAM_4,40,8": 308.4,
+      "PREALLOC_FF": 323.6,
+      "PREALLOC_FF_4,40,8": 302.4
+    },
+    "sustained_run_3_alternating_rounds": {
+      "bs8": {
+        "cold": [
+          82.5,
+          78.53
+        ],
+        "sustained": [
+          102.0,
+          99.53
+        ]
+      },
+      "bs16": {
+        "cold": [
+          157.1,
+          148.77
+        ],
+        "sustained": [
+          201.73,
+          196.13
+        ]
+      },
+      "bs32": {
+        "cold": [
+          322.83,
+          303.07
+        ],
+        "sustained": [
+          400.13,
+          388.67
+        ]
+      }
+    },
+    "stsb": {
+      "bs8": 0.8119,
+      "bs16": 0.8147,
+      "bs32": 0.8152
+    }
   }
 }

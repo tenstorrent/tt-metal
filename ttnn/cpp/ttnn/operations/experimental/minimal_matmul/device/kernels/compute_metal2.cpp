@@ -20,6 +20,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/dfb_binding_token.h"
 #include "experimental/kernel_args.h"
+#if defined(FUSE_SWIGLU) && !defined(FUSE_BIAS)
+#include "swiglu_sfpu.hpp"
+#endif
 
 void copy_and_pack_block(
     DFBBindingToken in_dfb, DFBBindingToken out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
@@ -418,6 +421,92 @@ void matmul_blocks(
     }
 }
 
+#if defined(FUSE_SWIGLU) && !defined(FUSE_BIAS)
+// The last K block of a fused-SwiGLU output block. Each subblock accumulates the last K block from zero in DST, then
+// adds its partial sums over K blocks 0..K-2 (packer-L1-accumulated in the intermediate) with one dest-reuse add, the
+// same rounding order as the packer's L1 accumulation. The PACK thread then applies silu(gate) * up to every gate/up
+// pair in its DST half and packs the results straight into out: the SFPU work overlaps the math thread's next
+// subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
+// thread). The out tiles land row-major in a half-width block, as swiglu_block writes them.
+void matmul_blocks_swiglu(
+    const DFBBindingToken in0_dfb,
+    const DFBBindingToken in1_dfb,
+    const DFBBindingToken interm_dfb,
+    const DFBBindingToken out_dfb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const bool add_partials) {
+    const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
+    uint32_t in0_index_offset = 0;
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                matmul_block(
+                    in0_dfb,
+                    in1_dfb,
+                    in0_index,
+                    in1_index,
+                    0,
+                    false /*transpose*/,
+                    subblock_w,
+                    subblock_h,
+                    K_block_tiles);
+                in0_index++;
+                in1_index += full_N_block_tiles;
+            }
+            if (add_partials) {
+                // DST -> SrcB, partial-sum tile -> SrcA
+                reconfig_data_format_srca(in1_dfb, interm_dfb);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(interm_dfb);
+                uint32_t dst = 0;
+                for (uint32_t h = 0; h < subblock_h; h++) {
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                            interm_dfb, (M_start + h) * full_N_block_tiles + N_start + w, dst++);
+                    }
+                }
+                reconfig_data_format_srca(interm_dfb, in1_dfb);
+                matmul_block_init(in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+            }
+            tile_regs_commit();
+
+            // tile_regs_wait() that also stalls CFG, so the SETC16 below waits for the math thread's commit
+            PACK(TTI_SEMWAIT(
+                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                semaphore::t6_sem(semaphore::MATH_PACK),
+                p_stall::STALL_ON_ZERO));
+            // point the SFPU at the packer's half of DST
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w += 2) {
+                    const uint32_t gate = h * subblock_w + w;
+                    PACK((llk_minimal_matmul_swiglu(gate, gate + 1, gate)));
+                }
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w += 2) {
+                    pack_tile<true>(
+                        h * subblock_w + w, out_dfb, (M_start + h) * out_full_N_block_tiles + ((N_start + w) >> 1));
+                }
+            }
+            tile_regs_release();
+
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * K_block_tiles;
+    }
+}
+#endif
+
 void kernel_main() {
     constexpr auto K_num_blocks = get_arg(args::K_num_blocks);
     constexpr auto M_block_tiles = get_arg(args::M_block_tiles);
@@ -460,6 +549,9 @@ void kernel_main() {
 #endif
 
     matmul_init(dfb::in0, dfb::in1);
+#if defined(FUSE_SWIGLU) && !defined(FUSE_BIAS)
+    PACK((llk_minimal_matmul_swiglu_init()));  // once: nothing else on the pack thread reprograms the SFPU
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -504,16 +596,44 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
-                    dfb::in0,
-                    dfb::in1,
-                    dfb::intermediate,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+#if defined(FUSE_SWIGLU) && !defined(FUSE_BIAS)
+                if (k_block == K_num_blocks - 1) {
+                    if (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
+                        dfb_intermediate.push_back(out_block_num_tiles);
+                        dfb_intermediate.wait_front(out_block_num_tiles);
+                    }
+                    pack_reconfig_l1_acc(0);
+                    pack_reconfig_data_format(dfb::out);
+                    // SwiGLU collapses the interleaved gate/up block to half its N width.
+                    dfb_out.reserve_back(out_block_num_tiles >> 1);
+                    matmul_blocks_swiglu(
+                        dfb::in0,
+                        dfb::in1,
+                        dfb::intermediate,
+                        dfb::out,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w,
+                        K_num_blocks > 1);
+                    dfb_out.push_back(out_block_num_tiles >> 1);
+                    if (K_num_blocks > 1) {
+                        dfb_intermediate.pop_front(out_block_num_tiles);
+                    }
+                } else
+#endif
+                    matmul_blocks(
+                        dfb::in0,
+                        dfb::in1,
+                        dfb::intermediate,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -535,10 +655,14 @@ void kernel_main() {
                 }
             }
 
+#if !defined(FUSE_SWIGLU) || defined(FUSE_BIAS)
             dfb_intermediate.push_back(out_block_num_tiles);
+#endif
             pack_reconfig_l1_acc(0);
 
-#ifdef FUSE_SWIGLU
+#if defined(FUSE_SWIGLU) && !defined(FUSE_BIAS)
+            // SwiGLU was applied in the last K block (matmul_blocks_swiglu).
+#elif defined(FUSE_SWIGLU)
             // SwiGLU collapses the interleaved gate/up block to half its N width.
             dfb_out.reserve_back(out_block_num_tiles >> 1);
             dfb_intermediate.wait_front(out_block_num_tiles);

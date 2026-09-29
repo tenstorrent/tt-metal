@@ -467,18 +467,50 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
             "QWEN_WEIGHT_INTERLEAVED_K2560_N9728",
         ):
             os.environ.setdefault(k, "1")
-    # Batched ISL 512: the fused add+RMSNorm's short-lived operands live in L1 interleaved instead of DRAM: its b
-    # (the WO / FF2 outputs) and both norms' outputs (read by QKV / FF1+FF3), and at bs8 / bs16 the post-attention
-    # residual sum (add 2's a, alive across the MLP only). The decoder's copy of the attention output to DRAM is
-    # skipped (tt/decoder_fusion.py). The op is DRAM-bound, so this halves its DRAM traffic: 434.9 -> 255.0 us per
-    # call at bs32 (with the copy gone). bs16 sustained_run.sh, 3 alternating rounds (without the sum): cold /
-    # sustained 202.8 / 230.7 -> 195.4 / 224.7 ms. The post-attention sum does not fit at bs32 (72 KB/core short,
-    # also with FF2's output in DRAM); the post-MLP sum crosses SDPA and stays in DRAM. Opt out:
+    # QKV output in L1 interleaved at bs8 / bs16 (ISL 512): the heads op reads it from L1 instead of DRAM (the QKV
+    # matmul's output write overlaps its compute either way: 559.5 vs 559.3 us at bs16), and with its input in L1 the
+    # heads op is compute-bound, so it runs the v3 compute (each phase once per unit; 30% less compute at bs16 shapes,
+    # 305 -> 214 us, bit-identical; slower than v1 with a DRAM input, so it follows this knob). bs8: 27 MB, 223 KB per
+    # core; cold / sustained 102.2 / 116.2 -> 98.8 / 113.1 ms. bs16: 53.5 MB, 446 KB per core, fits (without the
+    # preallocation below) only with the post-attention sum in DRAM (the sum held the norm output low in L1, splitting
+    # the free space in two), which the sum's own L1 gain does not outweigh: 189.3 / 222.9 -> 186.0 / 220.3 ms.
+    # sustained_run.sh, 3 alternating rounds, chip 0 (NEGATIVE_RESULTS 56); bs32 would need 892 KB per core. Opt out:
+    # TT_PREFILL_QKV_L1=0 (the bs16 sum then returns to L1).
+    if batch_size in (8, 16) and seq_len == 512:
+        os.environ.setdefault("TT_PREFILL_QKV_L1", "1")
+        if os.getenv("TT_PREFILL_QKV_L1") == "1":
+            os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
+    # The post-MLP add+RMSNorm output (the next layer's QKV input) preallocated in L1 before FF2 (tt/decoder_fusion.py):
+    # allocated by the add, it lands below FF2's output and the post-attention sum, which are live then and freed
+    # right after, and splits L1's free space. At bs16 that lets the post-attention sum stay in L1 beside the QKV
+    # output: cold / sustained 186.0 / 228.1 -> 185.2 / 227.0 ms (3 alternating rounds, chip 1). At bs32 the QKV
+    # output (892 KB per core) cannot live in L1, so QKV + the heads op run in two half-batch chunks
+    # (tt/qkv_chunks.py): the add writes its output as two preallocated half-batch tensors at the top of L1, each
+    # chunk's QKV output goes to L1 and its heads op (v3) writes Q / K / V into full-batch tensors at a batch offset;
+    # layer 0 (input from the embedding) runs unchunked. bs32: 369.1 / 433.3 -> 362.2 / 430.4 ms (3 alternating
+    # rounds, chip 0; the settled clock drops ~10 MHz), STS-B 0.8146 unchanged (NEGATIVE_RESULTS 56). Opt out:
+    # QWEN_FUSED_ADD_NORM_PREALLOC=0 (bs16) / QWEN_QKV_CHUNKS=1 (bs32).
+    if batch_size == 16 and seq_len == 512:
+        os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
+    if batch_size == 32 and seq_len == 512:
+        os.environ.setdefault("QWEN_QKV_CHUNKS", "2")
+        if os.getenv("QWEN_QKV_CHUNKS") == "2":
+            os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
+    # Batched ISL 512: the fused add+RMSNorm's short-lived operands live in L1 interleaved instead of DRAM: its b (the
+    # WO / FF2 outputs) and both norms' outputs (read by QKV / FF1+FF3), and at bs8 the post-attention residual sum (add
+    # 2's a, alive across the MLP only; at bs16 only without the QKV output in L1, above). The decoder's copy of the
+    # attention output to DRAM is skipped (tt/decoder_fusion.py). The op is DRAM-bound, so this halves its DRAM traffic:
+    # 434.9 -> 255.0 us per call at bs32 (with the copy gone). bs16 sustained_run.sh, 3 alternating rounds (without the
+    # sum): cold / sustained 202.8 / 230.7 -> 195.4 / 224.7 ms. The post-attention sum does not fit at bs32 (72 KB/core
+    # short, also with FF2's output in DRAM); the post-MLP sum crosses SDPA and stays in DRAM. Opt out:
     # QWEN_BATCHED_L1_INTERMEDIATES=0.
     if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_BATCHED_L1_INTERMEDIATES", "1") == "1":
         for k in ("TT_PREFILL_WO_L1", "TT_PREFILL_FF2_L1", "QWEN_FUSED_ADD_NORM_OUT_L1"):
             os.environ.setdefault(k, "1")
-        if batch_size in (8, 16):
+        if batch_size == 8 or (
+            batch_size == 16
+            and (os.getenv("TT_PREFILL_QKV_L1") != "1" or os.getenv("QWEN_FUSED_ADD_NORM_PREALLOC") == "1")
+        ):
             os.environ.setdefault("QWEN_FUSED_ADD_NORM_SUM1_L1", "1")
     # Batched ISL 512 SDPA with reuse_kv: each core reads a KV head's K/V once instead of once per Q chunk (at q512 the
     # 4 Q heads sharing a KV head each re-read it: 142 MB per call at bs16, DRAM-bound and contention-limited), and the
@@ -559,14 +591,6 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
             ("QWEN_LEGACY_SUBBLOCK_K2560_N6144", "1,6"),
         ):
             os.environ.setdefault(k, v)
-    # Fused-SwiGLU minimal_matmul blocks at bs16 (M=8192): 4,8,8 / 1x4 was -6% standalone and
-    # -2.2% e2e vs the 8,8,8 / 1x8 default (237.0 -> 231.8, chip 8); a wider sweep then found
-    # K_block 20 (4 K steps over the 80 K tiles) another -3.8% standalone (2988 -> 2874 us) and
-    # -1.9% e2e (232.8 -> 228.3, chip 8). bs8's default is already the best of the sweep; bs32
-    # runs the unfused path, where larger K steps are slower for every projection.
-    if batch_size == 16 and seq_len == 512:
-        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "4,20,8")
-        os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,4")
     # Plain minimal_matmul blocks at bs8 (M=4096), same sweep: FF2 16,8,8 (-16% standalone),
     # QKV 8,4,8 (-15%), WO 16,8,8 (-12%); e2e 126.4 -> 123.4 ms (-2.4%, chip 7). At bs16/bs32
     # the 8,8,8 defaults are the best of the sweep for these projections.
@@ -575,17 +599,26 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         os.environ.setdefault("QWEN_MM_BLOCK_QKV", "8,4,8")
         os.environ.setdefault("QWEN_MM_BLOCK_WO", "16,8,8")
     apply_recommended_env(batched_l1=cfg["batched_l1"])
-    # Fused SwiGLU (tt/mlp.py PplxFusedSwigluMLP) folds FF1 + FF3 + the silu*mul
-    # BinaryNg into one minimal_matmul(fuse_swiglu=True). It is a win at moderate
-    # batch and a loss at bs=32, where doubling the packed weight width to
-    # 2*hidden_dim=19456 costs more in block shape than the removed BinaryNg
-    # saves. Measured on P150 ISL=512 (best prefill / best tok/s):
-    #   bs8   off 160.8 ms / 25.5k   on 158.3 ms / 25.9k   -1.6%
-    #   bs16  off 308.4 ms / 26.6k   on 290.9 ms / 28.2k   -5.7%
-    #   bs32  off 558.4 ms / 29.3k   on 570.5 ms / 28.7k   +2.2%  <- regression
-    # bs=1 never reaches it (legacy MatmulMultiCoreReuseMultiCast path).
-    # STS-B Spearman identical either way (0.8125).
-    os.environ.setdefault("QWEN_FUSE_SWIGLU", "1" if cfg.get("fuse_swiglu", 1 < batch_size <= 16) else "0")
+    # Fused SwiGLU (tt/mlp.py PplxFusedSwigluMLP) folds FF1 + FF3 + the silu*mul into one
+    # minimal_matmul(fuse_swiglu=True) on the packed gate/up weight. Since minimal_matmul applies silu(gate) * up
+    # on the pack thread during the last K block (overlapping the math thread's matmul) instead of in a math-thread
+    # epilogue pass (~2100 cycles per output tile), the fused kernel wins at every batch > 1, bs32 included (it lost
+    # there by 16% with the old epilogue, NEGATIVE_RESULTS 13 / 58). bs32 takes bs16's blocks: fused 3831 us per
+    # layer (4,20,8 1x4; 4129 at 8,8,8 1x8) vs FF1 + FF3 + silu_mul 4704. bs=1 never reaches it (legacy 2D path).
+    os.environ.setdefault("QWEN_FUSE_SWIGLU", "1" if cfg.get("fuse_swiglu", batch_size > 1) else "0")
+    # Fused-SwiGLU blocks: K_block 40. The pack thread's SwiGLU (~1400 cycles per output tile) only overlaps the last K
+    # block's math (640 cycles per output tile at K_block 20), so half of it was exposed (15-17% of the op,
+    # perf_tools/bench_ff13_fused_ablate.py); K_block 40 doubles the window. Standalone (bench_ff13_sweep.py) bs8
+    # 8,20,8 1x8 999 -> 8,40,6 1x6 882 us, bs16 4,20,8 1x8 1937 -> 4,40,8 1x8 1703, bs32 4,20,8 1x8 3763 -> 4,40,8 1x8
+    # 3277. The larger CBs are L1-limited: bs8 8,40,8 (859) clashes with the L1 residual sum; bs32 4,40,8 needs the
+    # post-attention norm output allocated above WO's output (QWEN_FUSED_ADD_NORM_PREALLOC_FF, tt/decoder_fusion.py).
+    # Fused only: the FF13 block knobs also drive the unfused FF1 / FF3, which want 8,8,8 1x8 (4,20,8 1x4 there: +81
+    # ms at bs32).
+    if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_FUSE_SWIGLU") == "1":
+        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "8,40,6" if batch_size == 8 else "4,40,8")
+        os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,6" if batch_size == 8 else "1,8")
+        if batch_size == 32:
+            os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC_FF", "1")
     if cfg["dram_grid"]:
         os.environ.setdefault("QWEN_MM_GRID", DRAM_MM_GRID)
 

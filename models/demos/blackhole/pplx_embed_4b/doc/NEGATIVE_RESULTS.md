@@ -1045,3 +1045,255 @@ q96 364, q64 402; 11×10 / 12×9 / 12×8 at q128 373 / 370 / 390; packed + reuse
 less DRAM-bound), bs32: 911.6 → 620.5 (12×10 q128). In the model the cold gain matches the standalone one (bs16 −5.6 ms,
 bs32 −9.8 ms over 36 calls) but the sustained gain is a third of it: less waiting on DRAM means more power per
 iteration, and the power manager settles the clock 10-15 MHz lower.
+
+## 56. bs16 fused heads op: compute-bound; the QKV output does not fit in L1 next to the QKV matmul (2026-09-28)
+
+8× p150b host. Standalone traced time per call of the fused heads op (head split + Q/K RMSNorm + RoPE, v1 compute) at
+the bs16 config (QKV [16, 1, 512, 6144] bfp8, bfp8 Q/K/V out in DRAM), `perf_tools/bench_heads_bs16_ablate.py` (scratch
+kernel variants that skip the unit reads, the unit writes, or replace the compute with a tile copy). cos / sin / the
+rotation tile in L1 as in the model (`QWEN_ROPE_PREFILL_L1=1`); `ABL_ROPE=DRAM` gives the second column:
+
+| variant | DRAM in | L1 in | DRAM in, cos/sin in DRAM |
+|---|---|---|---|
+| full | 327.3 µs | 304.5 µs | 435.3 µs |
+| compute only (no unit read / write) | 301.6 | | 309.8 |
+| data movement only (copy compute) | 272.0 | 224.8 | 350.4 |
+| read only | 183.4 | 232.5 | 250.9 |
+| write only | 200.9 | | 267.1 |
+| handshakes only (copy compute, no read / write) | 63.8 | | 112.8 |
+
+At the model's placement the op is compute-bound (full 327 against compute-only 302); an L1 input saves only 23 µs. A
+first pass of this bench read cos / sin from DRAM and concluded the op was bound by the DRAM input read (435 → 320 with
+the input in L1): the cos / sin reads were what the L1 input relieved (entry 25's lesson, again).
+
+**The v1 compute is per-phase overhead.** Per-phase wall-clock split of the v1 compute (`perf_tools/bench_heads_bs16_phases.py`,
+per-TRISC accumulators, 114 cores, 18 units per core; a unit is one 32-row tile of one KV group: 4 Q + 1 K heads
+normalised, V copied): ~412k cycles per core, ~4.5k per normalised head over 9 phases of 4 tiles each (~500 cycles per
+phase). The math thread spends a third of its time in eps + rsqrt (one tile per head: fp32, non-approximate, all four
+faces although only column 0 is used), and the rest is spread evenly over the phases. The compute kernels side by side
+(`perf_tools/bench_heads_bs16_kernels.py`, cos / sin in L1, PCC against v1):
+
+| compute | L1 in | DRAM in | vs v1 |
+|---|---|---|---|
+| v1 (batched default) | 304.7 µs | 327.6 µs | |
+| v2 (dest-reuse, 6 passes per head, entry 25) | 298.5 | 324.1 | PCC Q 0.9988, K 0.9997 |
+| v3 (each phase once per unit, over its 5 heads; bs1 default) | 214.2 | 372.3 | bit-identical |
+
+Fewer passes (v2) do not help; paying each phase's reconfigure / init / CB handshakes once per unit instead of once per
+head (v3) cuts the compute by 30%, but only when the input read does not compete with it (DRAM in: slower than v1,
+entry 53).
+
+**In the model the QKV output does not fit in L1 at bs16.** `TT_PREFILL_QKV_L1=1` at bs16 puts the 53.5 MB QKV output
+in L1 (446 KB per core on 12×10) while the norm output is also L1 resident; the QKV `minimal_matmul`'s static CBs at the
+default 8,8,8 blocks end at 595072, and the output lands at 517184: `Statically allocated dataflow buffers ... clash
+with L1 buffers` (78 KB per core short). Smaller blocks make room, but the matmul slows down more than the heads op speeds
+up (e2e best of 10, `ab_one.sh`, same chip): 8,8,8 DRAM 189.2 → 8,4,8 L1 189.0 ms (sustained iteration 9 223.4 →
+225.7); 8,8,8 DRAM 189.5 → 4,8,8 L1 197.8; 4,4,8 DRAM 202.0 → 4,4,8 L1 200.3. bs8 fits (27 MB, 223 KB per core) and gains: QKV output in L1,
+default on at bs8 (POSITIVE_RESULTS). At bs16 the clash turned out to be fragmentation (below); with the post-attention
+sum in DRAM the QKV output fits at the default blocks and it lands at bs16 too.
+
+**The QKV matmul is compute-bound, and its output write overlaps.** `perf_tools/bench_qkv_mm_bs16_ablate.py [batch]`
+(QKV minimal_matmul at the model's config, from `perf_tools/capture_qkv_call.py`: bfp8 in0 in L1, **bfp4 weights DRAM
+width-sharded [2560, 768] over the 8 banks**, bfp8 out, 12×10, 8,8,8 blocks, subblock 1,8, LoFi, packer L1 acc;
+variants patch `matmul_dataflow_common_metal2.hpp`, the header the op's Metal 2.0 kernels include; output PCC 1.000 for
+full and ~0 for every skip variant), µs per call:
+
+| variant | bs16, L1 out | bs16, DRAM out | bs32, DRAM out |
+|---|---|---|---|
+| full | 559.5 | 559.3 | 1123.9 |
+| no output write | 552.0 | 552.1 | 1123.0 |
+| no in0 read | 531.9 | 542.6 | 1086.7 |
+| no in1 read | 556.3 | 563.5 | 1089.9 |
+| no reads | 520.5 | 529.5 | 1041.1 |
+| compute only | 504.9 | 504.8 | 972.9 |
+
+Compute is 87-90% of the call and the output write is hidden (−1 to −7 µs). A first pass of this bench used bf8
+interleaved weights and measured 667 µs with a 110-126 µs output-write stall; that stall was an artifact of the wrong
+weights (the commit message of the bs8 landing repeats it). Fused QKV + heads estimate from these numbers: the fused
+op costs the matmul plus the heads epilogue on the same cores, and the epilogue at v3's cost on the matmul's grid (each
+core owns 22 / 43 row tiles × 5 heads at bs16 / bs32; the V heads are copies, so rows y=8-9 carry no norm work unless
+the weight columns are permuted to 4 norm + 1 V head per core) is ~205-257 µs at bs16 and ~372-465 µs at bs32. bs16
+today (QKV in L1, v3) is 559 + 214 = 773 µs, fused 764-816: nothing to gain. bs32 today (DRAM, v1) is 1124 + 594 =
+1718 µs, fused 1496-1589: −130 to −220 µs per layer (≈5-8 ms). bs32 heads op (`bench_heads_bs16_ablate.py 32`): v1
+full 594.5, compute only 572.0, data movement only 530.4; v3 compute only 388.6.
+
+**Why v3 loses with a DRAM input: the op sits at the DRAM floor, and the saturated bandwidth reaches the top grid rows
+last.** Per-unit split (`bench_heads_bs16_phases.py`, `PH_MODE=unit`): with a DRAM input, v3's mean core is faster than
+v1's (347k vs 418k cycles), but the cores of grid rows 0-2 wait on their reader (unpack wait-for-input 183k cycles on
+the slowest, v1 ~20k) and end the op at 503k. Mean cycles by grid row, v3: 449 478 412 332 320 303 296 290 288 280k (v1
+the same gradient, 436 → 398k, hidden by its slower compute; L1 input: flat). It follows the core's position, not its
+data or its NoC: the same with the unit ranges handed out in reverse core order, with the reader on NoC1 and the writer
+on NoC0 (and everything much slower: v1 L1-input 305 → 500 µs), and with cos / sin in DRAM. Unit counts weighted by
+row (all 120 cores, rows 0-1 12 units, rows 7-9 20) even out the finish: v3 DRAM-input 372 → 327 µs, but that only
+matches v1 (328). The op moves 107 MB per call (read + write) and its data movement alone takes 272 µs (~390 GB/s), so
+with a DRAM input v1 is within ~55 µs of the floor and a faster compute cannot go below it. The experiment knobs (NoC
+swap, reversed units, row weights) were removed; v3 follows the QKV-output-in-L1 knob (bs8 default).
+
+**L1 at the bs16 QKV call: the room is there, fragmented.** `perf_tools/l1_map_first_layer.py 16` (live L1 buffers
+after each op of one eager prefill; CB region from 111,744 B, 1,461,120 B limit): when the QKV matmul runs, the only
+large L1 tensor is the norm output (181 KiB per core), but it sits at 963,264 B, low, because it was allocated while the
+FF2 output and the post-attention sum were still live above it. The QKV matmul's CBs end at 595,072 B (472 KiB), so
+~360 KiB per core is free below the norm output and ~364 KiB above it. A fused QKV + heads op fits: the heads op's own
+CBs other than its input and output are ~90 KB (v1 layout) or ~230 KB (v3, a unit's heads), under the 360 KiB at the
+default 8,8,8 blocks. The unfused QKV output in L1 (446 KiB) fits in neither gap alone although ~723 KiB are free:
+`TT_PREFILL_QKV_L1=1`'s clash at bs16 is fragmentation, not capacity. With the post-attention sum in DRAM
+(`QWEN_FUSED_ADD_NORM_SUM1_L1=0`) the norm output is allocated high and the QKV output fits below it at 8,8,8; with the
+v3 heads compute, sustained_run.sh, 3 alternating rounds, chip 0: cold / sustained 189.2 / 222.0, 189.3 / 223.4, 189.4 /
+223.3 → 186.0 / 219.3, 186.1 / 221.1, 186.0 / 220.6 ms (−1.7 / −1.2%): the QKV output's L1 gain outweighs the sum's.
+Landed as the bs16 default (POSITIVE_RESULTS).
+
+**bs32 in two half-batch chunks (landed, POSITIVE_RESULTS).** Splitting N instead (two `[2560, 3072]` weights, half the
+KV groups each, no input split) makes each chunk slower than half the call: 676.5 µs per chunk at M=16384 (N=96 tiles
+over 10 cores: N blocks of 8 + 2) against 1155.7 for the full call, +197 µs per layer. Splitting M keeps each chunk the
+bs16 matmul (561.4 µs). At bs32 the norm output (363 KiB per core) sat at 777,216 B, low for the same reason as at bs16
+(allocated while FF2's output, in L1, held the top slot), leaving ~182 KiB below it; moving FF2's output to DRAM would
+fix the layout but costs +5.1 ms cold (366.1 → 371.2). Preallocating the norm output before FF2
+(`QWEN_FUSED_ADD_NORM_PREALLOC=1`) puts it at the top (lowest buffer at the QKV call 1,149,312 B) with FF2's output in L1, neutral on its own
+(367.1 vs 367.4 ms); at bs16 it lets the post-attention sum back into L1 beside the QKV output (−0.8 / −1.1 ms cold /
+sustained). Chunked bs32: 369.1 / 433.3 → 362.2 / 430.4 ms cold / sustained, STS-B 0.8146.
+
+## 57. Heads-op rsqrt over column 0's faces only: 16% less compute, slower op (2026-09-28)
+
+After the row reduce only column 0 of the mean-square tile holds values, and the `bcast_cols` multiply that consumes
+`rsqrt(ms + eps)` reads column 0 only, but `rsqrt_tile` is hard-coded to `VectorMode::RC` (all four faces, fp32,
+non-approximate). The same SFPU call with `VectorMode::C` (faces 0 and 2) is bit-identical with half the rsqrt work;
+v3 has it behind compile-time arg 9 (`QWEN_FUSED_RSQRT_COL=1`, default off).
+
+Per-core compute drops as expected: v1 401.6k → 356.4k cycles per core (the math thread's eps+rsqrt phase 7681 →
+5077 cycles per unit, nothing else moves; `bench_heads_bs16_phases.py`, `PH_KERNEL=`), v3 287.6k → 241.8k (−16%).
+Standalone wall time, bs16 shapes, L1 input (`bench_heads_bs16_kernels.py 16 v1 v3 v3:<kernel>`, an unmodified copy of
+v3 through the same override reproduces v3 exactly): v1 304.2 → 271.2 µs, but **v3 215.0 → 256.5 µs** (bs32 393.8 →
+541.3); with a DRAM input v3 gets faster (372 → 335). v3's compute (~179 µs) now finishes well under the op's data
+movement with an L1 input (~225 µs, dominated by the 53.5 MB of Q/K/V tile writes to DRAM), and the op lands above
+that floor, as v3 did against a DRAM input (§56): once compute outruns the data movement, the traffic bunches and the
+top grid rows fall behind. The binaries are not the cause (v3 math 6.2 → 7.2 KB; v1, larger still, gains). e2e,
+`ab_one.sh`, one chip per batch: bs1 15.5 → 15.7 ms, bs8 98.5 → 98.2, bs16 185.1 → 185.8, bs32 359.5 → 362.6 (iteration
+9 at bs32 434.5 → 441.8). The v3 heads op is bound by its output writes now, not its compute; further compute cuts
+need the Q/K/V write side fixed first (their DRAM traffic, or keeping them in L1 for SDPA).
+
+## 58. FF1 + FF3: the fused-SwiGLU epilogue was the cost; applied on the pack thread in the last K block (landed) (2026-09-28)
+
+Configs from `perf_tools/capture_qkv_call.py` (`CAP_N=9728,19456`): bs8 / bs16 run the fused-SwiGLU `minimal_matmul`
+on the packed gate/up weight ([2560, 19456] bfp4, DRAM interleaved; 8,8,8 1×8 / 4,20,8 1×4), bs32 ran FF1 and FF3
+unfused (bfp4 width-sharded, 8,8,8 1×8) plus `silu_mul`; in0 bfp8 in L1, out bfp8 in DRAM, LoFi. `perf_tools/
+bench_mm_ablate.py ff13 <batch>` (skip reads / writes / both, as for QKV in §56), µs per call:
+
+| | full | compute only | TFLOP/s full / compute |
+|---|---|---|---|
+| bs8 fused | 1433.0 | 1404.7 | 285 / 291 |
+| bs16 fused | 2704.9 | 2651.1 | 302 / 308 |
+| bs32 FF1 | 1670.0 | 1478.9 | 489 / 552 |
+
+bs32's plain FF1 is efficient with an L1 activation (tenstorrent/tt-metal#57626's 332 TFLOP/s was measured with
+DRAM activations at M=4096: stale). The fused kernel is compute-bound at ~300 TFLOP/s; the same packed shape as a plain
+matmul (`ff13plain`) computes in 745.2 / 1477.3 µs (bs8 / bs16, 548-552 TFLOP/s; data-movement-bound in full, 1071 /
+2202, because it writes the 2× wider output). bs32 device profile (tracy, one replay, 340.5 ms of kernel time): FF1 +
+FF3 119.5 ms (35%), `silu_mul` 49.1 ms (14%, 1364 µs per call at the DRAM floor), FF2 + WO 77.3, QKV 39.2, SDPA 21.0.
+
+**Where the epilogue went** (`perf_tools/bench_swiglu_epilogue.py`, variants of `swiglu_block` patched in place,
+bs16 / bs8 µs): base 2709 / 1435, copy + pack only 1613 / 788, SiLU only 2287 / 1199, multiply only 1964 / 1010, inits
+hoisted (one pair per DST session kept) 2676 / 1417. So the SFPU SiLU (~675 µs at bs16) and the SFPU multiply (~350)
+are the epilogue, the per-tile inits are not (§35's batching was right to find the packer, not the inits, the limit).
+A single SFPU pass computing silu(gate) · up (`moe_compute` / `moe_gpt`'s `swiglu_sfpu.h` pattern, `_sfpu_sigmoid_`
+and the bf16 roundings of silu_tile + mul_binary_tile) is 2307 / 1222 on the pack thread (2348 / 1231 on the math
+thread; moe's bf16 exp + one reciprocal step 2292 / 1212, less precise); PCC vs base 1.00000.
+
+**In the K loop** (landed in `compute_metal2.cpp`, `matmul_blocks_swiglu`): on each output block's last K block the math
+thread accumulates the subblock from zero, adds its partial sums of K blocks 0..K-2 with one dest-reuse add (same
+rounding order as the packer's L1 accumulation), and the pack thread applies the single-pass SwiGLU in its DST half and
+packs straight into the half-width output, overlapping the math thread's next subblock; no epilogue pass re-reads the
+intermediate. µs per call and PCC vs an fp32 torch SwiGLU of the same operands (first 64 rows): bs8 1435.0 → 1049.8
+(0.98697 → 0.98697), bs16 2704.8 → 1958.7 (0.98690 → 0.98691), bs32 fused 5324.8 → 4128.7 at 8,8,8 1×8, 5165.5 →
+3830.5 at 4,20,8 1×4. Reloading the partials into DST first and accumulating on top was as fast but less accurate
+(PCC vs base 0.99989 / 0.99974, vs torch 0.98692 / 0.98670: the large partial swamps the bf16 DST accumulation).
+ttnn nightly `test_minimal_matmul.py -k swiglu` (4, incl. the bias path, which keeps the epilogue) and
+`test_minimal_matmul_split.py -k swiglu` (6) pass.
+
+At bs32 the fused kernel (3831 µs per layer) now beats FF1 + FF3 + `silu_mul` (1670 × 2 + 1364 = 4704), and it is the
+bs32 default (§13's "structurally slower" was the epilogue). e2e, sustained_run.sh, 3 alternating rounds per batch
+(committed vs new kernel, chips 0 / 1 / 2 concurrently): bs8 98.6 / 113.7 → 85.0 / 103.7 ms (cold / sustained, −13.8 /
+−8.8%), bs16 185.1 / 225.7 → 158.3 / 210.4 (−14.5 / −6.8%), bs32 364.1 / 436.3 → 329.4 / 411.0 (−9.5 / −5.8%, fused);
+the settled clock drops 40-90 MHz (more power per iteration with less waiting). STS-B 0.8116 / 0.8150 / 0.8135 at
+batch 8 / 16 / 32 (0.8114 / 0.8144 / 0.8146 before; bs32 changes path). The FF13 block knobs are shared with the
+unfused FF1 / FF3: bs32's 4,20,8 1×4 applies only when fused (the unfused path at those blocks: 410.2 ms).
+
+**Blocks re-swept for the new kernel** (`perf_tools/bench_ff13_sweep.py <batch>`, 255 configs per batch: M 4 / 8 / 16,
+K 5-20, N 4 / 8 / 16, subblocks 1×2 … 4×2; the failures are L1 clashes): K_block 20 with a 1×8 subblock wins at every
+batch; the fused kernel takes 1×8 (the old "capped at 1×4" note no longer holds). bs8 8,8,8 1×8 1058.4 → 8,20,8 1×8
+996.0 µs, bs16 4,20,8 1×4 1964.8 → 1×8 1927.4, bs32 4,20,8 1×4 3848.9 → 1×8 3763.7. e2e, 3 alternating rounds:
+cold / sustained bs8 85.0 / 104.1 → 82.5 / 101.4 ms, bs16 158.3 / 210.7 → 157.1 / 209.5, bs32 329.3 / 411.1 →
+326.4 / 408.6; STS-B bs8 0.8114. Landed, applied only with the fused kernel (the block knobs also drive the unfused
+FF1 / FF3). bs1 (`QWEN_FUSE_SWIGLU_BS1=1`, M=512, 110 configs): best 2,20,8 1×2 214.4 µs (the probe's old 2,8,8 1×4
+259.2), but the legacy FF1 + FF3 + mul it replaces is cheaper e2e: 15.6 → 17.6 ms at the old config, 15.7 → 16.0 at
+the best. bs1 stays unfused; the probe's defaults now point at the best config.
+
+## 59. FF2 / WO: compute-bound at ~80% of the LoFi roofline; bs32's M_block-16 win is lost to the power cap (2026-09-28)
+
+Model calls (`capture_qkv_call.py`, `CAP_N=2560`): FF2 in0 [M, 9728] and WO in0 [M, 4096] bfp8 in **DRAM**, bfp4 weights
+DRAM width-sharded ([K, 320] per bank), bfp8 out in L1, LoFi; blocks bs8 16,8,8 1×8, bs16 / bs32 8,8,8 1×8.
+`perf_tools/bench_mm_ablate.py ff2|wo <batch>` (the presets now read in0 from DRAM, `MM_IN0=` overrides), µs:
+
+| | full | no output write | no in0 read | no in1 read | compute only | TFLOP/s full / compute |
+|---|---|---|---|---|---|---|
+| FF2 bs8 | 372.6 | 372.8 | 372.0 | 370.2 | 366.6 | 548 / 557 |
+| FF2 bs16 | 734.6 | 730.5 | 733.0 | 723.7 | 718.7 | 555 / 568 |
+| FF2 bs32 | 1505.6 | 1501.8 | 1503.6 | 1401.1 | 1389.8 | 542 / 587 |
+| WO bs8 | 173.6 | 172.9 | 172.7 | 170.5 | 167.0 | 495 / 514 |
+| WO bs16 | 333.0 | 330.2 | 329.3 | 324.8 | 320.7 | 516 / 536 |
+| WO bs32 | 660.8 | 655.3 | 660.0 | 623.1 | 610.0 | 520 / 563 |
+
+Both are compute-bound (92-98%); the DRAM in0 read and the output write are hidden. The LoFi roofline is 4096 FLOP per
+cycle per core (8×16 × 16×16 per cycle, `tech_reports/GEMM_FLOPS`): 663.6 TFLOP/s on 120 cores at 1.35 GHz, ~496 at
+the ~1.01 GHz bs16 / bs32 settle; so FF2 / WO run at 79-88% of the FPU. At bs32 the weight read is exposed (−105 /
+−38 µs when skipped): each core re-reads its in1 slice once per M block, and bs32 has 6 M blocks per core.
+
+Block sweep (`perf_tools/bench_mm_sweep.py ff2|wo <batch>`, 126-168 configs): bs8 and bs16 keep their blocks (best
+within 0.1-1%). bs32 M_block 16 halves the re-reads: FF2 1510.0 → 1417.1 µs (16,4,8 1×8), WO 666.7 → 631.9 (16,8,8).
+In the model FF2's 16,4,8 CBs (~716 KB) clash with L1 (the preallocated norm halves and FF2's L1 output leave
+~665 KB, lowest buffer 777,216 B); 16,8,4 1×4 fits (1459.8 µs standalone). With WO 16,8,8, sustained_run.sh, 3
+alternating rounds, bs32 chip 0: cold 323.0 → 320.9 ms, **sustained 399.6 → 402.6** (settled clock ~1035 → ~1017
+MHz). More work per watt-second is not faster under the power cap: kept the 8,8,8 blocks.
+
+## 60. Fused FF1+FF3: the pack-thread SwiGLU was half exposed; K_block 40 hides it (landed) (2026-09-29)
+
+With the SwiGLU on the pack thread (§58) the fused kernel ran at 413-434 TFLOP/s against ~550 for the same packed shape
+as a plain matmul. `perf_tools/bench_ff13_fused_ablate.py <batch>` patches `compute_metal2.cpp` (skip or double the
+pack-thread SwiGLU call, skip the last K block's dest-reuse add of the partial sums) and optionally the dataflow header
+(skip reads / writes, as `bench_mm_ablate.py`), at the model's blocks (bs8 8,20,8 1×8, bs16 / bs32 4,20,8 1×8), µs:
+
+| | full | no SFPU | SFPU ×2 | no partials add | no SFPU, no add | compute only | compute only, no SFPU | compute only, no SFPU, no add |
+|---|---|---|---|---|---|---|---|---|
+| bs8 | 987.3 | 840.9 | 1329.5 | 979.6 | 810.1 | 929.6 | 771.0 | 734.0 |
+| bs16 | 1931.2 | 1631.0 | 2611.7 | 1911.3 | 1560.7 | 1842.1 | 1515.8 | 1438.6 |
+| bs32 | 3758.4 | 3104.3 | 5149.2 | 3720.3 | 2951.1 | 3644.6 | 2999.0 | 2842.2 |
+
+One SwiGLU pass costs what a second one adds (342 / 680 / 1391 µs), and about half of it is exposed (skipping it saves
+15-17%); the partial-sum add (1%) and the reads / writes (3-6%) are not the gap. Per output tile the SFPU pass is ~1400
+cycles (680 µs over ~650 output tiles per core at bs16), but it only overlaps the last K block's math: K_block 20 × 2
+(gate, up) × 16 cycles = 640 per output tile. The §58 re-sweep never reached a larger K block (K in 5..20).
+
+K_block 40 doubles the window (`bench_ff13_sweep.py`, µs): bs8 8,40,8 1×8 858.6, 8,40,6 1×6 881.9 (was 999.3); bs16
+4,80,4 1×4 1687.6, 4,40,8 1×8 1703.1 (1937.2); bs32 6,40,8 1×8 3254.8, 4,40,8 1×8 3276.5 (3763.4). Subblocks other
+than 1×W lose (2×4, 2×2: the SwiGLU pairs gate / up along W). K_block 80 (one K block, no partials) fits only with
+small M / N blocks and is not better.
+
+In the model the larger CBs are L1-limited. bs16 4,40,8 fits (cold 156.9 → 148.9 ms). bs8 8,40,8 clashes (static CBs
+end at 1,377,408 B, lowest L1 buffer 1,240,704: the post-attention residual sum in L1); 8,40,6 fits. bs32 4,40,8
+clashed at 777,216 B: `l1_map_first_layer.py 32` showed the post-attention add's norm output (the FF13 input, 363 KB
+per core) allocated below WO's L1 output, which is live during the add and freed right after, so FF13 ran with the top
+363 KB of L1 empty and its CBs capped below the norm output. Two fixes, cold bs32 ms:
+
+| | ms |
+|---|---|
+| default (4,20,8 1×8) | 322.6 |
+| 4,40,4 1×4 (fits as is) | 316.7 |
+| WO output to DRAM (`TT_PREFILL_WO_L1=0`) | 327.5 |
+| WO output to DRAM + 4,40,8 | 308.4 |
+| norm output preallocated before WO (`QWEN_FUSED_ADD_NORM_PREALLOC_FF=1`) | 323.6 |
+| preallocated + 4,40,8 (landed) | 302.4 |
+
+Trading WO's L1 output for DRAM pays (+4.2 ms for −19), but the preallocation (the FF2 hook's trick, §56, for the
+post-attention norm) gets the room without the trade: the lowest L1 buffer during FF13 moves to 1,149,312 B. bs32
+6,40,8 still misses by 4 KB. STS-B 0.8119 / 0.8147 / 0.8152 (bs8 / 16 / 32). sustained_run.sh, 3 alternating rounds per
+batch, chip 0, cold / sustained ms: bs8 82.5 / 102.0 → 78.5 / 99.5, bs16 157.1 / 201.7 → 148.8 / 196.1, bs32 322.8 /
+400.1 → 303.1 / 388.7.
