@@ -620,7 +620,7 @@ class CosyVoice2TTNN:
         Each segment's tokens feed a `StreamSession` as the LLM samples them. A chunk's flow and HiFT run between two
         decode steps, while the decode trace is alive, so `warmup_streaming()` must have run, or this raises: nothing
         may compile or prepare weights under a live trace. Without it, a cold request's first chunk allocated 1,259
-        buffers there, which the trace's next replay would have overwritten (the allocation tracker's count,
+        buffers there, where the trace's next replay could overwrite them (the allocation tracker's count,
         docs/VALIDATION.md). `generate()` releases the trace when it returns, before the final chunk (notes: D22, D31).
         `on_audio(audio)` receives each chunk's audio as soon as it is ready.
 
@@ -634,7 +634,7 @@ class CosyVoice2TTNN:
             raise RuntimeError(
                 "synthesize_stream() needs warmup_streaming() first: a chunk's flow and HiFT run while the LLM's "
                 "decode trace is alive, and on a pipeline not warmed for streaming they would compile and allocate "
-                "there, where the trace's next replay overwrites what they allocated"
+                "there, where the trace's next replay can overwrite what they allocated"
             )
         if ctx.mode != "zero_shot":
             raise NotImplementedError(f"mode {ctx.mode!r}: only zero_shot is wired end to end so far")

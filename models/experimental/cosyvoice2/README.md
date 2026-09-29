@@ -172,7 +172,7 @@ COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests
 - **Streaming needs its own warm-up.** A chunk runs between decode steps while the LLM's decode trace is alive, so
   `warmup_streaming()` compiles and verifies every streaming geometry first (2.5 minutes with the kernels on disk).
   `synthesize_stream` refuses to run without it. On a pipeline without it, the first chunk allocated 1,259 buffers
-  that the trace's next replay would have overwritten (`docs/VALIDATION.md`).
+  under the live trace, where its next replay could overwrite them (`docs/VALIDATION.md`).
 - **Blackhole is untested.**
   `tests/pcc/test_flow_decoder.py::test_device_decoder_fused_sdpa_ignores_tile_padding_at_t_1_mod_32` guards the
   fused-SDPA tile-padding bug reported for Blackhole ([#57608](https://github.com/tenstorrent/tt-metal/issues/57608)).

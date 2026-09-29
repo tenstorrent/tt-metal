@@ -764,11 +764,14 @@ tokens.
 under `TT_METAL_TRACE_ALLOC_TRACKING=1`:
 - It compiled 416 kernels, then failed at the first decode replay after the first chunk: `Found 1259 device
   buffer(s) still alive before trace replay. These will be corrupted on replay.`
-- Those buffers are what the first chunk's flow and HiFT allocated while the decode trace was alive:
-  - host-to-device copies of weights and constants, made on first use;
-  - outputs of their ops (convs, halos, norms, matmuls) that outlive the chunk.
+- The first chunk's flow and HiFT allocated those buffers while the decode trace was alive, and they stay allocated.
+  The tracker labels each with what allocated it:
+  - 772 are host-to-device copies (`ttnn.to_device`): weights and constants moved to the device on first use;
+  - 487 were created along with new programs, on program-cache misses (convs 110, halos 102, moves 42, matmuls 34,
+    and others). The program cache keeps them.
 
-  Untracked, the replay would have overwritten them silently.
+  The tracker flags every buffer allocated under a live trace, because the replay writes to addresses that were
+  free when the trace was captured. Untracked, the replay could have overwritten any of them silently.
 - So `synthesize_stream` now raises unless `warmup_streaming()` has run, and `demo.py` refuses `--stream` without
   `--warmup buckets`.
 - The interleaved test checks the refusal first. It passed again: 2 passed, 0 kernels compiled, first audio 1.373 s,
