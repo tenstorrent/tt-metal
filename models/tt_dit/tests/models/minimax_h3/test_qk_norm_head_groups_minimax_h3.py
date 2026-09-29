@@ -50,14 +50,31 @@ def test_a_one_chip_shard_is_split_to_the_width_a_galaxy_already_runs():
     assert H3_HEADS // groups * HEAD_DIM == _PER_HEAD_NORM_MAX_COLS
 
 
-@pytest.mark.parametrize("heads", [56, 28, 14, 12, 7])
-def test_the_split_is_always_the_fewest_groups_that_fit(heads):
+@pytest.mark.parametrize("heads", [56, 28, 14, 12, 7, 4, 3, 2])
+def test_the_split_is_always_legal_and_the_fewest_that_fit(heads):
     groups = per_head_norm_groups(heads, HEAD_DIM)
     assert heads % groups == 0, (heads, groups)
-    assert heads // groups * HEAD_DIM <= _PER_HEAD_NORM_MAX_COLS, (heads, groups)
-    # Fewest: no smaller group count would have fit.
+    # Legal first: the op refuses a single-head call, so a group must carry at least two heads.
+    # This is not hypothetical -- an earlier version fell back to one group per head and the 1x4
+    # row turned an L1 overflow into "per_head_norm requires num_heads_per_device > 1".
+    if groups > 1:
+        assert heads // groups >= 2, (heads, groups)
+    # Fewest that fit, among the legal counts.
     for fewer in range(1, groups):
-        assert heads % fewer or heads // fewer * HEAD_DIM > _PER_HEAD_NORM_MAX_COLS
+        if heads % fewer == 0 and (fewer == 1 or heads // fewer >= 2):
+            assert heads // fewer * HEAD_DIM > _PER_HEAD_NORM_MAX_COLS, (heads, groups, fewer)
+
+
+def test_a_width_no_legal_split_can_fix_stays_legal():
+    """If nothing legal gets under the budget, the answer must still be something the op accepts.
+
+    Two heads of a very wide head_dim cannot be split at all (one head per group is refused), so
+    the only correct answer is 1 -- an overflow the op may still handle, rather than a call it is
+    guaranteed to reject.
+    """
+    assert per_head_norm_groups(2, _PER_HEAD_NORM_MAX_COLS) == 1
+    # Three heads can only split 3 ways, which is one head each, so it cannot split either.
+    assert per_head_norm_groups(3, _PER_HEAD_NORM_MAX_COLS) == 1
 
 
 @SMALL_LINE_PARALLEL
@@ -71,11 +88,14 @@ def test_head_groups_match_the_ungrouped_norm(
     (the grouping is gated on `> 1`), which makes this a genuine before/after.
     """
     del sp_axis, device_params, is_fsdp
-    heads, seq = 8, 64
+    # 8 heads PER DEVICE on every row, so the per-device row is the same 1024 columns whatever the
+    # mesh and both the 2- and 4-way splits leave at least two heads in a group (the op refuses a
+    # single-head call). A fixed total head count would give the 1x4 row only 2 heads per device,
+    # where no legal split exists at all.
+    seq = 64
     tp_factor = tuple(mesh_device.shape)[tp_axis]
-    if heads % tp_factor:
-        pytest.skip(f"{heads} heads do not divide TP={tp_factor}")
-    heads_per_device = heads // tp_factor
+    heads_per_device = 8
+    heads = heads_per_device * tp_factor
     inner_dim = heads * HEAD_DIM
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -90,14 +110,21 @@ def test_head_groups_match_the_ungrouped_norm(
     torch.manual_seed(7)
     norm.load_torch_state_dict({"weight": torch.randn(inner_dim) * 0.1 + 1.0})
 
-    # bf16_tensor requires mesh_axis and shard_dim to be given together or not at all; at TP=1 the
-    # row is already whole, so neither applies.
+    # The tensor handed in is the FULL inner dim and the mesh mapper does the fracturing, so the
+    # per-device row is inner_dim // tp_factor -- which is what the norm's own check expects. At
+    # TP=1 there is nothing to fracture, and bf16_tensor wants mesh_axis and shard_dim given
+    # together or not at all.
     shard = {"mesh_axis": tp_axis, "shard_dim": -1} if tp_factor > 1 else {}
-    x = bf16_tensor(torch.randn(1, 1, seq, inner_dim // tp_factor), device=mesh_device, **shard)
+    x = bf16_tensor(torch.randn(1, 1, seq, inner_dim), device=mesh_device, **shard)
     kwargs = dict(num_heads_per_device=heads_per_device, per_head_norm=True)
     plain = ttnn.to_torch(ttnn.get_device_tensors(norm(x, **kwargs))[0]).to(torch.float32)
 
-    for groups in (g for g in (2, 4) if heads_per_device % g == 0):
+    # Groups of at least two heads: the op rejects a single-head call, which is also why
+    # per_head_norm_groups never produces one.
+    tried = [g for g in (2, 4) if heads_per_device % g == 0 and heads_per_device // g >= 2]
+    assert tried, f"no legal split to test at {heads_per_device} heads per device"
+
+    for groups in tried:
         grouped = ttnn.to_torch(ttnn.get_device_tensors(norm(x, head_groups=groups, **kwargs))[0]).to(torch.float32)
         assert grouped.shape == plain.shape, (groups, grouped.shape, plain.shape)
         rel = float(torch.linalg.vector_norm(grouped - plain) / torch.linalg.vector_norm(plain))

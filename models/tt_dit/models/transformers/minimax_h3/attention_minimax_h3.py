@@ -70,20 +70,30 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
 _PER_HEAD_NORM_MAX_COLS = 1792
 
 
+# The fused per-head norm rejects a call with a single head ("per_head_norm requires
+# num_heads_per_device > 1"), so a group must always carry at least two.
+_PER_HEAD_NORM_MIN_HEADS = 2
+
+
 def per_head_norm_groups(num_heads: int, head_dim: int) -> int:
     """Fewest equal groups of heads that keep one fused per-head norm inside L1.
 
     1 means "one call", which is what every mesh wide enough to shard the heads gets, so the
     grouping is inert everywhere it is not needed.
+
+    Never returns a count that would leave one head in a group: the op refuses that outright, so a
+    split that narrow would trade an L1 overflow for a hard validation failure. If no legal split
+    gets under the column budget, the narrowest legal one is returned and the budget is missed --
+    better to hand the op a shape it may still fit than one it is guaranteed to reject.
     """
     cols = num_heads * head_dim
     if cols <= _PER_HEAD_NORM_MAX_COLS:
         return 1
-    for groups in range(2, num_heads + 1):
-        if num_heads % groups == 0 and cols // groups <= _PER_HEAD_NORM_MAX_COLS:
+    legal = [g for g in range(2, num_heads // _PER_HEAD_NORM_MIN_HEADS + 1) if num_heads % g == 0]
+    for groups in legal:
+        if cols // groups <= _PER_HEAD_NORM_MAX_COLS:
             return groups
-    # Every head on its own: the narrowest the split can go.
-    return num_heads
+    return legal[-1] if legal else 1
 
 
 class MiniMaxH3Attention(Module):
