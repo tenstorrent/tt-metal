@@ -34,7 +34,7 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
         tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
         tt::tt_metal::datatype_to_dataformat_converter(grid_tensor.dtype()),
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()));
-    tt::tt_metal::IDevice* const device = output_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* const device = output_tensor.device();
 
     // Shape and dimensions
     const auto& [input_shape, grid_shape, output_shape] =

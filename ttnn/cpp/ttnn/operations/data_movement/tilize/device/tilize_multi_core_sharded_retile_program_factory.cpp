@@ -184,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer: sharded in-place (handshake only) or interleaved scatter (TensorAccessor).
@@ -205,7 +205,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
                 .accessor_name = "dst",
             }},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     } else {
         writer = KernelSpec{
@@ -219,18 +219,26 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     }
 
     // Compute: retile. MID / MID_VIEW are self-loops (compute is the only toucher; MID_VIEW's read
     // cursor is hand-driven, it has no FIFO producer).
-    ComputeGen1Config compute_cfg;
+    ComputeHardwareConfig compute_cfg;
     compute_cfg.enable_32_bit_dest = fp32_llk_acc;
     if (fp32_llk_acc) {
         compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
         compute_cfg.unpack_modes.emplace(MID_DFB, UnpackMode::UnpackToDest);
         compute_cfg.unpack_modes.emplace(MID_VIEW_DFB, UnpackMode::UnpackToDest);
+    }
+    // Quasar gets only the common fields set above; WH/BH use compute_cfg as is.
+    ComputeHardwareConfig compute_hw = compute_cfg;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        ComputeHardwareConfig compute_cfg_gen2;
+        compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+        compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+        compute_hw = compute_cfg_gen2;
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -275,7 +283,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
              {"mid_page_size", mid_page_size}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_input_blocks", "num_real_input_rows", "num_real_output_rows"}},
-        .hw_config = ComputeHardwareConfig{compute_cfg},
+        .hw_config = std::move(compute_hw),
     };
 
     ProgramSpec spec{

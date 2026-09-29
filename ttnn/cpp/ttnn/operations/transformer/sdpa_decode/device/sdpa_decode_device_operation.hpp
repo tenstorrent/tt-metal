@@ -26,12 +26,10 @@ constexpr uint32_t MAX_TREE_REDUCTION_ROUNDS = 6;  // Supports up to 2^6 = 64 co
 
 struct TreeReductionParams {
     uint32_t num_rounds = 0;                                 // ceil(log2(num_cores))
-    uint32_t my_active_rounds = 0;                           // rounds this core receives children
     bool is_root = false;                                    // final reducer (core 0)
     uint32_t parent_core_in_group = 0;                       // UINT32_MAX if root
     uint32_t send_at_round = 0;                              // UINT32_MAX if root
     uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];  // UINT32_MAX if no child
-    uint32_t num_children = 0;
 };
 
 // Binary tree reduction: core 0 is root, vid = (N-1) - core_id for tree structure
@@ -56,8 +54,6 @@ inline TreeReductionParams get_tree_reduction_params(uint32_t core_id, uint32_t 
             uint32_t child_vid = vid - (1u << r);
             if (child_vid < N) {
                 p.children_per_round[r] = (N - 1) - child_vid;
-                p.num_children++;
-                p.my_active_rounds = r + 1;
             }
         }
     }
@@ -78,8 +74,6 @@ inline TreeReductionParams get_tree_reduction_params(uint32_t core_id, uint32_t 
             uint32_t t = __builtin_ctz(~cv);
             if (cv + (1u << t) >= N && p.children_per_round[t] == UINT32_MAX) {
                 p.children_per_round[t] = c;
-                p.num_children++;
-                p.my_active_rounds = std::max(p.my_active_rounds, t + 1);
             }
         }
     }

@@ -29,7 +29,12 @@ before its first config write):
 `NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a
 stall that orders the GPR→cfg write but drains no execution unit; `DRAIN_REARMED`
 = a draining stall precedes the write but the unit was re-issued (UNPACR/PACR/
-matrix) between the drain and the write, so the drain no longer holds;
+matrix) between the drain and the write, so the drain no longer holds. A MOP /
+`mop_run` / replay sitting in that window re-arms the unit just as well, and the
+tool credits the drain straight across it — a MOP is **opaque to the tool, not
+skippable by you**: resolve what the MOP actually issues at its `run()`/`replay()`
+site (per `race-audit-all` → *"A word's SLOT, not its line"*) and treat a
+unit-re-issuing word in any slot as a re-arm;
 `PARTIAL_MATH_DRAIN` = a **MATH** reconfig whose stall drains only ONE of the two
 MATH engines (FPU=`MATH` vs SFPU=`WAIT_SFPU`/`SFPU1`) — **code-dependent, so
 low-confidence**: it is sufficient only if the reconfig'd field is not sampled by
@@ -46,11 +51,11 @@ decide. If unbuilt, proceed manually.
 ## The rule (what a correct function does)
 When a flattened LLK function REWRITES config registers that a hardware execution unit reads *while running*, that unit must be **idle first** — otherwise you reprogram state out from under an in-flight op (a "reconfig escape"). The guard is a `TTI_STALLWAIT` (usually at the top of the function) whose **condition (2nd) operand** drains the matching unit:
 
-| Function reconfigures… | condition (`wait_res`, 2nd arg) must include | because |
-|---|---|---|
-| **Packer** config (out/in fmt, strides, l1 offset, exp threshold, l1_acc, dest-rd-ctrl) | `p_stall::PACK` | packer reads these during PACR |
-| **Unpacker** config (tile descriptor, out fmt, strides, base addr) | `p_stall::UNPACK` (or `UNPACK0` for SrcA, `UNPACK1` for SrcB) | unpacker reads these during UNPACR |
-| **Math** config (ALU SrcA/SrcB fmt, INT8 enable, dest acc) | `p_stall::MATH \| p_stall::WAIT_SFPU` | the FPU **and** the SFPU share the math path — BOTH must drain |
+| Function reconfigures…                                                                  | condition (`wait_res`, 2nd arg) must include                  | because |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------- | --- |
+| **Packer** config (out/in fmt, strides, l1 offset, exp threshold, l1_acc, dest-rd-ctrl) | `p_stall::PACK`                                               | packer reads these during PACR |
+| **Unpacker** config (tile descriptor, out fmt, strides, base addr)                      | `p_stall::UNPACK` (or `UNPACK0` for SrcA, `UNPACK1` for SrcB) | unpacker reads these during UNPACR |
+| **Math** config (ALU SrcA/SrcB fmt, INT8 enable, dest acc)                              | `p_stall::MATH \| p_stall::WAIT_SFPU`                         | the FPU **and** the SFPU share the math path — BOTH must drain |
 
 `TTI_STALLWAIT(stall_res, wait_res)` **on WH/BH** (2-operand): `stall_res` = **block mask** (which instruction classes can't issue: `STALL_CFG`=B7 blocks WRCFG/RMWCIB, `STALL_PACK`/`STALL_UNPACK`/`STALL_MATH`), `wait_res` = **condition mask** (what to wait on). The block mask just needs to block the instruction that does the config write; the **condition mask is what proves the unit is drained** — that's the bit to check. **Quasar is 4-operand:** `TTI_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0)` — the condition mask is **split across the last three operands** (operand 2 is often `0`; the real tokens, e.g. `MATH`/`WAIT_SFPU`/`PACK0`/`PACK1`, are in operands 3–4). Read all three wait operands, not just the second. Confirm the current macro arity/operand layout against `tt_llk_<arch>/common/inc/ckernel_ops.h`.
 

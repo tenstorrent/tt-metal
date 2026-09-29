@@ -434,7 +434,8 @@ private:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator,
-        bool enable_blackhole_dram_programmable_cores);
+        bool enable_blackhole_dram_programmable_cores,
+        bool enable_aerisc_ptp_trace);
     void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
 
     // Functions where implementation varies by architecture
@@ -463,7 +464,8 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator = false,
-        bool enable_blackhole_dram_programmable_cores = false);
+        bool enable_blackhole_dram_programmable_cores = false,
+        bool enable_aerisc_ptp_trace = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -527,9 +529,7 @@ public:
     float get_inf() const { return inf_; }
 
     // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_arch_num_circular_buffers() const {
-        return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
-    }
+    uint32_t get_num_dataflow_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS; }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 

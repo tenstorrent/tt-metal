@@ -121,6 +121,21 @@ jobs:
           fi
           python3 .github/scripts/runner_failure_scan.py "${args[@]}"
 
+      - name: Post scan health alert
+        if: always() && hashFiles('out/runner_failure_report.json') != ''
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          DEFAULT_SLACK_CHANNEL: ${{ secrets.RUNNER_FAILURE_SCAN_CHANNEL }}
+          POST_TO_SLACK: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.post-to-slack == 'true' }}
+        run: |
+          if [[ "$POST_TO_SLACK" != "true" ]]; then
+            echo "Slack posting was not requested."
+            exit 0
+          fi
+          python3 .github/scripts/runner_failure_post_slack.py \
+            --scan-health-report-json out/runner_failure_report.json \
+            --slack-channel "$DEFAULT_SLACK_CHANNEL"
+
       - name: Build runner report matrix
         id: runner_matrix
         if: always() && hashFiles('out/runner_failure_report.json') != ''
@@ -180,7 +195,7 @@ jobs:
 
   runner-report:
     needs: scan
-    if: ${{ needs.scan.outputs.runner_matrix != '' && needs.scan.outputs.runner_matrix != '[]' }}
+    if: ${{ always() && needs.scan.outputs.runner_matrix != '' && needs.scan.outputs.runner_matrix != '[]' }}
     permissions:
       actions: read
       contents: read

@@ -7,10 +7,10 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -36,16 +36,13 @@ struct MultiInterleavedConfig {
 /// @param mesh_device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiInterleavedConfig& test_config) {
+bool run_dm(distributed::MeshDevice& mesh_device, const MultiInterleavedConfig& test_config) {
     log_info(
         tt::LogTest,
         "num transaction {}, num pages: {}, page size bytes: {}",
         test_config.num_of_transactions,
         test_config.num_pages,
         test_config.page_size_bytes);
-
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->impl().get_device(0);
 
     // Program
     Program program = CreateProgram();
@@ -54,14 +51,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     const size_t per_core_size_bytes = test_config.num_pages * test_config.page_size_bytes;
     const size_t total_buffer_size_bytes = num_cores * per_core_size_bytes;
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::ReplicatedBufferConfig global_config{.size = total_buffer_size_bytes};
     distributed::DeviceLocalBufferConfig local_config{
         .page_size = test_config.page_size_bytes, .buffer_type = BufferType::DRAM};
-    auto input_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
+    auto input_buffer = distributed::MeshBuffer::create(global_config, local_config, &mesh_device);
     uint32_t input_buffer_address = input_buffer->address();
 
-    auto output_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(global_config, local_config, &mesh_device);
     uint32_t output_buffer_address = output_buffer->address();
 
     TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
@@ -132,7 +129,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     // We only use the coordinator's semaphore - all cores increment it via NOC and poll until num_cores.
     // Creating on all cores ensures get_semaphore(id) works correctly on every core.
     CoreCoord coordinator_core = core_list[0];
-    CoreCoord coordinator_phys = device->worker_core_from_logical_core(coordinator_core);
+    CoreCoord coordinator_phys = mesh_device.worker_core_from_logical_core(coordinator_core);
 
     uint32_t reader_barrier_sem_id = 0;
     uint32_t writer_barrier_sem_id = 0;
@@ -213,16 +210,16 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
 
     if (test_config.read_kernel) {
         distributed::EnqueueWriteMeshBuffer(cq, input_buffer, packed_input, /*blocking=*/true);
-        MetalContext::instance().get_cluster().dram_barrier(device->id());
+        MetalContext::instance().get_cluster().dram_barrier(mesh_device.get_device_ids().front());
     } else {
         // If not reading, write each core's slice to L1 directly
         const size_t per_core_words = per_core_size_bytes / sizeof(uint32_t);
         for (size_t i = 0; i < num_cores; ++i) {
             vector<uint32_t> core_input(
                 packed_input.begin() + i * per_core_words, packed_input.begin() + (i + 1) * per_core_words);
-            detail::WriteToDeviceL1(device, core_list[i], l1_addrs[i], core_input);
+            slow_dispatch::WriteToL1(mesh_device, core_list[i], l1_addrs[i], core_input);
         }
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
     }
 
     auto mesh_workload = distributed::MeshWorkload();
@@ -252,7 +249,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         // Each core reads different pages, verify each core's L1 against its slice
         const size_t per_core_words = per_core_size_bytes / sizeof(uint32_t);
         for (size_t i = 0; i < num_cores; ++i) {
-            detail::ReadFromDeviceL1(device, core_list[i], l1_addrs[i], per_core_size_bytes, packed_output);
+            slow_dispatch::ReadFromL1(mesh_device, core_list[i], l1_addrs[i], per_core_size_bytes, packed_output);
             vector<uint32_t> core_golden(
                 packed_golden.begin() + i * per_core_words, packed_golden.begin() + (i + 1) * per_core_words);
             is_equal = (packed_output == core_golden);
@@ -270,7 +267,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
 }
 
 void directed_ideal_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord mst_grid_size,
@@ -307,7 +304,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord mst_grid_size,
@@ -355,17 +352,14 @@ void packet_sizes_test(
     }
 }
 
-void grid_packet_sizes_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id, bool read, bool write) {
-    auto* device = mesh_device->impl().get_device(0);
-
+void grid_packet_sizes_test(distributed::MeshDevice& mesh_device, uint32_t test_case_id, bool read, bool write) {
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;
     uint32_t max_num_pages = 256;
 
-    CoreCoord full_grid = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord full_grid = mesh_device.compute_with_storage_grid_size();
     std::vector<CoreCoord> grid_sizes = {{2, 2}, {6, 6}, full_grid};
 
     for (auto& grid_size : grid_sizes) {
@@ -406,74 +400,56 @@ void grid_packet_sizes_test(
 
 /* ========== Full grid directed ideal ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     uint32_t test_case_id = 110;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Full grid packet sizes sweep ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedSizes) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     uint32_t test_case_id = 111;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Full grid read kernel directed ideal ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     uint32_t test_case_id = 112;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Full grid read kernel packet sizes sweep ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadSizes) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     uint32_t test_case_id = 113;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Full grid write kernel directed ideal ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     uint32_t test_case_id = 114;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        mesh_device, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== Full grid write kernel packet sizes sweep ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteSizes) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     uint32_t test_case_id = 115;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = this->device().compute_with_storage_grid_size();
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        mesh_device, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== 2x2 CORE TESTS ========== */
@@ -483,7 +459,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedDirecte
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedSizes) {
@@ -491,7 +467,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedSizes) 
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
@@ -499,7 +475,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadDir
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
@@ -507,7 +483,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadSiz
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
@@ -515,7 +491,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteDi
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
@@ -523,7 +499,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteSi
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== 6x6 CORE TESTS ========== */
@@ -533,7 +509,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedDirecte
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedSizes) {
@@ -541,7 +517,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedSizes) 
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedReadDirectedIdeal) {
@@ -549,7 +525,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedReadDir
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedReadSizes) {
@@ -557,7 +533,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedReadSiz
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteDirectedIdeal) {
@@ -565,7 +541,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteDi
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteSizes) {
@@ -573,24 +549,24 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteSi
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
+        this->device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== GRID SWEEP TESTS ========== */
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedGridSweepSizes) {
     uint32_t test_case_id = 128;
-    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, true, true);
+    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(this->device(), test_case_id, true, true);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadGridSweepSizes) {
     uint32_t test_case_id = 129;
-    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, true, false);
+    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(this->device(), test_case_id, true, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteGridSweepSizes) {
     uint32_t test_case_id = 130;
-    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, false, true);
+    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(this->device(), test_case_id, false, true);
 }
 
 }  // namespace tt::tt_metal
