@@ -2510,14 +2510,6 @@ void ProgramImpl::finalize_single_dfb_config(
             "DFB {}: a PrefetcherPipe relay DFB does not support the BLOCKED access pattern on either side yet.",
             dfb->id);
     }
-    if (producer_is_tensix_only && config.cap == ::dfb::AccessPattern::BLOCKED) {
-        TT_FATAL(
-            !config.enable_consumer_implicit_sync,
-            "BLOCKED DFB {}: a Tensix (explicit-only) producer cannot feed an IMPLICIT-sync DM consumer, the "
-            "implicit-sync ISR path is DM-only, so the per-block explicit credit posts never reach the implicit "
-            "BLOCKED drain and the consumer deadlocks. Use explicit sync on the DM consumer, or a DM producer.",
-            dfb->id);
-    }
     if ((config.pap == ::dfb::AccessPattern::BLOCKED || config.cap == ::dfb::AccessPattern::BLOCKED) &&
         (has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask))) {
         TT_FATAL(

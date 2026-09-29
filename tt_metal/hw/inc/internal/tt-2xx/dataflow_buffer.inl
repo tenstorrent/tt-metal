@@ -22,16 +22,16 @@
 #include <type_traits>
 
 #if DFB_IS_COMPUTE_MATH
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline DataflowBuffer<Pap, Cap>::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
 #else
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline DataflowBuffer<Pap, Cap>::DataflowBuffer(uint16_t logical_dfb_id)
     : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
-    if constexpr (!kKnown) {
+    if constexpr (!pattern_known) {
         // UNKNOWN (raw id) only supports rings with no BLOCKED side.
         ASSERT(local_dfb_interface_.block_size <= 1u);
     }
@@ -44,7 +44,7 @@ inline DataflowBuffer<Pap, Cap>::DataflowBuffer(uint16_t logical_dfb_id)
 }
 #endif
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_entry_size() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -53,7 +53,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_entry_size() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_stride_size() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -62,7 +62,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_stride_size() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_total_num_entries() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -71,7 +71,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_total_num_entries() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_total_size_bytes() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -80,7 +80,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_total_size_bytes() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_local_num_entries() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -97,7 +97,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_local_num_entries() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_local_size_bytes() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -235,7 +235,7 @@ inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
 
 }  // namespace
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_ring_span_bytes() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -244,7 +244,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_ring_span_bytes() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_ring_span_num_entries() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -257,20 +257,22 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_ring_span_num_entries() const {
 // The stride the host serialized for this hart, in entries: entry spacing on a STRIDED side,
 // the per-tile cursor hop on a BLOCKED DM side.
 #ifndef COMPILE_FOR_TRISC
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline bool DataflowBuffer<Pap, Cap>::producer_broadcast() const {
-    if constexpr (kKnown) {
-        if constexpr (Cap == DFBAccess::ALL) {
+    if constexpr (pattern_known) {
+        if constexpr (Cap == dfb::AccessPattern::ALL) {
             ASSERT(local_dfb_interface_.broadcast_tc || local_dfb_interface_.num_tcs_to_rr == 1);
         }
-        return Cap == DFBAccess::ALL;
+        return Cap == dfb::AccessPattern::ALL;
     } else {
         return local_dfb_interface_.broadcast_tc != 0;
     }
 }
 #endif
 
-template <DFBAccess Pap, DFBAccess Cap>
+// The stride the host serialized for this hart, in entries: entry spacing on a STRIDED side,
+// the per-tile cursor hop on a BLOCKED DM side.
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint16_t DataflowBuffer<Pap, Cap>::wire_stride_tiles() const {
 #if DFB_IS_COMPUTE_MATH
     return 1u;
@@ -283,18 +285,18 @@ inline uint16_t DataflowBuffer<Pap, Cap>::wire_stride_tiles() const {
 
 // Spacing between the entries of one op: 1 on a BLOCKED side (a whole block), the stride on a
 // STRIDED side facing BLOCKED peers.
-template <DFBAccess Pap, DFBAccess Cap>
-inline uint16_t DataflowBuffer<Pap, Cap>::get_produce_stride_tiles() const {
-    if constexpr (kProducerBlocked) {
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_stride_tiles() const {
+    if constexpr (producer_blocked) {
         return 1u;
     } else {
         return wire_stride_tiles();
     }
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
-inline uint16_t DataflowBuffer<Pap, Cap>::get_consume_stride_tiles() const {
-    if constexpr (kConsumerBlocked) {
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint16_t DataflowBuffer<Pap, Cap>::get_consumer_stride_tiles() const {
+    if constexpr (consumer_blocked) {
         return 1u;
     } else {
         return wire_stride_tiles();
@@ -302,16 +304,16 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_consume_stride_tiles() const {
 }
 
 // Tiles per op on this side, derived from block_size and this hart's stride.
-template <DFBAccess Pap, DFBAccess Cap>
-inline uint16_t DataflowBuffer<Pap, Cap>::get_produce_share() const {
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint16_t DataflowBuffer<Pap, Cap>::get_producer_share() const {
 #if DFB_IS_COMPUTE_MATH
     return 1u;
 #else
     const uint32_t block = local_dfb_interface_.block_size;
     const uint32_t stride = wire_stride_tiles();
-    if constexpr (kProducerBlocked) {
+    if constexpr (producer_blocked) {
         return static_cast<uint16_t>(block);
-    } else if constexpr (kConsumerBlocked) {
+    } else if constexpr (consumer_blocked) {
         return static_cast<uint16_t>((block > stride) ? block / stride : 1u);
     } else {
         return 1u;
@@ -319,16 +321,16 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_produce_share() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
-inline uint16_t DataflowBuffer<Pap, Cap>::get_consume_share() const {
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint16_t DataflowBuffer<Pap, Cap>::get_consumer_share() const {
 #if DFB_IS_COMPUTE_MATH
     return 1u;
 #else
     const uint32_t block = local_dfb_interface_.block_size;
     const uint32_t stride = wire_stride_tiles();
-    if constexpr (kConsumerBlocked) {
+    if constexpr (consumer_blocked) {
         return static_cast<uint16_t>(block);
-    } else if constexpr (kProducerBlocked) {
+    } else if constexpr (producer_blocked) {
         return static_cast<uint16_t>((block > stride) ? block / stride : 1u);
     } else {
         return 1u;
@@ -336,14 +338,14 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_consume_share() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
-    ASSERT(num_entries == get_produce_share() || !kShareStrict);
+    ASSERT(num_entries == get_producer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
@@ -351,7 +353,7 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
     if (producer_broadcast()) {
         // BROADCAST: every consumer reads every entry, so every counter must have room for all of them.
         dfb_dm_all_tc_wait<true>(local_dfb_interface_, num_entries);
-    } else if (producer_split()) {
+    } else if (producer_split) {
         // SPLIT: the block belongs to every counter, wait for each one's share.
         dfb_dm_all_tc_wait<true>(local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, num_entries));
     } else {
@@ -364,12 +366,12 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
-    ASSERT(num_entries == get_produce_share() || !kShareStrict);
+    ASSERT(num_entries == get_producer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_push_tiles(logical_dfb_id_, num_entries);
@@ -378,7 +380,7 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
         // BROADCAST: post the full count to every counter (every consumer reads every entry).
         dfb_dm_all_tc_credit<true>(local_dfb_interface_, num_entries);
         dfb_dm_broadcast_advance(local_dfb_interface_, num_entries);
-    } else if (producer_split()) {
+    } else if (producer_split) {
         // SPLIT: post each counter its share of the block and step every bookmark past it.
         const uint16_t per_tc = dfb_dm_per_tc(local_dfb_interface_, num_entries);
         dfb_dm_all_tc_credit<true>(local_dfb_interface_, per_tc);
@@ -393,13 +395,13 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
     WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
-    ASSERT(num_entries == get_consume_share() || !kShareStrict);
+    ASSERT(num_entries == get_consumer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
         return;
@@ -407,7 +409,7 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
-    if (consumer_split()) {
+    if (consumer_split) {
         // SPLIT: the block belongs to every counter, wait for each one's share.
         dfb_dm_all_tc_wait<false>(local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, num_entries));
     } else {
@@ -420,12 +422,12 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
-    ASSERT(num_entries == get_consume_share() || !kShareStrict);
+    ASSERT(num_entries == get_consumer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
         return;
@@ -433,7 +435,7 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_pop_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
-    if (consumer_split()) {
+    if (consumer_split) {
         // SPLIT: ack each counter its share of the block and step every bookmark past it.
         const uint16_t per_tc = dfb_dm_per_tc(local_dfb_interface_, num_entries);
         dfb_dm_all_tc_credit<false>(local_dfb_interface_, per_tc);
@@ -449,7 +451,7 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
 }
 
 #if !defined(COMPILE_FOR_TRISC)
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::wait_relay_consumer_caught_up() const {
     // Same posted==acked drain as finish()'s DM path; scoped for PrefetcherPipe relay handoff.
     bool all_acked = false;
@@ -468,7 +470,7 @@ inline void DataflowBuffer<Pap, Cap>::wait_relay_consumer_caught_up() const {
 }
 #endif
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::finish_impl() {
 #if !DFB_IS_COMPUTE_MATH
 #ifndef COMPILE_FOR_TRISC
@@ -518,7 +520,7 @@ inline void DataflowBuffer<Pap, Cap>::finish_impl() {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -536,7 +538,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #endif
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -555,7 +557,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 }
 
 #ifdef COMPILE_FOR_TRISC
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) {
     uint32_t address = 0;
 #if defined(UCK_CHLKC_UNPACK)
@@ -577,7 +579,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) 
     return address;
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 template <typename T>
 T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t element_offset) {
     static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "read_tile_value: T must be 1, 2, or 4 bytes");
@@ -607,7 +609,7 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
 #endif  // COMPILE_FOR_TRISC
 
 #ifndef COMPILE_FOR_TRISC
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 template <bool is_producer>
 inline void DataflowBuffer<Pap, Cap>::handle_final_credits(uint32_t tiles_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If tiles_issued lands exactly on
@@ -622,8 +624,8 @@ inline void DataflowBuffer<Pap, Cap>::handle_final_credits(uint32_t tiles_issued
     // How many tiles each counter should have been credited by now: shares go round-robin over
     // the N counters, or 1/N of every op when split, or all of every op when broadcast. Computed in
     // 32 bits, compared in the HW counter's 16 bits.
-    const uint32_t visit = is_producer ? get_produce_share() : get_consume_share();
-    const bool split = is_producer ? producer_split() : consumer_split();
+    const uint32_t visit = is_producer ? get_producer_share() : get_consumer_share();
+    const bool split = is_producer ? producer_split : consumer_split;
     const bool broadcast = is_producer && producer_broadcast();
     const uint32_t NV = N * visit;
     auto expected_for_slot = [&](uint8_t i) -> uint16_t {
@@ -749,14 +751,14 @@ inline void DataflowBuffer<Pap, Cap>::handle_final_credits(uint32_t tiles_issued
 //     - cache op: invalidate the L2 range on acquire (both lock kinds); flush on release (write lock
 //       only)
 //     - record the scoped-lock event
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 template <bool is_write>
 inline typename DataflowBuffer<Pap, Cap>::ScopedLockRegion DataflowBuffer<Pap, Cap>::lock_acquire_impl(uint16_t num_entries) {
     // A lock covers one op: num_entries entries from the cursor, stride_tiles apart.
-    ASSERT(num_entries == (is_write ? get_produce_share() : get_consume_share()) || !kShareStrict);
+    ASSERT(num_entries == (is_write ? get_producer_share() : get_consumer_share()) || !share_strict);
     const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
     const uint32_t entry = local_dfb_interface_.entry_size;
-    const uint32_t stride = entry * (is_write ? get_produce_stride_tiles() : get_consume_stride_tiles());
+    const uint32_t stride = entry * (is_write ? get_producer_stride_tiles() : get_consumer_stride_tiles());
     // Snapshot the start pointer + this slot's wrap bounds so release replays the identical walk.
     const ScopedLockRegion region{s.ptr, s.base_addr, s.limit};
     uint32_t addr = region.start;
@@ -775,11 +777,11 @@ inline typename DataflowBuffer<Pap, Cap>::ScopedLockRegion DataflowBuffer<Pap, C
     return region;
 }
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 template <bool is_write>
 inline void DataflowBuffer<Pap, Cap>::lock_release_impl(ScopedLockRegion region, uint16_t num_entries) {
     const uint32_t entry = local_dfb_interface_.entry_size;
-    const uint32_t stride = entry * (is_write ? get_produce_stride_tiles() : get_consume_stride_tiles());
+    const uint32_t stride = entry * (is_write ? get_producer_stride_tiles() : get_consumer_stride_tiles());
     uint32_t addr = region.start;
     for (uint16_t k = 0; k < num_entries; ++k) {
         // Flush on release only for a write lock. A read lock never writes.
@@ -797,7 +799,7 @@ inline void DataflowBuffer<Pap, Cap>::lock_release_impl(ScopedLockRegion region,
 
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::write_barrier_impl(const Noc &noc) const {
     if (local_dfb_interface_.num_txn_ids == 0) {
         noc.async_write_barrier();
@@ -813,7 +815,7 @@ inline void DataflowBuffer<Pap, Cap>::write_barrier_impl(const Noc &noc) const {
 
 // Preamble for implicit-sync read: spin until previous reads are posted and there is space in the tile counters.
 // Returns the txn_id to stamp on the next NOC read.
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_read(uint32_t num_tiles) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -833,13 +835,13 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_read(uint32_t num_til
     // Wait until there is room for the whole op. Which counters to check depends on the ring:
     // broadcast waits on every counter for all of it, split waits on every counter for its part,
     // otherwise only this round's counter. `mine` is what this hart already sent to that counter.
-    ASSERT(num_tiles == get_produce_share());
+    ASSERT(num_tiles == get_producer_share());
     const uint8_t num_tcs = local_dfb_interface_.num_tcs_to_rr;
     if (producer_broadcast()) {
         for (uint8_t i = 0; i < num_tcs; i++) {
             dfb_dm_implicit_wait<true>(local_dfb_interface_, i, static_cast<uint16_t>(ptiles_read_), num_tiles);
         }
-    } else if (producer_split()) {
+    } else if (producer_split) {
         const uint16_t per_tc = dfb_dm_per_tc(local_dfb_interface_, static_cast<uint16_t>(num_tiles));
         const uint16_t mine = static_cast<uint16_t>(ptiles_read_ / num_tcs);
         for (uint8_t i = 0; i < num_tcs; i++) {
@@ -855,13 +857,13 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_read(uint32_t num_til
 }
 
 // Postamble for implicit-sync read: advance wr_ptr, tile/txn counters, and tc_idx.
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::commit_implicit_read(uint32_t num_tiles) {
     // Runs once per op; the ISR posts the credits, this only moves the bookmarks.
     const uint32_t block = num_tiles;
     if (producer_broadcast()) {
         dfb_dm_broadcast_advance(local_dfb_interface_, block);
-    } else if (producer_split()) {
+    } else if (producer_split) {
         dfb_dm_all_slots_advance(
             local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, static_cast<uint16_t>(block)));
     } else {
@@ -876,7 +878,7 @@ inline void DataflowBuffer<Pap, Cap>::commit_implicit_read(uint32_t num_tiles) {
 
 // Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
 // Returns the txn_id to stamp on the next NOC write.
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_write(uint32_t num_tiles) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -890,9 +892,9 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_write(uint32_t num_ti
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
     // Wait until the whole op has arrived. Split waits on every counter for its part, otherwise
     // only on this round's counter. `mine` is what this hart already took from that counter.
-    ASSERT(num_tiles == get_consume_share());
+    ASSERT(num_tiles == get_consumer_share());
     const uint8_t num_tcs = local_dfb_interface_.num_tcs_to_rr;
-    if (consumer_split()) {
+    if (consumer_split) {
         const uint16_t per_tc = dfb_dm_per_tc(local_dfb_interface_, static_cast<uint16_t>(num_tiles));
         const uint16_t mine = static_cast<uint16_t>(ctiles_written_ / num_tcs);
         for (uint8_t i = 0; i < num_tcs; i++) {
@@ -908,11 +910,11 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_write(uint32_t num_ti
 }
 
 // Postamble for implicit-sync write: advance rd_ptr, tile/txn counters, and tc_idx.
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void DataflowBuffer<Pap, Cap>::commit_implicit_write(uint32_t num_tiles) {
     // Runs once per op; the ISR acks the credits, this only moves the bookmarks.
     const uint32_t block = num_tiles;
-    if (consumer_split()) {
+    if (consumer_split) {
         dfb_dm_all_slots_advance(
             local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, static_cast<uint16_t>(block)));
     } else {
@@ -929,7 +931,7 @@ inline void DataflowBuffer<Pap, Cap>::commit_implicit_write(uint32_t num_tiles) 
 // These are member functions of Noc but must be defined here because they need the complete
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
-template <NocOptions opts, typename Src, DFBAccess Pap, DFBAccess Cap>
+template <NocOptions opts, typename Src, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
@@ -939,14 +941,14 @@ Noc::async_read(
     // Implicit sync always lands data at the cursor; offset_bytes is ignored.
     ASSERT(dst_args.offset_bytes == 0);
     const uint32_t entry_bytes = dst.get_entry_size();
-    const uint32_t share = dst.get_produce_share();
+    const uint32_t share = dst.get_producer_share();
     auto issue = [&](uint32_t txn_id, uint32_t l1_addr, uint32_t bytes) {
         noc_async_read_set_trid(txn_id, noc_id_);
         while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
         noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
             get_src_ptr<AddressType::NOC>(src, src_args), l1_addr, bytes, noc_id_, NOC_UNICAST_WRITE_VC);
     };
-    if constexpr (Pap == DFBAccess::BLOCKED) {
+    if constexpr (Pap == dfb::AccessPattern::BLOCKED) {
         // BLOCKED producer: one whole block per call, as one NoC transaction.
         const uint32_t txn_id = dst.prepare_implicit_read(share);
         issue(txn_id, dst.get_noc_write_addr(), entry_bytes * share);
@@ -956,7 +958,7 @@ Noc::async_read(
         if (dst.pshare_pos_ == 0) {
             dst.pshare_txn_id_ = dst.prepare_implicit_read(share);
         }
-        const uint32_t stride_bytes = entry_bytes * dst.get_produce_stride_tiles();
+        const uint32_t stride_bytes = entry_bytes * dst.get_producer_stride_tiles();
         issue(dst.pshare_txn_id_, dst.get_noc_write_addr() + dst.pshare_pos_ * stride_bytes, entry_bytes);
         if (++dst.pshare_pos_ == share) {
             dst.pshare_pos_ = 0;
@@ -965,7 +967,7 @@ Noc::async_read(
     }
 }
 
-template <NocOptions opts, typename Dst, DFBAccess Pap, DFBAccess Cap>
+template <NocOptions opts, typename Dst, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer<Pap, Cap>& src,
@@ -976,7 +978,7 @@ Noc::async_write(
     // call, otherwise one entry per call; offset_bytes is ignored.
     ASSERT(src_args.offset_bytes == 0);
     const uint32_t entry_bytes = src.get_entry_size();
-    const uint32_t share = src.get_consume_share();
+    const uint32_t share = src.get_consumer_share();
     auto issue = [&](uint32_t txn_id, uint32_t src_addr, uint32_t bytes) {
         const uint64_t dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, bytes, -1, false, noc_id_);
@@ -995,7 +997,7 @@ Noc::async_write(
             /*posted*/ false,
             txn_id);
     };
-    if constexpr (Cap == DFBAccess::BLOCKED) {
+    if constexpr (Cap == dfb::AccessPattern::BLOCKED) {
         // BLOCKED consumer: one whole block per call, as one NoC transaction.
         const uint32_t txn_id = src.prepare_implicit_write(share);
         issue(txn_id, src.get_noc_read_addr(), entry_bytes * share);
@@ -1005,7 +1007,7 @@ Noc::async_write(
         if (src.cshare_pos_ == 0) {
             src.cshare_txn_id_ = src.prepare_implicit_write(share);
         }
-        const uint32_t stride_bytes = entry_bytes * src.get_consume_stride_tiles();
+        const uint32_t stride_bytes = entry_bytes * src.get_consumer_stride_tiles();
         issue(src.cshare_txn_id_, src.get_noc_read_addr() + src.cshare_pos_ * stride_bytes, entry_bytes);
         if (++src.cshare_pos_ == share) {
             src.cshare_pos_ = 0;
@@ -1016,10 +1018,10 @@ Noc::async_write(
 
 #else  // COMPILE_FOR_TRISC
 
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 template <bool>
 inline typename DataflowBuffer<Pap, Cap>::ScopedLockRegion DataflowBuffer<Pap, Cap>::lock_acquire_impl(uint16_t) { return {}; }
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 template <bool>
 inline void DataflowBuffer<Pap, Cap>::lock_release_impl(ScopedLockRegion, uint16_t) {}
 

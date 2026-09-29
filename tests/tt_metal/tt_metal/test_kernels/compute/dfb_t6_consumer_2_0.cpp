@@ -54,11 +54,7 @@ void kernel_main() {
 
     // One wait/pop covers this hart's share: a whole block on a BLOCKED ring, else 1 tile. MATH has
     // no fifo state and reads share as 1, so acquire/release stays per tile to match PACK's count.
-#ifdef ARCH_QUASAR
-    const uint32_t share = dfb.get_consume_share();
-#else
-    const uint32_t share = 1;
-#endif
+    const uint32_t share = dfb.get_consumer_share();
 
 #ifdef UCK_CHLKC_UNPACK
     // UNPACK owns the read cursor, so it is the only thread that can address the
@@ -69,11 +65,7 @@ void kernel_main() {
     const uint32_t words_per_entry = entry_bytes / sizeof(uint32_t);
     // Spacing between the tiles of one share: 1 on a BLOCKED consumer, the ring stride when only
     // the producer is BLOCKED.
-#ifdef ARCH_QUASAR
-    const uint32_t stride_tiles = dfb.get_consume_stride_tiles();
-#else
-    const uint32_t stride_tiles = 1;
-#endif
+    const uint32_t stride_tiles = dfb.get_consumer_stride_tiles();
 
     // Host sizes this region with dfb_tensix_digest_region_bytes(num_consumers,
     // num_entries_per_consumer) using the same CTA compiled into this kernel.

@@ -27,7 +27,7 @@
 #include "tools/profiler/noc_debugging_profiler.hpp"
 
 #ifdef ARCH_QUASAR
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 struct noc_traits_t<DataflowBuffer<Pap, Cap>>;
 #else
 template <>
@@ -97,14 +97,14 @@ class DataflowBuffer {
 #ifdef ARCH_QUASAR
     // Compile-time facts about the pattern pair. UNKNOWN (built from a raw id) reads them at
     // runtime instead and only supports rings with no BLOCKED side.
-    static constexpr bool kKnown = Pap != DFBAccess::UNKNOWN && Cap != DFBAccess::UNKNOWN;
-    static constexpr bool kProducerBlocked = Pap == DFBAccess::BLOCKED;
-    static constexpr bool kConsumerBlocked = Cap == DFBAccess::BLOCKED;
+    static constexpr bool pattern_known = Pap != dfb::AccessPattern::UNKNOWN && Cap != dfb::AccessPattern::UNKNOWN;
+    static constexpr bool producer_blocked = Pap == dfb::AccessPattern::BLOCKED;
+    static constexpr bool consumer_blocked = Cap == dfb::AccessPattern::BLOCKED;
     // Split: one whole-block op is shared by all of this side's counters.
-    static constexpr bool kProducerSplit = kProducerBlocked && Cap == DFBAccess::STRIDED;
-    static constexpr bool kConsumerSplit = Pap == DFBAccess::STRIDED && kConsumerBlocked;
+    static constexpr bool producer_split = producer_blocked && Cap == dfb::AccessPattern::STRIDED;
+    static constexpr bool consumer_split = Pap == dfb::AccessPattern::STRIDED && consumer_blocked;
     // With a BLOCKED side every op must be exactly one whole block.
-    static constexpr bool kShareStrict = kProducerBlocked || kConsumerBlocked;
+    static constexpr bool share_strict = producer_blocked || consumer_blocked;
 #endif
 
 public:
@@ -121,17 +121,21 @@ public:
     // The token carries the pattern pair: DataflowBuffer dfb(dfb::out) deduces it.
     DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
     // DataflowBuffer<> (UNKNOWN) accepts any token, e.g. std::optional<DataflowBuffer<>>::emplace(token).
-    template <DFBAccess TokPap, DFBAccess TokCap, bool Agnostic = !kKnown, std::enable_if_t<Agnostic, int> = 0>
+    template <
+        dfb::AccessPattern TokPap,
+        dfb::AccessPattern TokCap,
+        bool Agnostic = !pattern_known,
+        std::enable_if_t<Agnostic, int> = 0>
     DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
     // A known pair rejects any other pair's token (otherwise it would silently convert to an id).
     template <
-        DFBAccess TokPap,
-        DFBAccess TokCap,
-        bool Known = kKnown,
+        dfb::AccessPattern TokPap,
+        dfb::AccessPattern TokCap,
+        bool Known = pattern_known,
         std::enable_if_t<Known && !(TokPap == Pap && TokCap == Cap), int> = 0>
     DataflowBuffer(DFBBindingToken<TokPap, TokCap>) = delete;
 #else
-    template <DFBAccess TokPap, DFBAccess TokCap>
+    template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
     DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 #endif
 
@@ -214,17 +218,16 @@ public:
     uint32_t get_ring_span_bytes() const;
     uint32_t get_ring_span_num_entries() const;
 
-#ifdef ARCH_QUASAR
     // Tiles per op on this side: the block when this side is BLOCKED, block / stride when only the
     // other side is, else 1. With a BLOCKED side every reserve/push/wait/pop must pass this count.
     // MATH returns 1 here, so compute kernels keep the dest handshake per tile, not per share.
-    uint16_t get_produce_share() const;
-    uint16_t get_consume_share() const;
+    // On tt-1xx (WH/BH) every op moves one contiguous entry, so all four return 1.
+    uint16_t get_producer_share() const;
+    uint16_t get_consumer_share() const;
     // Spacing between the entries of one op (1 = contiguous). Only a STRIDED side facing BLOCKED
     // consumers/producers has a stride > 1; copy_tile takes it as the tile index.
-    uint16_t get_produce_stride_tiles() const;
-    uint16_t get_consume_stride_tiles() const;
-#endif
+    uint16_t get_producer_stride_tiles() const;
+    uint16_t get_consumer_stride_tiles() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
@@ -238,9 +241,9 @@ public:
     // NOT part of the public DFB API). Granted friend access to advance the
     // implicit-sync shadow state alongside the HW counter. See that header for
     // semantics + usage rules.
-    template <DFBAccess P, DFBAccess C>
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend void preload_posted_counter(DataflowBuffer<P, C>&, uint16_t);
-    template <DFBAccess P, DFBAccess C>
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend void preload_acked_counter(DataflowBuffer<P, C>&, uint16_t);
 #endif
 
@@ -508,9 +511,6 @@ private:
 #ifdef ARCH_QUASAR
     // The stride the host serialized for this hart, in entries.
     uint16_t wire_stride_tiles() const;
-    // UNKNOWN never splits (it has no blocks), so these are compile-time for every shape.
-    static constexpr bool producer_split() { return kProducerSplit; }
-    static constexpr bool consumer_split() { return kConsumerSplit; }
 #if !defined(COMPILE_FOR_TRISC)
     // ALL consumers: a DM producer posts every op to all of its counters. Compile-time except
     // for UNKNOWN, which reads the wire flag.
@@ -544,7 +544,7 @@ private:
 #ifndef COMPILE_FOR_TRISC
 
 #ifdef ARCH_QUASAR
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 struct noc_traits_t<DataflowBuffer<Pap, Cap>> {
 #else
 template <>
@@ -591,7 +591,7 @@ struct noc_traits_t<DataflowBuffer> {
 };
 
 #ifdef ARCH_QUASAR
-template <DFBAccess Pap, DFBAccess Cap>
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer<Pap, Cap>> = true;
 #else
 template <>

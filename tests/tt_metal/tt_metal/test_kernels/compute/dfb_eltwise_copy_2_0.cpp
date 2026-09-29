@@ -39,15 +39,9 @@ void kernel_main() {
     // One wait/pop covers share_in input tiles and one reserve/push covers share_out output tiles
     // (a whole block on a BLOCKED side, one tile otherwise). acquire/release stays per tile so
     // MATH, which has no DFB interface, runs the same trip count as PACK.
-#ifdef ARCH_QUASAR
-    const uint32_t share_in = dfb_in.get_consume_share();
-    const uint32_t stride_in = dfb_in.get_consume_stride_tiles();
-    const uint32_t share_out = dfb_out.get_produce_share();
-#else
-    const uint32_t share_in = 1;
-    const uint32_t stride_in = 1;
-    const uint32_t share_out = 1;
-#endif
+    const uint32_t share_in = dfb_in.get_consumer_share();
+    const uint32_t stride_in = dfb_in.get_consumer_stride_tiles();
+    const uint32_t share_out = dfb_out.get_producer_share();
     uint32_t packed = 0;  // tiles packed so far; reserve/push the output ring once per share_out
     for (uint32_t b = 0; b < per_core_tile_cnt; b += share_in) {
         dfb_in.wait_front(share_in);

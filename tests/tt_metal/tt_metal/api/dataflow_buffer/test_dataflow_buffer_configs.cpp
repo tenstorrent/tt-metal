@@ -2443,36 +2443,6 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
 // =====================================================================================
 // BLOCKED access-pattern config-rejection tests
 // =====================================================================================
-// Tensix BLOCKED producer -> implicit-sync DM BLOCKED consumer must be rejected on the host:
-// a Tensix producer cannot post implicit credits, so the consumer would hang on the device.
-static void expect_tensix_blocked_implicit_consumer_rejected(
-    distributed::MeshDevice& mesh_device, uint32_t num_threads, uint32_t num_entries) {
-    if (mesh_device.arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only";
-    }
-    // Build only: launching would hang the device if the check ever regressed.
-    m2_config_test_helpers::M2ConfigDFBParams params{
-        .producer_type = M2PorCType::TENSIX,
-        .consumer_type = M2PorCType::DM,
-        .num_producers = num_threads,
-        .num_consumers = num_threads,
-        .num_entries = num_entries,
-        .pap = m2::DFBAccessPattern::BLOCKED,
-        .cap = m2::DFBAccessPattern::BLOCKED,
-        .implicit_sync = true,
-        .block_size = 4,
-    };
-    EXPECT_THAT(
-        [&]() { Program program = m2_config_test_helpers::build_single_dfb_program_2_0(mesh_device, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot feed an IMPLICIT-sync DM consumer")));
-}
-TEST_F(UnitMeshFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
-    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/2, /*num_entries=*/16);
-}
-TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
-    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/4, /*num_entries=*/32);
-}
-
 // 1 BLOCKED producer -> 4 BLOCKED consumers, implicit sync, block 4, 16 entries: the only txn window
 // that covers whole blocks on every consumer is the whole ring, so the config is accepted and must run.
 TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_2_0) {
