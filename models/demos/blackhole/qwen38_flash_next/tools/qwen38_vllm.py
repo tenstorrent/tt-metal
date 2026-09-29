@@ -16,9 +16,9 @@ Under the plugin's device-sampling contract (``--additional-config '{"tt": {"sam
 a decode step arrives with ``sampling_params`` (the plugin's ``TTSamplingParams`` as per-row lists) and must return the
 token instead of the row.  The adapter reads the same full row and samples on the host with vLLM's sampler semantics
 (``vllm/v1/sample/sampler.py``: penalties, temperature, top-k, top-p, exponential-noise draw) computed over the row's
-top candidates wherever that is exact, and over the full row otherwise.  vLLM's own ``Sampler`` sorts the 248,320-wide
-row on every sampled step (about 22 ms on the serving host); the reduced sampler costs well under a millisecond.  The
-distribution is vLLM's; the token stream for a given seed is not (the noise is drawn over the candidates, not the row).
+top candidates wherever that is exact, and over the full row otherwise. vLLM's own ``Sampler`` sorts the full
+248,320-wide row. The reduced route preserves its distribution; the token stream for a given seed differs because
+the noise is drawn over the candidates. Historical fork sampling timings are not measurements of this port.
 The plugin decides host or device per step before the call (min_p, logit_bias, bad_words, allowed_token_ids,
 min_tokens, structured output and logprobs stay on its host sampler) and a step without ``sampling_params`` returns
 the row as before.  Prefill sampling (mode ``"all"``) is refused at warmup: prefill returns the row.
