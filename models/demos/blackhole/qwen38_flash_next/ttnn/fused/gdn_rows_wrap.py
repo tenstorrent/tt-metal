@@ -53,6 +53,7 @@ import ttnn
 from . import gdn_post_rows as post
 from . import gdn_pre_rows as pre
 from . import program as fp
+from .gdn_public_adapter import chunk_public
 from .registry import BITWISE, FusedKernel, enabled, register
 
 NAME = "gdn_rows_wrap"
@@ -207,47 +208,32 @@ def buffers_of(rows_state) -> Buffers | None:
 
 
 def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
-    """The two prims on the layouts ``gdn_pre_rows`` wrote: the verify's call, or the commit's masked re-run when
-    ``committed_mask_c`` is given (the prim-layout ``[12, 1, 32, 1]`` fp32 mask, so the beta and decay multiplies are
-    element for element and no broadcast rule enters a committed state).
+    """Run the public recurrence, masking decay and beta for a committed prefix.
 
-    Returns the head-major ``o`` ``[12, 32, 128]`` and the final state ``[1, 12, 128, 128]``, both fp32 TILE in new
-    buffers -- the shapes ``_chunk_rows`` checks and retags, so both call sites keep the chain's own validation.
+    The producer's q/k are already normalized and scaled. The shared adapter restores
+    the public rank-four layout and passes scale=1. Only the temporary masked tensors
+    are released here; persistent producer buffers, constants and input state survive.
     """
-
     beta_c, g_c, masked = buffers.beta_c, buffers.g_c, ()
     if committed_mask_c is not None:
         dram = ttnn.DRAM_MEMORY_CONFIG
         beta_c = ttnn.multiply(buffers.beta_c, committed_mask_c, memory_config=dram)
         g_c = ttnn.multiply(buffers.g_c, committed_mask_c, memory_config=dram)
         masked = (beta_c, g_c)
-    # [1, 1, 32, 1536] -> the composite's rank-3 flat v (leading unit dims only: a metadata view, no program).
-    v_flat = ttnn.reshape(rows_state.v, (1, TILE, VALUE_WIDTH))
-    s0 = ttnn.reshape(initial_state, (HEADS, HEAD_DIM, HEAD_DIM))
     constants = rows_state.constants
-    prep = ttnn.prim.chunk_gdn_prep(
-        buffers.q_c,
-        buffers.k_c,
-        v_flat,
-        g_c,
-        beta_c,
-        eye=constants.eye,
-        tril=constants.tril,
-        ones=constants.ones,
-        masks=constants.masks,
-        chunk_size=TILE,
-        scale=SCALE,
-        v_flat=True,
-        HV=HEADS,
-        qk_flat=False,
-        Hk=HEADS,
-        qk_norm=False,
-    )
-    scan = ttnn.prim.chunk_gdn_scan(*prep, s0, chunk_size=TILE, output_final_state=True)
-    output = ttnn.reshape(scan[0], (HEADS, TILE, HEAD_DIM))
-    final_state = ttnn.reshape(scan[1], (1, HEADS, HEAD_DIM, HEAD_DIM))
-    _release(*masked, *prep)
-    return output, final_state
+    try:
+        return chunk_public(
+            buffers.q_c,
+            buffers.k_c,
+            rows_state.v,
+            beta_c,
+            g_c,
+            initial_state,
+            (constants.eye, constants.tril, constants.ones, constants.masks),
+            rows_total=TILE,
+        )
+    finally:
+        _release(*masked)
 
 
 # ------------------------------------------------------------------------------------------------- the two bodies
