@@ -33,7 +33,8 @@ class MiMoRuntimeOptions:
     # unified only: experts with <= T tokens go to moe_fused_swiglu, the rest to unified_routed_expert_moe (DeepSeek
     # / Kimi / GLM use 320). None: unified op only.
     re_hybrid_threshold: int | None = None  # MIMO_RE_HYBRID_THRESHOLD
-    # The all-gather MoE block (tt/moe_ag.py); needs a flat routed expert. False: DeepSeek dispatch / combine.
+    # The all-gather MoE block (tt/moe_ag.py); needs the flat_routed_expert op (routed_expert "op"). False: DeepSeek
+    # dispatch / combine.
     moe_ag: bool = True  # MIMO_MOE_AG
     # Dispatch-buffer capacity factor; None: ffn.moe_capacity_factor's rule.
     moe_capacity: int | None = None  # MIMO_MOE_CAPACITY
@@ -68,6 +69,11 @@ class MiMoRuntimeOptions:
 
     def __post_init__(self):
         assert self.routed_expert in ("op", "py", "unified"), self.routed_expert
+        if self.routed_expert == "py" and self.moe_ag:
+            raise ValueError(
+                'routed_expert="py" (the Python FlatExpert prototype) runs on the dispatch / combine path only: '
+                "set moe_ag=False (the all-gather block needs the flat_routed_expert op's indexed mode)"
+            )
         assert self.moe_ag_tp in (None, "hbw", "rsag"), self.moe_ag_tp
 
     @property
@@ -96,7 +102,7 @@ class MiMoRuntimeOptions:
         kw["expert_dtype"] = _EXPERT_DTYPES[env.get("MIMO_EXPERT_DTYPE", "bf4")]
         kw["routed_expert"] = {"1": "op", "py": "py"}.get(env.get("MIMO_FLAT_EXPERT", "1"), "unified")
         kw["re_hybrid_threshold"] = opt_int("MIMO_RE_HYBRID_THRESHOLD")
-        kw["moe_ag"] = flag("MIMO_MOE_AG", True)
+        kw["moe_ag"] = flag("MIMO_MOE_AG", kw["routed_expert"] != "py")  # the Python builder: dispatch path
         kw["moe_capacity"] = opt_int("MIMO_MOE_CAPACITY")
         kw["moe_ag_embedding"] = flag("MIMO_MOE_AG_EMB", False)
         kw["hbw_links"] = opt_int("MIMO_HBW_LINKS")

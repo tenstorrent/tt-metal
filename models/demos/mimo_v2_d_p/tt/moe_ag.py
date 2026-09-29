@@ -46,6 +46,15 @@ def _up(v, a):
     return -(-v // a) * a
 
 
+def flat_rows(tokens, k, experts_per_chip):
+    """Rows of the flat expert space that hold any routing (no pair is ever dropped): a token puts at most
+    min(k, experts_per_chip) pairs on a chip, and each active local expert pads its region to 32 rows:
+    sum_e ceil(c_e / 32) <= ceil(P / 32) + n - 1 for P pairs over n <= experts_per_chip active experts. The
+    moe_ag_route_plan op requires at least this many."""
+    pairs = tokens * min(k, experts_per_chip)
+    return _up(pairs, 32) + 32 * (min(pairs, experts_per_chip) - 1)
+
+
 class RoutePlan:
     """Gathered top-k indices [T, K] uint16 -> counts / regions [1, NG], token_index [1, rows], y_slot [1, T * K]
     (uint32, DRAM, persistent). gids[d]: device d's (row-major mesh order) local experts' global ids, local order."""

@@ -27,7 +27,8 @@ void bind_moe_ag(nb::module_& mod) {
             local_slot_map (ttnn.Tensor): per device [.., 1, NG] uint32 ROW_MAJOR: global expert id -> local slot
                 (< experts_per_chip) or 0xFFFFFFFF.
             experts_per_chip (int): local experts (<= 64).
-            num_rows (int): rows of the flat expert space (a multiple of 32; >= sum of the 32-padded counts).
+            num_rows (int): rows of the flat expert space, a multiple of 32 and at least the worst case
+                roundup(P, 32) + 32 (min(P, experts_per_chip) - 1) with P = T min(K, experts_per_chip) (no pair is dropped).
 
         Keyword Args:
             outputs (List[ttnn.Tensor], optional): preallocated (counts, regions, token_index, y_slot).

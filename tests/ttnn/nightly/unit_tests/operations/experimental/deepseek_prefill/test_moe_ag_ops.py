@@ -67,14 +67,25 @@ def _plan_reference(idx, lmap, epc, rows):
     return counts, regions, tidx, yslot, region
 
 
-def _plan_inputs(device, case, seed=0):
+def _worst_rows(T, K, EPC):
+    pairs = T * min(K, EPC)
+    return _up(pairs, 32) + 32 * (min(pairs, EPC) - 1)
+
+
+def _plan_inputs(device, case, seed=0, adversarial=False):
+    """Random top-k, or (adversarial) every token picking min(K, EPC) of this chip's experts (the worst case)."""
     tag, H, K, NG, EPC, T, S = case
     gen = torch.Generator().manual_seed(seed)
-    idx = torch.rand(T, NG, generator=gen).argsort(-1)[:, :K]
     gids = torch.randperm(NG, generator=gen)[:EPC]
+    if adversarial:
+        other = torch.tensor([g for g in range(NG) if g not in set(gids.tolist())])
+        n_loc = min(K, EPC)
+        idx = torch.cat([gids[:n_loc].expand(T, n_loc), other[: K - n_loc].expand(T, K - n_loc)], 1)
+    else:
+        idx = torch.rand(T, NG, generator=gen).argsort(-1)[:, :K]
     lmap = torch.full((NG,), NONE, dtype=torch.int64)
     lmap[gids] = torch.arange(EPC)
-    rows = _up(T * min(K, EPC), 32) + 32 * EPC  # the worst case of the 32-padded counts
+    rows = _worst_rows(T, K, EPC)
     d = dict(
         idx=_dev(device, idx.reshape(1, 1, T, K).to(torch.int32), ttnn.uint16),
         lmap=_dev(device, lmap.reshape(1, 1, 1, NG).to(torch.int32), ttnn.uint32),
@@ -105,11 +116,14 @@ def _pcc(a, b):
 
 
 # ---------------------------------------------------------------- route plan
+@pytest.mark.parametrize("adversarial", [False, True], ids=["random", "adversarial"])
 @pytest.mark.parametrize("case", CASES, ids=IDS)
-def test_moe_ag_route_plan(device, case):
+def test_moe_ag_route_plan(device, case, adversarial):
     tag, H, K, NG, EPC, T, S = case
-    d, idx, lmap = _plan_inputs(device, case)
+    d, idx, lmap = _plan_inputs(device, case, adversarial=adversarial)
     counts, regions, tidx, yslot, used = _plan_reference(idx, lmap, EPC, d["rows"])
+    if adversarial:  # every token's pairs local: the flat space is full up to the region padding
+        assert used == min(K, EPC) * _up(T, 32), (used, T, K, EPC)
     for attempt in range(2):  # the second launch is a program-cache hit on freshly allocated outputs
         out = ops.moe_ag_route_plan(d["idx"], d["lmap"], EPC, d["rows"])
         assert torch.equal(_u32(out[0]), counts), f"{tag}: counts"
@@ -254,6 +268,8 @@ def test_moe_ag_validation(device, expect_error):
         ops.moe_ag_route_plan(d["idx"], d["lmap"], 65, d["rows"])
     with expect_error(RuntimeError, "num_rows"):
         ops.moe_ag_route_plan(d["idx"], d["lmap"], 64, 100)
+    with expect_error(RuntimeError, "worst-case flat rows"):  # the dispatch capacity-factor sizing (1280 x 4 + 32 x 63)
+        ops.moe_ag_route_plan(d["idx"], d["lmap"], 64, 7136)
     x = _dev(device, torch.randn(1, 1, 64, 1000), ttnn.bfloat16, ttnn.TILE_LAYOUT)
     with expect_error(RuntimeError, "multiple of 1024"):
         ops.moe_ag_untilize_x(x)
@@ -262,25 +278,25 @@ def test_moe_ag_validation(device, expect_error):
 # ---------------------------------------------------------------- perf
 # Device ns, median of 3, one BH p150 (QuietBox chip), 2026-09-29 (3 calibration runs, spread <= 2%); recalibrate from the "RT-CAL" lines.
 _PERF_EXPECTED_NS = {
-    "mimo_route_plan": 29_653,
-    "mimo_local_reduce_tiled": 163_859,
-    "mimo_sum_rows_tiled": 61_304,
-    "mimo_untilize_x": 46_672,
-    "mimo_local_reduce_phase2": 76_904,
-    "galaxy_route_plan": 47_763,
-    "galaxy_local_reduce_tiled": 280_770,
-    "galaxy_sum_rows_tiled": 61_296,
-    "galaxy_untilize_x": 46_659,
-    "k2_route_plan": 34_899,
-    "k2_local_reduce_tiled": 272_743,
+    "mimo_route_plan": 29_758,
+    "mimo_local_reduce_tiled": 160_110,
+    "mimo_sum_rows_tiled": 61_755,
+    "mimo_untilize_x": 46_583,
+    "mimo_local_reduce_phase2": 75_089,
+    "galaxy_route_plan": 47_881,
+    "galaxy_local_reduce_tiled": 278_859,
+    "galaxy_sum_rows_tiled": 61_219,
+    "galaxy_untilize_x": 46_323,
+    "k2_route_plan": 34_776,
+    "k2_local_reduce_tiled": 288_256,
     "k2_sum_rows_tiled": 129_889,
     "k2_untilize_x": 97_264,
     "k2_local_reduce_phase2": 141_866,
-    "small_route_plan": 15_165,
-    "small_local_reduce_tiled": 36_534,
-    "small_sum_rows_tiled": 18_971,
-    "small_untilize_x": 13_141,
-    "small_local_reduce_phase2": 14_893,
+    "small_route_plan": 15_256,
+    "small_local_reduce_tiled": 35_477,
+    "small_sum_rows_tiled": 18_865,
+    "small_untilize_x": 13_154,
+    "small_local_reduce_phase2": 15_734,
 }
 _PERF_MARGIN = 0.05
 _KDIR = "/deepseek_prefill/moe_ag/device/kernels/"

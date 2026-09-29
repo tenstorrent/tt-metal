@@ -4,6 +4,8 @@
 
 #include "moe_ag_route_plan_device_operation.hpp"
 
+#include <algorithm>
+
 #include "moe_ag_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -37,6 +39,21 @@ void MoeAgRoutePlanDeviceOperation::validate_on_program_cache_miss(
         "{}: num_rows {} must be a positive multiple of 32",
         op,
         args.num_rows);
+    // Worst case of the flat space: every token's min(K, EPC) pairs local, each active expert's region 32-padded
+    // (sum_e ceil(c_e / 32) <= ceil(P / 32) + n - 1). The plan never drops a pair, so a smaller space would let
+    // adversarial routing overrun token_index / y.
+    const uint32_t pairs = T * std::min(K, args.experts_per_chip);
+    const uint32_t worst = (pairs + 31) / 32 * 32 + 32 * (std::min(pairs, args.experts_per_chip) - 1);
+    TT_FATAL(
+        args.num_rows >= worst,
+        "{}: num_rows {} < the worst-case flat rows {} (tokens {} x min(top-k {}, experts_per_chip {}) + region "
+        "padding)",
+        op,
+        args.num_rows,
+        worst,
+        T,
+        K,
+        args.experts_per_chip);
     const auto grid = idx.device()->compute_with_storage_grid_size();
     TT_FATAL(grid.x >= 8 && grid.y >= 8, "{}: needs an 8 x 8 worker grid, got {}", op, grid);
     const auto& outs = tensor_args.preallocated_outputs;

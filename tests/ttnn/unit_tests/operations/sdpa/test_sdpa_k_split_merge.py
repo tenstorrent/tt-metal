@@ -10,8 +10,6 @@ import torch
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
-from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
 
 
 def _ref(o, m, l, S, scale):
@@ -116,48 +114,6 @@ def test_sdpa_k_split_merge_determinism(device, S):
         marker = m if marker is None else ttnn.maximum(marker, m)
         out.deallocate(True)
     assert float(ttnn.to_torch(marker).item()) == 0.0, "sdpa_k_split_merge is not deterministic"
-
-
-# Device duration (ns) per (k_split, heads, rows, dv) on a BH p150, median of 3 dispatches; MiMo-V2 GA shapes
-# (QuietBox SP2 x TP2: 32 local heads at 2048 / 640 tokens per chip; Galaxy TP4: 16 heads at 640). Recalibrate from
-# the "RT-CAL" lines. The merge is DRAM-bound: bytes = (S + 1) x output + stats.
-_PERF_EXPECTED_NS = {  # BH p150 (QuietBox), 2026-09-29
-    (2, 32, 2048, 128): 181_319,
-    (3, 32, 2048, 128): 258_043,
-    (3, 32, 640, 128): 86_430,
-    (3, 16, 640, 128): 43_849,
-}
-_PERF_MARGIN = 0.05
-
-
-@pytest.mark.parametrize(
-    "S, NH, N, DV",
-    [(2, 32, 2048, 128), (3, 32, 2048, 128), (3, 32, 640, 128), (3, 16, 640, 128)],
-    ids=lambda v: str(v),
-)
-@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
-@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_sdpa_k_split_merge_perf(device, S, NH, N, DV):
-    require_realtime_profiler("sdpa_k_split_merge perf checks")
-    o, _, _, stats = _inputs(S, 1, NH, N, DV)
-    tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    to, ts = tt(o), tt(stats)
-    run = lambda: ttnn.transformer.sdpa_k_split_merge(to, ts, S, 0.07).deallocate(True)
-    key = (S, NH, N, DV)
-    expected = _PERF_EXPECTED_NS.get(key)
-    ns = assert_op_duration_merged(
-        device,
-        run,
-        "/ksplit_merge",
-        expected_ns=expected or 1,
-        margin=_PERF_MARGIN if expected else float("inf"),
-        label=f"{key}",
-        iters=3,
-    )
-    gbytes = ((S + 1) * NH * N * DV + S * NH * 2 * N * 32) * 2 / 1e9
-    print(f"sdpa_k_split_merge {key}: {ns / 1e3:.1f} us, {gbytes / (ns * 1e-9):.0f} GB/s")
-    if expected is None:
-        pytest.skip(f"no baseline for {key}; add it to _PERF_EXPECTED_NS")
 
 
 # Device duration (ns) per (k_split, heads, rows, dv) on a BH p150, median of 3 dispatches; MiMo-V2 GA shapes

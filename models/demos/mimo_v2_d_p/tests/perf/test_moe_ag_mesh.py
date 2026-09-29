@@ -23,9 +23,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_x_device_params,
     torus_y_device_params,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
-from models.demos.mimo_v2_d_p.tt.ffn import moe_capacity_factor
-from models.demos.mimo_v2_d_p.tt.moe_ag import NONE, MoeAgBlock
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+from models.demos.mimo_v2_d_p.tt.moe_ag import NONE, MoeAgBlock, flat_rows
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 try:
@@ -78,9 +77,7 @@ def test_moe_ag_block(mesh_device, device_params):
     gen = torch.Generator().manual_seed(3)
     for S in SEQS:
         T = rows * S
-        _, _, buf_rows, _ = compute_constants(
-            S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev, MiMoRuntimeOptions.from_env().moe_capacity)
-        )
+        buf_rows = flat_rows(T, K, epc)
         blk = MoeAgBlock.get(
             mesh_device,
             chunk_size_per_chip=S,

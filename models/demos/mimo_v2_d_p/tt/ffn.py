@@ -211,7 +211,7 @@ def build_flat_expert(
     cls = FlatExpert if options.routed_expert == "py" else FlatRoutedExpert
     return cls(
         mesh_device,
-        weights,
+        weights() if cls is FlatExpert else weights,  # the Python builder takes the weights themselves
         m=max_tok,
         H=cfg.hidden_size,
         I=cfg.moe_intermediate_size,
@@ -312,12 +312,15 @@ class TtMoE:
         self.flat = None
         self.ag = None
         if options.use_moe_ag:
-            from models.demos.mimo_v2_d_p.tt.moe_ag import MoeAgBlock
+            from models.demos.mimo_v2_d_p.tt.moe_ag import MoeAgBlock, flat_rows
 
             table_g = ExpertMapping.create_global_expert_idx_table(
                 experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
             )
             gids = [[int(g) for g in table_g[c, r]] for r in range(dgs) for c in range(ndg)]
+            # worst-case flat rows (every pair of the column's tokens on this chip): the dispatch capacity factor
+            # would let adversarial routing overrun token_index / y (the route plan cannot drop pairs)
+            ag_rows = flat_rows(dgs * seq_len_per_chip, K, experts_per_chip)
             self.ag = MoeAgBlock.get(
                 mesh_device,
                 chunk_size_per_chip=seq_len_per_chip,
@@ -325,7 +328,7 @@ class TtMoE:
                 k=K,
                 n_global=E,
                 gids=gids,
-                buf_rows=max_buf,
+                buf_rows=ag_rows,
                 options=options,
             )
         if options.flat_expert:
@@ -379,12 +382,17 @@ class TtMoE:
         idx4, w_rm = self.gate(x, row_major=True)
         x_rm = self.ag.to_rm(x)
         gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
-        ttnn.deallocate(x_rm)
-        ttnn.deallocate(w_rm)
+        gathered = self.ag.rows > 1  # one mesh row: gather returns x_rm / idx / w themselves (used until the reduce)
+        if gathered:
+            ttnn.deallocate(x_rm)
+            ttnn.deallocate(w_rm)
         counts, regions, token_index, _ = self.ag.plan()
         y = self.expert_indexed(gx, counts, regions, token_index)
         out = self.ag.reduce(y)
         ttnn.deallocate(y)
+        if not gathered:
+            ttnn.deallocate(x_rm)
+            ttnn.deallocate(w_rm)
         return out
 
     def expert_indexed(self, gx, counts, regions, token_index):
@@ -395,12 +403,9 @@ class TtMoE:
         if self.options.moe_ag_embedding:
             buf = ttnn.embedding(token_index, gx2, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             buf = ttnn.reshape(buf, (buf.shape[-2], buf.shape[-1]))
-            yrm = {"y_row_major": self.ag.y_rm} if isinstance(self.flat, FlatRoutedExpert) else {}
-            y = self.flat(buf, counts, regions, **yrm)
+            y = self.flat(buf, counts, regions, y_row_major=self.ag.y_rm)
             ttnn.deallocate(buf)
             return y
-        if not isinstance(self.flat, FlatRoutedExpert):  # the Python builder: tiled y (reduce untilizes it)
-            return self.flat(gx2, counts, regions, token_index=token_index, x_pages_per_row=self.ag.xppr)
         return self.flat(
             gx2, counts, regions, token_index=token_index, x_pages_per_row=self.ag.xppr, y_row_major=self.ag.y_rm
         )

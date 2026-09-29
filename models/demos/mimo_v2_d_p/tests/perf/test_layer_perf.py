@@ -84,6 +84,7 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
     tag = f"L{layer_idx}_{kind}_C{chunk_local}_ctx{max_seq}" + (
         f"_kv{kv_actual}" if os.environ.get("MIMO_PERF_KV_ACTUAL") else ""
     )
+    host = []
     wall = []  # MIMO_PERF_WALL=N: N timed iterations (run without --profile: host + device wall time per layer)
     n_it = 1 + int(os.environ.get("MIMO_PERF_WALL", "2"))
     for it in range(n_it):
@@ -99,6 +100,7 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
             signpost(f"{tag}_start")
         t0 = time.perf_counter()
         out = layer(x, rope, trans, kv, cache_layer=0, kv_actual=kv_actual)
+        host.append((time.perf_counter() - t0) * 1e3)  # host: every command enqueued (device still running)
         ttnn.synchronize_device(mesh_device)
         wall.append((time.perf_counter() - t0) * 1e3)
         if it:
@@ -142,6 +144,8 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
         ttnn.release_trace(mesh_device, tid)
         out.deallocate(True)
         x.deallocate(True)
+    h_ = sorted(host[1:])
+    _report(f"HOST {tag}: layer call (enqueue) median {h_[len(h_) // 2]:.2f} ms, min {h_[0]:.2f} ms")
     w_ = sorted(wall[1:])
     _report(
         f"WALL {tag}: median {w_[len(w_) // 2]:.2f} ms, min {w_[0]:.2f} ms over {len(w_)} (all {[round(v, 2) for v in wall]})"
