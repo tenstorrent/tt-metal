@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.2 MTP module CPU reference.
+"""GLM-5.3 MTP module CPU reference.
 
 The fused input projection is the only new math here; the decoder layer it feeds is
 ``reference.glm_5_1.block`` unchanged. Concat order is embedding first, then hidden state.

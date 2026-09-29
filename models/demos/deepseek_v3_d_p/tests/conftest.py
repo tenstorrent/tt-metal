@@ -41,12 +41,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 
-# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# glm_5_3 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
 # ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
 # without modifying the common prefill registry.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
-TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+TEST_VARIANTS["glm_5_3"] = GLM53Adapter()
 
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
