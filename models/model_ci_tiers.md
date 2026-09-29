@@ -44,7 +44,6 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 |----------------------|--------|------|-----------------|
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
 | Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
-| Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Full decoder serving; linear-attention convolution PCC; GPQA 10/198 subset; API and fixed-length performance |
 
 ## Daily Model Pipelines
 
@@ -253,10 +252,10 @@ and hardware pair has its own tier, test coverage, and time budget.
 | Time budgets | [time_budget.yaml](../.github/time_budget.yaml) |
 | Shared runner | [models-e2e-tests-impl.yaml](../.github/workflows/models-e2e-tests-impl.yaml) |
 
-Each test entry contains a `cmd`, either as an inline block or as a model-owned
-runner under its demo directory. Keep the complete procedure in one of those
-locations so reviewers can inspect it and developers can run the same command
-locally with the required hardware and model weights.
+Each test entry contains an explicit `cmd: |` block with its environment, setup,
+test, and cleanup commands. Keep those commands in the YAML so reviewers and
+dashboards can read the full procedure in one place. To reproduce a test locally,
+run its block from the checkout with the required hardware and model weights.
 
 For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
 and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
@@ -279,26 +278,15 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The QB2 Tier 3 budget is:
-
-   - **Llama3.1-8B:** 12 minutes
-   - **Gemma4 31B:** 40 minutes
-   - **Qwen3.8-27B:** 50 minutes
-   - **Total:** 12 + 40 + 50 = 102 minutes
-
-   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
-   passed all 24 model tests and completed 54 of 56 serving requests before its
-   timeout; the budget includes room for completion and runner variance.
-
+   the budget. The QB2 Tier 3 total is **52 minutes**: 12 for Llama3.1-8B
+   and 40 for Gemma4 31B, including setup, model tests, serving, and reporting.
    Gemma allows up to 20 minutes for each server startup within its total allowance;
    periodic metadata snapshots distinguish slow loading from stopped progress.
    Gemma's allowance covers the measured 15½-minute CI setup/checks, about 5½ minutes
    for GPQA, the remaining performance/reporting work, and runner variance.
-
-   Qwen's allowance covers model tests, three server startups, GPQA, API checks,
-   and fixed-length performance. Measured CI runs completed in 42–44 minutes,
-   leaving 6–8 minutes for runner variance.
-
+   The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   passed all 24 model tests and completed 54 of 56 serving requests before its
+   timeout; the budget includes room for completion and runner variance.
 4. Add any new model or SKU to the workflow's manual choices. Add the required
    targets to [model_targets.yaml](model_targets.yaml).
 
