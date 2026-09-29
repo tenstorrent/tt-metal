@@ -56,9 +56,7 @@ void kernel_main() {
     DataflowBuffer dfb_page_table(dfb::page_table);
 #endif
 
-    // get_entry_size(), not get_tile_size(): get_tile_size() reads a stale descriptor on Quasar's
-    // program-cache partial-update reuse path (cache DFB entry is one tile). See fill_cache overrun.
-    const uint32_t cache_tile_bytes = dfb_cache.get_entry_size();
+    const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;

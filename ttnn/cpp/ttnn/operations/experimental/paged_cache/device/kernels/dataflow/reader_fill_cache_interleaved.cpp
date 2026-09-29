@@ -27,9 +27,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_in(dfb::in);
 
-    // get_entry_size(), not get_tile_size(): on Quasar get_tile_size() reads a stale descriptor array on
-    // the program-cache partial-update reuse path (wrong per-tile size). The input DFB entry is one tile.
-    const uint32_t tile_bytes = dfb_in.get_entry_size();
+    const uint32_t tile_bytes = dfb_in.get_tile_size();
 
     // read a ublock of tiles from src to the buffer, and then push the ublock to unpacker
     uint32_t tile_id = start_tile_id;
