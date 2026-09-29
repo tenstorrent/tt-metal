@@ -909,10 +909,21 @@ not supported.</p></li>
 </div>
 </blockquote>
 <p>These features are determined by the hardware.</p>
-<p>Note: With the exception of signed integral compares on Quasar, there
-is currently a compiler defect regarding signed and unsigned integer
-comparisons, where ordering comparisons are only correct when the two
-operands are within 2^31 of each other.</p>
+<p>Due to hardware limitations, ordering integral compares (both signed
+and unsigned) are not correct over the full range – except on Quasar
+for signed compares. This is a compiler defect that is yet to be
+fixed. However, when values are less than 2^31 apart, the
+ordering compares are (a) correct and (b) can be cheaper than the
+full sequence, even on Quasar.  To that and the <code class="docutils literal notranslate"><span class="pre">sfpi::nearby</span></code>
+wrapper function is provided and may be used to wrap all, or part, of
+comparison sequences. The compiler does not have vector value range
+information to deduce this itself.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exexp</span><span class="w"> </span><span class="p">(</span><span class="n">f</span><span class="p">,</span><span class="w"> </span><span class="n">ExponentMode</span><span class="o">::</span><span class="n">Biased</span><span class="p">);</span>
+<span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">nearby</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">255</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="p">}</span><span class="w"> </span><span class="n">v_endif</span><span class="p">;</span>
+</pre></div>
+</div>
 </section>
 <section id="scalar-values">
 <h4>Scalar Values<a class="headerlink" href="#scalar-values" title="Permalink to this heading"></a>
@@ -1334,7 +1345,6 @@ vector to memory will result in an error similar to the following:</p>
 <div class="highlight"><pre><span></span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">ckernels</span><span class="o">/</span><span class="n">sfpi</span><span class="o">/</span><span class="n">include</span><span class="o">/</span><span class="n">sfpi</span><span class="p">.</span><span class="n">h</span><span class="o">:</span><span class="mi">792</span><span class="o">:</span><span class="mi">7</span><span class="o">:</span><span class="w"> </span><span class="n">error</span><span class="o">:</span><span class="w"> </span><span class="n">cannot</span><span class="w"> </span><span class="n">write</span><span class="w"> </span><span class="n">sfpu</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">memory</span>
 <span class="w">  </span><span class="mi">792</span><span class="w"> </span><span class="o">|</span><span class="w">     </span><span class="n">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">__builtin_rvtt_sfpassign_lv</span><span class="w"> </span><span class="p">(</span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">in</span><span class="p">);</span>
 <span class="w">      </span><span class="o">|</span><span class="w">       </span><span class="o">^</span>
-<span class="o">/</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">ckernels</span><span class="o">/</span><span class="n">sfpi</span><span class="o">/</span><span class="n">include</span><span class="o">/</span><span class="n">sfpi</span><span class="p">.</span><span class="n">h</span><span class="o">:</span><span class="mi">792</span><span class="o">:</span><span class="mi">7</span><span class="o">:</span><span class="w"> </span><span class="n">error</span><span class="o">:</span><span class="w"> </span><span class="n">cannot</span><span class="w"> </span><span class="n">write</span><span class="w"> </span><span class="n">sfpu</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">memory</span>
 </pre></div>
 </div>
 </section>
