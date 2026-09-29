@@ -111,6 +111,30 @@
   "status": "PASS",
   "waiting": null
  },
+ "R.3": {
+  "attempts": 0,
+  "duration_s": 231.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T03:56:39"
+   }
+  ],
+  "last_run": "2026-09-29T03:56:39",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/R.3.log",
+  "metrics": {
+   "boundaries_missing": 0,
+   "graph_errors": 0,
+   "graph_replay_maxabs": 0.0,
+   "maxabs_hidden": 0.0,
+   "pcc_hidden": 1.0000000000000149,
+   "pcc_state_min": 0.9999999999999764
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T03:52:47",
+  "status": "PASS"
+ },
  "R.4": {
   "attempts": 0,
   "duration_s": 70.1,
