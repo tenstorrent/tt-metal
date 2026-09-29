@@ -111,6 +111,29 @@
   "status": "PASS",
   "waiting": null
  },
+ "R.4": {
+  "attempts": 0,
+  "duration_s": 70.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T03:52:43"
+   }
+  ],
+  "last_run": "2026-09-29T03:52:43",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/R.4.log",
+  "metrics": {
+   "trim_done": 1,
+   "trim_dropped_tensors": 1818,
+   "trim_freed_gb": 1435.94,
+   "trim_kept_tensors": 188,
+   "trim_verify_errors": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T03:51:33",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T22:36:12",
