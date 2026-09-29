@@ -20,6 +20,13 @@ struct SDPAProgramConfig {
     // always runs the approximate form, which is what keeps the pack thread within the matmul time.
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    // Causal (incl. flexible chunked) SDPA only: keep the K/V causal prefix chains even when the zigzag pairs'
+    // K chunk counts are not uniform (e.g. q_chunk 64 with k_chunk 256). Default off: such configs stream K/V from DRAM
+    // per core.
+    bool allow_uneven_chain_pairs = false;
+    // Streaming compute only (fp32_dest_acc_en off): run the softmax @ V matmul at LoFi; Q @ K^T, the running-output
+    // rescale and the normalisation keep the compute kernel config's math fidelity. Default off.
+    bool pv_lofi = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

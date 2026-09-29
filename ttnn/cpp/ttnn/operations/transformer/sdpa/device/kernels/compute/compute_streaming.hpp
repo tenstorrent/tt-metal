@@ -37,6 +37,29 @@ constexpr bool reduce_trigger_supported = false;
 constexpr bool reduce_trigger_supported = true;
 #endif
 
+// SDPA_PV_LOFI (factory define, SDPAProgramConfig::pv_lofi): the softmax(Q@K^T)@V matmul runs at LoFi while Q@K^T,
+// the SALAD rescale, the normalisation and the other eltwise ops keep MATH_FIDELITY (LoFi there truncates the running
+// accumulator once per K chunk). The no-mop replay image differs between LoFi and HiFi, so the PV "reinit" becomes a
+// full LoFi init; the next Q@K^T step starts with its own full init (mm_no_mop_init_short) anyway.
+#ifdef SDPA_PV_LOFI
+namespace ckernel {
+ALWI void sdpa_pv_mm_init(uint32_t a, uint32_t b, bool tr, uint32_t ct, uint32_t rt, uint32_t kt) {
+    UNPACK((llk_unpack_AB_matmul_init(a, b, tr, ct, rt, kt)));
+    MATH((llk_math_matmul_init_no_mop<MathFidelity::LoFi, MM_THROTTLE>(a, b, tr, ct, rt)));
+}
+ALWI void sdpa_pv_mm_block(
+    uint32_t a, uint32_t b, uint32_t i0, uint32_t i1, uint32_t d, bool tr, uint32_t ct, uint32_t rt, uint32_t kt) {
+    UNPACK((llk_unpack_AB_matmul(a, b, i0, i1, ct, rt, kt)));
+    MATH((llk_math_matmul_no_mop<MathFidelity::LoFi, MM_THROTTLE>(a, b, d, ct, rt)));
+}
+}  // namespace ckernel
+#define SDPA_PV_MM_REINIT sdpa_pv_mm_init
+#define SDPA_PV_MM_BLOCK sdpa_pv_mm_block
+#else
+#define SDPA_PV_MM_REINIT mm_no_mop_reinit_short
+#define SDPA_PV_MM_BLOCK matmul_block_no_mop
+#endif
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -403,8 +426,14 @@ void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop(
-            in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
+#ifdef SDPA_PV_LOFI
+        if constexpr (!transpose) {
+            SDPA_PV_MM_BLOCK(
+                in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
+        } else
+#endif
+            matmul_block_no_mop(
+                in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
     }
@@ -451,8 +480,7 @@ void inplace_v_matmul_pack_batched(
             uint32_t in0_index = in0_index_start;
             uint32_t in1_index = (vs0 + c) * KT_stride;
             for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-                matmul_block_no_mop(
-                    in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
+                SDPA_PV_MM_BLOCK(in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
                 in0_index++;
                 in1_index++;
             }
@@ -1770,7 +1798,7 @@ static void sdpa_inner_loop_step(
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        SDPA_PV_MM_REINIT(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
@@ -1826,7 +1854,7 @@ static void sdpa_inner_loop_step(
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                    SDPA_PV_MM_REINIT(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     if (fp32_acc) {
                         pack_reconfig_data_format(out_cb);
                     }
@@ -1967,7 +1995,7 @@ static void sdpa_inner_loop_step(
                 sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_v_in, cb_recip_scratch, cb_qkt_im>();
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                SDPA_PV_MM_REINIT(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 if (fp32_acc) {
                     pack_reconfig_data_format(out_cb);
                 }

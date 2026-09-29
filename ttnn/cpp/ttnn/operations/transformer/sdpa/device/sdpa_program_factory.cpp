@@ -259,7 +259,8 @@ uint32_t kv_chain_mode_for(
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t Skt,
-    uint32_t max_offset_chunks = 0) {
+    uint32_t max_offset_chunks = 0,
+    bool allow_uneven_chain_pairs = false) {
     if (!plain_kv_stream) {
         return 0;
     }
@@ -268,7 +269,13 @@ uint32_t kv_chain_mode_for(
     }
     // No q tile gate: the reader side forward that used to cost more than the DRAM reads it saved past four
     // q tiles per chunk (measured at q256 k128 on Blackhole) now runs on the writer RISC.
-    if (!(causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt, max_offset_chunks))) {
+    // SDPAProgramConfig::allow_uneven_chain_pairs keeps the causal chains when the zigzag pair K chunk counts are
+    // not uniform (e.g. q64 k256). The uniform-pair gate is a load-balance condition, not a correctness one: both
+    // chain partners compute the same forward count and walk light then heavy, so uneven pairs cannot deadlock; the
+    // pairs then differ by at most one K chunk (measured on Blackhole, 8 heads, q64 k256, chunk start 3072:
+    // 710 -> 324 us).
+    if (!(causal_pairs && (allow_uneven_chain_pairs ||
+                           causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt, max_offset_chunks)))) {
         return 0;
     }
     // Measured on Blackhole: at one or two q tiles per chunk the relay latency rules and the reader's own forward
@@ -778,7 +785,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         Sq_chunk_t,
         Sk_chunk_t,
         Skt,
-        chain_max_offset_chunks);
+        chain_max_offset_chunks,
+        program_config.has_value() && program_config->allow_uneven_chain_pairs);
     // Chunked calls forward on the reader (mode 2) at every chain-eligible q chunk: the writer forward (mode 3) was
     // slower there at q128 (332 vs 538 us at chunk start 0). TT_METAL_SDPA_CHUNKED_CHAIN_MODE=3 selects the writer
     // forward, 0 the non chunked choice.
@@ -1073,6 +1081,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (is_chunked) {
         defines_map["SDPA_PAGED_KV_READ_BATCH"] = std::to_string(sdpa_env_u32("TT_METAL_SDPA_KV_READ_BATCH", 2));
         defines_map["SDPA_CHUNKED_CHAIN_LIGHT"] = std::to_string(sdpa_env_u32("TT_METAL_SDPA_CHUNKED_CHAIN_LIGHT", 2));
+    }
+    // SDPAProgramConfig::pv_lofi (streaming compute only, i.e. fp32_dest_acc_en off): the softmax@V matmul runs at
+    // LoFi while Q@K^T, the running-output rescale and the normalisation keep the configured fidelity (see
+    // compute_streaming.hpp).
+    if (use_streaming_compute && program_config.has_value() && program_config->pv_lofi) {
+        defines_map["SDPA_PV_LOFI"] = "1";
     }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
