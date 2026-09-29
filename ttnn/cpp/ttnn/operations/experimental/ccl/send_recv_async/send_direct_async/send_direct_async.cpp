@@ -12,8 +12,11 @@
 namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> send_direct_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    return ttnn::prim::send_direct_async(input_tensor, mesh_socket);
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    std::optional<uint32_t> static_dst_address,
+    std::optional<uint32_t> num_pages) {
+    return ttnn::prim::send_direct_async(input_tensor, mesh_socket, static_dst_address, num_pages);
 }
 
 }  // namespace ttnn::experimental

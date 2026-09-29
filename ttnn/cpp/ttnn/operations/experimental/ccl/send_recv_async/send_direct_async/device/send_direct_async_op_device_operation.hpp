@@ -30,6 +30,9 @@ struct SendDirectAsyncDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::experimental::prim::SendDirectAsyncDeviceOperation::tensor_return_value_t send_direct_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    std::optional<uint32_t> static_dst_address = std::nullopt,
+    std::optional<uint32_t> num_pages = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -12,8 +12,8 @@
 namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> recv_direct_async(
-    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    return ttnn::prim::recv_direct_async(output_tensor, mesh_socket);
+    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket, bool wait_only) {
+    return ttnn::prim::recv_direct_async(output_tensor, mesh_socket, wait_only);
 }
 
 }  // namespace ttnn::experimental

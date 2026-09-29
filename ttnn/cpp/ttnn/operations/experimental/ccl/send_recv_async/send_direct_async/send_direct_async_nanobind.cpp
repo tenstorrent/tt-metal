@@ -24,6 +24,15 @@ void bind_send_direct_async(nb::module_& mod) {
             input_tensor (ttnn.Tensor): device tensor.
             mesh_socket (ttnn.MeshSocket): MeshSocket to send the tensor to.
 
+        Keyword Args:
+            static_dst_address (int, optional): receiver output-buffer base address. When given, the
+                address handshake is skipped (fire-and-forget): the sender waits only for socket FIFO
+                credit, streams the pages to this address, then pushes the completion page. The
+                receiver must call recv_direct_async(..., wait_only=True). Defaults to None.
+            num_pages (int, optional): send only the first num_pages pages of the input buffer (e.g. the
+                leading block prefix of a paged KV cache), written to the same page indices at the
+                receiver. Defaults to None (all pages).
+
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Returns:
@@ -32,7 +41,10 @@ void bind_send_direct_async(nb::module_& mod) {
         )doc",
         &ttnn::experimental::send_direct_async,
         nb::arg("input_tensor"),
-        nb::arg("mesh_socket"));
+        nb::arg("mesh_socket"),
+        nb::kw_only(),
+        nb::arg("static_dst_address") = nb::none(),
+        nb::arg("num_pages") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

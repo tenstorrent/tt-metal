@@ -60,6 +60,10 @@ ttsl::hash::hash_t RecvDirectAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RecvDirectAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& output_tensor = tensor_args;
+    if (args.wait_only) {
+        return tt::tt_metal::operation::hash_operation<RecvDirectAsyncDeviceOperation>(
+            args.mesh_socket, output_tensor, true);
+    }
     return tt::tt_metal::operation::hash_operation<RecvDirectAsyncDeviceOperation>(args.mesh_socket, output_tensor);
 }
 
@@ -68,10 +72,10 @@ ttsl::hash::hash_t RecvDirectAsyncDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 std::vector<Tensor> recv_direct_async(
-    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket, bool wait_only) {
     using OperationType = ttnn::experimental::prim::RecvDirectAsyncDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
+    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket, wait_only);
     const auto& tensor_args = output_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

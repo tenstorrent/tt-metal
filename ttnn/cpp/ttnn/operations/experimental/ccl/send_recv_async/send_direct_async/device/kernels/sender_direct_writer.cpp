@@ -55,6 +55,9 @@ void kernel_main() {
     uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset for this core
     [[maybe_unused]] uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets (fallback)
     [[maybe_unused]] uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder (fallback)
+#ifdef SEND_STATIC_DST
+    uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);  // receiver buffer base (fixed)
+#endif
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -75,6 +78,11 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
 
+#ifdef SEND_STATIC_DST
+    // Fire-and-forget: no address exchange. Reserve the completion page up front; this blocks only
+    // while the receiver is a full FIFO (fifo_size / page_size transfers) behind.
+    socket_reserve_pages(sender_socket, 1);
+#else
     // Handshake buffer: page 0 is the dest-info landing zone, page 1 stages the advertise payload.
     uint32_t handshake_base_addr = get_write_ptr(handshake_cb_id);
     uint32_t advertise_stage_addr = handshake_base_addr + handshake_page_size;
@@ -110,6 +118,7 @@ void kernel_main() {
     } while (*valid_ptr == 0);
     uint32_t output_base_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_base_addr + DEST_OUTPUT_ADDR_OFFSET)[0];
+#endif
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
@@ -202,7 +211,9 @@ void kernel_main() {
     //////////////////////////////////////////////////
     // STEP 4: push a single completion page onto the socket
     //////////////////////////////////////////////////
+#ifndef SEND_STATIC_DST
     socket_reserve_pages(sender_socket, 1);
+#endif
     socket_push_pages(sender_socket, 1);
     fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
 

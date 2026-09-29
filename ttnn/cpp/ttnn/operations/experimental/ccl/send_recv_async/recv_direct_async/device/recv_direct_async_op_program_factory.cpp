@@ -128,6 +128,9 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
         handshake_page_size,     // handshake_page_size (socket page size)
     };
     handshake.config = WriterConfigDescriptor{};
+    if (operation_attributes.wait_only) {
+        handshake.defines.emplace_back("RECV_WAIT_ONLY", "1");
+    }
 
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         const auto& receiver_core_coord = receiver_core_coords[core_idx];

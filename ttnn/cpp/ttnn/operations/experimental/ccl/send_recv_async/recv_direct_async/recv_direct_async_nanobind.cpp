@@ -24,6 +24,11 @@ void bind_recv_direct_async(nb::module_& mod) {
             output_tensor (ttnn.Tensor): Tensor to receive the data into.
             mesh_socket (ttnn.MeshSocket): MeshSocket to receive the data from.
 
+        Keyword Args:
+            wait_only (bool): skip the address write-back and only wait for the completion page.
+                Pair with send_direct_async(..., static_dst_address=output_tensor.buffer_address()).
+                Defaults to False.
+
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Returns:
@@ -32,7 +37,9 @@ void bind_recv_direct_async(nb::module_& mod) {
         )doc",
         &ttnn::experimental::recv_direct_async,
         nb::arg("output_tensor"),
-        nb::arg("mesh_socket"));
+        nb::arg("mesh_socket"),
+        nb::kw_only(),
+        nb::arg("wait_only") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

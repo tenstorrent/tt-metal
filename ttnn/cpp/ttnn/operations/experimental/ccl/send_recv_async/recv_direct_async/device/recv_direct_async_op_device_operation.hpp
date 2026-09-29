@@ -30,6 +30,8 @@ struct RecvDirectAsyncDeviceOperation {
 namespace ttnn::prim {
 
 std::vector<Tensor> recv_direct_async(
-    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+    const ttnn::Tensor& output_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    bool wait_only = false);
 
 }  // namespace ttnn::prim

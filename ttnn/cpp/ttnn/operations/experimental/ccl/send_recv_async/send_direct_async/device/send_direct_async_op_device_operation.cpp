@@ -62,6 +62,16 @@ ttsl::hash::hash_t SendDirectAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendDirectAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& input_tensor = tensor_args;
+    if (args.num_pages.has_value()) {
+        // The page count sets the per-core page split (runtime args not patched on a cache hit): part of the hash.
+        return tt::tt_metal::operation::hash_operation<SendDirectAsyncDeviceOperation>(
+            args.mesh_socket, input_tensor, args.static_dst_address.has_value(), *args.num_pages);
+    }
+    if (args.static_dst_address.has_value()) {
+        // Only the mode is part of the program; the address itself is a runtime arg.
+        return tt::tt_metal::operation::hash_operation<SendDirectAsyncDeviceOperation>(
+            args.mesh_socket, input_tensor, true);
+    }
     return tt::tt_metal::operation::hash_operation<SendDirectAsyncDeviceOperation>(args.mesh_socket, input_tensor);
 }
 
@@ -70,10 +80,20 @@ ttsl::hash::hash_t SendDirectAsyncDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttnn::experimental::prim::SendDirectAsyncDeviceOperation::tensor_return_value_t send_direct_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    std::optional<uint32_t> static_dst_address,
+    std::optional<uint32_t> num_pages) {
     using OperationType = ttnn::experimental::prim::SendDirectAsyncDeviceOperation;
+    if (num_pages.has_value()) {
+        TT_FATAL(
+            *num_pages > 0 && *num_pages <= input_tensor.buffer()->num_pages(),
+            "send_direct_async: num_pages {} must be in [1, {}]",
+            *num_pages,
+            input_tensor.buffer()->num_pages());
+    }
 
-    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
+    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket, static_dst_address, num_pages);
     const auto& tensor_args = input_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

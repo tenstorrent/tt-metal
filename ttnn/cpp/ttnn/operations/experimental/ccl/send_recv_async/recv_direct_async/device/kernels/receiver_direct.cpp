@@ -50,6 +50,8 @@ void kernel_main() {
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, handshake_page_size);
 
+#ifndef RECV_WAIT_ONLY
+
     //////////////////////////////////////////////////
     // STEP 1: receive the sender's advertised handshake-buffer address
     //////////////////////////////////////////////////
@@ -77,6 +79,9 @@ void kernel_main() {
         socket_packet_header_addr,
         get_noc_addr(upstream_noc_x, upstream_noc_y, sender_handshake_addr + DEST_VALID_OFFSET),
         1);
+#else
+    (void)output_base_addr;
+#endif
 
     //////////////////////////////////////////////////
     // STEP 3: wait for the completion token from the sender

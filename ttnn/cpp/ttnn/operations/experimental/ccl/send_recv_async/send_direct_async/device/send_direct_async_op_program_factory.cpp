@@ -98,6 +98,9 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
     auto input_page_size = input_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
     auto total_num_pages = input_tensor.buffer()->num_pages();
+    if (operation_attributes.num_pages.has_value()) {
+        total_num_pages = std::min<decltype(total_num_pages)>(total_num_pages, *operation_attributes.num_pages);
+    }
 
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;
@@ -231,6 +234,10 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
     writer.core_ranges = sender_core_range_set;
     writer.compile_time_args = std::move(writer_compile_args);
     writer.config = WriterConfigDescriptor{};
+    const bool static_dst = operation_attributes.static_dst_address.has_value();
+    if (static_dst) {
+        writer.defines.emplace_back("SEND_STATIC_DST", "1");
+    }
 
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         const auto& sender_core_coord = sender_core_coords[core_idx];
@@ -263,6 +270,10 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
             num_whole_packets,                           // num_whole_packets
             num_pages_remainder,                         // num_pages_remainder
         };
+        if (static_dst) {
+            // rt arg 5: receiver output base address (patched in override_runtime_arguments)
+            writer_rt_args.push_back(*operation_attributes.static_dst_address);
+        }
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
@@ -307,7 +318,11 @@ void SendDirectAsyncProgramFactory::override_runtime_arguments(
     for (const auto& sender_core_coord :
          collect_sender_connections(mesh_socket, input_tensor, target_device).core_coords) {
         GetRuntimeArgs(program, reader_kernel_index, sender_core_coord)[0] = input_base_addr;
-        GetRuntimeArgs(program, writer_kernel_index, sender_core_coord)[0] = socket_config_addr;
+        auto& writer_args = GetRuntimeArgs(program, writer_kernel_index, sender_core_coord);
+        writer_args[0] = socket_config_addr;
+        if (operation_attributes.static_dst_address.has_value()) {
+            writer_args[5] = *operation_attributes.static_dst_address;
+        }
     }
 }
 
