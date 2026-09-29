@@ -124,9 +124,11 @@ SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-clu
 # 96-stage / six-BigMesh ring-stress entries.
 # Set landed in tt-cluster-descriptors #17 (in the pinned submodule).
 SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_aisleC/SC24_32x4_revC_subtorus_aisleC_mapping.yaml"
-# (The non-subtorus flat SC20 revAB Aisle C mock was removed: real revAB systems are subtorus, and the
-# flat mock only exposes 12 physical meshes, so the SC20 rings can't map onto it. Use the revAB subtorus
-# mock (SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING) instead.)
+# Full 20-host SC20 revAB Aisle C (flat, non-subtorus) galaxy. Used by the bh-heterogeneous 64-stage-ring
+# + 4x32-decode disaggregated placement test: the flat torus lets the decode 4x32 mesh seat as a real
+# 4x32_Mesh_flat_torus_xy PGD with no fallback (the revAB subtorus wiring cannot embed that torus).
+# (Pure SC20 blitz rings still use the subtorus mock SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING.)
+SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revAB_aisleC/SC20_32x4_revAB_aisleC_mapping.yaml"
 # SC16 revC subtorus, Aisle C (16-host / 64-mesh subset of the SC20 revC subtorus Aisle C set).
 SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC16_32x4_revC_subtorus_aisleC_mapping.yaml"
 SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml"
@@ -894,6 +896,12 @@ done
 
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_unpinned_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_PIPELINE_BUILDER_CHECK}"
 
+# Heterogeneous disaggregated placement: 64x M0(4x2) closed ring + 1 Decode4x32(32x4), co-placed in a
+# single master solve (65 meshes) on the 20-host SC20 revAB Aisle C flat galaxy. The flat torus lets the
+# decode 4x32 mesh seat as a real 4x32_Mesh_flat_torus_xy PGD with zero fallback. Supersedes the smaller
+# disaggregated_prefill_2x4_pipeline_decode_32x4_combined heterogeneous refill test (removed from bh-misc).
+run_test env TT_METAL_OPERATION_TIMEOUT_SECONDS=600 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding "${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor "${MGD_CUSTOM}/disaggregated_prefill_64x_4x2_ring_loop.textproto" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
+
 fi # bh-heterogeneous
 
 ######################################
@@ -981,9 +989,6 @@ run_test tt-run --mock-cluster-rank-binding "${MOCK_GALAXY_QUAD_2X4_FOUR_RANK_CL
 
 # Multi-MGD subcontext (-M / --mesh-graph-descriptor-mapping): bh_6u (non-torus) mock cluster, one MGD per sub-context.
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
-
-# Disaggregated prefill 2x4 pipeline decode 32x4 combined
-run_test env TT_METAL_OPERATION_TIMEOUT_SECONDS=600 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor "${MGD_CUSTOM}/disaggregated_prefill_2x4_pipeline_decode_32x4_combined.textproto" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 
 fi # bh-misc
 
