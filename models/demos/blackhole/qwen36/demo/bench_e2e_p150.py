@@ -413,6 +413,12 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "ops (same math, bit-exact; distinct from the pre-existing QWEN36_GDN_GATE_FUSED, which fuses the "
         "output-gate multiply). run_bench_e2e_p150.sh pins it (runner default 1); 0=separate ops",
     ),
+    "QWEN36_GDN_GATES_OP": (
+        "1",
+        "P10_GDNGATE: one ttnn.experimental.gdn_gates op makes the GDN beta and g (fp32) straight from the a/b columns "
+        "of gab at T>1 prefill (M1 S4 gab branch, fused FLA path), replacing the 2 slices + sigmoid-mul + add-softplus "
+        "+ mul (+ the FLA op's 2 typecasts); bit-identical to the chain. Runner default 1; 0=slice/eltwise chain",
+    ),
     "QWEN36_ROPE_L1": (
         "0",
         "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
