@@ -362,6 +362,13 @@ tasks:
     - attn_norm
     - attention
     layer: 0
+  frozen:
+    at: '2026-09-29T04:26:53'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_04_attention.py: 731b96cd5449ad02f44670db99e2f5534d79deb9a98bd73a3b30b7abc1f9ef3b
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_dense.attn_residual
   title: kda_dense attn_residual (residual) on device, layer 0
   step: implement
