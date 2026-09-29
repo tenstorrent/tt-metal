@@ -93,3 +93,60 @@ def test_kda_qkv_conv_perf(device, actual_start) -> None:
             torch.save(outputs, path)
             logger.info(f"saved outputs to {path}")
     assert elapsed_us <= _MAX_US, f"QKV conv {elapsed_us:.1f} us regressed past {_MAX_US} us"
+
+
+# The fused input projection is 12440 columns wide per device; its leading Q+K+V columns are the channels.
+_PROJECTION_WIDTH = 12440
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+@pytest.mark.parametrize("channel_chunk_size", [512, 768])
+@pytest.mark.parametrize("actual_start", [0, 672, 640 * 7 + 96], ids=["start0", "start672", "split96"])
+def test_kda_qkv_conv_reads_tiled_projection(device, actual_start, channel_chunk_size) -> None:
+    """Reading the tiled projection in place is bit-identical to convolving its row-major channel slice."""
+    (inputs, _, _), (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, sequence=_ROWS, widths=_WIDTHS)
+    channels = sum(_WIDTHS)
+    extra = torch.randn(1, _ROWS, _PROJECTION_WIDTH - channels).to(inputs.dtype)
+    projection_tt = ttnn.from_torch(
+        torch.cat([inputs.reshape(1, _ROWS, channels), extra], dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    predecessor_tt = ttnn.from_torch(
+        torch.randn(1, 3, channels), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    actual_start_tt = make_actual_start(device, actual_start)
+    program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size)
+
+    def convolve(source):
+        return lambda: ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            source,
+            history_tt,
+            *taps_tt,
+            *_WIDTHS,
+            actual_start=actual_start_tt,
+            predecessor_carry=predecessor_tt,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    row_major_us, expected = _traced_us(device, convolve(input_tt))
+    tiled_us, outputs = _traced_us(device, convolve(projection_tt))
+    logger.info(
+        f"QKV conv start={actual_start} chunk={channel_chunk_size}: RM {row_major_us:.1f} us, tiled {tiled_us:.1f} us"
+    )
+    for name, reference, output in zip("qkv", expected, outputs):
+        assert torch.equal(ttnn.to_torch(reference), ttnn.to_torch(output)), f"tiled {name} differs"
+
+
+@pytest.mark.parametrize("rows", [(637, 638, 639), (29, 30, 31), (0, 17, 623)], ids=["tail", "first", "mixed"])
+def test_kda_select_tile_rows_matches_embedding(device, rows) -> None:
+    channels = sum(_WIDTHS)
+    table = torch.randn(1, _ROWS, _PROJECTION_WIDTH).to(torch.bfloat16)
+    tiled = ttnn.from_torch(table, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    indices = ttnn.from_torch(
+        torch.tensor(rows, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    selected = ttnn.to_torch(ttnn.experimental.kda.select_tile_rows(tiled, indices, width=channels))
+    assert torch.equal(selected, table[:, list(rows), :channels]), "selected rows differ from the table"

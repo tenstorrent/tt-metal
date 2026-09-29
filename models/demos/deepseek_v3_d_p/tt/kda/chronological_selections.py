@@ -28,17 +28,19 @@ class ChronologicalSelections:
 
     _selection_records: ttnn.Tensor
 
-    def select_outgoing_history(self, projected_qkv: ttnn.Tensor) -> ttnn.Tensor:
+    def select_outgoing_history(self, projected_qkv: ttnn.Tensor, *, width: int | None = None) -> ttnn.Tensor:
         """Three local tokens preceding the next physical rank's segment."""
-        return self._select_rows(projected_qkv, _layout.OUTGOING_HISTORY)
+        return self._select_rows(projected_qkv, _layout.OUTGOING_HISTORY, width=width)
 
     def select_predecessor_history(self, gathered_history: ttnn.Tensor) -> ttnn.Tensor:
         """The preceding physical rank's history from the gathered candidates."""
         return self._select_rows(gathered_history, _layout.PREDECESSOR_HISTORY)
 
-    def select_local_final_history(self, projected_qkv: ttnn.Tensor, sp_size: int) -> ttnn.Tensor:
+    def select_local_final_history(
+        self, projected_qkv: ttnn.Tensor, sp_size: int, *, width: int | None = None
+    ) -> ttnn.Tensor:
         """Last three locally valid rows; ignored when this rank is empty."""
-        return self._select_rows(projected_qkv, _layout.local_final_history(sp_size))
+        return self._select_rows(projected_qkv, _layout.local_final_history(sp_size), width=width)
 
     def select_final_history(self, candidates: ttnn.Tensor) -> ttnn.Tensor:
         """History at the logical sequence end, replicated for the next call."""
@@ -89,8 +91,17 @@ class ChronologicalSelections:
             memory_config=memory_config,
         )
 
-    def _select_rows(self, tensor: ttnn.Tensor, record_index: int) -> ttnn.Tensor:
-        width = tensor.shape[-1]
+    def _select_rows(self, tensor: ttnn.Tensor, record_index: int, *, width: int | None = None) -> ttnn.Tensor:
+        """Gather indexed rows of the flattened table, keeping its leading ``width`` columns (default: all)."""
+        width = tensor.shape[-1] if width is None else width
+        if tensor.layout == ttnn.TILE_LAYOUT:
+            return ttnn.experimental.kda.select_tile_rows(
+                tensor,
+                self._indices(record_index, _layout.HISTORY_ROWS),
+                width=width,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        assert width == tensor.shape[-1], "row-major selection keeps every column"
         table = ttnn.reshape(tensor, (-1, width))
         selected = ttnn.embedding(
             self._indices(record_index, _layout.HISTORY_ROWS),

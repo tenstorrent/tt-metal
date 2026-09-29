@@ -11,6 +11,7 @@ def exchange_convolution_carry(
     *,
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
+    width: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return predecessor history and the replacement logical stream carry.
 
@@ -18,14 +19,14 @@ def exchange_convolution_carry(
     Predecessor history varies by SP rank; the final carry is replicated across
     each SP line. Channels remain sharded across TP. The native convolution
     selects the caller's initial history at the logical sequence start.
+    ``projected_qkv`` is the tiled projection whose leading ``width`` columns are the channels.
     """
-    outgoing = selections.select_outgoing_history(projected_qkv)
+    outgoing = selections.select_outgoing_history(projected_qkv, width=width)
     physical_tail_history = selections.select_local_final_history(
-        projected_qkv, tuple(projected_qkv.device().shape)[sequence_parallel_axis]
+        projected_qkv, tuple(projected_qkv.device().shape)[sequence_parallel_axis], width=width
     )
     # One collective carries both histories side by side: gathering along rows keeps the rank-major
     # [rank * 3 + row] layout both selections index, so each selection reads its own half.
-    width = outgoing.shape[-1]
     packed = ttnn.concat([outgoing, physical_tail_history], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     gathered = ttnn.all_gather(
         packed, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
