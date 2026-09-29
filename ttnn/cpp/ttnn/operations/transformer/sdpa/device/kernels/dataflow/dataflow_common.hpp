@@ -967,9 +967,10 @@ void generate_causal_sliding_window_mask(
                     // K tile is completely outside all sliding windows
                     mask_type = MaskType::FULLY_MASKED;
                 } else {
-                    // K tile overlaps with sliding windows, but we need to check if it's fully contained
+                    // A tile needs no mask only when every query row can attend to every key.
+                    // Use the intersection of the rows' windows, not their union at the leading edge.
                     bool k_tile_fully_contained =
-                        ((int32_t)k_tile_start >= min_window_start) &&
+                        ((int32_t)k_tile_start >= max_window_start) &&
                         ((int32_t)k_tile_end < min_window_end);  // fully contained within the window
                     if (k_tile_fully_contained) {
                         mask_type = MaskType::FULLY_ALLOWED;

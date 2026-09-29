@@ -678,5 +678,41 @@ def test_chunked_sdpa_sink_and_sliding_window(
             sliding_window_size=sliding_window,
             attention_sink=tt_sink,
         )
-        passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.99)
+        passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
         assert passed, f"chunk at absolute position {start} failed PCC: {pcc}"
+
+
+@pytest.mark.parametrize("is_causal", [False, True])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_sdpa_window_between_tile_boundaries(device, is_causal, fp32_dest_acc_en):
+    """The fully-visible K tiles must fit every query row's window, including its moving left edge."""
+    torch.manual_seed(83)
+    sequence, heads, dim, window = 512, 4, 64, 100
+    query, key, value = [torch.randn(1, heads, sequence, dim).to(torch.bfloat16) for _ in range(3)]
+    q_pos = torch.arange(sequence)[:, None]
+    k_pos = torch.arange(sequence)[None, :]
+    visible = ((k_pos <= q_pos) & (k_pos > q_pos - window)) if is_causal else (k_pos - q_pos).abs() <= window // 2
+    scores = query.float() @ key.float().transpose(-2, -1) * dim**-0.5
+    expected = scores.masked_fill(~visible, float("-inf")).softmax(dim=-1) @ value.float()
+    operands = [
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for x in (query, key, value)
+    ]
+    actual = ttnn.transformer.scaled_dot_product_attention(
+        *operands,
+        is_causal=is_causal,
+        sliding_window_size=window,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        ),
+    )
+    passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
+    assert passed, pcc
