@@ -1738,13 +1738,15 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device,
     """Only the 1D mcast factory reads in1 from the pipes; any other config would leave them undrained."""
     setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
     _space, pipes = _make_mcast_in0_pipes(device, setup, setup["entry_size"], 2)
+    # A 2D grid over the same workers that covers N; the output is interleaved because the output
+    # tensor is allocated from the program config before validation runs.
     program_config_2d = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(setup["ring_cols"], setup["recv_per_bank"]),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=1,
-        per_core_N=1,
+        per_core_N=setup["receiver_count"] // setup["ring_cols"],
         transpose_mcast=False,
         fused_activation=None,
     )
@@ -1753,7 +1755,7 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device,
             setup["tt_act"],
             setup["tt_weight"],
             program_config=program_config_2d,
-            memory_config=setup["output_mem_config"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             prefetcher_pipes=pipes,
         )
 
