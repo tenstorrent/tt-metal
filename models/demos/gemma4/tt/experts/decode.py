@@ -104,14 +104,14 @@ def decode_forward(
     if _down_n_tiles == 88 and _down_k_tiles == 6 and batch_size <= 32:
         # 22 cores (11x2) instead of 8; in0_block_w kept at 1 (in0_block_w=6 moved accuracy below the gate)
         down_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(11, 4),
+            compute_with_storage_grid_size=ttnn.CoreCoord(10, 4),
             in0_block_w=1,
             out_subblock_h=1,
-            out_subblock_w=2,
+            out_subblock_w=3,
             out_block_h=1,
-            out_block_w=2,
+            out_block_w=3,
             per_core_M=1,
-            per_core_N=2,
+            per_core_N=3,
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,

@@ -172,14 +172,14 @@ class SharedMLP:
             )
 
             _gu_decode_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(6, 1),
+                compute_with_storage_grid_size=(7, 1),
                 in0_block_w=2,
                 out_subblock_h=1,
-                out_subblock_w=6,
+                out_subblock_w=5,
                 out_block_h=1,
-                out_block_w=6,
+                out_block_w=5,
                 per_core_M=1,
-                per_core_N=6,
+                per_core_N=5,
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
