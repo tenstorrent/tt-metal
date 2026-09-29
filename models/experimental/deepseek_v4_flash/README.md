@@ -1,5 +1,10 @@
 # DeepSeek-V4-Flash
 
+> **On branch `sdawle/dsv4-flash-prefill-decode-1glx`** this directory is merged with the pure-ttnn prefill
+> (`models/demos/deepseek_v3_d_p/tt/v4`) for prefill + decode on one galaxy. Status, where and how to run it, and
+> what is next: [`tests/prefill/TTNN_PREFILL_E2E.md`](tests/prefill/TTNN_PREFILL_E2E.md). On Blackhole firmware
+> < 19.12 the decode runs without the DRISC weight prefetcher (auto-detected; `DEEPSEEK_V4_PREFETCHER=0/1` pins it).
+
 Experimental TT-NN implementation of DeepSeek-V4-Flash for Tenstorrent Blackhole.
 There is no prefill op: a prompt is replayed one traced decode step per token, so
 follow-up turns only cost the tokens they add. KV caches are paged, so several
