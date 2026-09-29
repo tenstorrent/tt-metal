@@ -378,3 +378,21 @@ Results: device passes (out PCC 0.999982, rel 0.0064, ratio [0.9828, 1.0078]; h_
 (out rel 0.0017). Stub fails (PCC 0).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_05_attn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.ffn_hc test (attempt 1)
+
+Reviewed the rendered component test for `ffn_hc` (the attn_hc op with hc_ffn_* weights, on h_mid). Rewrote it from the
+attn_hc test: the gated PCC plus asserted per-part rel L2 and max abs, comb column sums, and range checks.
+Sensitivity (CPU host script on the golden, not kept), PCC / part rel / max abs. Passing PCC 0.99: comb transposed
+0.9945 / 0.113; softmax on the wrong axis 0.030; 10 Sinkhorn iterations 0.054; hc_eps 1e-5 0.0107 / 0.078; comb base
+transposed 0.018 / 0.064; comb scale x1.02 0.042; rms eps 1.2e-5 pre 0.045; pre scale x1.02 0.031; post scale x1.02
+0.0146; x1.02 on any part 0.020; last row zeroed max abs 0.99. Caught by PCC: h_mid streams differ at layer 0
+(rel 0.6..1.5), so streams 0/1 swapped (0.912), stream-major flatten (0.548), attn weights (0.547) and rms eps 1e-6
+(0.936). Noise: bf16 mix output 0.0026 / 0.007; 0.3% mix noise 0.0049 / 0.023; 1% 0.016 / 0.070.
+Limits: rel L2 <= 0.01 and max abs <= 0.05 for every part (tighter than attn_hc's 0.03 / 0.02 / 0.15..0.2; the
+attn_hc pessimistic noise model gives 0.07 here), column sums within 0.01.
+Results: reference passes (PCC 0.999998, parts 0.0013 / 0.0017 / 0.0014). Stub fails (PCC 0). Device already passes
+through the existing `TtHcWeights` (`build_hc(..., "ffn")`): PCC 0.999994, rel 0.0028 / 0.0022 / 0.0030, max abs
+<= 0.0103, column sums [0.9965, 1.0009].
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
