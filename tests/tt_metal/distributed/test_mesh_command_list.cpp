@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -43,6 +44,7 @@ using ::testing::ThrowsMessage;
 constexpr m2::NodeCoord kNode{0, 0};
 constexpr uint32_t kAddressA = 100 * 1024;
 constexpr uint32_t kAddressB = kAddressA + 64;
+constexpr uint32_t kAddressC = kAddressB + 64;
 constexpr uint32_t kValueA = 0xCAFE0001;
 constexpr uint32_t kValueB = 0xCAFE0002;
 constexpr char kKernelName[] = "writer";
@@ -90,6 +92,23 @@ protected:
     }
 };
 
+class CommandListMultiDeviceTest : public MeshDeviceFixtureBase {
+protected:
+    CommandListMultiDeviceTest() :
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .trace_region_size = (64 << 20)}) {}
+
+    void SetUp() override {
+        MeshDeviceFixtureBase::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
+        const auto arch = mesh_device_->get_devices().at(0)->arch();
+        if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "Command-list tests require Wormhole B0 or Blackhole hardware";
+        }
+    }
+};
+
 m2::ProgramSpec make_l1_write_spec(const std::string& name) {
     const m2::KernelSpecName kernel_name{kKernelName};
     auto kernel = MakeMinimalGen1DMKernel(kKernelName, DataMovementProcessor::RISCV_0);
@@ -118,16 +137,65 @@ MeshWorkload make_l1_write_workload(
     return workload;
 }
 
+using DeviceRangeValue = std::pair<MeshCoordinateRange, uint32_t>;
+
+MeshWorkload make_l1_write_workload(
+    MeshDevice& mesh_device,
+    uint32_t address,
+    const std::vector<DeviceRangeValue>& device_range_values,
+    const std::string& name) {
+    std::unordered_map<MeshCoordinateRange, m2::ProgramSpec> specs;
+    std::unordered_map<MeshCoordinateRange, uint32_t> values;
+    for (size_t i = 0; i < device_range_values.size(); ++i) {
+        const auto& [device_range, value] = device_range_values[i];
+        specs.emplace(device_range, make_l1_write_spec(name + "_" + std::to_string(i)));
+        values.emplace(device_range, value);
+    }
+
+    auto workload = m2::MakeMeshWorkloadFromSpecs(mesh_device, specs);
+    for (auto& [device_range, program] : workload.get_programs()) {
+        m2::ProgramRunArgs args;
+        args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{kKernelName},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", address}}),
+            .common_runtime_arg_values = {{"value", values.at(device_range)}},
+        }};
+        m2::SetProgramRunArgs(program, args);
+    }
+    return workload;
+}
+
 IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device) { return mesh_device->get_devices().at(0); }
+
+IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
+    return mesh_device->get_device(device_coord);
+}
 
 void write_l1(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t address, uint32_t value) {
     std::vector<uint32_t> data{value};
     ::tt::tt_metal::detail::WriteToDeviceL1(device(mesh_device), kNode, address, data);
 }
 
+void write_l1(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinate& device_coord,
+    uint32_t address,
+    uint32_t value) {
+    std::vector<uint32_t> data{value};
+    ::tt::tt_metal::detail::WriteToDeviceL1(device(mesh_device, device_coord), kNode, address, data);
+}
+
 uint32_t read_l1(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t address) {
     std::vector<uint32_t> result;
     ::tt::tt_metal::detail::ReadFromDeviceL1(device(mesh_device), kNode, address, sizeof(uint32_t), result);
+    EXPECT_EQ(result.size(), 1u);
+    return result.at(0);
+}
+
+uint32_t read_l1(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord, uint32_t address) {
+    std::vector<uint32_t> result;
+    ::tt::tt_metal::detail::ReadFromDeviceL1(
+        device(mesh_device, device_coord), kNode, address, sizeof(uint32_t), result);
     EXPECT_EQ(result.size(), 1u);
     return result.at(0);
 }
@@ -164,6 +232,87 @@ TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysThroughBothPublicEnt
     Finish(cq);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
     EXPECT_EQ(read_l1(mesh_device_, kAddressB), kValueB);
+}
+
+TEST_F(CommandListMultiDeviceTest, ReplaysMeshWideWorkloadOnEveryDevice) {
+    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "mesh_wide");
+    auto& cq = mesh_device_->mesh_command_queue(0);
+
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(workload);
+    auto command_list = builder.build(cq);
+
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    for (const auto& coord : all_devices) {
+        write_l1(mesh_device_, coord, kAddressA, 0);
+    }
+    command_list.replay(/*blocking=*/true);
+    for (const auto& coord : all_devices) {
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueA) << "Device coordinate: " << coord;
+    }
+
+    for (const auto& coord : all_devices) {
+        write_l1(mesh_device_, coord, kAddressA, 0);
+    }
+    EnqueueCommandList(cq, command_list, /*blocking=*/false);
+    Finish(cq);
+    for (const auto& coord : all_devices) {
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueA) << "Device coordinate: " << coord;
+    }
+}
+
+TEST_F(CommandListMultiDeviceTest, ReplaysHeterogeneousAndNonConvexDeviceRanges) {
+    constexpr uint32_t kTopRowValue = 0xABCD0001;
+    constexpr uint32_t kBottomRowValue = 0xABCD0002;
+    constexpr uint32_t kTopLeftValue = 0xABCD0003;
+    constexpr uint32_t kBottomRightValue = 0xABCD0004;
+
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    const MeshCoordinateRange top_row({0, 0}, {0, 3});
+    const MeshCoordinateRange bottom_row({1, 0}, {1, 3});
+    const MeshCoordinateRange top_left({0, 0}, {0, 1});
+    const MeshCoordinateRange bottom_right({1, 2}, {1, 3});
+
+    auto mesh_wide = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "heterogeneous_mesh_wide");
+    auto split_rows = make_l1_write_workload(
+        *mesh_device_,
+        kAddressB,
+        std::vector<DeviceRangeValue>{{top_row, kTopRowValue}, {bottom_row, kBottomRowValue}},
+        "split_rows");
+    auto non_convex = make_l1_write_workload(
+        *mesh_device_,
+        kAddressC,
+        std::vector<DeviceRangeValue>{{top_left, kTopLeftValue}, {bottom_right, kBottomRightValue}},
+        "non_convex");
+
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    CommandListBuilder builder(*mesh_device_);
+    builder.add(mesh_wide);
+    builder.add(split_rows);
+    builder.add(non_convex);
+    auto command_list = builder.build(cq);
+
+    for (const auto& coord : all_devices) {
+        write_l1(mesh_device_, coord, kAddressA, 0);
+        write_l1(mesh_device_, coord, kAddressB, 0);
+        write_l1(mesh_device_, coord, kAddressC, 0);
+    }
+    command_list.replay(/*blocking=*/true);
+
+    for (const auto& coord : all_devices) {
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueA) << "Device coordinate: " << coord;
+
+        const uint32_t expected_row_value = top_row.contains(coord) ? kTopRowValue : kBottomRowValue;
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressB), expected_row_value) << "Device coordinate: " << coord;
+
+        uint32_t expected_non_convex_value = 0;
+        if (top_left.contains(coord)) {
+            expected_non_convex_value = kTopLeftValue;
+        } else if (bottom_right.contains(coord)) {
+            expected_non_convex_value = kBottomRightValue;
+        }
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressC), expected_non_convex_value) << "Device coordinate: " << coord;
+    }
 }
 
 TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
