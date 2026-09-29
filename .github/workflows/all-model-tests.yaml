@@ -590,6 +590,7 @@ jobs:
          || (!inputs.tier-1 && inputs.tier-2 && !inputs.tier-3) && '2'
          || (!inputs.tier-1 && !inputs.tier-2 && inputs.tier-3) && '3'
          || 'all' }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
 
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates per-leg ai-job-summary artifacts into one run-level report.

@@ -45,6 +45,11 @@ on:
         required: false
         type: string
         default: "all"
+      matmul-registry-mode:
+        required: false
+        type: string
+        default: "off"
+        description: "Matmul registry mode for test processes"
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
@@ -146,6 +151,7 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
+        TTNN_CONFIG_OVERRIDES: '{"matmul_registry_mode":"${{ inputs.matmul-registry-mode }}"}'
         FILE_INSTALL_LOG: "./output/vllm_install.log"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"

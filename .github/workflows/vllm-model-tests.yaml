@@ -90,6 +90,15 @@ on:
         type: boolean
         default: false
         description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
+      matmul-registry-mode:
+        description: "Matmul registry mode"
+        required: false
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "on"
 
 permissions:
   packages: write
@@ -253,3 +262,4 @@ jobs:
       vllm-tt-plugin-ref: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
       mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
