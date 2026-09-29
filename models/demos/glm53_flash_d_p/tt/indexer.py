@@ -59,13 +59,7 @@ class TtIndexer:
         self.kn_b = replicate(mesh, w["k_norm_b"].float().reshape(1, 1, 1, -1).to(torch.bfloat16))
         self.ape = replicate(mesh, w["ape"].float().reshape(1, 1, 1, KP * self.hd), dtype=ttnn.float32)
         self.cache_rows = max_seq // KP + ttnn.TILE_SIZE
-        self.cache = ttnn.zeros(
-            (1, 1, self.cache_rows, self.hd),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=MC,
-        )
+        self.cache = pooled_key_cache(mesh, cfg, max_seq)
         self.consts = {s: self._chunk_consts(s) for s in sorted(set(chunks))}
 
     # ---- load-time constants, one set per chunk size (each chip holds its own S/4 rows)
@@ -245,6 +239,11 @@ class TtIndexer:
         return out
 
     # ---- state at the harness boundary (prefix load / read-back; never inside the forward)
+    def bind_cache(self, cache: ttnn.Tensor) -> None:
+        """Read and write another pooled-key cache of the same shape (pooled_key_cache; one per serving slot)."""
+        assert tuple(cache.shape) == tuple(self.cache.shape), (cache.shape, self.cache.shape)
+        self.cache = cache
+
     def load_state(self, tensors: dict, length: int | None = None) -> None:
         """Pooled keys [n, 128] (reference layout, rows [0, length / 4) valid) -> the device cache."""
         pk = tensors["index_key"].float()
@@ -258,6 +257,17 @@ class TtIndexer:
     def state_torch(self) -> dict:
         """The pooled-key cache [max_seq / 4 + 32, 128] (chip 0's copy; replicated)."""
         return {"index_key": ttnn.to_torch(ttnn.get_device_tensors(self.cache)[0]).reshape(self.cache_rows, -1).float()}
+
+
+def pooled_key_cache(mesh, cfg, max_seq: int) -> ttnn.Tensor:
+    """The replicated pooled-key cache [1, 1, max_seq / 4 + 32, 128] bf16 TILE, zeroed (32 spare rows, see above)."""
+    return ttnn.zeros(
+        (1, 1, max_seq // KP + ttnn.TILE_SIZE, cfg.index_head_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=MC,
+    )
 
 
 def build_indexer(mesh, loader, cfg, layer: int, max_seq: int, chunks) -> TtIndexer:
