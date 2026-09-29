@@ -49,12 +49,13 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
  * At the default EXP2_DOWNSCALE that is roughly val ∈ [-88.0, 88.7].
  *
  * EXP2_DOWNSCALE returns exp(val) / 2^EXP2_DOWNSCALE rather than exp(val). It
- * folds into the bias constant, so it costs no instruction and rounds nothing:
- * it shifts the result's exponent and moves the admissible input range by the
- * same amount. A caller whose final value fits FP32 but whose exp()
- * intermediate would not uses it and multiplies the exact power of two back in
- * at the end — see i1's asymptotic path, where exp(|x|) leaves FP32 3.16 of
- * domain before i1 itself does.
+ * folds into the bias constant, so it costs no instruction: it shifts the
+ * result's exponent and moves the admissible input range by the same amount.
+ * The smaller bias can round the add differently, so a result may move by one
+ * BF16 step (i1 at |x| = 14.5, towards the exact value). A caller whose final
+ * value fits FP32 but whose exp() intermediate would not uses it and multiplies
+ * the exact power of two back in at the end — see i1's asymptotic path, where
+ * exp(|x|) leaves FP32 3.16 of domain before i1 itself does.
  *
  * The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
  * (e.g. logaddexp): it can load the fractional-part coefficients once, before its loop.
@@ -366,8 +367,8 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
 //
-// EXP2_DOWNSCALE returns exp(a) / 2^EXP2_DOWNSCALE. It folds into the exponent
-// recombination below, so it is exact and free; see _sfpu_exp_21f_bf16_unsafe_
+// EXP2_DOWNSCALE returns exp(a) / 2^EXP2_DOWNSCALE. It is one integer add on the
+// exponent recombination below, so it is exact; see _sfpu_exp_21f_bf16_unsafe_
 // for why a caller wants it. Only the unsafe path takes it: the safe path's
 // overflow test is written against an unscaled exponent.
 template <bool unsafe = false, int EXP2_DOWNSCALE = 0>

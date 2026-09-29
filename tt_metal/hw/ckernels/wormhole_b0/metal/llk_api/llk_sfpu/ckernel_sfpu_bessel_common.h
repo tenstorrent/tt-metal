@@ -22,19 +22,19 @@ namespace ckernel::sfpu {
 //
 // exp(|x|) leaves FP32 at 88.72284 but i0/i1 do not until ≈91.90 — the
 // asymptotic value carries a 1/sqrt(2·pi·|x|) ≈ 1/24 divisor. EXP2_DOWNSCALE
-// evaluates exp(|x|)/2^EXP2_DOWNSCALE (folded into exp's own bias constant, so
-// it costs nothing and rounds nothing), the matching 2^EXP2_DOWNSCALE is folded
-// into P's coefficients by the caller. With EXP2_DOWNSCALE=32 the exp
-// intermediate peaks at 2.1e30 for |x|=92 instead of 9.0e39, and the only
-// operation that can still overflow is the final rescaled multiply — which is
-// where i_n itself leaves FP32, so overflowing there is the correct answer.
+// evaluates exp(|x|)/2^EXP2_DOWNSCALE (folded into exp's bias constant on the
+// BF16 path, one exact integer add on the FP32 path's exponent), the matching
+// 2^EXP2_DOWNSCALE is folded into P's coefficients by the caller. With
+// EXP2_DOWNSCALE=32 the exp intermediate peaks at 2.1e30 for |x|=92 instead of
+// 9.0e39, and the only operation that can still overflow is the final rescaled
+// multiply — which is where i_n itself leaves FP32, so overflowing there is the
+// correct answer.
 // ======================================================================
 
 // 1/sqrt(x) via Quake-style magic constant + two Newton refinements
 // (23-bit variant). Uses only literal constants — it does not touch
 // vConstFloatPrgm*, so it is safe to call from a kernel whose init runs
-// sfpu_reciprocal_init, which writes vConstFloatPrgm0. The other two stay
-// free; i1 uses neither.
+// sfpu_reciprocal_init, which on Wormhole writes all three of them.
 sfpi_inline sfpi::vFloat _rsqrt_quake_newton_23b_(const sfpi::vFloat x) {
     const sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1);
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - i);

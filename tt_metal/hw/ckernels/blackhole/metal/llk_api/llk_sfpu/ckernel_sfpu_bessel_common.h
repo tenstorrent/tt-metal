@@ -22,12 +22,13 @@ namespace ckernel::sfpu {
 //
 // exp(|x|) leaves FP32 at 88.72284 but i0/i1 do not until ≈91.90 — the
 // asymptotic value carries a 1/sqrt(2·pi·|x|) ≈ 1/24 divisor. EXP2_DOWNSCALE
-// evaluates exp(|x|)/2^EXP2_DOWNSCALE (folded into exp's own bias constant, so
-// it costs nothing and rounds nothing), the matching 2^EXP2_DOWNSCALE is folded
-// into P's coefficients by the caller. With EXP2_DOWNSCALE=32 the exp
-// intermediate peaks at 2.1e30 for |x|=92 instead of 9.0e39, and the only
-// operation that can still overflow is the final rescaled multiply — which is
-// where i_n itself leaves FP32, so overflowing there is the correct answer.
+// evaluates exp(|x|)/2^EXP2_DOWNSCALE (folded into exp's bias constant on the
+// BF16 path, one exact integer add on the FP32 path's exponent), the matching
+// 2^EXP2_DOWNSCALE is folded into P's coefficients by the caller. With
+// EXP2_DOWNSCALE=32 the exp intermediate peaks at 2.1e30 for |x|=92 instead of
+// 9.0e39, and the only operation that can still overflow is the final rescaled
+// multiply — which is where i_n itself leaves FP32, so overflowing there is the
+// correct answer.
 // ======================================================================
 
 // 1/sqrt(x) via Quake-style magic constant + two Newton refinements
