@@ -89,6 +89,25 @@ def test_full_float(device, input_shape, fill_value, tt_dtype, layout):
     assert torch.equal(torch_output, tt_output_cpu)
 
 
+@pytest.mark.parametrize("input_shape", [[32, 32], [3, 300, 1, 300]])
+@pytest.mark.parametrize("fill_value", [0.1, 1 / 3, 65504.0, 1e30, -1e-30, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_full_tile_device_matches_host(device, input_shape, fill_value, tt_dtype, memory_config):
+    # A TILE ttnn.full on a device is filled on the device; it must hold the same values as the tensor built on the host
+    host_output = ttnn.to_torch(ttnn.full(input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT))
+    tt_output = ttnn.full(
+        input_shape, fill_value, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert ttnn.is_tensor_storage_on_device(tt_output)
+    device_output = ttnn.to_torch(tt_output)
+
+    assert device_output.shape == host_output.shape
+    assert torch.equal(torch.isnan(device_output), torch.isnan(host_output))
+    not_nan = ~torch.isnan(host_output)
+    assert torch.equal(device_output[not_nan], host_output[not_nan])
+
+
 # TODO (issue #16579): Add program cache test when ttnn.full is run on device
 
 
