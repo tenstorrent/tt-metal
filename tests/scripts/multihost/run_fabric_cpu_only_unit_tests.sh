@@ -896,11 +896,13 @@ done
 
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_unpinned_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_PIPELINE_BUILDER_CHECK}"
 
-# Heterogeneous disaggregated placement: 64x M0(4x2) closed ring + 1 Decode4x32(32x4), co-placed in a
-# single master solve (65 meshes) on the 20-host SC20 revAB Aisle C flat galaxy. The flat torus lets the
-# decode 4x32 mesh seat as a real 4x32_Mesh_flat_torus_xy PGD with zero fallback. Supersedes the smaller
-# disaggregated_prefill_2x4_pipeline_decode_32x4_combined heterogeneous refill test (removed from bh-misc).
-run_test env TT_METAL_OPERATION_TIMEOUT_SECONDS=600 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding "${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor "${MGD_CUSTOM}/disaggregated_prefill_64x_4x2_ring_loop.textproto" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
+# Heterogeneous disaggregated placement (2-MGD form): 64x M0(4x2) closed ring (subcontext 0) + 1
+# Decode4x32(32x4) torus (subcontext 1), supplied as two MGDs via --mesh-graph-descriptor-mapping. Phase 1
+# merges both MGDs and co-places all 65 meshes in ONE master solve on the 20-host SC20 revAB Aisle C flat
+# galaxy (the flat torus lets the decode 4x32 mesh seat as a real 4x32_Mesh_flat_torus_xy PGD with zero
+# fallback), then splits the result into per-subcontext rank bindings -- same joint placement as the single
+# combined disaggregated_prefill_64x_4x2_ring_loop.textproto, exercised through the multi-subcontext path.
+run_test env TT_METAL_OPERATION_TIMEOUT_SECONDS=600 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding "${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/disaggregated_prefill_64x_ring_plus_decode_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 
 fi # bh-heterogeneous
 
