@@ -21,6 +21,11 @@ The set of `TT_FATAL`s logged, all of them tests' expected errors, is also ident
 
 Validation was on for the post-port run, with one caveat: the recipe's forced-scaffolding proof was not possible. See [Friction](#friction), first entry.
 
+**Post-review change — sharded buffer/spec geometry guard** (uncommitted at the time of writing, pending the user's review). A reviewer found that a sharded tensor whose buffer is distributed differently from its spec's resolution, as a view can be, is silently mis-addressed through the tensor bindings. That was confirmed on silicon, and it is a regression the port introduces for unary: see [Handoff points](#handoff-points) 3.
+- `make_run_args` now calls `require_buffer_matches_spec_geometry` on every dispatch, miss and hit. It rejects such a tensor wherever an accessor reads a sharded buffer: the input on the accessor path, and a preallocated output there.
+- Five new tests are in `test_unary_sharding.py`: rejection on a miss, on a hit, and for a preallocated output, plus two ordinary `ttnn.reshape` views as positive controls.
+- The confirmed suite was re-run with the guard (Watcher on, hit validation on): 1789 pass / 23 skip / 0 fail. No test changed state against the post-port run; the other differences in the test set are the rebase onto a newer `main` plus the five new tests.
+
 Comment-only edits that landed after the post-port run started, with no code effect:
 - the `get_shard_specs` comment at `common/unary_utils.cpp:75`, "CB-aliasing" → "borrowed-DFB";
 - the first comment block of `compute_program_hash`, rewritten to describe the post-port hit path;
@@ -70,7 +75,8 @@ Both became tensor bindings. None became RTA values.
      Against the 139.7 µs baseline dispatch from the prerequisite work, the common-path addition is ≈ +19%, i.e. all of the +16% figure. The full table is in doc §2 (corrected in this branch). **This regression is not yet accepted.** It needs an explicit accept, or a cheaper or cached spec-side sharding resolution; see [Handoff points](#handoff-points) 6.
    - Nothing else in the hash changed. `tensor_layout` terms, the RM `padded_shape` term, the shard-volume optionals, and `to_hash()` are untouched.
    - **Why the recipe's rule couldn't hold here:** the rule assumes a hash fix can land upstream before the port. Here it can't. Legacy bakes the **buffer's** geometry into accessor CTAs via `TensorAccessorArgs(*src_buffer)`, so before the port the Buffer source is the correct key, and a spec-keyed hash would under-pin what legacy bakes. After the port, the `TensorParameter` bindings resolve geometry from the spec, and `tensorspecs_match_with_relaxation` compares `spec.compute_buffer_sharding_args()` (`tensor_spec_relaxations.cpp:105-109`). So the key's correct source changes *with* the port and must change in the same edit.
-   - The two resolutions agree for every freshly allocated tensor (`tensor_impl.cpp` builds the buffer from `tensor_spec.compute_buffer_sharding_args()`). The only known decoupler is a TILE-sharded `view` / `reshape`, and no divergent pair was ever constructed (doc §2). So cache behavior on the test set is unchanged, as the identical program-cache test results show.
+   - The two resolutions agree for every freshly allocated tensor (`tensor_impl.cpp` builds the buffer from `tensor_spec.compute_buffer_sharding_args()`). The only known decoupler is a TILE-sharded `view` / `reshape`. Cache behavior on the test set is unchanged, as the identical program-cache test results show.
+   - **Correction:** an earlier draft said no divergent pair was ever constructed. One has been, after review; see [Handoff points](#handoff-points) 3. A divergent view keys by its spec after the swap, where it keyed by its buffer before. On the accessor path it is now rejected either way. On the native-sharded path its result is wrong in legacy and the port alike.
 2. **Factory struct signatures and includes** (`device/unary_device_operation.hpp`). `create_descriptor` → `create_program_artifacts`, and the override's return type and parameters changed. These edits are forced by the concept. `program_descriptors.hpp` / `program_descriptor_patching.hpp` were replaced with `ttnn/metal_v2_artifacts.hpp`. No other device-op edits.
 3. **Pybind entry points removed:** none. `unary_nanobind.cpp` never exposed `create_descriptor`.
 
@@ -97,11 +103,28 @@ Both became tensor bindings. None became RTA values.
      - it is recorded here.
    - Alternatively, rule it out explicitly so the next such op stops at audit.
 2. **Recipe maintainers — validation forcing done without the `tt_metal/impl` scaffolding.** *(Tag: recipe / environment.)* See Friction, first entry. If the markers are required evidence, a maintainer or the invoker needs to apply the force in a session where the edit is permitted, then re-run.
-3. **Framework (Metal 2.0 host API) — one hazard raised, no gaps hit in this port's own configurations.** The first production use of `relax_logical_rank`, and relaxations on sharded and borrowed `TensorParameter`s, all validated without incident.
-   - **Hazard: on a sharded slot, `dynamic_tensor_shape` assembles the accessor from two resolutions with only a rank check between them.** The static geometry (shard shape in pages, bank count, bank coordinates) is resolved once from the **spec** at `ProgramSpec` build time; the dynamic shape-in-pages words are emitted per dispatch from the **buffer** (`program_run_args.cpp`, `EmitBindingCrtaValues`). A `view` / `reshape` keeps its parent buffer's `sharding_args` under a fresh spec, so the two can diverge, and equal rank with different values passes silently. See relaxation doc §4 for the full mechanism.
-   - Not introduced by this port, and not unary-specific: it applies to any op declaring the flag on a sharded tensor. Unary is the first shipped factory to declare a relaxation, so it is the first op exposed.
-   - It needs only a cache **miss**, not two dispatches: on a miss the spec-side match compares the dispatched spec against itself, so nothing checks the buffer-side words.
-   - The relaxations header states the opposite guarantee ("REJECTED rather than silently mis-addressed"). That rejection is `tensorspecs_match_with_relaxation` over `shard_distribution_of`, which is spec-derived, and so does not cover a spec/buffer mix. **Owner decision: either extend the check to compare values, or narrow the header's guarantee.**
+3. **Framework (Metal 2.0 host API) — tensor bindings trust the spec's sharded geometry; guarded op-side, framework fix still needed.** *(Found in review; an earlier draft of this entry understated it.)* The first production use of `relax_logical_rank`, and relaxations on sharded and borrowed `TensorParameter`s, otherwise validated without incident.
+   - **Mechanism.** For every sharded binding, `ResolveTensorParameterStaticCTAs` (`program_spec.cpp`) bakes rank, bank count, shard shape in pages and bank coordinates from `spec.compute_buffer_sharding_args()`, **whatever the relaxation**. `dynamic_tensor_shape` additionally moves the tensor shape in pages into per-dispatch CRTA words read from the **buffer** (`program_run_args.cpp`, `EmitBindingCrtaValues`), guarded only by a rank check. So the problem is not specific to the relaxation: any binding over a buffer that is not distributed the way its spec resolves is mis-addressed. The relaxation adds only the partial rank check.
+   - **Reachable.** `view` / `reshape` keeps the parent buffer's `sharding_args` under a freshly computed spec (`tensor_ops.cpp`). Squeezing folds leading dims into the height, so views that keep the last dim resolve identically. But `view_device` also allows a TILE view to change the last dim when the shard width equals the old last dim, and `GRID_2D` trims the bank list from the unsqueezed shape. Repro, via `ttnn.experimental.view`, which does not guard the last dim:
+     - BLOCK_SHARDED `[1,1,64,64]`, shard `[32,64]`, 2×2 grid: the buffer occupies banks (0,0), (0,1).
+     - Viewed as `[1,1,32,128]`: the spec resolves banks (0,0), (1,0).
+     - The squeezed shapes agree (`[4]` / `[2]`), so the rank check and even the shape words pass; only the bank list differs.
+   - **This port introduces it for unary.** Legacy baked the geometry from the buffer (`TensorAccessorArgs(*src_buffer)`). Measured on silicon against a host-computed ground truth, with `to_torch(view)` also matching it:
+
+     | divergent view, case | legacy unary | port, no guard | port + guard |
+     |---|---|---|---|
+     | accessor path, input (sharded in, DRAM out) | correct | **wrong, silently** | rejected |
+     | accessor path, preallocated output | correct | not run | rejected |
+     | native-sharded path, input | wrong | — | wrong (unchanged) |
+
+     The native-sharded path was already wrong in legacy: it sizes and iterates from the spec and borrows the buffer, and the port does not change that. The guard therefore leaves that path alone. It also needs only one dispatch: on a miss the spec-side match compares the dispatched spec with itself.
+   - **Op-side guard (this port, post-review).** `require_buffer_matches_spec_geometry` (`device/unary_program_factory.cpp`), called from `make_run_args` on every miss and hit, rejects a sharded tensor on the accessor path whose buffer's shard shape in pages or bank list differs from its spec's resolution. It is a new rejection: the two accessor-path cases legacy got right now throw instead of returning garbage. No Metal 2.0 binding can be told to use the buffer's geometry, so a faithful port of those cases is not expressible today.
+     - Cost: one `compute_buffer_sharding_args()` per checked tensor per dispatch, about 14 µs on 64 cores after `64a8b66a65a`. Interleaved and native-sharded dispatches don't pay it, and neither do fresh outputs, which are allocated from their own spec.
+   - **Owner decisions:**
+     - (a) A framework check comparing the bound buffer's distribution with the geometry the binding baked. It must run on cache hits too: TTNN skips hit-path validation by default (`validate_program_args`), so it would have to live on an always-on path, such as `EmitBindingCrtaValues` comparing against geometry recorded at build time.
+     - (b) Narrow the relaxations header's "REJECTED rather than silently mis-addressed" guarantee, which today covers only a spec/spec mismatch.
+     - (c) Whether `ttnn.experimental.view` should allow a last-dim change on a sharded TILE tensor at all.
+   - **Not unary's, observed in passing:** `ttnn.to_memory_config(view, DRAM)` also returns garbage for this view, in both the legacy-unary and ported builds. That goes through `sharded_to_interleaved`, itself already a Metal 2.0 port, and its cause was not diagnosed.
 4. **Kernel-lib / LLK:** none. `dfb::name` passed straight into `compute_kernel_hw_startup`, `copy_init`, `copy_tile`, `pack_tile`, and `compute_kernel_lib::input` / `output` in NTTP position. It compiled first time.
 5. **Removed pybind surface:** none.
 6. **Owner of `TensorSpec` / `TensorLayout` (tt_metal tensor), or the eltwise owner, to decide — hash cost of the sanctioned swap.** *(Tag: perf.)*
@@ -109,6 +132,7 @@ Both became tensor bindings. None became RTA values.
    - After the swap, unary's `compute_program_hash` calls it once per sharded slot, on every dispatch: +27 µs per sharded dispatch on the common path, +55 µs with a preallocated output.
    - The swap itself is required, because the key must read the same resolution the relaxed match compares.
    - Options: accept the cost explicitly, or make the resolution cheap (memoize it on the spec, or expose the pinned geometry without building the full distribution spec). Either is outside a port.
+   - After `64a8b66a65a` (skip the 2D `from_shard_spec` when an ND spec will overwrite it), the call measured ~14 µs on the same 64-core tensor, down from ~27 µs. The hash itself was not re-measured.
 
 ## Successes
 
@@ -171,7 +195,7 @@ Both became tensor bindings. None became RTA values.
   - Sharded output specs drop input over-padding.
   - Only `op_chain[0]` selects the compute kernel, so the dedicated kernels would silently skip later chain ops.
 - **Test coverage notes.**
-  - No test exercises a TILE-sharded `view` / `reshape` input. That is the one decoupler between the Buffer and spec geometry sources (relaxation doc §2), and so the one input where the sanctioned hash swap could change cache splitting. It is also the input that would exercise the framework hazard in handoff 3 — but that one is a framework-side check to fix, not a test for this op to add, since a divergence there is mis-addressed rather than rejected however the op is keyed.
+  - Sharded views now have coverage in `test_unary_sharding.py` (added post-review): a divergent input view rejected on a miss and on a hit, with the cached program still correct afterwards; a divergent preallocated output view rejected; and ordinary height- and block-sharded `ttnn.reshape` views correct on the accessor path. A divergent view on the native-sharded path is deliberately not covered, since its result is wrong in legacy too (handoff 3).
   - Regime row 5 of the relaxation doc (a sharded buffer on the accessor path) is covered only by `test_unary_sharded_input_on_interleaved_path_cache_reuse`.
 - **Quasar-uplift debt added:** none. There is no DM self-loop. `tmp0` is a compute self-loop, which is legal on Gen2. No token-form metadata sites were used.
 - **Hardware config, legacy → port (checked field by field):**
@@ -187,7 +211,7 @@ Both became tensor bindings. None became RTA values.
 
   | check | result |
   |---|---|
-  | buffer address / `emplace_runtime_args` / `Buffer*` in factory | 0 |
+  | buffer address / `emplace_runtime_args` / `Buffer*` in factory | 0 addresses. `tensor.buffer()` is now read once, by the post-review geometry guard, for its distribution only |
   | `TensorAccessorArgs` in bound kernels or factory | 0 |
   | `.id` on `dfb::` | 0 |
   | `allow_instance_multi_binding` | 0 |
@@ -195,7 +219,7 @@ Both became tensor bindings. None became RTA values.
   | `tt_metal/` files in diff | 0 |
   | scaffolding strings in the code diff | 0 (6 in recipe docs, see Friction) |
   | `.md` citations in the 16 changed / new code files | 0 |
-  | `TT_FATAL` / `TT_ASSERT` / `TT_THROW` per-file counts vs base | no delta |
+  | `TT_FATAL` / `TT_ASSERT` / `TT_THROW` per-file counts vs base | no delta at port time. +1 `TT_THROW` in `unary_program_factory.cpp` post-review (the geometry guard, a deliberate new rejection) |
   | positional `get_arg_val` / `get_compile_time_arg_val` / `get_local_cb_interface` in the 11 bound sources | 0 |
   | compute `opt_level` | 1 compute `KernelSpec`, 1 `O3` line |
   | `cb` grep | adjudicated, see Friction |

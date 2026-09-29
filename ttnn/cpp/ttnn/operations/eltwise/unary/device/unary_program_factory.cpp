@@ -340,6 +340,36 @@ void enumerate_core_rt_args(
     }
 }
 
+// Tensor binding geometry: TensorSpec → shard shape + bank list → accessor args.
+// The legacy accessor read them from the Buffer. They agree for normal tensors, but a view/reshape can keep
+// its parent's buffer under a new spec causing GRID_2D to resolve different banks. Reject this case.
+void require_buffer_matches_spec_geometry(const Tensor& tensor, const char* slot) {
+    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    const auto sharding_args = tensor.tensor_spec().compute_buffer_sharding_args();
+    const auto& spec_distribution = sharding_args.buffer_distribution_spec();
+    if (buffer_distribution.has_value() && spec_distribution.has_value() &&
+        buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
+        buffer_distribution->cores() == spec_distribution->cores()) {
+        return;
+    }
+    const auto describe = [](const std::optional<tt::tt_metal::BufferDistributionSpec>& distribution) {
+        if (!distribution.has_value()) {
+            return std::string("no distribution");
+        }
+        std::string banks;
+        for (const auto& core : distribution->cores()) {
+            banks += (banks.empty() ? "" : ", ") + fmt::format("{}", core);
+        }
+        return fmt::format("shard shape in pages {}, banks [{}]", distribution->shard_shape_in_pages(), banks);
+    };
+    TT_THROW(
+        "Unary: the sharded {} tensor's buffer distribution ({}) differs from its TensorSpec distribution ({}); "
+        "Use a tensor whose buffer was allocated for its own spec.",
+        slot,
+        describe(buffer_distribution),
+        describe(spec_distribution));
+}
+
 // The per-dispatch run args: every runtime arg on every core, plus both tensor bindings.
 // create_program_artifacts and override_runtime_arguments both return this. The legacy cache-hit
 // override re-applied every slot the miss path wrote, so both paths share one builder and cannot drift.
@@ -355,6 +385,15 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     const auto shard_specs = get_shard_specs(input.tensor_spec(), output.tensor_spec());
     const bool has_sharding = shard_specs.has_value();
     const bool rm_interleaved = input.layout() == Layout::ROW_MAJOR && !has_sharding;
+
+    if (!has_sharding) {
+        if (input.is_sharded()) {
+            require_buffer_matches_spec_geometry(input, "input");
+        }
+        if (output.is_sharded() && tensor_args.output_tensor.has_value()) {
+            require_buffer_matches_spec_geometry(output, "output");
+        }
+    }
 
     uint32_t packed_scalar1 = 0, packed_scalar2 = 0;
     pack_first_op_scalars(operation_attributes.op_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
@@ -524,10 +563,12 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     });
 
     // --- Tensor Parameters ---
-    // The TILE-layout program hash omits shape, and so rank: one cached program legitimately serves
+    // The TILE-layout program hash omits shape and rank: one cached program legitimately serves
     // tensors of any shape and logical rank, which the legacy accessors already allowed through
-    // ArgConfig::RuntimeTensorShape. The hash pins everything else a match compares exactly
-    // (tensor_layout, and the sharded distribution geometry resolved from each TensorSpec).
+    // ArgConfig::RuntimeTensorShape. The hash pins everything else that a match compares exactly
+    // (tensor_layout and the sharded distribution geometry resolved from each TensorSpec). Since
+    // this match is spec against spec, make_run_args separately checks that each bound buffer matches
+    // its own spec geometry
     const TensorSpecRelaxations shape_dynamic{.dynamic_tensor_shape = true, .relax_logical_rank = true};
     const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec(), .relaxations = shape_dynamic};
     const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec(), .relaxations = shape_dynamic};
