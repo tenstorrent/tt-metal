@@ -56,7 +56,7 @@ class GDNWeights:
     mega_a_dim: object
     mega_b_dim: object
     mega_g_dim: object
-    # Chunk-parallel prefill kernel (gated_delta_attn_seq) — always on
+    # Chunk-parallel prefill kernel (gated_delta_attn_seq)
     use_chunk_seq_prefill: bool
     chunk_seq_masks_long: object
 

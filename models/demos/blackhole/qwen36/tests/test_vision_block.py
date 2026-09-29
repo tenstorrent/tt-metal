@@ -68,7 +68,6 @@ def test_vision_block_inference(
 
         # Example inputs and preprocessing
         pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim, dtype=torch.bfloat16)
-        # pt_input = torch.load(f"ref_x_{layer_num - 1}.pt").unsqueeze(0).unsqueeze(0)
         (
             cu_seqlens,
             position_embeddings,
@@ -134,7 +133,11 @@ def test_vision_block_inference(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+            # Match the block's input contract: fractured along dim=3 normally, but replicated at
+            # full dim when TP cannot split dim into whole tiles (vision_replicated_acts).
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+            if getattr(model_args, "vision_replicated_acts", False)
+            else ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
         )
 
         # Run our model
@@ -143,12 +146,15 @@ def test_vision_block_inference(
             rot_mats=rot_mats,
         )
 
-        # Process the output. The block output is fractured along dim=3 (the
-        # hidden dim); concat along that axis to reassemble the full output.
+        # Process the output. The block output is fractured along dim=3 (the hidden dim), so concat
+        # along that axis to reassemble it. Under vision_replicated_acts every device already holds
+        # the full dim, so concatenating would just repeat it num_devices times — slice one copy.
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
         )
+        if getattr(model_args, "vision_replicated_acts", False):
+            tt_out = tt_out[..., : model_args.dim]
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
 
         # Remove sequence padding

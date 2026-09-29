@@ -24,7 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import (
     compute_pcc,
     get_pcc_threshold,
@@ -37,7 +37,8 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.attention.rope_tp import rope_full_head_dim, rot_mats_decode, rot_mats_prefill
 from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
@@ -81,7 +82,8 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     cur_tt = ttnn.from_torch(
         cur, dtype=ttnn.int32, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
-    cos, sin = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur)
+    _fhd = rope_full_head_dim(args)
+    cos, sin = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur, _fhd)
 
     out = attn.forward_decode(x_tt, cur_tt, cos, sin)
     out_t = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
@@ -114,7 +116,7 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     cur1_tt = ttnn.from_torch(
         cur1, dtype=ttnn.int32, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
-    cos1, sin1 = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur1)
+    cos1, sin1 = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur1, _fhd)
     x2 = replicate_to_device(mesh_device, torch.randn(1, 1, B, args.dim, dtype=torch.bfloat16))
     out2 = attn.forward_decode(x2, cur1_tt, cos1, sin1)
     out2_t = ttnn.to_torch(out2, mesh_composer=tp_composer(mesh_device))
@@ -140,9 +142,13 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     attn = TPAttention(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
-    x_tt = shard_to_device(mesh_device, x, dim=-1)
-    cos, sin = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta)
+    # Prefill input is K-sharded only when the fused AGMM in-proj is active (Blackhole only — see
+    # attn._fuse_agmm); otherwise the model's ff_norm gathers before handing attention a full-width
+    # input, so the test must match.
+    x_tt = shard_to_device(mesh_device, x, dim=-1) if attn._fuse_agmm else replicate_to_device(mesh_device, x)
+    cos, sin = rot_mats_prefill(
+        mesh_device, args.rope_head_dim, S, args.rope_theta, full_head_dim=rope_full_head_dim(args)
+    )
     out = attn.forward_prefill(x_tt, cos, sin)
     out_t = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
 
@@ -193,22 +199,29 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
 
+    # Fused AGMM in-proj (and thus the K-sharded prefill input contract) is Blackhole-only — see
+    # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
+    _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
+
     def to_dev(t):
         return replicate_to_device(mesh_device, t)
 
     def to_dev_pf(t):
-        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
-        return shard_to_device(mesh_device, t, dim=-1)
+        return shard_to_device(mesh_device, t, dim=-1) if _fused_prefill_in else replicate_to_device(mesh_device, t)
 
     def rm_pt(rows):
         return ttnn.from_torch(
             torch.tensor(rows, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
 
+    # Cache dtype must match what TPAttention._sdpa_bf8 casts K/V to before the fill (same helper
+    # model.py's allocate_kv_caches uses) -- otherwise paged_fill_cache's dtype assert trips.
+    _cache_dtype = ttnn.bfloat8_b if tpc.sdpa_bf8_enabled(args) else ttnn.bfloat16
+
     def mk_cache():
         return ttnn.from_torch(
             torch.zeros(num_blocks, NKV, block_size, HD, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=_cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -217,9 +230,10 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
 
     xp = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
     xd = torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16)
-    cos_p, sin_p = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta)
+    _fhd = rope_full_head_dim(args)
+    cos_p, sin_p = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta, full_head_dim=_fhd)
     cos_d, sin_d = rot_mats_decode(
-        mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, torch.tensor([S], dtype=torch.int32)
+        mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, torch.tensor([S], dtype=torch.int32), _fhd
     )
     cur_tt = ttnn.from_torch(
         torch.tensor([S], dtype=torch.int32),
@@ -289,11 +303,18 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
+    # Fused AGMM in-proj (and thus the K-sharded prefill input contract) is Blackhole-only — see
+    # attention/tp.py's _fuse_agmm; on WH the model's ff_norm gathers before attention instead.
+    _fused_prefill_in = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None and is_blackhole()
+
+    # Cache dtype must match what TPAttention._sdpa_bf8 casts K/V to before the fill (same helper
+    # model.py's allocate_kv_caches uses) -- otherwise paged_fill_cache's dtype assert trips.
+    _cache_dtype = ttnn.bfloat8_b if tpc.sdpa_bf8_enabled(args) else ttnn.bfloat16
 
     def mk_cache(num_blocks):
         return ttnn.from_torch(
             torch.zeros(num_blocks, NKV, block_size, HD, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=_cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -316,11 +337,13 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     def prefill_user(attn, x_u, blocks):
         """Prefill one B=1 sequence into the given physical blocks (model's B=1 contract)."""
         L = x_u.shape[-2]
-        cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta)
+        cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta, full_head_dim=rope_full_head_dim(args))
         pt = rm_pt([blocks])  # [1, bpu]
-        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
+        _x_dev = (
+            shard_to_device(mesh_device, x_u, dim=-1) if _fused_prefill_in else replicate_to_device(mesh_device, x_u)
+        )
         attn.forward_prefill_paged(
-            shard_to_device(mesh_device, x_u, dim=-1),
+            _x_dev,
             cos_p,
             sin_p,
             pt,
@@ -342,7 +365,9 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
         a.set_paged_kv_cache(k_c, v_c)
         prefill_user(a, xp[u], list(range(bpu)))
         pos = prompt_lens[u]
-        cos_d, sin_d = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor([pos], dtype=torch.int32))
+        cos_d, sin_d = rot_mats_decode(
+            mesh_device, rd, max_seq, theta, torch.tensor([pos], dtype=torch.int32), rope_full_head_dim(args)
+        )
         out_u = a.forward_decode(
             replicate_to_device(mesh_device, xd[u]), cur_pt([pos]), cos_d, sin_d, page_table=rm_pt([list(range(bpu))])
         )
@@ -356,7 +381,9 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     for u in range(B):
         prefill_user(a_b, xp[u], list(range(u * bpu, (u + 1) * bpu)))
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
-    cos_db, sin_db = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor(prompt_lens, dtype=torch.int32))
+    cos_db, sin_db = rot_mats_decode(
+        mesh_device, rd, max_seq, theta, torch.tensor(prompt_lens, dtype=torch.int32), rope_full_head_dim(args)
+    )
     page_table_b = rm_pt([list(range(u * bpu, (u + 1) * bpu)) for u in range(B)])  # [B, bpu]
     out_b = a_b.forward_decode(
         replicate_to_device(mesh_device, x_dec), cur_pt(prompt_lens), cos_db, sin_db, page_table=page_table_b
