@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Ring joint SDPA with the K split (program_config.ring_k_split; the op merges the partitions with
-ttnn.transformer.sdpa_k_split_merge), MiMo GA shapes on the 2x2: 64 Q / 4 KV heads (per chip 32 / 2), qk 192, v 128,
+ttnn.transformer.sdpa_k_split_merge), MiMo GA shapes on the 2x2 (and a 4-long SP ring on 4x1 for accuracy / determinism): 64 Q / 4 KV heads (per chip 32 / 2), qk 192, v 128,
 HiFi2, a random bf8 KV cache and a chunk at ``kv_actual``.
 
 * test_sdpa_ksplit_accuracy: every split vs the unsplit op (PCC) and vs an fp32 host reference for chip (0, 0)
@@ -19,7 +19,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
+from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS, SP_MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import MiMoKVCache, _cache_mem
 from models.demos.mimo_v2_d_p.tt.attention.sdpa import ring_attention, ring_program_config
 from models.demos.mimo_v2_d_p.tt.ccl import CCLManager
@@ -116,7 +116,7 @@ def _stats(a, b):
 
 
 @pytest.mark.timeout(3600)
-@MESH_PARAMS
+@SP_MESH_PARAMS
 @pytest.mark.parametrize(
     "chunk_local, ctx, splits, q_chunk, k_chunk",
     [
@@ -172,7 +172,7 @@ def _mismatch_marker(reference, actual):
 
 
 @pytest.mark.timeout(1800)
-@MESH_PARAMS
+@SP_MESH_PARAMS
 @pytest.mark.parametrize("chunk_local, split", [(2048, 2), (640, 3)], ids=["C2048-s2", "C640-s3"])
 def test_sdpa_ksplit_determinism(mesh_device, device_params, chunk_local, split):
     st = _Setup(mesh_device, device_params, chunk_local, 32768)
