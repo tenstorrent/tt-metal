@@ -332,6 +332,13 @@ tasks:
     kind: attention
     layer: 0
     stateful: true
+  frozen:
+    at: '2026-09-29T03:59:56'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attention.py: 9db21bb93b5b6c8bf0afa2d6f913a7b5754db238847e4cf38828f8385212bcea
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.kda_dense.04
   title: 'kda_dense block with steps 1-4 on device (last: attention)'
   step: implement
