@@ -900,6 +900,9 @@
   cmd: |
     export MESH_DEVICE=TG
     export TT_METAL_DISPATCH_STATS=1
+    export TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US=100
+    export TT_METAL_THREAD_POOL_RESERVED_CORES=16
+    echo "HOST_CPU_INFO nproc=$(nproc) cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null)"; lscpu | sed 's/^/HOST_CPU_INFO /' | head -30
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export LOGURU_LEVEL=ERROR
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8

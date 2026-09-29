@@ -203,6 +203,8 @@ struct FDMeshCommandQueue::DispatchStats {
     Log2Hist call_ns, first_call_ns, pre_ns, lock_wait_ns, body_ns, write_ns, write_ns_per_device, bytes_per_device,
         gap_ns, repeat_distance, trace_call_ns, trace_replay_ns, trace_replay_gap_ns;
     CountHist devices, programs;
+    uint64_t fanned_enqueues = 0;
+    Log2Hist write_fanned_ns, write_serial_ns;
     uint64_t trace_replays = 0;
     uint64_t last_trace_end_ns = 0;
     uint64_t last_snapshot_ns = 0;
@@ -224,8 +226,10 @@ struct FDMeshCommandQueue::DispatchStats {
                ",\"bytes_per_device\":" + bytes_per_device.json() + ",\"gap_ns\":" + gap_ns.json() +
                ",\"repeat_distance\":" + repeat_distance.json() + ",\"trace_call_ns\":" + trace_call_ns.json() +
                ",\"trace_replay_ns\":" + trace_replay_ns.json() +
-               ",\"trace_replay_gap_ns\":" + trace_replay_gap_ns.json() + ",\"devices\":" + devices.json() +
-               ",\"programs\":" + programs.json() + "}";
+               ",\"trace_replay_gap_ns\":" + trace_replay_gap_ns.json() +
+               ",\"fanned_enqueues\":" + std::to_string(fanned_enqueues) +
+               ",\"write_fanned_ns\":" + write_fanned_ns.json() + ",\"write_serial_ns\":" + write_serial_ns.json() +
+               ",\"devices\":" + devices.json() + ",\"programs\":" + programs.json() + "}";
     }
 };
 
@@ -764,6 +768,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             st.body_ns.add(end_ns - stats_locked_ns);
             const uint64_t write = stats_write_end_ns - stats_write_start_ns;
             st.write_ns.add(write);
+            if (fan_out) {
+                st.fanned_enqueues++;
+                st.write_fanned_ns.add(write);
+            } else {
+                st.write_serial_ns.add(write);
+            }
             const size_t n = device_program_writes_.size();
             st.devices.add(n);
             st.programs.add(mesh_workload.get_programs().size());
