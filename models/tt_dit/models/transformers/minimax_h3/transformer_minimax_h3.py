@@ -465,6 +465,8 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_sin: ttnn.Tensor,
         tables: list[list[ttnn.Tensor]] | None = None,
     ) -> ttnn.Tensor:
+        # The one-hot gather matrix depends only on the row tags: build it once per forward, not once per block.
+        onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2])
         for i, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
@@ -474,7 +476,10 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 tables=tables[i] if tables is not None else None,
+                onehot=onehot,
             )
+        if onehot is not None:
+            ttnn.deallocate(onehot)
         return hidden
 
     def _set_fixed_softmax_blocks(self, spec: str | None) -> None:

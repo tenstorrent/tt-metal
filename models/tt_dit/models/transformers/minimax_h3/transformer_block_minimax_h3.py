@@ -244,6 +244,18 @@ class MiniMaxH3TransformerBlock(Module):
         out = ttnn.embedding(adaln_indices, self._eye_tables[rows], layout=ttnn.TILE_LAYOUT)
         return ttnn.unsqueeze(out, 0)
 
+    @staticmethod
+    def _gather_indices(adaln_indices: ttnn.Tensor) -> ttnn.Tensor:
+        # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
+        indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
+        return indices if indices.dtype == ttnn.uint32 else ttnn.typecast(indices, ttnn.uint32)
+
+    def onehot_table(self, adaln_indices: ttnn.Tensor, num_timesteps: int) -> ttnn.Tensor | None:
+        """The one-hot gather matrix shared by every block of a forward, or None when gathers use ttnn.embedding."""
+        if self._adaln_gather != "matmul":
+            return None
+        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM)
+
     # ------------------------------------------------------------------ forward
 
     def forward(
@@ -255,6 +267,7 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         tables: list[ttnn.Tensor] | None = None,
+        onehot: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -265,18 +278,16 @@ class MiniMaxH3TransformerBlock(Module):
 
         tables: the six modulation tables for this step, if the caller cached them (see
             `MiniMaxH3Transformer3DModel.modulation_tables`); otherwise projected from `temb` here.
+        onehot: the gather matrix from `onehot_table`, shared by all blocks of a forward; built here if absent.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
         if tables is None:
             tables = self._modulation_tables(temb)
 
-        # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
-        indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
-        if indices.dtype != ttnn.uint32:
-            indices = ttnn.typecast(indices, ttnn.uint32)
-
-        onehot = self._onehot(indices, tables[0].shape[0]) if self._adaln_gather == "matmul" else None
+        indices = self._gather_indices(adaln_indices)
+        if onehot is None and self._adaln_gather == "matmul":
+            onehot = self._onehot(indices, tables[0].shape[0])
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], indices, onehot)
