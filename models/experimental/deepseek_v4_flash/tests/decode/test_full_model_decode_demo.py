@@ -31,7 +31,7 @@ Run it (ttnn venv)::
 
     DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
     DEEPSEEK_V4_MAX_NEW_TOKENS=16 pytest -s \\
-      models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py
+      models/experimental/deepseek_v4_flash/tests/decode/test_full_model_decode_demo.py
 
 Set ``DEEPSEEK_V4_START_POS`` to begin prefill at a non-zero absolute position,
 for example ``DEEPSEEK_V4_START_POS=1024``.

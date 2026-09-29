@@ -4,7 +4,7 @@
 """Interactive multi-user chat CLI on the full ttnn ``DeepSeekV4Model``.
 
 Same decode engine as
-``models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py``
+``models/experimental/deepseek_v4_flash/tests/decode/test_full_model_decode_demo.py``
 (whose helpers this reuses), turned into a multi-turn REPL: the model, the RoPE
 tables and the traced-decode buffers are built once, then every turn only the
 *new* tokens are fed into the already-populated caches. There is no prefill op --
@@ -73,7 +73,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 # The decode demo owns the reference RoPE-table construction and the lazy
 # dequantizing weight thunk; reuse them so the CLI cannot drift from it.
-from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import (
+from models.experimental.deepseek_v4_flash.tests.decode.test_full_model_decode_demo import (
     _DEFAULT_MODEL_DIR,
     _WEIGHT_DTYPE,
     _build_rope,

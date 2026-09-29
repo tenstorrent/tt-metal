@@ -9,7 +9,7 @@ Three ways to run it:
 
 | | Entry point |
 | --- | --- |
-| Single-shot demo test | `tests/test_full_model_decode_demo.py` |
+| Single-shot demo test | `tests/decode/test_full_model_decode_demo.py` |
 | Interactive chat REPL | `demo/chat_cli.py` |
 | OpenAI-compatible server | `demo/server.py` |
 
@@ -49,7 +49,7 @@ Point `DEEPSEEK_V4_CACHE_DIR` at a persistent directory so later runs reuse it.
 ## Demo test
 
 ```bash
-pytest -s models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py
+pytest -s models/experimental/deepseek_v4_flash/tests/decode/test_full_model_decode_demo.py
 ```
 
 Builds the full ttnn `DeepSeekV4Model`, seeds the caches with a chat prompt, and
