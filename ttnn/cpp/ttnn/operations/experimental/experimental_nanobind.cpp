@@ -93,6 +93,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/csa_compressor/csa_compressor_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/fused_experts_prefill/fused_experts_prefill_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/hybrid_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
@@ -261,6 +262,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_unified_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_fused_experts_prefill(mod);
     deepseek_prefill::detail::bind_moe_fused_swiglu(mod);
     deepseek_prefill::detail::bind_hybrid_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_extract(mod);
