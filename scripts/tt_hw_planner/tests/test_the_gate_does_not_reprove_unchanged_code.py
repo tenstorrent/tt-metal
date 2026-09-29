@@ -352,3 +352,91 @@ def test_an_edit_after_the_pass_re_runs_the_whole_thing(full_gate):
     (demo / "tt" / "pipeline.py").write_text("X = 2\n")
     E._run_deterministic_gates(demo, 0.99, 60, batch=32)
     assert runs["pytest"] == 2, "an edited pipeline must be re-proved"
+
+
+# --- the third reason it never hit: the key hashed code the gate never runs ----------------------
+
+
+@pytest.fixture
+def demo_with_a_perf_test(tmp_path, monkeypatch):
+    """A demo shaped like the real one: a gate test, a perf test, and a module only perf reaches."""
+    monkeypatch.setenv(_RUN_ENV, "run-1")
+    monkeypatch.delenv(E._GATE_CACHE_OFF_ENV, raising=False)
+    (tmp_path / "scripts").mkdir()
+    demo = tmp_path / "models" / "demos" / "m"
+    (demo / "tt").mkdir(parents=True)
+    (demo / "tests" / "e2e").mkdir(parents=True)
+    (demo / "tests" / "pcc").mkdir(parents=True)
+    measured = tmp_path / "models" / "harness"
+    measured.mkdir(parents=True)
+    (measured / "__init__.py").write_text("")
+    (measured / "measurer.py").write_text("ITERS = 16\n")
+    (measured / "shared.py").write_text("BATCH_ENV = 'B'\n")
+
+    (demo / "tt" / "pipeline.py").write_text("from models.harness.shared import BATCH_ENV\n")
+    (demo / "tests" / "e2e" / "test_e2e_m.py").write_text("from models.demos.m.tt import pipeline\n")
+    # the perf test -- the one file the gate does not run -- is the only route to measurer.py
+    (demo / "tests" / "e2e" / "test_m_perf.py").write_text("from models.harness.measurer import ITERS\n")
+    (demo / "tests" / "pcc" / "test_component.py").write_text("X = 1\n")
+    return demo, measured
+
+
+def test_the_key_ignores_code_only_the_perf_test_reaches(demo_with_a_perf_test):
+    """THE FAILURE, measured live: editing the replay code moved the key 8e9c4eb -> fe8e4b5 and
+    discarded a 3.5 h correctness pass it cannot possibly affect."""
+    demo, measured = demo_with_a_perf_test
+    before = _key(demo)
+    (measured / "measurer.py").write_text("ITERS = 2\n")
+    assert _key(demo) == before, "an edit to code the gate never runs must not invalidate the pass"
+
+
+def test_the_key_still_follows_what_the_pipeline_really_uses(demo_with_a_perf_test):
+    """The pipeline's own import of that package is real: the batch it names decides correctness."""
+    demo, measured = demo_with_a_perf_test
+    before = _key(demo)
+    (measured / "shared.py").write_text("BATCH_ENV = 'OTHER'\n")
+    assert _key(demo) != before
+
+
+def test_the_key_still_follows_the_demo_and_the_gate_test(demo_with_a_perf_test):
+    demo, _ = demo_with_a_perf_test
+    before = _key(demo)
+    (demo / "tt" / "pipeline.py").write_text("from models.harness.shared import BATCH_ENV\nX = 2\n")
+    assert _key(demo) != before
+    mid = _key(demo)
+    (demo / "tests" / "e2e" / "test_e2e_m.py").write_text("from models.demos.m.tt import pipeline\n# edit\n")
+    assert _key(demo) != mid, "the gate runs this file, so it decides the verdict"
+
+
+def test_the_seeds_are_the_tests_the_gate_actually_runs(demo_with_a_perf_test):
+    demo, _ = demo_with_a_perf_test
+    names = [f.name for f in E._gate_test_files(demo)]
+    assert names == ["test_e2e_m.py"], names
+
+
+def test_the_gate_and_the_fingerprint_ask_the_same_question():
+    """They disagreed, in the expensive direction; the selection now has one owner."""
+    import inspect
+
+    src = inspect.getsource(E._run_deterministic_gates)
+    assert "_gate_test_files(demo_dir)" in src
+    assert '"perf" not in f.name' not in src, "the rule must not be re-spelled at the call site"
+
+
+def test_the_no_edit_check_keeps_the_broad_fingerprint(demo_with_a_perf_test):
+    """Different question: there, ANY edit is the thing being looked for, including the perf test."""
+    import inspect
+
+    import scripts.tt_hw_planner.e2e_mcp as M
+
+    demo, measured = demo_with_a_perf_test
+    before = E._source_fingerprint(demo)
+    (measured / "measurer.py").write_text("ITERS = 2\n")
+    assert E._source_fingerprint(demo) != before
+    assert "seeds" not in inspect.getsource(M._count_unchanged_round)
+
+
+def test_existing_closure_callers_are_unaffected(demo_with_a_perf_test):
+    """`seeds` is additive: omitted, the walk is exactly what it was."""
+    demo, _ = demo_with_a_perf_test
+    assert len(E._import_closure(demo)) > len(E._import_closure(demo, seeds=E._correctness_seeds(demo)))

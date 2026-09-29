@@ -1449,7 +1449,7 @@ def _repo_root_of(demo_dir: Path) -> Optional[Path]:
     return None
 
 
-def _import_closure(demo_dir: Path) -> list:
+def _import_closure(demo_dir: Path, seeds: Optional[list] = None) -> list:
     """Every .py file the demo's own sources reach, transitively, inside this checkout.
 
     Walks the imports rather than assuming a layout: a graduated stub the pipeline composes may live
@@ -1458,7 +1458,13 @@ def _import_closure(demo_dir: Path) -> list:
     here."""
     root = _repo_root_of(demo_dir)
     seen, out = set(), []
-    work = sorted(demo_dir.rglob("*.py")) if demo_dir.is_dir() else []
+    # `seeds` lets a caller ask "what does THIS subset reach" -- the correctness verdict is decided
+    # by the tests the gate runs, not by every file that happens to sit in the directory. Default is
+    # unchanged: everything under the demo.
+    if seeds is not None:
+        work = sorted(seeds)
+    else:
+        work = sorted(demo_dir.rglob("*.py")) if demo_dir.is_dir() else []
     while work:
         f = work.pop()
         rf = f.resolve()
@@ -1495,7 +1501,36 @@ def _import_closure(demo_dir: Path) -> list:
     return out
 
 
-def _source_fingerprint(demo_dir: Path) -> Optional[str]:
+def _gate_test_files(demo_dir: Path) -> list:
+    """The tests the correctness gate RUNS -- one owner, so the fingerprint follows the gate.
+
+    The selection was spelled inline where the gate builds its argv; the fingerprint then hashed
+    EVERY file under the demo instead, and the two disagreed in the expensive direction."""
+    e2e = Path(demo_dir) / "tests" / "e2e"
+    tests = sorted(e2e.glob("test_*.py")) if e2e.is_dir() else []
+    return [f for f in tests if "perf" not in f.name] or tests
+
+
+def _correctness_seeds(demo_dir: Path) -> list:
+    """Every file that can change the CORRECTNESS verdict, and nothing that cannot.
+
+    THE CACHE THAT NEVER HIT. Seeding from every .py under the demo pulled in the PERF test -- the
+    one file the gate deliberately does not run -- and through its imports the whole trace-replay
+    measurement path. So editing the replay code invalidated a 3.5 h correctness pass that it cannot
+    possibly affect: measured on a live run, the key moved 8e9c4eb -> fe8e4b5 for an edit to a module
+    the gate never executes, and the pass was re-earned from scratch.
+
+    The pipeline's own reference to that package survives, because it is real: tt/ imports the batch
+    variable from it, and the batch decides what correctness measures. What drops out is the code
+    reached only from a test the gate excludes -- and which files those are is asked of
+    `_gate_test_files` rather than decided here, so the two cannot drift apart again."""
+    demo_dir = Path(demo_dir)
+    tests_root = demo_dir / "tests"
+    sources = [f for f in demo_dir.rglob("*.py") if tests_root not in f.parents]
+    return sorted(set(sources) | set(_gate_test_files(demo_dir)))
+
+
+def _source_fingerprint(demo_dir: Path, seeds: Optional[list] = None) -> Optional[str]:
     """Content hash of every file that can change this demo's verdict, or None if it cannot be taken.
 
     Content, not mtimes: a checkout or a no-op rewrite must not invalidate a good answer, and a real
@@ -1503,7 +1538,7 @@ def _source_fingerprint(demo_dir: Path) -> Optional[str]:
     this the code that already passed?) and the loop's no-edit check (did the last round change
     anything at all?) -- so it is taken once, here."""
     try:
-        files = sorted(_import_closure(demo_dir))
+        files = sorted(_import_closure(demo_dir, seeds=seeds))
         if not files:
             return None  # nothing found to hash: no evidence, NOT "the same as last time"
         h = hashlib.sha256()
@@ -1536,7 +1571,9 @@ def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
     stamp = run_stamp()
     if not stamp:
         return None  # no run identity -> cannot scope a pass to this run -> never cache
-    src = _source_fingerprint(demo_dir)
+    # Narrow seeds ON PURPOSE: see _correctness_seeds. The no-edit check keeps the BROAD
+    # fingerprint, because there any edit at all is the thing it is looking for.
+    src = _source_fingerprint(demo_dir, seeds=_correctness_seeds(demo_dir))
     if src is None:
         return None
     h = hashlib.sha256()
@@ -1717,7 +1754,7 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
 
         gate_env[BATCH_ENV] = str(batch)
     pytest_out = ""
-    gate_tests = [f for f in test_files if "perf" not in f.name] or test_files
+    gate_tests = _gate_test_files(demo_dir) or test_files
     # A STOPWATCH CANNOT TELL "HUNG" FROM "SLOW", SO IT MUST NOT BE THE JUDGE.
     #
     # This ran pytest under subprocess.run(timeout=N) with N a typed constant, and a gate that
@@ -2996,11 +3033,6 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
     it returns: an audio tower over 1500 frames that projects down to 375 outputs retires 1500.
     A recurring step (one token, one denoise step) returns 1. Omit it ONLY if the stage genuinely
     retires one item.
-  <stage>_trace_split(): ZERO-ARG, OPTIONAL. Only for a stage whose items are SPLIT across
-    data-parallel chip groups that run at the same time (each group gets items/split, e.g. the batch
-    sharded over a DP mesh axis): return that number of groups. The compute ceiling is per chip, so
-    an unstated split prices the stage as if one group did the whole batch. Omit it for a stage that
-    runs whole on every group (replicated) or on a single group.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 
