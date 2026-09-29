@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// K split for the chunked, non-sliding ring path: several cores share one (head, Q chunk) unit, each attends to a
-// disjoint slice of every ring iteration's K chunks, and the last split (the reducer) merges their raw
-// (max, sum, out) states and normalizes. The logical length is derived on device (trace replay), so a slice is a pure
-// function of values reader, compute and writer all hold: ring id, logical tile count and split index.
+// K split for the chunked ring path: several cores share one (head, Q chunk) unit, each attends to a disjoint slice of
+// every ring iteration's K chunks (sliding: a band of the unit's work plan), and the last split (the reducer) merges
+// their raw (max, sum, out) states and normalizes. The logical length is derived on device (trace replay), so a slice
+// is a pure function of values reader, compute and writer all hold: ring id, logical tile count and split index.
 
 #pragma once
 
@@ -60,6 +60,15 @@ inline uint32_t ksplit_valid_local_k_chunks(
 // diagonal, so the reducer's rows are never fully masked.
 inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t split_count) {
     return {split_idx * num_valid / split_count, (split_idx + 1) * num_valid / split_count};
+}
+
+// Sliding split of a (head, Q chunk) unit's work plan. A plan shorter than two chunks per band (the first window of the
+// sequence) stays whole on the reducer, the band that holds the diagonal chunk.
+inline KSplitRange sliding_ksplit_range(uint32_t num_items, uint32_t split_idx, uint32_t split_count) {
+    if (num_items < 2 * split_count) {
+        return split_idx + 1 == split_count ? KSplitRange{0, num_items} : KSplitRange{0, 0};
+    }
+    return ksplit_range(num_items, split_idx, split_count);
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint

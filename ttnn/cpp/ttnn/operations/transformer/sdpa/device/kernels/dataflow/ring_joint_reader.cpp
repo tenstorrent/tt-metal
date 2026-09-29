@@ -501,7 +501,7 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window));
+    static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
@@ -791,12 +791,16 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     uint32_t half_sequence = num_q_chunks / 2;
-    // Sliding consumes local and halo ranges in one logical Q pass. Wait for every halo that
-    // the host work plan selected before starting that pass; this keeps the hot loop free of
-    // device-wide ring phases and makes Q/accumulator state single-lifetime.
-    if constexpr (has_sliding_window) {
-        // Sliding has a compact write plan (local slab + cyclic predecessor tails). Consume
-        // its signal so a cached program cannot observe the previous invocation's token.
+    // Sliding consumes local and halo ranges in one logical Q pass. Without a K split the plan puts the local K chunks
+    // first, so the halo is waited for only before the first halo chunk; a core that reads none waits at the end, so a
+    // cached program cannot observe the previous invocation's token.
+    bool halo_synchronized = !has_sliding_window;
+    auto synchronize_halo = [&]() {
+        if (halo_synchronized) {
+            return;
+        }
+        halo_synchronized = true;
+        // Sliding has a compact write plan (local slab + cyclic predecessor tails).
         const uint32_t synchronization_iters =
             1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
         // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
@@ -804,7 +808,7 @@ void kernel_main() {
         for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
-    }
+    };
     // K chunks past this device's last Q row are fully masked; compute skips the same ones.
     const uint32_t causal_end_nt = dense_causal_skip
                                        ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
@@ -1027,18 +1031,21 @@ void kernel_main() {
                     Sk_chunk_t,
                     logical_nt,
                     circular_kv_slab_count,
-                    kv_pad_rotation_enabled ? &qmap : nullptr);
+                    kv_pad_rotation_enabled ? &qmap : nullptr,
+                    /*local_first=*/SLIDING_LOCAL_FIRST && ksplit_count == 1);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }
-            const uint32_t q_k_loop_count =
-                has_sliding_window ? sliding_q_plan.total_k_chunk_count : iter_num_kv_chunks;
+            // Sliding K split: this core's band of the work plan (ring_joint_ksplit.hpp).
+            const auto sliding_band =
+                ring_joint::sliding_ksplit_range(sliding_q_plan.total_k_chunk_count, ksplit_idx, ksplit_count);
+            const uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : iter_num_kv_chunks;
             // Q must be pushed on the first K chunk actually PROCESSED for this Q chunk — not a
             // hardcoded k_chunk == 0. When spatial k_chunk 0 is beyond logical_n it is skipped, so
             // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
-            for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
+            for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
                 const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
@@ -1107,6 +1114,7 @@ void kernel_main() {
                 } else {
                     uint32_t gathered_start_tile = source_ring_id * kv_local_padded_Nt + source_k_chunk * Sk_chunk_t;
                     if constexpr (has_sliding_window) {
+                        synchronize_halo();
                         gathered_start_tile = sliding_k_chunk.compact_k_chunk * Sk_chunk_t;
                     }
                     k_slice =
@@ -1366,4 +1374,5 @@ void kernel_main() {
             }
         }
     }
+    synchronize_halo();
 }
