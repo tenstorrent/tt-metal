@@ -289,8 +289,8 @@ KernelPlan make_kernel_plan(
     uint32_t pages_per_stream) {
     KernelPlan plan;
     plan.pages_per_stream = pages_per_stream;
-    plan.ring_filled_sem = RingSemaphores::FILLED;
-    plan.ring_freed_sem = RingSemaphores::FREED;
+    plan.ring_filled_slot = RingSemaphores::FILLED;
+    plan.ring_freed_slot = RingSemaphores::FREED;
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
@@ -500,7 +500,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             plan.my_index = j;
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
-            plan.produced_sem = sems.untilized(j);
+            plan.produced_slot = sems.untilized(j);
             // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
             const StreamId first = make_stream_id(0, g == 0);
             plan.walks_down = stream_is_cw(first);
