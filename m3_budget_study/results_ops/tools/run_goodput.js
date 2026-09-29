@@ -45,9 +45,12 @@ const FEATURES = {
 const SETS = {
   // g4_k0 (4 galaxies, today's kernels) greedy-kept stack = the study's grid features (results/study.json bestKeys)
   full: ['pool', 'arena', 'host', 'idxdedup', 'batch', 'var', 'async', 'idxbf8', 'msa', 'srpt', 'fused', 'unaligned'],
+  // Best match to "near-term features only: 16x[4,2] 2-3% worse than 16x[2,4]" (p90 <= 10 s): P0 + P1 without the
+  // variable chunk, and without the SP-local indexer. Pavlo never names the set; see pavlo_reference.md for candidates.
+  near: ['pool', 'bounded', 'host', 'async', 'batch', 'idxdedup'],
   // README roadmap tiers P0 + P1 (slot lanes + pool, bounded dense gather, host tier, async handoff, batching,
-  // index_k de-replication, variable chunk). Not a set Pavlo named; edit here or pass keys explicitly.
-  near: ['pool', 'bounded', 'host', 'async', 'batch', 'idxdedup', 'var'],
+  // index_k de-replication, variable chunk)
+  p0p1: ['pool', 'bounded', 'host', 'async', 'batch', 'idxdedup', 'var'],
   today: [],
 };
 // study.js CONCS and the goodput rule of lib/pool.js (early stop past the knee, 4 bisection steps at the cliff)

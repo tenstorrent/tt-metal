@@ -127,11 +127,42 @@ SLO 3 s is not in the study; its sweep and bisection are re-run at 3 s by the sa
 | 16x[2,4] | 4096 | 38,509 | 38,509 | 27,813 |
 
 This matches the quoted 42.5k vs 39.8k at 8k and p90 <= 10 s. The quoted p90 <= 3 s ranges, 29.9-30.7k and 24.6-27.8k, are the spread over budgets 8192 and 4096.
-Pavlo's material never names a "near-term" set. `run_goodput.js` defines `near` as the README's P0+P1 tiers:
+### "Near-term" feature set
 
-`pool bounded host async batch idxdedup var`
+The branch has no "near-term" wording: none in the README, the study code, the page or the commit messages.
+The only statement to match is that with near-term features, 16x[4,2] is 2-3% worse than 16x[2,4].
+The candidates below were run with `run_goodput.js --features <keys> --budget 4096,8192 --slo 10,3`.
+Sets with `arena` use a 2M-token arena; sets with `pool` and no `arena` use 4 fixed 1M lanes.
+Cells are goodput in k tok/s as [2,4] / [4,2] (Δ = [4,2] vs [2,4]).
 
-It runs with 4 fixed 1M lanes. Edit `SETS` in `run_goodput.js` if a different set is meant.
+| set (`run_goodput.js` name) | 4k, 10 s | 8k, 10 s | 4k, 3 s | 8k, 3 s |
+|---|---|---|---|---|
+| **`near`** = P0+P1 − var: pool bounded host async batch idxdedup | 28.4 / 27.5 (**−3.2%**) | 29.3 / 28.2 (**−3.6%**) | 20.1 / 16.4 (−18%) | 15.4 / 8.1 (−47%) |
+| P0+P1 − var − async: pool bounded host batch idxdedup | 25.1 / 23.9 (−4.6%) | 26.4 / 25.6 (−3.1%) | 14.9 / 8.4 (−43%) | 8.0 / 5.8 (−28%) |
+| `near` + idxbf8 | 29.0 / 28.2 (−3.0%) | 30.4 / 28.6 (−5.7%) | 20.5 / 17.3 (−15%) | 15.4 / 8.7 (−43%) |
+| `near` + idxbf8 + srpt | 29.0 / 28.5 (−1.8%) | 31.4 / 30.4 (−3.4%) | 20.6 / 19.6 (−4.7%) | 15.4 / 8.4 (−45%) |
+| greedy prefix before var: pool arena host idxdedup batch async | 28.5 / 27.5 (−3.6%) | 29.2 / 28.7 (−1.4%) | 20.0 / 16.4 (−18%) | 15.2 / 7.9 (−48%) |
+| `p0p1` = pool bounded host async batch idxdedup var | 32.7 / 32.0 (−2.1%) | 33.4 / 34.3 (+2.6%) | 25.0 / 24.6 (−1.6%) | 22.7 / 25.2 (+11%) |
+| P0+P1 − async | 29.5 / 29.4 (−0.6%) | 30.4 / 30.8 (+1.2%) | 19.8 / 19.4 (−2.0%) | 15.0 / 17.5 (+16%) |
+| P0+P1 − idxdedup | 25.9 / 29.6 (+14%) | 27.0 / 31.4 (+16%) | 20.2 / 23.7 (+17%) | 18.9 / 23.8 (+26%) |
+| P0 only: pool bounded host | 19.2 / 21.4 (+12%) | 14.7 / 17.2 (+17%) | 8.0 / 8.1 (+1%) | 5.3 / 6.4 (+20%) |
+| full − msa (async kept) | 37.0 / 36.1 (−2.4%) | 38.9 / 39.4 (+1.4%) | 26.0 / 26.0 (−0.1%) | 23.2 / 26.2 (+13%) |
+| full − msa − async | 32.4 / 31.7 (−2.1%) | 34.9 / 35.5 (+1.5%) | 19.6 / 19.8 (+0.7%) | 15.1 / 19.6 (+30%) |
+| full − async (msa kept) | 33.7 / 36.4 (+7.9%) | 36.1 / 38.5 (+6.6%) | 21.5 / 25.4 (+18%) | 15.2 / 23.0 (+52%) |
+| `full` | 38.5 / 40.1 (+4.2%) | 39.8 / 42.5 (+6.9%) | 27.8 / 30.7 (+11%) | 24.6 / 29.9 (+22%) |
+
+Match: `near` (P0+P1 without the variable chunk) is the closest. It puts [4,2] 3.2% and 3.6% behind at the two budgets at p90 ≤ 10 s.
+Other sets that also put [4,2] behind at both budgets spread wider (−1.4% to −5.7%).
+It is now the `near` set in `run_goodput.js`, and the old P0+P1 set is kept as `p0p1`.
+At p90 ≤ 3 s, `near` puts [4,2] far behind (−18% / −47%), so the "2-3% worse" statement only matches the 10 s SLO.
+
+What drives the [4,2] result:
+
+* **idxdedup** removes [4,2]'s capacity edge: index_k replicated ×2 instead of ×4. Without it, [4,2] wins by 12-26% in every set.
+* **msa** (the SP-local indexer) is what gives [4,2] its full-stack lead: full − msa is −2.4% / +1.4%, full is +4.2% / +6.9%.
+  It drops the SP=4 prefix all-gathers (ag_kv is 0.90 ms on [4,2] vs 0.24 ms on [2,4]).
+* **async** alone does not favour [4,2]: full − async still gives +7.9% / +6.6%.
+* **var** is the next largest swing: without it, [4,2] trails at both budgets; with it, [4,2] leads at 8k.
 
 Note: the hosted artifact and Pavlo's standalone repo (philei-tt/m3-agentx-prefill-lab) are newer than the branch. They add:
 
