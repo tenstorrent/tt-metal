@@ -1,0 +1,249 @@
+{
+ "metrics": {
+  "chunk0_topk_overlap_swap": {
+   "t": "2026-09-29T18:24:38",
+   "value": 1.0
+  },
+  "chunk0_topk_worst_row_overlap_swap": {
+   "t": "2026-09-29T18:24:38",
+   "value": 1.0
+  },
+  "max_col_rel_l2_swap_attn_hc": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.0045165494084358215
+  },
+  "max_stream_rel_l2_swap_h_mid": {
+   "t": "2026-09-29T18:24:59",
+   "value": 0.00666386354714632
+  },
+  "pcc_swap_attn_hc": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.9999986013823834
+  },
+  "pcc_swap_attn_norm": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.999996116317953
+  },
+  "pcc_swap_attn_out": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.9999803667350655
+  },
+  "pcc_swap_attn_x": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.9999974450350099
+  },
+  "pcc_swap_experts_out": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.9998117451155051
+  },
+  "pcc_swap_ffn_hc": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.999999912485134
+  },
+  "pcc_swap_ffn_norm": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.9999881768036759
+  },
+  "pcc_swap_ffn_x": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.9999889890605491
+  },
+  "pcc_swap_h_mid": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.9999989329359877
+  },
+  "pcc_swap_mlp_out": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.9999130857409568
+  },
+  "pcc_swap_out": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.9999766320786913
+  },
+  "pcc_swap_q_resid": {
+   "t": "2026-09-29T18:24:33",
+   "value": 0.999997504508023
+  },
+  "pcc_swap_router": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.9962124939667449
+  },
+  "pcc_swap_shared_out": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.9999940384052931
+  },
+  "pcc_swap_topk": {
+   "t": "2026-09-29T18:24:33",
+   "value": 1.0
+  },
+  "post_worst_row_rel_l2_swap_attn_hc": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.004799201153218746
+  },
+  "rel_l2_swap_attn_hc": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.001362898969091475
+  },
+  "rel_l2_swap_attn_norm": {
+   "t": "2026-09-29T18:24:35",
+   "value": 0.0028696961235255003
+  },
+  "rel_l2_swap_attn_norm_vs_cpu": {
+   "t": "2026-09-29T18:24:35",
+   "value": 0.0019342039013281465
+  },
+  "rel_l2_swap_attn_out_chunk0": {
+   "t": "2026-09-29T18:24:48",
+   "value": 0.0055784014984965324
+  },
+  "rel_l2_swap_attn_out_probe": {
+   "t": "2026-09-29T18:24:53",
+   "value": 0.005385174881666899
+  },
+  "rel_l2_swap_attn_out_scaled": {
+   "t": "2026-09-29T18:24:58",
+   "value": 0.011900368146598339
+  },
+  "rel_l2_swap_attn_out_vs_cpu": {
+   "t": "2026-09-29T18:24:42",
+   "value": 0.005821526516228914
+  },
+  "rel_l2_swap_attn_out_vs_golden": {
+   "t": "2026-09-29T18:24:38",
+   "value": 0.006284430623054504
+  },
+  "rel_l2_swap_attn_x": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.0022617594804614782
+  },
+  "rel_l2_swap_attn_x_vs_cpu": {
+   "t": "2026-09-29T18:24:34",
+   "value": 4.659578678456455e-08
+  },
+  "rel_l2_swap_h_mid": {
+   "t": "2026-09-29T18:24:59",
+   "value": 0.0014595257816836238
+  },
+  "rel_l2_swap_out": {
+   "t": "2026-09-29T18:24:59",
+   "value": 0.0068265460431575775
+  },
+  "rel_l2_swap_q_resid": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0022409018129110336
+  },
+  "rel_l2_swap_q_resid_vs_cpu": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0017721476033329964
+  },
+  "rot_rel_l2_swap_attn_x": {
+   "t": "2026-09-29T18:24:35",
+   "value": 4.3127588611469037e-08
+  },
+  "router_overlap_swap": {
+   "t": "2026-09-29T18:24:59",
+   "value": 0.9935302734375
+  },
+  "scale_coef_swap_attn_out_chunk0": {
+   "t": "2026-09-29T18:24:48",
+   "value": 0.9996152413822179
+  },
+  "scale_coef_swap_attn_out_probe": {
+   "t": "2026-09-29T18:24:53",
+   "value": 0.9998949905213534
+  },
+  "scale_coef_swap_attn_out_scaled": {
+   "t": "2026-09-29T18:24:58",
+   "value": 0.9999398118928375
+  },
+  "scale_coef_swap_attn_out_vs_cpu": {
+   "t": "2026-09-29T18:24:42",
+   "value": 0.999704290721029
+  },
+  "scale_coef_swap_attn_out_vs_golden": {
+   "t": "2026-09-29T18:24:38",
+   "value": 0.9993591427864588
+  },
+  "syn_rel_l2_swap_attn_norm": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0018788756569847465
+  },
+  "syn_rel_l2_swap_q_resid": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0017585094319656491
+  },
+  "syn_worst_row_rel_l2_swap_attn_norm": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.002488872269168496
+  },
+  "syn_worst_row_rel_l2_swap_q_resid": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0021578455343842506
+  },
+  "topk_overlap_swap": {
+   "t": "2026-09-29T18:24:37",
+   "value": 1.0
+  },
+  "topk_worst_row_overlap_swap": {
+   "t": "2026-09-29T18:24:37",
+   "value": 1.0
+  },
+  "vs_shared_input_topk_overlap_swap": {
+   "t": "2026-09-29T18:24:37",
+   "value": 1.0
+  },
+  "vs_shared_input_topk_worst_row_overlap_swap": {
+   "t": "2026-09-29T18:24:37",
+   "value": 1.0
+  },
+  "worst_row_rel_l2_swap_attn_norm": {
+   "t": "2026-09-29T18:24:35",
+   "value": 0.0034110345877707005
+  },
+  "worst_row_rel_l2_swap_attn_norm_vs_cpu": {
+   "t": "2026-09-29T18:24:35",
+   "value": 0.00245092180557549
+  },
+  "worst_row_rel_l2_swap_attn_out_chunk0": {
+   "t": "2026-09-29T18:24:48",
+   "value": 0.00767680024728179
+  },
+  "worst_row_rel_l2_swap_attn_out_probe": {
+   "t": "2026-09-29T18:24:53",
+   "value": 0.007707512471824884
+  },
+  "worst_row_rel_l2_swap_attn_out_scaled": {
+   "t": "2026-09-29T18:24:58",
+   "value": 0.02119121514260769
+  },
+  "worst_row_rel_l2_swap_attn_out_vs_cpu": {
+   "t": "2026-09-29T18:24:42",
+   "value": 0.008321466855704784
+  },
+  "worst_row_rel_l2_swap_attn_out_vs_golden": {
+   "t": "2026-09-29T18:24:38",
+   "value": 0.008803426288068295
+  },
+  "worst_row_rel_l2_swap_attn_x": {
+   "t": "2026-09-29T18:24:34",
+   "value": 0.002482783980667591
+  },
+  "worst_row_rel_l2_swap_h_mid": {
+   "t": "2026-09-29T18:24:59",
+   "value": 0.008390071801841259
+  },
+  "worst_row_rel_l2_swap_out": {
+   "t": "2026-09-29T18:24:59",
+   "value": 0.062071219086647034
+  },
+  "worst_row_rel_l2_swap_q_resid": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0033554104156792164
+  },
+  "worst_row_rel_l2_swap_q_resid_vs_cpu": {
+   "t": "2026-09-29T18:24:36",
+   "value": 0.0022243161220103502
+  }
+ },
+ "task": "S.moe_shared.06"
+}
