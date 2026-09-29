@@ -479,6 +479,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
                         .math_approx_mode = compute_descriptor.math_approx_mode,
                         .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
+                        .disable_sfpu_replay_optimization = compute_descriptor.disable_sfpu_replay_optimization,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
