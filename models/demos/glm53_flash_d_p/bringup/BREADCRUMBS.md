@@ -524,3 +524,46 @@ Watch: the block-out ratio minimum vs golden is still 0.9797 (limit 0.97). mlp a
 amplifies upstream error, so check the block-out margin there first.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_08_ffn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.mlp test (attempt 1)
+
+Reviewed the rendered component test for mlp (dense clamped SwiGLU 12288, layer 0, [2048, 4096] bf16 golden). I rewrote
+it from the ffn_norm test. It keeps the gated PCC and adds asserted checks (informational metrics):
+- vs golden: finite, rel L2 <= 0.015, per-token norm ratio [0.99, 1.01], worst row rel L2 <= 0.02, and the global scale
+  coefficient <got, want> / <want, want> in [0.995, 1.005].
+- Clamp probe: the module on 48 * ffn_norm vs the CPU reference on the same input: rel <= 0.01, ratio [0.99, 1.01],
+  worst row <= 0.03. The golden never reaches the limit (|gate| <= 0.70, |up| <= 0.66), so without the probe no
+  clamp bug is visible.
+Sensitivity (CPU host scripts /tmp/mlp_sens/s{1,2,3}.py, not kept):
+- Headroom: fp32 CPU 0.0026 / [0.9986, 1.0013] / 0.0031. bf16 weights + intermediates + output: 0.0039 / worst row
+  0.0044 / coef 0.9998. bfp8 weights: 0.0068..0.0089 / worst row 0.0078..0.0105.
+- Fail: bfp8 x and h, 0.025 / worst row 0.034 (outlier channels, |x| up to 1.53). Keep activations bf16.
+  gelu instead of silu: 0.031 / 0.046. gate/up swapped: 0.059. x1.01: ratio max 1.0113. Row zeroed: worst row 1.0.
+  7-bit weight truncation (HiFi2-like): coef 0.9938, although its ratio [0.9925, 0.9952] passes. TP shard doubled or
+  dropped: PCC 0.94..0.98.
+- Probe at 48x (gate > 10 on 0.007%): bf16 0.0030 / worst row 0.0037. No gate clamp 0.27 (ratio 1.108), no up clamp
+  0.19, up clamped above only 0.070, limit 7 0.19. gate clamped to [-10, 10] and min(silu(g), 10) are numerically
+  equivalent and pass. Limit 9.5 scores 0.029, just inside.
+Results: reference passes (PCC 0.999997, rel 0.0026, coef 0.99998, probe 0). Stub fails (PCC 0). The device gate fails
+with NotImplementedError until the implement step adds the module.
+Implement: plan per components.yaml (bf16 weights, fp32 gate/up out, HiFi4 + fp32 acc). Check that ttnn.silu is not an
+approximate mode that biases the output: the coefficient check allows only 0.5%.
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_mlp.py`
+(`BRINGUP_IMPL=stub` for the stub; no prefix for the device gate).
+
+## C.kda_dense.mlp implement (attempt 1)
+
+Added `tt/mlp.py:TtDenseMLP` + `build_mlp` (from `mimo_v2_6_d_p_2x2/tt/mlp.py`), registered in `hooks._device_step`
+(step `mlp`, non-MoE layers, wrapped by `_norm_host_fn`) and added `mlp` to `DEVICE_STEPS["kda_dense"]`.
+- TP=4 over the intermediate: chip d holds gate/up columns and down rows [3072d, 3072d + 3072). Weights: the loader's
+  fp8 block dequant (`loader.weight`), stored bf16. All three linears HiFi4 + fp32 acc (`common.hifi4_config`).
+- Forward: gate/up linear fp32 out -> `ttnn.minimum(g, 10)` -> `ttnn.silu` -> `ttnn.clamp(u, -10, 10)` ->
+  `ttnn.multiply` (fp32) -> down linear fp32 out -> `ttnn.all_reduce(cluster_axis=None)` in fp32 -> typecast bf16.
+  No host work in the forward.
+- Gotcha: with bf16 down partials the all_reduce biased the output up (coef 1.0018, ratio [1.0005, 1.0032]; stage
+  probe (tt-probe, not kept: outside this step's paths): all_reduce vs host sum of the same
+  partials coef 1.0019). fp32 all_reduce fixes it (known issues, Proposed). silu/minimum/clamp on fp32 are exact
+  (rel 6e-8 on a separate probe).
+- Gate: PCC 0.999994; golden rel L2 0.0036, ratio [0.9977, 1.0004], worst row 0.0043, coef 0.99917; clamp probe rel
+  0.0031, ratio [0.9980, 1.0004], worst row 0.0039.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_mlp.py`
