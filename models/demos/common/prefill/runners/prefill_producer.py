@@ -634,6 +634,11 @@ def replay_schedule(records, *, push_fn, speed: float = 1.0, now_fn=time.perf_co
 def _load_replay_records(cfg: ProducerConfig):
     if not cfg.replay_log:
         return None
+    if cfg.verify:
+        raise ValueError(
+            "PREFILL_PRODUCER_REPLAY_LOG does not support PREFILL_PRODUCER_CHECK_PCC=1: the log carries no "
+            "tokens, so there is no golden for the replayed KV."
+        )
     records = load_inject_log(cfg.replay_log, chunk_size=CHUNK_SIZE, max_seq_len=MAX_SEQ_LEN, num_slots=cfg.num_users)
     timed = cfg.replay_speed > 0 and all(r.t_s is not None for r in records)
     span_s = records[-1].t_s - records[0].t_s if timed else 0.0

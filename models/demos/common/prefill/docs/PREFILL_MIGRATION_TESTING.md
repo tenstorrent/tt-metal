@@ -264,8 +264,9 @@ exactly those chunks, in that order, instead of drawing a synthetic schedule. `P
 as fast, `0` sends back to back. Timing needs the builtin sink's leading ISO timestamp; a log without one
 replays back to back.
 
-The log records shape, not content: tokens are refilled from the trace pool by absolute position, so
-`PREFILL_PRODUCER_CHECK_PCC` is meaningful only up to the golden's length. Pushes must fit the runner's geometry
+The log records shape, not content: tokens are refilled from the trace pool by absolute position, so there
+is no golden for the replayed KV and replay rejects `PREFILL_PRODUCER_CHECK_PCC=1`. That also makes replay
+single-rank only, since multi-rank producers exist only to verify. Pushes must fit the runner's geometry
 (`end - start <= chunk_size`, `end <= max_seq_len`, `slot_id < num_users`); the producer rejects the log
 before attaching otherwise. The synthetic workload knobs (`chunks`, `max_requests`, `p_gap`, ...) are ignored.
 
