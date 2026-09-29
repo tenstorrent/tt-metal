@@ -335,7 +335,7 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
     if step in _RESIDUAL_STEPS:
         from models.demos.glm53_flash_d_p.tt.residual import build_residual
 
-        return _residual_host_fn(mesh, build_residual(cfg), cfg.hc_mult)
+        return _residual_host_fn(mesh, build_residual(cfg, mesh), cfg.hc_mult)
     if step in _NORM_STEPS:
         from models.demos.glm53_flash_d_p.tt.rms_norm import build_norm
 
@@ -557,6 +557,12 @@ class GlmDeviceModel:
         import ttnn
 
         ttnn.synchronize_device(self.mesh)
+
+    def perf_settings(self):
+        """Recorded in the profile: the mHC residual mix path (GLM_RESIDUAL_MIX=matmul | addcmul)."""
+        from models.demos.glm53_flash_d_p.tt.residual import residual_mix_mode
+
+        return {"residual_mix": residual_mix_mode()}
 
 
 def device_model(mesh, spec, layers, lm_head=True):
