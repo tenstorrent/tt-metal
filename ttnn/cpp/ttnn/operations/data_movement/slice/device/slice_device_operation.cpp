@@ -268,7 +268,42 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
     // Synthesize shard spec for sharded-no-spec output: scale from input spec when layouts match,
     // else fall back to generate_transpose_shard_spec for a fresh full-grid spec.
     auto output_mem_config = args.output_mem_config;
-    if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
+    if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+        !output_mem_config.shard_spec().has_value() && output_mem_config.nd_shard_spec().has_value() &&
+        input_tensor.is_sharded() && input_tensor.memory_config().nd_shard_spec().has_value() &&
+        input_tensor.padded_shape().rank() == output_tensor_shape.rank()) {
+        // True ND sharding (no legacy 2D equivalent, e.g. CONTIGUOUS_1D distribution): rescale each
+        // dimension of the ND shard shape to the sliced output, preserving the caller's requested
+        // core grid / distribution strategy instead of falling through to generate_transpose_shard_spec,
+        // which fabricates an unrelated legacy-style grid with no knowledge of ND distribution.
+        // (Issue #46954)
+        // Base the rescale on the *input* tensor's own (unsliced) nd_shard_spec/padded_shape rather
+        // than output_mem_config's -- the latter may already have been rescaled by the ttnn::slice
+        // wrapper's implicit-inheritance path, and re-deriving from an already-shrunk shard would
+        // double-shrink it here.
+        const auto& nd_shard_spec_val = input_tensor.memory_config().nd_shard_spec().value();
+        const auto& input_padded_shape = input_tensor.padded_shape();
+        const auto rank = output_tensor_shape.rank();
+        if (nd_shard_spec_val.shard_shape.rank() == rank) {
+            const bool tile_layout = input_tensor.layout() == Layout::TILE;
+            ttsl::SmallVector<uint32_t> new_nd_shard_shape(rank);
+            for (uint32_t i = 0; i < rank; i++) {
+                uint32_t cur_shard_dim = nd_shard_spec_val.shard_shape[i];
+                uint32_t num_shards_along_dim =
+                    cur_shard_dim == 0 ? 1 : tt::div_up(input_padded_shape[i], cur_shard_dim);
+                uint32_t new_shard_dim = tt::div_up(output_tensor_shape[i], num_shards_along_dim);
+                if (tile_layout && (i == rank - 2 || i == rank - 1)) {
+                    const uint32_t tile_dim = (i == rank - 2) ? TILE_HEIGHT : TILE_WIDTH;
+                    new_shard_dim = std::max(tt::round_up(new_shard_dim, tile_dim), tile_dim);
+                }
+                new_nd_shard_shape[i] = new_shard_dim;
+            }
+            auto new_nd_spec = nd_shard_spec_val.with_shard_shape(ttnn::Shape(new_nd_shard_shape));
+            output_mem_config = MemoryConfig(output_mem_config.buffer_type(), new_nd_spec);
+        }
+    }
+    if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value() &&
+        !output_mem_config.nd_shard_spec().has_value()) {
         std::optional<tt::tt_metal::ShardSpec> derived;
         if (input_tensor.is_sharded() && input_tensor.memory_config().shard_spec().has_value() &&
             input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout() &&

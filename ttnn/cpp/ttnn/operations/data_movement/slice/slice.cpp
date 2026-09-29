@@ -149,7 +149,14 @@ ttnn::Tensor slice(
     auto resolve_mc = [&](const ttnn::Tensor& source,
                           std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt) {
         auto resolved_mc = output_memory_config;
-        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value()) {
+        // A config with a populated nd_shard_spec (true ND sharding, e.g. CONTIGUOUS_1D) is already
+        // fully specified -- it just has no *legacy* 2D shard_spec to report. Only synthesize a fresh
+        // spec (below) for configs that carry neither shard_spec nor nd_shard_spec (e.g. a caller-
+        // supplied MemoryConfig(HEIGHT_SHARDED, L1) with no spec at all). Otherwise this would clobber
+        // an already-correct ND result (from compute_output_specs / the implicit-inheritance rescale
+        // above) with a fabricated legacy-style grid that has no knowledge of ND distribution.
+        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value() &&
+            !resolved_mc.nd_shard_spec().has_value()) {
             const auto& in_mc = source.memory_config();
             if (in_mc.is_sharded() && in_mc.memory_layout() == resolved_mc.memory_layout() &&
                 in_mc.shard_spec().has_value()) {
@@ -307,6 +314,50 @@ ttnn::Tensor slice(
                     tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
                 output_memory_config = MemoryConfig(
                     output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+            }
+        } else if (
+            mem_layout == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+            output_memory_config.nd_shard_spec().has_value()) {
+            // True ND sharding (e.g. CONTIGUOUS_1D distribution) has no legacy 2D equivalent, so the
+            // HEIGHT/WIDTH/BLOCK rescale above can't apply. Rescale each dimension of the ND shard
+            // shape by the same ratio the legacy paths use per-axis: keep the number of shards along
+            // each dimension constant (derived from the *current* padded shape) and redistribute the
+            // new (sliced) dimension size across that many shards. This preserves the caller's
+            // requested distribution strategy and core grid — only the per-dimension shard extents
+            // shrink. (Issue #46954)
+            const auto& nd_shard_spec_val = output_memory_config.nd_shard_spec().value();
+            const auto& input_padded_shape = input_tensor.padded_shape();
+            if (nd_shard_spec_val.shard_shape.rank() == input_rank && input_padded_shape.rank() == input_rank) {
+                ttsl::SmallVector<uint32_t> output_dims(input_rank);
+                for (size_t i = 0; i < input_rank; i++) {
+                    output_dims[i] = output_dim_i(i, modified_ends);
+                }
+                if (!rm_only) {
+                    output_dims[input_rank - 2] =
+                        std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+                    output_dims[input_rank - 1] =
+                        std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+                }
+
+                ttsl::SmallVector<uint32_t> new_nd_shard_shape(input_rank);
+                bool changed = false;
+                for (size_t i = 0; i < input_rank; i++) {
+                    uint32_t cur_shard_dim = nd_shard_spec_val.shard_shape[i];
+                    uint32_t num_shards_along_dim =
+                        cur_shard_dim == 0 ? 1 : tt::div_up(input_padded_shape[i], cur_shard_dim);
+                    uint32_t new_shard_dim = tt::div_up(output_dims[i], num_shards_along_dim);
+                    if (!rm_only && (i == input_rank - 2 || i == input_rank - 1)) {
+                        const uint32_t tile_dim = (i == input_rank - 2) ? tile_shape[0] : tile_shape[1];
+                        new_shard_dim = std::max(tt::round_up(new_shard_dim, tile_dim), tile_dim);
+                    }
+                    new_nd_shard_shape[i] = new_shard_dim;
+                    changed |= (new_shard_dim != cur_shard_dim);
+                }
+
+                if (changed) {
+                    auto new_nd_spec = nd_shard_spec_val.with_shard_shape(ttnn::Shape(new_nd_shard_shape));
+                    output_memory_config = MemoryConfig(output_memory_config.buffer_type(), new_nd_spec);
+                }
             }
         }
     }
