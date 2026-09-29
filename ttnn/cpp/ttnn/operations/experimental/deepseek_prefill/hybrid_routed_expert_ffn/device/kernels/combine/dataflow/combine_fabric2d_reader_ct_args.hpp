@@ -214,6 +214,17 @@ struct ReaderCtArgs {
         expert_threshold(get_compile_time_arg_val(28)),
         expert_table_page_base(get_compile_time_arg_val(29)) {}
 
+    // Program semaphores: the routed expert's arena occupies the L1 the standalone op places these in.
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_sem));
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_sem));
+    }
+    uint32_t unt_produced_word(uint32_t peer_word) const { return get_semaphore(peer_word); }
+    uint32_t unt_freed_addr_value() const { return get_semaphore(unt_freed_sem); }
+    void reset_produced_counter(volatile tt_l1_ptr uint32_t*) const {}
+
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
     static constexpr uint32_t forwarding_chunk_base =
