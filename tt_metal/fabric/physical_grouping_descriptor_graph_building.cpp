@@ -1092,7 +1092,9 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
 namespace tt::tt_fabric {
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_variants(
-    const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
+    const GroupingInfo& flattened_mesh,
+    const std::vector<GroupingInfo>& flattened_declared_hosts,
+    const std::vector<GroupingInfo>& host_seam_tilings) const {
     // A grouping's chips in node order, each with the slot it names. A slot left unspecified names no chip,
     // so it is dropped: there is nothing there to attribute to a host.
     auto named_slots_of = [](const GroupingInfo& grouping) {
@@ -1157,10 +1159,6 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_varia
     std::vector<GroupingInfo> variants;
     variants.push_back(std::move(rounds_variant));
 
-    if (std::getenv("TT_METAL_HOST_BOUNDARY_PROTO") == nullptr) {
-        return variants;
-    }
-
     // Host-boundary variants: for a mesh that fits inside one declared host, add one copy per declared host whose
     // tray tiling straddles the mesh, split at the host's grid-column edge. The slot-repetition rounds above
     // cannot express a cross-host mesh whose two halves sit on different trays; splitting at the host's own tray
@@ -1175,7 +1173,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_pgd_host_group_varia
         uint32_t host_asics = 0;
     };
     std::vector<HostEdge> host_edges;
-    for (const GroupingInfo& declared_host : flattened_declared_hosts) {
+    for (const GroupingInfo& declared_host : host_seam_tilings) {
         if (declared_host.instance_tile_layout_dims.size() != 2) {
             continue;
         }

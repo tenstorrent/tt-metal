@@ -1431,7 +1431,15 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         physical_system_descriptor != nullptr
             ? collect_machine_host_slots(*psd_physical_graph, *physical_system_descriptor)
             : std::vector<std::set<tt::tt_metal::ASICPosition>>{};
+    // Two views of the declared hosts. flattened_declared_hosts keeps only those the machine contains as one host,
+    // for rounds attribution (which machine host holds each chip). host_seam_tilings keeps every flattened tiling,
+    // machine-contained or not: the host-edge seam is a declarative geometry of the descriptor, so a mesh that
+    // crosses a host seam must still get its _hostedge variant even when the machine subdivides that host more
+    // finely than the descriptor does -- e.g. an oversubscribed mock that splits one galaxy across several ranks,
+    // where no declared host is machine-contained yet the seam still exists. Any variant so emitted is validated
+    // downstream by SAT placement, so offering the seam is safe when the machine cannot hold the whole host.
     std::vector<GroupingInfo> flattened_declared_hosts;
+    std::vector<GroupingInfo> host_seam_tilings;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         const auto hosts_it = type_map.find("HOSTS");
         if (hosts_it == type_map.end()) {
@@ -1444,7 +1452,10 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 continue;
             }
             for (auto& variant : build_flattened_adjacency_mesh(declared_host, physical_system_descriptor)) {
-                if (!machine_host_slots.empty() && !machine_has_this_host(variant, machine_host_slots)) {
+                const bool machine_contained =
+                    machine_host_slots.empty() || machine_has_this_host(variant, machine_host_slots);
+                host_seam_tilings.push_back(variant);
+                if (!machine_contained) {
                     continue;
                 }
                 flattened_declared_hosts.push_back(std::move(variant));
@@ -1477,7 +1488,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     // hosts above. Done once per variant here rather than per MGD instance below, since it says
                     // something about the variant alone. Returns the rounds-attributed variant plus any host-edge
                     // copies (cross-host meshes split at the declared host's tray edge); all are committed.
-                    for (auto& variant : build_pgd_host_group_variants(meshe, flattened_declared_hosts)) {
+                    for (auto& variant :
+                         build_pgd_host_group_variants(meshe, flattened_declared_hosts, host_seam_tilings)) {
                         mesh_flat_groupings[mesh_group_info.name].push_back(std::move(variant));
                     }
                 }

@@ -351,8 +351,17 @@ private:
     // slot-repetition rounds (mesh_node_to_pgd_host_group), plus, for a mesh that fits inside one declared host,
     // one "_hostedge" copy per declared host whose tray tiling straddles it, split at the host's tray edge so a
     // cross-host mesh aligns its ranks one-per-host along the physical seam. The caller commits all returned.
+    //
+    // flattened_declared_hosts is the machine-contained host set used for rounds attribution (which machine host
+    // holds each chip). host_seam_tilings is the full set of declared-host tray tilings used only to derive the
+    // host-edge SEAM, which is a declarative geometry of the descriptor: it must be available even when the machine
+    // subdivides a declared host more finely than the descriptor does (e.g. an oversubscribed mock that splits one
+    // galaxy across several ranks), where no declared host is machine-contained yet the seam still exists and any
+    // emitted variant is validated downstream by SAT placement. Callers with no such subdivision pass the same list.
     std::vector<GroupingInfo> build_pgd_host_group_variants(
-        const GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const;
+        const GroupingInfo& flattened_mesh,
+        const std::vector<GroupingInfo>& flattened_declared_hosts,
+        const std::vector<GroupingInfo>& host_seam_tilings) const;
 
     // Helper to get ASIC count for a grouping name (from cache)
     uint32_t get_grouping_asic_count(const std::string& grouping_name) const;

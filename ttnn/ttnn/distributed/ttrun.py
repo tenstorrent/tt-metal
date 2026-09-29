@@ -802,6 +802,37 @@ def ensure_oversubscribe_for_multi_proc_per_host(
     return ["--oversubscribe"] + mpi_args
 
 
+def mpi_args_set_yield_when_idle(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already sets the ``mpi_yield_when_idle`` MCA param (any value).
+
+    Used so tt-run's oversubscription default does not override an explicit user choice.
+    """
+    if not mpi_args:
+        return False
+    args = list(mpi_args)
+    for i, arg in enumerate(args):
+        if arg in ("--mca", "-mca") and i + 1 < len(args) and args[i + 1] == "mpi_yield_when_idle":
+            return True
+        if arg.startswith(("--mca=", "-mca=")) and "mpi_yield_when_idle" in arg:
+            return True
+    return False
+
+
+def yield_when_idle_mca_args(mpi_args: Optional[List[str]]) -> List[str]:
+    """MCA args to make idle MPI ranks yield the CPU (``sched_yield``) instead of busy-polling.
+
+    Returned (``["--mca", "mpi_yield_when_idle", "1"]``) only when placement is oversubscribed
+    (more ranks than cores) and the user has not already set the param. This is exactly the case
+    where aggressive busy-poll starves co-located ranks and livelocks the control-plane handshake
+    on mock / CPU-only multi-host runs. Normally-subscribed runs (one rank per core) get ``[]`` and
+    keep the low-latency busy-poll default. Injected *before* the user's ``--mpi-args`` so an
+    explicit ``--mca mpi_yield_when_idle 0`` still wins (Open MPI: last value on the line prevails).
+    """
+    if mpi_args_set_yield_when_idle(mpi_args):
+        return []
+    return ["--mca", "mpi_yield_when_idle", "1"]
+
+
 def build_host_slots_from_rankfile(rankfile_path: Path) -> tuple[str, int]:
     """Build --host host1:N,host2:N string and total rank count from rankfile.
 
@@ -971,6 +1002,8 @@ def build_generate_rank_bindings_mpi_cmd(
         # Use per-rank -np 1 segments to set per-rank env vars (similar to legacy_flow)
         # Use --oversubscribe to allow more processes than available slots (needed for mock clusters)
         cmd.extend(["--oversubscribe"])
+        # Oversubscribed: yield the CPU on idle MPI spins (see yield_when_idle_mca_args).
+        cmd.extend(yield_when_idle_mca_args(mpi_args))
         # Don't specify --host for mock clusters - MPI will default to localhost
         # This avoids "All nodes which are allocated for this job are already filled" errors
 
@@ -2028,6 +2061,13 @@ def build_mpi_command(
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
+
+    # When oversubscribed (mock / CPU-only multi-host: more ranks than cores), make idle ranks
+    # yield the CPU instead of busy-polling MPI progress, or co-located idle workers starve the
+    # rank doing the control-plane solve and the handshake livelocks. Prepended before user args
+    # so an explicit --mca mpi_yield_when_idle 0 still overrides.
+    if "--oversubscribe" in (effective_mpi_args or []):
+        cmd.extend(yield_when_idle_mca_args(effective_mpi_args))
 
     if effective_mpi_args:
         cmd.extend(effective_mpi_args)
