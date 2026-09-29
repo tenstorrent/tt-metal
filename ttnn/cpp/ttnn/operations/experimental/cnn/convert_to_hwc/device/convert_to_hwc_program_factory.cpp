@@ -4,6 +4,8 @@
 
 #include "convert_to_hwc_program_factory.hpp"
 
+#include "ttnn/operations/experimental/cnn/cnn_cb_descriptor.hpp"
+
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
@@ -288,25 +290,6 @@ void ConvertToHwcConfig::validate() const {
     }
 }
 
-tt::tt_metal::CBDescriptor make_hwc_circular_buffer(
-    const tt::tt_metal::CoreRangeSet& core_grid,
-    uint32_t index,
-    uint32_t total_size,
-    uint32_t page_size,
-    const tt::DataFormat& format,
-    tt::tt_metal::Buffer* buffer) {
-    return tt::tt_metal::CBDescriptor{
-        .total_size = total_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index),
-            .data_format = format,
-            .page_size = page_size,
-        }}},
-        .buffer = buffer,
-    };
-}
-
 // Setup all circular buffers for the convert_to_hwc operation
 void setup_circular_buffers(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -322,7 +305,7 @@ void setup_circular_buffers(
     const uint32_t cb_in_page_size = config.l1_input_shard_width * config.element_size_bytes;
     const uint32_t cb_in_total_size = config.l1_input_shard_height * cb_in_page_size;
     // Only update input CB address for L1 input (DRAM input doesn't need CB update)
-    desc.cbs.push_back(make_hwc_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid,
         CBIndex::CB_IN,
         cb_in_total_size,
@@ -333,26 +316,26 @@ void setup_circular_buffers(
     // CB_IN_BATCH: [C x block_size_width] staging for gathered sticks
     const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
     const uint32_t cb_in_batch_total_size = config.gather_l1_output_shard_height * cb_in_batch_page_size;
-    desc.cbs.push_back(make_hwc_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format, nullptr));
 
     // CB_IN_TILED: intermediate tiles
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const uint32_t cb_in_tiled_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
-    desc.cbs.push_back(make_hwc_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format, nullptr));
 
     // CB_IN_TRANSPOSE_[0/1]
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
-    desc.cbs.push_back(make_hwc_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid,
         CBIndex::CB_IN_TRANSPOSE_0,
         cb_in_transpose_total_size,
         cb_in_transpose_page_size,
         intermediary_format,
         nullptr));
-    desc.cbs.push_back(make_hwc_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid,
         CBIndex::CB_IN_TRANSPOSE_1,
         cb_in_transpose_total_size,
@@ -363,7 +346,7 @@ void setup_circular_buffers(
     // CB_OUT: output shard per core
     const uint32_t cb_out_page_size = config.output_shard_width * config.element_size_bytes;
     const uint32_t cb_out_total_size = cb_out_page_size * config.output_shard_height;  // same size as input
-    desc.cbs.push_back(make_hwc_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.input_format, output.buffer()));
 }
 

@@ -4,6 +4,8 @@
 
 #include "convert_to_chw_program_factory.hpp"
 
+#include "ttnn/operations/experimental/cnn/cnn_cb_descriptor.hpp"
+
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -33,31 +35,6 @@ void set_runtime_args_for_all_kernels(
         writer_kernel.runtime_args.emplace_back(core, runtime_args);
         compute_kernel.runtime_args.emplace_back(core, runtime_args);
     });
-}
-
-tt::tt_metal::CBDescriptor make_chw_circular_buffer(
-    const tt::tt_metal::CoreRangeSet& core_grid,
-    uint32_t index,
-    uint32_t total_size,
-    uint32_t page_size,
-    const tt::DataFormat& format,
-    tt::tt_metal::Buffer* buffer) {
-    log_debug(
-        tt::LogType::LogOp,
-        "Creating CB at index {} with total size {} B and page size {} B",
-        index,
-        total_size,
-        page_size);
-    return tt::tt_metal::CBDescriptor{
-        .total_size = total_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(index),
-            .data_format = format,
-            .page_size = page_size,
-        }}},
-        .buffer = buffer,
-    };
 }
 }  // namespace
 
@@ -104,27 +81,28 @@ tt::tt_metal::ProgramDescriptor ConvertToCHWProgramFactory::create_descriptor(
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;
     const uint32_t cb_in_page_size = input_tile_size;
-    desc.cbs.push_back(make_chw_circular_buffer(
-        input_core_grid, cb_in_id, cb_in_total_size, cb_in_page_size, input_format, input_buffer));
+    desc.cbs.push_back(make_cnn_circular_buffer(
+        input_core_grid, cb_in_id, cb_in_total_size, cb_in_page_size, input_format, input_buffer, true));
 
     const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(output_format);
     const uint32_t cb_out_total_size = output_shard_shape[0] * output_shard_shape[1] * element_size;
     const uint32_t cb_out_page_size = output_shard_shape[1] * element_size;
-    desc.cbs.push_back(make_chw_circular_buffer(
-        input_core_grid, cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output_buffer));
+    desc.cbs.push_back(make_cnn_circular_buffer(
+        input_core_grid, cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output_buffer, true));
 
     const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = 16 * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    desc.cbs.push_back(make_chw_circular_buffer(
+    desc.cbs.push_back(make_cnn_circular_buffer(
         input_core_grid,
         cb_in_transpose_id,
         cb_in_transpose_total_size,
         cb_in_transpose_page_size,
         intermediary_format,
-        nullptr));
+        nullptr,
+        true));
 
     std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C};
