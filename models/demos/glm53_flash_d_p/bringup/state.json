@@ -713,6 +713,110 @@
   "started": "2026-09-29T04:46:50",
   "status": "PASS"
  },
+ "C.kda_dense.ffn_norm": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "fc0053d8-3e6d-4d47-92b4-9c0a54d21736"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.kda_dense.ffn_norm.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.kda_dense.ffn_norm.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 166.6,
+    "session_id": "7db3a835-034a-40da-a2d3-19d2b7cdfc60",
+    "t": "2026-09-29T05:13:00"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.kda_dense.ffn_norm.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.kda_dense.ffn_norm.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 71.0,
+    "session_id": "fc0053d8-3e6d-4d47-92b4-9c0a54d21736",
+    "t": "2026-09-29T05:14:34"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 8.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T05:13:23"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T05:14:43"
+   }
+  ],
+  "last_run": "2026-09-29T05:14:43",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/C.kda_dense.ffn_norm.log",
+  "metrics": {
+   "max_row_rel_l2_ffn_norm_L00": 0.005155507475137711,
+   "pcc_ffn_norm_L00": 0.9999958153106521,
+   "rel_l2_ffn_norm_L00": 0.002893752884119749,
+   "row_norm_ratio_max_ffn_norm_L00": 1.002658724784851,
+   "row_norm_ratio_min_ffn_norm_L00": 0.9974125623703003
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-29T05:14:35",
+  "status": "PASS",
+  "waiting": null
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 399.9,
