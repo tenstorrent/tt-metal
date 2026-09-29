@@ -424,6 +424,18 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
         "DRAM interleaved (bit-exact). run_bench_e2e_p150.sh pins it (runner default 1); 0=DRAM",
     ),
+    "QWEN36_FA_GATE_FAST": (
+        "1",
+        "P14_FAGATE2 B2: FA prefill (T>1) gate: SIGMOID fused into the gate matmul program config, then a plain "
+        "multiply (bit-identical). "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 1=fused",
+    ),
+    "QWEN36_SDPA_CONCAT_OUT": (
+        "1",
+        "P15: the flexible chunked SDPA writes the head-concatenated [B,1,T,H*D] output directly "
+        "(concat_heads_output=True) and the concatenate_heads op is skipped at T>1 prefill (bit-exact layout change). "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 1=direct concat write",
+    ),
     "QWEN36_ROPE_PARTIAL_INPLACE": (
         "1",
         "P10_ROPE: prefill partial RoPE (rotary 64 of head 256) as ONE in-place ttnn.experimental.rotary_embedding_hf "

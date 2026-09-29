@@ -544,6 +544,19 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     check_conditions();
+    if (attrs.concat_heads_output) {
+        const auto& qs = tensors.q.logical_shape();
+        TT_FATAL(
+            attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value(),
+            "concat_heads_output is only supported by chunked SDPA");
+        TT_FATAL(!attrs.use_mla && !attrs.is_windowed, "concat_heads_output does not support MLA or windowed SDPA");
+        TT_FATAL(
+            !attrs.output_mem_config.is_sharded(), "concat_heads_output requires an interleaved output memory config");
+        TT_FATAL(
+            qs[3] % tt::constants::TILE_WIDTH == 0 && qs[2] % tt::constants::TILE_HEIGHT == 0,
+            "concat_heads_output requires head_dim and sequence length divisible by 32. Got {}",
+            qs);
+    }
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
     if (attrs.is_windowed) {
@@ -569,6 +582,10 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     auto shape = tensors.q.logical_shape();
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
+    }
+    if (attrs.concat_heads_output) {
+        // [B, NQH, S, DH] -> [B, 1, S, NQH*DH]
+        shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
     }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
@@ -682,7 +699,8 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    const std::optional<Tensor>& attn_mask_block_map) {
+    const std::optional<Tensor>& attn_mask_block_map,
+    bool concat_heads_output) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -700,6 +718,7 @@ Tensor sdpa(
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .concat_heads_output = concat_heads_output,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

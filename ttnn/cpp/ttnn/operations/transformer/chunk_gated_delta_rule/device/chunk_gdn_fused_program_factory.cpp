@@ -369,6 +369,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_reader.core_ranges = prod_set;
     prep_reader.compile_time_args = prep_reader_ct;
     prep_reader.config = ReaderConfigDescriptor{};
+    // P15 C1: item-0 input reads issued before the constants (production flat layout only; compiled out otherwise).
+    prep_reader.defines.emplace_back("GDN_COLD_PREFETCH", "1");
     prep_reader.runtime_args.reserve(P);
 
     KernelDescriptor prep_compute;

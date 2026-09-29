@@ -1075,6 +1075,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         defines_map["SDPA_CHUNKED_CHAIN_LIGHT"] = std::to_string(sdpa_env_u32("TT_METAL_SDPA_CHUNKED_CHAIN_LIGHT", 2));
     }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
+    if (operation_attributes.concat_heads_output) {
+        // The writer addresses the output as [B, 1, S, NQH*DH]: tile (b, h, s, d) -> page (b*Sqt + s)*NQH*vDHt + h*vDHt
+        // + d.
+        defines_map["SDPA_CONCAT_HEADS_OUT"] = "1";
+    }
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 

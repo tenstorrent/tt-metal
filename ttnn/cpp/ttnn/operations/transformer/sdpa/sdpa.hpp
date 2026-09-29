@@ -74,7 +74,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
+    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
+    // true: output is [B, 1, S, NQH*DH] (heads concatenated), bit-identical to nlp_concat_heads of the default output.
+    bool concat_heads_output = false);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,

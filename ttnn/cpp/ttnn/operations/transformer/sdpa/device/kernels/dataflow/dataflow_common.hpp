@@ -1571,15 +1571,18 @@ void write_block(
     const uint32_t cols,
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride_tiles = 0) {
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
+    const uint32_t row_step = row_stride_tiles == 0 ? cols : row_stride_tiles;
 
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
 
     uint32_t tile_offset = 0;
     for (uint32_t row = 0; row < rows; ++row) {
+        tile_id = out_tile_id + row * row_step;
         for (uint32_t col = 0; col < cols; ++col) {
             noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
             ++tile_id;
@@ -1612,10 +1615,12 @@ void write_block_row_grouped(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t sbh,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    const uint32_t row_stride_tiles = 0) {
     constexpr uint32_t default_trid = 0;
     uint32_t tile_id = out_tile_id;
     uint32_t barrier_count = 0;
+    const uint32_t row_step = row_stride_tiles == 0 ? cols : row_stride_tiles;
 
     const uint32_t num_full_groups = total_rows / sbh;
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
@@ -1629,6 +1634,7 @@ void write_block_row_grouped(
         for (uint32_t r = 0; r < rows_this_group; ++r) {
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
+                tile_id = out_tile_id + row * row_step;
                 for (uint32_t col = 0; col < cols; ++col) {
                     uint32_t tile_offset = (r * cols + col) * tile_bytes;
                     noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});

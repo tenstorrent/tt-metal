@@ -536,6 +536,7 @@ def gated_attention_forward_ttnn(
     # QWEN36_ATTN_FUSED_QKV env override (default on). Falls back to the F3 two-matmul
     # (q_deint + kv_packed) path when qkv_fused_weight is None or the override is "0".
     _fused_qkv = qkv_fused_weight is not None and _os.environ.get("QWEN36_ATTN_FUSED_QKV", "1") != "0"
+    _gate_sig_fused = False
     if prefill_last_row_only:
         assert (
             B == 1
@@ -620,13 +621,38 @@ def gated_attention_forward_ttnn(
             )  # [1, 1, H*Dh]
             ttnn.deallocate(_hs_last)
         else:
+            _gate_pc = _pc(hidden_states, gate_deint_weight)
+            # P14_FAGATE2 B2 (QWEN36_FA_GATE_FAST=1, code default 0): fuse SIGMOID into the T>1 prefill gate matmul's
+            # 2D mcast program config (bf16 sigmoid arm: needs fp32 dest acc off); the multiply below then has no
+            # activation. Bit-identical to the SFPU-activation multiply. Never used for the 1-row LASTROW gate.
+            if (
+                T > 1
+                and _os.environ.get("QWEN36_FA_GATE_FAST", "0") == "1"
+                and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0"
+                and _gate_pc is not None
+                and not getattr(ckc, "fp32_dest_acc_en", True)
+            ):
+                _gate_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=_gate_pc.compute_with_storage_grid_size,
+                    in0_block_w=_gate_pc.in0_block_w,
+                    out_subblock_h=_gate_pc.out_subblock_h,
+                    out_subblock_w=_gate_pc.out_subblock_w,
+                    out_block_h=_gate_pc.out_block_h,
+                    out_block_w=_gate_pc.out_block_w,
+                    per_core_M=_gate_pc.per_core_M,
+                    per_core_N=_gate_pc.per_core_N,
+                    transpose_mcast=_gate_pc.transpose_mcast,
+                    fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+                    fuse_batch=_gate_pc.fuse_batch,
+                )
+                _gate_sig_fused = True
             gate = ttnn.linear(
                 hidden_states,
                 gate_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
                 dtype=ttnn.bfloat16,
-                program_config=_pc(hidden_states, gate_deint_weight),
+                program_config=_gate_pc,
             )  # [B, T, H*Dh] flat, used as-is later
         if _fused_qkv:
             qkv4 = ttnn.reshape(qkv, [B, 1, T, num_attention_heads * head_dim + 2 * num_key_value_heads * head_dim])
@@ -819,6 +845,7 @@ def gated_attention_forward_ttnn(
     # KV cache handling
     _use_sdpa_decode = False
     _paged_sdpa_done = False
+    _sdpa_cat_out = False
     if paged_kv_cache_key is not None and page_table is not None and T > 1 and chunk_page_table is not None:
         # Paged prefill: fill K/V into paged cache, then chunked SDPA.
         # Q/K/V stay bfloat16 by default — no typecast. Production models (Qwen3_VL) typecast to
@@ -887,6 +914,14 @@ def gated_attention_forward_ttnn(
             # program config is fixed (_get_flexible_sdpa_program_config), so a single captured
             # trace replays for every chunk position (chunk-outer per-chunk prefill). The device
             # chunk start must be a multiple of flexible_sdpa_q_chunk() (no host check in the op).
+            # QWEN36_SDPA_CONCAT_OUT=1 (code default 0): the SDPA writes [B, 1, T, H*D] (heads concatenated)
+            # directly, so the concatenate_heads op below is skipped (P15; bit-exact layout change).
+            _sdpa_cat_out = (
+                T > 1
+                and use_optimized_concat
+                and not prefill_last_row_only
+                and _os.environ.get("QWEN36_SDPA_CONCAT_OUT", "0") == "1"
+            )
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
                 _q_for_sdpa,
                 paged_kv_cache_key,
@@ -897,6 +932,7 @@ def gated_attention_forward_ttnn(
                 memory_config=_prefill_mc,
                 program_config=_get_flexible_sdpa_program_config(device),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
+                **({"concat_heads_output": True} if _sdpa_cat_out else {}),
             )
         else:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -1143,6 +1179,7 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(query_states)
 
     _row_heads_concat_done = False
+    _sdpa_cat_out_done = _sdpa_cat_out
     if _r4b:
         # M4 R4B: the decode SDPA output [1, B=1, H, D] flattens (H, D) row-major = the head concat of row
         # T - 1 (one reshape, as decode_concat_reshape) -> [1, 1, H*D].
@@ -1171,6 +1208,8 @@ def gated_attention_forward_ttnn(
         # Paged decode, B == T == 1: the SDPA output is [1, 1, H, D]; its row-major flatten of
         # (H, D) is the head concat, so one reshape replaces transpose + concatenate_heads.
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
+    elif _sdpa_cat_out_done:
+        attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])  # [B, 1, T, H*D] -> [B, T, H*D]
     elif use_optimized_concat:
         attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=_prefill_mc)
     else:
@@ -1182,9 +1221,12 @@ def gated_attention_forward_ttnn(
     # there) always takes the legacy two-op path unchanged. QWEN36_ATTN_GATE_FUSED=0 restores the
     # legacy two-op path at any T.
     if T > 1 and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0":
-        attn_output = ttnn.multiply(
-            attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
-        )
+        if _gate_sig_fused:  # P14_FAGATE2 B2: sigmoid already applied inside the gate matmul
+            attn_output = ttnn.multiply(attn_output, gate, memory_config=_prefill_mc)
+        else:
+            attn_output = ttnn.multiply(
+                attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
+            )
     else:
         gate = ttnn.sigmoid(gate, memory_config=_prefill_mc)
         attn_output = ttnn.multiply(attn_output, gate, memory_config=_prefill_mc)

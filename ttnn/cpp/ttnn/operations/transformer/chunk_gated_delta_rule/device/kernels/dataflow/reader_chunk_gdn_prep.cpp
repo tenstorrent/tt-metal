@@ -97,6 +97,99 @@ void kernel_main() {
         cb.push_back(n);
     };
 
+    // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
+    // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into
+    // cb_v in the SAME row-major order the head-major read produces (CB idx rt*Vt+ct) — so the
+    // compute sees byte-identical tiles regardless of source layout. Requires pad==0 (T=NC*Ct*32).
+    auto read_v_flat = [&](uint32_t hc, bool wait) {
+        const uint32_t bh = hc / NC;
+        const uint32_t c = hc % NC;
+        const uint32_t hv = bh % HV;
+        const uint32_t b = bh / HV;
+        const uint32_t row_stride = HV * Vt;                   // tiles per token-row in flat v
+        const uint32_t batch_base = b * NC * Ct * row_stride;  // b * (T/32) * row_stride
+        CircularBuffer cbv(cb_v);
+        cbv.reserve_back(cv);
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            for (uint32_t ct = 0; ct < Vt; ct++) {
+                const uint32_t page = batch_base + (c * Ct + rt) * row_stride + hv * Vt + ct;
+                noc.async_read(v_acc, cbv, tb_io, {.page_id = page}, {.offset_bytes = (rt * Vt + ct) * tb_io});
+            }
+        }
+        if (wait) {
+            noc.async_read_barrier();
+            cbv.push_back(cv);
+        }
+    };
+
+    // Flat-q/k token-major read: work-item is value-head hv; its key-head is hk = hv / G (GQA group
+    // size G = HV/Hk). Fetch [Ct,Kt] for (hk, chunk c) from the flat [B,T,Hk*K] grid (row stride Hk*Kt,
+    // col offset hk*Kt), packed row-major into `cb` — identical layout to the head-major read.
+    auto read_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc, bool wait) {
+        const uint32_t G = HV / Hk;
+        const uint32_t bh = hc / NC;
+        const uint32_t c = hc % NC;
+        const uint32_t hv = bh % HV;
+        const uint32_t b = bh / HV;
+        const uint32_t hk = hv / G;
+        const uint32_t row_stride = Hk * Kt;
+        const uint32_t batch_base = b * NC * Ct * row_stride;
+        CircularBuffer cb(cb_id);
+        cb.reserve_back(ck);
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            for (uint32_t kt = 0; kt < Kt; kt++) {
+                const uint32_t page = batch_base + (c * Ct + rt) * row_stride + hk * Kt + kt;
+                noc.async_read(acc, cb, tb_io, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_io});
+            }
+        }
+        if (wait) {
+            noc.async_read_barrier();
+            cb.push_back(ck);
+        }
+    };
+
+    // gb_flat (Option B) raw read: fetch Ct tiles of the model's native [B,T,HV] g/beta tensor at
+    // this work item's chunk (tile-col 0 — HV<=32 is asserted host-side, so the tensor is exactly
+    // one tile wide). Every head sharing this (batch, chunk) reads the IDENTICAL Ct pages (no head
+    // index in the addressing at all) — the per-head selection happens in compute via the
+    // selector in cb_mask tile 3. Mirrors read_v_flat's page-range technique, minus the head offset.
+    auto read_gb_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc, bool wait) {
+        const uint32_t bh = hc / NC;
+        const uint32_t c = hc % NC;
+        const uint32_t b = bh / HV;
+        const uint32_t batch_base = b * NC * Ct;  // Wt=1 tile-col => row stride is 1 tile
+        CircularBuffer cb(cb_id);
+        cb.reserve_back(Ct);
+        for (uint32_t rt = 0; rt < Ct; rt++) {
+            const uint32_t page = batch_base + c * Ct + rt;
+            noc.async_read(acc, cb, tb_f, {.page_id = page}, {.offset_bytes = rt * tb_f});
+        }
+        if (wait) {
+            noc.async_read_barrier();
+            cb.push_back(Ct);
+        }
+    };
+
+    // P15 C1 (GDN_COLD_PREFETCH): issue item 0's five input reads BEFORE the constant synthesis and wait for them with
+    // the constants' own read barriers, so the DRAM latency overlaps the constant build. Production flat layout only.
+    constexpr bool kColdPrefetch =
+#ifdef GDN_COLD_PREFETCH
+        (Ct == 1) && QK_FLAT && V_FLAT && GB_FLAT;
+#else
+        false;
+#endif
+    const bool prefetched = kColdPrefetch && (wi_count > 0);
+    if constexpr (kColdPrefetch) {
+        if (prefetched) {
+            const uint32_t hc0 = wi_start;
+            read_qk_flat(q_acc, cb_q, hc0, false);
+            read_qk_flat(k_acc, cb_k, hc0, false);
+            read_v_flat(hc0, false);
+            read_gb_flat(g_acc, cb_g, hc0, false);
+            read_gb_flat(b_acc, cb_beta, hc0, false);
+        }
+    }
+
     // constants (once)
     if constexpr (Ct == 1) {
         // P3_FLAPREP: at chunk 32 every constant is a fixed 0/1 fp32 pattern (the host builds exactly these:
@@ -158,6 +251,15 @@ void kernel_main() {
         c_tril.push_back(1);
         c_ones.push_back(1);
         c_mask.push_back(n_mask);
+        if constexpr (kColdPrefetch) {
+            if (prefetched) {  // the barrier above also covered item 0's input reads
+                CircularBuffer(cb_q).push_back(ck);
+                CircularBuffer(cb_k).push_back(ck);
+                CircularBuffer(cb_v).push_back(cv);
+                CircularBuffer(cb_g).push_back(Ct);
+                CircularBuffer(cb_beta).push_back(Ct);
+            }
+        }
     } else {
         read_into(eye_acc, cb_eye, 0, cc, tb_f);
         read_into(tril_acc, cb_tril, 0, cc, tb_f);
@@ -170,90 +272,23 @@ void kernel_main() {
         }
     }
 
-    // Flat-v token-major read: fetch head hv's chunk c out of the flat [B,T,HV*V] tile grid
-    // (row stride HV*Vt tiles, column offset hv*Vt), packing the [Ct,Vt] block contiguously into
-    // cb_v in the SAME row-major order the head-major read produces (CB idx rt*Vt+ct) — so the
-    // compute sees byte-identical tiles regardless of source layout. Requires pad==0 (T=NC*Ct*32).
-    auto read_v_flat = [&](uint32_t hc) {
-        const uint32_t bh = hc / NC;
-        const uint32_t c = hc % NC;
-        const uint32_t hv = bh % HV;
-        const uint32_t b = bh / HV;
-        const uint32_t row_stride = HV * Vt;                   // tiles per token-row in flat v
-        const uint32_t batch_base = b * NC * Ct * row_stride;  // b * (T/32) * row_stride
-        CircularBuffer cbv(cb_v);
-        cbv.reserve_back(cv);
-        for (uint32_t rt = 0; rt < Ct; rt++) {
-            for (uint32_t ct = 0; ct < Vt; ct++) {
-                const uint32_t page = batch_base + (c * Ct + rt) * row_stride + hv * Vt + ct;
-                noc.async_read(v_acc, cbv, tb_io, {.page_id = page}, {.offset_bytes = (rt * Vt + ct) * tb_io});
-            }
-        }
-        noc.async_read_barrier();
-        cbv.push_back(cv);
-    };
-
-    // Flat-q/k token-major read: work-item is value-head hv; its key-head is hk = hv / G (GQA group
-    // size G = HV/Hk). Fetch [Ct,Kt] for (hk, chunk c) from the flat [B,T,Hk*K] grid (row stride Hk*Kt,
-    // col offset hk*Kt), packed row-major into `cb` — identical layout to the head-major read.
-    auto read_qk_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
-        const uint32_t G = HV / Hk;
-        const uint32_t bh = hc / NC;
-        const uint32_t c = hc % NC;
-        const uint32_t hv = bh % HV;
-        const uint32_t b = bh / HV;
-        const uint32_t hk = hv / G;
-        const uint32_t row_stride = Hk * Kt;
-        const uint32_t batch_base = b * NC * Ct * row_stride;
-        CircularBuffer cb(cb_id);
-        cb.reserve_back(ck);
-        for (uint32_t rt = 0; rt < Ct; rt++) {
-            for (uint32_t kt = 0; kt < Kt; kt++) {
-                const uint32_t page = batch_base + (c * Ct + rt) * row_stride + hk * Kt + kt;
-                noc.async_read(acc, cb, tb_io, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_io});
-            }
-        }
-        noc.async_read_barrier();
-        cb.push_back(ck);
-    };
-
-    // gb_flat (Option B) raw read: fetch Ct tiles of the model's native [B,T,HV] g/beta tensor at
-    // this work item's chunk (tile-col 0 — HV<=32 is asserted host-side, so the tensor is exactly
-    // one tile wide). Every head sharing this (batch, chunk) reads the IDENTICAL Ct pages (no head
-    // index in the addressing at all) — the per-head selection happens in compute via the
-    // selector in cb_mask tile 3. Mirrors read_v_flat's page-range technique, minus the head offset.
-    auto read_gb_flat = [&](const auto& acc, uint32_t cb_id, uint32_t hc) {
-        const uint32_t bh = hc / NC;
-        const uint32_t c = hc % NC;
-        const uint32_t b = bh / HV;
-        const uint32_t batch_base = b * NC * Ct;  // Wt=1 tile-col => row stride is 1 tile
-        CircularBuffer cb(cb_id);
-        cb.reserve_back(Ct);
-        for (uint32_t rt = 0; rt < Ct; rt++) {
-            const uint32_t page = batch_base + c * Ct + rt;
-            noc.async_read(acc, cb, tb_f, {.page_id = page}, {.offset_bytes = rt * tb_f});
-        }
-        noc.async_read_barrier();
-        cb.push_back(Ct);
-    };
-
-    for (uint32_t i = 0; i < wi_count; i++) {
+    for (uint32_t i = prefetched ? 1 : 0; i < wi_count; i++) {
         const uint32_t hc = wi_start + i * wi_stride;  // flat (head, chunk) index
         if constexpr (QK_FLAT) {
-            read_qk_flat(q_acc, cb_q, hc);
-            read_qk_flat(k_acc, cb_k, hc);
+            read_qk_flat(q_acc, cb_q, hc, true);
+            read_qk_flat(k_acc, cb_k, hc, true);
         } else {
             read_into(q_acc, cb_q, hc * ck, ck, tb_io);
             read_into(k_acc, cb_k, hc * ck, ck, tb_io);
         }
         if constexpr (V_FLAT) {
-            read_v_flat(hc);
+            read_v_flat(hc, true);
         } else {
             read_into(v_acc, cb_v, hc * cv, cv, tb_io);
         }
         if constexpr (GB_FLAT) {
-            read_gb_flat(g_acc, cb_g, hc);
-            read_gb_flat(b_acc, cb_beta, hc);
+            read_gb_flat(g_acc, cb_g, hc, true);
+            read_gb_flat(b_acc, cb_beta, hc, true);
         } else {
             read_into(g_acc, cb_g, hc * Ct, Ct, tb_f);
             read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
