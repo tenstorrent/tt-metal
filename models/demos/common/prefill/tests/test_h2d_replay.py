@@ -132,3 +132,19 @@ def test_replay_catches_up_after_a_slow_push():
     _, pushes = _replay(_timed_records(), 1.0, push_cost_s=2.0)
 
     assert [t - 100.0 for t, _ in pushes] == pytest.approx([0.0, 2.0, 4.0])
+
+
+def test_replay_rejects_pcc_check(tmp_path):
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    path = tmp_path / "engine.log"
+    path.write_text(_line("2026-09-29T10:00:00.000", 0, 0, 10))
+    cfg = producer._config_from_env()
+    cfg.replay_log = str(path)
+    cfg.verify = True
+
+    with pytest.raises(ValueError, match="CHECK_PCC"):
+        producer._load_replay_records(cfg)
+
+    cfg.verify = False
+    assert len(producer._load_replay_records(cfg)) == 1
