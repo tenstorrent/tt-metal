@@ -15,14 +15,11 @@ from types import SimpleNamespace
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
-from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TtV41Attention
-
-SUBLAYER_DTYPE = ttnn.bfloat16
+from models.demos.deepseek_v3_d_p.tt.v41.mhc import TtV41HyperConnections
 
 
 class TtV41Block(LightweightModule):
@@ -54,15 +51,7 @@ class TtV41Block(LightweightModule):
         )
         self.attn_norm = norm(weights["attn_norm"])
         self.ffn_norm = norm(weights["ffn_norm"])
-        mhc_cfg = MHCConfig(
-            dim=config.EMB_SIZE,
-            n=config.HC_MULT,
-            sinkhorn_iters=config.HC_SINKHORN_ITERS,
-            eps=config.HC_EPS,
-            norm_eps=config.RMS_NORM_EPS,
-        )
-        self.attn_res = TtMHCWrap(mesh_device, mhc_cfg, *weights["hc_attn"], tp_axis=tp_axis, topology=topology)
-        self.ffn_res = TtMHCWrap(mesh_device, mhc_cfg, *weights["hc_ffn"], tp_axis=tp_axis, topology=topology)
+        self.residual = TtV41HyperConnections(mesh_device, config, weights["hc_attn"], weights["hc_ffn"], topology)
         self.attn = TtV41Attention(mesh_device, config, layer, weights["attn"], seq_len, host, topology=topology)
         self.ffn = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
@@ -83,11 +72,6 @@ class TtV41Block(LightweightModule):
             layer_idx=layer,
         )
 
-    def _sublayer(self, h, norm, fn):
-        cast = ttnn.typecast(h, SUBLAYER_DTYPE)
-        out = fn(norm(cast))
-        return ttnn.typecast(out, ttnn.float32)
-
     def _moe(self, h):
         # TtMoe works in 3D and the prototype uploads the sequence as a plain contiguous SP shard.
         out, _ = self.ffn(ttnn.squeeze(h, dim=0), actual_isl=None, padding_side="right", actual_start=0)
@@ -95,11 +79,9 @@ class TtV41Block(LightweightModule):
 
     def forward(self, x, pre_mix):
         """x [1, 1, S/sp, hc*hidden/tp] fp32, pre_mix [1, 1, S/sp, hc] fp32 -> (x, next pre_mix)."""
-        attn_pre, attn_post, attn_comb = self.attn_res.split(x)
-        h = self._sublayer(self.attn_res.collapse(x, pre_mix), self.attn_norm, self.attn)
-        x = self.attn_res.hc_post(h, x, attn_post, attn_comb)
-
-        ffn_pre, ffn_post, ffn_comb = self.ffn_res.split(x)
-        h = self._sublayer(self.ffn_res.collapse(x, attn_pre), self.ffn_norm, self._moe)
-        x = self.ffn_res.hc_post(h, x, ffn_post, ffn_comb)
-        return x, ffn_pre
+        return self.residual(
+            x,
+            pre_mix,
+            attention=lambda h: self.attn(self.attn_norm(h)),
+            ffn=lambda h: self._moe(self.ffn_norm(h)),
+        )
