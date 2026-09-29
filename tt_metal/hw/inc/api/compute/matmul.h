@@ -124,7 +124,7 @@ ALWI void matmul_init(
 /**
  * (Quasar) Undo the automatic MxFp4 -> MxFp4_2x_B src-format selection applied by matmul_init.
  *
- * matmul_init overrides an MxFp4 operand's unpacker OUT_DATA_FORMAT and ALU format to the 2x-packed
+ * matmul_init overrides an MxFp4 operand's unpacker OUT_DATA_FORMAT to the 2x-packed
  * MxFp4_2x_B, diverging from the op-agnostic unpack_dst_format[] table. That override PERSISTS: the
  * non-matmul unpack inits never reprogram OUT_DATA_FORMAT, and reconfig_data_format is silently
  * skipped for a same-format operand. So a kernel that feeds the SAME MxFp4 buffer to matmul and then

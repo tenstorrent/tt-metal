@@ -100,10 +100,11 @@ ALWI void reduce_init(
 ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #ifdef ARCH_QUASAR
     // (Quasar) A column reduce over an MxFp4 operand overrides that operand's unpacker OUT_DATA_FORMAT
-    // and ALU src format to MxFp4_2x_B in reduce_init, diverging from the op-agnostic
-    // unpack_dst_format[] table. That override persists (non-reduce inits never restore OUT_DATA_FORMAT,
-    // and reconfig_data_format is skipped for a same-format operand), so restore it here before the
-    // next op. No-op unless icb is an MxFp4 operand.
+    // to MxFp4_2x_B in reduce_init, diverging from the op-agnostic unpack_dst_format[] table. That
+    // override persists (non-reduce inits never restore OUT_DATA_FORMAT, and reconfig_data_format is
+    // skipped for a same-format operand), so restore it here before the next op. No-op unless icb is
+    // an MxFp4 operand. The matching ALU src-format restore needs no call: reduce_init tracks the
+    // deviation as DataFormatConfigSet::REDUCE_2X_FMT, so the next op's init reprograms the ALU.
     UNPACK((llk_unpack_AB_reduce_uninit(icb)));
     MATH((llk_math_reduce_uninit(icb)));
 #elif defined(ARCH_BLACKHOLE)

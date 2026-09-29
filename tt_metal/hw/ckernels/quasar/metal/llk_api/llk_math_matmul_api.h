@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 
@@ -53,29 +54,17 @@ inline void llk_math_matmul_init(
         is_2x_format(srcA_format) == is_2x_format(srcB_format),
         "SrcA and SrcB must both be 2x formats or both non-2x formats");
 
-    // srcA/srcB above are the per-op effective src-register formats, which for MxFp4 differ from the
-    // op-agnostic unpack_dst_format[] table that kernel startup (llk_math_hw_configure) already
-    // programmed the ALU from and latched as DataFormatConfigSet::DEFAULT. That latch keys on which
-    // config set is active, not on the formats, so _configure_default_alu_data_format_state_ would
-    // early-return and leave the ALU decoding 2x-packed src registers as Float16_b while the EN_X2
-    // MOP below ran over them. When the formats deviate, program the ALU directly instead; this is
-    // still the DEFAULT config shape (implied math format off, no dest-format override), so the
-    // latched DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
-    if ((srcA_format != static_cast<DataFormat>(get_operand_dst_format(operandB_id))) ||
-        (srcB_format != static_cast<DataFormat>(get_operand_dst_format(operandA_id)))) {
-        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
-                                          _is_src_fmt_int32_dest_compatible_(srcB_format) && DST_ACCUM_MODE;
-        _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
-            srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
-    } else {
-        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+    // The 2x-packed src-register formats deviate from the op-agnostic unpack_dst_format[] table that
+    // the DEFAULT config set programs from, so they get their own config set. Tracking them as
+    // DEFAULT would make a following DEFAULT op early-return with the ALU still decoding 2x.
+    if (is_2x_format(srcA_format) && is_2x_format(srcB_format)) {
+        _configure_matmul_2x_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
             srcA_format, srcB_format);
-    }
-    const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
-    if (src_2x) {
         _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(
             ct_dim, rt_dim, src_b_shape, src_a_shape);
     } else {
+        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+            srcA_format, srcB_format);
         LLK_ASSERT(
             ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
             "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
@@ -85,38 +74,19 @@ inline void llk_math_matmul_init(
 }
 
 /**
- * @brief Restore the ALU SrcA/SrcB formats after a matmul that consumed MxFp4 (2x) operands.
+ * @brief No-op on Quasar - the ALU src-format restore after a 2x matmul is implicit.
  *
  * @param operandA: The input0 operand circular buffer (matches the matmul init call)
  * @param operandB: The input1 operand circular buffer
  *
- * Undoes the MxFp4 -> MxFp4_2x_B deviation that @ref llk_math_matmul_init programmed into the ALU
- * format registers, restoring the op-agnostic unpack_dst_format[] values so a following non-matmul
- * op decodes its src registers correctly. Only acts when init deviated (an operand was MxFp4). Uses
- * _configure_alu_formats_ directly for the same reason init does: the DataFormatConfigSet::DEFAULT
- * latch (still truthful) makes _configure_default_alu_data_format_state_ early-return.
- *
- * @note Pair with @ref llk_unpack_AB_matmul_uninit (via mm_uninit); call before the next op when an
- * MxFp4 matmul operand is reused by a non-matmul op in the same kernel.
+ * @ref llk_math_matmul_init tracks the MxFp4 -> MxFp4_2x_B deviation as
+ * DataFormatConfigSet::MATMUL_2X_FMT, so the next op's init sees a different config set and
+ * reprograms the ALU from the op-agnostic unpack_dst_format[] table. Kept so mm_uninit can issue
+ * MATH((...)) uniformly across arches; the unpacker OUT_DATA_FORMAT restore still needs
+ * @ref llk_unpack_AB_matmul_uninit.
  */
-inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t operandB_id = get_operand_id(operandB);
-    const bool deviated =
-        (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
-        (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
-    if (!deviated) {
-        return;
-    }
-    // Same operand->src mapping as init: In0(operandA)->SrcB, In1(operandB)->SrcA. The table values
-    // (unpack_dst_format[]) are the op-agnostic formats (Float16_b for MxFp4).
-    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
-    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
-    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
-                                      _is_src_fmt_int32_dest_compatible_(srcB_format) && DST_ACCUM_MODE;
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
-        srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
-}
+inline void llk_math_matmul_uninit(
+    [[maybe_unused]] const std::uint32_t operandA, [[maybe_unused]] const std::uint32_t operandB) {}
 
 /**
  * @brief Performs matrix multiply operation, where Input 0, Input 1 and Output are each 1 tile

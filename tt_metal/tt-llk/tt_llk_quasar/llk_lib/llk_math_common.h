@@ -211,6 +211,64 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
 }
 
 /**
+ * @brief Sets up the 2x-packed matmul ALU data format state
+ *
+ * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @param srcA_format: SrcA register format, a 2x-packed format, values = <MxFp4_2x_A/MxFp4_2x_B>
+ * @param srcB_format: SrcB register format, a 2x-packed format, values = <MxFp4_2x_A/MxFp4_2x_B>
+ *
+ * MxFp4 fed to matmul is unpacked as a 2x-packed src-register format on both SrcA and SrcB, which
+ * deviates from the op-agnostic unpack_dst_format[] table the DEFAULT state programs from. This is
+ * the DEFAULT config shape (implied math format off, no dest-format override) with deviating
+ * formats, so it needs its own config set: tracking it as DEFAULT would make a following DEFAULT op
+ * early-return and leave the ALU decoding 2x-packed src registers as the table format.
+ * @note A following op in any other config set reprograms the ALU, restoring the table formats.
+ */
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+inline void _configure_matmul_2x_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
+{
+    if (data_format_config_set == DataFormatConfigSet::MATMUL_2X_FMT)
+    {
+        return;
+    }
+
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
+    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
+
+    data_format_config_set = DataFormatConfigSet::MATMUL_2X_FMT;
+}
+
+/**
+ * @brief Sets up the 2x-packed column-reduce ALU data format state
+ *
+ * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @param srcA_format: SrcA register format, a 2x-packed format, values = <MxFp4_2x_A/MxFp4_2x_B>
+ * @param srcB_format: SrcB register format, the op-agnostic table format of the scaler operand
+ *
+ * A column reduce over an MxFp4 operand unpacks SrcA as a 2x-packed src-register format while SrcB
+ * (the scaler) keeps its unpack_dst_format[] value. That one-sided deviation is a different ALU state
+ * from @ref _configure_matmul_2x_alu_data_format_state_, which deviates both srcs, so the two cannot
+ * share a config set: doing so would let a 2x reduce after a 2x matmul early-return with SrcB still
+ * programmed as a 2x format.
+ * @note A following op in any other config set reprograms the ALU, restoring the table formats.
+ */
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+inline void _configure_reduce_2x_alu_data_format_state_(DataFormat srcA_format, DataFormat srcB_format)
+{
+    if (data_format_config_set == DataFormatConfigSet::REDUCE_2X_FMT)
+    {
+        return;
+    }
+
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
+    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
+
+    data_format_config_set = DataFormatConfigSet::REDUCE_2X_FMT;
+}
+
+/**
  * @brief Sets up MOV OPS EXPLICIT FMT ALU data format state
  *
  * Used for transpose dest operations, which require implied math format to be disabled.
