@@ -11,8 +11,4 @@
 <!-- Where should reviewers focus? Call out anything non-obvious, tradeoffs, or areas of uncertainty. -->
 
 ### Verification
-<!-- Say what you actually ran, not what the change should pass. For C++/CMake changes: the
-     exact build command (e.g. `.github/scripts/copilot-build.sh --build-metal-tests`) and its
-     result. For everything else: which check applies (pre-commit, docs-only, etc.). If you
-     could not verify (no build environment, device-only behavior), say so and why — do not
-     leave this blank and do not claim something you did not run. -->
+<!-- State what steps you took to verify the changes in this PR. -->
