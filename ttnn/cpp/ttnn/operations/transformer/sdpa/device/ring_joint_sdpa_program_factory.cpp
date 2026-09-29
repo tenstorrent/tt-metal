@@ -1399,12 +1399,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     uint32_t ksplit_count = 1;
     uint32_t ksplit_rows_per_split = 0;
     const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->max_k_splits : 1;
-    if (ksplit_requested > 1 && !has_sliding_window && kernel_chunked && !kernel_is_causal && !args.is_balanced &&
-        use_streaming_compute && B == 1 && L == 0 && gqa_grouped_kv && NHK == 1 && max_q_per_core == 1) {
+    // Sliding bands split each unit's work plan (local slab, then halo): every band needs two K chunks, since the
+    // oldest halo chunk can mask a Q chunk's later rows entirely, and the halo alone is window / k_chunk chunks.
+    const uint32_t sliding_ksplit_cap =
+        has_sliding_window
+            ? ring_joint::chunked_sliding_halo_tile_rows(sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
+                  Sk_chunk_t / 2
+            : ring_joint::kKSplitMaxCount;
+    if (ksplit_requested > 1 && kernel_chunked && !kernel_is_causal && !args.is_balanced && use_streaming_compute &&
+        B == 1 && L == 0 && (has_sliding_window || (gqa_grouped_kv && NHK == 1)) && max_q_per_core == 1) {
         ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
         ksplit_count = std::max(
             1u,
-            std::min({ksplit_requested, uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount}));
+            std::min(
+                {ksplit_requested,
+                 uint32_t(grid_size.y) / ksplit_rows_per_split,
+                 ring_joint::kKSplitMaxCount,
+                 sliding_ksplit_cap}));
     }
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
@@ -1884,12 +1895,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? chunked_sliding_halo_layout.halo_slot_count : 0);
+    const uint32_t sliding_halo_hops =
+        has_sliding_window
+            ? ring_joint::chunked_sliding_halo_hop_count(chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt)
+            : 0;
     defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(
-        has_sliding_window ? ring_joint::sliding_q_work_plan_source_ranges(
-                                 ring_joint::chunked_sliding_halo_hop_count(
-                                     chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt),
-                                 chunked_sliding_halo_layout.halo_slot_count)
-                           : 1);
+        has_sliding_window
+            ? ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
+            : 1);
+    // Local slab first (so it computes while the halo is in flight) only for a multi-hop halo, where the exchange
+    // is long enough to hide; a one-hop halo keeps the oldest-first accumulation order.
+    defines["SLIDING_LOCAL_FIRST"] = sliding_halo_hops > 1 ? "1" : "0";
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -1994,7 +2010,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Sliding folds every local/halo K/V range into one final pass per Q, so it never saves
     // or restores accumulators through DRAM. Keep valid, format-compatible CB indices in the
     // compile-time ABI without reserving separate L1 storage for those unreachable paths.
-    const bool needs_dram_accumulator_staging = !has_sliding_window;
+    const bool needs_dram_accumulator_staging = !has_sliding_window || ksplit_count > 1;
     const uint32_t cb_stats_in =
         needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
     const uint32_t cb_prev_out =
@@ -2453,7 +2469,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // A store-and-forward chain crossing bands would hand cores another band's K chunks.
     TT_FATAL(
-        ksplit_count == 1 || gqa_mcast_enabled,
+        ksplit_count == 1 || gqa_mcast_enabled || has_sliding_window,
         "ring_joint K split requires the row-wide GQA K/V multicast ({})",
         gqa_mcast_fallback_reason);
 

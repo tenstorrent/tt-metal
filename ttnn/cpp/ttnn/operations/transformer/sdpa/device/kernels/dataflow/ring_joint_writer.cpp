@@ -602,7 +602,7 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
     // Segmented accumulation (see the compute kernel): the output is normalized after the ring loop.
@@ -856,6 +856,10 @@ void kernel_main() {
                     cb_sig.pop_front(1);
                 }
 
+                // K-split bands hand their state to the reducer, which writes after the merge.
+                if (ksplit_active) {
+                    continue;
+                }
                 const auto& gen = [&]() -> const auto& {
                     if constexpr (has_joint_q) {
                         if (qi.is_joint_q) {
