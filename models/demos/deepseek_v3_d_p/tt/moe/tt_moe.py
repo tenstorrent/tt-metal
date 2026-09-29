@@ -697,6 +697,7 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
+        expert_x: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -725,6 +726,10 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
+            expert_x: the rows dispatched to the routed experts and fed to the shared expert, when they
+                differ from the gate's input ``x`` (same shape and sharding). None uses ``x``. DeepSeek-V4.1
+                passes its FP8-quantize-dequantized activations here, as its reference quantizes only the
+                expert GEMM inputs; the router reads the unquantized ``x``. Consumed like ``x``.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -839,6 +844,9 @@ class TtMoe(LightweightModule):
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
             logger.debug(f"  {indices.shape=} {indices.memory_config()=}")
+
+        if expert_x is not None:
+            x = expert_x  # the gate is done with x; everything below feeds the experts
 
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
