@@ -35,18 +35,49 @@ NOC1 = ttnn.NOC.RISCV_1_default  # routes -Y, then -X
 # Shared by reader, sender and copy writer: the chunk walk of one shard for one link. Banks b = first, first+stride, ...
 # are visited round-robin; a chunk is n <= run_pages pages b + (m + t) * B, consecutive in bank b.
 _CHUNK_WALK = r"""
+// The chunk walk of one shard for one port. The port owns banks first, first+stride, ... (its bank set, nb banks); it
+// visits them round-robin starting at set index `rot`. A chunk is n <= run_pages pages b + (m + t) * B, consecutive in
+// bank b. `part` 0 = every bank of the set, 1 = its first half, 2 = its second half (a shard split between the two
+// directions of a ring). f(page, n, idx): idx = the chunk's index in the full walk (part 0) of this shard.
 template <typename F>
 FORCE_INLINE void for_each_chunk(
-    uint32_t shard_pages, uint32_t first_bank, uint32_t bank_stride, uint32_t num_banks, uint32_t run_pages, F&& f) {
+    uint32_t shard_pages, uint32_t first_bank, uint32_t bank_stride, uint32_t num_banks, uint32_t run_pages,
+    uint32_t rot, uint32_t part, F&& f) {
+    // num_banks is a compile-time constant at every call site, so the per-bank divisions fold to shifts; the bank-set
+    // size is computed once and the rotation wraps by subtraction (no runtime division in the loop).
     const uint32_t max_per_bank = (shard_pages + num_banks - 1) / num_banks;
+    uint32_t idx = 0;
+    if (rot == 0 && part == 0) {  // the common case: every bank, in order
+        for (uint32_t m = 0; m < max_per_bank; m += run_pages) {
+            for (uint32_t b = first_bank; b < num_banks; b += bank_stride) {
+                const uint32_t per_bank = b < shard_pages ? (shard_pages - b + num_banks - 1) / num_banks : 0;
+                if (m >= per_bank) {
+                    continue;
+                }
+                const uint32_t n = (per_bank - m) < run_pages ? (per_bank - m) : run_pages;
+                f(b + m * num_banks, n, idx++);
+            }
+        }
+        return;
+    }
+    const uint32_t nb = first_bank < num_banks ? (num_banks - first_bank + bank_stride - 1) / bank_stride : 0;
+    const uint32_t half = nb / 2, lo = part == 2 ? half : 0, hi = part == 1 ? half : nb;
     for (uint32_t m = 0; m < max_per_bank; m += run_pages) {
-        for (uint32_t b = first_bank; b < num_banks; b += bank_stride) {
+        uint32_t slot = rot;
+        for (uint32_t i = 0; i < nb; ++i, ++slot) {
+            if (slot >= nb) {
+                slot -= nb;
+            }
+            const uint32_t b = first_bank + slot * bank_stride;
             const uint32_t per_bank = b < shard_pages ? (shard_pages - b + num_banks - 1) / num_banks : 0;
             if (m >= per_bank) {
                 continue;
             }
-            const uint32_t n = (per_bank - m) < run_pages ? (per_bank - m) : run_pages;
-            f(b + m * num_banks, n);  // first page (shard-local) and page count
+            if (slot >= lo && slot < hi) {
+                const uint32_t n = (per_bank - m) < run_pages ? (per_bank - m) : run_pages;
+                f(b + m * num_banks, n, idx);  // first page (shard-local), page count, index in the full walk
+            }
+            ++idx;
         }
     }
 }
@@ -76,20 +107,23 @@ void kernel_main() {
     const uint32_t shard_pages = get_arg_val<uint32_t>(a++);
     const uint32_t first_bank = get_arg_val<uint32_t>(a++);
     const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
+    const uint32_t rot = get_arg_val<uint32_t>(a++);           // bank-walk rotation (same as my upstream's)
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);  // my arrival counter (relays wait on it)
-    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // shard ids follow; the first is my own shard
+    const uint32_t full = get_arg_val<uint32_t>(a++);          // chunks of a whole shard for this port (host-counted)
+    uint32_t chunks_left = get_arg_val<uint32_t>(a++);         // chunks over all my entries (host-counted)
+    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // entries follow: shard | part << 16; the first is my own
     const uint32_t shards_idx = a;
     const auto in = TensorAccessor(in_args, in_addr, page_bytes);
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
 
-    uint32_t chunks_left = 0;
-    for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t, uint32_t) { ++chunks_left; });
-    chunks_left *= num_shards;
-    uint32_t batch = 0, wptr = 0, relayed = 0;
+    uint32_t batch = 0, wptr = 0;
     for (uint32_t k = 0; k < num_shards; ++k) {
-        const uint32_t out_base = get_arg_val<uint32_t>(shards_idx + k) * shard_pages;
-        for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
+        const uint32_t entry = get_arg_val<uint32_t>(shards_idx + k);
+        const uint32_t out_base = (entry & 0xFFFF) * shard_pages;
+        // relay entry k is (part of) upstream entry k - 1; every upstream entry before it is a whole shard
+        const uint32_t up_base = k > 0 ? (k - 1) * full : 0;
+        for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, entry >> 16, [&](uint32_t page, uint32_t n, uint32_t idx) {
             if (batch == 0) {
                 cb_reserve_back(cb, run_pages * group);
                 wptr = get_write_ptr(cb);
@@ -98,9 +132,8 @@ void kernel_main() {
             if (k == 0) {
                 src = in.get_noc_addr(page);  // my own shard, from the input
             } else {
-                // relays are a prefix of what upstream sends, so relay chunk j is upstream chunk j
-                noc_semaphore_wait_min(arrived, relayed / inc_every + 1);  // this chunk has landed in my output
-                ++relayed;
+                // upstream increments my counter once per inc_every chunks it sends; this is its chunk up_base + idx
+                noc_semaphore_wait_min(arrived, (up_base + idx) / inc_every + 1);  // landed in my output
                 src = out.get_noc_addr(out_base + page);
             }
             noc_async_read(src, wptr + batch * chunk_bytes, n * page_bytes);
@@ -157,13 +190,15 @@ void kernel_main() {
     const uint32_t shard_pages = get_arg_val<uint32_t>(a++);
     const uint32_t first_bank = get_arg_val<uint32_t>(a++);
     const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
+    const uint32_t rot = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);  // my counter; the downstream port's is at the same address
     const uint32_t expect_in = get_arg_val<uint32_t>(a++);     // increments I receive from upstream
+    const uint32_t total = get_arg_val<uint32_t>(a++);         // chunks I send (host-counted)
     const uint32_t peer_x = get_arg_val<uint32_t>(a++);        // downstream port core (NoC coords)
     const uint32_t peer_y = get_arg_val<uint32_t>(a++);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
-    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // 0 = nothing to send (line end)
+    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // 0 = nothing to send (line end); entries: shard | part << 16
     const uint32_t shards_idx = a;
     a += num_shards;
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
@@ -176,17 +211,15 @@ void kernel_main() {
             route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
         }
         const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
-        uint32_t chunks_left = 0;
-        for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t, uint32_t) { ++chunks_left; });
-        chunks_left *= num_shards;
-        const uint32_t total = chunks_left;
+        uint32_t chunks_left = total;
         uint32_t sent = 0;
         conn.open();
         // Up to `group` chunks in flight; the read pointer sits on a group boundary of a 2-group CB (no wrap).
         uint32_t h = 0, unflushed = 0;
         for (uint32_t k = 0; k < num_shards; ++k) {
-            const uint32_t out_base = get_arg_val<uint32_t>(shards_idx + k) * shard_pages;
-            for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
+            const uint32_t entry = get_arg_val<uint32_t>(shards_idx + k);
+            const uint32_t out_base = (entry & 0xFFFF) * shard_pages;
+            for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, entry >> 16, [&](uint32_t page, uint32_t n, uint32_t) {
                 cb_wait_front(cb, run_pages * (unflushed + 1));
                 const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
                 const uint32_t bytes = n * page_bytes;
@@ -248,12 +281,11 @@ void kernel_main() {
     const uint32_t first_bank = get_arg_val<uint32_t>(a++);
     const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
     const uint32_t out_base = get_arg_val<uint32_t>(a++) * shard_pages;  // my shard's place in the output
+    uint32_t chunks_left = get_arg_val<uint32_t>(a++);                   // host-counted
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
 
-    uint32_t chunks_left = 0;
-    for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t, uint32_t) { ++chunks_left; });
     uint32_t pending = 0;
-    for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, [&](uint32_t page, uint32_t n) {
+    for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t) {
         cb_wait_front(cb, run_pages * (pending + 1));
         noc_async_write(get_read_ptr(cb) + pending * chunk_bytes, out.get_noc_addr(out_base + page), n * page_bytes);
         --chunks_left;
@@ -303,14 +335,23 @@ def build_groups(mesh_shape, cluster_axis):
     return [snake]
 
 
-def _schedule(p, G, ring):
-    """(shards sent toward p+1, shards sent toward p-1), own shard first, in the order they arrive downstream."""
+def _schedule(p, G, ring, balance=False):
+    """(shards sent toward p+1, shards sent toward p-1), own shard first, in the order they arrive downstream.
+
+    Entries are (position, part): part 0 = the whole shard, 1 / 2 = the first / second half of the port's banks.
+    balance (ring, even G >= 4): the shard opposite each receiver goes half forward (part 1), half backward (part 2),
+    so both directions carry G/2 - 1/2 shards instead of G/2 and G/2 - 1."""
+    if ring and balance and G % 2 == 0 and G >= 4:
+        h = G // 2
+        fwd = [((p - i) % G, 1 if i == h - 1 else 0) for i in range(h)]
+        bwd = [((p + i) % G, 2 if i == h - 1 else 0) for i in range(h)]
+        return fwd, bwd
     if ring:
         kf = G // 2
         kb = G - 1 - kf
-        return [(p - i) % G for i in range(kf)], [(p + i) % G for i in range(kb)] if kb > 0 else []
-    fwd = [p - i for i in range(p + 1)] if p < G - 1 else []
-    bwd = [p + i for i in range(G - p)] if p > 0 else []
+        return [((p - i) % G, 0) for i in range(kf)], [((p + i) % G, 0) for i in range(kb)] if kb > 0 else []
+    fwd = [(p - i, 0) for i in range(p + 1)] if p < G - 1 else []
+    bwd = [(p + i, 0) for i in range(G - p)] if p > 0 else []
     return fwd, bwd
 
 
@@ -319,9 +360,14 @@ def _num_banks(mesh_device):
     return g.x * g.y
 
 
-def _chunks_per_shard(shard_pages, first_bank, stride, num_banks, run_pages):
+def _chunks_per_shard(shard_pages, first_bank, stride, num_banks, run_pages, part=0):
+    """Chunks the kernel walk visits for one shard (replica of for_each_chunk; rotation does not change the count)."""
+    banks = list(range(first_bank, num_banks, stride))
+    nb = len(banks)
     total = 0
-    for b in range(first_bank, num_banks, stride):
+    for slot, b in enumerate(banks):
+        if part == 1 and slot >= nb // 2 or part == 2 and slot < nb // 2:
+            continue
         per_bank = (shard_pages - b + num_banks - 1) // num_banks if b < shard_pages else 0
         total += (per_bank + run_pages - 1) // run_pages
     return total
@@ -516,7 +562,7 @@ def hamiltonian_decomposition(R, C, seed=1, tries=20000):
     raise ValueError(f"no Hamiltonian decomposition found for a {R}x{C} torus")
 
 
-def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", scheme="ring"):
+def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", scheme="ring", balance=False):
     """Rings, per-port shard schedules and core placement for every chip.
 
     scheme "ring":        one ring (or line) per group, in group order.
@@ -554,10 +600,14 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", sc
             for p, coord in enumerate(cyc):
                 nxt = cyc[(p + 1) % G] if (ring or p < G - 1) else None
                 prv = cyc[(p - 1) % G] if (ring or p > 0) else None
-                fwd, bwd = _schedule(p, G, ring)  # positions along this ring, own first
+                fwd, bwd = _schedule(p, G, ring, balance)  # (position along this ring, part), own first
                 chips[coord]["rings"].append(
                     dict(
-                        p=p, next=nxt, prev=prv, fwd=[out_idx[cyc[q]] for q in fwd], bwd=[out_idx[cyc[q]] for q in bwd]
+                        p=p,
+                        next=nxt,
+                        prev=prv,
+                        fwd=[(out_idx[cyc[q]], part) for q, part in fwd],
+                        bwd=[(out_idx[cyc[q]], part) for q, part in bwd],
                     )
                 )
     n_rings = len(ring_lists[0])
@@ -627,7 +677,8 @@ def link_load(chips):
         for rg in ch["rings"]:
             for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
                 if peer is not None and rg[d]:
-                    load[(coord, peer)] = load.get((coord, peer), 0.0) + len(rg[d]) / ch["n_rings"]
+                    shards = sum(1.0 if part == 0 else 0.5 for _, part in rg[d])
+                    load[(coord, peer)] = load.get((coord, peer), 0.0) + shards / ch["n_rings"]
     return load
 
 
@@ -641,6 +692,7 @@ def create_mesh_program_descriptor(
     num_links,
     cb_bytes=112 * 1024,
     inc_every=8,
+    desync=False,
 ):
     page_bytes = int(input_tensor.buffer_aligned_page_size())
     num_banks = _num_banks(mesh_device)
@@ -682,23 +734,24 @@ def create_mesh_program_descriptor(
             sends = rg[d] if peer is not None else []
             # what arrives at this port: the upstream chip's port of the same ring and direction sends to me
             up = rg["prev"] if d == "fwd" else rg["next"]
-            recv = len(chips[up]["rings"][j][d]) if up is not None else 0
+            up_sends = chips[up]["rings"][j][d] if up is not None else []
             first = j * num_links + l
-            per_link = _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages)
-            reader_rt[core.x][core.y] = [
-                in_addr,
-                out_addr,
-                shard_pages,
-                first,
-                stride,
-                arrival_addr,
-                len(sends),
-            ] + sends
-            args = [out_addr, shard_pages, first, stride, arrival_addr, -(-(recv * per_link) // inc_every)]
+            nb = len(range(first, num_banks, stride))
+            # desync: the two directions of a link walk the same banks; start the backward walk halfway round
+            rot = nb // 2 if (desync and d == "bwd") else 0
+            recv = sum(
+                _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in up_sends
+            )
+            packed = [out | (part << 16) for out, part in sends]
+            full = _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages)
+            mine = sum(_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in sends)
+            head = [in_addr, out_addr, shard_pages, first, stride, rot, arrival_addr, full, mine]
+            reader_rt[core.x][core.y] = head + [len(sends)] + packed
+            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, -(-recv // inc_every), mine]
             if sends:
                 pc = virt(chips[peer]["ports"][(j, d, l)])
                 pn = node(peer)
-                args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), len(sends)] + sends
+                args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), len(sends)] + packed
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], program, core))
             else:
                 args += [0, 0, 0, 0, 0]
@@ -706,8 +759,10 @@ def create_mesh_program_descriptor(
         copy_reader_rt, copy_writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         J = len(ch["copy"])
         for jj, core in enumerate(ch["copy"]):
-            copy_reader_rt[core.x][core.y] = [in_addr, out_addr, shard_pages, jj, J, arrival_addr, 1, ch["out"]]
-            copy_writer_rt[core.x][core.y] = [out_addr, shard_pages, jj, J, ch["out"]]
+            n_copy = _chunks_per_shard(shard_pages, jj, J, num_banks, run_pages)
+            head = [in_addr, out_addr, shard_pages, jj, J, 0, arrival_addr, n_copy, n_copy]
+            copy_reader_rt[core.x][core.y] = head + [1, ch["out"]]
+            copy_writer_rt[core.x][core.y] = [out_addr, shard_pages, jj, J, ch["out"], n_copy]
         port_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in port_cores])
         copy_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ch["copy"]])
         src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
@@ -771,6 +826,8 @@ def fabric_all_gather(
     dim=0,
     placement="auto",
     scheme="ring",
+    balance=False,
+    desync=False,
     output=None,
 ):
     """All-gather `input_tensor` (TILE, DRAM interleaved, one shard per chip) over each group; returns the output.
@@ -785,6 +842,7 @@ def fabric_all_gather(
         num_links=num_links,
         placement=placement,
         scheme=scheme,
+        balance=balance,
     )
     G = next(iter(chips.values()))["G"]
     if output is None:
@@ -801,5 +859,7 @@ def fabric_all_gather(
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in port_cores])
         _SEM_CACHE[key] = (mesh_device, ttnn.create_global_semaphore(mesh_device, cores, 0))
     arrival_addr = int(ttnn.get_global_semaphore_address(_SEM_CACHE[key][1]))
-    desc = create_mesh_program_descriptor(mesh_device, input_tensor, output, arrival_addr, chips, num_links=num_links)
+    desc = create_mesh_program_descriptor(
+        mesh_device, input_tensor, output, arrival_addr, chips, num_links=num_links, desync=desync
+    )
     return ttnn.generic_op([input_tensor, output], desc)

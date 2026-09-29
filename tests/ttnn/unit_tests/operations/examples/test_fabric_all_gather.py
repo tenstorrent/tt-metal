@@ -38,6 +38,8 @@ _DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "fp32": ttnn.float32}
 DTYPE_NAME = os.environ.get("FAG_DTYPE", "bf16")
 DIM = int(os.environ.get("FAG_DIM", "0"))  # 0, or 2 (= dim -2 of the [1, 1, H, W] shard)
 LINKS = tuple(int(x) for x in os.environ.get("FAG_LINKS", "1,2").split(","))
+# schedule variants: "b" = balanced ring (far shard split between directions), "d" = desynchronized bank walks
+VARIANTS = tuple(os.environ.get("FAG_VARIANTS", "base").split(","))
 _FABRICS = {
     "1d": "FABRIC_1D",
     "1d_ring": "FABRIC_1D_RING",
@@ -143,11 +145,13 @@ def test_fabric_all_gather(mesh_device):
         else:
             groups = build_groups((rows, cols), cluster_axis)
         G = len(groups[0])
-        for num_links in LINKS:
-            tag = f"    {fabric:<27} {topo_name:<15} G={G} links={num_links}"
+        for num_links, variant in [(l, v) for l in LINKS for v in VARIANTS]:
+            balance, desync = "b" in variant and variant != "base", "d" in variant and variant != "base"
+            kw = dict(balance=balance, desync=desync)
+            tag = f"    {fabric:<27} {topo_name:<15} G={G} links={num_links} {variant:<5}"
             try:
                 out = fabric_all_gather(
-                    inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM, scheme=scheme
+                    inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM, scheme=scheme, **kw
                 )
             except (ValueError, RuntimeError) as e:
                 msg = str(e).splitlines()[0][:110]
@@ -163,7 +167,12 @@ def test_fabric_all_gather(mesh_device):
                         got[r * cols + c].reshape(expected.shape).to(expected.dtype), expected
                     ), f"{fabric}/{topo_name}/links={num_links}: chip ({r},{c}) output != gathered shards"
             chips, _ = plan(
-                mesh_device, cluster_axis=cluster_axis, topology=topology, num_links=num_links, scheme=scheme
+                mesh_device,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                num_links=num_links,
+                scheme=scheme,
+                balance=balance,
             )
             load = link_load(chips)
             nbrs = max(len({p for (a, p) in load if a == coord}) for coord in chips)
@@ -183,6 +192,7 @@ def test_fabric_all_gather(mesh_device):
                     dim=DIM,
                     scheme=scheme,
                     output=out,
+                    **kw,
                 )
                 samples.append(_slowest_chip_ns(mesh_device))
             ns = statistics.median(samples)

@@ -90,6 +90,27 @@ All 112 combinations (7 fabric configs × 8 topologies × 1 and 2 links) are bit
 - **Placement is automatic and matters.** Every port core sits directly below its connection's Ethernet core, so the
   per-link streams share no NoC links.
 
+### Balancing a ring: split the far shard between the two directions
+On an even ring of G chips each chip receives G/2 shards over one direction and G/2 − 1 over the other, so one
+direction of every link idles for a shard's time. With `balance=True` the shard opposite each receiver is split by
+bank set: the forward port sends the first half of its banks, the backward port the second half. Both directions then
+carry G/2 − ½ shards. On a 4-chip ring the busiest direction carries 1.5 shards instead of 2:
+
+| FABRIC_1D, 4-chip ring (axis, snake) | 1 link | 2 links | 4 links |
+|---|---|---|---|
+| base | 71 | 124–126 | 146 |
+| `balance=True` | 91 | **153–156** | **166** |
+
+It's bit-exact on all 7 fabric configs (2 links: 1D / 1D_RING 153–156, NeighborExchange 148–151, 2D-torus-XY 146–148,
+2D and torus X / Y 130–135). A relay of a half shard waits on its upstream's chunk index in the whole shard's walk, so
+the arrival rule stays "chunk / 8 + 1" and the relay stays a prefix of what the upstream sends.
+
+`desync=True` starts the backward port's bank walk halfway round its bank set, so the two directions of a link don't
+hit the same DRAM bank at the same time. It measures the same as the default: the banks aren't the bottleneck.
+
+The per-port chunk counts are computed on the host and passed as runtime args. Counting them on device (one walk per
+shard entry, before the first read) cost ~10 µs per call, 3–7% of a 16 MiB gather.
+
 Known limitation: calls are not fenced against each other. A chip may start its next call while a neighbour is
 still relaying the previous one; with a different input per call that neighbour could relay newer data. The arrival
 counters stay consistent (they are re-armed by exactly what each call consumed).

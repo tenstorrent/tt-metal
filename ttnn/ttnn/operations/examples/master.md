@@ -329,6 +329,9 @@ the links' rate on whatever fabric config the workload uses.
 104–118 (ring) on the 2D configs; bit-exact on all 112 fabric × topology × links combinations. 4 links: ring **143**.
 A fused increment on **every** packet halves the rate (the receiving router waits for each write before the
 increment); one increment per 8 chunks restores it.
+`balance=True` (even rings): the shard opposite each chip goes half one way, half the other, so both directions carry
+the same load — ring **155 GB/s** at 2 links, **166** at 4 (+24% / +14%). Starting the backward port's bank walk
+halfway round (`desync`) changes nothing.
 **Gist:** one port core per (direction, link) that sends its own shard, then relays a prefix of what its upstream sends,
 waiting for `chunk / K + 1` arrivals, with every K-th packet a fused write + increment; one copy core per link for
 the local shard; find each connection's Ethernet core (probe it on device) and put the port core directly below it.
