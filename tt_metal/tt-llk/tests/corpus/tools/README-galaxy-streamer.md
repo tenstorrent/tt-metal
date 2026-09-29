@@ -104,8 +104,18 @@ bands) on quietbox and reproduced byte-identically on an exabox glx host (cross-
   persists verdicts to `/data`, so a relay drop loses observability, not the run; re-collect
   when it returns. Nodes auto-reap on completion.
 
-## Fast-follow TODO
-Integrate as `prove_all.py --fleet <op-set>` so there is ONE census pipeline (route the
-INFEASIBLE-2^32 rows to this streamer, fold SILICON-EXHAUSTIVE-2^32 verdicts into the
-ledger). Deferred from the first landing to avoid wiring prove_all mid-campaign; the tools
-run standalone as above meanwhile.
+## Wired into prove_all (plumbing landed; routing has not)
+`prove_all.py` now has a `silicon_stream` engine that shells out to `galaxy_shard.sh`
+verbatim and translates its combined verdict into the existing ledger classes
+(`BIT-EXACT-ALL-INPUTS` -> `SILICON-EXHAUSTIVE`, `DIVERGENT` -> `DIVERGENCE-CERTIFIED`,
+anything else -> `UNSWEPT`, i.e. a reported operational failure).  It re-enters the shard
+on every run rather than caching a verdict, because the driver's cache key cannot see the
+shard geometry while the streamers' own per-band resume (`stream_resume.py`) can.
+
+    python3 prove_all.py --engine silicon_stream \
+      --silicon-farm-root <staged tree> --silicon-venv <py> --silicon-idmap <idmap.tsv>
+
+**No manifest row routes here yet.** The 31 `INFEASIBLE-2^32` rows still say
+`engine=classify` and still carry `sem_node`/`hand_node` = `-`.  Flipping them is a
+measurement decision (device time on a galaxy node) and needs their pytest node ids plus an
+in-farm `IDMAP` from `build_identity_gate.sh`; the plumbing above does not supply either.

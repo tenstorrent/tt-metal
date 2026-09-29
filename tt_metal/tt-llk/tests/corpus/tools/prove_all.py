@@ -20,8 +20,14 @@
 #     engine's existing `anchor` stage into the SAME --out tree first, so its
 #     `all` stage can validate.  The anchors are resume-safe: once a run has
 #     left them there, later prove_all runs re-use them with no device.
+#   * galaxy_shard.sh   (laneMK) — exhaustive 2^N sweep on REAL SILICON: one
+#     op's whole input space sharded across the 32 chips of a galaxy node,
+#     both identity-gated legs per chip, combined by galaxy_combine.py.  Shelled
+#     out to verbatim; this driver only translates its verdict.  Reaches the
+#     2^32 single-input rows the sim engines refuse, so it is the one engine
+#     that can retire an INFEASIBLE-2^32 row.
 #
-# The two engines are REUSED as libraries/subprocesses — this driver never
+# The engines are REUSED as libraries/subprocesses — this driver never
 # re-implements any proof logic.  Two provenance-pinned overlays that are NOT
 # re-run here (they need a device campaign / are recorded z3 proofs on the
 # identical instrument) are joined in with strict precedence:
@@ -813,6 +819,21 @@ def verdict_cache_key(prov, flags, op, manifest_row):
     ).hexdigest()
 
 
+# Engines whose OWN tooling owns resume.  This driver's cache key covers the
+# pin, the instrument shas, the ON flags and the manifest row — it does not
+# cover the shard geometry (NPAR / BAND_BITS / SPACE), so a cached silicon
+# verdict would outlive a geometry change.  Rather than widen the key with
+# fields only one engine has, defer: the streamers already resume per band
+# under their own provenance record (stream_resume.py, which pins the streamer
+# sha, the harness tree, the identity map, the chip, the band geometry), so
+# re-entering galaxy_shard.sh costs nothing it has already streamed.
+STREAMER_OWNED_RESUME = {"silicon_stream"}
+
+
+def cache_eligible(engine):
+    return engine not in STREAMER_OWNED_RESUME
+
+
 def valid_cached(out_dir, op, expected_key):
     p = verdict_path(out_dir, op)
     if not p.exists():
@@ -1064,8 +1085,26 @@ def main():
     ap.add_argument(
         "--engine",
         default=None,
-        choices=["formal_equiv", "bitexact", "classify"],
+        choices=["formal_equiv", "bitexact", "classify", "silicon_stream"],
         help="restrict to one engine's ops",
+    )
+    ap.add_argument(
+        "--silicon-farm-root",
+        default=os.environ.get("CRAQ_SILICON_FARM_ROOT"),
+        help="FARM_ROOT for galaxy_shard.sh: the staged tree holding tests/ and "
+        "build/tt-llk-build (required by the silicon_stream engine)",
+    )
+    ap.add_argument(
+        "--silicon-venv",
+        default=os.environ.get("CRAQ_SILICON_VENV"),
+        help="VENV for galaxy_shard.sh: a python that can import the harness",
+    )
+    ap.add_argument(
+        "--silicon-idmap",
+        default=os.environ.get("CRAQ_SILICON_IDMAP"),
+        help="IDMAP for galaxy_shard.sh (op<TAB>sem_variant<TAB>sem_text<TAB>"
+        "hand_variant<TAB>hand_text, from build_identity_gate.sh); without it "
+        "the shard has no build variants and refuses",
     )
     ap.add_argument("--out", default=os.environ.get("CRAQ_PROVE_OUT",
                                str(HOME / "laneMH-evidence-20260903/run")))
@@ -1129,7 +1168,7 @@ def main():
         # the cache key cannot see that anchors have since appeared -- so an
         # anchoring run always re-proves its own rows.
         anchoring = args.allow_hardware and man[op]["engine"] == "bitexact"
-        if not args.force and not anchoring:
+        if not args.force and not anchoring and cache_eligible(man[op]["engine"]):
             c = valid_cached(out_dir, op, cache_keys[op])
             if c is not None:
                 engine_recs[op] = c
@@ -1140,6 +1179,7 @@ def main():
     formal_ops = [o for o in to_run if man[o]["engine"] == "formal_equiv"]
     bitexact_ops = [o for o in to_run if man[o]["engine"] == "bitexact"]
     classify_ops = [o for o in to_run if man[o]["engine"] == "classify"]
+    silicon_ops = [o for o in to_run if man[o]["engine"] == "silicon_stream"]
 
     for op in classify_ops:
         rec = run_classify(op, man[op])
@@ -1181,6 +1221,18 @@ def main():
         rec = run_formal(op, man[op], odir, flags, args.timeout)
         rec["arity_space"] = man[op]["arity_space"]
         rec["evidence_ptr"] = f"formal/{op}/{op}-verdict.json"
+        engine_recs[op] = rec
+        save_verdict(out_dir, op, rec, cache_keys[op])
+        print(f"      -> {rec['class']} ({rec.get('verdict')}, {rec.get('wall_s')}s)")
+
+    # silicon_stream (serial: each op takes the whole 32-chip galaxy node; the
+    # shard resumes its own bands, so a re-run costs only what it has not run)
+    sdir = out_dir / "silicon"
+    for i, op in enumerate(silicon_ops, 1):
+        print(f"  [silicon {i}/{len(silicon_ops)}] {op} ...", flush=True)
+        rec = run_silicon_stream(op, man[op], sdir / op, args, args.timeout)
+        rec["arity_space"] = man[op]["arity_space"]
+        rec["evidence_ptr"] = f"silicon/{op}/{op}-VERDICT.txt"
         engine_recs[op] = rec
         save_verdict(out_dir, op, rec, cache_keys[op])
         print(f"      -> {rec['class']} ({rec.get('verdict')}, {rec.get('wall_s')}s)")

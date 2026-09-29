@@ -21,6 +21,7 @@ class, then joins in two provenance-pinned overlays under a strict precedence.
 |---|---|---|
 | `formal_equiv.py` (laneJO) | per-lane bit-exact equivalence over **all** inputs | z3 QF_BV translation validation on the **final emitted SFPU stream**, on the pinned *instrumented* craq-sim; VALIDATION GATE = concrete replay reproduces every trace snapshot before any verdict |
 | `bitexact_sweep.py` (laneJN) | single-input **2^16** exhaustive equivalence | sweep on the pinned craq-sim; VALIDATION GATE = the sim executor must reproduce the row's **device anchors** bitwise on both legs (see below) |
+| `galaxy_shard.sh` (laneMK) | single-input **2^32** exhaustive equivalence on **real silicon** | the op's whole space sharded across a galaxy node's 32 chips, both identity-gated legs per chip, folded back by `galaxy_combine.py`; `BIT-EXACT-ALL-INPUTS` -> `SILICON-EXHAUSTIVE` |
 | classify (no run) | 2^32 single-input / cross-lane | recorded infeasibility / one-lane-model scope refusal, with reason |
 | KC-silicon overlay | device-exhaustive 2^16 | **recorded** laneKC silicon sweeps (a device campaign; not re-run here) |
 | JO-domain overlay | documented-deliverable-domain equivalence | **recorded** laneJO z3 re-proofs (upgrade clamp / mulint32) |
@@ -104,10 +105,18 @@ set is imported from the canonical `sweep_2x2.ON_FLAGS` (pin-59 ON-39).
 ## Re-run / resume / budget
 
 * **Resume-safe:** a valid `verdicts/<op>/prove_all_verdict.json` is reused;
-  `--force` re-proves from scratch.
+  `--force` re-proves from scratch.  `silicon_stream` rows are the exception:
+  this driver's cache key cannot see the shard geometry (`NPAR`/`BAND_BITS`/
+  `SPACE`), so instead of widening it they always re-enter `galaxy_shard.sh`,
+  which resumes per band under the streamers' own provenance record
+  (`stream_resume.py`).  Re-running costs only what it has not already streamed.
 * **Per-op budget:** `--timeout` (default 1800 s, like laneJO); on expiry a
   formal row records `UNDECIDED-Z3-TIMEOUT` and never hangs.
-* **Subsets:** `--only '<glob>[,<glob>...]'`, `--engine {formal_equiv,bitexact,classify}`.
+* **Subsets:** `--only '<glob>[,<glob>...]'`, `--engine {formal_equiv,bitexact,classify,silicon_stream}`.
+* **Silicon:** `silicon_stream` needs a staged galaxy node —
+  `--silicon-farm-root` (tree with `tests/` + `build/tt-llk-build`),
+  `--silicon-venv`, and `--silicon-idmap` (from `build_identity_gate.sh`).
+  `NPAR`/`BAND_BITS`/`STAGGER`/`GOLDEN` pass through to `galaxy_shard.sh`.
 * **Parallelism:** `--jobs N` drives the bitexact sim workers (the shared
   instrumented sim + deep z3 queries run serially by design).
 * Deterministic given the same pin, so drift across runs is detectable.

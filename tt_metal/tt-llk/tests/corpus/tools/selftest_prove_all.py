@@ -8,12 +8,20 @@
 #     smoothstep-fresh(formal_equiv, known DIVERGENT -> DIVERGENCE-CERTIFIED)
 #     binary-bcast    (classify,    known SCOPE      -> NOT-EXHAUSTIBLE)
 #
-# Part A is a fast pure-unit check of the precedence join + census (no sim).
+# Part A is a fast pure-unit check of the precedence join + census (no sim) and
+# a hardware-free exercise of the silicon_stream engine against the REAL
+# galaxy_shard.sh (stub farm, exactly as selftest_galaxy_shard.py does it).
 # Part B runs the real driver over the 3 ops and checks the emitted ledger.
+#
+#   python3 selftest_prove_all.py            # Part A + Part B
+#   python3 selftest_prove_all.py --no-live  # Part A only (no pinned instruments)
 #
 # Exit 0 = PASS.
 
+import argparse
+import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -21,6 +29,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 import prove_all as PA  # noqa: E402
+import selftest_galaxy_shard as SGS  # noqa: E402  (stub farm + stub streamer)
 
 
 def part_a_unit():
@@ -234,6 +243,133 @@ def part_a_manifest():
     print("PART A (manifest routing of 3 selftest ops): PASS")
 
 
+# ---------------------------------------------------------------------------
+# Part A (silicon_stream): the driver must DRIVE the existing 32-chip streamer.
+#
+# Hardware-free by the same trick selftest_galaxy_shard.py uses: a throwaway
+# FARM_ROOT whose streamer and elf_text_sha are stubs.  Everything between
+# prove_all and those stubs is the real thing — the real galaxy_shard.sh, its
+# real identity gate, the real galaxy_combine.py.
+# ---------------------------------------------------------------------------
+SILICON_MAN_ROW = {
+    "op": "myop",
+    "board_class": "WIN",
+    "arity_space": "single-2^20",  # small so 8 stub slices finish instantly
+    "engine": "silicon_stream",
+    "sem_node": "sem-node",
+    "hand_node": "hand-node",
+    "expected_class_ref": "SILICON-EXHAUSTIVE",
+    "reason": "selftest stub farm",
+}
+
+
+def _stub_farm(work, *, idmap_sem_body=b"sem-text\n"):
+    """A stub FARM_ROOT + the IDMAP galaxy_shard.sh gates against."""
+    farm = SGS.Farm(work, "fp32")  # single-operand space -> fp32 streamer
+    idmap = work / "idmap.tsv"
+    idmap.write_text(
+        "myop\tAAA\t%s\tBBB\t%s\n"
+        % (
+            hashlib.sha256(idmap_sem_body).hexdigest(),
+            hashlib.sha256(b"hand-text\n").hexdigest(),
+        )
+    )
+    return farm, idmap
+
+
+def _run_silicon_stub(work, *, dead="", band_bits=10, npar=8, sem_body=b"sem-text\n"):
+    """Invoke prove_all's silicon_stream engine over the stub farm."""
+    work.mkdir(parents=True, exist_ok=True)
+    farm, idmap = _stub_farm(work, idmap_sem_body=sem_body)
+    record = work / "calls.jsonl"
+    record.write_text("")
+    args = argparse.Namespace(
+        silicon_farm_root=str(farm.farm_root),
+        silicon_venv=str(farm.venv),
+        silicon_idmap=str(idmap),
+    )
+    saved = dict(os.environ)
+    os.environ.update(
+        SHARD_RECORD=str(record),
+        DEAD_CHIPS=dead,
+        STAGGER="0",
+        NPAR=str(npar),
+        BAND_BITS=str(band_bits),
+    )
+    try:
+        rec = PA.run_silicon_stream("myop", SILICON_MAN_ROW, work / "ev", args, 600)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    calls = [json.loads(l) for l in record.read_text().splitlines() if l.strip()]
+    return rec, calls, record
+
+
+def part_a_silicon_stream():
+    """silicon_stream shells out to galaxy_shard.sh and translates its verdict."""
+    # 1. the translation table adds no class of its own
+    assert set(PA.SILICON_CLASS_MAP) <= {"BIT-EXACT-ALL-INPUTS", "DIVERGENT"}
+    for cls in PA.SILICON_CLASS_MAP.values():
+        assert cls in PA.RANK, cls
+    assert PA.SILICON_CLASS_MAP["BIT-EXACT-ALL-INPUTS"] == "SILICON-EXHAUSTIVE"
+    assert "SILICON-EXHAUSTIVE" in PA.MACHINE_CERTIFIED
+
+    with tempfile.TemporaryDirectory(prefix="prove_all_silicon_") as tmp:
+        root = Path(tmp)
+
+        # 2. a clean 8-chip shard of 2^20 certifies, and the record is joinable
+        rec, calls, record = _run_silicon_stub(root / "ok")
+        assert rec["engine"] == "silicon_stream", rec
+        assert rec["class"] == "SILICON-EXHAUSTIVE", rec
+        assert rec["verdict"] == "BIT-EXACT-ALL-INPUTS", rec
+        assert rec["covered"] == str(1 << 20), rec
+        assert rec["geometry"]["NPAR"] == "8", rec
+        assert len(calls) == 8, calls
+        assert sorted(int(c["chip"]) for c in calls) == list(range(8)), calls
+        assert {int(c["total"], 0) for c in calls} == {(1 << 20) // 8}, calls
+        joined = PA.join_op("myop", "WIN", rec, {}, {})
+        assert joined["provability_class"] == "SILICON-EXHAUSTIVE", joined
+        assert joined["machine_certified_equal"] == "YES", joined
+        assert not PA.operational_failures({"myop": rec}), rec
+
+        # 3. re-entering does NOT short-circuit: prove_all defers resume to the
+        #    streamer, so the shard is driven again (here with a new geometry
+        #    that prove_all's own cache key would not have noticed).
+        before = len(record.read_text().splitlines())
+        rec2, calls2, _ = _run_silicon_stub(root / "ok2", band_bits=9)
+        assert rec2["class"] == "SILICON-EXHAUSTIVE", rec2
+        assert calls2, "re-entry launched no slices"
+        assert not PA.cache_eligible("silicon_stream")
+        assert PA.cache_eligible("formal_equiv") and PA.cache_eligible("bitexact")
+        assert before == 8
+
+        # 4. a dead chip must never be certified — the combiner says INCOMPLETE
+        #    and the record stays an auditable operational failure.
+        rec3, _, _ = _run_silicon_stub(root / "dead", dead="3")
+        assert rec3["class"] == "UNSWEPT", rec3
+        assert rec3["verdict"] == "INCOMPLETE", rec3
+        assert PA.operational_failures({"myop": rec3}), rec3
+
+        # 5. the shard's own identity gate is honoured, not re-implemented
+        rec4, calls4, _ = _run_silicon_stub(root / "refused", sem_body=b"wrong\n")
+        assert rec4["class"] == "UNSWEPT", rec4
+        assert rec4["verdict"].startswith("REFUSED-IDENTITY"), rec4
+        assert not calls4, "a refused identity gate still streamed slices"
+
+        # 6. missing farm config is a named refusal, not a silent pass
+        rec5 = PA.run_silicon_stream(
+            "myop",
+            SILICON_MAN_ROW,
+            root / "nofarm",
+            argparse.Namespace(
+                silicon_farm_root=None, silicon_venv=None, silicon_idmap=None
+            ),
+            600,
+        )
+        assert rec5["class"] == "UNSWEPT" and rec5["verdict"] == "NO-FARM", rec5
+    print("PART A (silicon_stream drives galaxy_shard.sh, stub farm): PASS")
+
+
 def part_b_live():
     """Run the driver end-to-end on the 3 ops; check the ledger classes."""
     tmp = Path(tempfile.mkdtemp(prefix="prove_all_selftest_"))
@@ -286,5 +422,9 @@ if __name__ == "__main__":
     part_a_formal_routing()
     part_a_fast_census()
     part_a_manifest()
-    part_b_live()
+    part_a_silicon_stream()
+    if "--no-live" in sys.argv[1:]:
+        print("PART B skipped (--no-live): needs the pin-59 instruments")
+    else:
+        part_b_live()
     print("\nSELFTEST: ALL PASS")
