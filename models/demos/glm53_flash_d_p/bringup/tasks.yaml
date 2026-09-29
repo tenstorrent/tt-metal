@@ -2319,6 +2319,13 @@ tasks:
     - experts
     - shared_expert
     layer: 4
+  frozen:
+    at: '2026-09-29T19:18:32'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_11_shared_expert.py: 78245af57d610b78686f9d6b392e745931ddb44e6e439245fdfe6ca94081391c
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_moe.moe_add
   title: kda_moe moe_add (residual) on device, layer 4
   step: implement
