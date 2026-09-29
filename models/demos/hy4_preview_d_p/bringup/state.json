@@ -1298,6 +1298,79 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.moe_full.attn_hc": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "9f5d3a24-118c-4729-8683-8612b3f3d4ce"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_full.attn_hc.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_full.attn_hc.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 336.8,
+    "session_id": "9f5d3a24-118c-4729-8683-8612b3f3d4ce",
+    "t": "2026-09-29T09:54:16"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 24.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T09:55:33"
+   }
+  ],
+  "last_run": "2026-09-29T09:55:33",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.moe_full.attn_hc.log",
+  "metrics": {
+   "attn_x_rel_l2_attn_hc_L01": 0.001437639002688229,
+   "attn_x_worst_row_rel_l2_attn_hc_L01": 0.004099666140973568,
+   "h_mid_max_stream_rel_l2_attn_hc_L01": 0.0012380260741338134,
+   "h_mid_worst_row_rel_l2_attn_hc_L01": 0.00478696683421731,
+   "max_col_rel_l2_attn_hc_L01": 0.005363833624869585,
+   "pcc_attn_hc_L01": 0.9999984247714285,
+   "post_worst_row_rel_l2_attn_hc_L01": 0.006542115472257137,
+   "rel_l2_attn_hc_L01": 0.0014920178800821304
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T09:55:08",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 402.8,

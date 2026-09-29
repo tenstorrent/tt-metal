@@ -1124,3 +1124,42 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py
+
+## C.moe_full.attn_hc test (attempt 1)
+
+What was done
+- Reviewed the rendered 22-line test for attn_hc at layer 1 (iHC gates [S, 8], hc_attn_layer of layer 1, s4096
+  chunk 1, bf16 golden). Rewrote it from the layer-0 attn_hc / ffn_hc tests. It keeps the gated PCC (0.99) and adds
+  these checks vs the golden: not a CPU bridge, element count, finite, rel L2 <= 0.01, per-column rel L2 (all 8
+  columns) <= 0.01, post worst row <= 0.015. It also checks the pre gates through the CPU attn_hc_pre on the golden
+  streams (attn_x rel <= 0.005, worst row <= 0.02) and the post gates through the CPU attn_residual with the golden
+  attn_out (h_mid per stream <= 0.003, worst row <= 0.02).
+- CPU mutation study in /tmp/hy4hc1/{an,an2,mut,mut2}.py (outside the repo). It needs only the golden and the hc
+  weights. The table is in the test docstring.
+
+Decisions
+- Per-column rel L2 on every column, unlike layer 0's ffn_hc. The smallest column (post 4, ~3e-4) is 300x hc_eps, so
+  its relative error is meaningful. It catches the bugs that the whole-matrix metrics and the downstream metrics miss:
+  a pre base swap (col 0.24, attn_x only 0.0031) and SP row swaps (col 0.022).
+- No synthetic distinct-stream probe and no eps probe. At layer 1 the streams are already distinct (fn streams 0 / 1
+  swapped: col 0.098), and the row RMS (0.005-0.07) is small enough that eps 1e-6 fails (col 0.081).
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999999, rel 0.00143, max col rel 0.0019, attn_x 0.00138 / 0.0043, h_mid
+  stream <= 0.00105 / row 0.0029).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device, the existing TtHcGates through device_component): PASS. PCC 0.999998, rel 0.00149, col rel
+  [0.0023, 0.0024, 0.0014, 0.0017, 0.0054, 0.0030, 0.0025, 0.0018], post row 0.0065, attn_x 0.00144 / 0.0041,
+  h_mid stream <= 0.00124 / row 0.0048.
+
+Gotchas
+- The tightest margin is post column 4 (device 0.0054 vs limit 0.01; max abs 4.8e-5 on gates of ~3e-4). It comes
+  from the device sigmoid on small outputs. If a later change (bf16 sigmoid, approx exp) touches TtHcGates, watch
+  this column.
+- Only dropping hc_eps goes undetected (downstream change < 1e-5).
+- The first pcc line (0.000000) comes from the precompile collect pass.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
