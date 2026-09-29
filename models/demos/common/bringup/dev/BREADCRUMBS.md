@@ -662,3 +662,14 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
   allowed paths and the gate's stage_paths never included the model's hooks.py.
 - Fix: allowed_paths adds `<bringup>/hooks.py` for the contract step; stage_paths commits it for that step.
 - Selftests 216 -> 217 (test_orchestrator: the contract step may change and commits hooks.py). Fails on the pre-F51 code.
+
+## F52 (2026-09-29): profile gates size the device profiler for large models (GLM-5.3 run)
+
+- Symptom: GLM X.3 failed only `timeline_ok = 0`: "device programs per chip 1281 != op-mode counts 1319 (profiler
+  buffer too small?)"; the log said "Profiler DRAM buffers were full, markers were dropped".
+- Cause: the pipelined timeline reads the device profiler once per chunk; TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT
+  defaults to 1000 programs per core, and a 5-layer GLM chunk launches 1319 per chip (MiMo: 611).
+- Fix: ledger_gen.PROFILE_ENV adds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 (the X.3 fix agent confirmed 3000
+  gives timeline_ok 1: 423.7 ms device timeline, 0.7 ms gaps). GLM's tasks.yaml profile commands (X.1, P.1, X.3)
+  patched the same way.
+- Selftests 217 -> 218 (test_plan: PROFILE_ENV sizes the profiler; fails on the pre-F52 ledger_gen).
