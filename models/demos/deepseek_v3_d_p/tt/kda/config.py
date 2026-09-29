@@ -52,8 +52,9 @@ class KDAProgramConfig:
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
-    # Stage short-lived activations (the QKV slice before its untilize and the gated-norm output
-    # before the output projection) in L1; only for local lengths where they fit comfortably.
+    # Stage short-lived activations (the QKV slice before its untilize, the bounded-decay
+    # intermediates, and the gated-norm output before the output projection) in L1; only for local
+    # lengths where they fit comfortably.
     stage_activations_in_l1: bool = False
 
     def __post_init__(self) -> None:

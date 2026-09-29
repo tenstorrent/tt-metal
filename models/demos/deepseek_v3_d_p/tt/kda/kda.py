@@ -361,11 +361,15 @@ class ttKDA:
         )
 
     def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.multiply(
-            self.weights.decay_scale_flat, gate, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # The scaled gate and its sigmoid are short-lived, so they take the activation staging memory.
+        scaled = ttnn.multiply(
+            self.weights.decay_scale_flat, gate, dtype=ttnn.bfloat16, memory_config=self.staging_memory_config
         )
-        gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        activated = ttnn.sigmoid(scaled, memory_config=self.staging_memory_config)
+        ttnn.deallocate(scaled)
+        gate = ttnn.multiply(activated, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(activated)
+        return gate
 
     def _kda_rms_norm(
         self,
