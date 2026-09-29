@@ -1146,3 +1146,32 @@ Results:
 The next step, implement, only needs to add ffn_collapse to `DEVICE_STEPS["dsa_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.09 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through ffn_collapse on the device. I rewrote it
+from swap 08's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new collapse-share block (every device output up to ffn_hc fixed, CPU ffn_collapse and tail)
+  is the base of the collapse's share. The ffn_hc share is now that block vs the ffn_hc-share block, and it
+  reproduces swap 08 exactly (19 / 0.00238). Every other swap-08 check and limit is unchanged, with one exception.
+- The exception: flips vs the all-CPU block, raised from 64 to 96. The device scored 61. The collapse's bf16
+  rounding alone flips 30..33 tokens, and the same-routing rel L2 (0.00197, limit 0.005) is the real check there
+  (proposed known issue).
+- New ffn_collapse checks:
+  - vs the fp32 CPU collapse of the same device (h_mid, ffn_hc), at the component limits: rel 0.008, ratio
+    [0.99, 1.01], worst row 0.008, coefficient [0.996, 1.004]. Also run on chunk 0.
+  - vs golden ffn_in: rel 0.008, ratio [0.99, 1.01], worst row 0.02, coefficient [0.995, 1.005]. The CPU collapse of
+    the device inputs already has a worst row of 0.0095, which is upstream error.
+  - Collapse share at block out: flips <= 64, same-routing rel <= 0.0012, ratio [0.996, 1.004], flipped-row ratio
+    [0.95, 1.05].
+- Sensitivity: CPU host script /tmp/dsas09/sens.py (not kept); the numbers are in the test docstring.
+  - Caught by the share: x1.005 (rel 0.0034), pre column 0 / 1 / 3 x1.01, one chip's rows x1.01, truncating bf16,
+    0.5% noise, zeroed rows (flipped ratio 0.88).
+  - Invisible at block out (only the same-input check sees them): one row's pre reversed, a duplicated row.
+Results:
+- Device passes: PCC 0.999993 (c0 0.999994). Collapse share 30 / 0.00044 / [0.9994, 1.0011], flipped rows
+  [0.9935, 1.0250]. ffn_collapse vs CPU same input 0.00166 / [0.9999, 1.0002] / row 0.00173 / coefficient 1.00000.
+  vs golden 0.00468 / 0.00968. Block out vs the all-CPU block 61 flips / 0.00197. About 105 s.
+- Reference passes (exact). Stub fails.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_09_ffn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
