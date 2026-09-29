@@ -119,3 +119,1954 @@ tasks:
       ledger_tasks: '>= 1'
   paths:
   - models/demos/glm53_flash_d_p/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/glm53_flash_d_p/bringup/plan.yaml
+  - models/demos/glm53_flash_d_p/bringup/plan.md
+  - models/demos/glm53_flash_d_p/bringup/components.yaml
+  - models/demos/glm53_flash_d_p/bringup/approvals.yaml
+  - models/demos/glm53_flash_d_p/bringup/results/plan_memory.json
+  approval: plan
+- id: C.kda_dense.attn_hc
+  title: kda_dense attn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py
+    metrics:
+      pcc_attn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/glm53_flash_d_p/tt
+  - models/demos/glm53_flash_d_p/bringup/hooks.py
+  brief:
+    block_type: kda_dense
+    step: attn_hc
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.kda_dense.01
+  title: 'kda_dense block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.kda_dense.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    layer: 0
+- id: C.kda_dense.attn_collapse
+  title: kda_dense attn_collapse (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: attn_collapse
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.kda_dense.02
+  title: 'kda_dense block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.kda_dense.attn_collapse
+  - S.kda_dense.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 0
+- id: C.kda_dense.attn_norm
+  title: kda_dense attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.kda_dense.03
+  title: 'kda_dense block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.kda_dense.attn_norm
+  - S.kda_dense.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 0
+- id: C.kda_dense.attention
+  title: kda_dense attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attention.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+- id: S.kda_dense.04
+  title: 'kda_dense block with steps 1-4 on device (last: attention)'
+  step: implement
+  deps:
+  - C.kda_dense.attention
+  - S.kda_dense.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_04_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_04_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    layer: 0
+- id: C.kda_dense.attn_residual
+  title: kda_dense attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.kda_dense.05
+  title: 'kda_dense block with steps 1-5 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.kda_dense.attn_residual
+  - S.kda_dense.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_05_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_05_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    layer: 0
+- id: C.kda_dense.ffn_hc
+  title: kda_dense ffn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: ffn_hc
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.kda_dense.06
+  title: 'kda_dense block with steps 1-6 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.kda_dense.ffn_hc
+  - S.kda_dense.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_06_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_06_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 0
+- id: C.kda_dense.ffn_collapse
+  title: kda_dense ffn_collapse (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: ffn_collapse
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.kda_dense.07
+  title: 'kda_dense block with steps 1-7 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.kda_dense.ffn_collapse
+  - S.kda_dense.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_07_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_07_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 0
+- id: C.kda_dense.ffn_norm
+  title: kda_dense ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.kda_dense.08
+  title: 'kda_dense block with steps 1-8 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.kda_dense.ffn_norm
+  - S.kda_dense.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_08_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_08_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 0
+- id: C.kda_dense.mlp
+  title: kda_dense mlp (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_mlp.py
+    metrics:
+      pcc_mlp_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: mlp
+    kind: mlp
+    layer: 0
+    stateful: false
+- id: S.kda_dense.09
+  title: 'kda_dense block with steps 1-9 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.kda_dense.mlp
+  - S.kda_dense.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_09_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_09_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - mlp
+    layer: 0
+- id: C.kda_dense.ffn_residual
+  title: kda_dense ffn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    step: ffn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.kda_dense.10
+  title: 'kda_dense block with steps 1-10 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.kda_dense.ffn_residual
+  - S.kda_dense.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_10_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_10_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_dense
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - mlp
+    - ffn_residual
+    layer: 0
+- id: C.dsa_moe.attn_hc
+  title: dsa_moe attn_hc (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_hc.py
+    metrics:
+      pcc_attn_hc_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: attn_hc
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.01
+  title: 'dsa_moe block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.dsa_moe.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    layer: 3
+- id: C.dsa_moe.attn_collapse
+  title: dsa_moe attn_collapse (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: attn_collapse
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.02
+  title: 'dsa_moe block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.dsa_moe.attn_collapse
+  - S.dsa_moe.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 3
+- id: C.dsa_moe.attn_norm
+  title: dsa_moe attn_norm (norm) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_norm.py
+    metrics:
+      pcc_attn_norm_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: attn_norm
+    kind: norm
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.03
+  title: 'dsa_moe block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.dsa_moe.attn_norm
+  - S.dsa_moe.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 3
+- id: C.dsa_moe.q_a
+  title: dsa_moe q_a (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_q_a.py
+    metrics:
+      pcc_q_a_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: q_a
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.04
+  title: 'dsa_moe block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.dsa_moe.q_a
+  - S.dsa_moe.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 3
+- id: C.dsa_moe.indexer
+  title: dsa_moe indexer (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_indexer.py
+    metrics:
+      pcc_indexer_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: indexer
+    kind: op
+    layer: 3
+    stateful: true
+- id: S.dsa_moe.05
+  title: 'dsa_moe block with steps 1-5 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.dsa_moe.indexer
+  - S.dsa_moe.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_05_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_05_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    layer: 3
+- id: C.dsa_moe.attention
+  title: dsa_moe attention (attention) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attention.py
+    metrics:
+      pcc_attention_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: attention
+    kind: attention
+    layer: 3
+    stateful: true
+- id: S.dsa_moe.06
+  title: 'dsa_moe block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.dsa_moe.attention
+  - S.dsa_moe.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    layer: 3
+- id: C.dsa_moe.attn_residual
+  title: dsa_moe attn_residual (residual) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py
+    metrics:
+      pcc_attn_residual_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: attn_residual
+    kind: residual
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.07
+  title: 'dsa_moe block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.dsa_moe.attn_residual
+  - S.dsa_moe.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    layer: 3
+- id: C.dsa_moe.ffn_hc
+  title: dsa_moe ffn_hc (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: ffn_hc
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.08
+  title: 'dsa_moe block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.dsa_moe.ffn_hc
+  - S.dsa_moe.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 3
+- id: C.dsa_moe.ffn_collapse
+  title: dsa_moe ffn_collapse (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: ffn_collapse
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.09
+  title: 'dsa_moe block with steps 1-9 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.dsa_moe.ffn_collapse
+  - S.dsa_moe.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_09_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_09_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 3
+- id: C.dsa_moe.ffn_norm
+  title: dsa_moe ffn_norm (norm) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: ffn_norm
+    kind: norm
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.10
+  title: 'dsa_moe block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.dsa_moe.ffn_norm
+  - S.dsa_moe.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 3
+- id: C.dsa_moe.router
+  title: dsa_moe router (router) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_router.py
+    metrics:
+      pcc_router_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: router
+    kind: router
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.11
+  title: 'dsa_moe block with steps 1-11 on device (last: router)'
+  step: implement
+  deps:
+  - C.dsa_moe.router
+  - S.dsa_moe.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_11_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_11_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 3
+- id: C.dsa_moe.experts
+  title: dsa_moe experts (moe) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_experts.py
+    metrics:
+      pcc_experts_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: experts
+    kind: moe
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.12
+  title: 'dsa_moe block with steps 1-12 on device (last: experts)'
+  step: implement
+  deps:
+  - C.dsa_moe.experts
+  - S.dsa_moe.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_12_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_12_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 3
+- id: C.dsa_moe.shared_expert
+  title: dsa_moe shared_expert (mlp) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_shared_expert.py
+    metrics:
+      pcc_shared_expert_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: shared_expert
+    kind: mlp
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.13
+  title: 'dsa_moe block with steps 1-13 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.dsa_moe.shared_expert
+  - S.dsa_moe.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_13_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_13_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 3
+- id: C.dsa_moe.moe_add
+  title: dsa_moe moe_add (residual) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_moe_add.py
+    metrics:
+      pcc_moe_add_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: moe_add
+    kind: residual
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.14
+  title: 'dsa_moe block with steps 1-14 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.dsa_moe.moe_add
+  - S.dsa_moe.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_14_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_14_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 3
+- id: C.dsa_moe.ffn_residual
+  title: dsa_moe ffn_residual (residual) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    step: ffn_residual
+    kind: residual
+    layer: 3
+    stateful: false
+- id: S.dsa_moe.15
+  title: 'dsa_moe block with steps 1-15 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.dsa_moe.ffn_residual
+  - S.dsa_moe.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_15_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_15_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dsa_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 3
+- id: C.kda_moe.attn_hc
+  title: kda_moe attn_hc (op) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_hc.py
+    metrics:
+      pcc_attn_hc_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: attn_hc
+    kind: op
+    layer: 4
+    stateful: false
+- id: S.kda_moe.01
+  title: 'kda_moe block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.kda_moe.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    layer: 4
+- id: C.kda_moe.attn_collapse
+  title: kda_moe attn_collapse (op) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: attn_collapse
+    kind: op
+    layer: 4
+    stateful: false
+- id: S.kda_moe.02
+  title: 'kda_moe block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.kda_moe.attn_collapse
+  - S.kda_moe.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 4
+- id: C.kda_moe.attn_norm
+  title: kda_moe attn_norm (norm) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_norm.py
+    metrics:
+      pcc_attn_norm_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: attn_norm
+    kind: norm
+    layer: 4
+    stateful: false
+- id: S.kda_moe.03
+  title: 'kda_moe block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.kda_moe.attn_norm
+  - S.kda_moe.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 4
+- id: C.kda_moe.attention
+  title: kda_moe attention (attention) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attention.py
+    metrics:
+      pcc_attention_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: attention
+    kind: attention
+    layer: 4
+    stateful: true
+- id: S.kda_moe.04
+  title: 'kda_moe block with steps 1-4 on device (last: attention)'
+  step: implement
+  deps:
+  - C.kda_moe.attention
+  - S.kda_moe.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_04_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_04_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    layer: 4
+- id: C.kda_moe.attn_residual
+  title: kda_moe attn_residual (residual) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py
+    metrics:
+      pcc_attn_residual_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: attn_residual
+    kind: residual
+    layer: 4
+    stateful: false
+- id: S.kda_moe.05
+  title: 'kda_moe block with steps 1-5 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.kda_moe.attn_residual
+  - S.kda_moe.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_05_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_05_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    layer: 4
+- id: C.kda_moe.ffn_hc
+  title: kda_moe ffn_hc (op) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: ffn_hc
+    kind: op
+    layer: 4
+    stateful: false
+- id: S.kda_moe.06
+  title: 'kda_moe block with steps 1-6 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.kda_moe.ffn_hc
+  - S.kda_moe.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_06_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_06_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 4
+- id: C.kda_moe.ffn_collapse
+  title: kda_moe ffn_collapse (op) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: ffn_collapse
+    kind: op
+    layer: 4
+    stateful: false
+- id: S.kda_moe.07
+  title: 'kda_moe block with steps 1-7 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.kda_moe.ffn_collapse
+  - S.kda_moe.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_07_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_07_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 4
+- id: C.kda_moe.ffn_norm
+  title: kda_moe ffn_norm (norm) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: ffn_norm
+    kind: norm
+    layer: 4
+    stateful: false
+- id: S.kda_moe.08
+  title: 'kda_moe block with steps 1-8 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.kda_moe.ffn_norm
+  - S.kda_moe.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_08_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_08_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 4
+- id: C.kda_moe.router
+  title: kda_moe router (router) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_router.py
+    metrics:
+      pcc_router_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: router
+    kind: router
+    layer: 4
+    stateful: false
+- id: S.kda_moe.09
+  title: 'kda_moe block with steps 1-9 on device (last: router)'
+  step: implement
+  deps:
+  - C.kda_moe.router
+  - S.kda_moe.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_09_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_09_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 4
+- id: C.kda_moe.experts
+  title: kda_moe experts (moe) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_experts.py
+    metrics:
+      pcc_experts_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: experts
+    kind: moe
+    layer: 4
+    stateful: false
+- id: S.kda_moe.10
+  title: 'kda_moe block with steps 1-10 on device (last: experts)'
+  step: implement
+  deps:
+  - C.kda_moe.experts
+  - S.kda_moe.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_10_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_10_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 4
+- id: C.kda_moe.shared_expert
+  title: kda_moe shared_expert (mlp) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_shared_expert.py
+    metrics:
+      pcc_shared_expert_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: shared_expert
+    kind: mlp
+    layer: 4
+    stateful: false
+- id: S.kda_moe.11
+  title: 'kda_moe block with steps 1-11 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.kda_moe.shared_expert
+  - S.kda_moe.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_11_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_11_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 4
+- id: C.kda_moe.moe_add
+  title: kda_moe moe_add (residual) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_moe_add.py
+    metrics:
+      pcc_moe_add_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: moe_add
+    kind: residual
+    layer: 4
+    stateful: false
+- id: S.kda_moe.12
+  title: 'kda_moe block with steps 1-12 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.kda_moe.moe_add
+  - S.kda_moe.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_12_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_12_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 4
+- id: C.kda_moe.ffn_residual
+  title: kda_moe ffn_residual (residual) on device, layer 4
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L04: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    step: ffn_residual
+    kind: residual
+    layer: 4
+    stateful: false
+- id: S.kda_moe.13
+  title: 'kda_moe block with steps 1-13 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.kda_moe.ffn_residual
+  - S.kda_moe.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_13_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_13_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: kda_moe
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 4
+- id: M.1
+  title: Assemble the all-device model (hidden state on the device from embedding to final norm)
+  step: assemble
+  deps:
+  - S.kda_dense.10
+  - S.dsa_moe.15
+  - S.kda_moe.13
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - M.1
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+  device: true
+  paths:
+  - models/demos/glm53_flash_d_p/tt
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/glm53_flash_d_p/bringup/opportunities.md
+- id: X.3
+  title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
+  step: perf
+  deps:
+  - X.2
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/glm53_flash_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/glm53_flash_d_p/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true
