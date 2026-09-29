@@ -132,7 +132,16 @@ Both became tensor bindings. None became RTA values.
    - After the swap, unary's `compute_program_hash` calls it once per sharded slot, on every dispatch: +27 µs per sharded dispatch on the common path, +55 µs with a preallocated output.
    - The swap itself is required, because the key must read the same resolution the relaxed match compares.
    - Options: accept the cost explicitly, or make the resolution cheap (memoize it on the spec, or expose the pinned geometry without building the full distribution spec). Either is outside a port.
-   - After `64a8b66a65a` (skip the 2D `from_shard_spec` when an ND spec will overwrite it), the call measured ~14 µs on the same 64-core tensor, down from ~27 µs. The hash itself was not re-measured.
+   - After `94d0b607b0a` (skip the 2D `from_shard_spec` when an ND spec will overwrite it), the call measured ~14 µs on the same 64-core tensor, down from ~27 µs. The hash itself was not re-measured.
+7. **Recipe maintainers — recipe deviation: a Gen2 setting chosen in a Gen1 port.** *(Tag: recipe / Quasar; found in review, adopted at the user's direction.)*
+   - The reader and writer now pass `disable_dfb_implicit_sync_for_all = true` to `create_reader_datamovement_config` / `create_writer_datamovement_config`. The recipe (§ Hardware configuration, "Gen2 is out of scope") names this exact flag as Quasar-specific judgment a Gen1 port should not make.
+   - Why it was taken anyway:
+     - Both kernels drive their DFB with explicit `reserve_back` / `push_back` (`wait_front` / `pop_front`) and sized `Noc::async_read` / `async_write` transfers, which on the `ROW_MAJOR` path are sub-entry at a non-zero offset. The TTNN helper documents the flag for exactly this case ("explicit reserve_back/push_back stays authoritative"; stick transfers "stall the implicit credit accounting").
+     - It is inert on Gen1: `config_2xx` is read only for Quasar's implicit-sync setting (`program_spec.cpp`).
+     - 31 call sites in already-shipped ports set it (`tilize`, `tilize_with_val_padding`, `interleaved_to_sharded`, `sharded_to_interleaved`).
+   - **Not validated:** there is no Quasar bench here. On Gen1 it is behaviour-neutral by construction; the Quasar behaviour is the reviewer's analysis plus the helper's contract.
+   - **Carry-over:** `copy/typecast` uses the same kernel shapes (explicit sync; a row-major chunked path) with the default helper, so it likely needs the same change.
+   - **Suggested recipe change:** replace the blanket "don't set it" with the rule the helper implies: DM kernels that keep explicit FIFO sync set `disable_dfb_implicit_sync_for_all = true`.
 
 ## Successes
 
@@ -196,14 +205,18 @@ Both became tensor bindings. None became RTA values.
   - Only `op_chain[0]` selects the compute kernel, so the dedicated kernels would silently skip later chain ops.
 - **Test coverage notes.**
   - Sharded views now have coverage in `test_unary_sharding.py` (added post-review): a divergent input view rejected on a miss and on a hit, with the cached program still correct afterwards; a divergent preallocated output view rejected; and ordinary height- and block-sharded `ttnn.reshape` views correct on the accessor path. A divergent view on the native-sharded path is deliberately not covered, since its result is wrong in legacy too (handoff 3).
-  - Regime row 5 of the relaxation doc (a sharded buffer on the accessor path) is covered only by `test_unary_sharded_input_on_interleaved_path_cache_reuse`.
-- **Quasar-uplift debt added:** none. There is no DM self-loop. `tmp0` is a compute self-loop, which is legal on Gen2. No token-form metadata sites were used.
+  - Regime row 5 of the relaxation doc (a sharded buffer on the accessor path) is covered by `test_unary_sharded_input_on_interleaved_path_cache_reuse`, and now also by the rank-changing test below.
+  - `relax_logical_rank` now has end-to-end coverage (added post-review), in `test_unary_program_cache.py`:
+    - `test_unary_cache_reuse_different_logical_ranks` dispatches TILE interleaved inputs of different ranks (4 → 2, 4 → 3 with a different volume and width, 2 → 5) through one cache entry, and checks both outputs and a cache count of 1.
+    - `…_sharded_accessor_path` does the same for a block-sharded input on the accessor path, where the reader's shape words come from each dispatch's buffer.
+    - Negative control: with `relax_logical_rank` removed, all four fail on the hit with `logical_shape rank (2) differs from the declared rank (4)`, so they genuinely exercise the flag.
+- **Quasar-uplift debt added:** none. There is no DM self-loop. `tmp0` is a compute self-loop, which is legal on Gen2. No token-form metadata sites were used. One Gen2 setting was chosen here rather than left to the uplift: see handoff 7.
 - **Hardware config, legacy → port (checked field by field):**
 
   | kernel | legacy | Metal 2.0 |
   |---|---|---|
-  | reader | `ReaderConfigDescriptor{}` (RISCV_1 / NOC_0 / dedicated), O2 | `create_reader_datamovement_config()`, O2 default |
-  | writer | `WriterConfigDescriptor{}` (RISCV_0 / NOC_1 / dedicated), O2 | `create_writer_datamovement_config()`, O2 default |
+  | reader | `ReaderConfigDescriptor{}` (RISCV_1 / NOC_0 / dedicated), O2 | `create_reader_datamovement_config(true)` (Gen1 triple identical; Gen2 implicit sync off, handoff 7), O2 default |
+  | writer | `WriterConfigDescriptor{}` (RISCV_0 / NOC_1 / dedicated), O2 | `create_writer_datamovement_config(true)` (same), O2 default |
   | compute | HiFi4, `math_approx_mode=false`, `fp32_dest_acc_en`, `bfp8_pack_precise`, `dst_full_sync_en` default false, `unpack_to_dest_mode[c_0,c_1] = Fp32 iff preserve`, O3 (resolved) | `fpu_math_fidelity=HiFi4`, `sfpu_precision_mode=Precise`, `enable_32_bit_dest=fp32_dest_acc_en`, `config_1xx->bfp_pack_precision_mode=bfp8_pack_precise?Precise:Approximate` (off Quasar), `double_buffer_dest=true` (default), `unpack_modes{in, tmp0 iff LOGIT} = UnpackToDest iff preserve && fp32_dest_acc_en, else explicit UnpackToSrc for a Float32 DFB under 32-bit Dest`, `opt_level=O3` explicit |
 
   The compute row has the port's only condition legacy did not have: `UnpackToDest` also requires `fp32_dest_acc_en`. It cannot change behaviour, because `ttnn::unary` (`unary.cpp`) derives `fp32_dest_acc_en = preserve_fp32_precision || ...` and is `prim::unary`'s only caller, so `preserve ⟹ fp32_dest_acc_en` holds on every reachable path. The conjunction is there because Metal 2.0 validates the combination legacy ignored: `UnpackToDest` into a 16-bit Dest is a `TT_FATAL` for a 32-bit buffer format on any generation, and on Gen1 (Wormhole and Blackhole both) for a narrower one. Written as `iff preserve` alone, a future caller that breaks the derivation would crash; written as the conjunction, it degrades to legacy's silent `UnpackToSrc`.

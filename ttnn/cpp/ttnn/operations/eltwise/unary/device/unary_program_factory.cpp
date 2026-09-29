@@ -603,7 +603,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .accessor_name = "src",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dm_runtime_arg_names},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = ttnn::create_reader_datamovement_config(true),
     };
 
     // --- Writer Kernel ---
@@ -626,7 +626,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .accessor_name = "dst",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dm_runtime_arg_names},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = ttnn::create_writer_datamovement_config(true),
     };
 
     // --- Compute Kernel ---

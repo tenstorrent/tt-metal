@@ -122,8 +122,8 @@ No semaphore-ID RTAs or page-size 3rd-argument sites exist.
 
 ## Hardware configuration (planned)
 
-- reader: `create_reader_datamovement_config()`, the reader default triple.
-- writer: `create_writer_datamovement_config()`, the writer default triple.
+- reader: `create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true)`, the reader default triple. The flag is Gen2-only; it was added in review (report handoff 7).
+- writer: `create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true)`, the writer default triple (same).
 - compute: Style B, a `ComputeHardwareConfig` built directly because legacy set a `ComputeConfigDescriptor` literally.
   - `fpu_math_fidelity = HiFi4`
   - `sfpu_precision_mode = Precise` (`math_approx_mode = false`)

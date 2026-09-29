@@ -126,6 +126,53 @@ def test_unary_cache_reuse_different_volumes(device):
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.parametrize(
+    "first_shape, second_shape",
+    [
+        ([1, 1, 64, 128], [64, 128]),  # rank 4 -> 2, same volume
+        ([2, 3, 32, 64], [4, 32, 96]),  # rank 4 -> 3, different volume and width
+        ([96, 64], [1, 2, 2, 64, 32]),  # rank 2 -> 5
+    ],
+)
+def test_unary_cache_reuse_different_logical_ranks(device, first_shape, second_shape):
+    """TILE layout: inputs of different rank share one cache entry. The hit must be accepted
+    (relax_logical_rank) and must re-derive the work split and tensor arguments for the second tensor."""
+    device.cache_entries_counter.reset()
+
+    for shape in (first_shape, second_shape):
+        torch_ref, tt_out = run_unary_op(device, ttnn.relu, shape)
+        assert_equal(torch_ref, tt_out)
+
+    assert device.cache_entries_counter.total == 1
+
+
+def test_unary_cache_reuse_different_logical_ranks_sharded_accessor_path(device):
+    """Sharded inputs with different ranks (interleaved output) share the same shard geometry: the cached
+    program is reused while the reader's shape follows each dispatch's buffer."""
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 2 or grid.y < 2:
+        pytest.skip("Device grid too small for a 2x2 shard grid")
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    device.cache_entries_counter.reset()
+    torch.manual_seed(0)
+    for shape in ([1, 1, 64, 128], [64, 128]):
+        torch_a = torch.rand(shape, dtype=torch.bfloat16) - 0.5
+        tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 1
+
+
 # =============================================================================
 # Cache miss tests (fields correctly included in hash)
 # =============================================================================
