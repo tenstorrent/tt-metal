@@ -863,7 +863,19 @@ class Model(_GPTOSSModel):
             if rows:
                 lengths = [int(length) for length in rows][:batch_size]
                 kwargs["fill_seq_lens"] = lengths + [0] * (batch_size - len(lengths))
+        if not is_decode:
+            self._prefill_output_is_hidden = bool(kwargs.get("skip_lm_head", False))
         return self._run_decoder_stack(*args, is_decode=is_decode, **kwargs)
+
+    def process_logits_after_prefill_trace(self, output, last_token_idx):
+        """Finish the selected prefill tile before the shared generator reads logits.
+
+        Single-user prefill applies the terminal head in the decoder stack.
+        Batched prefill defers it until each user's last tile has been selected,
+        for both device sampling and the shared host-logits warmup path.
+        """
+        tile = super().process_logits_after_prefill_trace(output, last_token_idx)
+        return self._apply_norm_and_lm_head(tile) if self._prefill_output_is_hidden else tile
 
     def _run_decoder_stack(
         self,

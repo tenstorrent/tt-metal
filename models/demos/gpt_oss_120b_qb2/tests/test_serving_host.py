@@ -159,6 +159,40 @@ def test_single_user_prefill_limits_cache_fill_to_valid_last_tile(last_tile, exp
     assert model._run_decoder_stack.call_args.kwargs["fill_seq_lens"] == [expected_fill]
 
 
+def test_batched_host_prefill_projects_hidden_states_once_then_single_user_keeps_logits(monkeypatch):
+    from models.demos.gpt_oss_120b_qb2.tt.model import Model, _GPTOSSModel
+
+    model = object.__new__(Model)
+    model.norm = SimpleNamespace(decode_mode=True)
+    model._prefill_rope_slices = {64: [None, None]}
+    weight = torch.arange(28, dtype=torch.float32).reshape(4, 7) / 28
+
+    def project(hidden):
+        return torch.nn.functional.layer_norm(hidden, (4,)) @ weight
+
+    model._apply_norm_and_lm_head = Mock(side_effect=project)
+    model._run_decoder_stack = lambda hidden_states, skip_lm_head=False, **kwargs: (
+        hidden_states if skip_lm_head else project(hidden_states)
+    )
+    monkeypatch.setattr(ttnn, "reshape", torch.reshape)
+    monkeypatch.setattr(
+        _GPTOSSModel,
+        "process_logits_after_prefill_trace",
+        lambda self, output, last: output[..., (last // 32) * 32 : (last // 32 + 1) * 32, :],
+    )
+    for batch in (4, 1):
+        hidden = torch.arange(batch * 64 * 4, dtype=torch.float32).reshape(1, 1, batch * 64, 4)
+        output = model._forward_layers_and_head(hidden_states=hidden, is_decode=False, batch_size=batch)
+        output = output.reshape(batch, 1, 64, -1)
+        for row in range(batch):
+            actual = model.process_logits_after_prefill_trace(output[row : row + 1], 47)
+            expected = project(hidden.reshape(batch, 1, 64, 4)[row : row + 1, :, 32:64])
+            torch.testing.assert_close(actual, expected)
+            assert actual.shape == (1, 1, 32, 7)
+    # Four batched rows need projection; the following single-user result is already logits.
+    assert model._apply_norm_and_lm_head.call_count == 4
+
+
 def test_serving_report_serializes_fabric_without_mutating_capabilities(monkeypatch, tmp_path):
     adapter = object.__new__(TTGptOssForCausalLM)
     adapter.model = SimpleNamespace(
