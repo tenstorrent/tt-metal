@@ -65,22 +65,12 @@ class MultichipTensorPlan:
 class MultichipDecoderPolicy:
     """Static multichip dtype/topology policy selected at construction."""
 
-    name: str = (
-        "p150_1d_tp_replicated_residual_mixed_ccl_lofi_sparse_fused_router_"
-        "decode45x15_prefill_group_sparse45x45_layer_aware_sdpa_tp2_subblock2_dram_output"
-    )
+    name: str = "p150_tp4_sparse_experts"
     attention_weight_dtype: object = ttnn.bfloat8_b
     expert_weight_dtype: object = ttnn.bfloat4_b
     kv_cache_dtype: object = ttnn.bfloat8_b
     residual_layout: str = "replicated"
     topology: object = ttnn.Topology.Ring
-    decode_dram_sharded_qkv: bool = False
-    decode_dram_sharded_output: bool = True
-    decode_dram_sharded_output_tp4: bool = False
-    decode_dram_sharded_output_input_cores: int = 16
-    decode_separate_qkv: bool = False
-    decode_explicit_output_projection: bool = False
-    decode_fused_output_projection_ccl: bool = False
     decode_fused_router: bool = True
     prefill_token_group_sparsity: bool = True
     # Decode batches above one run as a single 32-row token group through the
@@ -95,10 +85,8 @@ class MultichipDecoderPolicy:
     decode_grouped_l1: bool = True
     # Prefill: gather each expert's routed tokens into per-expert slabs and run
     # the projections in the compact indexed sparse-matmul mode, instead of a
-    # dense 128-expert expanded output per 32-token group.  Experimental: exact
-    # and 2.5-3.3x faster per layer in isolation, but its data-dependent tensor
-    # shapes recompile programs on every layer/prompt in the serving path
-    # (32 s TTFT at 1024 tokens, L1 clash at 16k).  Off until shapes are static.
+    # dense 128-expert expanded output per 32-token group. Static expert slabs
+    # keep program shapes reusable across prompts and decoder layers.
     prefill_indexed_experts: bool = True
     # Below this many tokens the packed group-sparse path is used: the indexed
     # path syncs the host once per layer to size its expert slabs, which costs
@@ -127,15 +115,12 @@ class MultichipDecoderPolicy:
     expert_gate_up_cores: tuple[int, int] = (6, 8)
     expert_gate_up_in0_block_w: int = 30
     expert_gate_up_subblock_w: int = 1
-    expert_gate_up_subblock_w_tp2: int | None = 2
     expert_down_cores: tuple[int, int] = (5, 3)
     expert_down_in0_block_w: int = 12
     expert_down_subblock_w: int | None = 6
     expert_prefill_down_cores: tuple[int, int] = (5, 9)
     expert_prefill_down_in0_block_w: int = 12
     expert_prefill_down_subblock_w: int | None = 2
-    expert_prefill_down_cores_tp2: tuple[int, int] | None = None
-    expert_prefill_down_subblock_w_tp2: int | None = None
 
 
 DEFAULT_MULTICHIP_POLICY = MultichipDecoderPolicy()
@@ -418,43 +403,14 @@ class _PhysicalHiddenCollectiveAttention:
         if seq_len != 1:
             raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
-        qkv_input = (
-            ttnn.to_memory_config(hidden_states, self.decode_qkv_input_memory_config)
-            if self.decode_qkv_input_memory_config is not None
-            else hidden_states
+        xqkv_fused = ttnn.linear(
+            hidden_states,
+            self.weights.wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=self.decode_projection_compute_kernel_config,
         )
-        if self.decode_separate_qkv:
-            projected = []
-            for weight, bias in zip(self.decode_separate_qkv_weights, self.decode_separate_qkv_biases):
-                output = ttnn.linear(
-                    qkv_input,
-                    weight,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    compute_kernel_config=self.decode_projection_compute_kernel_config,
-                )
-                output = ttnn.add(output, bias, output_tensor=output)
-                projected.append(output)
-            xqkv_fused = ttnn.concat(projected, dim=-1)
-            for output in projected:
-                output.deallocate(True)
-        else:
-            xqkv_fused = ttnn.linear(
-                qkv_input,
-                self.decode_wqkv,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                compute_kernel_config=self.decode_projection_compute_kernel_config,
-                program_config=self.decode_qkv_program_config,
-            )
-        if qkv_input is not hidden_states:
-            qkv_input.deallocate(True)
-        if self.decode_qkv_to_interleaved:
-            sharded_qkv = xqkv_fused
-            xqkv_fused = ttnn.sharded_to_interleaved(sharded_qkv, ttnn.DRAM_MEMORY_CONFIG)
-            sharded_qkv.deallocate(True)
-        if not self.decode_separate_qkv:
-            ttnn.add(xqkv_fused, self.weights.wqkv_bias, output_tensor=xqkv_fused)
+        ttnn.add(xqkv_fused, self.weights.wqkv_bias, output_tensor=xqkv_fused)
 
         num_local_heads = self.mesh_config.shard_size(self.config.num_heads)
         num_local_kv_heads = self.mesh_config.shard_size(self.config.num_kv_heads)
@@ -562,87 +518,16 @@ class _PhysicalHiddenCollectiveAttention:
 
         tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
         tt_sdpa_tensor.deallocate(True)
-        output_input = (
-            ttnn.to_memory_config(tt_sdpa_out, self.decode_output_input_memory_config)
-            if self.decode_output_input_memory_config is not None
-            and tt_sdpa_out.memory_config() != self.decode_output_input_memory_config
-            else tt_sdpa_out
-        )
-        padded_local_hidden = math.ceil((hidden_size // self.mesh_config.tp) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        padded_hidden = padded_local_hidden * self.mesh_config.tp
-        if self.decode_fused_output_projection_ccl:
-            fused_input = ttnn.to_memory_config(output_input, ttnn.DRAM_MEMORY_CONFIG)
-            if fused_input.dtype != self.activation_ccl_dtype:
-                cast_input = ttnn.typecast(fused_input, self.activation_ccl_dtype)
-                if fused_input is not output_input:
-                    fused_input.deallocate(True)
-                fused_input = cast_input
-            matmul_output, scattered = ttnn.experimental.matmul_reduce_scatter_async(
-                fused_input,
-                self.decode_o_proj,
-                persistent_intermediate_buffer=self.decode_output_mmrs_intermediate,
-                persistent_output_buffer=self.decode_output_mmrs_output,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                reduce_scatter_core_grid_offset=(0, 6),
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-                bias=self.decode_o_proj_bias,
-                num_links=self.ccl_manager.num_links,
-                memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                subdevice_id=None,
-                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
-                program_config=self.decode_output_mmrs_program_config,
-                compute_kernel_config=self.decode_projection_compute_kernel_config,
-            )
-            gathered = ttnn.experimental.all_gather_async(
-                scattered,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            tt_out = ttnn.slice(
-                gathered,
-                starts=[0, 0, 0, 0],
-                ends=[
-                    gathered.shape[0],
-                    gathered.shape[1],
-                    gathered.shape[2],
-                    hidden_size,
-                ],
-                steps=[1, 1, 1, 1],
-            )
-            fused_input.deallocate(True)
-            matmul_output.deallocate(True)
-            gathered.deallocate(True)
-            if output_input is not tt_sdpa_out:
-                output_input.deallocate(True)
-            tt_sdpa_out.deallocate(True)
-            return ttnn.reshape(
-                tt_out,
-                (1, 1, batch_size, hidden_size),
-                (1, 1, ttnn.TILE_SIZE, hidden_size),
-            )
 
         tt_out = ttnn.linear(
-            output_input,
-            self.decode_o_proj,
+            tt_sdpa_out,
+            self.weights.o_proj,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.decode_projection_compute_kernel_config,
-            program_config=self.decode_output_program_config,
         )
-        output_input.deallocate(True)
-        if output_input is not tt_sdpa_out:
-            tt_sdpa_out.deallocate(True)
-        if self.decode_output_to_interleaved:
-            sharded_output = tt_out
-            tt_out = ttnn.sharded_to_interleaved(sharded_output, ttnn.DRAM_MEMORY_CONFIG)
-            sharded_output.deallocate(True)
-        tt_out = ttnn.add(tt_out, self.decode_o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tt_sdpa_out.deallocate(True)
+        tt_out = ttnn.add(tt_out, self.weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
         if tt_out.dtype != self.activation_ccl_dtype:
             projection_output = tt_out
             tt_out = ttnn.typecast(projection_output, self.activation_ccl_dtype)
@@ -2699,11 +2584,10 @@ class MultichipDecoder(LightweightModule):
         "decode_sharded_rmsnorm",
         "decode_attention_bfp8_prefill_attention_bf16_expert_bf16_collectives",
         "decode_lofi_prefill_qkv_hifi2_o_lofi_attention_projections",
-        "sparse_expert_decode_45x15_prefill_45x45_geometry_with_tp2_gate_subblock2",
+        "sparse_expert_decode_45x15_prefill_45x45_geometry",
         "fused_decode_router",
         "route_derived_prefill_token_group_expert_sparsity",
         "layer_aware_long_prefill_sdpa_chunks",
-        "tp2_dram_sharded_output_projection",
         "replicated_decode_l1_prefill_dram_stack_residual_contract",
     )
 
@@ -2819,28 +2703,9 @@ class MultichipDecoder(LightweightModule):
             tensor_cache_path=get_cache_file_name(cache_root, "self_attn"),
             create_kv_cache=create_kv_cache,
         )
-        attention.decode_wqkv = attention.weights.wqkv
-        attention.decode_separate_qkv = policy.decode_separate_qkv
-        attention.decode_separate_qkv_weights = None
-        attention.decode_separate_qkv_biases = None
-        attention.decode_qkv_input_memory_config = None
-        attention.decode_qkv_program_config = None
-        attention.decode_qkv_to_interleaved = False
-        attention.decode_output_input_memory_config = None
-        attention.decode_output_program_config = None
-        attention.decode_o_proj = attention.weights.o_proj
-        attention.decode_o_proj_bias = attention.weights.o_proj_bias
-        attention.decode_output_to_interleaved = False
         attention.decode_output_physical_hidden = plan.padded_hidden_size
         attention.activation_ccl_dtype = policy.attention_activation_ccl_dtype or policy.activation_ccl_dtype
         attention.residual_dtype = policy.residual_dtype
-        # The regular fused MM+RS kernel is correct and substantially faster
-        # for TP4. Its TP2 topology hangs on Blackhole for both native and
-        # 3072-column adapted shapes, so TP2 keeps the measured non-fused path.
-        attention.decode_fused_output_projection_ccl = policy.decode_fused_output_projection_ccl and plan.tp == 4
-        attention.decode_output_mmrs_intermediate = None
-        attention.decode_output_mmrs_output = None
-        attention.decode_output_mmrs_program_config = None
         attention.decode_projection_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=policy.projection_math_fidelity,
@@ -2848,212 +2713,6 @@ class MultichipDecoder(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        if attention.decode_fused_output_projection_ccl:
-            persistent_batch = ttnn.TILE_SIZE
-            make_persistent = lambda width: ttnn.from_torch(
-                torch.zeros((1, 1, persistent_batch, width)),
-                device=mesh_device,
-                dtype=attention.activation_ccl_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            attention.decode_output_mmrs_intermediate = make_persistent(plan.padded_hidden_size)
-            attention.decode_output_mmrs_output = make_persistent(plan.padded_local_hidden)
-            output_tiles = plan.padded_hidden_size // ttnn.TILE_SIZE
-            per_core_n = math.ceil(output_tiles / 8)
-            attention.decode_output_mmrs_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 6),
-                in0_block_w=4,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=1,
-                per_core_N=per_core_n,
-                out_block_w=max(1, per_core_n // 2),
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=False,
-            )
-        if policy.decode_separate_qkv:
-            column_mapper = mesh_config.column_parallel(mesh_device)
-            attention.decode_separate_qkv_weights = tuple(
-                ttnn.as_tensor(
-                    substate(attention_state, projection)["weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=policy.attention_weight_dtype,
-                    mesh_mapper=column_mapper,
-                    cache_file_name=get_cache_file_name(cache_root, f"self_attn/{projection}_separate_weight"),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                for projection in ("q_proj", "k_proj", "v_proj")
-            )
-            attention.decode_separate_qkv_biases = tuple(
-                ttnn.as_tensor(
-                    substate(attention_state, projection)["bias"],
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=column_mapper,
-                    cache_file_name=get_cache_file_name(cache_root, f"self_attn/{projection}_separate_bias"),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                for projection in ("q_proj", "k_proj", "v_proj")
-            )
-        if policy.decode_dram_sharded_qkv:
-            dram_grid_size = mesh_device.dram_grid_size()
-            dram_grid = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
-                    )
-                }
-            )
-            dram_banks = dram_grid.num_cores()
-            if plan.local_qkv_width % (dram_banks * ttnn.TILE_SIZE):
-                raise ValueError(
-                    "DRAM-sharded QKV requires a tile-aligned per-bank width, "
-                    f"got local width {plan.local_qkv_width} over {dram_banks} banks"
-                )
-            weight_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.DRAM,
-                ttnn.ShardSpec(
-                    dram_grid,
-                    (hf_config.hidden_size, plan.local_qkv_width // dram_banks),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-            attention.decode_wqkv = ttnn.to_memory_config(attention.weights.wqkv, weight_memory_config)
-            input_cores = ttnn.num_cores_to_corerangeset(
-                15,
-                mesh_device.compute_with_storage_grid_size(),
-                row_wise=True,
-            )
-            attention.decode_qkv_input_memory_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, hf_config.hidden_size // 15),
-                core_grid=input_cores,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            attention.decode_qkv_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=6,
-                per_core_M=1,
-                per_core_N=5,
-                fused_activation=None,
-            )
-            attention.decode_qkv_to_interleaved = True
-        if policy.decode_dram_sharded_output and (plan.tp == 2 or policy.decode_dram_sharded_output_tp4):
-            dram_grid_size = mesh_device.dram_grid_size()
-            dram_grid = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
-                    )
-                }
-            )
-            dram_banks = dram_grid.num_cores()
-            output_alignment = dram_banks * ttnn.TILE_SIZE
-            output_width = math.ceil(plan.padded_hidden_size / output_alignment) * output_alignment
-            local_attention_width = hf_config.num_attention_heads * hf_config.head_dim // plan.tp
-            output_weight = substate(attention_state, "o_proj")["weight"].transpose(-1, -2)
-            output_bias = substate(attention_state, "o_proj")["bias"]
-            output_weight = torch.nn.functional.pad(
-                output_weight,
-                (0, output_width - hf_config.hidden_size),
-                "constant",
-                value=0.0,
-            )
-            output_bias = torch.nn.functional.pad(
-                output_bias,
-                (0, output_width - hf_config.hidden_size),
-                "constant",
-                value=0.0,
-            )
-            output_bias = torch.cat([output_bias] + [torch.zeros_like(output_bias)] * (plan.tp - 1), dim=-1)
-            output_weight_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.DRAM,
-                ttnn.ShardSpec(
-                    dram_grid,
-                    (local_attention_width, output_width // dram_banks),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-            attention.decode_o_proj = ttnn.as_tensor(
-                output_weight,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=policy.attention_weight_dtype,
-                mesh_mapper=mesh_config.row_parallel(mesh_device),
-                cache_file_name=get_cache_file_name(
-                    cache_root,
-                    f"self_attn/decode_o_proj_dram_sharded_{output_width}",
-                ),
-                memory_config=output_weight_memory_config,
-            )
-            attention.decode_o_proj_bias = ttnn.as_tensor(
-                output_bias,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=mesh_config.column_parallel(mesh_device),
-                cache_file_name=get_cache_file_name(
-                    cache_root,
-                    f"self_attn/decode_o_proj_bias_dram_sharded_{output_width}",
-                ),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            input_cores = policy.decode_dram_sharded_output_input_cores
-            output_input_grid = ttnn.num_cores_to_corerangeset(
-                input_cores,
-                mesh_device.compute_with_storage_grid_size(),
-                row_wise=True,
-            )
-            input_shard_width = local_attention_width // input_cores
-            attention.decode_output_input_memory_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, input_shard_width),
-                core_grid=output_input_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            attention.decode_output_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=input_shard_width // ttnn.TILE_SIZE,
-                per_core_M=1,
-                per_core_N=output_width // dram_banks // ttnn.TILE_SIZE,
-                fused_activation=None,
-            )
-            attention.decode_output_to_interleaved = True
-            attention.decode_output_physical_hidden = output_width
-        if policy.decode_explicit_output_projection:
-            output_cores = 32 if plan.tp == 2 else 16
-            output_grid = ttnn.CoreGrid(x=8, y=output_cores // 8)
-            local_attention_width = hf_config.num_attention_heads * hf_config.head_dim // plan.tp
-            attention.decode_output_input_memory_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, local_attention_width // output_cores),
-                core_grid=output_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            per_core_n = 3 if plan.tp == 2 else 6
-            attention.decode_output_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(output_grid.x, output_grid.y),
-                in0_block_w=2,
-                out_subblock_h=1,
-                out_subblock_w=per_core_n,
-                out_block_h=1,
-                out_block_w=per_core_n,
-                per_core_M=1,
-                per_core_N=per_core_n,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
         backend = DecoderLayer(
             mesh_device=mesh_device,
             hf_config=hf_config,
@@ -3106,25 +2765,13 @@ class MultichipDecoder(LightweightModule):
                 separate_gate_up=policy.decode_separate_gate_up,
                 gate_up_cores=policy.expert_gate_up_cores,
                 gate_up_in0_block_w=policy.expert_gate_up_in0_block_w,
-                gate_up_subblock_w=(
-                    policy.expert_gate_up_subblock_w_tp2
-                    if plan.tp == 2 and policy.expert_gate_up_subblock_w_tp2 is not None
-                    else policy.expert_gate_up_subblock_w
-                ),
+                gate_up_subblock_w=policy.expert_gate_up_subblock_w,
                 down_cores=policy.expert_down_cores,
                 down_in0_block_w=policy.expert_down_in0_block_w,
                 down_subblock_w=policy.expert_down_subblock_w,
-                prefill_down_cores=(
-                    policy.expert_prefill_down_cores_tp2
-                    if plan.tp == 2 and policy.expert_prefill_down_cores_tp2 is not None
-                    else policy.expert_prefill_down_cores
-                ),
+                prefill_down_cores=policy.expert_prefill_down_cores,
                 prefill_down_in0_block_w=policy.expert_prefill_down_in0_block_w,
-                prefill_down_subblock_w=(
-                    policy.expert_prefill_down_subblock_w_tp2
-                    if plan.tp == 2 and policy.expert_prefill_down_subblock_w_tp2 is not None
-                    else policy.expert_prefill_down_subblock_w
-                ),
+                prefill_down_subblock_w=policy.expert_prefill_down_subblock_w,
             ),
             calibrated_checkpoint_revision=calibrated_checkpoint_revision,
         )

@@ -20,13 +20,15 @@ PAGE_SIZE = 64
 DECODE_K_CHUNK = 128
 ENV_SLIDING_RING = "GPT_OSS_120B_SLIDING_RING"
 ENV_SLIDING_RING_TOKENS = "GPT_OSS_120B_SLIDING_RING_TOKENS"
+MIN_SLIDING_RING_TOKENS = 768
 
 
 def _ring_tokens() -> int:
     value = int(os.environ.get(ENV_SLIDING_RING_TOKENS, "768"))
-    if value < 2 * DECODE_K_CHUNK or value % DECODE_K_CHUNK:
+    if value < MIN_SLIDING_RING_TOKENS or value % DECODE_K_CHUNK:
         raise ValueError(
-            f"{ENV_SLIDING_RING_TOKENS} must be a multiple of {DECODE_K_CHUNK} and at least {2 * DECODE_K_CHUNK}, got {value}"
+            f"{ENV_SLIDING_RING_TOKENS} must be a multiple of {DECODE_K_CHUNK} and at least "
+            f"{MIN_SLIDING_RING_TOKENS} to preserve the window across prefix resumes, got {value}"
         )
     return value
 

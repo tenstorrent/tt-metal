@@ -124,44 +124,6 @@ def _merge_policy(base: dict, override: dict) -> dict:
     return merged
 
 
-BUILTIN_DEFAULT_PRECISION = {
-    "schema_version": 2,
-    "config_id": "optimized_full_model_baseline",
-    "weight_groups": {
-        "embedding": "bfloat16",
-        "attention_qkv": "bfloat8_b",
-        "attention_output": "bfloat8_b",
-        "router": "bfloat16",
-        "experts_gate_up": "bfloat4_b",
-        "experts_down": "bfloat4_b",
-        "normalization": "bfloat16",
-        "lm_head": "bfloat8_b",
-    },
-    "layer_exceptions": {},
-    "compute_fidelities": {
-        "decode_attention_projection": "LoFi",
-        "prefill_attention_projection": "HiFi2",
-        "attention_sdpa": "HiFi4",
-        "expert_matmul": "LoFi",
-        "router_matmul": "HiFi2",
-        "lm_head": "HiFi2",
-    },
-    "activation_residual_dtype": {
-        "stack_residual": "bfloat16",
-        "attention_projection_input": "bfloat8_b",
-        "expert_intermediate": "bfloat16",
-    },
-    "ccl_dtype": {"attention": "bfloat8_b", "experts": "bfloat16"},
-    "kv_cache_dtype": "bfloat8_b",
-    "logits_sampling_dtype_assumptions": {
-        "lm_head_output": "bfloat8_b",
-        "full_logits_gather": {"mode": "not_materialized"},
-        "topk_values_gather_dtype": "bfloat16",
-        "sampling_accumulator": "bfloat16",
-    },
-}
-
-
 @dataclass(frozen=True)
 class PrecisionConfig:
     raw: dict
@@ -312,15 +274,10 @@ class PrecisionConfig:
 def load_precision_config(path: str | Path | None = None) -> PrecisionConfig:
     explicit = path or os.environ.get("GPT_OSS_120B_PRECISION_CONFIG")
     resolved = Path(explicit).expanduser().resolve() if explicit else DEFAULT_PRECISION_CONFIG_PATH
-    if resolved.is_file():
-        return PrecisionConfig(json.loads(resolved.read_text(encoding="utf-8")), resolved)
-    if explicit:
-        raise FileNotFoundError(f"precision config does not exist: {resolved}")
-    return PrecisionConfig(copy.deepcopy(BUILTIN_DEFAULT_PRECISION))
+    return PrecisionConfig(json.loads(resolved.read_text(encoding="utf-8")), resolved)
 
 
 __all__ = [
-    "BUILTIN_DEFAULT_PRECISION",
     "DEFAULT_PRECISION_CONFIG_PATH",
     "PrecisionConfig",
     "dtype_name",

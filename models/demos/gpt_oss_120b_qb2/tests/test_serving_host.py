@@ -120,3 +120,21 @@ def test_host_prefill_trims_each_layer_table_using_its_cache_block_axis():
         passed = generator._prefill_one.call_args_list[row].kwargs["page_tables_per_layer"]
         assert torch.equal(passed[0], tables[0][row : row + 1, :first_width])
         assert torch.equal(passed[1], tables[1][row : row + 1, :second_width])
+
+
+@pytest.mark.parametrize("tokens", [256, 512, 640, 769])
+def test_ring_override_cannot_discard_prefix_resume_history(monkeypatch, tokens):
+    from models.demos.gpt_oss_120b_qb2.tt import sliding_ring
+
+    monkeypatch.setenv(sliding_ring.ENV_SLIDING_RING_TOKENS, str(tokens))
+    with pytest.raises(ValueError, match="prefix resumes"):  # allow-pytest.raises: host-only, no device conftest
+        sliding_ring._ring_tokens()
+
+
+def test_missing_precision_manifest_fails_instead_of_changing_policy(monkeypatch, tmp_path):
+    from models.demos.gpt_oss_120b_qb2.tt import precision
+
+    monkeypatch.delenv("GPT_OSS_120B_PRECISION_CONFIG", raising=False)
+    monkeypatch.setattr(precision, "DEFAULT_PRECISION_CONFIG_PATH", tmp_path / "missing.json")
+    with pytest.raises(FileNotFoundError):  # allow-pytest.raises: host-only, no device conftest
+        precision.load_precision_config()
