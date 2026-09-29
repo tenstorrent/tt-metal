@@ -98,3 +98,75 @@ class TtDistributedRmsNorm:
         )
         ttnn.deallocate(gathered)
         return y
+
+
+class TtGatheredRmsNorm:
+    """ffn_norm (post_attention_layernorm): all_gather the column-split input over ``cluster_axis``, then one local
+    ``ttnn.bringup.rms_norm`` over the whole hidden (components.yaml: every FFN consumer needs the full row, so the one
+    gather here serves them all).
+
+    Call with the per-chip input [1, 1, S/2, H/2] TILE (fp32 or bf16, the TtHcPre output); returns
+    [1, 1, S/2, H] TILE ``dtype`` per chip, split by rows over the other axis and replicated over ``cluster_axis``.
+
+        ttnn.all_gather dim 3, axis 1   [S/2, H/2] -> [S/2, H] (input dtype, Linear topology on the FABRIC_2D mesh)
+        ttnn.bringup.rms_norm           w * x * rsqrt(mean(x^2) + eps), full w (fp32 row-major [1, 1, H/32, 32],
+                                        replicated), HiFi4 + fp32 dest (the fork's fp32 sum-of-squares fix; the native
+                                        op scales rows ~0.1% low on fp32 input, known issues)
+        ttnn.typecast                   -> ``dtype`` when the fork's output dtype differs
+
+    ``norm_impl="native"`` runs ttnn.rms_norm for comparison. No host work in __call__.
+    """
+
+    def __init__(
+        self,
+        mesh,
+        weight: torch.Tensor,
+        eps: float,
+        cluster_axis: int = 1,
+        dtype=ttnn.bfloat16,
+        norm_impl: str = "bringup",
+    ):
+        assert norm_impl in ("bringup", "native"), norm_impl
+        self.norm_op = ttnn.bringup.rms_norm if norm_impl == "bringup" else ttnn.rms_norm
+        hidden = weight.numel()
+        tp = mesh.shape[cluster_axis]
+        assert hidden % (TILE * tp) == 0, (hidden, tp)
+        self.mesh, self.hidden, self.eps, self.cluster_axis, self.dtype = mesh, hidden, float(eps), cluster_axis, dtype
+        self.ckc = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self.weight = ttnn.from_torch(
+            weight.float().reshape(1, 1, hidden // TILE, TILE),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        full = ttnn.all_gather(
+            x,
+            dim=3,
+            cluster_axis=self.cluster_axis,
+            topology=ttnn.Topology.Linear,
+            memory_config=dram,
+        )
+        y = self.norm_op(
+            full,
+            weight=self.weight,
+            epsilon=self.eps,
+            memory_config=dram,
+            compute_kernel_config=self.ckc,
+        )
+        ttnn.deallocate(full)
+        if y.dtype != self.dtype:
+            y2 = ttnn.typecast(y, self.dtype, memory_config=dram)
+            ttnn.deallocate(y)
+            y = y2
+        return y
