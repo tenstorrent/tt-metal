@@ -297,16 +297,21 @@ class TtKdaAttention(LightweightModule):
             )
         return self._layers[s]
 
-    def __call__(self, x: ttnn.Tensor, start: int, end: int | None = None) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, start: int, end: int | None = None, split: bool = False) -> ttnn.Tensor:
         """x [1, 1, S, H] replicated bf16, start the chunk's absolute position (a multiple of S) ->
         attn_out [1, 1, S, H] replicated bf16. Advances the carried state. end (optional): the exclusive valid end,
-        32-aligned, in (start, start + S]; rows past it are pad (their output is unspecified, the state skips them)."""
-        s = x.shape[-2]
+        32-aligned, in (start, start + S]; rows past it are pad (their output is unspecified, the state skips them).
+        split: x and attn_out are this chip's [1, 1, S/4, H] (tt/common.py split layout): the input is gathered on
+        axis 1 to the SP half, the output all_gathered on axis 1 (hidden) and cut to the chip's quarter."""
+        s = x.shape[-2] * (self.sp * self.tp if split else 1)
         assert start % s == 0 and start % START_ALIGN == 0, f"chunk start {start} must be a multiple of S={s}"
         if end is not None:
             assert start < end <= start + s and end % END_ALIGN == 0, f"actual_end {end} for chunk [{start}, +{s})"
         kda = self._kda(s)
-        xs = ttnn.mesh_partition(x, dim=-2, cluster_axis=SP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if split:  # rows of mesh row r = its two chips' quarters
+            xs = ttnn.all_gather(x, dim=-2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            xs = ttnn.mesh_partition(x, dim=-2, cluster_axis=SP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = ttnn.reshape(xs, (1, s // self.sp, self.hidden))
         i = start // START_ALIGN
         actual_start = ttnn.slice(self.starts, (i, 0), (i + 1, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -328,7 +333,10 @@ class TtKdaAttention(LightweightModule):
         o4 = ttnn.reshape(out, (1, 1, s // self.sp, self.hidden // self.tp))
         g1 = ttnn.all_gather(o4, dim=-1, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out)
-        g2 = ttnn.all_gather(g1, dim=-2, cluster_axis=SP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if split:
+            g2 = ttnn.mesh_partition(g1, dim=-2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            g2 = ttnn.all_gather(g1, dim=-2, cluster_axis=SP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(g1)
         if g2.dtype != ttnn.bfloat16:
             y = ttnn.typecast(g2, ttnn.bfloat16)

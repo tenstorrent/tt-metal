@@ -45,3 +45,20 @@ findings:
     PCC 0.80..0.94, conv 0.16..0.27, so the padded tail is really skipped).
     Resolved in the run1 contract step: bringup/hooks.py is now in the contract paths and forwards to the adapter's
     contract_state_pcc; the gate passes.
+- id: x3-timeline-profiler-buffer
+  task: X.3
+  kind: INFRA
+  title: X.3 timeline_ok is 0 because the device profiler buffer (1000 programs per RISC) overflows in the unsynced timeline run
+  detail: >-
+    The timeline run in testing/profile.py op_profile (profiler.enable(timeline=True)) reads the device profiler once,
+    after the whole chunk. GLM-5.3's 5-layer chunk launches 1319 programs per chip (op mode). The DRAM profiler
+    buffer holds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs per RISC (default 1000, bufferEndIndex 12000 words),
+    so busy cores drop markers ("Profiler DRAM buffers were full") and the timeline sees only 1281 programs per chip.
+    align_timeline then refuses the alignment. Every accuracy and perf metric passes (pcc_layer min 0.99954,
+    pcc_state_min 0.98247, prefill_ms_full 4501, op_rows 869, pos_chunk 5120). Checked: the same test_profile with
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=3000 gives timeline_ok 1 (device timeline 423.7 ms = kernels 422.9 +
+    gaps 0.7, host dispatch 43.4 ms, host wall 430.8 ms). The fix is in the framework, outside a fix step's paths:
+    add TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT (e.g. 3000, or sized from the op-mode count) to the X.3 profile env
+    (plan/ledger_gen.py) or to profiler.PROFILER_ENV / test_profile before the mesh opens. The model's modules and
+    the ttnn.bringup forks cannot fix it; cutting ~320 programs per chip from the forward pass only to fit the buffer
+    would not be a real fix.
