@@ -2944,3 +2944,37 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
+
+## C.moe_shared.router test (attempt 1)
+
+What
+- Replaced the rendered router test (moe_shared layer 2) with the reviewed layer-1 router test
+  (test_c_moe_full_router.py) at LAYER = 2, with the same limits: gated pcc_router_L02 (0.99), not a CPU bridge,
+  finite, 8 nonzeros per row, non-negative, overlap >= 0.995 vs golden and >= 0.996 vs the CPU step, matched-row rel L2
+  <= 0.005 / 0.004, row sum / 2.827 within 0.004. Added the worst per-row overlap vs the CPU step >= 0.75 (from swap
+  S.moe_full.11), which catches a row permutation that the mean checks miss.
+- CPU mutation study on the layer-2 golden in /tmp/hy4_router2/{study,mut,mut2}.py (outside the repo; logs mut.log,
+  mut2.log). The table is in the test docstring.
+
+Decisions
+- Kept the layer-1 limits after re-measuring on layer 2 (known issue: router mutations score differently per layer).
+  The layer-2 bias is wider (-0.147..0.024) and the median 8th / 9th gap is smaller (0.0017), so the bf16 stages score
+  lower than at layer 1 (choice keys bf16 overlap 0.98395, sigmoid bf16 0.98792, logits bf16 0.98969). All of them fail
+  the overlap limits. A bf16 bias is harmless (0.99841).
+- Worst-row limit 0.75: adjacent rows share up to 5 of 8 experts at layer 2, so a swapped row scores 0.625. The fp32
+  device router scores 0.875 (a near-tie flip).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.998961, overlap 0.99823 / vs CPU 1.0, matched rel 0.00172 / 0, row sums 1.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, TtHy4Router from the moe_full implement step already covers layer 2): PASS. pcc_router_L02 0.998978,
+  overlap 0.99823 vs golden, 0.99988 vs CPU (2046/2048 rows matched), worst row 0.875, matched rel 0.00173 / 0.00006,
+  row sums 1.00000.
+
+Gotchas
+- The first `FAIL pcc_router_L02: pcc=0.000000` line in the log comes from the precompile collect pass. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
