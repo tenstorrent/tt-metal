@@ -207,15 +207,25 @@ void kernel_main() {
     const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
     for (uint32_t qi = 0; qi < jobs; ++qi) {
         const uint32_t qbase = (first_job + qi) * q_tiles * SDPA_RECIPE_DHT;
-        qcb.reserve_back(q_tiles * SDPA_RECIPE_DHT);
+        // Paired recipes pad an odd chunk with SDPA_RECIPE_Q_PAD_TILES zero rows (host: recipe_compute_q_tiles).
+        constexpr uint32_t q_push_tiles = (q_tiles + SDPA_RECIPE_Q_PAD_TILES) * SDPA_RECIPE_DHT;
+        qcb.reserve_back(q_push_tiles);
         const uint32_t qptr = qcb.get_write_ptr();
+        bool zeroed = SDPA_RECIPE_Q_PAD_TILES > 0;
         for (uint32_t p = 0; p < q_tiles * SDPA_RECIPE_DHT; ++p) {
             const CoreLocalMem<uint32_t> destination(qptr + p * qbytes);
             if (!q.visit(qbase + p, [&](const auto& source, uint32_t page) {
                     noc.async_read(source, destination, qbytes, {.page_id = page}, {});
                 })) {
                 noc.async_write_zeros(destination, qbytes);
+                zeroed = true;
             }
+        }
+        for (uint32_t p = q_tiles * SDPA_RECIPE_DHT; p < q_push_tiles; ++p) {
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(qptr + p * qbytes), qbytes);
+        }
+        if (zeroed) {
+            noc.write_zeros_l1_barrier();
         }
         noc.async_read_barrier();
         if constexpr (decltype(q)::has_partial_rows) {
@@ -226,7 +236,7 @@ void kernel_main() {
                 }
             }
         }
-        qcb.push_back(q_tiles * SDPA_RECIPE_DHT);
+        qcb.push_back(q_push_tiles);
 
         const bool receive = link.should_receive(head);
         const bool forward = link.should_forward(head, qi);
