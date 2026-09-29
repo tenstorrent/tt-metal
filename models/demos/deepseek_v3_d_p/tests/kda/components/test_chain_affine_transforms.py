@@ -7,27 +7,22 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _AffineTransform, _distributed_prefix
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY, _VALUE = 640, 24, 128, 128
-
-
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="SP8xTP4",
-        )
-    ],
-    indirect=True,
+_GALAXY = pytest.param(
+    (8, 4),
+    torus_xy_device_params(),
+    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+    id="SP8xTP4",
 )
+
+
+@pytest.mark.parametrize("mesh_device,device_params", [_GALAXY], indirect=True)
 @pytest.mark.parametrize("start", [0, 640, 672, 3232], ids=["aligned", "rotated", "split", "late-split"])
 def test_chain_affine_transforms_matches_reference(mesh_device, start):
     generator = torch.Generator().manual_seed(start)
@@ -80,24 +75,23 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
 
 
+# Validation does not depend on the mesh, so LoudBox CI covers it too.
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
+        _GALAXY,
         pytest.param(
-            (8, 4),
-            torus_xy_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="SP8xTP4",
-        )
+            (2, 4),
+            fabric_1d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP2xTP4",
+        ),
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "case, message",
-    [("fp32-transforms", "transforms must be BFLOAT16"), ("bf16-dest", "fp32_dest_acc_en must be enabled")],
-    ids=["fp32-transforms", "bf16-dest"],
-)
-def test_chain_affine_transforms_rejects_lossy_configurations(mesh_device, case, message, expect_error):
+@pytest.mark.parametrize("case", ["fp32-transforms", "bf16-dest"])
+def test_chain_affine_transforms_rejects_lossy_configurations(mesh_device, case, expect_error):
+    message = {"fp32-transforms": "transforms must be BFLOAT16", "bf16-dest": "fp32_dest_acc_en must be enabled"}[case]
     sp_size = tuple(mesh_device.shape)[0]
 
     def replicated(shape, dtype):

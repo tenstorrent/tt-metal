@@ -63,6 +63,7 @@ FORCE_INLINE void add(DataflowBuffer& product, DataflowBuffer& b, DataflowBuffer
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // product and b interleave in DST: tile i uses DST[2i] and DST[2i + 1].
     constexpr uint32_t pair_tiles = dst_tiles / 2;
+    static_assert(pair_tiles > 0);
     const uint32_t product_id = product.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t state_id = state.get_id();
@@ -133,7 +134,7 @@ TT_KERNEL void compute() {
         // b is only needed by the add, so its reads may land while the matmul runs.
         b.wait_front(state_tiles);
         product.wait_front(state_tiles);
-        // Publish the carry after entry_step - 1 steps (this rank's entry state) and after the last step.
+        // Publish the carry after step entry_step - 1 (this rank's entry state) and after the last step.
         const bool publish = step + 1 == entry_step || step + 1 == steps;
         add<state_tiles>(product, b, state, publish ? &out : nullptr);
         product.pop_front(state_tiles);

@@ -65,7 +65,7 @@ TT_KERNEL void dataflow(uint32_t head) {
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
-    // This rank's chronological index: its entry state is the carry after entry_step - 1 steps.
+    // This rank's chronological index: its entry state is the carry after step entry_step - 1.
     const uint32_t entry_step = (topology.rank + sp_size - topology.first_rank) % sp_size;
 
     if (entry_step == 0) {
@@ -105,7 +105,7 @@ TT_KERNEL void dataflow(uint32_t head) {
         a.push_back(a_tiles);
         b.push_back(state_tiles);
         // Compute publishes the carry after step entry_step - 1; drain it once the next inputs are queued.
-        if (step != 0 && step == entry_step) {
+        if (entry_step != 0 && step == entry_step) {
             out.wait_front(state_tiles);
             write_state(out, entry_state);
             out.pop_front(state_tiles);

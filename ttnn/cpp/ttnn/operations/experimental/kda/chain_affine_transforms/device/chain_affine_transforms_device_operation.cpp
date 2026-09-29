@@ -39,7 +39,7 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     TT_FATAL(
-        ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
+        attrs.compute_kernel_config.fp32_dest_acc_en,
         "{}: fp32_dest_acc_en must be enabled; the FP32 product unpacks to DST for the add",
         operation_name);
 
