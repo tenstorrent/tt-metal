@@ -1,3 +1,4 @@
-from .functional_decoder import FunctionalDecoder
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
-__all__ = ["FunctionalDecoder"]
+"""GPT-OSS 120B on a four-chip Blackhole mesh."""

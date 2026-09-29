@@ -203,6 +203,7 @@ class TTGptOssForCausalLM:
     model_capabilities = {
         "supports_prefix_caching": PREFIX_CACHING_ENABLED,
         "supports_async_decode": True,
+        "supports_decode_output_batch_size": True,
         "supports_sample_on_device": True,
         "max_device_sampling_top_k": 32,
         "supports_batched_prefill": True,
@@ -487,10 +488,6 @@ class TTGptOssForCausalLM:
         self.model.kv_cache_owner = "vllm"
         self.model._validate_precision_runtime()
         self.generator = Generator(self.model, self.model_args, kv_cache=layer_cache, cache_owner="vllm")
-        # This adapter retains B1 and B32 model traces concurrently. The generic
-        # generator keeps its model-capture allocation acknowledgement opt-in so
-        # ordinary single-bucket models receive the normal allocator warning.
-        self.generator._inner._allow_coexisting_decode_trace_capture_allocations = True
         self._cache_tensor_indices = tensor_indices
         self._cache_shapes = cache_shapes
         self._write_serving_capability()
@@ -919,8 +916,8 @@ class TTGptOssForCausalLM:
         slot_remap=None,
         reload_inputs=True,
         reload_page_table=False,
-        reload_sampling_params=True,
-        reset_sampling_state=True,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
         enable_trace=True,
         read_from_device=True,
         **kwargs,
@@ -960,6 +957,7 @@ class TTGptOssForCausalLM:
             device_sampling=device_sampling,
             enable_trace=enable_trace,
         )
+        host_width = int(torch.as_tensor(start_pos).numel())
         bucket_changed = False
         force_host_tokens = bool(reload_inputs) or recapture_reset
         if device_sampling and enable_trace:

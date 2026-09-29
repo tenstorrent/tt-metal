@@ -310,6 +310,7 @@ class Generator:
         self._inner._slots_prefilled_since_decode = set()
         self._inner._defer_trace_recording = False
         self._inner._pending_decode_trace = None
+        self._inner._prepared_decode_traces.clear()
         self._prepared_device_sampling_params = None
         if host_sampling:
             self.trace_evidence.decode_trace_releases_for_host_sampling += 1
@@ -762,7 +763,9 @@ class Generator:
                 page_table=page_table_host,
                 kv_cache=self._outer_cache(kv_cache),
                 enable_trace=enable_trace,
-                read_from_device=read_from_device,
+                # The shared generator formats with its configured maximum
+                # width. Host logits must use this submission's bucket width.
+                read_from_device=read_from_device and sampling_mode == "device",
                 sampling_params=effective_sampling_params,
                 reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
@@ -798,9 +801,11 @@ class Generator:
             return result
         self.trace_evidence.full_logits_readbacks += 1
         self.trace_evidence.validation_full_logit_synchronizations += 1
-        if isinstance(result, tuple):
-            result = result[0]
-        return result[:, 0, :]
+        host_output = self._inner.read_decode_output(result)
+        logits, _ = self.process_decode_output_host(
+            host_output, batch_size_per_model=(tokens.shape[0],), is_tokens=False
+        )
+        return logits[:, 0, :]
 
     def _sampling_has_active_request_seed(self) -> bool:
         for inner_model in self._inner.model:
@@ -923,11 +928,20 @@ class Generator:
             return torch.cat([ttnn.to_torch(shard).reshape(-1) for shard in host_output.shards], dim=0).to(torch.int64)
         if batch_size_per_model is None:
             return self._inner.process_decode_output_host(host_output, is_tokens=is_tokens)
-        return self._inner.process_decode_output_host(
-            host_output,
-            is_tokens=is_tokens,
-            batch_size_per_model=batch_size_per_model,
-        )
+        # The plugin snapshots this submission's padded width before a later
+        # bucket activation can change model state. This model has one DP rank.
+        if is_tokens or len(batch_size_per_model) != 1:
+            raise ValueError("Explicit output widths require one GPT-OSS host-logits rank")
+        width = int(batch_size_per_model[0])
+        if not 1 <= width <= self.model_args.max_batch_size:
+            raise ValueError(f"Invalid submitted decode width {width}")
+        output = host_output[0]
+        if isinstance(output, tuple):
+            output, log_probs = output
+            if log_probs is not None:
+                raise ValueError("Host-logits decode must not return device sampling logprobs")
+        logits = self.model.process_output_decode(output, width, S=1, is_tokens=False)
+        return logits, torch.ones_like(logits)
 
     def warmup_model_prefill(self, *, kv_cache, enable_trace: bool, can_sample_on_device: bool):
         """Delegate vLLM's prefill warmup to the canonical generator."""
@@ -1382,22 +1396,7 @@ class Generator:
         if self._torn_down:
             return
         self._torn_down = True
-        destructor = getattr(self._inner, "__del__", None)
-        if callable(destructor):
-            destructor()
-        # ``__del__`` is not an ordinary teardown API and does not clear the
-        # handles it released.  Clear them before dropping our last reference,
-        # otherwise Python invokes it a second time and double-releases traces.
-        for name in (
-            "trace_id_prefill",
-            "trace_id_prefill_sampling",
-            "trace_ids_decode",
-            "_bucket_trace_store",
-            "trace_ids",
-        ):
-            store = getattr(self._inner, name, None)
-            if hasattr(store, "clear"):
-                store.clear()
+        self._inner.release_persistent_capture()
         self._inner = None
 
 
