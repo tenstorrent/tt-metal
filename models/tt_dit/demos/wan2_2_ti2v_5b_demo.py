@@ -92,6 +92,22 @@ def save_outputs(frames_u8: np.ndarray, out_path: str, fps: int) -> None:
 
         export_to_video(frames_u8, out_path, fps=fps)
         logger.info(f"Saved video: {out_path} ({t} frames @ {fps} fps)")
+        return
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"mp4 export via imageio failed ({e!r}); trying OpenCV")
+    # Fallback: OpenCV's writer needs no extra ffmpeg module (this venv has cv2 but not
+    # imageio_ffmpeg). mp4v is universally decodable; re-encode with ffmpeg for a smaller file.
+    try:
+        import cv2
+
+        h, w = frames_u8.shape[1:3]
+        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+        if not writer.isOpened():
+            raise RuntimeError("cv2.VideoWriter could not open the output")
+        for frame in frames_u8:
+            writer.write(cv2.cvtColor(np.ascontiguousarray(frame), cv2.COLOR_RGB2BGR))
+        writer.release()
+        logger.info(f"Saved video via OpenCV: {out_path} ({t} frames @ {fps} fps)")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"mp4 export failed ({e!r}); the PNG previews are the output")
 
