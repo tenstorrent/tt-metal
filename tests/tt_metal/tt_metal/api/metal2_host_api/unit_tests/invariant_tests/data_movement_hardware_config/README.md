@@ -1,13 +1,8 @@
 # data_movement_hardware_config invariant tests
 
-Local invariants of `DataMovementHardwareConfig`, as written in `data_movement_hardware_config.hpp`.
-
-The rules that compare data-movement kernels with each other (distinct processors and NOCs within a WorkUnitSpec,
-Gen2 DM core assignment) are structural; they live in
-[`../program_spec/gen1_dm_placement.cpp`](../program_spec/gen1_dm_placement.cpp) and
-[`../program_spec/gen2_dm_core_assignment.cpp`](../program_spec/gen2_dm_core_assignment.cpp).
-
-Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH).
+Local invariants of `DataMovementHardwareConfig` (`data_movement_hardware_config.hpp`). Rules that compare DM kernels
+with each other are structural: `../program_spec/gen1_dm_placement.cpp` and
+`../program_spec/gen2_dm_core_assignment.cpp`.
 
 ## Files
 
@@ -15,7 +10,7 @@ Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH).
 |---|---|---|
 | `config_1xx.cpp` | 3 | `config_1xx` (Wormhole, Blackhole) |
 
-## Coverage of the header invariants
+## Coverage
 
 | Invariant | Tests |
 |---|---|

@@ -1,10 +1,7 @@
 # kernel_spec invariant tests
 
-Local invariants of `KernelSpec` and its nested structs, as written in `kernel_spec.hpp`. Every rule here reads one
-KernelSpec and nothing else in the ProgramSpec. Rules that relate a kernel's bindings to the rest of the ProgramSpec
-(for example, "the bound DFB is declared") are structural and live in [`../program_spec/`](../program_spec/).
-
-Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH). All test names start with `CPU_`.
+Local invariants of `KernelSpec` and its nested structs (`kernel_spec.hpp`). Rules that relate a kernel's bindings to
+the rest of the ProgramSpec, such as "the bound DFB is declared", are structural and live in `../program_spec/`.
 
 ## Files
 
@@ -19,7 +16,7 @@ Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH). All test n
 | `kernel_arguments.cpp` | 8 | `compile_time_args` and `RuntimeArgSchema` |
 | `hardware_config.cpp` | 4 | `hw_config` against the kernel's own bindings |
 
-## Coverage of the header invariants
+## Coverage
 
 "Accepted" lists tests that pin the legal side of a rule.
 
@@ -54,11 +51,7 @@ Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH). All test n
 | Gen1: UnpackToDest on a DFB this kernel consumes requires `enable_32_bit_dest` | WH `ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf`. Accepted on Gen2: Q `ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds` |
 | Every `config_2xx->disable_dfb_implicit_sync_for` entry names a DFB this kernel binds | **Untested** |
 
-Tests that document a freedom rather than a rule:
-
-- WH `AccessorNamesAcrossCategoriesAreSeparateNamespaces`: the same string may be a DFB, semaphore and tensor
-  accessor name in one kernel.
-- Q `TensorBindingOnComputeKernelIsAccepted`: compute kernels may bind tensors.
-- Q `DifferentKernelsMayReuseArgNames`: the argument-name rules apply per kernel.
-- Q `NamedRuntimeArgsSucceeds`, Q `CompileTimeArgBindingsSucceeds`, Q `RuntimeArgsSchemaSucceeds`,
-  Q `CompilerOptionsDefinesSucceeds`, Q `ComputeConfigMathFidelitySucceeds`: ordinary uses of these fields are accepted.
+Freedoms pinned by acceptance tests: one string may be a DFB, semaphore and tensor accessor name in the same kernel
+(WH `AccessorNamesAcrossCategoriesAreSeparateNamespaces`); compute kernels may bind tensors
+(Q `TensorBindingOnComputeKernelIsAccepted`); the argument-name rules apply per kernel
+(Q `DifferentKernelsMayReuseArgNames`).

@@ -1,13 +1,9 @@
 # advanced_options invariant tests
 
-Local invariants of the `*AdvancedOptions` structs in `advanced_options.hpp`. That header does not state its
-invariants in comments yet, so these files follow the rules the implementation enforces, grouped by struct.
-
-Rules that span several structs are structural and live in [`../program_spec/`](../program_spec/): DFB alias groups
-(`dfb_aliasing.cpp`), options of compute-bound semaphores (`semaphores.cpp`), and PrefetcherPipe roles, lanes and
-relays (`prefetcher_pipe_*.cpp`).
-
-Fixtures: `ProgramSpecTestQuasar` (Q), `ProgramSpecTestGen1` (WH) and `PrefetcherPipeSpecTestQuasar` (PQ).
+Local invariants of the `*AdvancedOptions` structs in `advanced_options.hpp`. The header does not state them in
+comments yet, so these tests follow the checks in the implementation. Rules that span several structs (DFB alias
+groups, compute-bound semaphore options, PrefetcherPipe roles, lanes and relays) are structural and live in
+`../program_spec/`.
 
 ## Files
 
@@ -17,7 +13,7 @@ Fixtures: `ProgramSpecTestQuasar` (Q), `ProgramSpecTestGen1` (WH) and `Prefetche
 | `dfb_advanced_options.cpp` | 3 | `allow_instance_multi_binding`, `prefetcher_pipe_relays` |
 | `semaphore_advanced_options.cpp` | 2 | `initial_value` |
 
-## Rules covered
+## Coverage
 
 ### KernelAdvancedOptions
 
@@ -34,8 +30,7 @@ Fixtures: `ProgramSpecTestQuasar` (Q), `ProgramSpecTestGen1` (WH) and `Prefetche
 | A pipe appears in at most one of a kernel's pipe bindings | PQ `SamePipeBoundTwiceInOneKernelFails` |
 | Only data-movement kernels bind pipes | PQ `ComputeKernelBindingPipeFails` |
 
-Tensor binding sequences that are accepted are exercised by the JIT smoke tests in
-[`../../../kernel_compilation_tests/bindings/tensor_bindings.cpp`](../../../kernel_compilation_tests/bindings/tensor_bindings.cpp).
+Accepted tensor binding sequences are covered by the JIT tests in `kernel_compilation_tests/bindings/tensor_bindings.cpp`.
 
 ### DFBAdvancedOptions
 
@@ -45,8 +40,8 @@ Tensor binding sequences that are accepted are exercised by the JIT smoke tests 
 | `prefetcher_pipe_relays` has no repeats | PQ `RelayListsSamePipeTwiceFails` |
 | A relay DFB (non-empty `prefetcher_pipe_relays`) does not set `borrowed_from` | PQ `RelayWithBorrowedFromFails` |
 
-What the flag allows on Gen1 is tested in `../program_spec/work_unit_bindings.cpp` and
-`../program_spec/dfb_endpoints.cpp` (`*WithFlag` tests).
+What the flag allows on Gen1 is covered by the `*WithFlag` tests in `../program_spec/work_unit_bindings.cpp` and
+`../program_spec/dfb_endpoints.cpp`.
 
 ### SemaphoreAdvancedOptions
 

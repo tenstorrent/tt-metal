@@ -1,18 +1,13 @@
 # program_spec invariant tests
 
-Invariants of `program_spec.hpp`:
+Invariants of `program_spec.hpp`: the local invariants of `WorkUnitSpec`, the per-field rules of `ProgramSpec`, and
+the structural invariants listed at the top of `ProgramSpec`. The PrefetcherPipe and alias rules come from
+`advanced_options.hpp` and `prefetcher_pipe_parameter.hpp`, but are structural because they relate several
+ProgramSpec fields.
 
-- local invariants of `WorkUnitSpec`,
-- per-field invariants of `ProgramSpec` (the comments on each field), and
-- the **structural** invariants listed at the top of `ProgramSpec`: rules that read more than one field of the
-  ProgramSpec, such as a kernel's bindings together with the declared resources.
+## Files
 
-Fixtures: `ProgramSpecTestQuasar` (Q), `ProgramSpecTestGen1` (WH), `ProgramSpecTestBlackhole` (BH),
-`PrefetcherPipeSpecTestQuasar` (PQ) and `PrefetcherPipeSpecTestGen1` (PW).
-
-## Files, by section of program_spec.hpp
-
-| Section | File | Tests |
+| Section of program_spec.hpp | File | Tests |
 |---|---|---|
 | `WorkUnitSpec` fields: non-empty kernels, target nodes on the device grid | `work_unit_spec.cpp` | 5 |
 | `ProgramSpec` fields: unique ids in each group, non-empty kernels and work units, disjoint work units, no cross-node DFBs yet | `program_spec_fields.cpp` | 11 |
@@ -33,19 +28,14 @@ Fixtures: `ProgramSpecTestQuasar` (Q), `ProgramSpecTestGen1` (WH), `ProgramSpecT
 | PrefetcherPipe: relay DFBs | `prefetcher_pipe_relays.cpp` | 9 |
 | Minimal specs that satisfy every invariant | `valid_program_specs.cpp` | 3 |
 
-The PrefetcherPipe and alias rules come from `advanced_options.hpp` and `prefetcher_pipe_parameter.hpp`. They are
-structural because they relate several ProgramSpec fields.
-
 ## Known gaps
 
 - `WorkUnitSpecWithNoKernelsFails` and `EmptyWorkUnitSpecsFails` fail earlier, on "Kernel ... is not referenced by
-  any WorkUnitSpec". The checks their names describe (a WorkUnitSpec has kernels; the ProgramSpec has work units)
-  are not reached by any test.
-- No test covers: a kernel name repeated within one `WorkUnitSpec::kernels`; an empty `WorkUnitSpec::target_nodes`;
-  more than 16 SemaphoreSpecs on one node; the Gen1 per-WorkUnitSpec thread budgets (the Gen2 budgets are tested);
-  the STRIDED / ALL `num_entries` rules as rejections.
+  any WorkUnitSpec", so the checks their names describe are never reached.
 - `DMKernelsDifferentNocModesOnDistinctNodesSucceeds` sets both kernels to `DM_DEDICATED_NOC`, so it does not test
   what its name says.
 - `SemaphoreSharedByComputeAndDMIsRejected` and `ComputeBoundSemaphoreWithNonzeroInitialValueIsRejected` use
   `EXPECT_ANY_THROW` and do not pin the error message.
+- Untested: a kernel repeated within one `WorkUnitSpec::kernels`; an empty `WorkUnitSpec::target_nodes`; more than
+  16 SemaphoreSpecs on one node; the Gen1 per-WorkUnitSpec thread budgets; the STRIDED / ALL `num_entries` rules.
 - The per-node DFB limit in the `ProgramSpec` comment is marked "TODO: THIS IS LYING" in the header.
