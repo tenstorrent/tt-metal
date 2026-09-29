@@ -1784,3 +1784,35 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
+
+## S.moe_full.10 test (attempt 1)
+
+What
+- Replaced the rendered 31-line swap test (moe_full layer 1, steps 1-10, last ffn_norm) with the reviewed swap 09
+  test (test_swap_moe_full_09_ffn_hc_pre.py), keeping every check at its limits. Added the ffn_norm checks from the
+  layer-0 swap 10 and the layer-1 component test. vs golden: rel <= 0.01, ratio [0.99, 1.01], row <= 0.03. vs the
+  CPU ffn_norm on the same device ffn_x: 0.008 / [0.993, 1.007] / 0.015. The module on that ffn_x x 0.1 vs the CPU step:
+  rel <= 0.01, row <= 0.02, ratio not gated (the component's eps probe). The module on ffn_x x 30 vs the CPU step:
+  0.006 / [0.993, 1.007] / 0.015.
+- CPU mutation study in /tmp/hy4_sm10/study.py (outside the repo; log study.log). Table in the test docstring.
+
+Decisions
+- Kept the component's limits. 16 of 25 mutations pass the 0.98 out gate. At layer 1 the MoE output is large next to
+  the residual (x 1.01 moves out by 0.018), so the swap-09 checks on out (rel vs golden 0.01, vs the CPU tail 0.01)
+  already catch most of them. LayerNorm-instead-of-RMS (out 0.0075) and eps 1.2e-5 (out 0.0057) get past those, but
+  fail the ffn_norm worst-row check (0.038) or the ratio check (0.963), and the eps probe (0.050).
+- Added the x0.1 eps probe, which layer 0's swap 10 does not have, because layer-1 ffn_x is not eps-dominated.
+
+Results
+- BRINGUP_IMPL=reference: PASS (every vs-CPU ffn_norm check 0). BRINGUP_IMPL=stub: FAIL.
+- Gate (device, tt/norm.py:TtGatheredRmsNorm; already on device through hooks._GATHERED_NORM_STEPS): PASS, run twice.
+  pcc_swap_out 0.999984. ffn_norm vs golden 0.00572 [0.99866, 1.00066], row 0.0131. vs CPU 0.00174, row 0.0019.
+  x0.1: 0.00168. x30: 0.00169. Tail 0.0043. Router 0.99347. Out rel 0.00599.
+
+Gotchas
+- Router overlap is now 0.99347 against the 0.99 limit, inherited from swaps 07-09 (a margin of 0.0035).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
