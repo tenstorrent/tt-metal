@@ -363,7 +363,7 @@ jobs:
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: 885d5069683330c40674bf54f27d1122810613bd
           MODE: >-
             ${{ inputs.speed_of_light == 'true'
                 && 'speed of light' || 'non speed-of-light' }}
