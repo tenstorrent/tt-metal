@@ -17,6 +17,16 @@ run in order, and the source's window rows are dead once its attention ran). Rat
 scratch tensor without compressed rows. Each layer's window carry (128 rows) persists across chunks.
 Index-K caches hold row j at j. Compressed rows are complete ratio groups only: chunk tokens [s, s+L) add
 rows [s // r, (s + L) // r) (padded positions >= L write nothing; graph.md §4 rule 8).
+
+KV format (epic KV FORMAT, dev-spec D-A), chosen at construction for the compressed layers' KV tensors (their
+window region and carries included, since one ``sparse_sdpa`` reads the whole tensor in one format):
+
+* ``BF16_RM`` (stage 1): 512 BF16 per row, holding the values the caller passes (the reference's QDQ values).
+* ``SCALED_FP8`` (stage 2): the caller passes unrounded KV; each row is stored as 512 FP8 e4m3 bytes and 4
+  FP32 power-of-two scales, one per 128 dims (RoPE dims included, no BF16 RoPE tail) = 528 bytes.
+
+Ratio-0 (sliding-window-only) layers keep BF16 in both stages: their window KV holds the reference's FP8
+block-32 values exactly, and no compressed rows share their tensor.
 """
 
 from dataclasses import dataclass
@@ -26,6 +36,11 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    MlaKvCacheGeometry,
+    reconstruct_scaled_fp8_kv_cache,
+)
 
 WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
 
@@ -71,36 +86,90 @@ class V41CacheGeometry:
 
 
 class V41PrefillState:
-    """Per-request device state: compressed KV / index-K caches per KV source, ratio-0 scratch, window carries."""
+    """Per-request device state: compressed KV / index-K caches per KV source, ratio-0 scratch, window carries,
+    DSpark window rings."""
 
-    def __init__(self, mesh_device, config, max_seq_len: int, chunk: int, layers: list[int], dtype=ttnn.bfloat16):
+    FORMATS = (MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8)
+
+    def __init__(
+        self,
+        mesh_device,
+        config,
+        max_seq_len: int,
+        chunk: int,
+        layers: list[int],
+        kv_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+    ):
+        assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
         self.mesh_device = mesh_device
         self.config = config
         self.geometry = V41CacheGeometry(config, max_seq_len, chunk, mesh_device.shape[0])
         self.layers = list(layers)
         self.start = 0
-        g, d, idim = self.geometry, config.HEAD_DIM, config.INDEX_HEAD_DIM
+        self.compressed_kv_format = kv_format
+        # one 512-dim row with RoPE inside (V4.1 attends over all of it; no separate BF16 RoPE part)
+        self.kv_geometry = MlaKvCacheGeometry(latent_dim=config.HEAD_DIM, rope_dim=0)
+        g, idim = self.geometry, config.INDEX_HEAD_DIM
 
-        def zeros(rows, width):
+        def zeros(rows, width, fmt=MlaKvCacheFormat.BF16_RM):
             return ttnn.from_torch(
                 torch.zeros(1, 1, rows, width),
                 device=mesh_device,
-                dtype=dtype,
+                dtype=fmt.storage_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
+        def kv_zeros(rows, ratio):
+            fmt = self.kv_format(ratio)
+            return zeros(rows, fmt.storage_width(self.kv_geometry), fmt)
+
         sources = [l for l in config.KV_SOURCE_LAYERS if l in self.layers]
-        self.kv = {l: zeros(g.kv_rows(config.compress_ratio(l)), d) for l in sources}
+        self.kv = {l: kv_zeros(g.kv_rows(config.compress_ratio(l)), config.compress_ratio(l)) for l in sources}
         self.index_k = {l: zeros(g.compressed_rows(config.compress_ratio(l)), idim) for l in sources}
-        self.swa_scratch = zeros(g.kv_rows(0), d) if any(config.compress_ratio(l) == 0 for l in self.layers) else None
-        self.window_carry = {l: zeros(WINDOW_SLOT, d) for l in self.layers}
+        self.swa_scratch = (
+            kv_zeros(g.kv_rows(0), 0) if any(config.compress_ratio(l) == 0 for l in self.layers) else None
+        )
+        self.window_carry = {l: kv_zeros(WINDOW_SLOT, config.compress_ratio(l)) for l in self.layers}
         # ratio-2 compressor carry: fp32 (kv, score) of a trailing incomplete group, None when groups are complete
         self.compressor_carry = {l: None for l in sources if config.compress_ratio(l) > 1}
         # chunk-transient sharing: the latest index source's top-k and the candidate source's blocks
         self.selection = {}
+        # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
+        self.dspark_rings = None
         self._ccl = get_tt_ccl(mesh_device) if mesh_device.shape[0] > 1 else None
         self._num_links = 2 if is_blackhole() else 1
+
+    def kv_format(self, ratio: int) -> MlaKvCacheFormat:
+        """Storage format of the KV tensors (and window carries) of layers with compress ``ratio``."""
+        return self.compressed_kv_format if ratio else MlaKvCacheFormat.BF16_RM
+
+    def layer_kv_format(self, layer: int) -> MlaKvCacheFormat:
+        """Format of ``layer``'s KV tensor: what ``write_window`` / ``write_compressed`` expect (reference QDQ
+        values for BF16_RM, unrounded values for SCALED_FP8) and what its ``sparse_sdpa`` reads."""
+        return self.kv_format(self.config.compress_ratio(layer))
+
+    def _encode(self, rows, fmt: MlaKvCacheFormat):
+        """Logical [1, 1, n, 512] rows (any layout) -> the physical row-major rows of ``fmt``."""
+        rows = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
+        if fmt == MlaKvCacheFormat.BF16_RM:
+            return rows
+        latent, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            rows, round_scale_to_power_of_two=True
+        )
+        packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent, scales)
+        ttnn.deallocate(latent)
+        ttnn.deallocate(scales)
+        return packed
+
+    def to_host(self, t) -> torch.Tensor:
+        """Logical fp32 rows [rows, width] of a state tensor (first device's replica); SCALED_FP8 rows are decoded."""
+        if t.dtype == MlaKvCacheFormat.SCALED_FP8.storage_dtype:
+            # FP8 bytes leave the device only through a mesh composer (single-device FP8 to_torch is unsupported)
+            composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            physical = ttnn.to_torch(t, mesh_composer=composer)[0, 0]
+            return reconstruct_scaled_fp8_kv_cache(physical, self.kv_geometry).float()
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0])[0, 0].float()
 
     def kv_tensor(self, layer: int):
         """The KV tensor ``layer``'s attention reads: its KV source's, or the ratio-0 scratch."""
@@ -129,35 +198,38 @@ class V41PrefillState:
         ttnn.experimental.slice_write(rows, dst, [0, 0, first, 0], [1, 1, first + n, width], [1, 1, 1, 1])
 
     def write_window(self, layer: int, window_kv_local):
-        """Place ``layer``'s carry and this chunk's window KV (per SP rank ``[1, 1, chunk/sp, d]``) into the
-        window region of the tensor its attention reads. Returns that tensor."""
+        """Place ``layer``'s carry and this chunk's window KV (per SP rank ``[1, 1, chunk/sp, d]``, logical
+        values of ``layer_kv_format(layer)``) into the window region of the tensor its attention reads. Returns
+        that tensor."""
         dst = self.kv_tensor(layer)
         self._write_rows(dst, self.window_carry[layer], 0)
-        self._write_rows(dst, ttnn.to_layout(self._gather_sp(window_kv_local), ttnn.ROW_MAJOR_LAYOUT), WINDOW_SLOT)
+        rows = self._encode(self._gather_sp(window_kv_local), self.layer_kv_format(layer))
+        self._write_rows(dst, rows, WINDOW_SLOT)
         return dst
 
     def write_compressed(self, source: int, kv_rows_local, index_k_rows_local, length: int):
         """Append the chunk's complete groups: per-SP-rank rows (contiguous tokens) of compressed KV
-        ``[1, 1, rows/sp, d]`` and index keys ``[1, 1, rows/sp, index_head_dim]``. Only the first ``count``
-        rows of the gathered chunk (complete groups of the valid length) are written."""
+        ``[1, 1, rows/sp, d]`` (logical values of the source's format) and index keys
+        ``[1, 1, rows/sp, index_head_dim]``. Only the first ``count`` rows of the gathered chunk (complete
+        groups of the valid length) are written."""
         ratio = self.config.compress_ratio(source)
         first, count = self.geometry.new_compressed_rows(self.start, length, ratio)
         if count == 0:
             return
-        for cache, local, offset in (
-            (self.kv[source], kv_rows_local, self.geometry.kv_row_of_compressed(first)),
-            (self.index_k[source], index_k_rows_local, first),
+        for cache, local, offset, fmt in (
+            (self.kv[source], kv_rows_local, self.geometry.kv_row_of_compressed(first), self.kv_format(ratio)),
+            (self.index_k[source], index_k_rows_local, first, MlaKvCacheFormat.BF16_RM),
         ):
             rows = ttnn.to_layout(self._gather_sp(local), ttnn.ROW_MAJOR_LAYOUT)
             if rows.shape[2] != count:
                 rows = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, count, rows.shape[3]])
-            self._write_rows(cache, rows, offset)
+            self._write_rows(cache, self._encode(rows, fmt), offset)
 
     def update_window_carry(self, layer: int, length: int):
         """After ``layer``'s attention: its carry becomes the last WINDOW_SLOT rows ending at the chunk's
         last valid token (rows [length, length + WINDOW_SLOT) of the window region)."""
         src = self.kv_tensor(layer)
-        carry = ttnn.slice(src, [0, 0, length, 0], [1, 1, length + WINDOW_SLOT, self.config.HEAD_DIM])
+        carry = ttnn.slice(src, [0, 0, length, 0], [1, 1, length + WINDOW_SLOT, src.shape[3]])
         self._write_rows(self.window_carry[layer], carry, 0)
 
     def set_compressor_carry(self, source: int, carry, length: int):

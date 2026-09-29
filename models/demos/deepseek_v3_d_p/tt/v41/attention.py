@@ -5,7 +5,8 @@
 """DeepSeek-V4.1 attention for one prefill chunk (graph nodes B4-B16; beads F3, F7).
 
 q = wq_b(q_norm(wq_a(x))) with RoPE on the trailing 64 channels (no per-head norm); window KV
-kv_norm(wkv(x)), RoPE, FP8 QDQ. Compressed layers attend over their KV source's compressed rows too:
+kv_norm(wkv(x)), RoPE, FP8 QDQ (BF16 KV format; the SCALED_FP8 format encodes the unrounded KV, epic KV
+FORMAT; likewise the compressed KV's FP4 QDQ). Compressed layers attend over their KV source's compressed rows too:
 a KV source runs its compressor, index keys and compressed-KV write; an index source runs its indexer
 (the candidate source publishes candidate blocks); consumers reuse the top-k their index source published
 this chunk. One ``sparse_sdpa`` over the layer's KV tensor (``cache.V41PrefillState``: window region + the
@@ -27,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chunks a multiple of 32
 
@@ -203,8 +205,11 @@ class TtV41Attention(LightweightModule):
             weight=self.kv_norm,
             epsilon=self.eps,
         )
-        kv = fp8_qdq(self._rope(kv, cos, sin))
-        kv_tensor = state.write_window(self.layer, kv)
+        # stage 1 (BF16) stores the reference's QDQ values; SCALED_FP8 quantizes the unrounded KV itself
+        kv_format = state.layer_kv_format(self.layer)
+        reference_values = kv_format == MlaKvCacheFormat.BF16_RM
+        kv = self._rope(kv, cos, sin)
+        kv_tensor = state.write_window(self.layer, fp8_qdq(kv) if reference_values else kv)
 
         compressed = None
         if self.ratio:
@@ -217,8 +222,8 @@ class TtV41Attention(LightweightModule):
                     positions,
                     ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(2, None)),
                 )
-                comp_kv = fp4_e4m3_qdq(self._rope(latent, c_cos, c_sin))
-                state.write_compressed(self.layer, comp_kv, keys, length)
+                comp_kv = self._rope(latent, c_cos, c_sin)
+                state.write_compressed(self.layer, fp4_e4m3_qdq(comp_kv) if reference_values else comp_kv, keys, length)
             if self.is_index_source:
                 src = self.config.kv_source(self.layer)
                 compressed, candidates = self.indexer(
@@ -247,7 +252,7 @@ class TtV41Attention(LightweightModule):
             kv_tensor,
             rows,
             self.head_dim,
-            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            kv_format=kv_format.sparse_sdpa_format,
             scale=self.scale,
             k_chunk_size=next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0),
             attention_sink=self.sink,

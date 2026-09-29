@@ -11,6 +11,11 @@ Checks per layer: block output and next pre_mix vs the oracle, compressed-KV and
 shared state, the window-KV carry vs the oracle's window KV, determinism (a second pass over a fresh state is
 bit-identical); selection recall is reported.
 Bars (G1): block >= 0.99 synthetic / >= 0.98 real; caches >= 0.998.
+
+``kv_format`` selects the stage of the compressed layers' KV (epic KV FORMAT): ``bf16`` stores the reference's
+QDQ values, so compressed KV is compared with the oracle's FP4-QDQ rows; ``scaled_fp8`` encodes the unrounded
+KV, so its compressed rows are compared with the reference's compressed KV before the FP4 QDQ (the value the
+format encodes); the PCC against the FP4-QDQ rows is reported (``compressed_kv_vs_fp4``, no bar).
 """
 
 import os
@@ -22,6 +27,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import kernel_cpu
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
@@ -32,6 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from tests.ttnn.utils_for_testing import comp_pcc
 
 # every sharing role (2->3, 20->21->24) and the sliding-window-only type (layer 0; layer 1 needs Engram, F5)
@@ -61,7 +69,25 @@ def _pcc(a, b):
     return comp_pcc(a.float(), b.float(), 0.0)[1]
 
 
+KV_FORMATS = {"bf16": MlaKvCacheFormat.BF16_RM, "scaled_fp8": MlaKvCacheFormat.SCALED_FP8}
+
+
+@torch.no_grad()
+def _unrounded_compressed_kv(model, spec, layer: int, attn_in: torch.Tensor) -> torch.Tensor:
+    """The reference compressed KV of KV source ``layer`` with RoPE and before its FP4 QDQ (``Attention._compress_kv``
+    at start_pos 0), from the recorded attention input: what the SCALED_FP8 cache encodes."""
+    attn = model.layers[spec.layer_ids.index(layer)].attn
+    seq, ratio = attn_in.shape[0], attn.compress_ratio
+    with v41.set_dtype(torch.bfloat16):
+        latent = attn.compressor(attn_in[None], 0)
+        if latent is None:  # shorter than one group
+            return attn_in.new_zeros(0, attn.head_dim)
+        v41.apply_rotary_emb(latent[..., -attn.rope_head_dim :], attn.freqs_cis[: seq - seq % ratio : ratio])
+    return latent[0]
+
+
 @pytest.mark.timeout(5400)
+@pytest.mark.parametrize("kv_format", list(KV_FORMATS))
 @pytest.mark.parametrize("prompt", ["full", "padded", "tiny"])
 @pytest.mark.parametrize("schedule", ["stack", "swa"])
 @pytest.mark.parametrize("chunks", [1, 2], ids=["single_chunk", "two_chunks"])
@@ -78,7 +104,7 @@ def _pcc(a, b):
     ],
     indirect=True,
 )
-def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule, prompt):
+def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule, prompt, kv_format):
     LAYERS = SCHEDULES[schedule]
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
@@ -98,10 +124,18 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
     tokens = orc.random_tokens(spec, valid)
     reference = orc.build_reference(spec) if ckpt is None else None
     result = orc.oracle(spec, tokens, model=reference)
+    fmt = KV_FORMATS[kv_format]
+    unrounded = {}
+    if fmt == MlaKvCacheFormat.SCALED_FP8 and any(l in C.KV_SOURCE_LAYERS for l in LAYERS):
+        model = reference if reference is not None else orc.build_reference(spec)
+        for l in (l for l in LAYERS if l in C.KV_SOURCE_LAYERS):
+            unrounded[l] = _unrounded_compressed_kv(model, spec, l, result["blocks"][l]["attn_in"])
+            # the derivation is the reference's: its FP4 QDQ reproduces the oracle's compressed rows bit for bit
+            fp4 = kernel_cpu.fp4_act_quant(unrounded[l].clone(), 16, True, scale_dtype=torch.float8_e4m3fn)
+            assert torch.equal(fp4, result["shared"][l]["compress_kv"]), l
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), cfg.HC_MULT
     topology = per_axis_topology(device_params["fabric_config"])[1]
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
-    host = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()[0, 0]
 
     # MoE device tensors are cached on disk: the first build converts 1152 expert matrices per layer on the
     # host (minutes); later builds load them. A marker records a completed layer.
@@ -135,7 +169,7 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         """All chunks through all layers in execution order; layer inputs teacher-forced per chunk, padded rows
         of the last chunk zero (their outputs are not compared)."""
         chunk = seq // chunks
-        state = V41PrefillState(mesh_device, cfg, seq, chunk, list(LAYERS))
+        state = V41PrefillState(mesh_device, cfg, seq, chunk, list(LAYERS), kv_format=fmt)
         outs = {layer: ([], []) for layer in LAYERS}
         for c in range(chunks):
             start = c * chunk
@@ -176,7 +210,7 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
     attention_pcc = None
     if prompt == "full" and chunks == 1:
         # the first layer's attention alone on the oracle's attention input (a KV source reads only its own rows)
-        attn_state = V41PrefillState(mesh_device, cfg, seq, seq, [head])
+        attn_state = V41PrefillState(mesh_device, cfg, seq, seq, [head], kv_format=fmt)
         attn_in = ttnn.from_torch(
             result["blocks"][head]["attn_in"][None, None],
             device=mesh_device,
@@ -199,13 +233,18 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         tail = rec["window_kv"][max(0, valid - WINDOW_SLOT) : valid].float()
         expected_carry = torch.zeros(WINDOW_SLOT, tail.shape[-1])
         expected_carry[WINDOW_SLOT - tail.shape[0] :] = tail
-        entry["window_kv"] = _pcc(expected_carry, host(state.window_carry[layer]))
+        entry["window_kv"] = _pcc(expected_carry, state.to_host(state.window_carry[layer]))
         if layer in C.KV_SOURCE_LAYERS:
             pub = result["shared"][layer]
             rows = pub["compress_kv"].shape[0]
             w0 = state.geometry.window_rows
-            entry["compressed_kv"] = _pcc(pub["compress_kv"], host(state.kv[layer])[w0 : w0 + rows])
-            entry["index_k"] = _pcc(pub["index_k"], host(state.index_k[layer])[:rows])
+            stored = state.to_host(state.kv[layer])[w0 : w0 + rows]
+            if fmt == MlaKvCacheFormat.SCALED_FP8:
+                entry["compressed_kv"] = _pcc(unrounded[layer], stored)
+                entry["compressed_kv_vs_fp4"] = _pcc(pub["compress_kv"], stored)
+            else:
+                entry["compressed_kv"] = _pcc(pub["compress_kv"], stored)
+            entry["index_k"] = _pcc(pub["index_k"], state.to_host(state.index_k[layer])[:rows])
         if layer == head and attention_pcc is not None:
             entry["attention_alone"] = attention_pcc
         report[layer] = entry
