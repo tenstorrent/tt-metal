@@ -68,7 +68,8 @@ void kernel_main() {
 #ifndef ABLATE_DRAM_READ
             noc_async_read(in.get_noc_addr(b + m * num_banks), wptr + batch * chunk_bytes, n * page_bytes);
 #endif
-            if (++batch == group || --chunks_left == 0) {
+            --chunks_left;  // (decrement before the test: `||` would skip it whenever a batch fills)
+            if (++batch == group || chunks_left == 0) {
                 noc_async_read_barrier();
                 cb_push_back(cb, run_pages * batch);
                 batch = 0;
@@ -153,7 +154,7 @@ void kernel_main() {
             // output pages out_page_base + b + m*B, ... are consecutive in the same bank on both chips
             const uint32_t page = out_page_base + b + m * num_banks;
             const uint64_t dst = out.get_noc_addr(page, 0, 0);  // packet destinations are NoC0 coordinates
-#ifndef ABLATE_LOCAL_COPY
+#if !defined(ABLATE_LOCAL_COPY) && !defined(LOCAL_COPY_ELSEWHERE)
             noc_async_write(src, out.get_noc_addr(page, 0, local_noc), bytes, local_noc);  // local copy
 #endif
             volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
@@ -192,6 +193,55 @@ void kernel_main() {
 """
 
 
+_COPY_WRITER_SOURCE = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+
+// Copy core: writes the chunks its reader fetched into the same chip's output (the local half of the gather).
+void kernel_main() {
+    constexpr uint32_t cb = get_compile_time_arg_val(0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t run_pages = get_compile_time_arg_val(2);
+    constexpr uint32_t num_banks = get_compile_time_arg_val(3);
+    constexpr uint32_t group = get_compile_time_arg_val(4);
+    constexpr auto out_args = TensorAccessorArgs<5>();
+    constexpr uint32_t chunk_bytes = run_pages * page_bytes;
+
+    size_t a = 0;
+    const uint32_t out_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t pages_per_bank = get_arg_val<uint32_t>(a++);
+    const uint32_t first_bank = get_arg_val<uint32_t>(a++);
+    const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
+    const uint32_t out_page_base = get_arg_val<uint32_t>(a++);
+    const auto out = TensorAccessor(out_args, out_addr, page_bytes);
+
+    uint32_t chunks_left = 0;
+    for (uint32_t b = first_bank; b < num_banks; b += bank_stride) {
+        chunks_left += (pages_per_bank + run_pages - 1) / run_pages;
+    }
+    uint32_t pending = 0;
+    for (uint32_t m = 0; m < pages_per_bank; m += run_pages) {  // same order as the reader
+        for (uint32_t b = first_bank; b < num_banks; b += bank_stride) {
+            cb_wait_front(cb, run_pages * (pending + 1));
+            const uint32_t n = (pages_per_bank - m) < run_pages ? (pages_per_bank - m) : run_pages;
+            noc_async_write(
+                get_read_ptr(cb) + pending * chunk_bytes, out.get_noc_addr(out_page_base + b + m * num_banks), n * page_bytes);
+            --chunks_left;
+            if (++pending == group || chunks_left == 0) {
+                noc_async_write_barrier();
+                cb_pop_front(cb, run_pages * pending);
+                pending = 0;
+            }
+        }
+    }
+}
+"""
+
+
+def num_banks_of(mesh_device):
+    return mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
+
+
 def default_cores(num_links):
     return [ttnn.CoreCoord(l, 0) for l in range(num_links)]
 
@@ -207,10 +257,16 @@ def create_mesh_program_descriptor(
     cb_bytes=112 * 1024,
     sender_noc=NOC1,
     local_copy_noc=None,
+    copy_cores=None,
     ablate=(),
 ):
-    """`ablate` (diagnostic only; output is then incomplete): any of "dram_read", "local_copy", "fabric"."""
+    """`copy_cores`: if given, these cores make the local copy (each reads its share of the banks from DRAM and writes
+    it into the local output) and the link cores only read and send.
+    `ablate` (diagnostic only; output is then incomplete): any of "dram_read", "local_copy", "fabric"."""
     defines = [(f"ABLATE_{x.upper()}", "1") for x in ablate]
+    copy_cores = list(copy_cores or [])
+    assert not set((c.x, c.y) for c in copy_cores) & set((c.x, c.y) for c in cores), "copy cores overlap link cores"
+    assert not copy_cores or num_banks_of(mesh_device) % len(copy_cores) == 0, "copy cores must split the banks evenly"
     if local_copy_noc is not None:
         defines.append(("LOCAL_COPY_NOC", "0" if local_copy_noc == NOC0 else "1"))
     assert variant in VARIANTS
@@ -218,7 +274,7 @@ def create_mesh_program_descriptor(
     assert rows == 2, "pairs chips along mesh axis 0: needs exactly 2 rows"
     num_links = len(cores)
     page_bytes = int(input_tensor.buffer_aligned_page_size())
-    num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
+    num_banks = num_banks_of(mesh_device)
     shape = list(input_tensor.padded_shape)
     shard_pages = (shape[-1] // 32) * (shape[-2] // 32) * math.prod(shape[:-2])
     assert input_tensor.layout == ttnn.TILE_LAYOUT
@@ -232,6 +288,8 @@ def create_mesh_program_descriptor(
     group = max(1, min(8, cb_bytes // (2 * chunk_bytes)))  # chunks per flush (= headers in flight)
 
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    copy_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in copy_cores]) if copy_cores else None
+    sender_defines = defines + ([("LOCAL_COPY_ELSEWHERE", "1")] if copy_cores else [])
     virt = [mesh_device.worker_core_from_logical_core(c) for c in cores]
     in_ct = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     out_ct = list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
@@ -248,7 +306,7 @@ def create_mesh_program_descriptor(
             program.cbs = [
                 ttnn.CBDescriptor(
                     total_size=2 * group * chunk_bytes,
-                    core_ranges=core_set,
+                    core_ranges=core_set.merge(copy_set) if copy_cores else core_set,
                     format_descriptors=[ttnn.CBFormatDescriptor(CB_CHUNKS, input_tensor.dtype, page_bytes)],
                 )
             ]
@@ -285,13 +343,41 @@ def create_mesh_program_descriptor(
                     source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                     core_ranges=core_set,
                     compile_time_args=ct + [group] + out_ct,
-                    defines=defines,
+                    defines=sender_defines,
                     runtime_args=sender_rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=sender_noc
                     ),
                 ),
             ]
+            if copy_cores:
+                copy_reader_rt, copy_writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+                for j, core in enumerate(copy_cores):
+                    copy_reader_rt[core.x][core.y] = [in_addr, pages_per_bank, j, len(copy_cores)]
+                    copy_writer_rt[core.x][core.y] = [out_addr, pages_per_bank, j, len(copy_cores), r * shard_pages]
+                program.kernels += [
+                    ttnn.KernelDescriptor(
+                        kernel_source=_READER_SOURCE,
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=copy_set,
+                        compile_time_args=ct + [group] + in_ct,
+                        defines=defines,
+                        runtime_args=copy_reader_rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_1, noc=NOC0
+                        ),
+                    ),
+                    ttnn.KernelDescriptor(
+                        kernel_source=_COPY_WRITER_SOURCE,
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=copy_set,
+                        compile_time_args=ct + [group] + out_ct,
+                        runtime_args=copy_writer_rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=NOC1
+                        ),
+                    ),
+                ]
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc
 

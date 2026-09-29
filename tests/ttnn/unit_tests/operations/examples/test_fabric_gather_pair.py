@@ -47,6 +47,11 @@ PLACEMENTS = {
     name: _parse_cores(spec)
     for name, spec in (p.split("=") for p in os.environ.get("FGP_PLACEMENTS", _DEFAULT_PLACEMENTS).split("|"))
 }
+# Local copy made by separate copy cores instead of the link core: "|"-separated "name=x,y;x,y" or "none".
+COPY_CORES = {
+    (e.split("=")[0] if "=" in e else "none"): (_parse_cores(e.split("=")[1]) if "=" in e else None)
+    for e in os.environ.get("FGP_COPY_CORES", "none|copy1=0,6|copy2=0,6;1,6").split("|")
+}
 _REPORT = []
 
 
@@ -120,7 +125,9 @@ def test_fabric_gather_pair(mesh_device):
         noc_xy = " ".join(f"({v.x},{v.y})" for v in (mesh_device.worker_core_from_logical_core(c) for c in cores))
         sem = ttnn.create_global_semaphore(mesh_device, ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]), 0)
         sem_addr = int(ttnn.get_global_semaphore_address(sem))
-        for variant, local, ablate in [(v, l, a) for v in RUN_VARIANTS for l in LOCAL_NOCS for a in ABLATIONS]:
+        cases = [(v, l, "none", a) for v in RUN_VARIANTS for l in LOCAL_NOCS for a in ABLATIONS]
+        cases += [(v, "same", k, ()) for v in RUN_VARIANTS for k in COPY_CORES if k != "none"]
+        for variant, local, copy_name, ablate in cases:
             run = lambda: fabric_gather_pair(
                 mesh_device,
                 inp,
@@ -129,6 +136,7 @@ def test_fabric_gather_pair(mesh_device):
                 variant=variant,
                 cores=cores,
                 local_copy_noc=NOC0 if local == "noc0" else None,
+                copy_cores=COPY_CORES.get(copy_name),
                 ablate=ablate,
             )
             run()
@@ -147,7 +155,7 @@ def test_fabric_gather_pair(mesh_device):
                 samples.append(_slowest_chip_ns(mesh_device))
             ns = statistics.median(samples)
             lines.append(
-                f"    {name:<16} {noc_xy:<15} {variant + ('+local_noc0' if local == 'noc0' else '') + ('-' + '-'.join(ablate) if ablate else ''):<26} {ns:>11.0f} {shard_bytes / len(cores) / ns:>18.2f} "
+                f"    {name:<16} {noc_xy:<15} {variant + ('+local_noc0' if local == 'noc0' else '') + ('+copy:' + copy_name if copy_name != 'none' else '') + ('-' + '-'.join(ablate) if ablate else ''):<26} {ns:>11.0f} {shard_bytes / len(cores) / ns:>18.2f} "
                 f"{shard_bytes / ns:>14.2f}"
             )
     _REPORT.extend(lines)

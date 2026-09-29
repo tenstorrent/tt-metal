@@ -5,7 +5,7 @@
 
     python -m ttnn.operations.examples.fabric_gather_pair [--shape 8192,4096] [--variant all] [--payload 14336]
                                                          [--placements "a=2,0|b=2,0;3,0"] [--local-noc same,noc0]
-                                                         [--ablate "|local_copy|fabric"] [--trials 3]
+                                                         [--copy-cores "none|two=0,6;1,6"] [--ablate "|local_copy|fabric"] [--trials 3]
 
 Translates the flags into env overrides and runs the device-perf test through scripts/run_safe_pytest.sh
 (device lock, in-process profiler, post-run reset). Needs a 2x2 mesh (4 chips). Run from the repo root with the
@@ -27,6 +27,11 @@ def main():
     ap.add_argument("--payload", type=int, default=14336, help="router max payload in bytes. Default 14336.")
     ap.add_argument("--placements", default=None, help='link cores, e.g. "one=2,0|two=2,0;3,0" (logical x,y).')
     ap.add_argument("--local-noc", default="same,noc0", help="NoC for the local copy: same, noc0. Default both.")
+    ap.add_argument(
+        "--copy-cores",
+        default="none|copy1=0,6|copy2=0,6;1,6",
+        help='copy-core sets for the local copy, e.g. "none|two=0,6;1,6". Default none|copy1|copy2.',
+    )
     ap.add_argument("--ablate", default="", help='diagnostic ablation sets, e.g. "|local_copy|fabric+local_copy".')
     ap.add_argument("--trials", type=int, default=3, help="measured launches per case (median). Default 3.")
     args = ap.parse_args()
@@ -37,6 +42,7 @@ def main():
         FGP_PAYLOAD=str(args.payload),
         FGP_LOCAL_NOCS=args.local_noc,
         FGP_ABLATE=args.ablate,
+        FGP_COPY_CORES=args.copy_cores,
         FGP_TRIALS=str(args.trials),
     )
     if args.variant != "all":
