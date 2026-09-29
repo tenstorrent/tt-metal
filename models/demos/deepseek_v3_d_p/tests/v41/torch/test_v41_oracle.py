@@ -214,6 +214,26 @@ def test_oracle_cache_hit_miss_and_reload(cache, monkeypatch):
     assert path not in other_keys and len(other_keys) == 6
 
 
+def test_tail_logits_match_reference_and_noise_floor(cache, monkeypatch):
+    spec, tokens = _small()
+    model = o.build_reference(spec)
+    result = o.oracle(spec, tokens, model)
+    tail = o.tail_logits(spec, tokens, 5, model)
+    assert tail.shape == (5, spec.args.vocab_size) and tail.dtype == torch.float32
+    assert torch.equal(tail[-1], result["logits"])  # the last position is the oracle's logits
+    noisy = o.tail_logits(spec, tokens, 5, model, noise=(0.045, 4e-3, 0))
+    assert not torch.equal(noisy, tail) and torch.equal(
+        noisy, o.tail_logits(spec, tokens, 5, model, noise=(0.045, 4e-3, 0))
+    )
+    assert not torch.equal(noisy, o.tail_logits(spec, tokens, 5, model, noise=(0.045, 4e-3, 1)))
+
+    def no_prefill(*args):
+        raise AssertionError("cache hit must not run the reference")
+
+    monkeypatch.setattr(o, "prefill", no_prefill)
+    assert torch.equal(o.tail_logits(spec, tokens, 5), tail)  # hit: bit-identical reload
+
+
 def test_window_ring_hand_values():
     kv = torch.arange(10.0).unsqueeze(1)
     assert o.window_ring(kv, 7, 4).flatten().tolist() == [4, 5, 6, 3]  # positions 3..6 at slot p % 4

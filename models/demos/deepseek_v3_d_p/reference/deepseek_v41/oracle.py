@@ -193,6 +193,21 @@ def random_tokens(spec: OracleSpec, seq_len: int | None = None, seed: int = 1) -
     return torch.randint(0, spec.args.vocab_size, (1, seq_len), generator=torch.Generator().manual_seed(seed))
 
 
+def text_tokens(seq_len: int) -> torch.Tensor:
+    """[1, seq_len] V4.1-tokenized real text: A Tale of Two Cities from its first chapter (the book the
+    tt_transformers accuracy references use), for accuracy gates that score predictions of real text."""
+    import bz2
+
+    from transformers import AutoTokenizer
+
+    book = bz2.open(_HERE.parents[3] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2", "rt").read()
+    text = book[book.index("It was the best of times") :][: 12 * seq_len]  # > 1 character per token
+    ids = AutoTokenizer.from_pretrained(HF_SNAPSHOT)(text, add_special_tokens=False)["input_ids"]
+    if len(ids) < seq_len:
+        raise ValueError(f"{len(ids)} tokens of text, {seq_len} requested")
+    return torch.tensor(ids[:seq_len], dtype=torch.int64)[None]
+
+
 # ---------------------------------------------------------------------------------------------- model
 
 
@@ -562,6 +577,69 @@ def oracle(spec: OracleSpec, tokens: torch.Tensor, model: v41.Transformer | None
     torch.save(result, tmp)
     tmp.replace(path)
     return result
+
+
+@torch.no_grad()
+def tail_logits(
+    spec: OracleSpec,
+    tokens: torch.Tensor,
+    count: int,
+    model: v41.Transformer | None = None,
+    noise: tuple[float, float, int] | None = None,
+) -> torch.Tensor:
+    """fp32 logits ``[count, vocab]`` of the last ``count`` positions of a single-shot prefill of ``tokens``
+    [1, S]: a prompt is teacher-forced by construction, so these are next-token predictions at ``count``
+    positions. ``noise = (output_rel, attention_input_rel, seed)`` adds Gaussian noise of RMS ``output_rel`` x the
+    output's RMS to the output of every backbone attention and MoE (component-level error) and of RMS
+    ``attention_input_rel`` x the input's RMS to every attention input (the input-level sensitivity that flips
+    top-k selection): the floor an implementation whose components meet their bars is gated against. Cached next
+    to the ``oracle`` result of the same (spec, tokens), keyed additionally by ``count`` and ``noise``."""
+    if not 0 < count <= tokens.size(1):
+        raise ValueError(f"count must be in (0, {tokens.size(1)}], got {count}")
+    base = cache_path(spec, tokens)
+    tag = f"-tail{count}" + (f"-noise-out{noise[0]:g}-attn-in{noise[1]:g}-{noise[2]}" if noise else "")
+    path = base.with_name(base.stem + tag + ".pt")
+    if path.is_file():
+        return torch.load(path)
+    model = model if model is not None else build_reference(spec)
+    _reset_state(model)
+    if spec.checkpoint is None:
+        load_engram_rows(model, spec, tokens)
+    captured = {}
+
+    def capture(mod, args):  # the backbone's head call comes first (DSpark calls the head again afterwards)
+        captured.setdefault("x", args[0][0, -count:].clone())
+
+    hooks = [model.head.register_forward_pre_hook(capture)]
+    if noise is not None:
+        output_rel, input_rel, seed = noise
+        gen = torch.Generator().manual_seed(seed)
+
+        def perturbed(t, rel):
+            return (t.float() + torch.randn(t.shape, generator=gen) * rel * t.float().pow(2).mean().sqrt()).to(t.dtype)
+
+        def perturb_output(mod, args, out):
+            return perturbed(out, output_rel)
+
+        def perturb_input(mod, args):
+            return (perturbed(args[0], input_rel), *args[1:])
+
+        for layer in model.layers:
+            hooks += [layer.attn.register_forward_pre_hook(perturb_input)]
+            hooks += [m.register_forward_hook(perturb_output) for m in (layer.attn, layer.ffn)]
+    try:
+        prefill(model, tokens)
+    finally:
+        for h in hooks:
+            h.remove()
+    # one row at a time, as the reference head projects the last position (bit-identical to its logits)
+    weight = model.head.weight.float()
+    logits = torch.cat([torch.nn.functional.linear(row[None].float(), weight) for row in captured["x"]])
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    torch.save(logits, tmp)
+    tmp.replace(path)
+    return logits
 
 
 # ------------------------------------------------------------------------------------ chunk contract

@@ -31,10 +31,11 @@ class SmallV41Config(DeepSeekV41FlashConfig):
     CANDIDATE_TOPK_BLOCKS = 32  # 32 x 8 = 256 >= INDEX_TOPK rows, half of the 64 visible blocks
 
 
-def small_spec(layers: tuple[int, ...], seq_len: int, *, seed: int = 0):
-    """An oracle spec for V4.1 layers ``layers`` (their real roles) at SmallV41Config dims, synthetic weights."""
+def small_spec(layers: tuple[int, ...], seq_len: int, *, seed: int = 0, dspark: bool = False):
+    """An oracle spec for V4.1 layers ``layers`` (their real roles, plus the DSpark layers with ``dspark``) at
+    SmallV41Config dims, synthetic weights."""
     c = SmallV41Config
-    spec = orc.real_spec(layers, seq_len, candidate_topk_blocks=c.CANDIDATE_TOPK_BLOCKS, seed=seed)
+    spec = orc.real_spec(layers, seq_len, dspark=dspark, candidate_topk_blocks=c.CANDIDATE_TOPK_BLOCKS, seed=seed)
     args = replace(
         spec.args,
         dim=c.EMB_SIZE,

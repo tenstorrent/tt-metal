@@ -112,6 +112,22 @@ class TtV41Head(LightweightModule):
     def logits_to_host(self, logits: ttnn.Tensor, position: tuple[int, int]) -> torch.Tensor:
         """The requested row's fp32 logits ``[vocab]``: vocab shards of mesh row ``sp_row`` concatenated."""
         sp_row, offset = position
+        return self._tile_to_host(logits, sp_row)[offset]
+
+    def rows_to_host(self, h: ttnn.Tensor, rows: list[int]) -> torch.Tensor:
+        """fp32 logits ``[len(rows), vocab]`` of rows ``rows`` of ``h`` (as :meth:`forward`), one projection per
+        distinct 32-row tile."""
+        found = {}
+        for row in rows:
+            if row in found:
+                continue
+            logits, (sp_row, offset) = self(h, row)
+            tile, first = self._tile_to_host(logits, sp_row), row - offset  # a tile never spans chips
+            found |= {r: tile[r - first] for r in rows if first <= r < first + ttnn.TILE_SIZE}
+        return torch.stack([found[r] for r in rows])
+
+    def _tile_to_host(self, logits: ttnn.Tensor, sp_row: int) -> torch.Tensor:
+        """The fp32 logits ``[32, vocab]`` of mesh row ``sp_row``'s tile: its vocab shards concatenated."""
         shards = ttnn.get_device_tensors(logits)
         pieces = [ttnn.to_torch(shards[sp_row * self.tp + j]) for j in range(self.tp)]
-        return torch.cat(pieces, dim=-1).reshape(-1, pieces[0].shape[-1] * self.tp)[offset].float()
+        return torch.cat(pieces, dim=-1).reshape(-1, pieces[0].shape[-1] * self.tp).float()

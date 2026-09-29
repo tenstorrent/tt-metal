@@ -6,8 +6,9 @@
 
 Per request: allocate ``V41PrefillState``; for each chunk of ``chunk`` tokens (the last one padded, graph.md
 rule 8): embed, expand to ``hc_mult`` streams, one-hot pre-mix, run the layers in order (DSpark taps at its
-target layers), seed the DSpark window rings, advance the state. After the last chunk: collapse the streams
-with the last block's pre, final norm, LM head on the last real token.
+target layers), seed the state's DSpark window rings, advance the state. In the chunks holding scored
+positions (the last real token by default): collapse the streams with the last block's pre, final norm, LM
+head on those rows.
 
 The layer list is any execution-ordered subset of V4.1 layers whose sources are present (a full model is
 layers 0..39). Engram layers (1, 14) apply their n-gram update to the streams before their block; the hash
@@ -100,13 +101,18 @@ class TtV41Transformer(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(2, None)),
         )
 
-    def prefill(self, tokens: torch.Tensor):
-        """tokens [S] (S <= max_seq_len) -> (fp32 logits [vocab] of the last token, state, DSpark rings or None)."""
+    def prefill(self, tokens: torch.Tensor, logit_positions: int = 1):
+        """tokens [S] (S <= max_seq_len) -> (fp32 logits [logit_positions, vocab] of the last ``logit_positions``
+        prompt positions, state); the state holds the caches, carries and (with DSpark) the seeded DSpark
+        window rings. Generation needs the last position only; more positions score the prompt itself."""
         total = int(tokens.numel())
         assert 0 < total <= self.max_seq_len, f"prompt of {total} tokens, max {self.max_seq_len}"
+        assert 0 < logit_positions <= total, f"logit_positions {logit_positions} outside the {total}-token prompt"
+        first_scored = total - logit_positions
         state = V41PrefillState(self.mesh_device, self.config, self.max_seq_len, self.chunk, self.layers)
-        rings = self.dspark.new_rings() if self.dspark is not None else None
-        logits = None
+        if self.dspark is not None:
+            state.dspark_rings = self.dspark.new_rings()
+        logits = []
         history = self.engram_hash.new_history() if self.engram else None
         while state.start < total:
             start = state.start
@@ -130,10 +136,10 @@ class TtV41Transformer(LightweightModule):
                     taps.append(self.dspark.tap(x))
                 x, pre = block(x, pre, state, length)
             if self.dspark is not None:
-                self.dspark.seed(taps, start, length, rings)
-            if start + length == total:
-                final = self.blocks[-1].residual.final_collapse(x, pre)
-                out, position = self.head(ttnn.typecast(final, ttnn.bfloat16), length - 1)
-                logits = self.head.logits_to_host(out, position)
+                self.dspark.seed(taps, start, length, state.dspark_rings)
+            if start + length > first_scored:
+                final = ttnn.typecast(self.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
+                rows = list(range(max(first_scored - start, 0), length))
+                logits.append(self.head.rows_to_host(final, rows))
             state.advance(length)
-        return logits, state, rings
+        return torch.cat(logits), state
