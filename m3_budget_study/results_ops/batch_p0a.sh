@@ -42,7 +42,12 @@ export STAGES=4 STAGE=0 FABRIC=1d M3_FABRIC=1d LAYER_IDS=0,1,2,3,4,5,6
 export M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128 M3_MOE_DISPATCH=v1 M3_MOE_COMBINE=v1
 export M3_MOE_TOPOLOGY=linear M3_CCL_TOPOLOGY=linear EXPERT_DTYPE=bf4 LEVEL=2
 export PROFILE_SKIP_COMPILE=1 PREFIX_QUIET=1 WARM_POINT="${WARM_POINT:-3}" PROFILE_PROGRESS_EVERY=8
-export PROFILE_PREFIX_READ_EVERY="${PROFILE_PREFIX_READ_EVERY:-4}"   # ~4 x 520 programs per drain, buffer holds 20000
+# No drains in the un-profiled forwards: every marker read is a host zone in the .tracy, so a deep prefix drained
+# every few forwards grows the capture with h (3.4 GB of tracy_ops_times.csv at h=0 already). The device buffer
+# instead overflows (prefix markers dropped) and holds only what the last two forwards need: ~400 programs per
+# chip per single forward; PROGRAMS_PACKED for the packed ones.
+export PROFILE_PREFIX_READ_EVERY="${PROFILE_PREFIX_READ_EVERY:-0}"
+PROGRAMS_SINGLE="${PROGRAMS_SINGLE:-1200}" PROGRAMS_PACKED="${PROGRAMS_PACKED:-2400}"
 export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 export TT_CACHE_PATH="${TT_CACHE_PATH:-/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill}"
 unset SKIP_PREFIX PROFILE_SKIP_PREFIX NOC_TRACES CACHE SEGMENTS
@@ -87,9 +92,12 @@ run_point () {
   local -a knobs=(SRC_TRACE="$src" RESULTS_DIR="$prof" LOGDIR="$prof" TT_METAL_PROFILER_DIR="$ptmp"
                   REPORTS="$ptmp/reports" PERF_WORKDIR="$ptmp/traces")
   if [ -n "$segs" ]; then
-    knobs+=(SEGMENTS="$segs" INPUTS="prose=$PROSE;code=$CODE" CHUNK="$W")
+    knobs+=(SEGMENTS="$segs" INPUTS="prose=$PROSE;code=$CODE" CHUNK="$W"
+            TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="$PROGRAMS_PACKED")
   else
-    knobs+=(CHUNK="$W" CACHE="$h")
+    knobs+=(CHUNK="$W" CACHE="$h" TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="$PROGRAMS_SINGLE")
+    # the harness rounds the depth down to whole chunks: label per_op / the roofline with the depth profiled
+    h=$(( h / W * W )); rsegs="$W:$h"
   fi
   { echo "run_id=$id"; echo "git_sha=$(git -C "$TT_METAL_HOME" rev-parse HEAD)"
     echo "dirty=$(git -C "$TT_METAL_HOME" status --porcelain -uno | wc -l)"; echo "date=$(date -Is)"

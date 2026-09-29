@@ -8,6 +8,7 @@ A composition is one forward's segment list, written as in the study doc:
     548864:2048,0:2048             two slots: a deep hot segment and a cold one
     20480:2048+22528:2048          one slot, two consecutive chunks (depth-first)
     3@141312:1024                  optional "s@" picks the token stream (default: the entry's slot index)
+    code@0:2048,prose.1@16384:2048 with BUDGET_INPUTS: "name@" / "name.s@" pick a named input (stream 0 / s)
 Comma-separated entries map to slots 0..B'-1 in order; each "+"-joined run stays in its entry's slot.
 
 Before a composition runs, every slot it uses is filled up to its first segment's cached_len with real
@@ -27,6 +28,8 @@ Env:
   BUDGET_DUMP_KV     directory: after the last composition, save each slot's [k, v, index_k] (torch)
   BUDGET_REFERENCE   1 -> run each segment alone on the plain path (see above)            [default 0]
   BUDGET_TOPK_DUMP   file: record the MSA top-k block ids of one extra forward of the last composition
+  BUDGET_INPUTS      named token sources "prose=<metadata.json>;code=<metadata.json>" for "name@" selectors;
+                     "default" is BUDGET_TOKENS                                            [default unset]
   BUDGET_STAGES / BUDGET_STAGE, BUDGET_TOKENS, M3_FABRIC, EXPERT_DTYPE, HF_MODEL, TT_CACHE_PATH as
   for budget_sweep.py.
 """
@@ -55,13 +58,15 @@ def emit(**kw):
 
 
 def parse_compo(spec):
-    """'a:b,c:d+e:f' -> [(slot, stream, h, n), ...] in loop order."""
+    """'a:b,c:d+e:f' -> [(slot, stream, h, n), ...] in loop order. With a named input ("code@", "code.1@")
+    the stream is (name, s); a plain integer stream reads the default input."""
     segs = []
     for slot, entry in enumerate(spec.split(",")):
         stream = slot
         if "@" in entry:
             stream, entry = entry.split("@")
-            stream = int(stream)
+            head, _, tail = stream.partition(".")
+            stream = int(stream) if head.isdigit() else (head, int(tail or 0))
         for part in entry.split("+"):
             h, _, n = part.partition(":")
             h, n = int(h), int(n or SEG)
@@ -132,8 +137,19 @@ def main():
     stage = int(os.getenv("BUDGET_STAGE", "0"))
     dump = os.getenv("BUDGET_DUMP_KV")
 
-    src = json.load(open(os.environ["BUDGET_TOKENS"]))["token_ids"]
-    tok = lambda stream, p: [src[(p + STREAM_STRIDE * stream + i) % len(src)] for i in range(SEG)]
+    srcs = {"default": json.load(open(os.environ["BUDGET_TOKENS"]))["token_ids"]}
+    for item in os.getenv("BUDGET_INPUTS", "").split(";"):
+        if item.strip():
+            name, _, path = item.partition("=")
+            srcs[name.strip()] = json.load(open(path.strip()))["token_ids"]
+    for _, _, segs in compos:
+        for *_, stream, _, _ in segs:
+            assert isinstance(stream, int) or stream[0] in srcs, f"input {stream[0]!r} not in BUDGET_INPUTS"
+
+    def tok(stream, p):
+        name, s = ("default", stream) if isinstance(stream, int) else stream
+        src = srcs[name]
+        return [src[(p + STREAM_STRIDE * s + i) % len(src)] for i in range(SEG)]
 
     emit(
         kind="config",

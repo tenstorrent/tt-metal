@@ -1,7 +1,8 @@
 #!/bin/bash
 # One budget_sweep.py process with reset, watchdog and per-run log/env capture.
 # Usage: RUN_ID=e1_s8_w2048 EXP=E1 LAYER_SET=S8 BUDGET_LAYER_IDS=8,...,15 BUDGET_W=2048 BUDGET_POINTS=0:2048 ./run_budget.sh
-# Watchdog: LOAD_TIMEOUT s until the model is built, then STALL_TIMEOUT s without log output -> kill.
+# Watchdog: LOAD_TIMEOUT s until the model is built, then STALL_TIMEOUT s without log output -> kill;
+# RUN_TIMEOUT s in total (default unset: no limit).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/.." && pwd)}"
@@ -28,6 +29,7 @@ env -u TT_VISIBLE_DEVICES python3 -u models/demos/minimax_m3/tests/perf/${HARNES
 PID=$!; T0=$(date +%s); STATUS=""
 while kill -0 $PID 2>/dev/null; do
   sleep 10; now=$(date +%s); age=$(( now - $(stat -c %Y "$LOG") ))
+  if [ -n "${RUN_TIMEOUT:-}" ] && [ $((now - T0)) -gt "$RUN_TIMEOUT" ]; then STATUS=TIMEOUT; break; fi
   if ! grep -q '"kind": "built"' "$LOG"; then
     [ $((now - T0)) -gt "$LOAD_TIMEOUT" ] && { STATUS=LOAD_TIMEOUT; break; }
   elif [ "$age" -gt "$STALL_TIMEOUT" ]; then STATUS=HANG; break; fi

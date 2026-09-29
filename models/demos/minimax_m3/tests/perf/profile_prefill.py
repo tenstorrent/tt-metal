@@ -55,8 +55,17 @@ Env:
                       (TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY); delete the prefix's rows of
                       .logs/cpp_device_perf_report.csv, then run one recorded (still un-zoned) warm forward
                       before the profiled one, so op-metadata serialisation stays out of its op-to-op gaps.
-                      Needs the C++ post-process (the tracy default); excludes --collect-noc-traces [default 0]
-  PROFILE_PREFIX_READ_EVERY  with PROFILE_PREFIX_QUIET: drain every N un-profiled forwards   [default 1]
+                      Needs the C++ post-process (the tracy default); excludes --collect-noc-traces. Also mutes
+                      the real-time profiler's Tracy lanes for the whole run (unregisters its program callback):
+                      they add one dynamic source location per program execution (Program_<runtime_id>, ~400 per
+                      7-layer forward), and tracy-capture aborts at 32K of them ("Too many source locations"),
+                      i.e. after ~80 forwards. The ops report does not use those lanes             [default 0]
+  PROFILE_PREFIX_READ_EVERY  with PROFILE_PREFIX_QUIET: drain every N un-profiled forwards; 0 = never: the
+                      device buffer overflows and drops the later prefix markers, and the one drain before
+                      the recorded warm forward reads at most one buffer. Every marker read becomes a host
+                      zone in the .tracy (readDeviceMarkerData), so 0 keeps a deep prefix's capture the size
+                      of a shallow one. Size TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT to hold the last two
+                      forwards (the recorded warm-up + the profiled one), no more       [default 1]
   PROFILE_PROGRESS_EVERY  N > 0: log a line every N un-profiled forwards (watchdog heartbeat)  [default 0]
   PROFILE_WARM_ITERS  warm forwards of the profiled chunk / composition before it is profiled
                       (PROFILE_SKIP_COMPILE=1 or PROFILE_SEGMENTS)                              [default 2]
@@ -262,6 +271,18 @@ def segment_tokens(inputs, name, stream, p):
     return [src[(p + STREAM_STRIDE * stream + i) % len(src)] for i in range(SEG)]
 
 
+def mute_realtime_profiler_tracy():
+    """Unregister the real-time profiler's Tracy callback(s) (see PROFILE_PREFIX_QUIET).
+
+    Callback handles are sequential from 0 and, in this process, only the runtime's own Tracy handler registers
+    one (when the mesh opens), so every handle below a fresh probe's belongs to it."""
+    probe = ttnn.device.RegisterProgramRealtimeProfilerCallback(lambda batch: None)
+    ttnn.device.UnregisterProgramRealtimeProfilerCallback(probe)
+    for handle in range(probe):
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+    print(f"[zone-prof] real-time profiler Tracy lanes muted ({probe} callback(s) unregistered)", flush=True)
+
+
 def drop_device_perf_report():
     """Delete the C++ per-program report the un-profiled forwards appended to. The runtime re-creates it
     (with its header) on the next profiler read, so the report tracy -r joins holds only what follows."""
@@ -403,7 +424,7 @@ def main():
     fabric_config = fabric_config_from_env()
     warm_iters = int(os.getenv("PROFILE_WARM_ITERS", "2"))
     warm_point = int(os.getenv("PROFILE_WARM_POINT", "0"))
-    prefix_read_every = max(1, int(os.getenv("PROFILE_PREFIX_READ_EVERY", "1")))
+    prefix_read_every = max(0, int(os.getenv("PROFILE_PREFIX_READ_EVERY", "1")))
     progress_every = int(os.getenv("PROFILE_PROGRESS_EVERY", "0"))
     skip_prefix = os.getenv("PROFILE_SKIP_PREFIX") == "1"
     skip_compile = os.getenv("PROFILE_SKIP_COMPILE") == "1"
@@ -438,8 +459,13 @@ def main():
         )
     if PREFIX_QUIET:
         print(
-            "[zone-prof] PROFILE_PREFIX_QUIET=1: op records + zones off until the profiled forward, one profiler "
-            f"drain per {prefix_read_every} un-profiled forward(s), no device log / tracy device zones",
+            "[zone-prof] PROFILE_PREFIX_QUIET=1: op records + zones off until the profiled forward, "
+            + (
+                f"one profiler drain per {prefix_read_every} un-profiled forward(s)"
+                if prefix_read_every
+                else "no profiler drain in the un-profiled forwards (device buffer overflows, prefix markers dropped)"
+            )
+            + ", no device log / tracy device zones",
             flush=True,
         )
         if os.getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS") == "1":
@@ -493,6 +519,8 @@ def main():
             num_users=n_slots + 1 if packed else 1,
         )
         num_layers = len(global_layer_indices)
+        if PREFIX_QUIET:
+            mute_realtime_profiler_tracy()  # after every mesh / sub-mesh is open, before the first forward
 
         # Per-layer ReadDeviceProfiler for the UN-profiled phases only (warmup + prefix). The device
         # profiler buffer must be drained or it overflows and the next phase's data is dropped — but a
@@ -531,7 +559,7 @@ def main():
                 for _ in range(warm_point):
                     fn()
                 print(f"[zone-prof] warm point: forward #2 repeated {warm_point}x", flush=True)
-            if PREFIX_QUIET and state["fwd"] % prefix_read_every == 0:
+            if PREFIX_QUIET and prefix_read_every > 0 and state["fwd"] % prefix_read_every == 0:
                 read_profiler(mesh)
                 state["reads"] += 1
             if progress_every > 0 and state["fwd"] % progress_every == 0:

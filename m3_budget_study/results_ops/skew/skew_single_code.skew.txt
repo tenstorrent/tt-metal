@@ -1,0 +1,19 @@
+2026-09-29 16:35:43.274 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/vmelnykov/.cache/ttnn,model_cache_path=/home/vmelnykov/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-29 16:35:43.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.340 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.340 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.341 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.341 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.342 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.343 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:35:43.343 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+skew_single_code_0 L3 h=0 max/mean=1.3623 per_chip=2790;2535;2324;1974;2196;1773;1171;1621
+skew_single_code_0 L4 h=0 max/mean=1.3076 per_chip=2678;2519;1675;2482;2576;1624;1123;1707
+skew_single_code_0 L5 h=0 max/mean=1.3677 per_chip=2589;1347;2716;1950;2127;2801;1457;1397
+skew_single_code_0 L6 h=0 max/mean=2.3877 per_chip=1865;1764;4890;1267;1939;1473;1760;1426
+skew_single_code_139264 L3 h=139264 max/mean=1.3608 per_chip=2787;2557;2002;2089;2269;1785;1380;1515
+skew_single_code_139264 L4 h=139264 max/mean=1.8633 per_chip=3816;2355;1068;2644;2354;1611;962;1574
+skew_single_code_139264 L5 h=139264 max/mean=1.3535 per_chip=2772;1131;2348;1949;2174;2622;2003;1385
+skew_single_code_139264 L6 h=139264 max/mean=2.1548 per_chip=1562;1771;4413;1336;2248;1588;1704;1762
+[load_skew] 8 rows -> /home/vmelnykov/tt-metal/m3_budget_study/results_ops/load_skew.csv

@@ -1,0 +1,11 @@
+2026-09-29 16:40:50.932 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/vmelnykov/.cache/ttnn,model_cache_path=/home/vmelnykov/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-29 16:40:50.999 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:40:51.000 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:40:51.001 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+2026-09-29 16:40:51.002 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:291 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 2, 16])
+skew_packed_w8192_mixed L3 h=548864+141312+16384+0 max/mean=1.6404 per_chip=6719;5467;3412;3121;3137;2913;4246;3753
+skew_packed_w8192_mixed L4 h=548864+141312+16384+0 max/mean=1.6094 per_chip=5050;5773;6592;3788;3941;3498;1829;2297
+skew_packed_w8192_mixed L5 h=548864+141312+16384+0 max/mean=1.2991 per_chip=4990;2492;4578;3683;3726;5321;2795;5183
+skew_packed_w8192_mixed L6 h=548864+141312+16384+0 max/mean=1.5686 per_chip=3882;3483;6425;3117;5770;3940;3357;2794
+[load_skew] 4 rows -> /home/vmelnykov/tt-metal/m3_budget_study/results_ops/load_skew.csv
