@@ -190,3 +190,31 @@ rel 0.0026, ratio [0.9951, 1.0044]; collapse vs golden 0.0016, vs CPU same input
 Note: with the stub, `vs_cpu_same_input` rel is 0 (the CPU collapse of a zero attn_hc is zero); its ratio check fails it.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_02_attn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.attn_norm test (attempt 1)
+
+Reviewed the rendered component test for attn_norm (layer 0, s4096 chunk 1, [2048, 4096] bf16). Kept the gated PCC and
+added asserted checks (informational metrics): finite, rel L2 <= 0.01, per-token norm ratio [0.98, 1.02], worst
+per-token rel L2 <= 0.03. Tighter than the Gemma/MiMo template (0.03, [0.97, 1.03]) because of what the CPU mutation
+run on this golden showed (host script, not kept):
+- Layer-0 input rows are tiny (row RMS 0.0023..0.0155), so mean(x^2) is about the size of eps 1e-5 and eps matters:
+  eps 1.2e-5 scores PCC 0.99986 / rel 0.027 (passes 0.03), eps 8e-6 rel 0.031.
+- LayerNorm-style mean subtraction: PCC 0.99992, rel 0.0149, worst row 0.056. x1.02: rel 0.020.
+- Caught by PCC already: sum instead of mean (0.9877). No weight / 1 + w: PCC 0.998, rel ~9.
+- Headroom: fp32 reference rel 0.0023; squares accumulated in bf16 rel 0.0056, ratio [0.9865, 1.0149], worst row 0.015.
+Results: reference passes (PCC 0.999997, rel 0.0023, ratio [0.9998, 1.0002], worst row 0.0029). Stub fails (PCC 0).
+Device mode fails with NotImplementedError until the implement step adds the module.
+Implement: keep eps exactly 1e-5 and the reduction of squares in fp32 (fp32 dest acc); bf16 accumulation is close to
+the ratio limit.
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_norm.py`
+
+## C.kda_dense.attn_norm implement (attempt 1)
+
+- `tt/rms_norm.py:TtRMSNorm` (from `mimo_v2_6_d_p/tt/rms_norm.py`): `ttnn.bringup.rms_norm`, replicated [1, 1, S, 4096]
+  bf16, plain w (bf16 TILE gamma [1, 1, 1, H]), eps `cfg.rms_norm_eps` (1e-5), HiFi4 + fp32 dest. `build_norm(mesh,
+  loader, cfg, layer, name)` takes any `<name>.weight` of the layer, so post_attention_layernorm can reuse it.
+  `GLM_NORM_IMPL=native` selects `ttnn.rms_norm` for comparison.
+- hooks: `_NORM_STEPS = {"attn_norm": "input_layernorm"}`, `_norm_host_fn` (bf16 upload, chip-0 readback at the harness
+  boundary); `attn_norm` added to `DEVICE_STEPS["kda_dense"]`.
+- Gate: PCC 0.999996, rel L2 0.0028, row norm ratio [0.9993, 1.0006], worst row 0.0037 (fp32 CPU reference 0.0023).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_norm.py`
