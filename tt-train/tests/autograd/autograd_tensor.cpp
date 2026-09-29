@@ -150,3 +150,35 @@ TEST_F(AutogradTensorTest, DISABLED_FullViewTracksFusedSGDStep) {
     config.lr = 1e-1F;
     expect_full_view_tracks_fused_step<optimizers::SGD>(config);
 }
+
+// Disabled: for an fp32-native parameter the fused step updates only the bf16 copy, so the stored value never
+// moves — https://github.com/tenstorrent/tt-metal/issues/41657
+TEST_F(AutogradTensorTest, DISABLED_NativeValueTracksFusedAdamWStepOnFp32Parameter) {
+    const std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const xt::xarray<float> w0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
+    const xt::xarray<float> g0 = test_utils::make_uniform_xarray<float>(shape, 0.25F, 1.0F, gen());
+
+    auto* device = &autograd::ctx().get_device();
+    auto theta = autograd::create_tensor(
+        core::from_xtensor<float, ttnn::DataType::FLOAT32>(w0, device), /* requires_grad */ true);
+    ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
+
+    // A forward pass reads the bf16 compute copy before any step.
+    const auto half_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
+    const auto native_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
+
+    theta->set_grad(core::from_xtensor(g0, device));
+    optimizers::AdamWConfig config;
+    config.lr = 1e-2F;
+    optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
+    optimizer.step();
+
+    const auto half_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
+    ASSERT_FALSE(xt::allclose(half_after, half_before, 0.0, 0.0)) << "the step did not change the parameter";
+
+    const auto native_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
+    EXPECT_FALSE(xt::allclose(native_after, native_before, 0.0, 0.0))
+        << "the stored fp32 value did not change after an in-place step";
+}
