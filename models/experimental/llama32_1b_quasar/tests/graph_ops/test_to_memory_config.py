@@ -273,7 +273,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 1, 32, 8192],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {
                     "layout": "WIDTH_SHARDED",
@@ -291,7 +291,7 @@ CASES = [
         "kwargs": {},
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {
@@ -361,7 +361,7 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 1, 32, 128256],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "L1", "shard": None},
             },
@@ -370,7 +370,7 @@ CASES = [
         "kwargs": {},
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

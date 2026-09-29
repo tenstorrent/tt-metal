@@ -205,7 +205,7 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 

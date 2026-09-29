@@ -146,14 +146,25 @@ cleanup() {
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
-      python3 -c "import matplotlib" 2>/dev/null \
-        || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
-        || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
-        || echo "matplotlib install failed (gantt skipped, non-fatal)"
-      python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+      GANTT_PY=python3
+      GANTT_TMP=""
+      if ! python3 -c "import matplotlib" 2>/dev/null; then
+        GANTT_TMP=$(mktemp -d)
+        if UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 120 uv venv --quiet "${GANTT_TMP}/venv" \
+           && UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 180 uv pip install --quiet \
+                --python "${GANTT_TMP}/venv/bin/python" matplotlib; then
+          GANTT_PY="${GANTT_TMP}/venv/bin/python"
+        else
+          echo "matplotlib install failed (gantt skipped, non-fatal)"
+        fi
+      fi
+      "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
         --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
+      if [ -n "${GANTT_TMP}" ]; then
+        rm -rf "${GANTT_TMP}"
+      fi
     fi
   fi
   rm -rf "${MR_DIR}"
@@ -170,6 +181,7 @@ python3 "${TTRUN_PY}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_SYNC_PER_CHUNK=1; \
@@ -215,6 +227,7 @@ set +e
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \

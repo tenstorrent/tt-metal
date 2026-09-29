@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -12,7 +13,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
-    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
@@ -74,22 +74,6 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def eltwise_binary_math_fidelities(mathop, formats):
-    # Add/sub ignore fidelity. Int8 is an exact integer op, and Float16_b is
-    # already full precision at LoFi: HiFi only touches the low 3 mantissa bits.
-    if mathop in [
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-    ] or formats.input_format in (DataFormat.Int8, DataFormat.Float16_b):
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
-
-
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
 def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
@@ -134,7 +118,7 @@ ELTWISE_FORMATS = (
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    math_fidelity=eltwise_binary_math_fidelities,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=False
     ),
