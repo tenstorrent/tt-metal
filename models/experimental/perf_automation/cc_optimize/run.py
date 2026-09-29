@@ -3499,6 +3499,12 @@ def _progress_watch(pgid, log_path=None, stall_s=0.0):
             def moved(self, *_a, **_k):
                 return True
 
+            def note_progress(self, *_a, **_k):
+                return None
+
+            def limit(self):
+                return float(stall_s or 0.0)
+
         return _Blind()
 
 
@@ -3927,7 +3933,6 @@ def _run_device_proc(
             # (_llm_child_alive), which no hung run can fail. Cooling stays: it is a deliberate
             # pause this tool asked for.
             _watch = _progress_watch(pgid, None, stall_s)
-            max_gap = 0.0
             _over_budget = [False]
             _ceiling_mult = _hard_ceiling_mult()
             while proc.poll() is None:
@@ -3957,9 +3962,9 @@ def _run_device_proc(
                 # liveness signals read that as a wedge, which is exactly wrong.
                 moved = _watch.moved(now, last_progress, proc.pid) or _act[0] > last_progress or _cooling_now()
                 if moved:
-                    max_gap = max(max_gap, now - last_progress)
+                    _watch.note_progress(now, last_progress)  # the rule lives in ProgressWatch now
                     last_progress = now
-                limit = max(stall_s, int(3 * max_gap))
+                limit = int(_watch.limit())
                 idle = now - last_progress
                 if idle >= limit:
                     print(

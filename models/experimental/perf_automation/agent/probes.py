@@ -659,6 +659,10 @@ def _proc_stat_fields():
 
 
 _STACK_EVERY_S = 30.0
+# Headroom over the longest quiet stretch a run has already come back from. Dimensionless, so it
+# assumes nothing about the model, the stage or the box -- and the same multiple run._run_device_proc
+# arrived at independently, which is why it is now shared rather than spelled twice.
+_GAP_MULT = 3
 
 # How far past its budget a still-moving step may run before the attempt is failed. A multiple, so
 # it scales with what the caller already said the work is worth.
@@ -777,6 +781,24 @@ class ProgressWatch:
         self._stall_s = float(stall_s or 0.0)
         self._sig = progress_signature(pgid, log_path)
         self._last_stack_at = 0.0
+        self._max_gap = 0.0
+
+    # A WINDOW MAY NEVER BE TIGHTER THAN A GAP THIS RUN HAS ALREADY SURVIVED.
+    #
+    # Every stall window in this tree is a number somebody typed, and the number is a guess about
+    # work nobody has measured yet -- which is how a 2400s window became 600s and then killed a
+    # perfectly healthy trace stage three times over. The run itself carries the answer: if it has
+    # already gone quiet for 200s and come back with real progress, 200s is not evidence of a wedge.
+    # `run._run_device_proc` worked this out and kept the rule to itself, so the other two supervised
+    # loops -- _execute here and cc_harness's gate check -- still killed on the raw typed number.
+    # Same rule, one owner, exactly as this class's own docstring demands.
+    def note_progress(self, now, last_progress) -> None:
+        """Record that progress just happened, widening the window to what this run really does."""
+        self._max_gap = max(self._max_gap, float(now) - float(last_progress))
+
+    def limit(self) -> float:
+        """The stall window in force: the typed one, or a multiple of the longest gap survived."""
+        return max(self._stall_s, _GAP_MULT * self._max_gap)
 
     def moved(self, now, last_progress, pid=None) -> bool:
         want = (
@@ -1599,10 +1621,12 @@ def _execute(
             except OSError:
                 size = last_size
             if _watch.moved(now, last_progress, proc.pid):
+                _watch.note_progress(now, last_progress)
                 last_progress = now
-            if stall_timeout_s and now - last_progress >= stall_timeout_s:
+            _stall_limit = _watch.limit()
+            if stall_timeout_s and now - last_progress >= _stall_limit:
                 _kill_and_raise(
-                    f"made no forward progress for {stall_timeout_s}s -- no log growth, no syscalls, "
+                    f"made no forward progress for {int(_stall_limit)}s -- no log growth, no syscalls, "
                     f"no bytes and an unchanged stack. CPU alone is not progress; a livelock has "
                     f"plenty of it. Process group killed"
                 )

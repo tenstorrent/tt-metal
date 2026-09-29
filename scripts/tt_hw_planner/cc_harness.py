@@ -171,8 +171,9 @@ def _supervised_gate_run(cmd: list, cwd, env: dict, progress_log, budget: int):
                 pass
             now = time.monotonic()
             if watch.moved(now, last_progress, proc.pid):
+                watch.note_progress(now, last_progress)
                 last_progress = now
-            if stall_s and now - last_progress >= stall_s:
+            if stall_s and now - last_progress >= watch.limit():
                 _pr._kill_tree(proc.pid)
                 proc.wait()
                 return None, True, out_path
