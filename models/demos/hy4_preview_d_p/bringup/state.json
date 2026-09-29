@@ -10472,6 +10472,25 @@
   "started": "2026-09-29T22:58:33",
   "status": "PASS"
  },
+ "X.2": {
+  "attempts": 0,
+  "duration_s": 1.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T23:01:04"
+   }
+  ],
+  "last_run": "2026-09-29T23:01:04",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/X.2.log",
+  "metrics": {
+   "opportunities_listed": 12
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T23:01:02",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T22:36:12",
