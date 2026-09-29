@@ -76,8 +76,8 @@ struct MoEComputeParams {
     // LocalOutput only. 0: today's ring (the weight CB holds 3 blocks, dm0 re-streams an expert's slice from DRAM
     // for every 32-token chunk). 1: the replay ring: the weight CB holds one whole expert slice, dm0 reads it once
     // per expert and re-presents it to compute for every further chunk without moving a byte. The compute kernel
-    // and its arithmetic are the same, so the pages are the same. (Values above 1 are the R replicated rings of the
-    // prefill mode, not implemented yet.)
+    // and its arithmetic are the same, so the pages are the same. Values 2 and 3 distribute chunks across that
+    // many replay rings; these modes require zero_fill_non_owned_rows=false to avoid racing output writes.
     uint32_t prefill_rings = 0;
     // Opt-in: the pipeline needs three feed slots instead of the legacy two.
     bool enable_a2a_pipeline = false;

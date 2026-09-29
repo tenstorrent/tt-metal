@@ -48,8 +48,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
-    const bool local_combine,
     const std::optional<uint32_t>& num_shared_experts_per_device,
+    const bool local_combine,
     const bool zero_fill_non_owned_rows,
     const std::optional<uint32_t>& prefill_rings,
     const bool enable_a2a_pipeline) {
@@ -77,9 +77,9 @@ std::vector<ttnn::Tensor> moe_compute(
         optional_cross_device_semaphore,
         activation_type,
         compute_only,
-        local_combine,
         bh_ring_size,
         num_shared_experts_per_device,
+        local_combine,
         zero_fill_non_owned_rows,
         prefill_rings,
         enable_a2a_pipeline);

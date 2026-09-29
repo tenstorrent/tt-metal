@@ -1558,7 +1558,10 @@ def test_moe_compute_local_axis_rejects_width_sharded_output(mesh_device, mesh_s
 @pytest.mark.parametrize(
     "sharded_input", ["expert indices", "expert scores", "expert mapping"], ids=["indices", "scores", "mapping"]
 )
-def test_moe_compute_local_axis_rejects_sharded_routing_metadata(mesh_device, mesh_shape, expect_error, sharded_input):
+@pytest.mark.parametrize("local_combine", [False, True], ids=["local_output", "fused_local"])
+def test_moe_compute_local_axis_rejects_sharded_routing_metadata(
+    mesh_device, mesh_shape, expect_error, sharded_input, local_combine
+):
     """On a multi-device mesh the local output path reads the token set and its routing metadata
     (expert indices, scores and mapping) as the same full set at every coordinate, so each of the
     four must be fully replicated, not only the activations: a dim-0-sharded copy of one of the
@@ -1592,7 +1595,10 @@ def test_moe_compute_local_axis_rejects_sharded_routing_metadata(mesh_device, me
         tt_mapping = dim0_sharded(torch.zeros(num_devices, experts, dtype=torch.uint16), ttnn.uint16)
     with expect_error(RuntimeError, rf"fully replicated {sharded_input} topology"):
         _call_moe_compute_for_rejection(
-            mesh_device, inputs=(tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2), cluster_axis=0
+            mesh_device,
+            inputs=(tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2),
+            cluster_axis=0,
+            local_combine=local_combine,
         )
 
 

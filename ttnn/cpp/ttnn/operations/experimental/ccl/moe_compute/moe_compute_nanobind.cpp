@@ -125,7 +125,8 @@ void bind_moe_compute(nb::module_& mod) {
           mesh axis, for example axis 0 on a 1x4 expert-parallel mesh. This represents one
           replicated logical token without fabric dispatch; the caller must reduce the
           weighted partials across the non-degenerate expert-parallel axis. It must not be
-          used with ``compute_only=True`` or with shared experts.
+          used with ``compute_only=True``. Multi-device local combine does not support shared experts;
+          the existing 1x1 fused path retains its shared-expert behavior.
 
         The matmul ring size is **auto-detected** from the live DRAM-bank count — 12 on
         Wormhole (no DRAM-bank harvesting), 7/8 on Blackhole (up to one bank may be fused
@@ -290,8 +291,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("local_combine") = false,
         nb::arg("num_shared_experts_per_device") = nb::none(),
+        nb::arg("local_combine") = false,
         nb::arg("zero_fill_non_owned_rows") = true,
         nb::arg("prefill_rings") = nb::none(),
         nb::arg("enable_a2a_pipeline") = false);

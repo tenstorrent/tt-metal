@@ -247,20 +247,34 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             "cluster_axis {} is out of range for a mesh with {} axes",
             args.combine_params->axis,
             mesh_shape.dims());
+        if (mesh_device->num_devices() > 1 &&
+            (args.path == MoEComputePath::FullLocal || args.path == MoEComputePath::LocalOutput)) {
+            // Every coordinate runs the tilize stage over the whole token set: the input rows,
+            // the expert indices and scores that route them and the expert mapping are all
+            // read as the full set, and dm1 addresses page k * T + t of the output by the
+            // global token id. A sharded copy of any of the four would give the coordinates
+            // different token numberings or partial routing tables, so all four must be
+            // fully replicated. A 1x1 mesh has nothing to check.
+            const std::array<std::pair<const char*, const ttnn::Tensor*>, 4> replicated_inputs{{
+                {"input", &tensor_args.tilize_input_tensor},
+                {"expert indices", &tensor_args.tilize_expert_indices_tensor},
+                {"expert scores", &tensor_args.tilize_expert_scores_tensor},
+                {"expert mapping", &tensor_args.tilize_expert_mapping_tensor},
+            }};
+            for (const auto& [what, tensor] : replicated_inputs) {
+                for (const auto& placement : tensor->tensor_topology().placements()) {
+                    TT_FATAL(
+                        std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
+                        "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully "
+                        "replicated {} topology (every coordinate reads the whole token set and its routing); "
+                        "the caller reduces the per-device partials",
+                        what);
+                }
+            }
+        }
         if (args.path == MoEComputePath::FullLocal) {
             TT_FATAL(
                 args.combine_params->local_combine, "path=FullLocal requires combine_params->local_combine to be true");
-            // On a degenerate axis of a multi-device mesh every coordinate combines its own experts over the same
-            // tokens, so the token input must be replicated; a 1x1 mesh has nothing to replicate.
-            if (mesh_device->num_devices() > 1) {
-                const auto& input_topology = tensor_args.tilize_input_tensor.tensor_topology();
-                for (const auto& placement : input_topology.placements()) {
-                    TT_FATAL(
-                        std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
-                        "path=FullLocal on a multi-device mesh requires a fully replicated logical-token input "
-                        "topology; local expert partials are reduced explicitly by the caller");
-                }
-            }
         } else if (args.path == MoEComputePath::LocalOutput) {
             // The CCL knobs are accepted and unused on this path; num_links keeps its range check.
             TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
@@ -278,30 +292,6 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
                 "moe_compute over a mesh axis of extent 1 writes a local output and does not support shared experts; "
                 "got num_shared_experts_per_device={}",
                 args.num_shared_experts_per_device.value_or(0));
-            if (mesh_device->num_devices() > 1) {
-                // Every coordinate runs the tilize stage over the whole token set: the input rows,
-                // the expert indices and scores that route them and the expert mapping are all
-                // read as the full set, and dm1 addresses page k * T + t of the output by the
-                // global token id. A sharded copy of any of the four would give the coordinates
-                // different token numberings or partial routing tables, so all four must be
-                // fully replicated. A 1x1 mesh has nothing to check.
-                const std::array<std::pair<const char*, const ttnn::Tensor*>, 4> replicated_inputs{{
-                    {"input", &tensor_args.tilize_input_tensor},
-                    {"expert indices", &tensor_args.tilize_expert_indices_tensor},
-                    {"expert scores", &tensor_args.tilize_expert_scores_tensor},
-                    {"expert mapping", &tensor_args.tilize_expert_mapping_tensor},
-                }};
-                for (const auto& [what, tensor] : replicated_inputs) {
-                    for (const auto& placement : tensor->tensor_topology().placements()) {
-                        TT_FATAL(
-                            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
-                            "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully "
-                            "replicated {} topology (every coordinate reads the whole token set and its routing); "
-                            "the caller reduces the per-device partials",
-                            what);
-                    }
-                }
-            }
             const auto& output_memory_config = args.combine_params->output_memory_config;
             const uint32_t num_output_rows =
                 args.combine_params->select_experts_k * args.combine_params->batch_size * args.combine_params->seq_size;
@@ -684,9 +674,9 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
-    const bool local_combine,
     const std::optional<uint32_t>& bh_ring_size,
     const std::optional<uint32_t>& num_shared_experts_per_device,
+    const bool local_combine,
     const bool zero_fill_non_owned_rows,
     const std::optional<uint32_t>& prefill_rings,
     const bool enable_a2a_pipeline) {
@@ -796,8 +786,9 @@ std::vector<ttnn::Tensor> moe_compute(
             !optional_cross_device_semaphore.has_value(),
             "moe_compute(local_combine=true) requires optional_cross_device_semaphore to be std::nullopt");
         TT_FATAL(
-            num_shared_experts_per_device.value_or(0) == 0,
-            "moe_compute(local_combine=true) does not support shared experts; execute the dynamically gated "
+            num_devices == 1 || num_shared_experts_per_device.value_or(0) == 0,
+            "multi-device moe_compute(local_combine=true) does not support shared experts; execute the dynamically "
+            "gated "
             "shared expert separately and add its local partial before the expert-parallel reduction");
     } else {
         TT_FATAL(
@@ -817,8 +808,8 @@ std::vector<ttnn::Tensor> moe_compute(
     if (full_local) {
         // Local combine: no fabric, no mux, no cross-device semaphore. The selected
         // axis has size one, so tilize/combine see exactly one dispatch device per
-        // independent mesh coordinate. Shared experts are intentionally unsupported by
-        // the Qwen4Exp caller; it executes its dynamically gated shared expert separately.
+        // independent mesh coordinate. Multi-device callers execute shared experts separately
+        // so their contribution is not duplicated by the expert-parallel reduction.
         combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
             .hidden_size = hidden_size,
             .batch_size = 1,
