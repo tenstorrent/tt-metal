@@ -232,6 +232,7 @@ async function run({ github, context, core }) {
       const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: number, per_page: 100 });
       let session = 'none';
       let sessionAt = null;
+      let lastStartedAt = null;
       // Nudge-count baseline (the documented RESET): a maintainer puts a handed-off PR back
       // under Sous Chef by removing `copilot-flow-handoff`. Only nudges and hand-off comments
       // posted AFTER the most recent such removal count; everything before it is history.
@@ -241,7 +242,10 @@ async function run({ github, context, core }) {
       let nudgeBaseline = 0;
       for (const ev of timeline) {
         if (typeof ev.event !== 'string') continue;
-        if (ev.event.startsWith('copilot_work_')) { session = ev.event; sessionAt = ev.created_at || null; }
+        if (ev.event.startsWith('copilot_work_')) {
+          session = ev.event; sessionAt = ev.created_at || null;
+          if (ev.event === 'copilot_work_started') lastStartedAt = ev.created_at || null;
+        }
         if (ev.event === 'unlabeled' && (ev.label?.name || '').toLowerCase() === HANDOFF_LABEL) {
           nudgeBaseline = Math.max(nudgeBaseline, new Date(ev.created_at || 0).getTime());
         }
@@ -300,7 +304,25 @@ async function run({ github, context, core }) {
       // nudge (head unchanged since) blocks — and only one from THIS cycle: a nudge older
       // than the reset baseline belongs to the previous, handed-off cycle, and the
       // maintainer's label removal is itself the instruction to try again.
-      if (!nudgeCapped && comments.length && isNudge(comments[0]) && afterBaseline(comments[0]) && !conflicting && headDate <= new Date(comments[0].created_at).getTime()) {
+      const lastCommentIsUnansweredNudge = comments.length && isNudge(comments[0]) && afterBaseline(comments[0]);
+      const noPushSinceLastNudge = lastCommentIsUnansweredNudge && headDate <= new Date(comments[0].created_at).getTime();
+      // Second tt-metal refinement (PR #58341, 2026-09-29): a session that STARTS and FINISHES
+      // (or fails) entirely after the nudge, with no push and no reply either, means Copilot
+      // tried and silently produced nothing -- e.g. the "GitHub engine reported fetch failed"
+      // write-back error observed there. `session`/`sessionAt` can only be a finished/failed
+      // event here (a `copilot_work_started` with no later finished event already `continue`d
+      // at Filter 2, unless stale). The old code treated this identically to "still working,
+      // wait" and blocked forever: Filter 4 never lets a second nudge through, so a silently
+      // failed nudge could never progress toward a working retry OR the nudge cap. A silent
+      // session is evidence the last nudge already failed, not a reason to keep waiting on it.
+      const silentSessionSinceNudge = noPushSinceLastNudge && sessionAt !== null &&
+        (session === 'copilot_work_finished' || session === 'copilot_work_finished_failure') &&
+        new Date(sessionAt).getTime() > new Date(comments[0].created_at).getTime();
+      if (silentSessionSinceNudge) {
+        counters.silent_session_since_nudge = (counters.silent_session_since_nudge || 0) + 1;
+        core.info(`#${number}: Copilot's session (${lastStartedAt || '?'} → ${sessionAt}, ${session}) after the last nudge produced no push and no reply; not blocking on it`);
+      }
+      if (!nudgeCapped && noPushSinceLastNudge && !conflicting && !silentSessionSinceNudge) {
         counters.filtered_last_comment_from_sous_chef++; reasons[number] = 'last comment is an unanswered sous-chef nudge (no push since)'; continue;
       }
       // Filter 5 — cooldown since the last actionable nudge (also delays a hand-off).
@@ -443,7 +465,10 @@ async function run({ github, context, core }) {
           core.info(`#${number}: hand-off skipped: ${staleReason}`);
           continue;
         }
-        const body = buildHandoffComment({ pr, nudgeCount: nudges.length, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now });
+        const body = buildHandoffComment({
+          pr, nudgeCount: nudges.length, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now,
+          silentSession: silentSessionSinceNudge ? { startedAt: lastStartedAt, endedAt: sessionAt, outcome: session } : null
+        });
         try {
           await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
           core.info(`#${number}: posted the hand-off comment (${nudges.length} nudges)`);
@@ -542,7 +567,7 @@ async function run({ github, context, core }) {
 // Deterministic hand-off comment (no at-mention anywhere: it must not start a session, and
 // must not look like a nudge to `isNudge`, which is why "Copilot nudges" is written without
 // the `@`).
-function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now }) {
+function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now, silentSession = null }) {
   const hours = Math.round((now - new Date(pr.createdAt).getTime()) / 3600000);
   const lines = [
     HANDOFF_MARKER,
@@ -557,6 +582,12 @@ function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, fai
   for (const t of unansweredAll.slice(0, 10)) lines.push(`- Review thread by ${t.reviewer} with no reply from Copilot${t.url ? `: ${t.url}` : ''}`);
   if (unansweredAll.length > 10) lines.push(`- … and ${unansweredAll.length - 10} more unanswered review thread(s).`);
   for (const c of needsMaintainerApproval.slice(0, 5)) lines.push(`- Waiting for a maintainer to approve the run: ${c.url ? `[${c.name}](${c.url})` : c.name}.`);
+  // Distinguishes "Copilot never got the nudge" from "Copilot tried and its write-back silently
+  // failed" -- without this a maintainer has to reconstruct the timeline by hand (as happened
+  // on PR #58341) to tell the two apart.
+  if (silentSession) {
+    lines.push(`- The last nudge's Copilot session ran (${silentSession.startedAt || '?'} → ${silentSession.endedAt || '?'}, ended \`${silentSession.outcome}\`) but produced no new commit and no reply -- its write-back likely failed rather than nothing happening.`);
+  }
   lines.push('',
     `A maintainer should take the PR over, give Copilot direct guidance in a comment (an at-mention from a maintainer with write access starts a new session), or close it. To put the PR back under PR Sous Chef, remove the \`${HANDOFF_LABEL}\` label: only nudges posted after that removal count toward the next cap of ${MAX_NUDGES_PER_PR}, so this comment can stay as history (deleting it is neither needed nor sufficient).`,
     '',
