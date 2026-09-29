@@ -79,3 +79,18 @@ class TtDenseMLP:
         out = ttnn.reduce_scatter(part, dim=3, cluster_axis=self.tp_axis, memory_config=dram)
         ttnn.deallocate(part)
         return out
+
+
+class TtMoeCombine:
+    """MoE layer output (HF HYV4MoE: routed experts + shared expert): mlp_out = experts_out + shared_out.
+
+    Both inputs arrive already reduce-scattered over axis 1 in the residual's column split ([1, 1, S/2, H/2] per
+    chip: TtHy4Experts and TtDenseMLP on mlp.shared_experts.*, fp32), so this is one elementwise fp32 ttnn.add per
+    chip and no collective. The output keeps the input layout, fp32. No host work in __call__."""
+
+    def __init__(self, mesh):
+        self.mesh = mesh
+
+    def __call__(self, experts_out: ttnn.Tensor, shared_out: ttnn.Tensor) -> ttnn.Tensor:
+        assert tuple(experts_out.shape) == tuple(shared_out.shape), (tuple(experts_out.shape), tuple(shared_out.shape))
+        return ttnn.add(experts_out, shared_out, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
