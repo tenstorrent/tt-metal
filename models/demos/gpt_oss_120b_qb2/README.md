@@ -66,6 +66,32 @@ teacher-forced decode. It requires top-5 agreement ≥0.98 and top-100 agreement
 sampling does not read back full logits. These are one-prompt token-agreement
 checks; full AIME evaluation is separate.
 
+Layer state tests use independent Transformers 5.12.1 CPU references. Generate
+these in a separate CPU Torch environment from the same verified checkpoint.
+Each generation streams weights one layer at a time and saves a hash manifest;
+the boundary reference executes all 36 HF layers. Outputs belong outside the
+checkout.
+
+```bash
+python models/demos/gpt_oss_120b_qb2/tests/generate_reference.py \
+  --snapshot "$GPT_OSS_120B_SNAPSHOT" --kind boundaries --output /path/to/references/boundaries
+python models/demos/gpt_oss_120b_qb2/tests/generate_reference.py \
+  --snapshot "$GPT_OSS_120B_SNAPSHOT" --kind batches --output /path/to/references/batches
+```
+
+Then return to the TTNN environment and run:
+
+```bash
+export GPT_OSS_120B_BOUNDARY_REFERENCE=/path/to/references/boundaries
+export GPT_OSS_120B_BATCH_REFERENCE=/path/to/references/batches
+python -m pytest models/demos/gpt_oss_120b_qb2/tests/test_layer_state.py -v
+```
+
+These tests check real-weight sliding/full layers, thirteen active batch sizes,
+request permutations, page remapping, ring wrap and warm/cold chunk continuation.
+The per-row PCC threshold is 0.99. Full-model serving isolation and accuracy
+qualification are separate from these layer checks.
+
 Host contracts can run without devices:
 
 ```bash
@@ -92,6 +118,7 @@ export GPT_OSS_120B_SLIDING_RING=1
 export GPT_OSS_120B_PREFIX_CACHING=1
 export GPT_OSS_120B_CHUNK_WARMUP=8192
 export TORCHDYNAMO_DISABLE=1
+export VLLM_SYSTEM_START_DATE=2026-08-31
 
 python -m vllm.entrypoints.openai.api_server \
   --model "$GPT_OSS_120B_SNAPSHOT" \
@@ -111,8 +138,9 @@ Measure both profiles on the same workload before comparing their latency.
 
 Greedy sampling and supported top-k values up to 32 use the device route. Requests
 with unsupported sampling parameters or logprobs use the plugin's host route;
-verify its effect on concurrent requests. Source-specific Harmony answer-reserve
-and system-date patches are not part of this integration. A response that spends
+verify its effect on concurrent requests. The supported `VLLM_SYSTEM_START_DATE` setting fixes Harmony prompt dates for
+repeatable evaluation. Source-specific Harmony answer-reserve behavior is not
+part of this integration. A response that spends
 its entire output budget on reasoning can therefore have empty final content;
 evaluation must record that as a failure.
 
