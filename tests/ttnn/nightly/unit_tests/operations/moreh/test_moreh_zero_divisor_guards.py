@@ -45,6 +45,14 @@ def test_moreh_fold_stride_zero(device, expect_error):
         )
 
 
+def test_moreh_fold_kernel_size_zero(device, expect_error):
+    x = ttnn.from_torch(torch.randn(1, 36, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "kernel_size must be greater than 0"):
+        ttnn.operations.moreh.fold(
+            x, None, output_size=[8, 8], kernel_size=[0, 3], dilation=[1, 1], padding=[1, 1], stride=[1, 1]
+        )
+
+
 def test_moreh_fold_kernel_size_arity(device, expect_error):
     x = ttnn.from_torch(torch.randn(1, 36, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "kernel_size takes 2 elements"):
