@@ -1681,3 +1681,25 @@ Results:
 Watch: the vs-golden ratio low side (0.9890 of 0.985) and the CPU-block flips (33 of 64).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_02_attn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.attn_norm test (attempt 1)
+Reviewed the rendered component test for attn_norm at layer 4. The rendered file was the bare `run_component_test`.
+I rewrote it from the dsa_moe layer-3 ffn_norm test and kept its limits and structure: chunk 1 and chunk 0, each
+checked for finite values, rel L2 <= 0.01, per-token norm ratio [0.99, 1.01], worst row <= 0.015, and coefficient
+`<got, want> / <want, want>` in [0.996, 1.004]. Every limit is written `not x <= lim`, so NaN fails.
+Why: layer 4's input_layernorm weight is nearly constant (0.162..0.220), like ffn_norm at layer 3 (known issue: a
+nearly constant norm weight...). So no weight (PCC 0.99947), `1 + w` (0.99963), and ffn_norm's, layer 0's or layer 3's
+weight (0.9973..0.99947) all pass PCC. Only the scale checks catch them. Input row RMS is 0.0016..0.030, so eps matters.
+Sensitivity (CPU host script /tmp/kmnorm/sens.py, not kept; the numbers are in the test docstring). These pass PCC and
+fail the extra checks: every wrong weight, w reversed (rel 0.045), eps 1.05e-5 / 9.5e-6 (ratio), mean subtraction
+(worst row 0.041), a norm over 4 TP shards (0.047), x1.01, x1.005 (coefficient 1.005), one row x1.02, a zero or
+neighbour row, and 32 zero rows or columns. Not caught: x1.003. Device-like noise that fails the limits: squares
+accumulated in bf16 (ratio [0.987, 1.020]) and rsqrt with 5e-3 row error.
+Results:
+- Device (the gate's default mode) passes already, because `_device_step` builds the norm for any layer. It scores
+  PCC 0.999996, rel 0.0028, ratio [0.9991, 1.0006], worst row 0.0032, coefficient 0.99993 (both chunks alike).
+- Reference passes (0.0023 / [0.9998, 1.0002] / 0.0025 / 1.00000). Stub fails (PCC 0).
+- The first `FAIL pcc ... 0.000000` line in each run comes from the precompile collect pass, not from the real pass.
+Next step: implement only needs to add attn_norm to `DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
