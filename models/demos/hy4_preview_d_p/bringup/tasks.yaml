@@ -1929,6 +1929,13 @@ tasks:
     kind: norm
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T17:00:09'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py: 033f2e444e283fb35b7f4a83f345226f3e8ee8bec3933ed6db95022f708f3175
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.03
   title: 'moe_shared block with steps 1-3 on device (last: attn_norm)'
   step: implement
