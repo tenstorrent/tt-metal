@@ -2001,3 +2001,32 @@ Next (implement): no module change is needed. Add router to `DEVICE_STEPS["kda_m
 hooks.py).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_router.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.09 test (attempt 1)
+Reviewed the rendered swap test for kda_moe layer 4 with attn_hc..ffn_norm and router on the device. The rendered file
+was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 08 test (every check and limit kept) and added
+dsa_moe swap 11's router checks, re-measured at layer 4:
+- Router-share block: the device outputs through ffn_norm fixed, then the CPU router and tail. Block out vs it is the
+  router share. The norm share is now that block vs the norm-share block, and it reproduces swap 08 exactly
+  (19 / 0.00032 / [0.9986, 1.0016]).
+- Router vs the fp32 CPU router of the same ffn_norm: exactly 8 nonzeros, non-negative, overlap >= 0.999 (dsa_moe
+  0.998; layer 4's 8th-9th gaps are wider), worst row >= 0.75, matched rel <= 0.0025, coefficient [0.9995, 1.0005],
+  sums 2.5 +- 0.015. Runs on chunk 1 and chunk 0.
+- Router vs golden, at the component test's limits (overlap 0.99). Runs on chunk 1 and chunk 0.
+- Router-share limits: flips <= 16, same-routing rel <= 0.0005 (dsa_moe 0.0015), ratio [0.997, 1.003], flipped-row
+  ratio [0.95, 1.05]. At layer 4 a router error reaches block out at about a quarter of layer 3's (bf16 weights 0.00023
+  vs 0.00086). I added a Proposed entry to known issues.
+The limits come from a CPU sensitivity study (/tmp/kmoe09/sens.py, which is /tmp/dsas11/sens.py with layer 4;
+device-free, about 2 s per case, not kept). The numbers are in the test docstring. Every router bug in the study fails
+at least one check. A recentred bias with a TF32 choice score passes every check.
+Results:
+- Device passes: PCC 0.999992, rel 0.00424. Vs the all-CPU block: 62 flips / 0.00242 (limit 0.003). Router vs the CPU
+  router of the same input: 0.99994 / 0.00166 / coef 0.99999 (chunk 0: 0.99982). Vs golden: 0.99609 / 0.00314.
+  Router share: 1 flip / 0.00024 / [0.9976, 1.0025]. Every swap 08 number is unchanged. The real pass takes about
+  100 s, 190 s in total.
+- Reference passes (PCC 0.999997, router share exact). Stub fails (PCC 0 and every check).
+Watch: the router-share ratio [0.9976, 1.0025] against its limit of [0.997, 1.003] is bf16 output rounding (the CPU
+bf16 case gives [0.9978, 1.0020]). The swap for the experts is next. Its router share would then include the device
+experts, so it needs its own design.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_09_router.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
