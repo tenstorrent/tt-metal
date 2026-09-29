@@ -108,7 +108,6 @@ jobs:
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
-      llk-perf-inputs-changed: ${{ steps.find-changes.outputs.llk-perf-inputs-changed }}
       ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       models-changed: ${{ steps.find-changes.outputs.models-changed }}
@@ -625,14 +624,37 @@ jobs:
   # the queue head, non speed-of-light, L1_TO_L1, and compare it with the merge
   # baseline at the queue's base. The base is the head of the entry in front, and
   # that entry's gate uploaded its head as merge_baseline, so the next entry finds it.
-  llk-perf-merge-gate-measure:
-    name: LLK perf merge gate (measure)
-    needs: [find-changes]
+  llk-perf-merge-gate-changes:
+    name: LLK perf merge gate (changes)
     if: ${{
         github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') &&
-        needs.find-changes.outputs.llk-perf-inputs-changed == 'true'
+        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
       }}
+    runs-on: ubuntu-slim
+    outputs:
+      changed: ${{ steps.classify.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          sparse-checkout: .github
+      - name: Classify this entry's own changes
+        id: classify
+        env:
+          # In the queue, base..head holds only this entry; the entries in front are in the base.
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          BASE=${BASE:-$(git merge-base origin/main HEAD)}
+          CHANGED=$(git diff --name-only --diff-filter=ACMRT "$BASE" HEAD | .github/scripts/llk-perf-inputs-changed.sh)
+          echo "LLK perf inputs changed in ${BASE}..$(git rev-parse HEAD): ${CHANGED}"
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+  llk-perf-merge-gate-measure:
+    name: LLK perf merge gate (measure)
+    needs: [llk-perf-merge-gate-changes]
+    if: needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: all
@@ -646,13 +668,8 @@ jobs:
 
   llk-perf-merge-gate:
     name: LLK perf merge gate (${{ matrix.arch }})
-    needs: [find-changes, llk-perf-merge-gate-measure]
-    if: ${{
-        always() && !cancelled() &&
-        github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') &&
-        needs.find-changes.outputs.llk-perf-inputs-changed == 'true'
-      }}
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
+    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -669,7 +686,9 @@ jobs:
       gate_name: LLK perf merge gate
       baseline_pipeline: merge_baseline
       baseline_match_ref: ${{ github.event.merge_group.base_sha || github.sha }}
-      baseline_wait_minutes: ${{ github.event_name == 'merge_group' && '20' || '0' }}
+      # No wait, so the queue never waits for the warehouse: a missing baseline
+      # falls back to the newest older one in the base's history, marked stale.
+      baseline_wait_minutes: "0"
       speed_of_light: "false"
       run_types: L1_TO_L1
       threshold: ${{ matrix.threshold }}

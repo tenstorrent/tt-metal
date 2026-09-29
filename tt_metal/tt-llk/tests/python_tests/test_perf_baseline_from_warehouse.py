@@ -319,6 +319,12 @@ def test_find_run_never_takes_a_commit_outside_the_history():
 
 def test_find_run_without_commits_takes_the_newest():
     cur = CursorMock(one=("baseline-20260922-1-wormhole", "abc", "t"))
-    found = bw.find_run(cur, _find_args(commits=""), False)
+    found = bw.find_run(cur, _find_args(commits=None), False)
     assert found["commit_sha"] == "abc" and "stale" not in found
     assert len(cur.executed) == 1
+
+
+def test_find_run_with_an_empty_commit_list_finds_no_baseline():
+    cur = CursorMock(one=("merge_baseline-20260928-9-wormhole", "dequeued", "t"))
+    assert bw.find_run(cur, _find_args(commits=""), False) is None
+    assert cur.executed == []

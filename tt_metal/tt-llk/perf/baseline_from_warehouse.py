@@ -15,6 +15,8 @@ from statistics import median
 VIEW = "TTDATASF.LLK_PERF.LLK_PERF_V"
 
 _BATCH = 20000
+# --commits holds at most 200 commits (llk-perf-baseline-commits.sh) and a commit has
+# one run per queue attempt, so this ceiling on candidate runs is never reached.
 _MAX_RUNS = 500
 
 
@@ -115,16 +117,18 @@ def pick_run(
 
 def find_run(cursor, a, sol, sleep=time.sleep):
     """The run at the first of ``--commits``, waited for; else the newest of the
-    others, marked stale. Without ``--commits``, the newest run."""
+    others, marked stale. Empty ``--commits``: none. No ``--commits``: the newest."""
 
     def pick(commits=None):
         return pick_run(
             cursor, a.view, a.arch, a.pipeline, sol, a.exclude_workflow_run, commits
         )
 
+    if a.commits is None:
+        return pick()
     commits = [c.strip() for c in a.commits.split(",") if c.strip()]
     if not commits:
-        return pick()
+        return None
     want = commits[0]
     deadline = time.monotonic() + a.wait_minutes * 60
     while True:
@@ -230,7 +234,7 @@ def main(argv=None):
     )
     ap.add_argument(
         "--commits",
-        default="",
+        default=None,
         help="comma-separated commits, newest first; the run at the first is wanted",
     )
     ap.add_argument(

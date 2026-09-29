@@ -5,22 +5,21 @@
 
 # Print the commits that can hold the merge gate's baseline, newest first: the
 # first-parent commits at or before merge-base(<ref>, HEAD) that changed an LLK
-# perf input. The merge gate uploads a merge baseline at exactly these commits,
-# so the first line is the baseline the gate wants.
+# perf input (llk-perf-inputs-changed.sh). The merge gate uploads a merge baseline
+# at exactly these commits, so the first line is the baseline the gate wants.
 #
 # Usage: llk-perf-baseline-commits.sh <ref> [max-commits]
 set -euo pipefail
 
 REF="${1:?usage: llk-perf-baseline-commits.sh <ref> [max-commits]}"
 MAX="${2:-200}"
-FIND="$(dirname "${BASH_SOURCE[0]}")/utils/find-changed-files.sh"
+CLASSIFY="$(dirname "${BASH_SOURCE[0]}")/llk-perf-inputs-changed.sh"
 
 START=$(git merge-base "$REF" HEAD)
 FOUND=0
 for C in $(git rev-list --first-parent -n "$MAX" "$START"); do
     git rev-parse -q --verify "${C}^" >/dev/null || break
-    if FIND_CHANGES_BASE="${C}^" FIND_CHANGES_HEAD="$C" GITHUB_OUTPUT="" "$FIND" \
-        | grep -qx "llk-perf-inputs-changed=true"; then
+    if [ "$(git diff --name-only --diff-filter=ACMRT "${C}^" "$C" | "$CLASSIFY")" = true ]; then
         echo "$C"
         FOUND=1
     fi

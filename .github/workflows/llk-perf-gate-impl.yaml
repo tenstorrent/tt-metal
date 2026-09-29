@@ -170,18 +170,21 @@ jobs:
           LLK_PERF_WAREHOUSE_TABLE: >-
             ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
-          COMMITS=""
+          COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
-            COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF" | paste -sd, -) \
-              || echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."
+            # An empty list is passed on, so the reader skips instead of taking any run.
+            COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
+              || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
+            COMMITS=$(echo "$COMMITS" | paste -sd, -)
             echo "Expected baseline commit: ${COMMITS%%,*}"
+            COMMITS_ARG=(--commits "$COMMITS")
           fi
           python3 ${{ env.LLK_PATH }}/perf/baseline_from_warehouse.py \
             --arch "$ARCH" \
             --pipeline "$BASELINE_PIPELINE" \
             --speed-of-light "$SPEED_OF_LIGHT" \
             --exclude-workflow-run "$MEASURED_RUN" \
-            --commits "$COMMITS" \
+            "${COMMITS_ARG[@]}" \
             --wait-minutes "${WAIT_MINUTES:-0}" \
             --out baseline_perf/baseline.csv \
             --metadata baseline_metadata.json
@@ -440,9 +443,10 @@ jobs:
           path = "baseline_metadata.json"
           data = json.load(open(path)) if os.path.exists(path) else {}
           if data.get("stale"):
+              wait = float(os.environ.get("WAIT_MINUTES") or 0)
               print(
-                  f"Stale baseline: none at {data['expected_commit'][:11]} after "
-                  f"{os.environ.get('WAIT_MINUTES') or 0} min, so this compares "
+                  f"Stale baseline: none at {data['expected_commit'][:11]} "
+                  f"{f'after {wait:g} min' if wait else 'yet'}, so this compares "
                   f"with {data.get('commit_sha', '?')[:11]} ({data.get('run_ts', '?')})."
               )
           PYTHON
