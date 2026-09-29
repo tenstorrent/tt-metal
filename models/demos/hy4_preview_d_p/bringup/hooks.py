@@ -73,6 +73,7 @@ DEVICE_STEPS = {
         "attn_residual",
         "ffn_hc",
         "ffn_hc_pre",
+        "ffn_norm",
     },
     "moe_full": set(),
     "moe_shared": set(),
@@ -86,6 +87,9 @@ _HC_PRE_STEPS = {"attn_hc_pre", "ffn_hc_pre"}
 _HC_POST_STEPS = {"attn_residual"}
 # Column-split distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm) -> weight under model.layers.<i>.
 _NORM_STEPS = {"attn_norm": "input_layernorm"}
+# Gathered RMSNorm steps (tt/norm.py:TtGatheredRmsNorm): all_gather over axis 1 -> ttnn.bringup.rms_norm on the full
+# hidden; output [S/2, H] replicated over the 2 columns of a row.
+_GATHERED_NORM_STEPS = {"ffn_norm": "post_attention_layernorm"}
 # q_a stem (tt/q_a.py:TtQa): K-split q_a_proj -> all_reduce over axis 1 -> q_a_layernorm (eps 1e-6).
 _QA_STEPS = {"q_a"}
 # DSA indexer (tt/indexer.py:TtHy4Indexer), stateful: owns the layer's device index-key cache.
@@ -195,6 +199,33 @@ def _norm_module(mesh, spec, layer, step, loader=None, cfg=None):
     cfg = cfg or _cfg(loader)
     w = loader.get(f"model.layers.{layer}.{_NORM_STEPS[step]}.weight").float()
     return TtDistributedRmsNorm(mesh, w, cfg.rms_norm_eps, cluster_axis=1)
+
+
+def _gathered_norm_module(mesh, spec, layer, step, loader=None, cfg=None):
+    """TtGatheredRmsNorm (all_gather the column-split input over axis 1, ttnn.bringup.rms_norm with the full weight)."""
+    from models.demos.hy4_preview_d_p.tt.norm import TtGatheredRmsNorm
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    w = loader.get(f"model.layers.{layer}.{_GATHERED_NORM_STEPS[step]}.weight").float()
+    return TtGatheredRmsNorm(mesh, w, cfg.rms_norm_eps, cluster_axis=1)
+
+
+def _col_in_row_out_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, W] fp32 for a module taking the column-split [1, 1, S/2, H/2] input and
+    returning a row-split tensor replicated over axis 1 (harness boundary; column 0's copy is read back)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = col_split_to_device(mesh, x)
+        yd = module(xd)
+        y = row_split_to_host(mesh, yd).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y
+
+    return fn
 
 
 def _qa_module(mesh, spec, layer, loader=None, cfg=None):
@@ -408,6 +439,8 @@ def _col_split_host_fn(mesh, module):
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
     if step in _NORM_STEPS:
         return _col_split_host_fn(mesh, _norm_module(mesh, spec, layer, step, loader, cfg))
+    if step in _GATHERED_NORM_STEPS:
+        return _col_in_row_out_host_fn(mesh, _gathered_norm_module(mesh, spec, layer, step, loader, cfg))
     if step in _HC_STEPS:
         return _hc_host_fn(mesh, _hc_module(mesh, spec, layer, step, loader, cfg), cfg.hidden_size)
     if step in _QA_STEPS:
@@ -435,6 +468,7 @@ def device_component(mesh, spec, layer, step):
             _HC_PRE_STEPS,
             _HC_POST_STEPS,
             _NORM_STEPS,
+            _GATHERED_NORM_STEPS,
             _QA_STEPS,
             _INDEXER_STEPS,
             _ATTENTION_STEPS,
