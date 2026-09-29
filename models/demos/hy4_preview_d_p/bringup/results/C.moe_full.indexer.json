@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "chunk0_worst_row_overlap_indexer_L01": {
+   "t": "2026-09-29T11:00:12",
+   "value": 1.0
+  },
+  "pcc_indexer_L01": {
+   "t": "2026-09-29T11:00:11",
+   "value": 0.995924711227417
+  },
+  "self_selected_indexer_L01": {
+   "t": "2026-09-29T11:00:12",
+   "value": 1.0
+  },
+  "worst_row_overlap_indexer_L01": {
+   "t": "2026-09-29T11:00:12",
+   "value": 0.98876953125
+  }
+ },
+ "task": "C.moe_full.indexer"
+}
