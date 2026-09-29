@@ -1397,12 +1397,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     uint32_t ksplit_count = 1;
     uint32_t ksplit_rows_per_split = 0;
     const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->max_k_splits : 1;
-    if (ksplit_requested > 1 && !has_sliding_window && kernel_chunked && !kernel_is_causal && !args.is_balanced &&
-        use_streaming_compute && B == 1 && L == 0 && gqa_grouped_kv && NHK == 1 && max_q_per_core == 1) {
+    // Sliding bands split each unit's work plan (local slab, then halo): every band needs two K chunks, since the
+    // oldest halo chunk can mask a Q chunk's later rows entirely, and the halo alone is window / k_chunk chunks.
+    const uint32_t sliding_ksplit_cap =
+        has_sliding_window
+            ? std::max(
+                  1u,
+                  ring_joint::chunked_sliding_halo_tile_rows(sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
+                      Sk_chunk_t / 2)
+            : ring_joint::kKSplitMaxCount;
+    if (ksplit_requested > 1 && kernel_chunked && !kernel_is_causal && !args.is_balanced && use_streaming_compute &&
+        B == 1 && L == 0 && (has_sliding_window || (gqa_grouped_kv && NHK == 1)) && max_q_per_core == 1) {
         ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
         ksplit_count = std::max(
             1u,
-            std::min({ksplit_requested, uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount}));
+            std::min(
+                {ksplit_requested,
+                 uint32_t(grid_size.y) / ksplit_rows_per_split,
+                 ring_joint::kKSplitMaxCount,
+                 sliding_ksplit_cap}));
     }
     log_debug(tt::LogOp, "ring_joint K split: requested={} splits={}", ksplit_requested, ksplit_count);
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
@@ -1964,7 +1977,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Sliding folds every local/halo K/V range into one final pass per Q, so it never saves
     // or restores accumulators through DRAM. Keep valid, format-compatible CB indices in the
     // compile-time ABI without reserving separate L1 storage for those unreachable paths.
-    const bool needs_dram_accumulator_staging = !has_sliding_window;
+    const bool needs_dram_accumulator_staging = !has_sliding_window || ksplit_count > 1;
     const uint32_t cb_stats_in =
         needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
     const uint32_t cb_prev_out =
@@ -2423,7 +2436,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // A store-and-forward chain crossing bands would hand cores another band's K chunks.
     TT_FATAL(
-        ksplit_count == 1 || gqa_mcast_enabled,
+        ksplit_count == 1 || gqa_mcast_enabled || has_sliding_window,
         "ring_joint K split requires the row-wide GQA K/V multicast ({})",
         gqa_mcast_fallback_reason);
 

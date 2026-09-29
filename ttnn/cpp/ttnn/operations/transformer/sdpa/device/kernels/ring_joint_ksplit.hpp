@@ -62,4 +62,13 @@ inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t
     return {split_idx * num_valid / split_count, (split_idx + 1) * num_valid / split_count};
 }
 
+// Sliding split of a (head, Q chunk) unit's work plan. A plan shorter than two chunks per band (the first window of the
+// sequence) stays whole on the reducer, the band that holds the diagonal chunk.
+inline KSplitRange sliding_ksplit_range(uint32_t num_items, uint32_t split_idx, uint32_t split_count) {
+    if (num_items < 2 * split_count) {
+        return split_idx + 1 == split_count ? KSplitRange{0, num_items} : KSplitRange{0, 0};
+    }
+    return ksplit_range(num_items, split_idx, split_count);
+}
+
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint
