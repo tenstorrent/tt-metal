@@ -96,8 +96,8 @@ TEST(PchBuildDeathTest, SharesWithinArchitectureAndSeparatesHalTargetFlags) {
         llrt::RunTimeOptions options;
         const Hal wh_hal(tt::ARCH::WORMHOLE_B0, false, false, 0, false);
         const Hal bh_hal(tt::ARCH::BLACKHOLE, false, false, 0, false);
-        const JitDeviceConfig wh_config{.hal = &wh_hal, .arch = tt::ARCH::WORMHOLE_B0, .max_cbs = 32};
-        const JitDeviceConfig bh_config{.hal = &bh_hal, .arch = tt::ARCH::BLACKHOLE, .max_cbs = 32};
+        const JitDeviceConfig wh_config{.hal = &wh_hal, .arch = tt::ARCH::WORMHOLE_B0, .max_dfbs = 32};
+        const JitDeviceConfig bh_config{.hal = &bh_hal, .arch = tt::ARCH::BLACKHOLE, .max_dfbs = 32};
         JitBuildEnv first;
         JitBuildEnv second;
         JitBuildEnv blackhole;

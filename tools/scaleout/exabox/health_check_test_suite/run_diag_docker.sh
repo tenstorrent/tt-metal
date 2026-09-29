@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Pinned to the same image the scheduled fleet run uses.
-DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.80.0-dev20260922-17-g86b55b92d0d"
+DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.80.0-dev20260929-17-gdc0d2c494ce"
 
 # The suite as it ships in the image. --entrypoint "" means nothing else sets
 # the environment up, so run_diag.sh does it itself off its own location.
@@ -51,7 +51,7 @@ Every option has a default, so a bare \`$(basename "$0")\` runs the medium tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {light|medium|deploy}
+  -t, --tier {light|medium|deploy|pre_reboot}
                          Tier to run (default: ${TIER}). Also accepted
                          positionally, like run_diag.sh itself.
   -o, --output-dir PATH  Host directory for the report, the per-step logs and
@@ -140,12 +140,12 @@ while (( $# )); do
     case "$1" in
         -h|--help) show_help; exit 0 ;;
 
-        light|medium|deploy) TIER="$1"; shift ;;
+        light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                light|medium|deploy) ;;
-                *) die "unknown tier '$2'. Expected: light, medium, deploy" ;;
+                light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: light, medium, deploy, pre_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 

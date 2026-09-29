@@ -377,6 +377,16 @@ class SFPU_TYPED_BF16_STORE(TemplateParameter):
 
 
 @dataclass
+class SFPU_INPUT_SCALE(TemplateParameter):
+    """``calculate_add_rsqrt``'s ``INPUT_SCALE``: the fp32 factor on x, as raw bits."""
+
+    input_scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_INPUT_SCALE = {self.input_scale_bits}u;"
+
+
+@dataclass
 class SFPU_FAST_APPROX(TemplateParameter):
     """The sqrt/rsqrt family's ``FAST_APPROX`` template argument.
 
@@ -768,7 +778,7 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 @dataclass
 class SDPA_OP(TemplateParameter):
-    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
+    sdpa_op: SdpaOp = SdpaOp.RecipIter
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
@@ -1179,16 +1189,6 @@ class SAMPLING_OP(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define SAMPLING_OP_{self.sampling_op.upper()}"
-
-
-@dataclass
-class SAMPLING_LEGACY_COMPAT(TemplateParameter):
-    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
-
-    legacy_compat: bool = True
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
 
 
 @dataclass
