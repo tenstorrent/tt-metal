@@ -180,11 +180,32 @@ def decode_forward(
     next_states = ttnn.reshape(next_states, (batch_size, num_experts, config.hidden_size))
 
     # routing_weights: [1, 1, S, E] → reshape to [batch, E, 1] for broadcast mul
-    routing_3d = ttnn.reshape(routing_weights, (batch_size, num_experts, 1))
-    next_states = ttnn.mul(next_states, routing_3d)
-
-    # Sum across experts dimension
-    next_states = ttnn.sum(next_states, dim=1)
+    # Weighted sum over experts as one batched matmul: [B,1,E] @ [B,E,H] -> [B,1,H]
+    routing_3d = ttnn.reshape(routing_weights, (batch_size, 1, num_experts))
+    next_states = ttnn.matmul(
+        routing_3d,
+        next_states,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            next_states.device().arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=True,
+        ),
+        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=1,
+            out_block_w=2,
+            per_core_M=1,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
+        dtype=ttnn.bfloat16,
+    )
+    next_states = ttnn.reshape(next_states, (batch_size, config.hidden_size))
     next_states = ttnn.unsqueeze_to_4D(next_states)
 
     # Reshape to [1, 1, S, H]
