@@ -25,6 +25,7 @@ import ttnn
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.ffn import all_reduce_tp
 from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import permute_heads
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_name
 
@@ -81,7 +82,13 @@ def attention_host_weights(cfg: MiMoTextConfig, layer_idx: int, sd: dict, tp: in
 
 
 def load_attention_weights(
-    mesh_device, cfg: MiMoTextConfig, layer_idx: int, sd: dict, weight_dtype=ttnn.bfloat8_b, cache_prefix=None
+    mesh_device,
+    cfg: MiMoTextConfig,
+    layer_idx: int,
+    sd: dict,
+    weight_dtype=ttnn.bfloat8_b,
+    cache_prefix=None,
+    options=None,
 ):
     """``sd``: the layer's ``self_attn.*`` sub-state (HF names; fused qkv in global [Q|K|V] order)."""
     host = attention_host_weights(cfg, layer_idx, sd, mesh_device.shape[1])
@@ -93,7 +100,7 @@ def load_attention_weights(
         dtype=dt,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=dims),
-        cache_file_name=cache_name(mesh_device, cache_prefix, f"attn.{name}"),
+        cache_file_name=cache_name(mesh_device, cache_prefix, f"attn.{name}", options),
     )
     sink = None if host["sink"] is None else to(host["sink"], (None, 1), "sink", ttnn.bfloat16)
     return AttentionWeights(
@@ -111,8 +118,11 @@ class TtAttention:
         ccl_manager,
         weight_dtype=ttnn.bfloat8_b,
         cache_prefix=None,
+        options=None,
     ):
         self.mesh_device = mesh_device
+        self.options = options = options or MiMoRuntimeOptions()
+        self.sdpa_k_split = options.sdpa_k_split  # GA ring SDPA K split, None: automatic (default_k_split)
         self.cfg = cfg
         self.layer_idx = layer_idx
         self.spec = cfg.layer_attn(layer_idx)
@@ -124,7 +134,7 @@ class TtAttention:
         self.v_dim = cache_v_dim(self.spec)
         self.scale = self.spec.head_dim**-0.5
         self.ccl = ccl_manager
-        self.w = load_attention_weights(mesh_device, cfg, layer_idx, state_dict, weight_dtype, cache_prefix)
+        self.w = load_attention_weights(mesh_device, cfg, layer_idx, state_dict, weight_dtype, cache_prefix, options)
         self._pcs = {}
         self.compute_cfg = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -233,4 +243,4 @@ class TtAttention:
             program_config=self._pc("o", oc, self.w.wo),
         )
         oc.deallocate(True)
-        return all_reduce_tp(out, self.mesh_device)
+        return all_reduce_tp(out, self.mesh_device, self.options.ar_links)

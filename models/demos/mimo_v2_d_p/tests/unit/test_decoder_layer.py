@@ -22,8 +22,9 @@ from models.demos.mimo_v2_d_p.tests.common import bc_index, from_mesh_seq, to_me
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS, mesh_id, sp_tp
 from models.demos.mimo_v2_d_p.tt.attention.attention import cache_v_dim
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
-from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, default_num_links
+from models.demos.mimo_v2_d_p.tt.ccl import CCLManager
 from models.demos.mimo_v2_d_p.tt.decoder import TtDecoderLayer
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 
 
@@ -48,7 +49,8 @@ def test_decoder_layer(mesh_device, device_params, layer_idx, n_chunks, chunk):
     del ref_layer
 
     sp_topo, _ = per_axis_topology(device_params["fabric_config"])
-    ccl = CCLManager(mesh_device, num_links=default_num_links(), topology=sp_topo)
+    opts = MiMoRuntimeOptions.from_env()
+    ccl = CCLManager(mesh_device, num_links=opts.num_links, topology=sp_topo)
     _orig, _acc = ttnn.from_torch, [0.0, 0, 0]
 
     def _timed(t, *a, **k):
@@ -63,13 +65,24 @@ def test_decoder_layer(mesh_device, device_params, layer_idx, n_chunks, chunk):
 
     ttnn.from_torch = _timed
     t0 = time.perf_counter()
-    layer = TtDecoderLayer(mesh_device, cfg, layer_idx, sd, ccl=ccl, sp_topology=sp_topo, seq_len_per_chip=C)
+    layer = TtDecoderLayer(
+        mesh_device, cfg, layer_idx, sd, ccl=ccl, sp_topology=sp_topo, seq_len_per_chip=C, options=opts
+    )
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"WEIGHT_LOAD L{layer_idx}: {time.perf_counter() - t0:.2f}s (pin={os.environ.get('TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES')} cache={os.environ.get('MIMO_TTNN_CACHE')})")
+    logger.info(
+        f"WEIGHT_LOAD L{layer_idx}: {time.perf_counter() - t0:.2f}s (pin={os.environ.get('TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES')} cache={os.environ.get('MIMO_TTNN_CACHE')})"
+    )
     ttnn.from_torch = _orig
     logger.info(f"FROM_TORCH L{layer_idx}: {_acc[0]:.2f}s over {_acc[1]} tensors, {_acc[2] / 1e9:.2f} GB torch input")
     del sd
-    kv = allocate_kv_cache(mesh_device, num_layers=1, max_seq_len=S, n_kv_local=layer.attn.nkv_l, k_dim=spec.head_dim, v_dim=cache_v_dim(spec))
+    kv = allocate_kv_cache(
+        mesh_device,
+        num_layers=1,
+        max_seq_len=S,
+        n_kv_local=layer.attn.nkv_l,
+        k_dim=spec.head_dim,
+        v_dim=cache_v_dim(spec),
+    )
     rope = build_indexed_rope(mesh_device, spec, max_seq_len=S, chunk_size=chunk)
     trans = build_transformation_mat(mesh_device)
 
@@ -83,5 +96,7 @@ def test_decoder_layer(mesh_device, device_params, layer_idx, n_chunks, chunk):
 
     ok, pcc = comp_pcc(ref_out, got, 0.99)
     d_ok, d_pcc = comp_pcc(ref_out - x, got - x, 0.98)  # the layer's own contribution (residual removed)
-    logger.info(f"decoder L{layer_idx} ({spec.kind}, moe={cfg.is_moe(layer_idx)}) mesh={mesh_id(mesh_device)}: PCC {pcc} delta-PCC {d_pcc}")
+    logger.info(
+        f"decoder L{layer_idx} ({spec.kind}, moe={cfg.is_moe(layer_idx)}) mesh={mesh_id(mesh_device)}: PCC {pcc} delta-PCC {d_pcc}"
+    )
     assert ok and d_ok, (pcc, d_pcc)

@@ -5,13 +5,11 @@
 Layer 0 = global attention (4 KV heads, DV 128), layer 1 = SWA (8 KV heads, window 128, sink).
 """
 
-import os
 
 import pytest
 import torch
 from loguru import logger
 
-import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.mimo_v2_d_p.reference import hf
@@ -21,13 +19,16 @@ from models.demos.mimo_v2_d_p.tests.common import bc_index, from_mesh_seq, to_me
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS, mesh_id, sp_tp
 from models.demos.mimo_v2_d_p.tt.attention.attention import TtAttention, cache_v_dim
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
-from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, default_num_links
+from models.demos.mimo_v2_d_p.tt.ccl import CCLManager
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 
 
 @MESH_PARAMS
 @pytest.mark.parametrize("layer_idx", [0, 1], ids=["L0-GA", "L1-SWA"])
-@pytest.mark.parametrize("n_chunks,chunk", [(3, 2048), (3, 2560)], ids=["3x2k", "3x2.5k-kvpad"])  # 2.5k: KV shard 3840 % 1024 != 0
+@pytest.mark.parametrize(
+    "n_chunks,chunk", [(3, 2048), (3, 2560)], ids=["3x2k", "3x2.5k-kvpad"]
+)  # 2.5k: KV shard 3840 % 1024 != 0
 def test_attention_block(mesh_device, device_params, layer_idx, n_chunks, chunk):
     cfg = MiMoTextConfig.from_json()
     sd = layer_state(layer_idx, cfg, experts=False)
@@ -54,9 +55,12 @@ def test_attention_block(mesh_device, device_params, layer_idx, n_chunks, chunk)
         ref_out, _ = ref(x, (cos, sin), hf.mask(pos[0], S, spec.window))
 
     sp_topo, _ = per_axis_topology(device_params["fabric_config"])
-    ccl = CCLManager(mesh_device, num_links=default_num_links(), topology=sp_topo)
-    tt_attn = TtAttention(mesh_device, cfg, layer_idx, attn_sd, ccl)
-    kv = allocate_kv_cache(mesh_device, num_layers=1, max_seq_len=S, n_kv_local=tt_attn.nkv_l, k_dim=spec.head_dim, v_dim=cache_v_dim(spec))
+    opts = MiMoRuntimeOptions.from_env()
+    ccl = CCLManager(mesh_device, num_links=opts.num_links, topology=sp_topo)
+    tt_attn = TtAttention(mesh_device, cfg, layer_idx, attn_sd, ccl, options=opts)
+    kv = allocate_kv_cache(
+        mesh_device, num_layers=1, max_seq_len=S, n_kv_local=tt_attn.nkv_l, k_dim=spec.head_dim, v_dim=cache_v_dim(spec)
+    )
     rope = build_indexed_rope(mesh_device, spec, max_seq_len=S, chunk_size=chunk)
     trans = build_transformation_mat(mesh_device)
 
@@ -69,6 +73,9 @@ def test_attention_block(mesh_device, device_params, layer_idx, n_chunks, chunk)
         out.deallocate(True)
 
     ok, pcc = comp_pcc(ref_out, got, 0.99)
-    per_chunk = [round(comp_pcc(ref_out[:, i * chunk : (i + 1) * chunk], got[:, i * chunk : (i + 1) * chunk])[1], 5) for i in range(n_chunks)]
-    logger.info(f"attention L{layer_idx} ({spec.kind}) mesh={mesh_id(mesh_device)} fid={os.environ.get('MIMO_SDPA_FIDELITY','HiFi2')}: PCC {pcc} per-chunk {per_chunk}")
+    per_chunk = [
+        round(comp_pcc(ref_out[:, i * chunk : (i + 1) * chunk], got[:, i * chunk : (i + 1) * chunk])[1], 5)
+        for i in range(n_chunks)
+    ]
+    logger.info(f"attention L{layer_idx} ({spec.kind}) mesh={mesh_id(mesh_device)}: PCC {pcc} per-chunk {per_chunk}")
     assert ok, pcc

@@ -20,7 +20,8 @@ from models.demos.mimo_v2_d_p.reference.weights import layer_state
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.attention.attention import TtAttention, cache_v_dim
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
-from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, default_num_links
+from models.demos.mimo_v2_d_p.tt.ccl import CCLManager
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 
 try:
@@ -34,7 +35,9 @@ CTX = [int(c) for c in os.environ.get("MIMO_PERF_CTX", "8192,32768").split(",")]
 @pytest.mark.timeout(3600)
 @MESH_PARAMS
 @pytest.mark.parametrize("layer_idx", [0, 1], ids=["GA", "SWA"])
-@pytest.mark.parametrize("chunk_local", [int(c) for c in os.environ.get("MIMO_PERF_CHUNK_LOCAL", "640,2048").split(",")])
+@pytest.mark.parametrize(
+    "chunk_local", [int(c) for c in os.environ.get("MIMO_PERF_CHUNK_LOCAL", "640,2048").split(",")]
+)
 def test_attention_perf(mesh_device, device_params, layer_idx, chunk_local):
     cfg = MiMoTextConfig.from_json()
     sd = layer_state(layer_idx, cfg, experts=False)
@@ -44,13 +47,24 @@ def test_attention_perf(mesh_device, device_params, layer_idx, chunk_local):
     chunk = chunk_local * sp
     max_seq = max((c + chunk - 1) // chunk * chunk for c in CTX)
     sp_topo, _ = per_axis_topology(device_params["fabric_config"])
-    ccl = CCLManager(mesh_device, num_links=default_num_links(), topology=sp_topo)
-    attn = TtAttention(mesh_device, cfg, layer_idx, attn_sd, ccl)
-    kv = allocate_kv_cache(mesh_device, num_layers=1, max_seq_len=max_seq, n_kv_local=attn.nkv_l, k_dim=spec.head_dim, v_dim=cache_v_dim(spec))
+    opts = MiMoRuntimeOptions.from_env()
+    ccl = CCLManager(mesh_device, num_links=opts.num_links, topology=sp_topo)
+    attn = TtAttention(mesh_device, cfg, layer_idx, attn_sd, ccl, options=opts)
+    kv = allocate_kv_cache(
+        mesh_device,
+        num_layers=1,
+        max_seq_len=max_seq,
+        n_kv_local=attn.nkv_l,
+        k_dim=spec.head_dim,
+        v_dim=cache_v_dim(spec),
+    )
     rope = build_indexed_rope(mesh_device, spec, max_seq_len=max_seq, chunk_size=chunk)
     trans = build_transformation_mat(mesh_device)
     x = ttnn.from_torch(
-        torch.randn(1, 1, chunk, cfg.hidden_size) * 0.5, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+        torch.randn(1, 1, chunk, cfg.hidden_size) * 0.5,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None)),
     )
     kind = "GA" if spec.window is None else "SWA"

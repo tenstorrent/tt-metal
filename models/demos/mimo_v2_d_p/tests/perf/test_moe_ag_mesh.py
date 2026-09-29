@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
 from models.demos.mimo_v2_d_p.tt.ffn import moe_capacity_factor
 from models.demos.mimo_v2_d_p.tt.moe_ag import NONE, MoeAgBlock
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 try:
     from tracy import signpost
@@ -77,9 +78,18 @@ def test_moe_ag_block(mesh_device, device_params):
     gen = torch.Generator().manual_seed(3)
     for S in SEQS:
         T = rows * S
-        _, _, buf_rows, _ = compute_constants(S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev))
+        _, _, buf_rows, _ = compute_constants(
+            S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev, MiMoRuntimeOptions.from_env().moe_capacity)
+        )
         blk = MoeAgBlock.get(
-            mesh_device, chunk_size_per_chip=S, hidden=H, k=K, n_global=E, gids=gids, buf_rows=buf_rows
+            mesh_device,
+            chunk_size_per_chip=S,
+            hidden=H,
+            k=K,
+            n_global=E,
+            gids=gids,
+            buf_rows=buf_rows,
+            options=MiMoRuntimeOptions.from_env(),
         )
         # per mesh row its S tokens (replicated over the columns)
         xt = torch.randn(rows, 1, S, H)

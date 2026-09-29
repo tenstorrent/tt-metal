@@ -51,6 +51,7 @@ class MiMoV2PrefillAdapter(PrefillModelAdapter):
         return None  # dequantized from the fp8/mxfp4 checkpoint at build time (no TTNN cache yet)
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
+        from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
         from models.demos.mimo_v2_d_p.tt.tt_prefill_runtime import MiMoPrefillRuntime, MiMoRuntimeConfig
 
         cfg = MiMoRuntimeConfig(
@@ -64,6 +65,7 @@ class MiMoV2PrefillAdapter(PrefillModelAdapter):
             is_last_rank=params.is_last_rank,
             use_trace=False,
             ckpt_dir=os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default,
+            options=MiMoRuntimeOptions.from_env(),  # the process entry point: MIMO_* launch knobs -> explicit options
         )
         self._runtime = MiMoPrefillRuntime(mesh_device, cfg)
         return self._runtime

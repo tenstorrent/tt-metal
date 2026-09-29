@@ -10,12 +10,11 @@ Hidden states are ``[1, 1, S_local, H]``: sequence block-cyclic over SP rows, re
   sigmoid scores renormalised (``norm_topk_prob``), x routed_scaling_factor (1.0). Same routing rule as Kimi.
 * MoE: DeepSeek EP substrate (routing_setup -> dispatch -> unified_routed_expert_ffn(Silu) -> combine ->
   reduce), experts spread over all chips (2x2: 64/chip, Galaxy 8x4: 8/chip). No shared expert.
-  Default: the all-gather MoE block (``tt/moe_ag.py``; ``MIMO_MOE_AG=0`` for dispatch / combine) with the flat
-  streamed expert op (``tt/flat_expert.py``; ``MIMO_FLAT_EXPERT=0`` for unified_routed_expert_moe).
+  Default: the all-gather MoE block (``tt/moe_ag.py``; ``MiMoRuntimeOptions.moe_ag=False`` for dispatch / combine)
+  with the flat streamed expert op (``tt/flat_expert.py``; ``routed_expert="unified"`` for unified_routed_expert_moe).
 """
 
 import math
-import os
 
 import torch
 
@@ -35,6 +34,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert, FlatRoutedExpert
 from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config, router_mm_config
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_dir, cache_name
 
 
@@ -64,22 +64,19 @@ class TtRMSNorm:
         return ttnn.rms_norm(x, epsilon=self.eps, weight=self.w, compute_kernel_config=self.cfg)
 
 
-# TP all-reduce links: op default (measured on 2x2: 2 links made the reduce-scatter ~1.8x slower).
-AR_LINKS = int(os.environ["MIMO_AR_LINKS"]) if os.environ.get("MIMO_AR_LINKS") else None
-
-
-def all_reduce_tp(x, mesh_device):
-    """Sum over the TP (col) axis; deallocates ``x``."""
+def all_reduce_tp(x, mesh_device, num_links=None):
+    """Sum over the TP (col) axis; deallocates ``x``. ``num_links``: MiMoRuntimeOptions.ar_links (None: op default)."""
     if mesh_device.shape[1] == 1:
         return x
-    out = ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, num_links=AR_LINKS)
+    out = ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, num_links=num_links)
     x.deallocate(True)
     return out
 
 
 class TtDenseMLP:
-    def __init__(self, mesh_device, sd, weight_dtype=ttnn.bfloat8_b, cache_prefix=None):
+    def __init__(self, mesh_device, sd, weight_dtype=ttnn.bfloat8_b, cache_prefix=None, options=None):
         self.mesh_device = mesh_device
+        self.options = options = options or MiMoRuntimeOptions()
         shape = tuple(mesh_device.shape)
         col = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(None, 3))
         row = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(None, 2))
@@ -90,7 +87,7 @@ class TtDenseMLP:
             dtype=weight_dtype,
             mesh_mapper=m,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(mesh_device, cache_prefix, f"mlp.{name}"),
+            cache_file_name=cache_name(mesh_device, cache_prefix, f"mlp.{name}", options),
         )
         self.w_gate = to(sd["gate_proj.weight"].T, col, "gate")
         self.w_up = to(sd["up_proj.weight"].T, col, "up")
@@ -115,13 +112,13 @@ class TtDenseMLP:
         up.deallocate(True)
         out = ttnn.linear(h, self.w_down, dtype=ttnn.bfloat16, compute_kernel_config=self.cfg, program_config=pc_down)
         h.deallocate(True)
-        return all_reduce_tp(out, self.mesh_device)
+        return all_reduce_tp(out, self.mesh_device, self.options.ar_links)
 
 
 class TtGate:
     """noaux_tc sigmoid router -> (indices uint16 RM [S, K], weights [S, K]); fp32 logits + bias (see __init__)."""
 
-    def __init__(self, mesh_device, sd, cfg: MiMoTextConfig, seq_len_per_chip: int, cache_prefix=None):
+    def __init__(self, mesh_device, sd, cfg: MiMoTextConfig, seq_len_per_chip: int, cache_prefix=None, options=None):
         self.K, self.E = cfg.num_experts_per_tok, cfg.n_routed_experts
         self.route_scale = cfg.routed_scaling_factor
         self.w = ttnn.as_tensor(
@@ -131,7 +128,7 @@ class TtGate:
             dtype=ttnn.bfloat16,
             mesh_mapper=_rep(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(mesh_device, cache_prefix, "gate.w"),
+            cache_file_name=cache_name(mesh_device, cache_prefix, "gate.w", options),
         )
         bias = sd["e_score_correction_bias"].float().view(1, 1, 1, -1).expand(1, 1, seq_len_per_chip, -1).contiguous()
         # fp32 bias + logits: the bias sits at ~1-2 where the bf16 step (0.008-0.016) exceeds the typical
@@ -183,28 +180,17 @@ def prepare_expert_weights(sd, cfg: MiMoTextConfig):
     ]
 
 
-def default_expert_dtype():
-    """Routed-expert weight dtype (``MIMO_EXPERT_DTYPE`` = bf4 | bf8). bf4 (DeepSeek's production default) halves
-    the expert weight bandwidth, which bounds the MoE at 64 experts/chip on 2x2 (experts 3.66 -> 2.73 ms at
-    640 tok/chip); the source is MXFP4, so the loss is small (6-layer stitched KV PCC >= 0.997 vs >= 0.9994 at bf8)."""
-    return {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b}[os.environ.get("MIMO_EXPERT_DTYPE", "bf4")]
-
-
-def routed_expert_hybrid_threshold() -> int | None:
-    """``MIMO_RE_HYBRID_THRESHOLD`` = T sends experts with <= T tokens to the AI-CodeGen ``moe_fused_swiglu`` op and the
-    rest to ``unified_routed_expert_moe`` (DeepSeek / Kimi / GLM use 320). Unset: unified op only."""
-    v = os.environ.get("MIMO_RE_HYBRID_THRESHOLD")
-    return int(v) if v else None
-
-
-def flat_expert_enabled() -> bool:
-    """Routed experts on the flat streamed expert C++ op (flat_routed_expert, default); ``MIMO_FLAT_EXPERT=0``:
-    unified_routed_expert_moe; ``=py``: the Python generic_op builder it was ported from."""
-    return os.environ.get("MIMO_FLAT_EXPERT", "1") in ("1", "py")
-
-
 def build_flat_expert(
-    mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix=None
+    mesh_device,
+    sd,
+    cfg: MiMoTextConfig,
+    experts_per_chip,
+    dgs,
+    ndg,
+    max_tok,
+    weights_dtype,
+    cache_prefix=None,
+    options=None,
 ):
     """One FlatExpert over the mesh: device (r, c) runs the experts the EP table puts there (the same global ids the
     unified op reads through its global expert idx table: table[c, r], get_ep_mesh_mapper's sharding)."""
@@ -218,7 +204,8 @@ def build_flat_expert(
     tw = lambda g, n: sd[f"experts.{g}.{n}.weight"].T.contiguous()
     weights = lambda: [[(tw(g, "gate_proj"), tw(g, "up_proj"), tw(g, "down_proj")) for g in gl] for gl in gids]
     wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
-    cls = FlatExpert if os.environ.get("MIMO_FLAT_EXPERT") == "py" else FlatRoutedExpert
+    options = options or MiMoRuntimeOptions()
+    cls = FlatExpert if options.routed_expert == "py" else FlatRoutedExpert
     return cls(
         mesh_device,
         weights,
@@ -230,32 +217,31 @@ def build_flat_expert(
         wdtype=wdtype,
         act="silu",
         pin=1,
-        **({"cache_prefix": cache_name(mesh_device, cache_prefix, "experts")} if cls is FlatRoutedExpert else {}),
+        **(
+            {"cache_prefix": cache_name(mesh_device, cache_prefix, "experts", options)}
+            if cls is FlatRoutedExpert
+            else {}
+        ),
     )
 
 
-def moe_ag_enabled() -> bool:
-    """The all-gather MoE block (tt/moe_ag.py, default): high_bw_all_gather of x / top-k over the dispatch axis,
-    on-device route plan, the flat expert in indexed mode, local weighted reduce, gather + add send-back. Needs the
-    flat expert. ``MIMO_MOE_AG=0``: the DeepSeek dispatch / combine substrate."""
-    return os.environ.get("MIMO_MOE_AG", "1") == "1" and flat_expert_enabled()
-
-
-def moe_capacity_factor(K: int, E: int, n_dev: int) -> int:
+def moe_capacity_factor(K: int, E: int, n_dev: int, override: int | None = None) -> int:
     """Dispatch-buffer capacity factor (buffer = dispatch_group * seq * factor tokens per chip).
 
     A token lands on K * (E / n_dev) / E = K / n_dev experts per chip on average (2x2: 2, Galaxy 8x4: 0.25).
     The buffer, and with it dispatch / tilize / combine time, scales with the factor, so size it at 2x the
     expected load (floor 2 = DeepSeek production, cap K = exact worst case); overflow tokens are dropped by
-    the dispatch kernel, not corrupted. ``MIMO_MOE_CAPACITY`` overrides.
+    the dispatch kernel, not corrupted. ``override`` (MiMoRuntimeOptions.moe_capacity) wins.
     """
-    if os.environ.get("MIMO_MOE_CAPACITY"):
-        return int(os.environ["MIMO_MOE_CAPACITY"])
+    if override is not None:
+        return override
     return min(K, E // n_dev, max(2, math.ceil(2 * K / n_dev)))
 
 
 class TtMoE:
-    """Expert-parallel routed experts (DeepSeek substrate, SiLU fused expert FFN)."""
+    """Expert-parallel routed experts. Default (``options.use_moe_ag``): the all-gather MoE block (tt/moe_ag.py:
+    high_bw_all_gather of x / top-k over the dispatch axis, on-device route plan, the flat expert in indexed mode,
+    local weighted reduce, gather + add send-back). Else the DeepSeek dispatch / combine substrate."""
 
     def __init__(
         self,
@@ -268,9 +254,11 @@ class TtMoE:
         topology=ttnn.Topology.Linear,
         weights_dtype=None,
         cache_prefix=None,
+        options=None,
     ):
         self.mesh_device = mesh_device
-        weights_dtype = weights_dtype or default_expert_dtype()
+        self.options = options = options or MiMoRuntimeOptions()
+        weights_dtype = weights_dtype or options.expert_dtype
         E, K, H = cfg.n_routed_experts, cfg.num_experts_per_tok, cfg.hidden_size
         self.E, self.K, self.H = E, K, H
         self.gate = TtGate(
@@ -279,11 +267,12 @@ class TtMoE:
             cfg,
             seq_len_per_chip,
             cache_prefix,
+            options,
         )
         mc = extract_mesh_config(mesh_device)
         dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
         n_dev = mesh_device.get_num_devices()
-        cap = moe_capacity_factor(K, E, n_dev)
+        cap = moe_capacity_factor(K, E, n_dev, options.moe_capacity)
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(seq_len_per_chip, E, K, n_dev, dgs, cap)
         table = ExpertMapping.create_dispatch_table(E, dgs, ndg)
         self.routing_setup = TtMoERoutingSetup(
@@ -319,7 +308,7 @@ class TtMoE:
         )
         self.flat = None
         self.ag = None
-        if moe_ag_enabled():
+        if options.use_moe_ag:
             from models.demos.mimo_v2_d_p.tt.moe_ag import MoeAgBlock
 
             table_g = ExpertMapping.create_global_expert_idx_table(
@@ -334,10 +323,11 @@ class TtMoE:
                 n_global=E,
                 gids=gids,
                 buf_rows=max_buf,
+                options=options,
             )
-        if flat_expert_enabled() or moe_ag_enabled():
+        if options.flat_expert:
             self.flat = build_flat_expert(
-                mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix
+                mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix, options
             )
             self.expert = None
         else:
@@ -359,7 +349,7 @@ class TtMoE:
         )
         gidx = ttnn.squeeze(ttnn.squeeze(gidx, 0), 0)
         # A complete expert cache loads without touching the torch weights (no gather / transpose / stack).
-        ec_dir = cache_dir(mesh_device)
+        ec_dir = cache_dir(mesh_device, self.options)
         ec_prefix = None if ec_dir is None or cache_prefix is None else f"{cache_prefix}.experts"
         ec_hit = False
         if ec_prefix is not None and ec_dir.is_dir():
@@ -378,7 +368,7 @@ class TtMoE:
             activation=ttnn.RoutedExpertActivation.Silu,
             weight_cache_path=ec_dir if ec_prefix else None,
             cache_name_prefix=ec_prefix,
-            hybrid_token_threshold=routed_expert_hybrid_threshold(),
+            hybrid_token_threshold=self.options.re_hybrid_threshold,
         )
 
     def _call_ag(self, x):
@@ -399,9 +389,10 @@ class TtMoE:
 
     def expert_indexed(self, gx, counts, regions, token_index):
         """The routed experts on the gathered tokens: flat row r of the output reads gathered row token_index[r].
-        ``MIMO_MOE_AG_EMB=1`` (A/B): build the flat buffer locally with ttnn.embedding and run the flat expert on it."""
+        ``options.moe_ag_embedding`` (A/B): build the flat buffer locally with ttnn.embedding and run the flat expert
+        on it."""
         gx2 = ttnn.reshape(gx, (gx.shape[-2], gx.shape[-1]))
-        if os.environ.get("MIMO_MOE_AG_EMB") == "1":
+        if self.options.moe_ag_embedding:
             buf = ttnn.embedding(token_index, gx2, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             buf = ttnn.reshape(buf, (buf.shape[-2], buf.shape[-1]))
             yrm = {"y_row_major": self.ag.y_rm} if isinstance(self.flat, FlatRoutedExpert) else {}

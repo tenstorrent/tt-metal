@@ -16,6 +16,7 @@ from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.reference.weights import global_state, layer_state
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.model import TtMiMoModel
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 LAYERS = [int(x) for x in os.environ.get("MIMO_INIT_LAYERS", "1").split(",")]
 
@@ -35,6 +36,7 @@ def test_model_init_time(mesh_device, device_params):
         chunk_size=4096,
         layers=LAYERS,
         global_state=global_state,
+        options=MiMoRuntimeOptions.from_env(),
     )
     pr.disable()
     print(f"INIT layers {LAYERS}: {time.time() - t0:.1f} s")

@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, comp
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.ffn import moe_capacity_factor
 from models.demos.mimo_v2_d_p.tt.moe_ag import NONE, RoutePlan, _dram
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 try:
     from tracy import signpost
@@ -68,7 +69,9 @@ def test_route_plan(mesh_device, device_params, mode):
     gen = torch.Generator().manual_seed(0)
     for S in SEQS:
         T = rows * S
-        _, _, buf_rows, _ = compute_constants(S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev))
+        _, _, buf_rows, _ = compute_constants(
+            S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev, MiMoRuntimeOptions.from_env().moe_capacity)
+        )
         idx = make_idx(T, gen, mode)
         idx_dev = ttnn.from_torch(
             idx.reshape(1, 1, T, K).to(torch.int32),
@@ -117,7 +120,9 @@ def test_reduce_sendback(mesh_device, device_params):
     links = int(os.environ.get("MIMO_HBW_LINKS", "4"))
     for S in SEQS:
         T = rows * S
-        _, _, buf_rows, _ = compute_constants(S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev))
+        _, _, buf_rows, _ = compute_constants(
+            S, E, K, n_dev, rows, moe_capacity_factor(K, E, n_dev, MiMoRuntimeOptions.from_env().moe_capacity)
+        )
         idx = make_idx(T, gen, "uniform")
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
         idx_dev = ttnn.from_torch(

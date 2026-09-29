@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""All-gather MoE block (``MIMO_MOE_AG=1``): the routed-expert data movement without dispatch / combine.
+"""All-gather MoE block (``MiMoRuntimeOptions.moe_ag``, default): the routed-expert data movement without dispatch / combine.
 
     x, topk (indices, weights)  --high_bw_all_gather over the dispatch axis (mesh rows)-->  every chip of a mesh column
     holds the column's chunk_size tokens (gathered row g = src_row * chunk_size_per_chip + token)
@@ -15,20 +15,19 @@ Kernels: tt/kernels/moe_ag/ (generic_op; one program for the whole mesh, per-dev
 tensors: the local-slot map and the chip's row).
 """
 
-import os
-
 import torch
 
 import ttnn
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 KDIR = "models/demos/mimo_v2_d_p/tt/kernels/moe_ag"
 NONE = 0xFFFFFFFF
 
 
 def _crs(cores):
-    from models.demos.mimo_v2_d_p.tt.flat_expert import _crs as crs
+    from models.demos.mimo_v2_d_p.tt.flat_expert import crs_rects
 
-    return crs(cores)
+    return crs_rects(cores)
 
 
 def grid_cores(mesh_device, n):
@@ -402,11 +401,6 @@ class AddRows:
         return self.out
 
 
-def hbw_links():
-    """high_bw_all_gather links (``MIMO_HBW_LINKS``; the QuietBox has 4 per axis, Galaxy 2)."""
-    return int(os.environ["MIMO_HBW_LINKS"]) if os.environ.get("MIMO_HBW_LINKS") else None
-
-
 _BLOCKS = {}
 
 
@@ -421,21 +415,22 @@ class MoeAgBlock:
             _BLOCKS[key] = cls(mesh_device, **kw)
         return _BLOCKS[key]
 
-    def __init__(self, mesh_device, *, chunk_size_per_chip, hidden, k, n_global, gids, buf_rows):
+    def __init__(self, mesh_device, *, chunk_size_per_chip, hidden, k, n_global, gids, buf_rows, options=None):
         self.dev = mesh_device
+        self.options = options = options or MiMoRuntimeOptions()
         rows, cols = tuple(mesh_device.shape)
         self.rows, self.cols = rows, cols
         S, H = chunk_size_per_chip, hidden
         self.S, self.H, self.K = S, H, k
         self.T = T = rows * S  # chunk_size: the tokens of a mesh column
-        self.links = hbw_links()
+        self.links = options.hbw_links  # None: every usable link on the axis (QuietBox 4, Galaxy 2)
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
         self.sp_topo, self.tp_topo = per_axis_topology()
-        self.rs_links = int(os.environ["MIMO_MOE_AG_RS_LINKS"]) if os.environ.get("MIMO_MOE_AG_RS_LINKS") else None
-        # MIMO_MOE_AG_XPPR = 4: gathered x in 2 KB pages ([T * 4, 1024]: a token row over 4 DRAM banks; the indexed
+        self.rs_links = options.moe_ag_rs_links
+        # x_pages_per_row = 4: gathered x in 2 KB pages ([T * 4, 1024]: a token row over 4 DRAM banks; the indexed
         # expert reads it with x_pages_per_row = 4). Default 1: one 8 KB page per token row.
-        self.xppr = int(os.environ.get("MIMO_MOE_AG_XPPR", "1"))
+        self.xppr = options.moe_ag_x_pages_per_row
         assert self.xppr in (1, H // 1024), self.xppr
         self.untilize_x = UntilizeX(mesh_device, rows=S, hidden=H) if self.xppr > 1 else None
         if rows > 1:
@@ -446,6 +441,10 @@ class MoeAgBlock:
         self.info = chip_info(mesh_device, S)
         split = rows == 2
         self.split = split
+        # TP all-reduce over the mesh columns (options.moe_ag_tp): "hbw" high_bw_all_gather + one add / tilize pass (the
+        # default for 2 columns), "rsag" ttnn.reduce_scatter + ttnn.all_gather on tiles (default for > 2 columns:
+        # 162 / 284 us vs 220 / 404 on 1x4 at 640 / 1280 tokens per chip, it moves 2 x 3/4 of the rows instead of 3 x)
+        self.tp_mode = options.moe_ag_tp or ("rsag" if cols > 2 else "hbw")
         self.lreduce = LocalReduce(
             mesh_device,
             tokens=T,
@@ -454,15 +453,11 @@ class MoeAgBlock:
             chunk_size_per_chip=S,
             split=split,
             info=self.info,
-            tiled=rows > 2 or (rows == 1 and os.environ.get("MIMO_MOE_AG_TP", "rsag" if cols > 2 else "hbw") == "rsag"),
+            tiled=rows > 2 or (rows == 1 and self.tp_mode == "rsag"),
         )
         if split:
             self.g_sp = _dram(mesh_device, [1, 1, 2 * S, H])
             self.ex = AddRows(mesh_device, n_rows=S, hidden=H, info=self.info)
-        # TP all-reduce over the mesh columns (MIMO_MOE_AG_TP): "hbw" high_bw_all_gather + one add / tilize pass (the
-        # default for 2 columns), "rsag" ttnn.reduce_scatter + ttnn.all_gather on tiles (default for > 2 columns:
-        # 162 / 284 us vs 220 / 404 on 1x4 at 640 / 1280 tokens per chip, it moves 2 x 3/4 of the rows instead of 3 x)
-        self.tp_mode = os.environ.get("MIMO_MOE_AG_TP", "rsag" if cols > 2 else "hbw")
         if cols > 1 and self.tp_mode == "hbw":
             self.g_tp = _dram(mesh_device, [1, 1, cols * S, H])
             self.tp = (
@@ -470,11 +465,18 @@ class MoeAgBlock:
                 if cols == 2
                 else SumBlocksTiled(mesh_device, n_rows=S, hidden=H, n_blocks=cols)
             )
-        # MIMO_MOE_AG_YRM (default 1): the flat expert writes y as row-major bf16 itself (pack-untilized on its down
-        # cores), so no untilize pass and no [rows, H] untilized copy; 0: bfp8 tiles + UntilizeActive
-        self.y_rm = os.environ.get("MIMO_MOE_AG_YRM", "1") == "1"
+        # y_row_major (default): the flat expert writes y as row-major bf16 itself (pack-untilized on its down cores),
+        # so no untilize pass and no [rows, H] untilized copy; False: bfp8 tiles + UntilizeActive
+        self.y_rm = options.moe_ag_y_row_major
         self.untilize = None  # built on the first tiled y (y_rm off, or an expert without row-major output)
-        self._untilize_args = dict(rows=buf_rows, hidden=H, n_global=n_global, epc=len(gids[0]), lmap=self.plan_op.lmap)
+        self._untilize_args = dict(
+            rows=buf_rows,
+            hidden=H,
+            n_global=n_global,
+            epc=len(gids[0]),
+            lmap=self.plan_op.lmap,
+            W=options.untilize_width,
+        )
 
     def _ag(self, x, out, axis):
         return ttnn.experimental.high_bw_all_gather(
@@ -532,7 +534,7 @@ class MoeAgBlock:
             if self.untilize is None:
                 self.untilize = UntilizeActive(self.dev, **self._untilize_args)
             y_rm = self.untilize(y, self.plan_op.counts, self.plan_op.regions)
-        if self.split and os.environ.get("MIMO_MOE_AG_FUSED_SB", "1") == "1":
+        if self.split and self.options.moe_ag_fused_send_back:
             other = self.lreduce.phase(y_rm, self.plan_op.y_slot, self.gw, 1)
             self._ag(other, self.g_sp, 0)
             col = self.lreduce.phase(y_rm, self.plan_op.y_slot, self.gw, 2, peer=self.g_sp)
@@ -571,8 +573,7 @@ class UntilizeActive:
     """y bfp8 TILE [rows, H] -> y_rm bf16 RM [rows, H], only the tile rows that hold tokens (each local expert's
     ceil(count / 32) tile rows at its region; counts / regions read on device)."""
 
-    def __init__(self, mesh_device, *, rows, hidden, n_global, epc, lmap, W=None):
-        W = W or int(os.environ.get("MIMO_UA_W", "32"))
+    def __init__(self, mesh_device, *, rows, hidden, n_global, epc, lmap, W=32):
         self.dev, self.rows, self.H, self.NG, self.EPC, self.lmap, self.W = (
             mesh_device,
             rows,

@@ -35,6 +35,7 @@ from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.attention.attention import kv_heads_for_col
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
 from models.demos.mimo_v2_d_p.tt.model import TtMiMoModel, block_cyclic_index
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import rope_perm
 
 R = int(os.environ.get("MIMO_LOOP_R", "6"))
@@ -132,6 +133,7 @@ def test_layer_loop(mesh_device, device_params):
         layers=list(range(6)),
         global_state=global_state,
         allocate_kv=False,
+        options=MiMoRuntimeOptions.from_env(),
     )
     # one cache slot per step (virtual layer), per attention type
     slot, n_type = [], {}

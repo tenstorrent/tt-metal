@@ -18,8 +18,9 @@ from models.demos.mimo_v2_d_p.reference.weights import global_state, layer_state
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.attention.attention import cache_v_dim
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
-from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, default_num_links
+from models.demos.mimo_v2_d_p.tt.ccl import CCLManager
 from models.demos.mimo_v2_d_p.tt.decoder import TtDecoderLayer
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
 
 try:
@@ -51,7 +52,8 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
     chunk = chunk_local * sp
     max_seq = (CTX + chunk - 1) // chunk * chunk
     sp_topo, _ = per_axis_topology(device_params["fabric_config"])
-    ccl = CCLManager(mesh_device, num_links=default_num_links(), topology=sp_topo)
+    opts = MiMoRuntimeOptions.from_env()
+    ccl = CCLManager(mesh_device, num_links=opts.num_links, topology=sp_topo)
     layer = TtDecoderLayer(
         mesh_device,
         cfg,
@@ -60,7 +62,7 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
         ccl=ccl,
         sp_topology=sp_topo,
         seq_len_per_chip=chunk_local,
-        num_links=default_num_links(),
+        options=opts,
     )
     kv = allocate_kv_cache(
         mesh_device,

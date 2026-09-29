@@ -8,7 +8,7 @@ Contract (models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md §2):
     Non-first pipeline ranks take the previous rank's hidden ``[1, 1, chunk/sp, H]`` (D2D socket).
   * ``[actual_start, actual_end)``: KV write offset (32-aligned; chunk-aligned on SWA — the sliding ring
     needs whole ring groups) and end of real tokens (KV beyond it is not written).
-  * exactly one layer ack per layer, global order. ``MIMO_ACK_SYNC=1`` (default) synchronizes before each
+  * exactly one layer ack per layer, global order. ``MiMoRuntimeOptions.ack_sync`` (default) synchronizes before each
     ack so a migration burst never reads a layer the device has not finished writing.
   * last rank emits no logits: the populated KV cache is the output; other ranks return their hidden.
 """
@@ -23,8 +23,9 @@ import torch
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
-from models.demos.mimo_v2_d_p.reference.config import GA, SWA, MiMoTextConfig
+from models.demos.mimo_v2_d_p.reference.config import SWA, MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.model import TtMiMoModel
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 
 @dataclass
@@ -52,7 +53,7 @@ class MiMoRuntimeConfig:
     tp_axis: int = 1
     fabric_config: object = None
     ckpt_dir: Optional[str] = None
-    expert_dtype: object = None  # None -> ffn.default_expert_dtype() (MIMO_EXPERT_DTYPE)
+    options: MiMoRuntimeOptions = field(default_factory=MiMoRuntimeOptions)  # model runtime knobs
 
     @property
     def sp_factor(self):
@@ -72,12 +73,21 @@ class MiMoPrefillRuntime:
         self.cfg = MiMoTextConfig.from_json(os.path.join(config.ckpt_dir, "config.json") if config.ckpt_dir else None)
         layers = list(range(config.first_layer_idx, config.first_layer_idx + config.num_layers))
         self.model = TtMiMoModel(
-            mesh_device, self.cfg, layer_state or (lambda i: weights.layer_state(i, self.cfg)), fabric_config=config.fabric_config or ttnn.get_fabric_config(),
-            max_seq_len=config.max_seq_len, chunk_size=config.chunk_size, layers=layers, global_state=global_state or weights.global_state,
-            num_users=config.num_users, expert_dtype=config.expert_dtype, allocate_kv=False, embed=config.is_first_rank,
+            mesh_device,
+            self.cfg,
+            layer_state or (lambda i: weights.layer_state(i, self.cfg)),
+            fabric_config=config.fabric_config or ttnn.get_fabric_config(),
+            max_seq_len=config.max_seq_len,
+            chunk_size=config.chunk_size,
+            layers=layers,
+            global_state=global_state or weights.global_state,
+            num_users=config.num_users,
+            allocate_kv=False,
+            embed=config.is_first_rank,
+            options=config.options,
         )
         self._on_layer_complete = None
-        self._ack_sync = os.environ.get("MIMO_ACK_SYNC", "1") == "1"
+        self._ack_sync = config.options.ack_sync
         self.compiled = False
 
     # ---------------------------------------------------------------- caches
@@ -95,12 +105,17 @@ class MiMoPrefillRuntime:
         assert (chunk_size or c.chunk_size) == c.chunk_size, "mimo_v2_d_p serves one chunk size"
         if not c.is_first_rank:
             return ttnn.from_torch(
-                torch.zeros(1, 1, c.chunk_size, self.cfg.hidden_size), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+                torch.zeros(1, 1, c.chunk_size, self.cfg.hidden_size),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(c.mesh_shape), dims=(2, None)),
             )
         t = torch.as_tensor(token_ids, dtype=torch.int64)
-        assert t.numel() == c.chunk_size, f"chunk input must be exactly {c.chunk_size} tokens (pad the tail), got {t.numel()}"
+        assert (
+            t.numel() == c.chunk_size
+        ), f"chunk input must be exactly {c.chunk_size} tokens (pad the tail), got {t.numel()}"
         return self.model.tokens_to_device(t)
 
     # ---------------------------------------------------------------- run
@@ -110,16 +125,31 @@ class MiMoPrefillRuntime:
         n = 2 if c.max_seq_len >= 2 * c.chunk_size else 1
         for i in range(n):
             inp = self.make_chunk_input([0] * c.chunk_size)
-            out = self.prefill_chunk(inp, kv_caches, slot_id=0, actual_start=i * c.chunk_size, actual_end=(i + 1) * c.chunk_size)
+            out = self.prefill_chunk(
+                inp, kv_caches, slot_id=0, actual_start=i * c.chunk_size, actual_end=(i + 1) * c.chunk_size
+            )
             if out is not None:
                 out.deallocate(True)
         ttnn.synchronize_device(self.mesh_device)
         self.compiled = True
 
-    def prefill_chunk(self, input_tensor, kv_caches, *, slot_id: int, actual_start: int, actual_end: int, request_id: int = -1,
-                      d2h_service=None, metadata_msg=None, **_unused):
+    def prefill_chunk(
+        self,
+        input_tensor,
+        kv_caches,
+        *,
+        slot_id: int,
+        actual_start: int,
+        actual_end: int,
+        request_id: int = -1,
+        d2h_service=None,
+        metadata_msg=None,
+        **_unused,
+    ):
         if d2h_service is not None:
-            raise NotImplementedError("mimo_v2_d_p emits layer acks from the host callback; run with PREFILL_LAYER_ACK_D2H=0")
+            raise NotImplementedError(
+                "mimo_v2_d_p emits layer acks from the host callback; run with PREFILL_LAYER_ACK_D2H=0"
+            )
         c = self.config
         assert 0 <= slot_id < c.num_users, f"slot {slot_id} out of range [0, {c.num_users})"
         assert actual_start % ttnn.TILE_SIZE == 0, f"actual_start {actual_start} must be 32-aligned"
@@ -160,7 +190,11 @@ class MiMoPrefillRuntime:
 
         n = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         first = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
-        return [KvCacheStage(int(t.buffer_address()), first, n) for cache in kv_caches.by_type.values() for t in (cache.k, cache.v)]
+        return [
+            KvCacheStage(int(t.buffer_address()), first, n)
+            for cache in kv_caches.by_type.values()
+            for t in (cache.k, cache.v)
+        ]
 
     def kv_migration_base_address(self, kv_caches: MiMoKvCaches) -> int:
         return int(next(iter(kv_caches.by_type.values())).k.buffer_address())
@@ -169,8 +203,14 @@ class MiMoPrefillRuntime:
         from models.demos.mimo_v2_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         return build_and_serialize_kv_chunk_table(
-            path=path, mesh_device=self.mesh_device, cfg=self.cfg, caches=kv_caches.by_type, cache_layer=self.model.cache_layer,
-            seq_len=self.config.max_seq_len, chunk_size=self.config.chunk_size, num_users=self.config.num_users,
+            path=path,
+            mesh_device=self.mesh_device,
+            cfg=self.cfg,
+            caches=kv_caches.by_type,
+            cache_layer=self.model.cache_layer,
+            seq_len=self.config.max_seq_len,
+            chunk_size=self.config.chunk_size,
+            num_users=self.config.num_users,
         )
 
     # ---------------------------------------------------------------- readback (validation)
@@ -187,8 +227,14 @@ class MiMoPrefillRuntime:
 
         def heads(tensor, d_keep):
             d = tensor.shape[3]
-            dts = ttnn.get_device_tensors(ttnn.slice(tensor, [b, 0, 0, 0], [b + 1, cache.n_kv_local, tensor.shape[2], d],
-                                                     memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            dts = ttnn.get_device_tensors(
+                ttnn.slice(
+                    tensor,
+                    [b, 0, 0, 0],
+                    [b + 1, cache.n_kv_local, tensor.shape[2], d],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
             out = [None] * spec.n_kv
             for c in range(tp):
                 idx = kv_heads_for_col(c, tp, spec.n_q, spec.n_kv)

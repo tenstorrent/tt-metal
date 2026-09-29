@@ -9,13 +9,13 @@ import pytest
 import torch
 from loguru import logger
 
-import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.reference.weights import global_state, layer_state
 from models.demos.mimo_v2_d_p.tests.golden import golden
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS, mesh_id
 from models.demos.mimo_v2_d_p.tt.model import TtMiMoModel
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import rope_perm
 from models.demos.mimo_v2_d_p.tt.tt_prefill_runtime import MiMoKvCaches, MiMoPrefillRuntime
 
@@ -27,8 +27,17 @@ from models.demos.mimo_v2_d_p.tt.tt_prefill_runtime import MiMoKvCaches, MiMoPre
 def test_model_prefill(mesh_device, device_params, n_layers, seq, chunk):
     g = golden(n_layers, seq)
     cfg = MiMoTextConfig.from_json()
-    model = TtMiMoModel(mesh_device, cfg, lambda i: layer_state(i, cfg), fabric_config=device_params["fabric_config"], max_seq_len=seq,
-                        chunk_size=chunk, layers=list(range(n_layers)), global_state=global_state)
+    model = TtMiMoModel(
+        mesh_device,
+        cfg,
+        lambda i: layer_state(i, cfg),
+        fabric_config=device_params["fabric_config"],
+        max_seq_len=seq,
+        chunk_size=chunk,
+        layers=list(range(n_layers)),
+        global_state=global_state,
+        options=MiMoRuntimeOptions.from_env(),
+    )
     got = torch.zeros(n_layers, seq, cfg.hidden_size)
 
     def capture(layer_idx, x, kv_actual):
@@ -52,6 +61,8 @@ def test_model_prefill(mesh_device, device_params, n_layers, seq, chunk):
         pk = comp_pcc(k_ref[..., rope_perm(spec.head_dim, spec.rope_dim)], k_dev)[1]
         pv = comp_pcc(v_ref, v_dev)[1]
         worst = min(worst, p, pk, pv)
-        logger.info(f"L{i} ({spec.kind[:4]}, {'moe' if cfg.is_moe(i) else 'dense'}): hidden PCC {p:.5f} delta {pd:.5f} | K {pk:.5f} V {pv:.5f}")
+        logger.info(
+            f"L{i} ({spec.kind[:4]}, {'moe' if cfg.is_moe(i) else 'dense'}): hidden PCC {p:.5f} delta {pd:.5f} | K {pk:.5f} V {pv:.5f}"
+        )
     logger.info(f"mesh={mesh_id(mesh_device)} {n_layers} layers {seq // chunk}x{chunk}: worst PCC {worst:.5f}")
     assert worst > 0.98, worst

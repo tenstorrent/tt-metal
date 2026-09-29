@@ -30,10 +30,15 @@ from models.demos.mimo_v2_d_p.tests.perf.test_stream_matmul import _crs as _crs_
 
 
 def _crs(cores):
-    """Cores packed into maximal rectangles (greedy: widest x run, then grow in y). One CoreRange per core
-    turns every binary / launch-message write into a per-core unicast; rectangles let dispatch multicast."""
+    """crs_rects; ``MIMO_FL_CRS_SINGLE`` (prototype A/B): one CoreRange per core."""
     if os.environ.get("MIMO_FL_CRS_SINGLE"):
         return _crs_single(cores)
+    return crs_rects(cores)
+
+
+def crs_rects(cores):
+    """Cores packed into maximal rectangles (greedy: widest x run, then grow in y). One CoreRange per core
+    turns every binary / launch-message write into a per-core unicast; rectangles let dispatch multicast."""
     left = {(c.x, c.y) for c in cores}
     rects = []
     for x0, y0 in sorted(left, key=lambda t: (t[1], t[0])):
@@ -1790,7 +1795,7 @@ class FlatRoutedExpert:
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(_crs(coords), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(crs_rects(coords), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
 

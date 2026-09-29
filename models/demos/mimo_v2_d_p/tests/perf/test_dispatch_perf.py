@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
 from models.demos.mimo_v2_d_p.tt.ffn import moe_capacity_factor
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 try:
     from tracy import signpost
@@ -137,7 +138,7 @@ def test_dispatch_perf(mesh_device, device_params, mode, seq, layout, num_links,
     n_dev = sp * tp
     mc = extract_mesh_config(mesh_device)
     dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
-    cap = moe_capacity_factor(K, E, n_dev)
+    cap = moe_capacity_factor(K, E, n_dev, MiMoRuntimeOptions.from_env().moe_capacity)
     experts_per_chip, metadata_len, max_buf, _ = compute_constants(seq, E, K, n_dev, dgs, cap)
     sp_topo, _ = per_axis_topology(device_params["fabric_config"])
 

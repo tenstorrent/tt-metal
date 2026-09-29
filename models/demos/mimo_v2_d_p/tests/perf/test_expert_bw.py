@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extr
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_dir
 
 try:
@@ -70,7 +71,7 @@ def test_expert_bw(mesh_device, device_params, path, active, tokens):
     sp, tp = tuple(mesh_device.shape)
     n_dev = sp * tp
     epc = E // n_dev
-    wdir = cache_dir(mesh_device)
+    wdir = cache_dir(mesh_device, MiMoRuntimeOptions.from_env())
     prefix = f"L{LAYER}.experts"
     if wdir is None:
         pytest.skip("set MIMO_TTNN_CACHE (expert weights are loaded cache-only)")

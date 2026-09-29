@@ -17,6 +17,7 @@ from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.reference.weights import layer_state
 from models.demos.mimo_v2_d_p.tt.attention.attention import attention_host_weights, kv_heads_for_col
 from models.demos.mimo_v2_d_p.tt.ffn import moe_capacity_factor
+from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import meta_cos_sin
 
 
@@ -62,7 +63,11 @@ def simulate_tp_attention(cfg, layer_idx, host, x, tp):
 @pytest.mark.parametrize("tp", [1, 2, 4, 8], ids=lambda t: f"tp{t}")
 def test_tp_attention_layout(layer_idx, tp):
     cfg = MiMoTextConfig.from_json()
-    sd = {k[len("self_attn.") :]: v for k, v in layer_state(layer_idx, cfg, experts=False).items() if k.startswith("self_attn.")}
+    sd = {
+        k[len("self_attn.") :]: v
+        for k, v in layer_state(layer_idx, cfg, experts=False).items()
+        if k.startswith("self_attn.")
+    }
     torch.manual_seed(0)
     S = 256
     x = torch.randn(1, S, cfg.hidden_size) * 0.5
@@ -83,7 +88,9 @@ def test_tp_attention_layout(layer_idx, tp):
 @pytest.mark.parametrize("n_dev,expected_cap", [(4, 4), (32, 2)], ids=["2x2", "galaxy-8x4"])
 def test_moe_capacity(n_dev, expected_cap):
     cfg = MiMoTextConfig.from_json()
-    cap = moe_capacity_factor(cfg.num_experts_per_tok, cfg.n_routed_experts, n_dev)
+    cap = moe_capacity_factor(
+        cfg.num_experts_per_tok, cfg.n_routed_experts, n_dev, MiMoRuntimeOptions.from_env().moe_capacity
+    )
     assert cap == expected_cap
     dgs = 2 if n_dev == 4 else 8
     epc, _, buf, _ = compute_constants(640, cfg.n_routed_experts, cfg.num_experts_per_tok, n_dev, dgs, cap)

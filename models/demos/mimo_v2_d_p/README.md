@@ -77,8 +77,12 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest models
 | dgen Gate 1: bare runner + prefill_producer (H2D, 24 acks, device-less KV read via table) | PASSED, min 0.9974 |
 | host TP layout TP=1/2/4/8 (Galaxy TP=4), EP sizing 4 / 32 chips | PASSED |
 
-bf4 experts (default, as DeepSeek) cost the MoE output ~0.98-0.99 PCC per layer; `MIMO_EXPERT_DTYPE=bf8`
-gives ~0.997 at ~+0.9 ms per MoE layer on 2x2.
+bf4 experts (default, as DeepSeek) cost the MoE output ~0.98-0.99 PCC per layer; `expert_dtype=ttnn.bfloat8_b`
+(`MIMO_EXPERT_DTYPE=bf8` for tests) gives ~0.997 at ~+0.9 ms per MoE layer on 2x2.
+
+Runtime knobs (links, expert dtype / implementation, MoE block variants, weight cache, ack sync) are fields of
+`MiMoRuntimeOptions` (`tt/options.py`), passed to `TtMiMoModel` / `MiMoRuntimeConfig(options=...)`. Tests, perf scripts
+and the engine adapter build it with `MiMoRuntimeOptions.from_env()`, so the old `MIMO_*` variables still select them.
 
 ### GA SDPA FPU utilization (HiFi2, vs 4096 FMA-FLOP/cycle/core x 100 SDPA cores @ 1.35 GHz)
 
