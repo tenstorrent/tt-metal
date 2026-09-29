@@ -197,5 +197,5 @@ main, hangs on this emulator — exclude it with `:-*HostHugepagePcieLoopback*`.
 | test | |
 |---|---|
 | `WidthAndTileRowSweep` | `ct_dim` 1/2/4/8 × `last_tile_w` 8/16/24/32 — the layout contract |
-| `SubFaceWidths` | `last_tile_w` 1/2/3/4/12/20 at `ct_dim` 1 **and** 2 — below the RV_PACR floor. `ct_dim` 1 is the case that tests the claim: it produces 2 B to 40 B rows, where `ct_dim` 2's leading full tile would keep every row at 66 B or wider. The odd widths also make `out_row_bytes` odd |
+| `SubFaceWidths` | `last_tile_w` 1/2/3/4/12/20 at `ct_dim` 1 **and** 2 — below the RV_PACR floor. `ct_dim` 1 is the case that tests the claim: it produces 2 B to 40 B rows, where `ct_dim` 2's leading full tile would keep every row at 66 B or wider. The odd widths make `matrix_w` odd, so every other destination row starts at a 2 mod 4 byte offset |
 | `EngineParity` | iDMA at 8 and 1 channels, and the NOC workaround, at 32 / 70 / 504 B rows. 70 B (`ct_dim` 2, `last_tile_w` 3) puts every odd destination row at a 2 mod 4 offset, so the NOC arm cross-checks the byte-granular placement instead of only covering 8-byte multiples |

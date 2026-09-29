@@ -409,8 +409,8 @@ TEST_F(QuasarNarrowRowUntilize, WidthAndTileRowSweep) {
 // 16-bit format it cannot place rows closer than 8 datums apart, and widths that are not a
 // multiple of 8 make it write a full 16-datum face-row that spills into the next output row
 // and has to be overwritten in a second pass. iDMA addresses L1 by the byte, so these are
-// just a smaller out_row_bytes. 1 and 3 also make out_row_bytes odd, which probes byte-
-// rather than word-granular placement.
+// just a smaller out_row_bytes. 1 and 3 make matrix_w odd, so every other destination row
+// starts at a 2 mod 4 byte offset, which probes byte- rather than word-granular placement.
 TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
