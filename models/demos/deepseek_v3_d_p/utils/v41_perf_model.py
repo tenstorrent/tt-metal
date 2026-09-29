@@ -5,13 +5,27 @@
 """Theoretical per-chip performance and capacity model for DeepSeek-V4.1-Flash prefill.
 
 Each operation of the semantic graph (``graph.md`` node ids N*, B*, F*, D*, V*) gets a lower bound for
-one prefill chunk on one chip of an SP x TP mesh: total mathematical work divided evenly over all
-chips, mandatory DRAM traffic of the materialized graph (weights read once per chip, every declared
-activation read once and written once), and the bottleneck-edge payload of its collectives. Block
-types compose these operations under two scenarios. This is a lower bound, not a prediction of any
+one prefill chunk on one chip of an SP x TP mesh: total mathematical work divided evenly over the chips
+that share it, mandatory DRAM traffic of the materialized graph (weights read once per chip, every
+declared activation read once and written once), and the bottleneck-edge payload of its collectives.
+Block types compose these operations under two scenarios. This is a lower bound, not a prediction of any
 implementation; scheduling, grids and redundant traffic are deliberately ignored.
 
-Capability sources (Blackhole p150b):
+Distribution and placement follow the implemented V4.1 modules (``tt/v41/*``):
+  * attention: row-parallel ``wq_a`` / ``wkv`` + TP all-reduce, column-parallel ``wq_b``, head->sequence
+    all-to-all over TP around ``sparse_sdpa`` (every chip attends ``S/(sp*tp)`` queries with all heads),
+    grouped ``wo_a`` + ``wo_b`` + TP reduce-scatter;
+  * caches (``cache.V41PrefillState``): replicated on every chip; per chunk the window KV and the new
+    compressed / index-K rows are SP all-gathered (no per-layer gather of the visible cache);
+  * indexer (dev-spec D-C, C4 query split): every chip scores its ``S/(sp*tp)`` queries with all 32 heads
+    against the replicated index-K; no score reduction;
+  * MoE (``TtMoe`` via ``TtPrefillBlock._build_moe``): TP all-gather of the input, dispatch / combine along
+    SP inside each TP column (a column holds ``experts / tp`` experts), reduce over top-k slots + TP
+    reduce-scatter; dispatch buffer ``chunk * top-k`` rows (capacity factor = top-k, never drops tokens);
+  * Engram (``engram.py``): packed 320 B rows; host table (rows uploaded per chunk) or device table
+    (row-sharded over all chips, byte reduce-scatter SP -> TP).
+
+Capability sources (Blackhole p150b; Galaxy chips assumed identical):
   * matrix engine 4096 FLOP/cycle/core at LoFi, divided by the fidelity phase count
     (``tech_reports/matrix_engine/matrix_engine.md``); elementwise 128 results/cycle/core (same).
   * 110 worker cores = compute_with_storage_grid 11x10, probed on this LoudBox (2026-09-28).
@@ -26,16 +40,28 @@ counted, not timed, so compute time is FPU time only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import V41BlockType
 
-# Physical bytes per element. Block-float tiles carry one shared exponent byte per 16 values.
-BYTES = {"fp32": 4.0, "bf16": 2.0, "bfp8": 1088 / 1024, "bfp4": 576 / 1024, "fp8": 1.0, "fp8_e8m0_32": 1 + 1 / 32}
+# Physical bytes per element. Block-float tiles carry one shared exponent byte per 16 values. scaled_fp8 is the
+# SCALED_FP8 KV row: 512 FP8 bytes + 4 fp32 scales = 528 B per 512 values (``cache.py``).
+BYTES = {
+    "fp32": 4.0,
+    "bf16": 2.0,
+    "bfp8": 1088 / 1024,
+    "bfp4": 576 / 1024,
+    "fp8": 1.0,
+    "fp8_e8m0_32": 1 + 1 / 32,
+    "scaled_fp8": 528 / 512,
+}
 FIDELITY_PHASES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 # Fidelity implied by the weight format of a matmul (in-tree convention; a §5 choice, not a law).
 DEFAULT_FIDELITY = {"bfp4": "LoFi", "bfp8": "HiFi2", "bf16": "HiFi4", "fp32": "HiFi4"}
+WINDOW_SLOT = 128  # carried window rows per KV tensor (``cache.WINDOW_SLOT``)
+ENGRAM_PACKED_ROW_BYTES = 320  # ``engram.PACKED_WIDTH`` (160) uint16 containers: 256 FP8 values + 8 E8M0 scales, padded
+TILE = 32
 
 
 @dataclass(frozen=True)
@@ -70,7 +96,11 @@ class Layout:
 
 LOUDBOX_2X4 = Layout(sp=2, tp=4, links=1)
 LOUDBOX_4X2 = Layout(sp=4, tp=2, links=1)
+# The 32-chip Galaxy as a FABRIC_2D_TORUS_XY mesh (ring on both axes, ``tests/conftest.py`` torus-xy-8x4) viewed
+# as SP8 x TP4 or SP4 x TP8 (both accepted by ``layout.V41MeshLayout``); 2 links = ``ccl.V41Collectives`` on
+# Blackhole. The V4.1 modules default to ``Topology.Linear``: evaluate that with ``sp_ring=tp_ring=False``.
 GALAXY_8X4 = Layout(sp=8, tp=4, links=2, sp_ring=True, tp_ring=True)
+GALAXY_4X8 = Layout(sp=4, tp=8, links=2, sp_ring=True, tp_ring=True)
 
 
 @dataclass(frozen=True)
@@ -109,8 +139,8 @@ class Workload:
     expert_dtype: str = "bfp8"
     dense_dtype: str = "bfp8"
     stream_dtype: str = "fp32"  # mHC residual streams between sublayers (in-tree V4 keeps fp32)
-    kv_dtype: str = "bf16"
-    indexer_heads_over_tp: bool = True  # False: replicate the indexer per TP chip (no score reduction)
+    kv_dtype: str = "bf16"  # compressed layers' KV tensors: "bf16" (BF16_RM) or "scaled_fp8" (SCALED_FP8)
+    engram_tables: str = "host"  # "host" (rows uploaded per chunk) or "device" (row-sharded over all chips)
 
     @property
     def end(self) -> int:
@@ -122,8 +152,10 @@ def collective_ns(coll: Collective, layout: Layout, hw: Hardware) -> float:
 
     Linear all-gather over n chips: the edge next to an end forwards n-1 shards in one direction;
     a bidirectional ring halves that. Reduce-scatter moves the same payload; all-reduce is both.
-    Halo sends one payload to a neighbor. All-to-all is bounded by the per-chip egress spread over the
-    chip's mesh ports (a lower bound that ignores multi-hop forwarding load).
+    Halo sends one payload to a neighbor. All-to-all along one axis (egress E per chip, spread evenly over
+    the n-1 peers): (n/2)^2 * E/(n-1) crosses the axis bisection per direction over 1 (line) or 2 (ring)
+    edges. Mesh-wide all-to-all is bounded by the per-chip egress spread over the chip's mesh ports (a
+    lower bound that ignores multi-hop forwarding load).
     """
     if coll.axis == "mesh":
         n, ring = layout.chips, False
@@ -133,16 +165,19 @@ def collective_ns(coll: Collective, layout: Layout, hw: Hardware) -> float:
     if n == 1 or coll.shard_bytes == 0:
         return 0.0
     bw = hw.link_bytes_per_ns * layout.links
+    hops = n // 2 if ring else n - 1
     if coll.kind in ("all_gather", "reduce_scatter", "all_reduce"):
         edge_shards = (n - 1) / 2 if ring else (n - 1)
-        hops = n // 2 if ring else n - 1
         passes = 2 if coll.kind == "all_reduce" else 1
         return passes * (edge_shards * coll.shard_bytes / bw + hops * hw.hop_latency_ns)
     if coll.kind == "halo":
         return coll.shard_bytes / bw + hw.hop_latency_ns
     if coll.kind == "all_to_all":
-        ports = (2 if layout.sp > 1 else 0) + (2 if layout.tp > 1 else 0)
-        return coll.shard_bytes / (bw * ports) + hw.hop_latency_ns
+        if coll.axis == "mesh":
+            ports = (2 if layout.sp > 1 else 0) + (2 if layout.tp > 1 else 0)
+            return coll.shard_bytes / (bw * ports) + hw.hop_latency_ns
+        crossing = (n // 2) * (n - n // 2) * coll.shard_bytes / (n - 1)
+        return crossing / (bw * (2 if ring else 1)) + hops * hw.hop_latency_ns
     raise ValueError(f"unknown collective kind {coll.kind}")
 
 
@@ -158,7 +193,7 @@ def _finish(op: OpCost, layout: Layout, hw: Hardware) -> OpCost:
 
 
 def _linear(node, name, tokens, k, n, wdtype, layout, *, k_sharded_tp, n_sharded_tp, act=("bf16", "bf16"), coll=()):
-    """Per-chip cost of ``[tokens, k] @ [k, n]``: tokens are this chip's SP shard. Work and weights split
+    """Per-chip cost of ``[tokens, k] @ [k, n]``: tokens are this chip's rows. Work and weights split
     over TP when either dimension is TP-sharded; otherwise every TP chip repeats the full product."""
     kk = k / layout.tp if k_sharded_tp else k
     nn = n / layout.tp if n_sharded_tp else n
@@ -171,14 +206,13 @@ def _linear(node, name, tokens, k, n, wdtype, layout, *, k_sharded_tp, n_sharded
 
 
 def block_ops(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
-    """Operation costs of one backbone block for one chunk on one chip."""
+    """Operation costs of one backbone block (with its Engram at layers 1, 14) for one chunk on one chip."""
     btype = C.block_type(layer)
     ratio = C.compress_ratio(layer)
     s = w.chunk / layout.sp  # tokens per chip
     h, hc = C.EMB_SIZE, C.HC_MULT
     ht = h / layout.tp
     sd = BYTES[w.stream_dtype]
-    dense = w.dense_dtype
     ops: list[OpCost] = []
 
     def stream_bytes(copies):
@@ -216,14 +250,9 @@ def block_ops(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_
             dram_bytes=s * ht * 2 * 2,
             collectives=[Collective("all_gather", "tp", s * 32 * 4)],
         )
-        if site == "attn":
-            ops += [mix, pre, norm]
-            ops += _attention_ops(layer, btype, ratio, s, w, layout)
-            ops.append(post)
-        else:
-            ops += [mix, pre, norm]
-            ops += _moe_ops(s, w, layout)
-            ops.append(post)
+        ops += [mix, pre, norm]
+        ops += _attention_ops(layer, btype, ratio, s, w, layout) if site == "attn" else _moe_ops(s, w, layout)
+        ops.append(post)
 
     if layer in C.ENGRAM_LAYER_IDS:
         ops = engram_ops(s, w, layout) + ops
@@ -232,8 +261,10 @@ def block_ops(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_
 
 def _attention_ops(layer, btype, ratio, s, w: Workload, layout: Layout) -> list[OpCost]:
     h, d, heads, rd = C.EMB_SIZE, C.HEAD_DIM, C.NUM_ATTENTION_HEADS, C.QK_ROPE_HEAD_DIM
-    q_lora, dense, kvb = C.Q_LORA_RANK, w.dense_dtype, BYTES[w.kv_dtype]
+    q_lora, dense, idim = C.Q_LORA_RANK, w.dense_dtype, C.INDEX_HEAD_DIM
+    kvb = BYTES[w.kv_dtype] if ratio else BYTES["bf16"]  # ratio-0 layers keep BF16 (cache.py)
     hl = heads / layout.tp
+    qc = s / layout.tp  # queries per chip after the head->sequence all-to-all
     ops = [
         _linear(
             "B4",
@@ -262,13 +293,14 @@ def _attention_ops(layer, btype, ratio, s, w: Workload, layout: Layout) -> list[
             n_sharded_tp=False,
             coll=[Collective("all_reduce", "tp", s * d * 2 / layout.tp)],
         ),
+        OpCost("B5", "kv_norm_rope_qdq", eltwise=s * d * 6, sfpu={"rsqrt": s}, dram_bytes=s * d * 2 * 2),
+        # write_window: the chunk's window KV SP-gathered onto every chip (+ carry) in the layer's KV format
         OpCost(
             "B5",
-            "kv_norm_rope_qdq",
-            eltwise=s * d * 6,
-            sfpu={"rsqrt": s},
-            dram_bytes=s * d * 2 * 2,
-            collectives=[Collective("halo", "sp", (C.SLIDING_WINDOW - 1) * d * kvb)],
+            "window_kv_write",
+            eltwise=w.chunk * d * (2 if kvb != 2 else 0),
+            dram_bytes=w.chunk * d * 2 + (w.chunk + WINDOW_SLOT) * d * kvb + WINDOW_SLOT * d * kvb * 2,
+            collectives=[Collective("all_gather", "sp", s * d * 2)],
         ),
     ]
     visible = 0
@@ -294,44 +326,41 @@ def _attention_ops(layer, btype, ratio, s, w: Workload, layout: Layout) -> list[
                 OpCost(
                     "B7",
                     "index_keys",
-                    matmul_flop=2 * c_chip * d * C.INDEX_HEAD_DIM / layout.tp,
+                    matmul_flop=2 * c_chip * d * idim,  # wk replicated: every TP chip projects its SP rows
                     fidelity="HiFi4",
-                    eltwise=c_chip * C.INDEX_HEAD_DIM * 6,
-                    dram_bytes=d * C.INDEX_HEAD_DIM * 2 + c_chip * (d * 2 + C.INDEX_HEAD_DIM * kvb),
+                    eltwise=c_chip * idim * 6,
+                    dram_bytes=d * idim * 2 + c_chip * (d * 2 + idim * 2),
                 )
             )
+            # write_compressed: the chunk's new compressed KV and index-K rows SP-gathered onto every chip
             ops.append(
                 OpCost(
                     "B8",
                     "compressed_kv_write",
                     eltwise=c_chip * (rd * 3 + d * 4),
-                    dram_bytes=c_chip * d * (2 + kvb),
+                    dram_bytes=w.chunk / ratio * (d * 2 + d * kvb + idim * 2 * 2),
+                    collectives=[Collective("all_gather", "sp", c_chip * (d + idim) * 2)],
                 )
             )
         if btype in (V41BlockType.KV_INDEX_SOURCE, V41BlockType.CANDIDATE_SOURCE, V41BlockType.CANDIDATE_INDEX_SOURCE):
             ops += _indexer_ops(btype, s, visible, w, layout)
-        # every compressed layer gathers the visible compressed KV of its source along SP
-        ops.append(
-            OpCost(
-                "B14",
-                "compressed_kv_gather",
-                dram_bytes=visible * d * kvb,
-                collectives=[Collective("all_gather", "sp", visible / layout.sp * d * kvb)],
-            )
-        )
     selected = min(C.SLIDING_WINDOW, w.end) + (min(C.INDEX_TOPK, visible) if ratio else 0)
+    a2a = [Collective("all_to_all", "tp", s * hl * d * 2 * (1 - 1 / layout.tp))] if layout.tp > 1 else []
+    ops.append(OpCost("B14", "q_head_to_seq", dram_bytes=s * hl * d * 2 * 2, collectives=list(a2a)))
+    # every chip reads the KV rows its queries select once: their window span and the union of their top-k
+    kv_rows = qc + C.SLIDING_WINDOW - 1 + (min(visible, qc * C.INDEX_TOPK) if ratio else 0)
     ops.append(
         OpCost(
             "B14",
             "sparse_attention",
-            matmul_flop=4 * s * hl * selected * d,
+            matmul_flop=4 * qc * heads * selected * d,
             fidelity="HiFi2",
-            eltwise=s * hl * selected * 3,
-            sfpu={"exp": s * hl * selected},
-            # q and o once, the chunk's KV rows (window halo + chunk + visible compressed) once, indices once
-            dram_bytes=s * hl * d * 2 * 2 + (s + C.SLIDING_WINDOW - 1 + visible) * d * kvb + s * selected * 4,
+            eltwise=qc * heads * selected * 3,
+            sfpu={"exp": qc * heads * selected},
+            dram_bytes=qc * heads * d * 2 * 2 + kv_rows * d * kvb + qc * selected * 4,
         )
     )
+    ops.append(OpCost("B14", "o_seq_to_head", dram_bytes=s * hl * d * 2 * 2, collectives=list(a2a)))
     ops.append(OpCost("B15", "inverse_rope", eltwise=s * hl * rd * 3, dram_bytes=s * hl * d * 2 * 2))
     g_local = C.O_GROUPS / layout.tp
     ops.append(
@@ -371,22 +400,13 @@ def _attention_ops(layer, btype, ratio, s, w: Workload, layout: Layout) -> list[
 
 
 def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]:
+    """C4 query split: this chip's ``qi = S/(sp*tp)`` queries, all 32 heads, bf16 scores ``[qi, T]``."""
     ih, idim, q_lora, h = C.INDEX_N_HEADS, C.INDEX_HEAD_DIM, C.Q_LORA_RANK, C.EMB_SIZE
-    kvb = BYTES[w.kv_dtype]
-    split = layout.tp if w.indexer_heads_over_tp else 1  # compute split over TP only if heads are split
-    heads_local = ih / split
+    qi = s / layout.tp
+    t = max(-(-visible // TILE) * TILE, TILE)  # score width in whole tiles
+    score = qi * t * 2
     ops = [
-        _linear(
-            "B9",
-            "index_wq_b",
-            s,
-            q_lora,
-            ih * idim,
-            w.dense_dtype,
-            layout,
-            k_sharded_tp=False,
-            n_sharded_tp=w.indexer_heads_over_tp,
-        ),
+        _linear("B9", "index_wq_b", qi, q_lora, ih * idim, "bf16", layout, k_sharded_tp=False, n_sharded_tp=False),
         _linear(
             "B9",
             "index_weights_proj",
@@ -397,24 +417,16 @@ def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]
             layout,
             k_sharded_tp=True,
             n_sharded_tp=False,
-            coll=[Collective("all_reduce", "tp", s * ih * 4 / layout.tp)],
-        ),
-        OpCost(
-            "B9",
-            "index_k_gather",
-            dram_bytes=visible * idim * kvb,
-            collectives=[Collective("all_gather", "sp", visible / layout.sp * idim * kvb)],
+            coll=[Collective("all_reduce", "tp", s * ih * 2 / layout.tp)],
         ),
         OpCost(
             "B9",
             "index_scores",
-            matmul_flop=2 * s * heads_local * idim * visible,
+            matmul_flop=2 * qi * ih * idim * visible,
             fidelity="LoFi",  # FP4 q and k in the reference
-            eltwise=s * heads_local * visible * 3,
-            dram_bytes=s * heads_local * idim * 2 + visible * idim * kvb + s * visible * 4,
-            collectives=[Collective("all_reduce", "tp", s * visible * 4 / layout.tp)]
-            if w.indexer_heads_over_tp
-            else [],
+            eltwise=qi * ih * visible * 3 + qi * t,
+            # q once, index-K read + tiled copy + read, score written, visibility mask added (2 reads, 1 write)
+            dram_bytes=qi * ih * idim * 2 + t * idim * 2 * 3 + score * 4,
         ),
     ]
     if btype == V41BlockType.CANDIDATE_SOURCE:
@@ -422,37 +434,51 @@ def _indexer_ops(btype, s, visible, w: Workload, layout: Layout) -> list[OpCost]
             OpCost(
                 "B10",
                 "candidate_select",
-                eltwise=s * visible,
-                sfpu={"topk": s},
-                dram_bytes=s * visible * 4 + s * visible,
+                eltwise=qi * t * 3,
+                sfpu={"topk": qi},
+                # block max over 8 strided slices, block top-k, scatter, repeat_interleave, where -> published mask
+                dram_bytes=score * 2 + score / C.CANDIDATE_BLOCK_SIZE * 4 + score * 2,
             )
         )
     if btype == V41BlockType.CANDIDATE_INDEX_SOURCE:
-        ops.append(OpCost("B11", "candidate_mask", eltwise=s * visible, dram_bytes=s * visible * (4 + 1 + 4)))
-    ops.append(OpCost("B12", "topk", sfpu={"topk": s}, dram_bytes=s * visible * 4 + s * C.INDEX_TOPK * 4))
+        ops.append(OpCost("B11", "candidate_mask", eltwise=qi * t, dram_bytes=score * 3))
+    ops.append(OpCost("B12", "topk", sfpu={"topk": qi}, dram_bytes=score + qi * C.INDEX_TOPK * 4))
     return ops
+
+
+def moe_dispatch_rows(w: Workload, layout: Layout) -> int:
+    """Rows of the per-chip dispatch buffer (``moe.init_helpers.compute_constants``): the column's chunk tokens
+    times the capacity factor (top-k, ``tt/v41/moe.py``) plus one tile of alignment per further local expert."""
+    experts_per_chip = C.NUM_ROUTED_EXPERTS // layout.chips
+    return w.chunk * C.NUM_EXPERTS_PER_TOKEN + TILE * (experts_per_chip - 1)
 
 
 def _moe_ops(s, w: Workload, layout: Layout) -> list[OpCost]:
     h, inter, e, k = C.EMB_SIZE, C.MOE_INTERMEDIATE_SIZE, C.NUM_ROUTED_EXPERTS, C.NUM_EXPERTS_PER_TOKEN
-    chips = layout.chips
-    tokens_src = s / layout.tp  # tokens dispatched by each chip of the TP row
-    routed_tokens = s * k / layout.tp  # expert-token pairs computed per chip on average
-    ops = [
+    picks_local = k / layout.tp  # expected top-k picks of a token that land in this chip's TP column
+    routed_tokens = s * picks_local  # expert-token pairs computed per chip on average (balanced routing)
+    egress = s * picks_local * (1 - 1 / layout.sp) * h * 2  # dispatch / combine along SP inside the column
+    return [
         OpCost(
             "B20",
             "gate",
             matmul_flop=2 * s * h * e / layout.tp,
             fidelity="HiFi4",
             sfpu={"softplus": s * e / layout.tp, "sqrt": s * e / layout.tp, "topk": s / layout.tp},
-            dram_bytes=h * e * 4 / layout.tp + s * h / layout.tp * 2 + s * e * 4 / layout.tp,
+            dram_bytes=h * e * 2 / layout.tp + s * h / layout.tp * 2 + s * e * 4 / layout.tp,
             collectives=[Collective("all_reduce", "tp", s * e * 4 / layout.tp)],
         ),
         OpCost(
             "B21",
+            "moe_input_gather",
+            dram_bytes=s * h / layout.tp * 2 + s * h * 2,
+            collectives=[Collective("all_gather", "tp", s * h / layout.tp * 2)],
+        ),
+        OpCost(
+            "B21",
             "dispatch",
-            dram_bytes=tokens_src * h * 2 + routed_tokens * h * 2,
-            collectives=[Collective("all_to_all", "mesh", tokens_src * k * (1 - 1 / chips) * h * 2)],
+            dram_bytes=routed_tokens * h * 2 * 2,
+            collectives=[Collective("all_to_all", "sp", egress)],
         ),
         OpCost(
             "B21",
@@ -461,14 +487,21 @@ def _moe_ops(s, w: Workload, layout: Layout) -> list[OpCost]:
             fidelity=DEFAULT_FIDELITY[w.expert_dtype],
             eltwise=routed_tokens * inter * 4,
             sfpu={"sigmoid": routed_tokens * inter},
-            dram_bytes=e / chips * 3 * h * inter * BYTES[w.expert_dtype] + routed_tokens * h * 2 * 2,
+            dram_bytes=e / layout.chips * 3 * h * inter * BYTES[w.expert_dtype] + routed_tokens * h * 2 * 2,
         ),
         OpCost(
             "B21",
             "combine",
             eltwise=routed_tokens * h,
-            dram_bytes=routed_tokens * h * 2 + tokens_src * h * 2,
-            collectives=[Collective("all_to_all", "mesh", tokens_src * k * (1 - 1 / chips) * h * 2)],
+            dram_bytes=routed_tokens * h * 2 * 2,
+            collectives=[Collective("all_to_all", "sp", egress)],
+        ),
+        OpCost(
+            "B21",
+            "routed_reduce",
+            eltwise=s * k * h,
+            dram_bytes=s * k * h * 2 + s * h * 2,
+            collectives=[Collective("reduce_scatter", "tp", s * h * 2 / layout.tp)],
         ),
         OpCost(
             "B22",
@@ -481,20 +514,33 @@ def _moe_ops(s, w: Workload, layout: Layout) -> list[OpCost]:
             collectives=[Collective("reduce_scatter", "tp", s * h * 2 / layout.tp)],
         ),
     ]
-    return ops
 
 
-def engram_ops(s, w: Workload, layout: Layout, device_tables: bool = False) -> list[OpCost]:
-    """Engram at one layer (N3-N5). Host lookup: rows arrive over the host link (bytes reported in
-    ``host_bytes`` via the lookup op's dram field only when tables live on device)."""
+def engram_ops(s, w: Workload, layout: Layout) -> list[OpCost]:
+    """Engram at one layer (N3-N5) for ``s`` tokens per chip. N3 lookup per ``w.engram_tables``: host table
+    (packed rows arrive over the host link, 1/chips of the lookups per chip; host time not modeled) or device
+    table (every chip gathers all lookups from its row shard, byte sums reduce-scattered SP then TP); both
+    decode on device and all-gather the rows over TP."""
     cols, hd, h, hc = (C.ENGRAM_MAX_NGRAM_SIZE - 1) * C.ENGRAM_N_HEADS, C.ENGRAM_HEAD_DIM, C.EMB_SIZE, C.HC_MULT
-    row_bytes = hd * BYTES["fp8_e8m0_32"]
-    lookup = OpCost(
-        "N3",
-        "engram_lookup",
-        eltwise=s * cols * hd / layout.tp,
-        dram_bytes=(s * cols * row_bytes / layout.tp if device_tables else 0) + s * cols * hd * 2 / layout.tp,
-    )
+    lookups = w.chunk * cols
+    per_chip = lookups / layout.chips
+    decode = per_chip * ENGRAM_PACKED_ROW_BYTES * 2 + per_chip * hd * 2  # low/high bytes read, bf16 rows written
+    gather = [Collective("all_gather", "tp", per_chip * hd * 2)]
+    if w.engram_tables == "device":
+        byte_sums = lookups * ENGRAM_PACKED_ROW_BYTES * 2  # low | high bytes as bf16, per chip before the scatter
+        lookup = OpCost(
+            "N3",
+            "engram_lookup_device",
+            eltwise=lookups * ENGRAM_PACKED_ROW_BYTES * 3,
+            dram_bytes=lookups * ENGRAM_PACKED_ROW_BYTES * 2 + byte_sums * 3 + decode,
+            collectives=[
+                Collective("reduce_scatter", "sp", byte_sums / layout.sp),
+                Collective("reduce_scatter", "tp", byte_sums / layout.chips),
+            ]
+            + gather,
+        )
+    else:
+        lookup = OpCost("N3", "engram_lookup_host", eltwise=per_chip * hd * 4, dram_bytes=decode, collectives=gather)
     wkv = _linear(
         "N4", "engram_wkv", s, cols * hd, h * (hc + 1), w.dense_dtype, layout, k_sharded_tp=False, n_sharded_tp=True
     )
@@ -504,14 +550,14 @@ def engram_ops(s, w: Workload, layout: Layout, device_tables: bool = False) -> l
         eltwise=s * hc * h / layout.tp * 8,
         sfpu={"rsqrt": 2 * s * hc, "sqrt": s * hc, "sigmoid": s * hc},
         dram_bytes=s * hc * h / layout.tp * (2 * BYTES[w.stream_dtype]) + s * h * (hc + 1) / layout.tp * 2,
-        collectives=[Collective("all_reduce", "tp", s * hc * 4 * 2 / layout.tp)],
+        collectives=[Collective("all_gather", "tp", s * 32 * 4)],
     )
     return [lookup, wkv, gate]
 
 
-def engram_host_bytes_per_token() -> float:
-    """Bytes per token per Engram layer if the host looks up and dequantizes rows to bf16 (N3 on host)."""
-    return (C.ENGRAM_MAX_NGRAM_SIZE - 1) * C.ENGRAM_N_HEADS * C.ENGRAM_HEAD_DIM * 2
+def engram_host_upload_bytes_per_chunk(chunk: int) -> float:
+    """Host -> device bytes per chunk per Engram layer with the host table: every lookup's packed row once."""
+    return chunk * (C.ENGRAM_MAX_NGRAM_SIZE - 1) * C.ENGRAM_N_HEADS * ENGRAM_PACKED_ROW_BYTES
 
 
 @dataclass
@@ -527,8 +573,7 @@ class BlockEstimate:
     ops: list
 
 
-def compose_block(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> BlockEstimate:
-    ops = block_ops(layer, w, layout, hw)
+def compose(ops: list[OpCost], layer: int = -1, block_type: str = "") -> BlockEstimate:
     compute = sum(o.compute_ns for o in ops)
     dram = sum(o.dram_ns for o in ops)
     ccl = sum(o.ccl_ns for o in ops)
@@ -538,7 +583,7 @@ def compose_block(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKH
             sfpu[key] = sfpu.get(key, 0) + value
     return BlockEstimate(
         layer=layer,
-        block_type=C.block_type(layer).value,
+        block_type=block_type,
         compute_ns=compute,
         dram_ns=dram,
         ccl_ns=ccl,
@@ -549,9 +594,57 @@ def compose_block(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKH
     )
 
 
+def compose_block(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> BlockEstimate:
+    return compose(block_ops(layer, w, layout, hw), layer, C.block_type(layer).value)
+
+
+def prefill_estimate(
+    prompt_tokens: int, w: Workload, layout: Layout, *, dspark: bool = True, hw: Hardware = BLACKHOLE_P150B
+) -> dict:
+    """Full prefill of ``prompt_tokens`` in chunks of ``w.chunk`` (the last one padded): per-chunk block
+    compositions summed, i.e. blocks run one after another and each block's scenarios apply within it."""
+    chunks = -(-prompt_tokens // w.chunk)
+    optimistic = conservative = 0.0
+    per_chunk = []
+    for i in range(chunks):
+        wc = replace(w, start=i * w.chunk)
+        blocks = [compose_block(layer, wc, layout, hw) for layer in range(C.NUM_LAYERS)]
+        tail = (dspark_prefill_ops(wc, layout, hw) if dspark else []) + (
+            final_ops(wc, layout, hw) if i == chunks - 1 else []
+        )
+        rest = compose(tail)
+        o = sum(b.optimistic_ns for b in blocks) + rest.optimistic_ns
+        c = sum(b.conservative_ns for b in blocks) + rest.conservative_ns
+        per_chunk.append((wc.start, o, c))
+        optimistic += o
+        conservative += c
+    return {"chunks": chunks, "optimistic_ns": optimistic, "conservative_ns": conservative, "per_chunk": per_chunk}
+
+
+# --- capacity -------------------------------------------------------------------------------------------------
+# Placement of each weight component (``tt/v41/*``): "tp" = split over TP, replicated over SP; "chips" = split
+# over every chip; "replicated" = full copy per chip.
+WEIGHT_PLACEMENT = {
+    "attention": "tp",
+    "mhc": "tp",
+    "gate": "tp",
+    "shared_expert": "tp",
+    "routed_experts": "chips",
+    "compressor": "tp",
+    "index_keys": "replicated",
+    "index_wq_b": "replicated",
+    "index_weights_proj": "tp",
+    "engram_wkv": "tp",
+    "embedding": "tp",
+    "lm_head": "tp",
+    "dspark_main_proj": "tp",
+    "dspark_wkv": "replicated",
+}
+
+
 def weight_bytes_per_layer(layer: int, w: Workload) -> dict:
-    """Device bytes of one backbone layer's weights, by component (whole mesh, before sharding)."""
-    h, d, q_lora = C.EMB_SIZE, C.HEAD_DIM, C.Q_LORA_RANK
+    """Device bytes of one backbone layer's weights, by component (whole model, before placement)."""
+    h, d, q_lora, idim = C.EMB_SIZE, C.HEAD_DIM, C.Q_LORA_RANK, C.INDEX_HEAD_DIM
     dense = BYTES[w.dense_dtype]
     attn = (
         h * q_lora
@@ -563,60 +656,131 @@ def weight_bytes_per_layer(layer: int, w: Workload) -> dict:
     out = {
         "attention": attn,
         "mhc": 2 * (2 + C.HC_MULT) * C.HC_MULT * C.HC_MULT * h * 4,
-        "gate": C.NUM_ROUTED_EXPERTS * h * 4,
+        "gate": C.NUM_ROUTED_EXPERTS * h * 2,
         "shared_expert": 3 * h * C.MOE_INTERMEDIATE_SIZE * dense,
         "routed_experts": C.NUM_ROUTED_EXPERTS * 3 * h * C.MOE_INTERMEDIATE_SIZE * BYTES[w.expert_dtype],
     }
     ratio = C.compress_ratio(layer)
     if layer in C.KV_SOURCE_LAYERS:
-        out["compressor"] = h * d * (2 if ratio > 1 else 1) * (4 if ratio > 1 else 2) + d * C.INDEX_HEAD_DIM * 2
+        out["compressor"] = h * d * (2 if ratio > 1 else 1) * (4 if ratio > 1 else 2)
+        out["index_keys"] = d * idim * 2
     if layer in C.INDEX_SOURCE_LAYERS:
-        out["indexer"] = q_lora * C.INDEX_N_HEADS * C.INDEX_HEAD_DIM * dense + h * C.INDEX_N_HEADS * 2
+        out["index_wq_b"] = q_lora * C.INDEX_N_HEADS * idim * 2
+        out["index_weights_proj"] = h * C.INDEX_N_HEADS * 2
     if layer in C.ENGRAM_LAYER_IDS:
         cols = (C.ENGRAM_MAX_NGRAM_SIZE - 1) * C.ENGRAM_N_HEADS
         out["engram_wkv"] = cols * C.ENGRAM_HEAD_DIM * h * (C.HC_MULT + 1) * dense
     return out
 
 
+def model_weight_bytes(w: Workload, *, dspark: bool = True) -> dict:
+    """Non-layer weights: bf16 embedding and LM head, DSpark prefill seeding (main_proj, 3 x wkv; bf16)."""
+    out = {"embedding": C.VOCAB_SIZE * C.EMB_SIZE * 2, "lm_head": C.VOCAB_SIZE * C.EMB_SIZE * 2}
+    if dspark:
+        out["dspark_main_proj"] = len(C.DSPARK_TARGET_LAYER_IDS) * C.EMB_SIZE * C.EMB_SIZE * 2
+        out["dspark_wkv"] = C.NUM_DSPARK_LAYERS * C.EMB_SIZE * C.HEAD_DIM * 2
+    return out
+
+
+def _placed(nbytes: float, placement: str, layout: Layout) -> float:
+    return nbytes / {"tp": layout.tp, "chips": layout.chips, "replicated": 1}[placement]
+
+
 def engram_table_bytes(layers: list[int] | None = None) -> float:
-    """FP8 rows + E8M0 scales of the Engram tables of ``layers`` (all Engram layers by default)."""
+    """Packed Engram rows (``ENGRAM_PACKED_ROW_BYTES`` each) of the tables of ``layers`` (all by default):
+    the host table's RAM and the device tables' total before sharding."""
     layers = list(C.ENGRAM_LAYER_IDS) if layers is None else layers
     rows = [n for layer, n in zip(C.ENGRAM_LAYER_IDS, C.ENGRAM_NUM_EMBEDDINGS) if layer in layers]
-    return sum(n * C.ENGRAM_HEAD_DIM * BYTES["fp8_e8m0_32"] for n in rows)
+    return sum(n * ENGRAM_PACKED_ROW_BYTES for n in rows)
 
 
-def capacity_per_chip(
-    layers: list[int], w: Workload, layout: Layout, *, engram_on_device: bool, context_tokens: int = 0
-) -> dict:
-    """Per-chip DRAM bytes: attention/dense weights replicated over SP and split over TP; routed experts
-    and Engram tables split over every chip; caches split over SP (token-sharded)."""
-    per = {"dense": 0.0, "routed_experts": 0.0, "engram_tables": 0.0, "embed_head": 0.0, "caches": 0.0}
-    for layer in layers:
-        wb = weight_bytes_per_layer(layer, w)
-        per["routed_experts"] += wb.pop("routed_experts") / layout.chips
-        per["dense"] += sum(wb.values()) / layout.tp
-    per["embed_head"] = 2 * C.VOCAB_SIZE * C.EMB_SIZE * 2 / layout.chips
-    if engram_on_device:
-        per["engram_tables"] = engram_table_bytes(layers) / layout.chips
-    per["caches"] = kv_cache_bytes(context_tokens, w, layers) / layout.sp
-    per["total"] = sum(per.values())
-    return per
+def engram_device_table_bytes_per_chip(layers: list[int], layout: Layout) -> float:
+    """``TtV41EngramTable``: each chip holds ceil(rows / chips) packed rows plus one zero row, per table."""
+    rows = [n for layer, n in zip(C.ENGRAM_LAYER_IDS, C.ENGRAM_NUM_EMBEDDINGS) if layer in layers]
+    return sum((-(-n // layout.chips) + 1) * ENGRAM_PACKED_ROW_BYTES for n in rows)
 
 
-def kv_cache_bytes(tokens: int, w: Workload, layers: list[int] | None = None) -> float:
-    """Compressed KV + index-K caches of the KV sources in ``layers`` plus the window rings of all layers."""
+def kv_cache_bytes(max_seq_len: int, w: Workload, layers: list[int] | None = None) -> float:
+    """Per-chip bytes of ``V41PrefillState`` (replicated on every chip) for requests up to ``max_seq_len``: per KV
+    source one KV tensor (window slot + chunk scratch + compressed rows, in the KV format) and its bf16 index-K;
+    one bf16 ratio-0 scratch tensor if any SWA-only layer is present; one window carry per layer."""
     layers = list(range(C.NUM_LAYERS)) if layers is None else layers
-    kvb = BYTES[w.kv_dtype]
+    d, idim = C.HEAD_DIM, C.INDEX_HEAD_DIM
+
+    def row(ratio):
+        return d * (BYTES[w.kv_dtype] if ratio else BYTES["bf16"])
+
     total = 0.0
     for layer in layers:
+        ratio = C.compress_ratio(layer)
         if layer in C.KV_SOURCE_LAYERS:
-            total += tokens // C.compress_ratio(layer) * (C.HEAD_DIM + C.INDEX_HEAD_DIM) * kvb
-        total += C.SLIDING_WINDOW * C.HEAD_DIM * kvb
+            compressed = max_seq_len // ratio
+            total += (WINDOW_SLOT + w.chunk + compressed) * row(ratio) + compressed * idim * 2
+        total += WINDOW_SLOT * row(ratio)
+    if any(C.compress_ratio(layer) == 0 for layer in layers):
+        total += (WINDOW_SLOT + w.chunk) * row(0)
     return total
 
 
+def activation_bytes_per_chip(w: Workload, layout: Layout, max_seq_len: int) -> dict:
+    """Largest transient per-chip DRAM of one chunk, by phase (phases do not overlap; peak = streams + max).
+
+    streams: fp32 mHC streams in / out / mixed (3 live copies). moe: gathered input, dispatch buffer +
+    metadata, routed expert output (same rows), combine output ``[S/sp, k, H]``, and one expert's
+    intermediates at the worst per-expert count (the whole chunk). indexer (at a full ``max_seq_len`` context,
+    ratio-1 index sources): index-K tiled copy, bf16 score, visibility mask, masked score and the published
+    candidate mask ``[S/(sp*tp), T]``. engram: the device-table lookup's gathered rows and byte tensors (host
+    table: the chunk's packed upload and decoded rows)."""
+    s, h, k = w.chunk / layout.sp, C.EMB_SIZE, C.NUM_EXPERTS_PER_TOKEN
+    rows = moe_dispatch_rows(w, layout)
+    streams = 3 * s * C.HC_MULT * h / layout.tp * BYTES[w.stream_dtype]
+    moe = s * h * 2 + rows * (h * 2 + 3 * 4) + rows * h * 2 + s * k * h * 2 + w.chunk * C.MOE_INTERMEDIATE_SIZE * 2 * 3
+    qi = s / layout.tp
+    t = max_seq_len  # ratio-1 visible rows at the end of the context
+    indexer = t * C.INDEX_HEAD_DIM * 2 + 4 * qi * t * 2
+    cols = (C.ENGRAM_MAX_NGRAM_SIZE - 1) * C.ENGRAM_N_HEADS
+    lookups = w.chunk * cols
+    if w.engram_tables == "device":
+        engram = lookups * ENGRAM_PACKED_ROW_BYTES * (1 + 2 * 2 + 2)  # gathered uint16, low/high int32, bf16 sums
+    else:
+        engram = lookups / layout.chips * ENGRAM_PACKED_ROW_BYTES + lookups / layout.sp * C.ENGRAM_HEAD_DIM * 2
+    engram += s * cols * C.ENGRAM_HEAD_DIM * 2 + s * (C.HC_MULT + 1) * h / layout.tp * 2  # rows + wkv output
+    out = {"streams": streams, "moe": moe, "indexer": indexer, "engram": engram}
+    out["peak"] = streams + max(moe, indexer, engram)
+    return out
+
+
+def capacity_per_chip(
+    layers: list[int],
+    w: Workload,
+    layout: Layout,
+    *,
+    context_tokens: int,
+    dspark: bool = True,
+) -> dict:
+    """Per-chip DRAM bytes by component for ``layers`` (+ embedding, head, DSpark seeding), Engram tables per
+    ``w.engram_tables``, state for ``context_tokens`` and the peak chunk transient."""
+    per: dict = {}
+    for layer in layers:
+        for name, nbytes in weight_bytes_per_layer(layer, w).items():
+            per[name] = per.get(name, 0.0) + _placed(nbytes, WEIGHT_PLACEMENT[name], layout)
+    for name, nbytes in model_weight_bytes(w, dspark=dspark).items():
+        per[name] = _placed(nbytes, WEIGHT_PLACEMENT[name], layout)
+    per["weights"] = sum(per.values())
+    engram_layers = [layer for layer in layers if layer in C.ENGRAM_LAYER_IDS]
+    per["engram_tables"] = (
+        engram_device_table_bytes_per_chip(engram_layers, layout) if w.engram_tables == "device" else 0.0
+    )
+    per["caches"] = kv_cache_bytes(context_tokens, w, layers)
+    if dspark:
+        per["caches"] += C.NUM_DSPARK_LAYERS * C.SLIDING_WINDOW * C.HEAD_DIM * 2  # bf16 DSpark rings
+    per["activations"] = activation_bytes_per_chip(w, layout, context_tokens)["peak"]
+    per["total"] = per["weights"] + per["engram_tables"] + per["caches"] + per["activations"]
+    return per
+
+
 def final_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
-    """F1 final collapse and F2 norm over the chunk; F3 fp32 LM head over the last token only."""
+    """F1 final collapse and F2 norm over the chunk; F3 LM head (bf16, vocab split over TP) on the last token."""
     s, ht, hc = w.chunk / layout.sp, C.EMB_SIZE / layout.tp, C.HC_MULT
     ops = [
         OpCost(
@@ -630,13 +794,13 @@ def final_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> li
             dram_bytes=s * ht * 2 * 2,
             collectives=[Collective("all_gather", "tp", s * 32 * 4)],
         ),
-        # one token; vocab split over every chip, hidden gathered to the owner first
+        # one token on the SP row that holds it; the hidden is gathered over TP, each TP chip owns vocab / tp
         OpCost(
             "F3",
             "lm_head_last_token",
-            matmul_flop=2 * C.EMB_SIZE * C.VOCAB_SIZE / layout.chips,
+            matmul_flop=2 * C.EMB_SIZE * C.VOCAB_SIZE / layout.tp,
             fidelity="HiFi4",
-            dram_bytes=C.EMB_SIZE * C.VOCAB_SIZE / layout.chips * 2 + C.VOCAB_SIZE / layout.chips * 4,
+            dram_bytes=C.EMB_SIZE * C.VOCAB_SIZE / layout.tp * 2 + C.VOCAB_SIZE / layout.tp * 4,
             collectives=[Collective("all_gather", "tp", ht * 2)],
         ),
     ]
@@ -644,17 +808,19 @@ def final_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> li
 
 
 def dspark_prefill_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
-    """N6 taps (3 layers, whole chunk) and D1/D2 over the last ``min(128, chunk)`` rows: main_proj FP8
-    15360 -> 5120 + main_norm once, then per DSpark layer wkv 5120 -> 512, kv_norm, RoPE, FP8 QDQ."""
+    """N6 taps (3 layers, whole chunk, SP-gathered) and D1/D2 over the chunk's last ``min(128, chunk)`` rows:
+    main_proj bf16 15360 -> 5120 (row-parallel, TP all-reduce) + main_norm, then per DSpark layer the replicated
+    bf16 wkv 5120 -> 512, kv_norm, RoPE, FP8 QDQ into the ring. Runs every chunk (``dspark.seed``)."""
     s, h, d, hc = w.chunk / layout.sp, C.EMB_SIZE, C.HEAD_DIM, C.HC_MULT
-    rows = min(C.SLIDING_WINDOW, w.chunk)  # held by the last SP rank(s); modeled on one chip
+    rows = min(C.SLIDING_WINDOW, w.chunk)
     taps = len(C.DSPARK_TARGET_LAYER_IDS)
     ops = [
         OpCost(
             "N6",
             "dspark_taps",
             eltwise=taps * s * hc * h / layout.tp,
-            dram_bytes=taps * s * (hc * BYTES[w.stream_dtype] + 2) * h / layout.tp,
+            dram_bytes=taps * s * (hc * BYTES[w.stream_dtype] + 2) * h / layout.tp + taps * w.chunk * h / layout.tp * 2,
+            collectives=[Collective("all_gather", "sp", taps * s * h / layout.tp * 2)],
         ),
         _linear(
             "D1",
@@ -662,25 +828,24 @@ def dspark_prefill_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P15
             rows,
             taps * h,
             h,
-            w.dense_dtype,
+            "bf16",
             layout,
             k_sharded_tp=True,
             n_sharded_tp=False,
-            coll=[Collective("all_reduce", "tp", rows * h * 2 / layout.tp)],
+            act=("bf16", "fp32"),
+            coll=[Collective("all_reduce", "tp", rows * h * 4 / layout.tp)],
         ),
         OpCost("D1", "main_norm", eltwise=rows * h * 3, sfpu={"rsqrt": rows}, dram_bytes=rows * h * 2 * 2),
     ]
     for i in range(C.NUM_DSPARK_LAYERS):
-        ops.append(
-            _linear("D2", f"dspark{i}_wkv", rows, h, d, w.dense_dtype, layout, k_sharded_tp=False, n_sharded_tp=True)
-        )
+        ops.append(_linear("D2", f"dspark{i}_wkv", rows, h, d, "bf16", layout, k_sharded_tp=False, n_sharded_tp=False))
         ops.append(
             OpCost(
                 "D2",
                 f"dspark{i}_kv_norm_rope_qdq",
                 eltwise=rows * d * 6,
                 sfpu={"rsqrt": rows},
-                dram_bytes=rows * d * (2 + BYTES[w.kv_dtype]),
+                dram_bytes=rows * d * (2 + 2),
             )
         )
     return [_finish(op, layout, hw) for op in ops]
