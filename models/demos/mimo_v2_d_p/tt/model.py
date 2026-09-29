@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.mimo_v2_d_p.reference.config import GA, SWA, MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.attention.attention import cache_v_dim, kv_heads_for_col
 from models.demos.mimo_v2_d_p.tt.attention.kv_cache import allocate_kv_cache
-from models.demos.mimo_v2_d_p.tt.ccl import CCLManager
+from models.demos.mimo_v2_d_p.tt.ccl import CCLManager, resolve_num_links
 from models.demos.mimo_v2_d_p.tt.decoder import TtDecoderLayer
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 from models.demos.mimo_v2_d_p.tt.rope import build_indexed_rope, build_transformation_mat
@@ -77,7 +77,7 @@ class TtMiMoModel:
         ), f"chunk/SP ({self.chunk_local}) must be >= sliding window ({cfg.sliding_window})"
         self.layer_ids = list(layers) if layers is not None else list(range(cfg.num_hidden_layers))
         self.sp_topo, self.tp_topo = per_axis_topology(fabric_config)
-        self.num_links = options.num_links
+        self.num_links = resolve_num_links(mesh_device, options.num_links)
         self.ccl = CCLManager(mesh_device, num_links=self.num_links, topology=self.sp_topo)
         self.vocab = cfg.vocab_size
 

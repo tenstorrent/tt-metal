@@ -5,6 +5,7 @@
 import ttnn
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.attention.attention import TtAttention
+from models.demos.mimo_v2_d_p.tt.ccl import resolve_num_links
 from models.demos.mimo_v2_d_p.tt.ffn import TtDenseMLP, TtMoE, TtRMSNorm
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
@@ -37,7 +38,7 @@ class TtDecoderLayer:
                 sub("mlp"),
                 cfg,
                 seq_len_per_chip=seq_len_per_chip,
-                num_links=options.num_links,
+                num_links=resolve_num_links(mesh_device, options.num_links),
                 topology=sp_topology,
                 cache_prefix=cp,
                 options=options,
