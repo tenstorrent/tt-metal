@@ -2028,3 +2028,52 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
+
+## C.moe_full.shared_expert test (attempt 1)
+
+What was done
+- Replaced the rendered 20-line test with the reviewed C.dense_full.mlp test, set for shared_expert (layer 1,
+  mlp.shared_experts, SwiGLU 2048, unclamped). Kept the gated pcc_shared_expert_L01 (0.99, PCC on the bf16 golden).
+  Added, vs the golden: finite, element count, rel L2 <= 0.008, row norm ratio in [0.99, 1.01], worst row <= 0.015.
+  Also asserts the module is not a CPU bridge. Added a second run on ffn_norm x 2 (bf16) vs the CPU shared_expert on
+  the same input: rel <= 0.006, ratio in [0.99, 1.01], worst row <= 0.012.
+- CPU mutation study in /tmp/hy4_se/study{,2}.py (outside the repo). The tables are in the test docstring.
+
+Decisions and why
+- These pass PCC 0.99 on the golden: gelu_tanh (0.9952), HiFi2-like truncation (rel 0.027), x 1.01 / 1.03, last row
+  or last 32 rows zeroed, input x 0.5. The added golden checks catch all of them.
+- The ratio band is [0.99, 1.01], not the dense mlp's [0.993, 1.007]. Here bf16 gate / up / h already scores
+  [0.9946, 1.0032] / worst row 0.0073, because the layer-1 input is wider. x 1.01 is still caught (ratio max 1.0105,
+  rel 0.0102).
+- Scale x 2, not x 30 as in the dense mlp. On the golden, gate reaches 8.07 and up 9.67, so a clamp at 10 does not
+  show. At x 2 the clamp scores rel 0.085 / worst row 0.42, against bf16 noise of 0.0032 / 0.0056. It also keeps the
+  outputs moderate (row norm up to about 1e3).
+- bfp8 weights would score rel 0.0074 on the golden and pass. The plan says bf16 weights anyway.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999998, rel 0.00183, ratio [0.99950, 1.00047], worst row 0.00242; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): FAIL, NotImplementedError "no device module for shared_expert yet". This is expected before implement.
+
+Gotcha for implement
+- The module is called twice: on the golden, then on x 2. Its input is ffn_norm [S, 6144] at the host boundary. Its
+  output is shared_out [S, 6144] (after the reduce_scatter, [S/2, 3072] per chip). tt/mlp.py:TtDenseMLP with
+  intermediate 2048 (1024 per chip) and the mlp harness boundary should fit as is.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py
+
+## C.moe_full.shared_expert implement (attempt 1)
+
+- Shared expert = `tt/mlp.py:TtDenseMLP` on `model.layers.<i>.mlp.shared_experts.{gate,up,down}_proj.weight`
+  (intermediate 2048 -> 1024 per chip column, TP=2 over axis 1, bf16 weights, HiFi4 + fp32 dest acc, fp32
+  gate/up/h, SILU input activation on multiply, no clamp, reduce_scatter over axis 1 -> [S/2, H/2] fp32).
+  No new module: `hooks._mlp_module` gained a `prefix` argument; `_SHARED_STEPS = {"shared_expert": "mlp.shared_experts."}`
+  routes through `_row_in_col_out_host_fn` like `mlp`.
+- `DEVICE_STEPS["moe_full"]` now includes `shared_expert`. `moe_shared` left untouched (its own tasks).
+- Gate: pcc 0.999998, rel_l2 0.00197, row ratio [0.99894, 0.99999], worst row 0.00254; x2 input rel_l2 0.00073,
+  worst row 0.00096. The `pcc=0.000000` line in the log is the precompile collect pass (stubbed), not the real pass.
+- Perf note (assemble): the shared partial can be added to the routed experts' partial before one reduce_scatter.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py`
