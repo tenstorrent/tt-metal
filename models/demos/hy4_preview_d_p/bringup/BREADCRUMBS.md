@@ -1329,3 +1329,32 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
+
+## C.moe_full.q_a test (attempt 1)
+
+What was done
+- Replaced the rendered one-line test with the layer-0 q_a test's checks, at LAYER = 1 and with the same limits:
+  gated pcc_q_a_L01 (0.99), no CPU bridge, element count, finite output, rel L2 <= 0.008, row norm ratio in
+  [0.994, 1.006], worst row rel L2 <= 0.015 vs the golden; a second run on the golden input x 0.01 (bf16) vs the CPU
+  step on the same input (rel <= 0.01, worst row <= 0.02) to catch a wrong eps. Layer-1 mutation tables (CPU study
+  script in /tmp, outside the repo) are in the test docstring.
+
+Decisions
+- Kept the layer-0 limits: the layer-1 golden has the same statistics (pre-norm row rms 0.358-0.497; bf16 estimate
+  rel 0.0029, ratio [0.9995, 1.0004], worst row 0.0035), and every mutation in the table fails at least one check.
+
+Gotchas
+- At layer 1, a dropped norm weight (PCC 0.9914) and 1 + w (0.9939) pass PCC; at layer 0 they did not. Rel L2
+  catches both. Known-issues proposal added.
+- The first "FAIL pcc_q_a_L01: pcc=0.000000" line in each run is the precompile collect pass, not the real run.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999998, rel 0.00180, ratio [0.99971, 1.00028], worst row 0.0020; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Device (gate command): PASS, because the layer-0 TtQa module already serves layer 1: pcc 0.999998, rel 0.00198, ratio
+  [0.99885, 1.00041], worst row 0.0027; scaled x 0.01 rel 0.00175, worst row 0.0020.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
