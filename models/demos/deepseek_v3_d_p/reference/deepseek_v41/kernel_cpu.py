@@ -140,18 +140,17 @@ def fp4_act_quant(
 
 
 def _block_scaled_gemm(a: torch.Tensor, a_s: torch.Tensor, b: torch.Tensor, b_s: torch.Tensor, block_k: int):
-    """sum_k (A_k @ B_k^T) * a_s[:, k] * b_s[:, k], accumulated in fp32 sequentially over K blocks.
+    """sum_k (A_k @ B_k^T) * a_s[:, k] * b_s[:, k] in fp32.
 
     a: [M, K] fp32 values, a_s: [M, K//block_k] fp32, b: [N, K] fp32 values, b_s: [N, K//block_k] fp32.
+    Scales are powers of two (ue8m0) or exact products, so scaling the operands before one fp32 matmul is
+    exact per element; only the fp32 summation order differs from the kernel's per-block accumulation
+    (same tolerance class as the tensor-core order, see module docstring). A per-block Python loop costs
+    minutes per layer at real dims.
     """
-    M, K = a.shape
-    N = b.size(0)
-    acc = torch.zeros(M, N, dtype=torch.float32)
-    for k in range(K // block_k):
-        sl = slice(k * block_k, (k + 1) * block_k)
-        partial = a[:, sl] @ b[:, sl].T
-        acc += partial * a_s[:, k : k + 1] * b_s[:, k].unsqueeze(0)
-    return acc
+    a_scaled = a * a_s.repeat_interleave(block_k, dim=1)
+    b_scaled = b * b_s.repeat_interleave(block_k, dim=1)
+    return a_scaled @ b_scaled.T
 
 
 def fp8_gemm(
