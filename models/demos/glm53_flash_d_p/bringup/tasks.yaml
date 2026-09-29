@@ -1798,6 +1798,13 @@ tasks:
     kind: norm
     layer: 4
     stateful: false
+  frozen:
+    at: '2026-09-29T13:59:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_norm.py: 34af0a7caf6f68b32e98ae2ea05f2a67e613ace00c492408a2538c5bfdc2936d
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.kda_moe.03
   title: 'kda_moe block with steps 1-3 on device (last: attn_norm)'
   step: implement
