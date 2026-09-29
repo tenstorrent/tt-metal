@@ -67,6 +67,22 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
         (_nlp_create_qkv_heads, {"num_heads": 2, "num_kv_heads": _UINT32_MAX}, "exceeds the fused width"),
         (_nlp_create_qkv_heads_with_kv, {"num_heads": 1, "num_kv_heads": 0}, "num_kv_heads must be greater than 0"),
         (_nlp_create_qkv_heads_with_kv, {"num_heads": 1, "num_kv_heads": 2**31}, "exceeds the KV width"),
+        (_nlp_create_qkv_heads, {"num_heads": 0, "kv_tied": True}, "num_q_heads must be greater than 0"),
+        (
+            _nlp_create_qkv_heads,
+            {"num_heads": 2, "num_kv_heads": _UINT32_MAX, "kv_tied": True},
+            r"num_q_heads \(2\) \+ num_kv_heads .* exceeds the fused width",
+        ),
+        (
+            _nlp_create_qkv_heads_with_kv,
+            {"num_heads": 1, "num_kv_heads": 0, "kv_tied": True},
+            "num_kv_heads must be greater than 0",
+        ),
+        (
+            _nlp_create_qkv_heads_with_kv,
+            {"num_heads": 1, "num_kv_heads": _UINT32_MAX, "kv_tied": True},
+            r"1 \* num_kv_heads .* exceeds the KV width",
+        ),
         (_nlp_create_qkv_heads_boltz, {"num_heads": 0}, "num_q_heads must be greater than 0"),
         (_nlp_create_qkv_heads_boltz, {"num_heads": 2, "num_kv_heads": _UINT32_MAX}, "exceeds the fused width"),
         (
@@ -99,6 +115,10 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
         "nlp_create_qkv_heads_wrap",
         "nlp_create_qkv_heads_with_kv_zero_kv",
         "nlp_create_qkv_heads_with_kv_wrap",
+        "nlp_create_qkv_heads_tied_zero_q",
+        "nlp_create_qkv_heads_tied_wrap",
+        "nlp_create_qkv_heads_tied_with_kv_zero_kv",
+        "nlp_create_qkv_heads_tied_with_kv_wrap",
         "nlp_create_qkv_heads_boltz_zero_q",
         "nlp_create_qkv_heads_boltz_wrap",
         "nlp_create_qkv_heads_boltz_with_kv_zero_kv",
