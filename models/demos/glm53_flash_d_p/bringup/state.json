@@ -89,6 +89,27 @@
   "started": "2026-09-29T01:54:50",
   "status": "PASS"
  },
+ "PL.0": {
+  "attempts": 0,
+  "duration_s": 14.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T02:23:48"
+   }
+  ],
+  "last_run": "2026-09-29T02:23:48",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/PL.0.log",
+  "metrics": {
+   "ledger_errors": 0,
+   "ledger_tasks": 96,
+   "ledger_tasks_added": 87
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T02:23:34",
+  "status": "PASS"
+ },
  "R.1": {
   "attempt": 1,
   "attempts": 1,
