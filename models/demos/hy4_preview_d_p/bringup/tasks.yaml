@@ -890,6 +890,13 @@ tasks:
     kind: op
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-09-29T09:54:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py: d8aa0188efb30e3cca77fd86d4327f507546afa7a67b42044bb7425adc347752
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_full.01
   title: 'moe_full block with steps 1-1 on device (last: attn_hc)'
   step: implement
