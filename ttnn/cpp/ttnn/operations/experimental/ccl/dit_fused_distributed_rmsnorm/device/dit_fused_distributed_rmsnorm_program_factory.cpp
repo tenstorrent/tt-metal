@@ -5,8 +5,8 @@
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
-#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -46,16 +46,6 @@ namespace ttnn::experimental::prim {
 //     compute (PRE+POST), worker_writer (stick push + gather read + output
 //     drain), forwarder (coalesce + fabric mcast + cross-chip sync).
 // =============================================================================
-
-namespace {
-
-uint32_t float_to_u32(float v) {
-    uint32_t out;
-    std::memcpy(&out, &v, sizeof(float));
-    return out;
-}
-
-}  // namespace
 
 // num_tile_rows below this uses a single worker — spinning up forwarders + the
 // per-round AG handshake doesn't pay off with <4 tile-rows of compute per chip.
@@ -1166,7 +1156,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(epsilon_cb_id);
         writer_compile_args.push_back(transformation_mat_cb_id);
         writer_compile_args.push_back(reduce_factor);
-        writer_compile_args.push_back(float_to_u32(args.epsilon));
+        writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
         writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
         if (fuse_rope) {
             TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
@@ -1209,7 +1199,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(epsilon_cb_id);
         writer_compile_args.push_back(transformation_mat_cb_id);
         writer_compile_args.push_back(reduce_factor);
-        writer_compile_args.push_back(float_to_u32(args.epsilon));
+        writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
         writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
         if (fuse_rope) {
             TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
@@ -1303,7 +1293,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         args.num_heads_per_device,
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
-        float_to_u32(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
+        std::bit_cast<uint32_t>(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
         static_cast<uint32_t>(streaming_low_l1),
         static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
         static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)

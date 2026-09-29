@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstring>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -32,16 +31,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-namespace {
-
-uint32_t float_to_u32(float v) {
-    uint32_t out;
-    std::memcpy(&out, &v, sizeof(float));
-    return out;
-}
-
-}  // namespace
 
 // Multi-core mcast GroupNorm across the device grid — the on-device reduction is identical to the
 // stock ttnn::group_norm mcast path (groupnorm_mcast_program_factory.cpp): cores split into
@@ -835,7 +824,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         }
 
         std::vector<uint32_t> writer_rt = {
-            float_to_u32(args.eps),
+            std::bit_cast<uint32_t>(args.eps),
             output_addr,
             gamma_addr,
             beta_addr,
