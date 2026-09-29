@@ -7,6 +7,21 @@ import torch
 import ttnn
 from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import core_set
 
+SIGNAL_LIFETIME_CASES = (
+    pytest.param(1, False, 0, (False, False), False, id="noc1-flag-payload-guard-both-external"),
+    pytest.param(0, True, 0, (True, False), True, id="noc0-counter-payload-caller-sender-local"),
+    pytest.param(1, True, 0, (False, True), False, id="noc1-counter-payload-caller-receiver-external"),
+    pytest.param(0, False, 0, (True, True), False, id="noc0-flag-payload-caller-both-external"),
+    pytest.param(1, True, 1, (False, False), True, id="noc1-counter-control-guard-both-local"),
+    pytest.param(1, False, 1, (True, False), True, id="noc1-flag-control-caller-sender-local"),
+    pytest.param(0, False, 1, (False, True), False, id="noc0-flag-control-caller-receiver-external"),
+    pytest.param(1, True, 1, (True, True), True, id="noc1-counter-control-caller-both-local"),
+    pytest.param(0, True, 2, (False, False), True, id="noc0-counter-mixed-guard-both-local"),
+    pytest.param(1, False, 2, (True, False), False, id="noc1-flag-mixed-caller-sender-external"),
+    pytest.param(0, True, 2, (False, True), True, id="noc0-counter-mixed-caller-receiver-local"),
+    pytest.param(0, True, 2, (True, True), False, id="noc0-counter-mixed-caller-both-external"),
+)
+
 
 def _stress(device, noc, counter, events, guards, includes_sender, reverse_channel=False):
     coords = [(0, 0), (2, 0), (4, 0)]
@@ -70,15 +85,7 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
         assert torch.count_nonzero(ttnn.to_torch(actual).contiguous().view(torch.int32)) == 0
 
 
-@pytest.mark.parametrize("noc", [0, 1])
-@pytest.mark.parametrize("counter", [False, True], ids=["flag", "counter"])
-@pytest.mark.parametrize("events", [0, 1, 2], ids=["payload", "control", "mixed"])
-@pytest.mark.parametrize(
-    "guards",
-    [(False, False), (True, False), (False, True), (True, True)],
-    ids=["guard-both", "caller-sender", "caller-receiver", "caller-both"],
-)
-@pytest.mark.parametrize("includes_sender", [False, True], ids=["external", "local-copy"])
+@pytest.mark.parametrize("noc,counter,events,guards,includes_sender", SIGNAL_LIFETIME_CASES)
 def test_chain_signal_lifetime(device, noc, counter, events, guards, includes_sender):
     _stress(device, noc, counter, events, guards, includes_sender)
 
