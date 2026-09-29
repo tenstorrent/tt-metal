@@ -115,7 +115,7 @@ def _reference_main() -> None:
     _md.version = lambda name: "0.22.0" if name.lower() == "tokenizers" else _orig_version(name)
 
     # weight_loader / quant are standalone (torch + safetensors only); import by path.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tt"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tt"))
 
     import weight_loader as WL  # noqa: E402
     import quant as Q  # noqa: E402
@@ -233,7 +233,7 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
-from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.decode.decode_kv_utils import DecodeLayerKV  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (  # noqa: E402
     int32_pos_tensor,
     make_rope_table,

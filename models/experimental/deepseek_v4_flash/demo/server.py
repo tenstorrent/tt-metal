@@ -38,7 +38,7 @@ that send one identifier for all their traffic, or none, still run in parallel.
 
 **Concurrency.** Up to ``--num-users`` turns generate at once. One scheduler thread
 owns the device and walks the active turns in rounds. Prefill is the pipelined
-round-robin of ``tests/test_multi_user_paged_decode_demo.py``: a prompt is fed
+round-robin of ``tests/decode/test_multi_user_paged_decode_demo.py``: a prompt is fed
 ``--prefill-chunk`` tokens per round, traces posted before packets, logits read the
 next round. Decode posts ``_DECODE_REPLAY_AHEAD`` (32) ``execute_trace`` calls for a
 turn before writing that burst's packets -- the same look-ahead as ``chat_cli`` --
@@ -413,7 +413,7 @@ def _parse_tool_calls(block: str) -> list[dict]:
 SAMPLER_TOP_K = 64
 
 # Generated tokens the live decode rate is averaged over, as
-# ``tests/test_full_model_decode_demo.py`` reports throughput over a rolling window
+# ``tests/decode/test_full_model_decode_demo.py`` reports throughput over a rolling window
 # rather than a whole run. A session's first ``sliding_window`` positions replay the
 # masked SDPA variant, whose cost is set by ``--max-context`` instead of by the
 # position, so a turn that starts on a cold cache is slow for that prefix and then
@@ -1763,7 +1763,7 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
     ``server`` variant -- see :mod:`...tt.system_config`), so they follow the hardware
     instead of being restated here.
     """
-    from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import _DEFAULT_MODEL_DIR
+    from models.experimental.deepseek_v4_flash.tests.decode.test_full_model_decode_demo import _DEFAULT_MODEL_DIR
 
     decode = sys_cfg.decode
     p.add_argument("--model-dir", default=_DEFAULT_MODEL_DIR, help="HF snapshot (or hub cache) of the checkpoint")

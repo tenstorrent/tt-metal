@@ -12,7 +12,7 @@ argmax at that position.
 Requires idle chips (the MTP recv submesh). Skip on 8-chip meshes.
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache DEEPSEEK_V4_DSPARK_ACCEPT_TOKENS=32 \\
-      pytest -s models/experimental/deepseek_v4_flash/tests/test_dspark_flash_accept_rate.py
+      pytest -s models/experimental/deepseek_v4_flash/tests/decode/test_dspark_flash_accept_rate.py
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from models.experimental.deepseek_v4_flash.dspark import (
     speculative_accept_lengths,
     speculative_accept_rate,
 )
-from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import (
+from models.experimental.deepseek_v4_flash.tests.decode.test_full_model_decode_demo import (
     _DEFAULT_MODEL_DIR,
     _DEFAULT_TEXT,
     _build_and_prefill,

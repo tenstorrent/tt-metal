@@ -26,7 +26,7 @@ device weights are bf4, so the bar is the real-weight decode PCC, not fp32.
 
 Run (ttnn venv)::
 
-    pytest -s models/experimental/deepseek_v4_flash/tests/test_csa_layer_indexer.py
+    pytest -s models/experimental/deepseek_v4_flash/tests/decode/test_csa_layer_indexer.py
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-# TODO: port to ``tests/decode_kv_utils.DecodeLayerKV`` once the lightning indexer is
+# TODO: port to ``tests/decode/decode_kv_utils.DecodeLayerKV`` once the lightning indexer is
 # re-enabled; it still seeds a dense ``combined`` cache that no longer exists.
 pytest.skip("lightning indexer is disabled and this test predates paged-only attention", allow_module_level=True)
 
@@ -45,8 +45,8 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_pcc  # noqa: E402
-from models.experimental.deepseek_v4_flash.tests.test_attention_batching import _rope_half_tables  # noqa: E402
-from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights import (  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.decode.test_attention_batching import _rope_half_tables  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.decode.test_attention_real_weights import (  # noqa: E402
     _DEFAULT_MODEL_DIR,
     _WEIGHT_DTYPE,
     _checkpoint_available,
