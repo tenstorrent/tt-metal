@@ -14,11 +14,9 @@
 #include "generic_op_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::device_operation {
-namespace detail {
+namespace ttnn::device_operation::detail {
 struct ProgramPreparationResult;
-}  // namespace detail
-}
+}  // namespace ttnn::device_operation::detail
 
 namespace ttnn::operations::generic {
 

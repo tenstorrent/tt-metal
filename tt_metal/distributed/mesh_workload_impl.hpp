@@ -24,10 +24,6 @@ namespace program_dispatch {
 uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch
 
-namespace experimental::program_preparation {
-struct ProgramCapacity;
-ProgramCapacity prepare(distributed::MeshWorkload&, distributed::MeshDevice*);
-}  // namespace experimental::program_preparation
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
