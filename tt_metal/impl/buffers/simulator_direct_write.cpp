@@ -33,25 +33,25 @@ bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, con
 }
 
 void write_shard(
-    Buffer& shard_view, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter) {
+    Buffer& buffer, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter) {
     auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region.size));
     if (logical_core_filter != nullptr) {
-        experimental::core_subset_write::WriteToBuffer(shard_view, payload, *logical_core_filter);
+        experimental::core_subset_write::WriteToBuffer(buffer, payload, region, *logical_core_filter);
     } else {
-        detail::WriteToBuffer(shard_view, payload);
+        detail::WriteToBuffer(buffer, payload, region);
     }
 }
 
 bool try_direct_write(
     const DirectWriteGuard& guard,
-    Buffer& shard_view,
+    Buffer& buffer,
     const void* src,
     const BufferRegion& region,
     const CoreRangeSet* logical_core_filter) {
     if (!is_direct_write_enabled(guard, src, region)) {
         return false;
     }
-    write_shard(shard_view, src, region, logical_core_filter);
+    write_shard(buffer, src, region, logical_core_filter);
     return true;
 }
 

@@ -54,16 +54,12 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
-    std::shared_ptr<Buffer> view(Buffer& self, const BufferRegion& region);
-
     bool is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }
     HalMemType memory_type() const;
     bool is_valid_region(const BufferRegion& region) const;
     bool is_valid_partial_region(const BufferRegion& region) const;
     bool bottom_up() const { return bottom_up_; }
 
-    std::shared_ptr<Buffer> root_buffer(Buffer& self);
-    BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
     void mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
 
@@ -103,11 +99,17 @@ public:
     // Lockstep only across the cores this buffer occupies, rather than every core on the device.
     bool range_lockstep_allocation_ = false;
 
-    std::shared_ptr<Buffer> root_buffer_;
-    DeviceAddr root_buffer_offset_ = 0;
-
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };
+
+// Throws unless `region` is a page-aligned sub-range of `buffer`.
+void validate_buffer_region(const Buffer& buffer, const BufferRegion& region);
+
+// Page mapping of `buffer` restricted to `region`, with host page indices rebased so that host page 0
+// is the first page of the region. Device page indices stay absolute. Returns the buffer's own page
+// mapping unchanged when `region` spans the whole buffer. Sharded buffers only.
+std::shared_ptr<const BufferPageMapping> get_buffer_page_mapping_for_region(
+    Buffer& buffer, const BufferRegion& region);
 
 }  // namespace tt::tt_metal
