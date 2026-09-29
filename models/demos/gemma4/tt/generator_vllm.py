@@ -2391,6 +2391,10 @@ class Gemma4DFlashBase(Gemma4ForCausalLM):
     to pin the fused decoder's verify count.
     """
 
+    # The drafter taps come from a python hook in the eager forward. A traced
+    # chunk replay skips it and the drafter gets no taps for that chunk.
+    _TRACED_PREFILL_CHUNKS = False
+
     # -- plugin speculative contract (vllm-tt-plugin#110 s.2) -----------------
     @classmethod
     def _spec_plan_one_row(cls, requested_k: int, *, supports_narrow_decode: bool):
@@ -2976,6 +2980,8 @@ class Gemma4DFlashForCausalLM(Gemma4DFlashBase):
     # is plausibly recoverable by a plugin-driven spec loop
     # (vllm-tt-plugin#110).
     _SPEC_BLOCK = int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64"))
+    # Throughput mode (GEMMA4_DFLASH_SERVE_BLOCK=1) never captures taps.
+    _TRACED_PREFILL_CHUNKS = _SPEC_BLOCK <= 1
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
@@ -3177,10 +3183,10 @@ class Gemma4DFlashForCausalLM(Gemma4DFlashBase):
         is_warmup = bool(kwargs.get("warmup_prefill")) or (tokens is not None and int(tokens.abs().sum()) == 0)
         # Force EAGER prefill: the residual taps are captured by a python hook in
         # the eager forward, which a traced replay skips. enable_trace=False gates
-        # the prefill-bucket trace; GEMMA4_CHUNKED_PREFILL_TRACE=0 (model spec)
-        # gates the per-chunk trace so multi-chunk prefills (ISL > one chunk)
-        # still fire the hook -- without it the drafter gets empty taps at ISL
-        # above the chunk size and the request fails.
+        # the prefill-bucket trace; _TRACED_PREFILL_CHUNKS=False gates the
+        # per-chunk trace so multi-chunk prefills (ISL > one chunk) still fire
+        # the hook -- without it the drafter gets empty taps at ISL above the
+        # chunk size and the request fails.
         kwargs["enable_trace"] = False
         if is_warmup:
             return super().prefill_forward(*args, **kwargs)

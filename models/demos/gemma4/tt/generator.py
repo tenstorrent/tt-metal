@@ -253,6 +253,10 @@ class ChunkedPrefillPageTableGuardMixin:
     - Mixed into demo (:class:`Gemma4Generator`) and vLLM (``Gemma4ForCausalLM``).
     """
 
+    # False for a class whose prefill depends on a python-side forward hook: a
+    # traced chunk replay (GEMMA4_CHUNKED_PREFILL_TRACE=1) does not run the hook.
+    _TRACED_PREFILL_CHUNKS = True
+
     @staticmethod
     def _match_page_table_row(page_table_1row, page_tables_per_layer) -> int | None:
         """Return the batch row whose page-table prefix matches ``page_table_1row``."""
@@ -857,6 +861,7 @@ class ChunkedPrefillPageTableGuardMixin:
         max_chunk = self.model_args[model_id].max_prefill_chunk_size
         use_traced_chunks = (
             chunked_prefill_trace_enabled()
+            and self._TRACED_PREFILL_CHUNKS
             and page_table is not None
             and kv_cache is not None
             and seq_len > max_chunk

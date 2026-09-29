@@ -77,6 +77,15 @@ def test_verify_count_pins_the_inherited_width_arithmetic(adapter):
     assert cls._SPEC_V == 5 and cls._SPEC_N == 6
 
 
+@pytest.mark.parametrize("serve_block, block_rail_traced", [("64", False), ("1", True)])
+def test_dflash_classes_refuse_traced_prefill_chunks_while_they_capture_taps(serve_block, block_rail_traced):
+    """A traced chunk replay skips the tap hook. Only the block rail's throughput mode captures no taps."""
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, {"GEMMA4_DFLASH_SERVE_BLOCK": serve_block})
+        assert module.Gemma4DFlashContractForCausalLM._TRACED_PREFILL_CHUNKS is False
+        assert module.Gemma4DFlashForCausalLM._TRACED_PREFILL_CHUNKS is block_rail_traced
+
+
 def test_contract_rail_shares_the_base_and_not_the_block_rail(adapter):
     cls = adapter.Gemma4DFlashContractForCausalLM
     assert issubclass(cls, adapter.Gemma4DFlashBase)

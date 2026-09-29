@@ -79,6 +79,42 @@ def test_bounded_last_chunk_no_expand_when_remnant_covers_window():
     assert last_idx == 2047
 
 
+def _two_chunk_prefill_path(monkeypatch, traced_chunks):
+    """Which path ``prefill_forward_single_user_text`` takes for an unbounded two-chunk prompt."""
+    monkeypatch.setenv("GEMMA4_CHUNKED_PREFILL_TRACE", "1")
+    cls = type("Generator", (ChunkedPrefillPageTableGuardMixin,), {"_TRACED_PREFILL_CHUNKS": traced_chunks})
+    generator = object.__new__(cls)
+    generator.model = [
+        SimpleNamespace(
+            layers=[],
+            bounded_sliding_kv_cache=False,
+            process_logits_after_prefill_trace=lambda tt_out, last_token_idx: "traced",
+        )
+    ]
+    generator.model_args = [SimpleNamespace(max_prefill_chunk_size=4096)]
+    generator._activate_sequential_per_layer_row = lambda page_table: None
+    generator._effective_paged_block_size = lambda kv_cache: 64
+    generator._refresh_prefill_valid_seq_len = lambda **kwargs: None
+    generator._chunk_prefill_page_table = lambda page_table, **kwargs: (page_table, 64)
+    generator._easy_trace_prefill = lambda tokens, **kwargs: None
+    generator._prefill_forward_single_user_text_eager = lambda tokens, **kwargs: "eager"
+    return generator.prefill_forward_single_user_text(
+        torch.ones((1, 8192), dtype=torch.int32),
+        page_table=torch.arange(1, 129, dtype=torch.int32).unsqueeze(0),
+        kv_cache=[object()],
+        last_token_idx=8191,
+    )
+
+
+def test_two_chunk_prefill_replays_traced_chunks_by_default(monkeypatch):
+    assert _two_chunk_prefill_path(monkeypatch, traced_chunks=True) == "traced"
+
+
+def test_a_class_that_refuses_traced_chunks_prefills_eagerly(monkeypatch):
+    """A traced chunk replay does not run python-side forward hooks, such as the dFlash tap capture."""
+    assert _two_chunk_prefill_path(monkeypatch, traced_chunks=False) == "eager"
+
+
 def test_unbounded_last_chunk_is_noop():
     generator = object.__new__(ChunkedPrefillPageTableGuardMixin)
     generator.model = [SimpleNamespace(bounded_sliding_kv_cache=False, layers=[])]
