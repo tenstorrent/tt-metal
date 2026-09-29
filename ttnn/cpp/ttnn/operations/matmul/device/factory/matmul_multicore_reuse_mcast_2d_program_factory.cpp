@@ -679,6 +679,28 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
     }
 
+    // One-block in1 lookahead across out blocks along N (sender-writer and receiver-writer kernels).
+    // Env TT_MM_IN1_LOOKAHEAD=0 disables it; like TT_MATMUL_GLU_SFPU_ON_PACK it is read at program build,
+    // so it is fixed for a cached program (set it before the first matmul of the process).
+    {
+        const char* in1_lookahead_env = std::getenv("TT_MM_IN1_LOOKAHEAD");
+        const bool in1_lookahead_disabled = in1_lookahead_env != nullptr && std::string(in1_lookahead_env) == "0";
+        // No global circular buffer exists in this factory; fused ops (all-gather) take the legacy path.
+        // The lookahead lets compute start the next out block before the writer drained the previous one. That is
+        // only safe when the out and interm0 CBs are separate; a shared buffer would be overwritten by partials
+        // (found with test_matmul_2d_multiple_output_blocks_per_core). Same condition as the CB setup below.
+        const bool separate_out_interm0_cbs = do_not_inplace_interm0_out_CB ||
+                                              (interm0_data_format != output_data_format) ||
+                                              (untilize_out && ((out_block_w / out_subblock_w) > 1)) ||
+                                              (fuse_swiglu && (out_num_blocks_x * out_num_blocks_y * B > 1));
+        if (!in1_lookahead_disabled && !in1_is_sharded && !in0_is_sharded && !output_is_sharded && !fuse_op &&
+            separate_out_interm0_cbs && in1_num_blocks_x > 1) {
+            mm_kernel_in1_sender_writer_defines["MM_IN1_LOOKAHEAD"] = "1";
+            mm_kernel_in1_receiver_writer_defines["MM_IN1_LOOKAHEAD"] = "1";
+            mm_kernel_in1_receiver_writer_other_noc_setup_defines["MM_IN1_LOOKAHEAD"] = "1";
+        }
+    }
+
     // Intermediate CB read
     /*
     Blackhole architecture alignment issue workaround for tiny tiles:

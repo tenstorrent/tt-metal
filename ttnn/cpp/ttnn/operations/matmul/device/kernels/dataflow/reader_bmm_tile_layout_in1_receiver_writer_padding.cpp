@@ -113,8 +113,18 @@ void kernel_main() {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
+#ifdef MM_IN1_LOOKAHEAD
+            bool in1_first_prefetched = false;  // first K block of this out block already received
+#endif
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                uint32_t in1_first_block = 0;
+#ifdef MM_IN1_LOOKAHEAD
+                if (in1_first_prefetched) {
+                    in1_first_block = 1;
+                    in1_first_prefetched = false;
+                }
+#endif
+                for (uint32_t block = in1_first_block; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
 
@@ -146,6 +156,21 @@ void kernel_main() {
                     receiver_sem.wait(VALID);
 
                     dfb_in3.push_back(in3_block_w);
+                }
+#endif
+
+#if defined(MM_IN1_LOOKAHEAD) && !defined(OUT_SHARDED)
+                // One-block lookahead. Receive the first K block of the next out block (same bh) before
+                // the write phase of this out block. Matches the in1 sender kernel.
+                if constexpr (num_blocks_w_dim > 1) {
+                    if (bw + 1 < num_blocks_w_dim) {
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        receiver_sem.set(INVALID);
+                        sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+                        receiver_sem.wait(VALID);
+                        dfb_in1.push_back(in1_block_num_tiles);
+                        in1_first_prefetched = true;
+                    }
                 }
 #endif
 
