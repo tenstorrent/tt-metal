@@ -52,7 +52,6 @@ hf:
   custom_loader: true              # transformers 5.17 hy_v4 code vendored (python_env has 5.12.1); 1.56 TB bf16 > host
                                    #   RAM: the HF sanity runs at R.2 on hooks.hf_model, experts read lazily from mmap
 checkpoint:
-  trim_drop: ["model.mtp_layers.*"]   # R.4 (F47) keeps layers 0-5 + embed / norm / hc_head / lm_head after the sanity
   expect:
     "model.embed_tokens.weight": [120832, 6144]
     "lm_head.weight": [120832, 6144]
