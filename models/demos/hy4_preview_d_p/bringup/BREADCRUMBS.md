@@ -1642,3 +1642,46 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
+
+## S.moe_full.08 test (attempt 1)
+
+What was done
+- Replaced the rendered 28-line swap test (moe_full layer 1, attn_hc .. attn_residual + ffn_hc on device, rest CPU)
+  with swap 07 (test_swap_moe_full_07_attn_residual.py) plus ffn_hc checks. The gated pcc_swap_out (0.98), the trail
+  and every swap-07 check stay at their limits.
+  New checks:
+  - ffn_hc vs golden: rel <= 0.01, per column <= 0.015 (small columns 0 / 1 / 6 <= 0.03), post row <= 0.02. ffn_x
+    vs golden: <= 0.01 / row 0.05.
+  - ffn_hc vs the CPU ffn_hc on the same device h_mid: rel <= 0.005, per column <= 0.015 (0 / 1 / 6 <= 0.02), post
+    row <= 0.015. ffn_x from the device gates vs from the CPU gates: <= 0.005 / row 0.02.
+  - post gates through out: block out vs ffn_residual(h_mid, CPU gates, the block's own mlp_out), per stream <= 0.005,
+    row <= 0.02.
+  - block out vs the whole CPU tail from the device h_mid: rel <= 0.01, worst row recorded only.
+- CPU mutation study /tmp/hy4_sm8/study.py (outside the repo, ~4 s per variant on the tail). The table is in the test
+  docstring. 23 of 35 mutations pass the out gate; every real bug among them fails an added check.
+
+Decisions
+- Per-column checks (not layer 0's post-column-only check): at layer 1, gates 0 / 1 / 6 are near hc_eps. Zeroing them,
+  swapping base 0 / 1 or dropping hc_eps moves out by <= 1e-4, and only the column check catches it.
+- Post gates are checked through out with the block's own mlp_out, not through the full CPU tail. In the full tail,
+  near-tie expert flips give a worst row of 0.055 even for a bf16 output, so the full tail is gated on rel only.
+- vs-CPU big-column limit is 0.015, not 0.01. The device reads 0.0089 on post column 5 (sigmoid on ~1e-4 gates). The
+  only study bug between 0.01 and 0.015 (post x 1.01, 0.0100) fails the post-through-out check (0.0079 > 0.005).
+- No scaled-input eps probe: at layer 1's own scale (row RMS 0.006 .. 0.08), rms_norm_eps 1e-6 already fails the
+  column check (0.40).
+
+Gotchas
+- Golden-side column 0 reads 0.0146 on the device (limit 0.03): the device h_mid error reaches the near-hc_eps gates.
+- Router overlap 0.99377 vs 0.99 is inherited from swap 07 (0.99396). Watch it if an upstream step changes.
+- In the golden chunk, rows 1023 / 1024 have identical gates, so a swap of that pair is a no-op (left out of the table).
+
+Results
+- BRINGUP_IMPL=reference: PASS (every vs-CPU check 0). BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999983. ffn_hc vs golden 0.00155 / worst column 0.0146 (col 0) / post row 0.0139.
+  vs CPU 0.00036 / big column 0.0089 / small column 0.0105 / post row 0.0095. ffn_x vs CPU 0.00048. Post through
+  out 0.0032 / 0.0054. Tail 0.0033. Router 0.99377. Out rel 0.00608.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
