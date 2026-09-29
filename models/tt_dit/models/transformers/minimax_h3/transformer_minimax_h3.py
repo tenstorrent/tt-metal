@@ -272,6 +272,7 @@ class MiniMaxH3Transformer3DModel(Module):
         )
 
         # 4. The block stack.
+        self.attention_head_dim = attention_head_dim
         self.transformer_blocks = ModuleList(
             [
                 MiniMaxH3TransformerBlock(
@@ -477,17 +478,56 @@ class MiniMaxH3Transformer3DModel(Module):
         return hidden
 
     def _set_fixed_softmax_blocks(self, spec: str | None) -> None:
+        """`spec`: "all", a block-range list ("0-35,39,41,42"), or "auto[:threshold]" which reads the checkpoint's q/k
+        norm gains and enables the mode where sqrt(d) * max|g_q| * max|g_k| <= threshold (default 70), using that
+        bound as the constant offset. Explicit lists use the same bounds when the checkpoint is readable, else 0."""
         if not spec:
             return
-        chosen: set[int] = set()
-        if spec.strip() == "all":
+        spec = spec.strip()
+        bounds = self._fixed_softmax_bounds()
+        if spec.startswith("auto"):
+            threshold = float(spec.partition(":")[2] or 70.0)
+            chosen = {i for i, b in bounds.items() if b <= threshold}
+        elif spec == "all":
             chosen = set(range(len(self.transformer_blocks)))
         else:
+            chosen = set()
             for part in spec.split(","):
                 lo, _, hi = part.partition("-")
                 chosen.update(range(int(lo), int(hi or lo) + 1))
         for i, block in enumerate(self.transformer_blocks):
             block.attn.sdpa_fixed_offset = block.attn.use_ring and i in chosen
+            block.attn.sdpa_fixed_offset_value = float(bounds.get(i, 0.0))
+        logger.info(
+            f"fixed-offset softmax on blocks {sorted(chosen)} with offsets {[round(bounds.get(i, 0.0), 1) for i in sorted(chosen)]}"
+        )
+
+    def _fixed_softmax_bounds(self) -> dict[int, float]:
+        """Per-block upper bound of |scale * q.k| from the checkpoint's q/k RMSNorm gains (RMSNorm output has L2 norm
+        sqrt(d); RoPE preserves norms), with a 2% margin. Empty if the checkpoint is not readable."""
+        import glob
+
+        root = os.path.join(os.environ.get("MINIMAX_H3_MODEL_PATH", ""), "transformer")
+        files = sorted(glob.glob(os.path.join(root, "*.safetensors")))
+        if not files:
+            return {}
+        from safetensors import safe_open
+
+        gains: dict[str, torch.Tensor] = {}
+        for path in files:
+            with safe_open(path, "pt") as handle:
+                for key in handle.keys():
+                    if key.startswith("transformer_blocks.") and (
+                        key.endswith("attn.norm_q.weight") or key.endswith("attn.norm_k.weight")
+                    ):
+                        gains[key] = handle.get_tensor(key).float()
+        bounds = {}
+        for i in range(len(self.transformer_blocks)):
+            gq = gains.get(f"transformer_blocks.{i}.attn.norm_q.weight")
+            gk = gains.get(f"transformer_blocks.{i}.attn.norm_k.weight")
+            if gq is not None and gk is not None:
+                bounds[i] = 1.02 * (self.attention_head_dim**0.5) * gq.abs().max().item() * gk.abs().max().item()
+        return bounds
 
     def modulation_tables(self, temb: ttnn.Tensor, timestep_key: tuple) -> list[list[ttnn.Tensor]] | None:
         """Per-block modulation tables for this timestep vector from the cache, building them on a miss.
