@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
@@ -31,6 +33,18 @@ pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
 _SEQUENCE = 5120
 _PCC_THRESHOLD = 0.9995
+
+
+def _check_layer_golden(path: Path, tensors: tuple[ttnn.Tensor, ...]) -> None:
+    """Save (first run) or bit-compare (later runs) every device shard of the layer results."""
+    shards = [[ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor)] for tensor in tensors]
+    if not path.exists():
+        torch.save(shards, path)
+        print(f"KDA_LAYER_GOLDEN saved {path}")
+        return
+    for name, expected, actual in zip(("output", "recurrent", "convolution"), torch.load(path), shards):
+        assert all(torch.equal(e, a) for e, a in zip(expected, actual)), f"{name} differs from {path}"
+    print(f"KDA_LAYER_GOLDEN bit-identical to {path}")
 
 
 @pytest.mark.parametrize(
@@ -91,6 +105,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     (output, recurrent, convolution), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     state = KdaState(recurrent=recurrent, convolution=convolution)
     try:
+        # Opt-in exactness gate for optimizations: KDA_LAYER_GOLDEN is a file prefix.
+        if golden_prefix := os.environ.get("KDA_LAYER_GOLDEN"):
+            _check_layer_golden(Path(f"{golden_prefix}.{layout}.{start_kind}.pt"), (output, recurrent, convolution))
         assert_matches_reference(
             output_tt=output,
             state=state,
