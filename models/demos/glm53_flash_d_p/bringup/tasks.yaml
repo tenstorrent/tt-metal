@@ -1103,6 +1103,13 @@ tasks:
     kind: residual
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T09:26:01'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py: 6c98b0594af6006aec9fb9de7f2bef3658a65214aed8bec52de4e5d241f97382
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.07
   title: 'dsa_moe block with steps 1-7 on device (last: attn_residual)'
   step: implement
