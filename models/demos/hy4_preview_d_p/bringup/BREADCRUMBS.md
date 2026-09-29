@@ -2112,3 +2112,51 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
+
+## C.moe_full.moe_combine test (attempt 1)
+
+What
+- Replaced the rendered test with a reviewed one for mlp_out = experts_out + shared_out (layer 1, [S, 6144], golden
+  bf16, s4096 chunk 1). Norms: experts 6479, shared 3630, mlp_out 8216. Both addends are large, so no bf16 rounding
+  budget is needed (unlike attn_residual).
+- Checks vs golden: PCC >= 0.99 (gated), not a CPU bridge, size, finite, rel L2 <= 0.004, row norm ratio
+  [0.995, 1.005], worst row <= 0.01.
+- Per addend (float64): |coef - 1| <= 0.002, add rel <= 0.008 (shared) / 0.005 (experts), add worst row <= 0.03.
+- Probes: the module again on (experts, -shared) and (experts, 0), vs the exact sums (rel <= 0.004, row <= 0.005).
+- CPU study: /tmp/hy4_mc/study.py and mut.py (outside the repo). mut.py patches each variant in as the module and runs
+  the test body. The table is in the test docstring.
+
+Results
+- fp32 reference: rel 0.00223, probes 0. A bf16 output: rel 0.00275, (experts, -shared) probe 0.0017.
+- 1.01 x shared, 1.005 / 1.01 x experts, 2x, last row zeroed and last 32 columns zeroed fail rel L2.
+- 0.995 x shared fails the addend worst-row check.
+- A cached output and a + golden shared fail the probe. The zero stub fails PCC.
+- Blind spot: a shared scale error below about 0.5 %.
+- BRINGUP_IMPL=reference: PASS. BRINGUP_IMPL=stub: FAIL (PCC).
+- Gate (device): FAIL with NotImplementedError "no device module for moe_combine yet". Expected before implement.
+
+Gotcha for implement
+- The module is called 3 times: golden inputs, then (experts, -shared), then (experts, zeros). All inputs are fp32
+  at the host boundary (the bf16 golden values). Output is mlp_out [S, 6144]; a bf16 output fits the limits.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
+
+## C.moe_full.moe_combine implement (attempt 1)
+
+What
+- `tt/mlp.py:TtMoeCombine`: mlp_out = ttnn.add(experts_out, shared_out), fp32, DRAM. It works on the column split
+  [1, 1, S/2, H/2] per chip. There is no collective, because both inputs are already reduce-scattered over axis 1
+  (TtHy4Experts and the shared TtDenseMLP both return fp32 in this layout). No host work in __call__.
+- hooks.py: `_MOE_COMBINE_STEPS`, a two-input column-split boundary `_col_split2_host_fn` (fp32 in / out), the
+  `_device_step_fn` / `device_component` branch, and "moe_combine" added to `DEVICE_STEPS["moe_full"]` (hybrid).
+
+Results
+- Gate: PASS. pcc 0.999997, rel_l2 0.002234 (the fp32 reference floor 0.00223), row ratio [0.99984, 1.00016],
+  worst row 0.0024. Addend coefs 1.000000, addend rel 0. Both probes rel 0.
+- The first "FAIL pcc=0.000000" line in the log comes from the precompile collect pass, not the real run.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
