@@ -2297,3 +2297,62 @@ Gotchas:
 - A tt-probe run saves its script under `tests/ttnn/...`. I deleted it (known issue).
 Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
 (`BRINGUP_HYBRID=1` for the hybrid).
+
+## K.1 contract (attempt 1)
+Made GLM-5.3-Flash servable by the prefill engine (`PREFILL_MODEL=glm53_flash_d_p`, single rank, 2x2, FABRIC_2D).
+- `tt/runners/adapter.py`: `Glm53FlashPrefillAdapter` (registered in `common/prefill/adapter.py`) and
+  `Glm53FlashPrefillRuntime` over `tt/model.py:TtGlmModel`, with the served layers taken from the spec (0-4).
+  - The engine-owned `GlmKvCaches` holds the migratable contract copy plus the state of each slot and layer. DSA
+    layers get a latent cache and a pooled-key cache; KDA layers get recurrent and conv carries.
+  - The blocks are pointed at the slot's buffers before each chunk (`TtGlmBlock.bind_state` -> `TtMLA.bind_cache`,
+    `TtIndexer.bind_cache`, `TtKdaAttention.bind_state`). These rebind Python attributes and do no device work.
+  - Engine ids: `ttnn.minimum(ids, V - 1)` (V = 154880), then `all_gather` over axis 0, as MiMo 2x2 does.
+- `tt/runners/kv_contract.py`: only the DSA layers own KV.
+  - After each DSA layer, the chunk's rows are copied from the slot's caches into two DRAM-interleaved ROW_MAJOR
+    slabs, one 32-token block per page: latent 32 x 512 bf16 (32 KB), pooled keys 8 x 128 bf16 (2 KB).
+  - Table: config 0 kv_latent, config 1 index_key, 32-token entries. The table layer is the DSA layer's KV-slot
+    index. The device group is chip (0, 0), since the data is replicated.
+- Acks: one per DSA layer per chunk (`kv_slot_layer_ids` -> [3]), sent with the slot index after an event sync.
+  - New adapter flag `acks_in_kv_slot_space`: the runner maps the slot back to the global layer. The contract test
+    expects slot-space acks; the runner expected global ones (known issue proposed).
+- KDA `actual_end`: `TtKdaAttention.__call__(x, start, end=None)` slices a load-time table of 32-aligned ends. `end`
+  is threaded through `TtGlmBlock` and `TtGlmModel.prefill_chunk`. With `end=None` (the ladder) the path is unchanged.
+- `contract_state_pcc(spec, runtime, kv, slot, length, golden)` is in `tt/runners/adapter.py`. It is not yet
+  reachable by the gate, because `bringup/hooks.py` is outside this step's paths.
+Results:
+- Gate as written: FAIL, only "fixed-size state ... unchecked: hooks.contract_state_pcc is missing".
+  - contract_checks_failed 1, acks_early 0 (8 blocks checked).
+  - pcc_producer_kv_kv_latent 0.999973, pcc_producer_kv_index_key 0.999982.
+  - About 15 s in total, from warm caches.
+- A tt-probe registered the hook in its own process and ran `run_contract_test`: 0 failures.
+  - KDA recurrent PCC at 4064: L0 0.99988, L1 0.99920, L2 0.99967, L4 0.99980.
+  - Conv PCC is 0.99998 or higher on every layer.
+  - The golden states at 4064 and 4096 differ a lot, so `actual_end` does work.
+- The s4096 ladder still passes: worst layer 0.999953, state 0.999158 (the same as M.1).
+To pass the gate, add this one line to `bringup/hooks.py`:
+`from models.demos.glm53_flash_d_p.tt.runners.adapter import contract_state_pcc  # noqa: F401`
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## K.1 contract (attempt 2)
+No code changes. This brief allows the same paths as attempt 1, and `bringup/hooks.py` is still not among them.
+- The gate as written gives the same result as attempt 1:
+  - contract_checks_failed 1, only "hooks.contract_state_pcc is missing".
+  - acks_early 0, kv_latent 0.999973, index_key 0.999982.
+- `testing/contract.py` finds the hooks module through spec.yaml `hooks:`. Both files are read-only here.
+- Adding the hook to the hooks module at run time from `tt/` (monkey-patching it, e.g. from adapter import) would
+  pass the gate. I did not do it: it has the same effect as editing a file this step may not change, and it
+  depends on import order.
+- Unblock: either the owner adds this one line to `bringup/hooks.py`, or the orchestrator lets the contract step
+  change `bringup/hooks.py`:
+  `from models.demos.glm53_flash_d_p.tt.runners.adapter import contract_state_pcc  # noqa: F401`
+  (see the known issue "The contract step cannot supply the fixed-state hook it is gated on").
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## K.1 contract (run1, attempt 1)
+- This brief allows `bringup/hooks.py`. I added `contract_state_pcc(spec, runtime, kv, slot, length, golden)` there.
+  It is a thin forwarder to `tt/runners/adapter.py:contract_state_pcc` (lazy import, like the other hooks).
+  I made no other code changes: the adapter, runtime and KV contract from the earlier attempts are unchanged.
+- Gate: PASS, with contract_checks_failed 0 and acks_early 0.
+  - Producer KV: kv_latent 0.999973, index_key 0.999982.
+  - KDA state at 4064: recurrent L0 0.999878, L1 0.999204, L2 0.999672, L4 0.999796; conv >= 0.999984 on every layer.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`

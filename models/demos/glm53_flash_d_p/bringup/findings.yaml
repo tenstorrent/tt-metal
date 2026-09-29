@@ -32,3 +32,16 @@ findings:
     entries. Not proven. The swap-01 part checks (rel <= 0.01, worst column 0.05) pass because large, accurate entries
     dominate each column's norm. Effect so far: attn_collapse vs golden ratio [0.9890, 0.9994] (limit 0.985); block out
     vs the CPU block 33 flips, same-routing [0.9929, 1.0032]. Worth fixing if later kda_moe swaps run out of margin.
+- id: contract-state-hook-outside-paths
+  task: K.1
+  kind: INFRA
+  title: K.1 needs hooks.contract_state_pcc (spec state.fixed), but bringup/hooks.py is outside the contract step's paths
+  detail: >-
+    Implemented as models/demos/glm53_flash_d_p/tt/runners/adapter.py:contract_state_pcc. hooks.py needs one line,
+    `from models.demos.glm53_flash_d_p.tt.runners.adapter import contract_state_pcc  # noqa: F401`, for the gate to
+    count it. Without it K.1 records contract_checks_failed 1 (the missing hook) and nothing else fails. With it
+    (checked in a tt-probe that registers the function and runs run_contract_test): 0 failures, KDA recurrent min
+    0.99920 / conv min 0.99998 vs the golden snapshot at 4064 (the golden states at 4064 and 4096 differ: recurrent
+    PCC 0.80..0.94, conv 0.16..0.27, so the padded tail is really skipped).
+    Resolved in the run1 contract step: bringup/hooks.py is now in the contract paths and forwards to the adapter's
+    contract_state_pcc; the gate passes.

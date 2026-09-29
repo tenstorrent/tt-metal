@@ -5,7 +5,7 @@
 
 CPU side (reference role): reference, and optionally tokenizer, hf_model, hf_layers.
 Device side (implement role): device_params, device_component, device_model.
-Contract side (contract role): contract_independent_pcc (optional).
+Contract side (contract role): contract_state_pcc (KDA fixed-size state read-back), contract_independent_pcc (optional).
 See models/demos/common/bringup/reference/interface.py and testing/harness.py for the contracts.
 """
 
@@ -567,3 +567,10 @@ def device_model(mesh, spec, layers, lm_head=True):
     if os.environ.get("BRINGUP_HYBRID") == "1":
         return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
     return GlmDeviceModel(mesh, spec, layers, lm_head=lm_head)
+
+
+def contract_state_pcc(spec, runtime, kv, slot, length, golden):
+    """The slot's KDA carries (spec state.fixed) after a request of ``length`` tokens vs the golden snapshot."""
+    from models.demos.glm53_flash_d_p.tt.runners.adapter import contract_state_pcc as _impl
+
+    return _impl(spec, runtime, kv, slot, length, golden)

@@ -115,6 +115,7 @@ class TtGlmBlock:
         from models.demos.glm53_flash_d_p.tt.rms_norm import build_norm
 
         self.i, self.mesh, self.cfg = layer, mesh, cfg
+        self._end = None  # the chunk's valid end while a call runs (KDA carries stop there)
         self.kda, self.moe = cfg.is_kda(layer), cfg.is_moe(layer)
         chunks = sorted(set(chunks))
         self.graph = block_graph(cfg, layer)
@@ -138,7 +139,7 @@ class TtGlmBlock:
 
             self.attn = build_kda_attention(mesh, loader, cfg, layer, max_seq)
             self.stateful.append(self.attn)
-            steps["attention"] = lambda ctx, x: self.attn(x, ctx.start)
+            steps["attention"] = lambda ctx, x: self.attn(x, ctx.start, self._end)
         else:
             from models.demos.glm53_flash_d_p.tt.indexer import build_indexer
             from models.demos.glm53_flash_d_p.tt.mla_attention import build_mla
@@ -192,15 +193,28 @@ class TtGlmBlock:
             dead = tuple(dict.fromkeys(nm for nm in st.inputs if nm != "in" and last_use[nm] == k))
             self.overrides[st.name] = _freeing(steps[st.name], st.inputs, dead)
 
-    def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
-        """x: replicated [1, 1, S, 4 H] block input (not freed) -> block output, same layout."""
+    def __call__(self, x: ttnn.Tensor, start: int, end: int | None = None) -> ttnn.Tensor:
+        """x: replicated [1, 1, S, 4 H] block input (not freed) -> block output, same layout. end (optional): the
+        exclusive valid end of a padded chunk (rows past it are pad; only the KDA carries need it)."""
         from models.demos.common.bringup.reference.interface import Ctx, run_block
 
         def missing(name):
             raise KeyError(f"no device step {name}")
 
         ctx = Ctx(self.i, start, x.shape[-2], None)
-        return run_block(self.graph, missing, ctx, x, overrides=self.overrides)
+        self._end = end
+        try:
+            return run_block(self.graph, missing, ctx, x, overrides=self.overrides)
+        finally:
+            self._end = None
+
+    def bind_state(self, state: dict) -> None:
+        """Point the stateful modules at a serving slot's buffers (tt/runners/adapter.py new_block_state)."""
+        if self.kda:
+            self.attn.bind_state(state["kda"])
+        else:
+            self.indexer.bind_cache(state["index_key"])
+            self.attn.bind_cache(state["kv_latent"])
 
     # ---- state at the harness boundary (prefix load / read-back; never inside the forward)
     def load_state(self, tensors: dict, length: int) -> None:
@@ -256,11 +270,14 @@ class TtGlmModel:
         self.blocks = [TtGlmBlock(mesh, cfg, loader, i, self.max_seq, self.chunks) for i in self.layer_ids]
         self.final_norm = TtFinalNorm(mesh, loader.get(PREFIX + "norm.weight"), cfg.hc_mult, cfg.rms_norm_eps)
 
-    def prefill_chunk(self, ids: ttnn.Tensor, start: int, on_layer: Callable[[int], None] | None = None):
-        """ids: device uint32 [1, 1, S] at positions [start, start + S). on_layer(i) after block i is enqueued."""
+    def prefill_chunk(
+        self, ids: ttnn.Tensor, start: int, on_layer: Callable[[int], None] | None = None, end: int | None = None
+    ):
+        """ids: device uint32 [1, 1, S] at positions [start, start + S). on_layer(i) after block i is enqueued.
+        end (optional): the exclusive valid end when the chunk's tail is pad."""
         h = self.embed(ids)
         for blk in self.blocks:
-            h2 = blk(h, start)
+            h2 = blk(h, start, end)
             ttnn.deallocate(h)
             h = h2
             if on_layer is not None:
