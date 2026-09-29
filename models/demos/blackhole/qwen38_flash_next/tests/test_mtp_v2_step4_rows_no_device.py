@@ -1031,16 +1031,13 @@ def test_rows_paths_never_upload_or_take_per_pass_host_ints() -> None:
         for argument in methods[name].args.args:
             annotation = ast.unparse(argument.annotation) if argument.annotation is not None else ""
             assert annotation != "int", f"{name} takes a per-call host int {argument.arg}"
-    # _chunk_rows builds the kernel's views and hands them to the resolved recurrence (the composite by default; the
-    # two prims called directly under QWEN38_FUSED=gdn_rows_prims_direct, test_fused_gdn_rows_prims_direct_static);
-    # the composite call itself lives in _chunk_rows_composite, the registry's composed chain.
+    # The owned rows path hands its views to the public composite with the original scale.
     dispatch = [
         node
         for node in ast.walk(methods["_chunk_rows"])
-        if isinstance(node, ast.Call) and ast.unparse(node.func) == "kernel"
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "self._chunk_rows_composite"
     ]
     assert len(dispatch) == 1 and [ast.unparse(argument) for argument in dispatch[0].args] == [
-        "self",
         "q_rows",
         "k_rows",
         "v_rows",
@@ -1049,7 +1046,6 @@ def test_rows_paths_never_upload_or_take_per_pass_host_ints() -> None:
         "initial_state",
         "constants",
     ]
-    assert calls["_chunk_rows"].count("self._chunk_rows_kernel") == 1
     assert calls["_chunk_rows"].count("ttnn.transformer.chunk_gated_delta_rule") == 0
     chunk_call = next(
         node
@@ -1233,7 +1229,7 @@ def test_rows_bodies_are_the_pinned_walk() -> None:
     assert walk("_step_committed_rows_state") == ["_step_row_state"]
     # the recurrence: the wrap's prim-layout form when it owns the rows state, else the resolved composite / prims
     # direct call; both return through the one validation
-    assert walk("_chunk_rows") == ["_validate_chunk_rows", "_chunk_rows_kernel", "_validate_chunk_rows"]
+    assert walk("_chunk_rows") == ["_validate_chunk_rows", "_chunk_rows_composite", "_validate_chunk_rows"]
     assert walk("_validate_chunk_rows") == []
     assert walk("_chunk_rows_composite") == []
     assert walk("_causal_conv_rows") == ["_shifted_rows_slab", "_conv_window_rows", "_select_rows"]

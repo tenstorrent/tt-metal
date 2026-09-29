@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""No-device contract of ``gdn_rows_wrap``: the registry entry (opt-in, BITWISE, off by default), what ``attach``
-gives a rows state and when, the shape-only admission, the body's program sequence, and the two agreements the form
-stands on -- its prim call is spelled exactly as ``gdn_rows_prims_direct``'s (which the die proved against the
-composite), and the two programs it wraps are called the way their own device tests call them."""
+"""Model-owned verify-row admission, allocation, dispatch and masked-commit contracts.
+
+The public recurrence adapter has separate host layout and device numerical tests.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_post_rows as post
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_pre_rows as pre
-from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_prims_direct as prims
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_wrap as module
 
 NAME = module.NAME
@@ -45,7 +44,7 @@ def test_registry_entry_is_a_bitwise_default_the_off_switch_undoes():
     assert entry.tolerance == fused.BITWISE and entry.default_on is True and NAME in fused.DEFAULT_ON
     assert entry.fused is module.rows_body_wrap and entry.composed is module.rows_body_composed
     assert entry.admits is module.admits and entry.gate is None and entry.component_proof is None
-    assert "53 programs" in entry.replaces and "gdn_pre_rows" in entry.replaces
+    assert "gdn_pre_rows" in entry.replaces and "public chunk_gated_delta_rule" in entry.replaces
     # the served default: the admitted dispatcher (the wrap where a rows state carries its buffers, the chain else)
     default = fused.resolve_admitted(NAME, {})
     assert isinstance(default, fused.AdmittedStep) and default.fused is module.rows_body_wrap
@@ -56,13 +55,7 @@ def test_registry_entry_is_a_bitwise_default_the_off_switch_undoes():
     assert fused.resolve(NAME, {fused.OFF_ENV: NAME}) is module.rows_body_composed
     assert fused.resolve_admitted(NAME, {fused.OFF_ENV: "all"}) is module.rows_body_composed
     assert fused.enabled(NAME, {}) is True and fused.enabled(NAME, {fused.OFF_ENV: NAME}) is False
-    # step 1 of the same lane stays registered and independent: the wrap subsumes it when both are on
-    assert fused.kernel(prims.NAME).default_on is False
-    assert module.SCALE == prims.SCALE == HEAD_DIM**-0.5
     assert (module.TILE, module.HEADS, module.HEAD_DIM) == (32, 12, 128)
-    # the layer's verify segment: 11 programs against the chain's 58 (the 53-program window becomes 6)
-    assert module.PROGRAMS_PER_LAYER == 11 and module.CHAIN_PROGRAMS_PER_LAYER == 58
-    assert module.CHAIN_PROGRAMS_PER_LAYER - module.PROGRAMS_PER_LAYER == 53 - 6
 
 
 def test_the_layer_resolves_the_body_once_and_forward_rows_dispatches_through_it():
@@ -238,67 +231,13 @@ def test_the_wrapped_body_is_the_nine_programs_in_order():
         "post.post_norm",
         "gdn._out_proj_tile",
     ]
-    assert _calls(module.chunk).count("ttnn.prim.chunk_gdn_prep") == 1
-    assert _calls(module.chunk).count("ttnn.prim.chunk_gdn_scan") == 1
+    assert _calls(module.chunk).count("chunk_public") == 1
     # the body allocates only what does not outlive it; the prim layouts are the attached buffers
     assert inspect.getsource(module.rows_body_wrap).count("fp.allocate(") == 2  # o16 and the gated tile
     assert "buffers.q_c" in inspect.getsource(module.chunk) and "rows_state.v" in inspect.getsource(module.chunk)
     # the row count reaches both programs: the pre writers zero past it, the post writer zeroes the gated tail
     body = inspect.getsource(module.rows_body_wrap)
     assert "rows = rows_state.constants.rows" in body and body.count("rows=rows") == 2
-
-
-def _prim_keywords(function, name: str) -> dict[str, str]:
-    tree = ast.parse(inspect.getsource(function))
-    call = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.Call) and ast.unparse(node.func) == f"ttnn.prim.{name}"
-    )
-    return {kw.arg: ast.unparse(kw.value) for kw in call.keywords if kw.arg is not None}
-
-
-def _prim_call(function, name: str) -> ast.Call:
-    tree = ast.parse(inspect.getsource(function))
-    return next(
-        node for node in ast.walk(tree) if isinstance(node, ast.Call) and ast.unparse(node.func) == f"ttnn.prim.{name}"
-    )
-
-
-def _prim_positional(function, name: str) -> list[str]:
-    return [ast.unparse(a) for a in _prim_call(function, name).args]
-
-
-def test_the_prim_call_is_spelled_as_the_prefill_slabs_form_spells_it():
-    """One spelling of the two prims across the lane: the prefill slab's ``gdn_prefill_rows.chunk_prims`` (proven on
-    one die) and this form pass the same keywords with the same values, q / k / v / g / beta positional in that order
-    (g BEFORE beta), and to the scan the seven hand-offs then the state view, positional.  ``scale`` is a compile-time
-    argument of the prep kernel, so both pass the composite's ``128 ** -0.5`` although ``qk_norm`` is off."""
-
-    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_prefill_rows as slab
-
-    keywords = {"eye", "tril", "ones", "masks", "chunk_size", "scale", "v_flat", "HV", "qk_flat", "Hk", "qk_norm"}
-    for function, names in ((module.chunk, module), (prims.chunk_rows_prims, prims), (slab.chunk_prims, slab)):
-        prep = _prim_keywords(function, "chunk_gdn_prep")
-        assert set(prep) == keywords, function.__module__
-        assert (prep["v_flat"], prep["qk_flat"], prep["qk_norm"]) == ("True", "False", "False")
-        assert getattr(names, prep["chunk_size"]) == 32
-        assert getattr(names, prep["HV"]) == getattr(names, prep["Hk"]) == 12
-        assert getattr(names, prep["scale"]) == 128**-0.5
-        positional = _prim_positional(function, "chunk_gdn_prep")
-        assert len(positional) == 5 and positional[3].endswith("g_c") and positional[4].endswith("beta_c"), positional
-        scan = _prim_positional(function, "chunk_gdn_scan")
-        assert len(scan) == 2 and scan[0] == "*prep", scan
-        assert _prim_keywords(function, "chunk_gdn_scan") == {
-            "chunk_size": prep["chunk_size"],
-            "output_final_state": "True",
-        }
-    # the state view: theirs inline, ours bound to ``s0`` two lines up -- the same reshape either way
-    assert (
-        _prim_positional(slab.chunk_prims, "chunk_gdn_scan")[1]
-        == "ttnn.reshape(initial_state, (HEADS, HEAD_DIM, HEAD_DIM))"
-    )
-    for function in (module.chunk, prims.chunk_rows_prims):
-        assert _prim_positional(function, "chunk_gdn_scan")[1] == "s0"
-        assert "s0 = ttnn.reshape(initial_state, (HEADS, HEAD_DIM, HEAD_DIM))" in inspect.getsource(function)
 
 
 def test_the_slab_and_verify_admissions_never_both_admit():
@@ -318,28 +257,6 @@ def test_the_slab_and_verify_admissions_never_both_admit():
         slab_state.fused_prefill = True
         assert module.qualifies(slab_state) is False and module.admits(None, _Fake(), slab_state, state) is False
         assert slab.is_slab_rows(rows) and not slab.is_slab_rows(TILE)
-
-
-def test_the_prim_call_is_spelled_as_the_die_proved_it():
-    """``gdn_rows_prims_direct`` was proved bitwise against the composite on the line; this form must hand the prims
-    the same keywords, so the only difference between the two is which programs produced the layouts."""
-
-    mine = _prim_keywords(module.chunk, "chunk_gdn_prep")
-    theirs = _prim_keywords(prims.chunk_rows_prims, "chunk_gdn_prep")
-    assert set(mine) == set(theirs)
-    for key in ("chunk_size", "scale", "v_flat", "HV", "qk_flat", "Hk", "qk_norm"):
-        assert mine[key] == theirs[key], key
-    for key in ("eye", "tril", "ones", "masks"):
-        assert mine[key] == theirs[key] == f"constants.{key}", key
-    scan_mine, scan_theirs = _prim_keywords(module.chunk, "chunk_gdn_scan"), _prim_keywords(
-        prims.chunk_rows_prims, "chunk_gdn_scan"
-    )
-    assert scan_mine == scan_theirs == {"chunk_size": "TILE", "output_final_state": "True"}
-    for function in (module.chunk, prims.chunk_rows_prims):  # the seven hand-offs, then the state view, positional
-        assert _prim_positional(function, "chunk_gdn_scan") == ["*prep", "s0"]
-        assert "s0 = ttnn.reshape(initial_state, (HEADS, HEAD_DIM, HEAD_DIM))" in inspect.getsource(function)
-    # and the values those names carry are the composite's own
-    assert module.SCALE == 128**-0.5 and module.TILE == 32 and module.HEADS == 12
 
 
 def test_the_two_programs_are_called_as_their_device_tests_call_them():

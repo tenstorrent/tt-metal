@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_prefill_rows`` without a device: the registry entry and its switch, the admission predicate on host fakes,
-the buffer layouts the rows state allocates under the form, the two prims call against the composite's own arguments
-(a source pin on ``chunk_gated_delta_rule.cpp`` and on the binding), and the source pins that the wiring sits under a
-slab condition while the 32-row, 128-row, lane and decode bodies keep their text."""
+"""Model-owned slab admission, buffer layout, state and topology contracts.
+
+The numerical public GDN adapter is qualified by direct device and real-model
+controls. Shared native binding implementation is owned by its upstream tests.
+"""
 
 from __future__ import annotations
 
@@ -22,10 +23,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_prefill_rows
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import registry
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
-REPO_ROOT = MODEL_DIR.parents[3]
-COMPOSITE = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp"
-NANOBIND = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.cpp"
-PREP_KERNEL = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp"
 
 NAME = "gdn_prefill_rows"
 SLAB = 2048
@@ -214,86 +211,6 @@ def test_a_wrong_buffer_shape_is_refused():
 
 
 # ------------------------------------------------------------------------------------------- the two prims call
-
-
-def _composite_prep_arguments() -> list[str]:
-    """The positional arguments ``chunk_gated_delta_rule.cpp`` hands ``ttnn::prim::chunk_gdn_prep``."""
-
-    source = (REPO_ROOT / COMPOSITE).read_text(encoding="utf-8")
-    call = source[source.index("ttnn::prim::chunk_gdn_prep(") :]
-    body = call[call.index("(") + 1 : call.index(");")]
-    return [argument.strip() for argument in body.split(",")]
-
-
-def _binding_arguments(prim: str) -> list[str]:
-    """The argument names the nanobind declares for one prim, in order."""
-
-    source = (REPO_ROOT / NANOBIND).read_text(encoding="utf-8")
-    block = source[source.index(f'ttnn::bind_function<"{prim}", "ttnn.prim.">') :]
-    block = block[: block.index(");") + 2]
-    return re.findall(r'nb::arg\("([a-zA-Z_]+)"\)', block)
-
-
-def test_the_prims_call_names_every_argument_the_binding_declares():
-    call = MODULE_SOURCE[MODULE_SOURCE.index("ttnn.prim.chunk_gdn_prep(") :]
-    call = call[: call.index("\n    )")]
-    named = set(re.findall(r"\n\s+([a-zA-Z_]+)=", call))
-    positional = {"q", "k", "v", "g", "beta"}
-    declared = set(_binding_arguments("chunk_gdn_prep"))
-    # every keyword argument of the binding is passed explicitly except the two the composite leaves unset
-    assert declared - positional - named == {"memory_config", "compute_kernel_config"}
-    assert named <= declared
-
-
-def test_the_prep_flags_are_what_the_composite_passes_for_the_rows_shapes():
-    """B = 1, T a multiple of C, HV = H = 12 (q/k GQA-expanded before the kernel), K = V = 128, v flat token-major:
-    the composite's ``flat_v`` true, ``flat_qk`` false, ``qk_norm = flat_qk && C == 32`` false, ``HV`` and ``H``
-    both 12, ``C`` the caller's chunk_size and ``scale`` the caller's or ``K ** -0.5``."""
-
-    arguments = _composite_prep_arguments()
-    assert arguments[-6:] == ["flat_v", "HV", "qk_norm", "scale", "flat_qk", "H"]
-    call = _squash(MODULE_SOURCE[MODULE_SOURCE.index("ttnn.prim.chunk_gdn_prep(") :])
-    for pin in (
-        "chunk_size=CHUNK,",
-        "scale=QK_SCALE,",
-        "v_flat=True,",
-        "HV=HEADS,",
-        "qk_flat=False,",
-        "Hk=HEADS,",
-        "qk_norm=False,",
-    ):
-        assert _squash(pin) in call, pin
-    assert module.CHUNK == 32 and module.HEADS == 12
-    assert module.QK_SCALE == HEAD_DIM**-0.5
-
-
-def test_the_prep_kernel_reads_scale_only_under_the_in_kernel_norm():
-    """Why passing the composite's ``scale`` beside q that is already scaled twice is right: ``SCALE_BITS`` is read
-    inside ``if constexpr (QK_NORM)`` only, so with ``qk_norm=False`` it multiplies nothing -- it is a compile-time
-    argument of the prep kernel, and passing the composite's value keeps the program the composite's."""
-
-    source = (REPO_ROOT / PREP_KERNEL).read_text(encoding="utf-8")
-    assert "constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(4);" in source
-    guarded = source[source.index("if constexpr (QK_NORM)") :]
-    before = source[: source.index("if constexpr (QK_NORM)")]
-    assert "SCALE_BITS" in guarded
-    assert before.count("SCALE_BITS") == 1  # the declaration only
-
-
-def test_the_scan_takes_the_prep_outputs_and_the_reshaped_initial_state():
-    call = _squash(MODULE_SOURCE[MODULE_SOURCE.index("ttnn.prim.chunk_gdn_scan(") :])
-    assert _squash("*prep,") in call  # the seven hand-off tensors, in the order the prep returned them
-    assert _squash("ttnn.reshape(initial_state, (HEADS, HEAD_DIM, HEAD_DIM)),") in call
-    assert _squash("chunk_size=CHUNK,") in call and _squash("output_final_state=True,") in call
-    # and the composite's own folds of the two outputs
-    body = MODULE_SOURCE[MODULE_SOURCE.index("def chunk_prims") :]
-    assert _squash("ttnn.reshape(scan[0], (HEADS, rows_total, HEAD_DIM))") in _squash(body)
-    assert _squash("ttnn.reshape(scan[1], (1, HEADS, HEAD_DIM, HEAD_DIM))") in _squash(body)
-
-
-def test_the_prep_hand_off_tensors_are_freed():
-    body = MODULE_SOURCE[MODULE_SOURCE.index("def chunk_prims") : MODULE_SOURCE.index("def slab_body")]
-    assert "for tensor in prep:" in body and "ttnn.deallocate(tensor)" in body
 
 
 # ------------------------------------------------------------------------------------------ the gdn.py wiring
