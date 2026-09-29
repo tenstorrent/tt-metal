@@ -80,7 +80,11 @@ echo "[copilot-build] args : ${*:-<none>}"
 # Not `exec`: a RESULT line printed after the build (below) is the one thing meant to be
 # pasted straight into the PR description's `### Verification` section (see
 # .github/instructions/copilot-cloud.instructions.md) - it has to survive the run.
-CMD_DISPLAY="copilot-build.sh ${*:-}"
+# Full, runnable-from-repo-root path (per the Usage comment above) and properly quoted
+# per argument, so the RESULT line below can be pasted verbatim and actually reproduce
+# the build, not just describe it.
+CMD_DISPLAY=".github/scripts/copilot-build.sh"
+for arg in "$@"; do CMD_DISPLAY+=" $(printf '%q' "${arg}")"; done
 START_TS="$(date +%s)"
 set +e
 docker run "${DOCKER_ARGS[@]}" "${IMAGE}" bash -lc '
