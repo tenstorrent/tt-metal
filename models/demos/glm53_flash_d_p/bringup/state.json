@@ -3112,6 +3112,86 @@
   "started": "2026-09-29T17:04:11",
   "status": "PASS"
  },
+ "C.kda_moe.ffn_residual": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "0d596113-2df6-4f6b-bb0f-f4fc8734140a"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.kda_moe.ffn_residual.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.kda_moe.ffn_residual.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 240.3,
+    "session_id": "0d596113-2df6-4f6b-bb0f-f4fc8734140a",
+    "t": "2026-09-29T20:02:48"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 20.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T20:03:47"
+   }
+  ],
+  "last_run": "2026-09-29T20:03:47",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/C.kda_moe.ffn_residual.log",
+  "metrics": {
+   "comb_term_coef_ffn_residual_L04": 0.9999982118606567,
+   "comb_term_rel_l2_ffn_residual_L04": 0.0016886148368939757,
+   "norm_ratio_max_ffn_residual_L04": 1.0029921531677246,
+   "norm_ratio_max_ffn_residual_L04_vs_cpu": 1.000469446182251,
+   "norm_ratio_min_ffn_residual_L04": 0.9966074824333191,
+   "norm_ratio_min_ffn_residual_L04_vs_cpu": 0.9996291399002075,
+   "pcc_ffn_residual_L04": 0.9999952515280986,
+   "post_term_coef_ffn_residual_L04": 0.9999939799308777,
+   "post_term_rel_l2_ffn_residual_L04": 0.01121095847338438,
+   "rel_l2_ffn_residual_L04": 0.003082272130995989,
+   "rel_l2_ffn_residual_L04_vs_cpu": 0.0016592947067692876,
+   "worst_row_rel_ffn_residual_L04": 0.0045921108685433865,
+   "worst_row_rel_ffn_residual_L04_vs_cpu": 0.001757610822096467,
+   "worst_stream_rel_ffn_residual_L04": 0.003081810660660267,
+   "worst_stream_rel_ffn_residual_L04_vs_cpu": 0.0016590994782745838
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T20:03:27",
+  "status": "PASS"
+ },
  "C.kda_moe.moe_add": {
   "agent": {
    "defs": {
