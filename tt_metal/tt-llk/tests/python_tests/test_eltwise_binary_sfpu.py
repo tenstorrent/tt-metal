@@ -1453,8 +1453,9 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
         # calculate_sfpu_binary_mul -- the kernel mul_binary_tile() dispatches, and what this
         # harness runs for float MUL -- forces 0 * x = 0 on a bf16 Dest "to match FPU
         # behaviour", so 0 * inf and 0 * NaN come back 0 where IEEE, the fp32 arm and this
-        # golden say NaN (packed as inf). Recorded rather than modelled: the asymmetry is review
-        # finding G02-11 and its resolution belongs to the kernel, not to the golden.
+        # golden say NaN (packed as inf). Recorded rather than modelled: the asymmetry is tracked
+        # in https://github.com/tenstorrent/tt-metal/issues/58445 and its resolution belongs to
+        # the kernel, not to the golden.
         #
         # Only those lanes are expected to fail, so they run on their own: every other
         # non-finite pair (inf * inf, NaN propagation, result signs, ...) is asserted as usual,
@@ -1479,12 +1480,12 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
             if "Assert against golden failed" not in str(exc):
                 raise
             pytest.xfail(
-                "G02-11 (no tracking issue yet): calculate_sfpu_binary_mul "
+                "https://github.com/tenstorrent/tt-metal/issues/58445: calculate_sfpu_binary_mul "
                 "(ckernel_sfpu_binary.h) forces 0 * inf = 0 * NaN = 0 on a bf16 Dest"
             )
         pytest.fail(
-            "MUL bf16 now matches the IEEE golden on 0 * inf / 0 * NaN: G02-11 was resolved in "
-            "the kernel, remove this xfail block"
+            "MUL bf16 now matches the IEEE golden on 0 * inf / 0 * NaN: the divergence was fixed in "
+            "the kernel (#58445), remove this xfail block"
         )
 
     _sfpu_binary_edges(formats, dest_acc, mathop, edge_class)
