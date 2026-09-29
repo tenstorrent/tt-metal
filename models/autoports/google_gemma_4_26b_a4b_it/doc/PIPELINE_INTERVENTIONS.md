@@ -1,0 +1,265 @@
+# Gemma 4 pipeline interventions
+
+This record distinguishes what the stock multigoal pipeline accomplished from
+what required human action or a new human prompt. Durations are elapsed evidence
+windows, not continuous compute time.
+
+## What the pipeline did
+
+The original 11-stage Gemma 4 pipeline started on 2026-09-25 at 17:17 UTC. It
+brought up the decoder, fused and optimized it, added multichip execution,
+assembled and optimized the full model, selected datatypes, and integrated and
+optimized vLLM serving.
+
+By 2026-09-27 at 19:50 UTC, after about 50.5 elapsed hours including pauses, it
+had completed the serving stages and both required performance profiles. Stage
+11 passed 42 host checks and began the frozen accuracy workload, but stopped at
+8/536 responses to preserve the stage's one-hour budget. The pipeline therefore
+ended with valid serving/performance evidence and incomplete accuracy evidence.
+
+The work below happened because a human repaired the environment, redirected a
+blocked stage, or explicitly asked an additional agent to continue beyond that
+pipeline endpoint.
+
+## Human interventions during the pipeline
+
+### 1. Make the pipeline runner usable
+
+Human action:
+
+- Mounted both `codex` and its required `codex-code-mode-host` companion into
+  the development container.
+- Selected the isolated personal Codex home and refreshed personal-account
+  authentication after the Stage 2 HTTP 401.
+- Resumed Stage 3 when weekly usage capacity became available.
+
+Why it was needed:
+
+The initial wrapper exposed only the `codex` executable, so app-server code
+execution could not run. Authentication and usage limits were infrastructure
+interruptions, not model failures.
+
+What it unlocked:
+
+The recorded pipeline threads resumed instead of restarting the bringup.
+
+### 2. Continue through the Stage 4 fabric teardown failure
+
+Human direction, paraphrased: investigate and fix the multichip teardown rather
+than treating it as a terminal model failure.
+
+Why it was needed:
+
+The model completed collective traffic, but Watcher failed when ERISC ownership
+was handed back with stale NoC packet tags. Earlier single-device stages did not
+exercise this path.
+
+Incremental result:
+
+- Added a full NoC barrier and `noc_clear_packet_tags(NOC_INDEX)` before ERISC
+  handback.
+- The model-free CCL reproducer passed.
+- The expert-parallel Watcher probe passed all 16 comparisons.
+- The original Stage 4 thread resumed.
+
+### 3. Redirect Stage 9 to an existing serving image
+
+Human direction, paraphrased: inspect the machine for a usable serving runtime
+and continue with it instead of accepting the generic development environment
+as the only available environment.
+
+Why it was needed:
+
+The generic TT-Metal interpreter lacked OpenAI, uvloop, vLLM and the TT plugin.
+The initial automated diagnosis did not inventory existing local serving images.
+
+Incremental result:
+
+- Reused the existing vLLM/TTNN serving image.
+- Corrected an initial wrapper mistake that mixed the checkout's `build/lib`
+  with a different compiled TTNN runtime.
+- Successfully loaded the image runtime, editable TT plugin and Gemma autoport
+  together without installing dependencies into the repository environment.
+- Stages 9 and 10 then completed.
+
+### 4. Authorize a separate Stage 11 benchmark client
+
+Human prompt, paraphrased: find and apply a recovery for the missing benchmark
+dependencies, while keeping the serving environment unchanged.
+
+Why it was needed:
+
+Neither provisioned interpreter contained `lm_eval==0.4.13`, and no existing
+image supplied it.
+
+Incremental result:
+
+- Created `/home/mvasiljevic/.venvs/gemma4-benchmark` outside the repository.
+- Reused the serving image's PyTorch/vLLM packages and added only the benchmark
+  client dependencies.
+- The pipeline completed both performance profiles, 42 host checks and the
+  context-contract check.
+- Accuracy made real progress but remained incomplete at 8/536 because the
+  human did not waive or silently reset the one-hour pipeline budget.
+
+## Human prompts that extended work beyond the pipeline
+
+### 5. Start a dedicated TTFT optimization agent
+
+Human prompt, paraphrased: continue after the pipeline with a separate Astra
+agent focused on minimum warmed short-input concurrency-1 TTFT, while retaining
+correctness, canonical sampling, full context and higher concurrency.
+
+Agent effort:
+
+- Same-day run on 2026-09-28; exact start clock was not recorded.
+- Final runtime implementation committed at 12:31 UTC.
+
+Problem it addressed:
+
+Short requests were dominated by prefill and first-token host/dispatch overhead.
+
+Improvement beyond the pipeline:
+
+- Added bounded generator-owned prefill and canonical first-token sampling
+  traces.
+- S128/O128/C1 median TTFT improved from 419.10 to 95.24 ms: a 77.3% reduction.
+- Repeat medians were 95.36 and 95.03 ms.
+- The 6–9% C1 TPOT tradeoff was retained and documented rather than hidden.
+
+The full mechanism and measurement progression are in
+[`ttft_optimization/README.md`](ttft_optimization/README.md): eager baseline
+419.10 ms, traced async 104.29 ms, and traced latency-priority sync 95.24 ms.
+It also documents exact-length B1 prefill tracing, first-token sampling capture,
+compact page-table views, compatible decode-graph reuse, bounded fallbacks,
+correctness evidence and the scheduler/TPOT tradeoff.
+
+### 6. Ask for remote CI, benchmarks and evals on QB2 `main`
+
+Human prompts, summarized:
+
+- Use `tenstorrent/tt-agentic-bringup-qb2` only as the CI dispatcher.
+- Use the TT-Metal and tt-inference-server branches for implementation.
+- Run benchmarks and evals separately, matching the Qwen 3.8 benchmark matrix.
+- Try the same agentic evals used for Qwen.
+- Reuse the Docker image, monitor every dispatched run, and fix failures.
+
+Agent effort:
+
+- 2026-09-28 12:31 to 2026-09-29 09:08 UTC, about 20.6 elapsed hours.
+
+Problems it addressed:
+
+- The exact vLLM commit could not be published with available permissions.
+- The initial benchmark selected the wrong matrix and was mistakenly cancelled
+  while still making progress.
+- HTTP readiness preceded background trace completion.
+- Agentic runs exposed missing provisioning, Docker loopback routing, CPU limits,
+  tool-choice/parser flags, parser-constructor compatibility and timeout/artifact
+  gaps.
+
+Improvement beyond the pipeline:
+
+- Embedded the exact vLLM snapshot and built one reusable source image.
+- Added `/tmp/ready` gating and the Qwen-style benchmark configuration.
+- Completed the full 23-row benchmark sweep with zero request failures.
+- Completed GPQA at 25/40, Terminal-Bench at 2/5, and timeout-limited SWE-Bench
+  at 1/5.
+- Added durable CI, networking, parser and compact agentic-evidence fixes.
+- No QB2 model-bringup branch was used.
+- The final serialized SWE retry is still running in
+  [job 109283453627](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36530661132/job/109283453627).
+  It was left untouched by human direction and is not included in the 1/5
+  completed-result claim above.
+
+The CI transport and exact-source workaround are documented in
+[`ttft_optimization/remote_ci_workaround.md`](ttft_optimization/remote_ci_workaround.md).
+The complete run chronology, image provenance, 23-row benchmark results,
+standard eval and agentic-eval outcomes are in
+[`readiness_vllm/ttft_optimization_remote/README.md`](../readiness_vllm/ttft_optimization_remote/README.md).
+Workflow-routing compatibility is recorded in
+[`ttft_optimization/workflow_compatibility_audit.md`](ttft_optimization/workflow_compatibility_audit.md).
+
+### 7. Start a dedicated TSU optimization agent
+
+Human prompt: start an Astra agent to maximize the TSU actually used in the
+benchmark cases, working on both device performance and vLLM/TTI overhead, and
+let it analyze, experiment and measure iteratively.
+
+Follow-up human interventions:
+
+- Changed the agent from ultra to high reasoning.
+- Required image reuse after the one necessary exact-runtime build.
+- Directed it to prioritize large bottlenecks and only C1/C8/C16.
+- Asked it to close without starting the remaining full sweep.
+
+Agent effort:
+
+- Approximately 2026-09-29 09:08 to 15:18 UTC, about 6.2 elapsed hours.
+
+Problems it addressed:
+
+- Prompts above 1024 tokens discarded and recaptured the decode trace for every
+  request, adding roughly 300 ms/request.
+- Synchronous serving added avoidable scheduling overhead.
+- Dense higher-concurrency decode repeated shared MLP, collective and tail work
+  for each logical row.
+
+Improvement beyond the pipeline and TTFT work:
+
+- Retained compatible decode traces and enabled async serving.
+- Remote 4K/C1 improved from 43.04 to 50.68 TSU: +17.74%.
+- Safe shared batching improved matched local 4K/C8 by 3.03% and 4K/C16 by
+  4.44%.
+- The focused exact-image run completed 104/104 responses with exact text and
+  token lengths.
+- The full 29-row C1/C8/C16 sweep was explicitly not run at human-requested
+  closure. Selected remote qualification was blocked before model execution by
+  checkout EACCES on runner `p04`; it is not reported as a model failure or pass.
+
+The bounded final result and its qualification limits are in
+[`tsu_optimization/closure.md`](tsu_optimization/closure.md). The full
+experiment chronology, human interventions and rejected candidates are in
+[`tsu_optimization/work_log.md`](tsu_optimization/work_log.md). Device/serving
+bottleneck analysis is in
+[`tsu_optimization/topology_audit.md`](tsu_optimization/topology_audit.md),
+normalized measurements are in
+[`tsu_optimization/perf_summary.json`](tsu_optimization/perf_summary.json), and
+the build-once/reuse provenance is in
+[`tsu_optimization/image_reuse.json`](tsu_optimization/image_reuse.json).
+
+### 8. Independent review agents
+
+Human/skill direction: independently audit TTFT and TSU correctness,
+measurement claims, evidence packaging and closure boundaries.
+
+Result:
+
+- TTFT passed bounded local review while still requiring remote qualification.
+- TSU review found and caused repair of a reference-harness issue, then passed
+  the bounded local and closure checkpoints.
+- Review did not convert the unrun full sweep, timeout-limited evals or blocked
+  remote run into passes.
+
+## TODO: Eval-focused performance optimization
+
+- Analyze why standard and agentic evals take so long.
+- Measure their TTFT and TSU.
+- Separate model/device performance from eval-framework overhead.
+- Check whether the same evals can run with more parallelism and finish sooner.
+- Dispatch eval subsets in parallel on multiple CI machines during development.
+- Reuse the existing image for these experiments where possible.
+
+## Evidence
+
+- TTFT: `doc/ttft_optimization/`.
+- Remote benchmarks/evals:
+  `readiness_vllm/ttft_optimization_remote/README.md`.
+- Inference-server CI fixes:
+  `/home/mvasiljevic/gemma4-ttft-inference-server/AUTOFIX.md`.
+- TSU: `doc/tsu_optimization/closure.md` and
+  `doc/tsu_optimization/work_log.md`.
+
+Final documented heads: TT-Metal
+`2a052971dffc0e1747a487cdf42c513a5c0dc3ab`; tt-inference-server
+`6d88032ed5f8259333233c53db671cd29aad377d`.
