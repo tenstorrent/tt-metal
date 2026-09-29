@@ -486,6 +486,11 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
+        // A block-float output's 7-bit mantissas hide a cheaper sigmoid's error (swiglu_sfpu.hpp); bf16 / fp32 outputs
+        // keep silu_tile's.
+        if (output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b) {
+            defines["SWIGLU_BLOCK_FLOAT_OUTPUT"] = "1";
+        }
     }
 
     if (use_fused_ternary) {

@@ -571,6 +571,65 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
     assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
 
 
+@pytest.mark.parametrize(
+    "output_dtype, max_relative_rmse",
+    # Measured on Blackhole: bf16 out 0.00236 (0.00514 if it took the block-float sigmoid); bfp8 out 0.01132 with the
+    # block-float sigmoid, 0.01179 with silu_tile's.
+    [(ttnn.bfloat16, 0.0035), (ttnn.bfloat8_b, 0.0125)],
+    ids=["bf16_out", "bfp8_out"],
+)
+def test_linear_swiglu_bf16_dest(device, output_dtype, max_relative_rmse):
+    """fuse_swiglu=True without fp32_dest_acc_en: the sigmoid depends on the output format (swiglu_sfpu.hpp).
+
+    A block-float output gets a cheaper sigmoid whose error its 7-bit mantissas hide; a bf16 output keeps silu_tile's.
+    One-hot weight columns copy bf16 input columns into gate and up exactly, so the error measured is the SwiGLU's
+    alone (a random weight's bf16 DST accumulation error would swamp the sigmoid's). The gate sits at std ~2, where the
+    sigmoid is neither saturated nor linear.
+    """
+    torch.manual_seed(0)
+    M, K, out_N = 512, 256, 512
+
+    torch_input = (torch.randn((M, K), dtype=torch.float32) * 2.0).bfloat16().float()
+    columns = torch.randint(0, K, (2 * out_N,))
+    weight_input = torch.nn.functional.one_hot(columns, K).T.float()  # [K, 2N]: column j copies input column columns[j]
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(
+        prepare_for_fused_swiglu(weight_input, ndev=1), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
+
+    with torch.no_grad():
+        up, gate = torch.chunk(torch_input @ weight_input, 2, dim=-1)
+        golden = torch.nn.functional.silu(gate) * up
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+    tt_output = ttnn.experimental.minimal_matmul(
+        tt_input,
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+        dtype=output_dtype,
+        fuse_swiglu=True,
+    )
+
+    result = assert_quality(golden, ttnn.to_torch(tt_output).float())
+    logger.info(f"{output_dtype}: PCC={result['pcc']:.7f}, relative RMSE={result['relative_rmse']:.5f}")
+    assert result["relative_rmse"] < max_relative_rmse, f"relative RMSE {result['relative_rmse']:.5f}"
+
+
 def _cache_hit_config(device, block_size=1, subblock=1, core_grid=None):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
