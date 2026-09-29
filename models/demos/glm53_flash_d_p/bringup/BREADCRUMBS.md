@@ -1473,3 +1473,35 @@ Results:
   pass.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_13_shared_expert.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.moe_add test (attempt 1)
+Reviewed and extended the rendered component test for `moe_add` (`mlp_out = experts_out + shared_out`, [2048, 4096],
+no weights) on layer 3, s4096 chunk 1.
+- Golden: row norms experts 47.6, shared 22.1, out 59.7. The fp32 sum of the bf16 golden inputs is at rel 0.0022 vs
+  the golden (the golden summed the fp32 upstream outputs).
+- Mutations that pass PCC 0.99: `(a + b) / 2` (0.999997), shared x1.01, experts x1.01, the last row zeroed, shared
+  missing on the last 32 rows (0.9989), one column shard x1.01.
+- Added checks, each written `not x <= lim` so NaN fails:
+  - vs golden: rel <= 0.005, ratio [0.995, 1.005], worst row <= 0.01.
+  - vs the fp32 sum of the same inputs: rel <= 0.0035, ratio [0.997, 1.003], worst row <= 0.006.
+  - Each addend: experts coefficient [0.997, 1.003] / rel <= 0.004; shared coefficient [0.995, 1.005] / rel <= 0.009.
+  - The limits leave room for a truncating bf16 output (ratio 0.9974, experts coefficient 0.9975, shared 0.9967). An
+    RNE bf16 output sits at 0.0018 rel vs the fp32 sum.
+- Sensitivity script: /tmp/moe_add_probe.py, host only (not kept). It needs only the golden tensors.
+Results: reference passes (exact against the fp32 sum). Stub fails (PCC 0). Device gate fails with NotImplementedError: `_device_step` has no
+`moe_add` module yet. That is expected before the implement step. components.yaml: NATIVE `ttnn.add`, reuse
+`mimo_v2_6_d_p/tt/residual.py`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_moe_add.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.moe_add implement (attempt 1)
+- New `tt/moe_add.py`: `TtMoeAdd`, one `ttnn.add(experts, shared, dtype=bf16, DRAM)` on replicated [1, 1, S, 4096]
+  bf16 tensors. No CCL and no weights. Reused from `mimo_v2_6_d_p/tt/residual.py` (`TtResidualAdd`).
+- hooks.py: a `moe_add` branch in `_device_step` through a new `_add_host_fn` (two [S, H] host inputs, bf16 upload,
+  chip-0 read-back), and `moe_add` added to `DEVICE_STEPS["dsa_moe"]`.
+- The plain bf16 add was enough; no fp32 path is needed. Gate: PCC 0.999996. vs golden: rel 0.00275, ratio
+  [1.0003, 1.0011], worst row 0.0030. vs the fp32 sum: rel 0.00177, ratio [1.0004, 1.0011], worst row 0.0019
+  (matches the test's RNE prediction of 0.0018). Coefficients: experts 1.00068, shared 1.00135. About 14 s.
+- The per-row norm ratio sits slightly above 1 (up to 1.0011), not centred on 1. This is well inside the limits.
+- In the log, the first `FAIL pcc=0` line comes from the precompile collect pass, not from the real pass.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_moe_add.py`
