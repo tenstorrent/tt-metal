@@ -1931,3 +1931,30 @@
   team: ttnn
   budget_type: demo
   sp_config: sc1
+
+# Throwaway (#57586, never merge): BM_EnqueueMeshWorkload baseline on a Blackhole Galaxy, three runs in one job.
+- name: "(#57586 throwaway) EnqueueMeshWorkload host-cost benchmark x3"
+  cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    echo "HOST_CPU_INFO nproc=$(nproc)"; lscpu | sed 's/^/HOST_CPU_INFO /' | head -20
+    B=$TT_METAL_HOME/build/test/tt_metal/distributed/distributed_benchmarks
+    if [ ! -x "$B" ]; then B=$(find "$TT_METAL_HOME" -name distributed_benchmarks -type f -perm -u+x | head -1); fi
+    echo "BENCH_BINARY=$B"
+    for r in 1 2 3; do
+      echo "BENCH_RUN_BEGIN r=$r"
+      "$B" --benchmark_filter=BM_EnqueueMeshWorkload --benchmark_out=/tmp/emw_$r.json --benchmark_out_format=json || echo "BENCH_RUN_FAILED r=$r"
+      echo "BENCH_JSON_BEGIN r=$r"; cat /tmp/emw_$r.json; echo "BENCH_JSON_END r=$r"
+    done
+  test_type: emw_host_bench
+  test_tags: [emw_host_bench]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05
+  team: models
+  budget_type: demo
+  sp_config: sc1
