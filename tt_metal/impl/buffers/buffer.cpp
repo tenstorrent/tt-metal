@@ -591,7 +591,7 @@ std::shared_ptr<Buffer> BufferImpl::create(
     buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
 
     // Explicit-address (non-owning) buffers skip allocate_impl(), so register their
-    // extent here (removed in deallocate()): per-core for L1 (SANITIZER_CHECKS.md §4),
+    // extent here (removed in deallocate()): per-core for L1,
     // full size for DRAM — mirroring the allocate_impl() registration.
     if (is_emule_device(device) && buffer->impl().size_ != 0) {
         if (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL) {
@@ -677,7 +677,7 @@ void BufferImpl::allocate_impl(Buffer& self) {
 
         if (is_emule_device(device_)) {
             if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                // Per-core footprint, not the aggregate size_ (spans all banks). See SANITIZER_CHECKS.md §4.
+                // Per-core footprint, not the aggregate size_ (spans all banks).
                 tt::tt_metal::emule::LiveL1Ranges::add(
                     device_->id(),
                     static_cast<uint32_t>(address_),

@@ -97,15 +97,17 @@ public:
     };
 
     struct StridedRowMap {
-        // One (slot, layer) row: chunk c at bases[c % step] + (c / step) * strides[c % step].
-        // step == 0 marks a never-populated row (lookup returns a zeroed location, matching
-        // an unset unrolled cell). A populated row is dense: residues 0..step-1 each present.
+        // One (slot, layer) row: chunk c at bases[c % step] + (c / step) * strides[c % step], on
+        // device group device_group_indices[c % step] — a row spanning SP/TP-sharded devices
+        // changes group along the sequence. step == 0 marks a never-populated row (lookup
+        // returns a zeroed location, matching an unset unrolled cell). A populated row is
+        // dense: residues 0..step-1 each present.
         struct Row {
             uint32_t step = 0;
             uint32_t size_bytes = 0;
-            DeviceGroupIndex device_group_index{0};
-            std::vector<uint64_t> bases;    // [step]
-            std::vector<int64_t> strides;   // [step]
+            std::vector<DeviceGroupIndex> device_group_indices;  // [step]
+            std::vector<uint64_t> bases;                         // [step]
+            std::vector<int64_t> strides;                        // [step]
         };
 
         std::vector<Row> rows;  // [slot][layer]

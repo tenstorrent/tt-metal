@@ -37,6 +37,9 @@
 //   12 = noc_semaphore_wait for multicast (NCRISC consumer)
 //   13 = noc_semaphore_set_multicast (BRISC producer)
 //   14 = noc_semaphore_wait for set_multicast (NCRISC consumer)
+//   31 = noc_semaphore_set_remote (BRISC producer)
+//   33 = noc_semaphore_set_multicast_loopback_src (BRISC producer)
+//        (both pair with consumer api 5, a plain noc_semaphore_wait)
 //
 // Semaphore class APIs:
 //   20 = Semaphore::set() (BRISC producer)
@@ -202,6 +205,43 @@ void kernel_main() {
         // =====================================================================
         case 14: {
             noc_semaphore_wait(sem_ptr, 1);  // SYNC-SEM-WAIT
+            break;
+        }
+
+        // =====================================================================
+        // Raw API: noc_semaphore_set_remote (BRISC producer)
+        // The raw call, not Semaphore::relay_unicast, which asserts its source and destination
+        // have different L1 offsets: CreateSemaphore numbers per core, so the harness's two
+        // semaphores are both id 0 and share an offset. The tag is emitted in the raw function
+        // either way, which is what this covers.
+        // =====================================================================
+        case 31: {
+            if (use_remote_sem_id) {
+                uint64_t remote_noc_addr = get_noc_addr(remote_noc_x, remote_noc_y, remote_sem_addr);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr) = 1;  // value to relay
+                delay_cycles(DELAY_CYCLES);
+                noc_semaphore_set_remote(sem_addr, remote_noc_addr);  // SYNC-SEM-SET-REMOTE
+                noc_async_write_barrier();
+            }
+            break;
+        }
+
+        // =====================================================================
+        // Raw API: noc_semaphore_set_multicast_loopback_src (BRISC producer)
+        // Loopback includes the sender, so the rectangle spans producer and consumer. Both cores
+        // hold their semaphore at the same L1 offset (id 0 on each), so one offset addresses both.
+        // =====================================================================
+        case 33: {
+            if (use_remote_sem_id) {
+                // Rectangle from this core to the consumer; my_x/my_y are this core's NoC coords,
+                // which the logical (0,0) of the harness does not give directly.
+                uint64_t mcast_addr = get_noc_multicast_addr(
+                    my_x[noc_index], my_y[noc_index], remote_noc_x, remote_noc_y, remote_sem_addr);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr) = 1;
+                delay_cycles(DELAY_CYCLES);
+                noc_semaphore_set_multicast_loopback_src(sem_addr, mcast_addr, 2);  // SYNC-SEM-SET-REMOTE
+                noc_async_write_barrier();
+            }
             break;
         }
 

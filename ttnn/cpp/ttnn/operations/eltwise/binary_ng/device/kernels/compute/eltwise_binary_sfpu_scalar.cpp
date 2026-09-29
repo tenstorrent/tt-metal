@@ -22,6 +22,8 @@
 #include "api/compute/atan2.h"
 #include "api/compute/hypot.h"
 #include "api/compute/nextafter.h"
+#include "api/compute/logaddexp.h"
+#include "api/compute/logaddexp2.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
