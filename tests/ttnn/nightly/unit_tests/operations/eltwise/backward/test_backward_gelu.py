@@ -8,7 +8,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import (
     assert_allclose,
-    assert_with_pcc,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
@@ -194,7 +193,8 @@ def test_bw_gelu_opt_output(variant, approximate, device):
         (ttnn.bfloat16, ttnn.float32),
     ),
 )
-def test_bw_gelu_mixed_grad_and_input_dtypes(grad_dtype, input_dtype, device):
+@pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
+def test_bw_gelu_mixed_grad_and_input_dtypes(grad_dtype, input_dtype, variant, approximate, device):
     """grad_output and input need not share a dtype: the kernels switch the unpacker's format
     between the two operand buffers when they differ. The result takes the input's dtype."""
     shape = torch.Size([1, 1, 32, 32])
@@ -203,13 +203,16 @@ def test_bw_gelu_mixed_grad_and_input_dtypes(grad_dtype, input_dtype, device):
     input_tensor = ttnn.from_torch(input_data, input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     grad_tensor = ttnn.from_torch(grad_data, grad_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = ttnn.gelu_bw(grad_tensor, input_tensor)[0]
+    output = ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0]
     assert output.dtype == input_dtype
 
-    golden = ttnn.get_golden_function(ttnn.gelu_bw)(
-        ttnn.to_torch(grad_tensor).float(), ttnn.to_torch(input_tensor).float().requires_grad_(True)
-    )[0]
-    assert_with_pcc(golden, ttnn.to_torch(output).float(), 0.999)
+    rtol, atol = _bf16_tolerance(approximate)
+    assert_allclose(
+        _gelu_bw_reference(input_data, grad_data, approximate),
+        ttnn.to_torch(output),
+        rtol=rtol,
+        atol=atol,
+    )
 
 
 # Test gradients across program cache hits
