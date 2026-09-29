@@ -78,11 +78,8 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     return expm1_cw_clamped(x, CW_INV_LN2, CW_NEG_LN2_HI, CW_NEG_LN2_LO, CW_EXPM1_H_TOP1, CW_EXPM1_H_TOP0);
 }
 
-// Row-loop form for kernels whose init programmed the Cody-Waite constants into vConstFloatPrgm0/1/2 with
-// expm1_cw_init_prgm_consts(). The two top Horner coefficients come from the caller: an sfpi::vFloat built
-// once before its loop, or a float literal where its LRegs are all spoken for (sfpi cannot spill: one
-// hoisted constant too many is a compile error, "too few lregs", never a slowdown). Only for kernels that
-// run no reciprocal: Prgm0 is sfpu_reciprocal_init's 2.0f wherever one does.
+// Programs the three Cody-Waite constants into vConstFloatPrgm0/1/2 for expm1_cw_clamped_prgm. Only for
+// kernels that run no reciprocal: Prgm0 is sfpu_reciprocal_init's 2.0f wherever one does.
 inline void expm1_cw_init_prgm_consts()
 {
     sfpi::vConstFloatPrgm0 = CW_INV_LN2;
@@ -90,6 +87,10 @@ inline void expm1_cw_init_prgm_consts()
     sfpi::vConstFloatPrgm2 = CW_NEG_LN2_LO;
 }
 
+// Row-loop form for kernels whose init ran expm1_cw_init_prgm_consts(): the Cody-Waite constants come from
+// vConstFloatPrgm0/1/2, the two top Horner coefficients from the caller -- an sfpi::vFloat built once before
+// its loop, or a float literal where its LRegs are all spoken for (sfpi cannot spill: one hoisted constant
+// too many is a compile error, "too few lregs", never a slowdown).
 template <typename T1, typename T0>
 sfpi_inline sfpi::vFloat expm1_cw_clamped_prgm(sfpi::vFloat x, T1 h_top1, T0 h_top0)
 {
