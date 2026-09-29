@@ -746,7 +746,8 @@ class LinearDecode(DeepSeekV4Module):
             spec = x.memory_config().shard_spec
             if spec.grid == grid and spec.shape[1] == k:
                 return x
-        m = x.memory_config().shard_spec.shape[0] if self._is_replicated_rm_hs(x) else x.shape[-2]
+        replica = self._is_replicated_rm_hs(x)
+        m = x.memory_config().shard_spec.shape[0] if replica else x.shape[-2]
         num_cores = grid.num_cores()
         mem_cfg = ttnn.create_sharded_memory_config(
             (m, k),
@@ -759,6 +760,11 @@ class LinearDecode(DeepSeekV4Module):
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if x.layout != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        if replica and x.shape[-2] != m:
+            # A replica on ANOTHER grid holds one [m, K] copy per source core (height num_src_cores * m): keep
+            # one copy before re-replicating it here. Without the DRISC prefetcher the B grids are the weights'
+            # own L1 grids, which are not nested inside the q_a replica's grid the way the GCB receivers are.
+            x = ttnn.slice(x, [0] * len(x.shape), [*list(x.shape)[:-2], m, k])
         repeats = [1] * len(x.shape)
         repeats[-2] = num_cores
         x = ttnn.repeat(x, ttnn.Shape(repeats))
