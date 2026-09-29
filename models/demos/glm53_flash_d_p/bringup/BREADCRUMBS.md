@@ -174,3 +174,19 @@ Decisions: fp32 accumulate with a single bf16 round, matching `glm_ref.hc_collap
 Result: pcc_attn_collapse_L00 0.999997; L00 rel L2 0.00238, ratio [0.9964, 1.0027]; L01 (distinct streams) rel L2
 0.00298, ratio [0.9960, 1.0036].
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_collapse.py`
+
+## S.kda_dense.02 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc + attn_collapse on device, layer 0). Kept the gated pcc_swap_out. A CPU-only
+sensitivity run (attn_collapse output perturbed, rest CPU; `/tmp` script, not kept) showed block out is weak on collapse
+bugs because attn_norm follows it: x1.02 passes PCC and rel L2 (0.0072), last stream dropped passes PCC (rel 0.029).
+Added asserted checks (informational metrics):
+- block out rel L2 <= 0.01, per-row norm ratio [0.97, 1.03]; attn_hc's per-part checks (both as swap 01);
+- attn_collapse vs golden attn_in and vs the CPU collapse of its actual inputs (golden in, swapped attn_hc):
+  rel L2 <= 0.01, per-token ratio [0.985, 1.015];
+- the same collapse module on layer 1's golden (distinct streams), same limits.
+Results: reference passes (out rel 0.0017). Stub fails (PCC 0, every check). Device passes: out PCC 0.999997,
+rel 0.0026, ratio [0.9951, 1.0044]; collapse vs golden 0.0016, vs CPU same input 0.0017, L01 0.0030.
+Note: with the stub, `vs_cpu_same_input` rel is 0 (the CPU collapse of a zero attn_hc is zero); its ratio check fails it.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_02_attn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
