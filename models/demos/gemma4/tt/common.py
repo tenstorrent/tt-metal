@@ -86,15 +86,20 @@ def create_tt_model(
         is_mesh = hasattr(mesh_device, "shape")
         num_devices = mesh_device.get_num_devices() if is_mesh else 1
         _fracture = os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
+        _lanes = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
         if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1:
             # Galaxy one-instance: heads/TP over axis 0, weights 2D-fractured
             # (SharedMLP over rows*cols; attention replicated across columns).
+            # GEMMA4_GALAXY_LANES=1 additionally lane-shards the batch: one
+            # lane per column with its own KV contents/page tables (slice 3b);
+            # callers then pass lane-major global batches of lanes x 32.
             mesh_config = MeshConfig(
                 mesh_device.shape,
                 decode=ModeConfig(tp=mesh_device.shape[0]),
                 tp_axis=0,
                 weight_fracture=True,
             )
+            mesh_config.lane_sharded = _lanes
         elif is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
