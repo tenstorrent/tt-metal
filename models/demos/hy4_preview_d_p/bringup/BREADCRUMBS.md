@@ -853,3 +853,28 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc_pre.py
+
+## S.dense_full.09 test (attempt 1)
+
+What was done
+- Rewrote the rendered swap test (steps 1-9 on device, the last one ffn_hc_pre) starting from swap 08. It keeps the
+  gated pcc_swap_out (0.98) and every swap-08 check. Swap 08's ffn_x-vs-golden and out-vs-CPU-tail checks now see
+  the device ffn_hc_pre. It adds these checks:
+  - ffn_x (device) vs the CPU ffn_hc_pre on the same device h_mid and gates: rel <= 0.003, row <= 0.006.
+  - the module again with each row's pre gates rotated by row mod 4, vs the CPU step: rel <= 0.004, row <= 0.01.
+  - the module on the scaled probe (h_mid x 0.1, the device gates for it) vs the CPU step: the same limits as the
+    first check.
+- CPU mutation study in /tmp/hy4_s09/study.py (outside the repo); the table is in the test docstring. 8 of 20
+  mutations pass the out gate. Each one fails an added check. Stream 1 dropped is caught only by the rotated probe.
+
+Decisions
+- The limits are the component test's. The device module is fp32 and matches the CPU step bit for bit, so the
+  checks against the CPU step have large margins.
+
+Results
+- BRINGUP_IMPL=reference: PASS. BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999985, out rel 0.00541. ffn_x vs golden 0.0046 / row 0.0082. ffn_hc_pre vs
+  CPU, rotated and scaled: all 0.0. out vs CPU tail 0.0023 / row 0.0047.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_09_ffn_hc_pre.py
