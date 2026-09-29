@@ -37,6 +37,10 @@ from tests.ttnn.utils_for_testing import comp_pcc
 SCHEDULES = {"stack": (2, 3, 20, 21, 24), "swa": (0,)}
 SEQ = 2048
 BLOCK_PCC = {"small": 0.99, "synthetic": 0.99, "real": 0.98}
+# User decision 2026-09-29 (bars by data source): synthetic production-shape index-source blocks are hypersensitive
+# to the intrinsic top-k disagreement of FP4-quantized selection (reference self-recall 0.993 at bf16-level input
+# perturbation; synthetic compressed rows uncorrelated), so they are gated at the real-weight bar.
+SYNTHETIC_INDEX_SOURCE_PCC = 0.98
 SMALL_SEQ = 512
 CACHE_PCC = 0.998
 WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
@@ -205,7 +209,10 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         Path(out).write_text(repr(report))
     for layer, entry in report.items():
         assert entry["deterministic"], (layer, entry)
-        assert entry["block_out"] >= BLOCK_PCC[weights], (layer, entry)
+        bar = BLOCK_PCC[weights]
+        if weights == "synthetic" and layer in C.INDEX_SOURCE_LAYERS:
+            bar = SYNTHETIC_INDEX_SOURCE_PCC
+        assert entry["block_out"] >= bar, (layer, bar, entry)
         for key in ("compressed_kv", "index_k"):
             if key in entry:
                 assert entry[key] >= CACHE_PCC, (layer, key, entry)
