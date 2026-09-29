@@ -324,6 +324,10 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  # /llk-sfpu-test (llk-sfpu-report.yaml): on demand, one leg per arch per command.
+  on_demand:
+    wh_n150_civ2: 60
+    bh_p150b_civ2: 60
   accuracy:
     wh_n150_civ2: 45
   ttnop:
