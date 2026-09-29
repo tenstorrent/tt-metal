@@ -592,6 +592,38 @@ def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch
     assert budget.PENDING_AMBIGUOUS
 
 
+def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
+    tmp_path, monkeypatch
+):
+    """``--ulp-measure`` tags a comparison with ``accuracy_contract``'s last query and
+    consumes it: a second comparison in the same test that never went through the
+    registry must not inherit the variant, and the row names the variant asked for
+    rather than the tensors' format."""
+    import json
+
+    import helpers.utils as utils
+
+    path = tmp_path / "measure.jsonl"
+    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(path))
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+
+    accuracy_contract(
+        MathOperation.Abs,
+        output_format=DataFormat.Float16_b,
+        input_format=DataFormat.Float16,
+        dest_acc=DestAccumulation.Yes,
+        arch=MEASURED_ARCH,
+    )
+    assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
+    assert passed_test(golden, golden.clone(), DataFormat.Float16_b)  # no lookup
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 1, rows
+    assert rows[0]["op"] == "Abs" and rows[0]["in"] == "Float16"
+    assert rows[0]["out"] == "Float16_b" and rows[0]["dest"] == "Yes"
+    assert rows[0]["approx"] is None and rows[0]["max"] == 0
+
+
 def test_arch_must_be_passed_explicitly():
     """The one dimension whose numbers do not transfer cannot default to Wormhole."""
     with _refuses("arch", TypeError):
