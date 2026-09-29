@@ -177,24 +177,6 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const auto combine_token_parallel_cores = args.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.num_data_parallel_cores;
 
-    TT_FATAL(
-        args.zero_fill_non_owned_rows || args.path == MoEComputePath::LocalOutput,
-        "zero_fill_non_owned_rows=False applies to the local output path only (a cluster_axis of extent 1)");
-    TT_FATAL(
-        args.prefill_rings == 0 || args.path == MoEComputePath::LocalOutput,
-        "prefill_rings applies to the local output path only (a cluster_axis of extent 1)");
-    TT_FATAL(
-        args.prefill_rings <= detail::ADMITTED_PREFILL_RINGS,
-        "prefill_rings={}: one replay ring (1), two or three rings (2, 3) are implemented",
-        args.prefill_rings);
-    TT_FATAL(
-        args.prefill_rings < 2 || !args.zero_fill_non_owned_rows,
-        "prefill_rings={}: the zero fill of the unowned rows is one ring's job and would race the other rings' "
-        "row writes; pass zero_fill_non_owned_rows=False",
-        args.prefill_rings);
-    TT_FATAL(
-        args.prefill_rings == 0 || tensor_args.tilize_input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
-        "prefill_rings>0 is supported only on Blackhole; use prefill_rings=0 on Wormhole");
     if (args.path == MoEComputePath::LocalOutput) {
         // Nothing is staged in the combine cores' L1 on this path and the tilize cores keep the routing as packed
         // (token, k slot) lists (moe_ring::token_list), so the token count is bounded by the entry format, not by
@@ -747,6 +729,28 @@ std::vector<ttnn::Tensor> moe_compute(
     const bool local_output =
         !compute_only && !full_local && cluster_axis.has_value() && mesh_shape[*cluster_axis] == 1;
 
+    // These choices size output buffers. Reject unsupported configurations before
+    // launch() calls create_output_tensors, which precedes cache-miss validation.
+    const uint32_t resolved_prefill_rings = prefill_rings.value_or(0);
+    TT_FATAL(
+        zero_fill_non_owned_rows || local_output,
+        "zero_fill_non_owned_rows=False applies to the local output path only (a cluster_axis of extent 1)");
+    TT_FATAL(
+        resolved_prefill_rings == 0 || local_output,
+        "prefill_rings applies to the local output path only (a cluster_axis of extent 1)");
+    TT_FATAL(
+        resolved_prefill_rings <= experimental::prim::detail::ADMITTED_PREFILL_RINGS,
+        "prefill_rings={}: one replay ring (1), two or three rings (2, 3) are implemented",
+        resolved_prefill_rings);
+    TT_FATAL(
+        resolved_prefill_rings < 2 || !zero_fill_non_owned_rows,
+        "prefill_rings={}: the zero fill of the unowned rows is one ring's job and would race the other rings' "
+        "row writes; pass zero_fill_non_owned_rows=False",
+        resolved_prefill_rings);
+    TT_FATAL(
+        resolved_prefill_rings == 0 || mesh_device->arch() == tt::ARCH::BLACKHOLE,
+        "prefill_rings>0 is supported only on Blackhole; use prefill_rings=0 on Wormhole");
+
     std::optional<uint32_t> local_axis;
     if (full_local) {
         if (cluster_axis.has_value()) {
@@ -909,7 +913,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
             .zero_fill_non_owned_rows = zero_fill_non_owned_rows,
-            .prefill_rings = prefill_rings.value_or(0),
+            .prefill_rings = resolved_prefill_rings,
             .enable_a2a_pipeline = enable_a2a_pipeline},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
