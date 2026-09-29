@@ -225,6 +225,24 @@ def unit_label(unit: str) -> str:
     return _UNIT_LABEL.get(str(unit or "").strip().lower(), "")
 
 
+def known_unit_word(unit) -> str:
+    """unit_word for a unit this tool produced -- token / step / inference -- or "" for one it did not.
+    unit_word keeps its "inference" fallback; a caller that must not relabel a foreign unit uses this."""
+    u = str(unit or "").strip().lower()
+    if u in _UNIT_LABEL:
+        return u
+    for word, label in _UNIT_LABEL.items():
+        if u == label.lower():
+            return word
+    noun = u.split("/", 1)[0]
+    if noun:
+        for word, label in _UNIT_LABEL.items():
+            spellings = {word, word + "s", label.lower().split("/", 1)[0]}
+            if noun in spellings:
+                return word
+    return ""
+
+
 def unit_word(unit) -> str:
     """The vocabulary word -- token / step / inference -- behind a unit, whichever form it arrives in.
 
@@ -239,24 +257,12 @@ def unit_word(unit) -> str:
     "/") names one -- so "token", "tok/s/u" and "tokens/s" all answer "token". A unit this tool never
     produced and cannot match names no recurring work, which is what an inference is.
     """
-    u = str(unit or "").strip().lower()
-    if u in _UNIT_LABEL:
-        return u
-    for word, label in _UNIT_LABEL.items():
-        if u == label.lower():
-            return word
     # THE WORK-NOUN, MATCHED EXACTLY AGAINST WHAT EACH WORD CAN BE SPELLED AS: the word itself, its
     # plural, and the noun its own label uses ("tok" for a token). This compared PREFIXES in both
     # directions, which is unbounded at the short end -- "s" resolved to a step and "t" to a token
     # because one letter is a prefix of "steps" and "tok" -- and unbounded at the long end, where
     # "toked" resolved to a token. Both are the spelling guess this function exists to remove.
-    noun = u.split("/", 1)[0]
-    if noun:
-        for word, label in _UNIT_LABEL.items():
-            spellings = {word, word + "s", label.lower().split("/", 1)[0]}
-            if noun in spellings:
-                return word
-    return "inference"
+    return known_unit_word(unit) or "inference"
 
 
 # WHERE A CHECKPOINT'S WEIGHTS ARE, as the checkpoint itself says. A single model keeps its weight files
@@ -407,6 +413,43 @@ def weight_bytes(
         "shards": len(files),
         "unit": unit,
     }
+
+
+def stage_params(snapshot_dir, stage_paths: dict) -> dict:
+    """{stage: parameters its matmuls multiply} from the checkpoint headers, given the module paths
+    each stage runs (stage_marks.stage_module_paths -- the model's own code, not a name typed here).
+
+    A path names checkpoint tensors when some tensor sits under it (tensor names carry their
+    component prefix, see weight_files). A stage NONE of whose paths name any -- a wrapper attribute
+    the checkpoint spells differently -- takes what its component holds that no other stage claims,
+    but only when it is the one such stage in that component; two would be a guess. Lookup-only
+    tensors (embeddings) are left out: nothing multiplies them. Any output head the checkpoint ships
+    beside that component stays in the remainder."""
+    numel: dict = {}
+    for prefix, f in weight_files(snapshot_dir):
+        try:
+            hdr = _headers(f)
+        except Exception:  # noqa: BLE001
+            continue
+        for k, v in hdr.items():
+            n = _numel(v.get("shape"))
+            if n > 0:
+                numel[prefix + k] = n
+    if not numel or not stage_paths:
+        return {}
+
+    def _under(path):
+        return {n for n in numel if n == path or n.startswith(path + ".")}
+
+    claimed = {st: set().union(*[_under(p) for p in (ps or [])]) for st, ps in stage_paths.items()}
+    comps = {st: {str(p).split(".", 1)[0] for p in (ps or [])} for st, ps in stage_paths.items()}
+    for st in [x for x, c in claimed.items() if not c]:
+        for comp in comps[st]:
+            if any(o != st and not claimed[o] and comp in comps[o] for o in stage_paths):
+                continue  # another unresolved stage shares the component: refuse rather than split
+            taken = set().union(*[claimed[o] for o in stage_paths if o != st])
+            claimed[st] |= _under(comp) - taken
+    return {st: sum(numel[n] for n in names if not _LOOKUP_ONLY.search(n)) for st, names in claimed.items() if names}
 
 
 def untowered_sections(snapshot_dir, stage_roots: dict) -> list:

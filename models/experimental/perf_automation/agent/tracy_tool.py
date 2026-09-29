@@ -31,7 +31,26 @@ from .opclass import SIGNPOST_CODES, base_op_code, classify_op, is_layout_conver
 # ---- thresholds (PLAN section 4.3) ----
 DISPATCH_GAP_NS = 6_500.0  # 6.5 us median op-to-op gap -> gappy
 GRID_TINY = 10
-DEFAULT_WORKER_CORES = 64  # WH default when CSV lacks AVAILABLE WORKER CORE COUNT
+# NO DEFAULT CORE COUNT. This was 64, a Wormhole grid, applied to every board whose env carried none
+# -- 130-core Blackhole ops read "full" at half the chip. The count is the DETECTED board's
+# (detected_worker_cores), and when nothing names the board an op is never called "full".
+DEFAULT_WORKER_CORES = None
+
+
+def detected_worker_cores(env) -> int | None:
+    """Worker cores on ONE chip of the detected board, or None: the run env through roofline._facts,
+    whose worker_cores (mesh-aggregate when mesh_chips is set) or grid gives the count."""
+    try:
+        from agent import roofline as _rf
+
+        facts = _rf._facts(env or {}) if env else {}
+    except Exception:  # noqa: BLE001
+        return None
+    chips = max(1, int(facts.get("mesh_chips") or 1))
+    cores = int(facts.get("worker_cores") or 0) or int(facts.get("grid_x") or 0) * int(facts.get("grid_y") or 0) * chips
+    return (cores // chips) or None
+
+
 # rank=count cut (high call count + tiny us/call). TBD(count-thresh): provisional.
 RANK_COUNT_MIN_CALLS = 32
 RANK_COUNT_MAX_US_PER_CALL = 5.0
@@ -184,12 +203,13 @@ def normalize_memory(mem: str) -> str:
     return "unknown"
 
 
-def normalize_grid(cores: float, available: int = DEFAULT_WORKER_CORES) -> str:
-    """CORE COUNT vs available worker cores -> tiny/partial/full (PLAN section 4.1)."""
+def normalize_grid(cores: float, available: int | None = DEFAULT_WORKER_CORES) -> str:
+    """CORE COUNT vs available worker cores -> tiny/partial/full (PLAN section 4.1). With the board's
+    core count unknown an op is never "full": that verdict needs to know what full is."""
     c = int(round(cores))
     if c < GRID_TINY:
         return "tiny"
-    if c >= available:
+    if available and c >= available:
         return "full"
     return "partial"
 
@@ -926,6 +946,6 @@ def profile_model(*, perf_test, config, env, profiles_dir, run_profiled):
         start_signpost=config.get("start_signpost", "start"),
         end_signpost=config.get("end_signpost", "stop"),
         arch=env.get("arch"),
-        available_cores=env.get("worker_cores", 64),
+        available_cores=detected_worker_cores(env),
         run_profiled=run_profiled,
     )

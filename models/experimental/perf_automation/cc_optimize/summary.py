@@ -1168,14 +1168,17 @@ def _unit_key(unit) -> str:
     capture -- the precise defect the anchor exists to prevent, and the comment at its call site
     describes.
 
-    "tok" is the only abbreviation the rate builder introduces; every other unit reaches the label
-    whole, so the leading segment IS the unit.
+    THE LABEL IS INVERTED BY THE TABLE THAT BUILT IT (model_bytes.unit_word via _unit_word), not by a
+    rule of its own. This took the leading segment and undid only "tok", so the plural the builder
+    also adds was kept: "inferences/s" looked up depth "inferences" while the anchor sits at
+    "inference", and the pinned peak was never found on any non-token run (Qwen-Image-Edit,
+    2026-09-29).
     """
     u = str(unit or "").strip().lower()
     if not u:
         return "token"
-    seg = u.split("/")[0].strip()
-    return "token" if seg == "tok" else (seg or "token")
+    # a unit the table does not know keeps its own leading noun, as before
+    return _unit_word(u, "known_unit_word") or u.split("/")[0].strip() or "token"
 
 
 def _pinned_peak_flops(unit, model: str = "", task: str = ""):
@@ -1716,8 +1719,9 @@ def _stage_units(stage, prompt_tokens, profile=None) -> int:
 _PROMPT_ROW_LABEL = "prefill"
 
 
-def _unit_word(unit) -> str:
-    """The vocabulary word behind a unit label, via the table in model_bytes that produced it.
+def _unit_word(unit, fn: str = "unit_word") -> str:
+    """The vocabulary word behind a unit label, via the table in model_bytes that produced it
+    (`fn="known_unit_word"`: "" for a unit the table does not know, instead of its fallback).
 
     GUARDED LIKE EVERY OTHER `agent.` IMPORT IN THIS FILE. They resolve because the tool puts the
     perf_automation dir on sys.path (perf_test_mcp.py:21), which an importer that reaches this module
@@ -1728,7 +1732,7 @@ def _unit_word(unit) -> str:
         try:
             import importlib
 
-            return importlib.import_module(_mod).unit_word(unit)
+            return getattr(importlib.import_module(_mod), fn)(unit)
         except Exception:  # noqa: BLE001
             continue
     return str(unit or "").strip().lower()
@@ -2917,6 +2921,10 @@ def _roofline_tables(
     out.extend(_fidelity_section())
     disp = _dispatch_ms_per_unit(profile, per_unit_ms)
     cap = _capacity_bytes()
+    # PER CHIP, like the capacity it is held against: each chip keeps its 1/TP share of the weights
+    # (DP replicates, it does not add). Comparing the whole model to one chip's DRAM printed a 57.7 GB
+    # checkpoint as 448% of a 12 GB Wormhole on a 32-chip Galaxy.
+    _resident = (active_bytes / max(1, int(tp_degree or 1))) if active_bytes else 0
     out.append("")
 
     if disp is not None or cap:
@@ -2953,15 +2961,15 @@ def _roofline_tables(
             # targets 10784 ops -- counted over the whole profiling window (one prefill plus six
             # decode steps) on a row that reads per token, so it was out by roughly 7x as well.
             # Op counts live in the Op breakdown table below, per class, correctly attributed.
-        if cap and active_bytes:
-            _used = 100.0 * active_bytes / cap
+        if cap and _resident:
+            _used = 100.0 * _resident / cap
             out.append(
                 (
                     " %-30s\u2502 %-16s\u2502 %-28s\u2502 %.0f%% used%s"
                     % (
                         "DRAM capacity",
                         _ncell("%.1f" % (cap * 0.9 / 1024**3), "GiB 90%"),
-                        _ncell("%.2f" % (active_bytes / 1024**3), "GiB"),
+                        _ncell("%.2f" % (_resident / 1024**3), "GiB"),
                         _used,
                         "      \u2717 OVER" if _used >= 90 else "",
                     )
@@ -3035,10 +3043,10 @@ def _roofline_tables(
     if disp is not None and per_unit_ms:
         _d = disp / float(per_unit_ms)
         _rows.append(("dispatch  overhead", _d, "%.2f / %.2f ms" % (disp, per_unit_ms), "\u2193 better"))
-    if cap and active_bytes:
-        _c = active_bytes / cap
+    if cap and _resident:
+        _c = _resident / cap
         _rows.append(
-            ("DRAM      capacity", _c, "%.2f / %.0f GiB" % (active_bytes / 1024**3, cap / 1024**3), "\u2193 better")
+            ("DRAM      capacity", _c, "%.2f / %.0f GiB" % (_resident / 1024**3, cap / 1024**3), "\u2193 better")
         )
     for _name, _frac, _detail, _dir in _rows:
         # An estimated row draws a HATCHED bar, never the solid fill a measurement gets. A bar is

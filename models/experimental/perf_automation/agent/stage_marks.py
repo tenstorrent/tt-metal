@@ -236,6 +236,77 @@ def stage_methods(pipe) -> dict:
     return out if len(set(out.values())) == len(out) else {}
 
 
+def _self_calls(fn) -> list:
+    """[(attr, sub)] for every call rooted at the function's own instance: `self.a(...)` gives
+    (a, None), `self.a.b(...)` and deeper give (a, b)."""
+    try:
+        f = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+        me = f.args.args[0].arg
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for n in ast.walk(f):
+        if not isinstance(n, ast.Call):
+            continue
+        chain, cur = [], n.func
+        while isinstance(cur, ast.Attribute):
+            chain.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name) and cur.id == me and chain:
+            chain.reverse()
+            out.append((chain[0], chain[1] if len(chain) > 1 else None))
+    return out
+
+
+def _is_own_method(obj, name) -> bool:
+    return inspect.isfunction(getattr(type(obj), name, None))
+
+
+def _modules_run_by(obj, fn, prefix: str, depth: int, seen: set) -> set:
+    """Attribute paths (under `prefix`) of the sub-objects `fn` of `obj` calls into, following the
+    object's own helper methods and, one level down, a component's own method."""
+    if depth <= 0 or (id(obj), fn) in seen:
+        return set()
+    seen.add((id(obj), fn))
+    paths = set()
+    for a, b in _self_calls(getattr(type(obj), fn)):
+        if _is_own_method(obj, a):
+            paths |= _modules_run_by(obj, a, prefix, depth - 1, seen)
+            continue
+        sub = getattr(obj, a, None)
+        if sub is None:
+            continue
+        path = "%s%s" % (prefix, a)
+        if b is not None and _is_own_method(sub, b):
+            inner = _modules_run_by(sub, b, path + ".", depth - 1, seen)
+            paths |= inner or {path}
+        else:
+            paths.add(path)
+    return paths
+
+
+def stage_module_paths(pipe) -> dict:
+    """{stage: sorted attribute paths of the modules it runs}, read from the model's own code: each
+    stage's method (stage_methods), the components it calls, and the sub-modules those components'
+    methods call. {} when the stages cannot be matched to methods. The paths are the pipeline's own
+    attribute names; which weights they hold is the checkpoint's business (model_bytes.stage_params)."""
+    out = {}
+    for stage, name in stage_methods(pipe).items():
+        paths = _modules_run_by(pipe, name, "", 4, set())
+        if paths:
+            out[stage] = sorted(paths)
+    return out
+
+
+def pipeline_tp(pipe) -> int:
+    """The tensor-parallel degree the pipeline says it runs at (stage_seams.TP_ATTR), or 0."""
+    try:
+        v = int(getattr(pipe, _seams.TP_ATTR, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return v if v > 0 else 0
+
+
 def mark_stages_on_forward(pipe) -> int:
     """Wrap each stage's own method on THIS pipeline so the forward emits its marks. Returns how many
     stages were marked, 0 when they cannot be matched (the caller then runs the separate pass).

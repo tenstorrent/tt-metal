@@ -32,6 +32,12 @@ OPTIONAL = (INPUTS, ITEMS)
 ALL = REQUIRED + OPTIONAL
 
 
+# The tensor-parallel degree a pipeline runs at, when it states one -- read off the pipeline, never
+# assumed from the mesh the operator typed: a 4x8 Galaxy can run TP=8 x DP=4 or TP=4 x DP=8, and only
+# the model knows which (Qwen-Image-Edit: `self.tp = device.shape[TP_AXIS]`).
+TP_ATTR = "tp"
+
+
 def hook(stage: str, seam: str) -> str:
     """The attribute a model exposes for `seam` on `stage`. The stage name comes from the model."""
     return "%s%s" % (stage, seam)

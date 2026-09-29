@@ -3252,6 +3252,7 @@ def _run_full_pipeline_ms():
     stage_bytes_samples: dict = {}
     stage_paths = {}
     stage_isl = {}
+    stage_modules: dict = {}  # {stage: module paths it runs}, from TRACE_STAGE_MODULES
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
     # the TOTAL a stage states for one call.
     stage_isl_per_request = {}
@@ -3429,6 +3430,14 @@ def _run_full_pipeline_ms():
             # THE COUNT THE STAGE ITSELF STATED, for whatever stage stated it. TRACE_STAGE_ITEMS is
             # printed beside TRACE_STAGE_MS by the same loop that measured the stage, so a third
             # tower can carry a real item count instead of inheriting the fallback of 1.
+            if "TRACE_STAGE_MODULES[" in line:
+                try:
+                    _mn = line.split("TRACE_STAGE_MODULES[", 1)[1].split("]", 1)[0].strip()
+                    _mv = [x.strip() for x in line.split("]=", 1)[1].split()[0].split(",") if x.strip()]
+                    if _mn and _mv:
+                        stage_modules[_mn] = _mv
+                except Exception:  # noqa: BLE001
+                    pass
             if "TRACE_STAGE_ITEMS[" in line:
                 try:
                     _nm = line.split("TRACE_STAGE_ITEMS[", 1)[1].split("]", 1)[0].strip()
@@ -3605,6 +3614,7 @@ def _run_full_pipeline_ms():
                     )
         except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
             pass
+        _pin_stage_params_and_tp(stage_modules, tp)
         # PIN THE BASELINE READ SET, where it is produced. Measuring the bytes made them right; it did
         # not stop them moving, and the dtype rung moves them by construction: bf16 -> bf8_b halves a
         # weight, the observed bytes halve, and a ceiling recomputed from them retreats ahead of the
@@ -7085,6 +7095,68 @@ def _perf_target_status(rep: dict, dev: float) -> dict | None:
         return None
 
 
+def _pin_stage_params_and_tp(stage_modules: dict, tp) -> None:
+    """Pin, where they are observed, the two ceiling inputs a stage-by-stage roof needs.
+
+    - matmul_params per stage: the parameters the modules each stage runs multiply
+      (model_bytes.stage_params over the model's own checkpoint), so a stage is no longer charged the
+      whole model. Qwen-Image-Edit: denoise 20.43 B, text_encode 7.07 B, vision_encode 0.68 B, the
+      VAE halves 0.05 / 0.07 B -- where the flat fallback charged each of them 28.85 B.
+    - tp_degree: what the run's own DP=/TP= marker reported.
+    Write-once (measurements.anchor); best-effort, never costs a measurement."""
+    try:
+        led = _ledger()
+        model = _MODEL_ROOT.name if _MODEL_ROOT else ""
+        if tp:
+            led.anchor(
+                led.KIND_TP_DEGREE,
+                float(int(tp)),
+                depth="pipeline",
+                mode="count",
+                source="trace_replay DP=/TP= marker",
+                model=model,
+            )
+        if not stage_modules:
+            return
+        import importlib.util as _ilu
+
+        _spec = _ilu.spec_from_file_location("cc_run_stage_params", str(Path(__file__).parent / "run.py"))
+        _run = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_run)
+        from agent.checkpoint_sections import hf_cache_dir
+        from agent.model_bytes import stage_params
+
+        _snap = hf_cache_dir(_run._model_id_for_facts(_MODEL_ROOT) or "")
+        for _st, _n in (stage_params(_snap, stage_modules) if _snap else {}).items():
+            if _st and int(_n) > 0:
+                led.anchor(
+                    led.KIND_MATMUL_PARAMS,
+                    float(int(_n)),
+                    depth=str(_st).strip().lower(),
+                    mode="params",
+                    source="stage modules (pipeline code) x checkpoint headers",
+                    model=model,
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _tp_degree() -> int:
+    """TP for the ceilings: the operator's topology when the tool exported one, else the degree the
+    run's own marker reported (pinned), else 1."""
+    env_tp = int(os.environ.get("TT_PERF_MESH_COLS", "0") or "0")
+    if env_tp > 0:
+        return env_tp
+    try:
+        led = _ledger()
+        v = led.anchor_value(led.KIND_TP_DEGREE, depth="pipeline", model=_MODEL_ROOT.name if _MODEL_ROOT else "")
+        if v and int(v) > 0:
+            return int(v)
+    except Exception:  # noqa: BLE001
+        pass
+    return 1
+
+
 def _select_perf_target(rep: dict):
     """Pick the roofline target for this pipeline, STATIC (no measurement mixed in). Returns
     ``(target, scope, has_unit_ceiling)``. Model-level config ceiling (compute_target, per-token tok/s)
@@ -7101,7 +7173,7 @@ def _select_perf_target(rep: dict):
             # purpose, and it was only wired into the report.
             mf = _anchored_ceiling_facts()
         if mf:
-            tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
+            tp = _tp_degree()
             # THE GATE AND THE REPORT MUST DIVIDE BY THE SAME BYTES. The report prices each stage by
             # the subtree it streams -- a decode token reads the language backbone and never the
             # audio encoder -- while this handed compute_target the WHOLE model. On a two-tower model

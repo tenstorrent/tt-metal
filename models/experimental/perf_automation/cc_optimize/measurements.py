@@ -111,6 +111,11 @@ KIND_MATMUL_PARAMS = "matmul_params"
 # prefill chunk that changes size would move the ceiling under the measurement chasing it.
 KIND_STAGE_TOKENS = "stage_tokens"
 
+# THE TENSOR-PARALLEL DEGREE the run's own marker reported (trace_replay: the pipeline's stated split,
+# else the mesh). Every ceiling divides a unit's bytes and FLOPs by it; pinned so a later round cannot
+# change the divisor under a measurement.
+KIND_TP_DEGREE = "tp_degree"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 
