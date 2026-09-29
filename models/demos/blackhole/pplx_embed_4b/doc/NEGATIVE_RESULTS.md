@@ -1310,3 +1310,61 @@ small and the SFPU pass already fits under the last K block's math. The gap is d
 rounds, chip 1, cold / sustained ms: default 15.6-15.7 / 15.8, fused 4,20,8 1×2 16.1 / 16.2, fused 2,20,8 1×2 16.1 /
 16.2-16.3. bs1 stays unfused. Note that `QWEN_FUSE_SWIGLU_BS1=1` alone is a no-op: the demo defaults
 `QWEN_FUSE_SWIGLU=0` at bs1, so the packed weight is never built; both must be set.
+
+## 62. Fused FF1+FF3: a SiLU sized for the bfp8 output, a third of the SFPU time (landed) (2026-09-29)
+
+**What a free SiLU would buy.** At the K_block-40 blocks the pack-thread SwiGLU is mostly hidden:
+`bench_ff13_fused_ablate.py <batch>` with `MM_BLOCKS=4,40,8,1,8`, µs:
+
+| | full | no SFPU | SFPU ×2 | no partials add | no SFPU, no add | compute only, no SFPU, no add |
+|---|---|---|---|---|---|---|
+| bs16 | 1700.4 | 1641.9 | 2290.3 | 1630.0 | 1569.0 | 1454.8 |
+| bs32 | 3259.6 | 3125.0 | 4524.9 | 3106.2 | 2966.0 | 2861.9 |
+
+One pass is 590 / 1265 µs of pack-thread work and 58 / 135 of it exposed (3.4 / 4.1%); at K_block 40 the partial-sum
+add (70 / 153) costs as much. e2e with the SFPU call removed (wrong output, `sustained_run.sh`, 2 alternating rounds,
+chips 0 / 1): bs16 cold / sustained 148.8 / 195.1 → 146.7 / 188.7 ms, bs32 302.0 / 403.6 → 292.2 / 388.4, i.e. a
+ceiling of −3.3 / −3.8% sustained, more than cold as the power-cap argument predicts.
+
+**Nothing to borrow from tt-blaze.** `dram_streaming_swiglu`'s SILU modes call the stock `calculate_silu` /
+`_sfpu_sigmoid_`; its fork's sigmoid / exp / recip headers are identical to ours. Its PACK-side SFPU, single init and
+math / pack semaphores are what §58 already does. The one idea, `sdpa_exp_unclamped` (no upper clamp for inputs ≤ 0),
+does not apply to a sigmoid's two-sided input.
+
+**Blackhole's `sfpi::approx_exp` (SFPARECIP mode 2) is not an exp.** Probed through the fused kernel's output, it
+returns ~sign(x)·e^|x| for |x| < 2 (0.4-0.7% median error) and saturates at 4.0 beyond; usable only after a range
+reduction that costs what `exp_21f` does.
+
+**Variants** (`perf_tools/bench_swiglu_variants.py 16 [1 4]`: the pass patched into `swiglu_sfpu.hpp`, error against
+torch's fp32 SwiGLU of the device's own bf16 pre-activations, relative L2 at gate std ~1 / ~4; pass cost from
+`SW_REPEAT=3`, (3 passes − 1) / 2):
+
+| exp(−gate) / reciprocal | µs per call | pass cost µs | rel err ×1 / ×4 |
+|---|---|---|---|
+| silu_tile + mul (`exp_21f`, 1 Newton step, bf16 roundings) | 1701.5 | 637 | 0.01283 / 0.01229 |
+| `exp_21f`, 1 Newton step, no roundings | 1700.9 | 578 | 0.01166 / 0.01105 |
+| `exp_21f`, bare SFPARECIP | 1689.4 | 483 | 0.01190 / 0.01099 |
+| Schraudolph, 1 Newton step | 1687.7 | 282 | 0.01383 / 0.01098 |
+| Schraudolph, bare SFPARECIP | 1685.7 | 188 | 0.01391 / 0.01096 |
+| Schraudolph centred, bare SFPARECIP | 1692.1 | 208 | 0.01228 / 0.01101 |
+| same, loop unrolled 8× (landed) | 1686.8 | 184 | 0.01228 / 0.01101 |
+
+Schraudolph (Neural Computation 11(4), 1999) is `_sfpu_exp_21f_bf16_` without its degree-2 mantissa polynomial:
+`(x / ln2 + 127) · 2^23` reinterpreted as a float is 2^int · (1 + frac), within 6.1% of e^x, always over. Shifting
+the bias by 0.043 (half of log2 1.061; a back-of-envelope choice, Schraudolph's own RMS-optimal shift is ~0.058)
+centres the error at ~±3%. Every variant sits at the bfp8 output's ~1.2% floor; the bf16 roundings the old pass copied
+from silu_tile + mul cost more accuracy than the cheaper exp does. With `fp32_dest_acc_en` the pass keeps the accurate
+sigmoid.
+
+**Where the exposed time is not.** The landed pass cuts the pack-thread work by 71% but the exposed time only from 58
+to ~45 µs (bs16 1700 → 1687 against 1642 with no SFPU). Every binary SFPU call opens with `STALLWAIT(STALL_SFPU,
+MATH)` (`_llk_math_eltwise_sfpu_start_`), redundant on the pack thread after the MATH_PACK semaphore wait; calling
+the pass without it: 1703.2 → 1700.6 (bs16), 3271.3 → 3267.8 (bs32). Not the stall; open.
+
+**e2e**, sustained_run.sh, 3 alternating rounds per batch, chips 2 / 0 / 1 concurrently, medians of 3, cold /
+sustained ms: bs8 78.5 / 101.2 → 78.3 / 99.4 (−0.3 / −1.8%), bs16 148.9 / 194.9 → 148.1 / 194.4 (−0.5 / −0.3%),
+bs32 300.5 / 403.7 → 297.8 / 401.8 (−0.9 / −0.5%); the new pass is faster in all 9 pairs, cold and sustained. STS-B
+0.8119 / 0.8147 / 0.8152 → 0.8110 / 0.8132 / 0.8156 (bs8 / 16 / 32; the batch paths alone spread 0.8121-0.8159),
+per-text embedding cosine vs the old pass mean 0.995 (p1 0.955-0.962). ttnn nightly `test_minimal_matmul.py -k
+swiglu` (4) and `test_minimal_matmul_split.py -k swiglu` (6) pass; their relative RMSE vs torch 0.0078-0.0085 before
+and after.
