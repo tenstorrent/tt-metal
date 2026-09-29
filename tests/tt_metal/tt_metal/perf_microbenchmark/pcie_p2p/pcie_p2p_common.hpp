@@ -8,6 +8,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <cstdint>
 #include <fstream>
 #include <memory>
@@ -18,6 +19,11 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include <cstdio>
+#include <map>
+#include <unistd.h>
 #include <tt_stl/assert.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/cluster.hpp>
@@ -44,6 +50,29 @@ constexpr uint32_t kNocAddrLocalBits = 36;
 constexpr uint32_t kNocNodeIdBits = 6;
 constexpr uint64_t kNocLocalLimit = 1ull << kNocAddrLocalBits;  // iATU base must stay below this
 constexpr uint32_t kL1Size = 1536u * 1024u;
+
+// Chips that are PCIe-attached but have no Ethernet link between them cannot be auto-discovered
+// into one mesh. Hand the control plane an explicit 1xN mesh with RELAXED channel policy (missing
+// links tolerated) and an explicit mapping mesh node i -> chips[i]. Must run before any device opens.
+inline void use_isolated_meshes(const std::vector<int>& chips) {
+    char path[] = "/tmp/pcie_p2p_isolated_XXXXXX.textproto";
+    int fd = mkstemps(path, 10);
+    TT_FATAL(fd >= 0, "cannot create temp mesh graph descriptor");
+    std::string d = fmt::format(
+        "mesh_descriptors {{\n  name: \"M0\"\n  arch: BLACKHOLE\n  device_topology {{ dims: [ 1, {} ] }}\n"
+        "  host_topology   {{ dims: [ 1, 1 ] }}\n  channels {{ count: 1 policy: RELAXED }}\n}}\n"
+        "top_level_instance {{ mesh {{ mesh_descriptor: \"M0\" mesh_id: 0 }} }}\n",
+        chips.size());
+    TT_FATAL(write(fd, d.data(), d.size()) == ssize_t(d.size()), "short write");
+    close(fd);
+    std::map<tt::tt_fabric::FabricNodeId, ChipId> mapping;
+    for (size_t i = 0; i < chips.size(); ++i) {
+        mapping[tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, uint32_t(i))] = chips[i];
+    }
+    fmt::print(
+        "isolated topology: 1x{} mesh over chips ({}), descriptor {}\n", chips.size(), fmt::join(chips, ","), path);
+    MetalContext::instance().set_custom_fabric_topology(path, mapping);
+}
 
 inline uint64_t tlb_ordering(const std::string& s) {
     if (s == "relaxed") {

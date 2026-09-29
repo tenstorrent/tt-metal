@@ -744,11 +744,17 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
         ChipId physical_chip_id_other = get_physical_chip_id(other_mesh_coord);
         auto eth_links = this->cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
         auto eth_links_to_other = eth_links.find(physical_chip_id_other);
-        TT_FATAL(
-            eth_links_to_other != eth_links.end(),
-            "Chip {} not connected to chip {}",
-            physical_chip_id,
-            physical_chip_id_other);
+        // A custom topology is an explicit statement of the layout by the caller. Chips that are
+        // logically adjacent but share no Ethernet link (e.g. two PCIe-only cards used for PCIe
+        // peer-to-peer) may still be opened together; there is simply no fabric route between them.
+        if (eth_links_to_other == eth_links.end()) {
+            log_warning(
+                tt::LogFabric,
+                "Chip {} is not Ethernet-connected to logically adjacent chip {}; no fabric route will exist "
+                "between them",
+                physical_chip_id,
+                physical_chip_id_other);
+        }
     };
     const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
     for (const auto& mesh_coord : mesh_coord_range) {

@@ -11,6 +11,10 @@
 //   1 PINGPONG  write seq to B's flag, spin on local flag for the echo, log RTT
 //   2 BW        stream total_bytes in chunks into B's data window, then flag,
 //               wait for B's ack, log issue cycles and end-to-end cycles
+//   3 BW_NOACK  stream total_bytes and log issue+barrier cycles only (multi-core aggregate runs)
+//   4 PULL_BW   noc_async_read total_bytes from data_dst into local_src, chunked, log cycles
+//   5 PULL_ONCE noc_async_read total_bytes (<= 64 KiB) from data_dst into local_src, host verifies L1
+//   6 POLL      noc_async_read 64 B from flag_dst until word0 == total_bytes (expected value) or timeout
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -57,6 +61,67 @@ void kernel_main() {
         noc_async_write_barrier();
         res[0] = RESULT_STATUS_OK;
         res[1] = 1;
+        return;
+    }
+
+    if (mode == 4 || mode == 5) {
+        uint32_t off = 0;
+        const uint64_t t0 = get_timestamp();
+        if (mode == 5) {
+            noc_async_read(data_dst, local_src, total_bytes);
+        } else {
+            for (uint32_t got = 0; got < total_bytes; got += chunk) {
+                noc_async_read(data_dst + off, local_src, chunk);
+                off += chunk;
+                if (off + chunk > window_span) {
+                    off = 0;
+                }
+            }
+        }
+        noc_async_read_barrier();
+        const uint64_t t1 = get_timestamp();
+        res[2] = static_cast<uint32_t>(t1 - t0);
+        res[3] = static_cast<uint32_t>((t1 - t0) >> 32);
+        res[0] = RESULT_STATUS_OK;
+        res[1] = mode == 5 ? 1 : total_bytes / chunk;
+        return;
+    }
+
+    if (mode == 6) {
+        const uint64_t t0 = get_timestamp();
+        while (true) {
+            noc_async_read(flag_dst, local_flag, 64);
+            noc_async_read_barrier();
+            if (flag[0] == total_bytes) {
+                break;
+            }
+            if (get_timestamp() - t0 > timeout) {
+                res[0] = RESULT_STATUS_TIMEOUT;
+                res[2] = flag[0];
+                return;
+            }
+        }
+        res[2] = static_cast<uint32_t>(get_timestamp() - t0);
+        res[0] = RESULT_STATUS_OK;
+        return;
+    }
+
+    if (mode == 3) {
+        uint32_t off = 0;
+        const uint64_t t0 = get_timestamp();
+        for (uint32_t sent = 0; sent < total_bytes; sent += chunk) {
+            noc_async_write(local_src, data_dst + off, chunk);
+            off += chunk;
+            if (off + chunk > window_span) {
+                off = 0;
+            }
+        }
+        noc_async_write_barrier();
+        const uint64_t t1 = get_timestamp();
+        res[2] = static_cast<uint32_t>(t1 - t0);
+        res[3] = static_cast<uint32_t>((t1 - t0) >> 32);
+        res[0] = RESULT_STATUS_OK;
+        res[1] = total_bytes / chunk;
         return;
     }
 

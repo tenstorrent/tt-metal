@@ -40,6 +40,7 @@ struct Options {
     double timeout_s = 3.0;
     bool force = false;
     bool dump = false;
+    bool isolated = false;
 };
 
 std::vector<uint32_t> parse_list_u32(const std::string& s) {
@@ -93,11 +94,13 @@ Options parse(int argc, char** argv) {
             o.force = true;
         } else if (a == "--dump") {
             o.dump = true;
+        } else if (a == "--isolated") {
+            o.isolated = true;
         } else if (a == "-h" || a == "--help") {
             fmt::print(
                 "usage: test_pcie_p2p_allgather [--chips 0,1,2,3] [--sizes 64,256,...] [--iters N] [--warmup N]\n"
                 "        [--ordering relaxed|strict|posted] [--region-base R] [--noc-base HEX] [--core x,y]\n"
-                "        [--flag-bytes 16|64] [--timeout S] [--force] [--dump]\n");
+                "        [--flag-bytes 16|64] [--timeout S] [--force] [--dump] [--isolated]\n");
             exit(0);
         } else {
             TT_THROW("unknown arg {}", a);
@@ -136,6 +139,9 @@ int main(int argc, char** argv) {
     Options opt = parse(argc, argv);
     const uint32_t n = opt.chips.size();
 
+    if (opt.isolated) {
+        use_isolated_meshes(opt.chips);
+    }
     auto meshes = distributed::MeshDevice::create_unit_meshes(opt.chips);
     auto& cluster = MetalContext::instance().get_cluster();
     TT_FATAL(cluster.arch() == tt::ARCH::BLACKHOLE, "Blackhole only");
