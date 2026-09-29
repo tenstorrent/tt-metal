@@ -58,3 +58,10 @@ def test_block_float_scalar_overload_honours_an_explicit_false(device):
     a = _t(ALL_BF16.reshape(SHAPE), ttnn.bfloat8_b, device)
     moved = _differ(ttnn.multiply(a, 2.0, fast_and_approximate_mode=False), ttnn.multiply(a, 2.0))
     assert moved > 0, "an explicit False is still being discarded for the scalar overload"
+
+
+def test_block_float_scalar_first_overload_honours_an_explicit_false(device):
+    a = _t(ALL_BF16.reshape(SHAPE), ttnn.bfloat8_b, device)
+    assert _differ(ttnn.multiply(2.0, a), ttnn.multiply(2.0, a, fast_and_approximate_mode=True)) == 0
+    moved = _differ(ttnn.multiply(2.0, a, fast_and_approximate_mode=False), ttnn.multiply(2.0, a))
+    assert moved > 0, "an explicit False is still being discarded for the scalar-first overload"
