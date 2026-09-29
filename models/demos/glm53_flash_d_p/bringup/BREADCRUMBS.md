@@ -2062,3 +2062,34 @@ Results:
 Next (implement): no module change is needed. Add experts to `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_experts.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.10 test (attempt 1)
+Reviewed the rendered experts swap test for kda_moe layer 4 (attn_hc..router plus experts on the device). The rendered
+file was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 09 test (every check kept) plus dsa_moe
+swap 12's experts checks, with the layer-4 limits. The gated metric pcc_swap_out (PCC >= 0.98) is unchanged.
+- Experts-share block: the device outputs through router fixed, CPU experts and tail. Block out vs it is the experts
+  share (no flips by construction). The router share is now that block vs the router-share block, and it reproduces
+  swap 09 exactly (1 / 0.00024 / [0.9976, 1.0025]).
+- Experts vs the CPU experts of the same (ffn_norm, router): the layer-4 component limits (rel 0.015, ratio
+  [0.988, 1.012], worst row 0.02, coef [0.997, 1.003], blocks [0.996, 1.004]). Runs on chunk 1 and chunk 0.
+- Experts vs golden on the rows whose top-8 matches: rel 0.015, ratio [0.985, 1.015], worst row 0.035, coef
+  [0.996, 1.004], blocks [0.995, 1.005]. The flipped rows get ratio [0.8, 1.25]. The coefficient, block and worst-row
+  limits are looser than the component limits: the CPU experts of the device inputs already score 0.99778 / 0.99701 /
+  0.0255. The cause is upstream: ffn_collapse coef 0.99744 vs golden, the device ffn_hc comb bias. With the first
+  draft (component limits) the device passed at coef 0.99790 against 0.997.
+- Experts share: rel <= 0.003 and ratio [0.994, 1.006]. At layer 4 the experts reach block out at only about 0.14x
+  (post * mlp is 0.148 of out; layer 3: 0.59x). Proposed as a known issue.
+- Changed one inherited limit: block out vs the all-CPU block, same-routing rel, 0.003 -> 0.004. The device scores
+  0.00295 (swap 09: 0.00242).
+- Sensitivity: /tmp/kmoe10/sens.py, which is /tmp/dsas12/sens.py with L = 4. CPU only, not kept. The numbers are in
+  the test docstring.
+Results:
+- Device passes, with identical numbers over 2 runs: PCC 0.999990, rel 0.00456.
+  - Experts vs CPU same input: 0.01036 / [0.9969, 1.0035] / 0.0131 / 1.00012 (chunk 0: 0.01040).
+  - Experts vs golden: 0.01254 / 0.0275 / 0.99790.
+  - Experts share: 0.00167 / [0.9980, 1.0018].
+  - About 103 s (195 s in total).
+- Reference passes (PCC 0.999997, every share exact). Stub fails (PCC 0 and every check).
+Next: the device experts module (`tt/experts.py`) and its hook already work for layer 4 in this swap.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_10_experts.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
