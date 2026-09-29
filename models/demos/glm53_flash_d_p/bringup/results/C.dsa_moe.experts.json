@@ -1,0 +1,97 @@
+{
+ "metrics": {
+  "bmax_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 1.0009241104125977
+  },
+  "bmax_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.000955581665039
+  },
+  "bmax_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.001020073890686
+  },
+  "bmin_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 1.0006965398788452
+  },
+  "bmin_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.0001217126846313
+  },
+  "bmin_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.000045657157898
+  },
+  "coef_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 1.0008106231689453
+  },
+  "coef_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.0004910230636597
+  },
+  "coef_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.00051748752594
+  },
+  "pcc_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.9999703609935092
+  },
+  "pcc_experts_L03_c0": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.9999703548358316
+  },
+  "rel_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 0.009056038223206997
+  },
+  "rel_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.007718853186815977
+  },
+  "rel_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.007719181943684816
+  },
+  "rmax_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 1.0033578872680664
+  },
+  "rmax_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.006575107574463
+  },
+  "rmax_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 1.0062146186828613
+  },
+  "rmin_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 0.9990010857582092
+  },
+  "rmin_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.9939178228378296
+  },
+  "rmin_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.9947196841239929
+  },
+  "row_rel_clamp_probe_experts_L03": {
+   "t": "2026-09-29T11:43:23",
+   "value": 0.012004494667053223
+  },
+  "row_rel_golden_c0_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.012280669994652271
+  },
+  "row_rel_golden_experts_L03": {
+   "t": "2026-09-29T11:43:21",
+   "value": 0.011711155995726585
+  }
+ },
+ "task": "C.dsa_moe.experts"
+}
