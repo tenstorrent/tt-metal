@@ -35,6 +35,13 @@ and resumes incomplete downloads. The checkpoint occupies 360 GB. Allow approxim
 remain in the host page cache for timing; the original source's smaller host-memory guidance does not guarantee
 this residency.
 
+Keep published cache artifacts immutable while readers use them: create a new file and publish it with atomic
+replacement, as the converter does. Do not overwrite or truncate a live file while loaded host tensors/views or
+device transfers still use it. Hash verification and retained descriptors do not create an immutable snapshot;
+stat checks cannot detect every writable-mmap modification. The model validates its cache identity and hashes
+before upload and releases loaded tensors on validation failure. Generic `ttnn.load_tensor` preserves ordinary
+pathname behavior and owns a duplicate only for a canonical `/proc/self/fd/<positive-int>` input.
+
 ## Standalone validation and serving
 
 Run only on an allocated four-device mesh. Keep `CACHE_ROOT` dedicated to this model. The QuietBox profile derives
