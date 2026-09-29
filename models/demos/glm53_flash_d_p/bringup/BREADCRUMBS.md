@@ -1505,3 +1505,35 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53
 - The per-row norm ratio sits slightly above 1 (up to 1.0011), not centred on 1. This is well inside the limits.
 - In the log, the first `FAIL pcc=0` line comes from the precompile collect pass, not from the real pass.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_moe_add.py`
+
+## S.dsa_moe.14 test (attempt 1)
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through moe_add on the device. I rewrote it from swap
+13's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new add-share block (every device output up to shared_expert fixed, CPU moe_add and tail) is the
+  base of the add's share. The shared share is now that block vs the shared-share block; it reproduces swap 13
+  (0.00056 / [0.9998, 1.0001]).
+- New checks:
+  - Add share at block out: rel <= 0.0025, ratio [0.998, 1.002].
+  - moe_add vs the fp32 sum of the same device experts_out and shared_out: the component test's limits, including
+    each addend's coefficient and rel. Also run on chunk 0.
+  - moe_add vs golden on the rows with the golden's top-8: rel <= 0.01, ratio [0.985, 1.015], worst row <= 0.03,
+    coefficient [0.997, 1.003], 128-row blocks [0.995, 1.005]. Flipped rows: ratio [0.8, 1.25].
+- `_moe_add_checks` is a new helper. The golden check reuses `_experts_checks(step="moe_add")`.
+- Sensitivity: a host-only script, /tmp/glm_s14/sens.py (not kept). It uses the golden h_mid, ffn_hc, experts_out
+  and shared_out with `glm_ref.hc_residual`, and needs no weights. mlp_out reaches block out at about 0.70x. Results:
+  - bf16 RNE output: 0.00123 / [0.99989, 1.00010].
+  - A truncating output: min 0.99789. x1.002: max 1.00183.
+  - x1.005: 0.0035. shared x1.005: max 1.0030.
+  - The last row's shared missing: min 0.962.
+Results:
+- Device passes: PCC 0.999981 (c0 0.999974).
+  - Add share: 0.00124 / [1.0000, 1.0008].
+  - moe_add vs the fp32 sum: 0.00177 / [1.0004, 1.0011]; experts coefficient 1.00071, shared 1.00142.
+  - moe_add vs golden: 0.00700 on 1974 rows.
+  - About 116 s.
+- Reference passes. Stub fails (AssertionError).
+- The device add's per-row norm ratio is above 1 on every row (1.0004..1.0011), the same as in the component test.
+  The ratio limit therefore has less headroom on the high side.
+- In the log, the first `FAIL pcc_swap_out pcc=0` lines come from the precompile collect pass, not from the real pass.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_14_moe_add.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
