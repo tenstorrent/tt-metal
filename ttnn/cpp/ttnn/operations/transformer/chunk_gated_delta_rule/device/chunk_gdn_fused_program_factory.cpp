@@ -10,7 +10,7 @@
 // receivers' CBs: the six V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta
 // as NV per-receiver slice writes — zero DRAM intermediates.
 //
-// Geometry (computed by fused_placement() in chunk_gdn_fused.cpp, which the host-side
+// Geometry (computed by fused_placement() in chunk_gdn_device_operation.cpp, which the host-side
 // geometry tests check per grid). Placement 0 (row-major):
 //   receivers  row-major from row 0: head h at row h / HPR, columns (h % HPR)*NV .. +NV-1, with
 //              HPR = grid.x / NV heads per row  =>  feasible iff BH <= HPR * grid.y
@@ -44,7 +44,7 @@
 // the seven intermediates are packed at the same CB boundaries in fp32, so fused == phased bit for
 // bit; any difference is plumbing.
 
-#include "chunk_gdn_fused.hpp"
+#include "chunk_gdn_device_operation.hpp"
 #include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
@@ -109,7 +109,7 @@ constexpr uint32_t s3 = tt::CBIndex::c_31;
 }  // namespace fcb
 
 tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
-    const ChunkGdnFusedParams& attrs, const ChunkGdnFusedInputs& in, std::vector<Tensor>& outputs) {
+    const ChunkGdnParams& attrs, const ChunkGdnInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t BH = attrs.BH;
     const uint32_t NC = attrs.num_chunks;
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;

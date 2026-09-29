@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "chunk_gdn_fused.hpp"
+#include "chunk_gdn_device_operation.hpp"
 
 #include <algorithm>
 #include <utility>
+#include <variant>
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
@@ -15,27 +16,31 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-// Uniquely named (vs the phased prim's `check`) so it does not clash under unity builds.
-void check_fused(const Tensor& t, const char* name, DataType dt) {
-    TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn_fused: {} must be TILE layout", name);
-    TT_FATAL(t.dtype() == dt, "chunk_gdn_fused: {} has wrong dtype", name);
-    TT_FATAL(t.buffer() != nullptr, "chunk_gdn_fused: {} must be on device", name);
+// Uniquely named (vs the phased prims' `check`) so it does not clash under unity builds.
+void check_gdn_tensor(const Tensor& t, const char* name, DataType dt) {
+    TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
+    TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
+    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
 }  // namespace
 
-ChunkGdnFusedOperation::program_factory_t ChunkGdnFusedOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+ChunkGdnDeviceOperation::program_factory_t ChunkGdnDeviceOperation::select_program_factory(
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    if (attrs.impl == ChunkGdnImpl::Mono) {
+        return ChunkGdnMonoProgramFactory{};
+    }
     return ChunkGdnFusedProgramFactory{};
 }
 
-void ChunkGdnFusedOperation::validate_on_program_cache_miss(
+void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace tt::constants;
-    // Input-side checks: identical to the phased PREP prim (the fused producer runs the unchanged
-    // prep reader/compute, so its input contract is prep's).
-    check_fused(in.q, "q", DataType::BFLOAT16);
-    check_fused(in.k, "k", DataType::BFLOAT16);
-    check_fused(in.v, "v", DataType::BFLOAT16);  // flat [B,T,HV*V] when attrs.v_flat; else [BH,NC,C,V]
+    // Input contract shared by both factories: the mono kernel and the fused producers read the same
+    // head-major tensors (identical to the phased PREP prim's contract, whose reader/compute the fused
+    // producer runs unchanged; the flat forms are the prep reader's and therefore Fused-only).
+    check_gdn_tensor(in.q, "q", DataType::BFLOAT16);
+    check_gdn_tensor(in.k, "k", DataType::BFLOAT16);
+    check_gdn_tensor(in.v, "v", DataType::BFLOAT16);  // flat [B,T,HV*V] when attrs.v_flat; else [BH,NC,C,V]
     if (attrs.v_flat) {
         TT_FATAL(attrs.HV > 0, "v_flat requires HV > 0");
         const auto& vs = in.v.logical_shape();
@@ -50,27 +55,41 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
-    check_fused(in.g, "g", DataType::FLOAT32);
-    check_fused(in.beta, "beta", DataType::FLOAT32);
-    check_fused(in.eye_c, "eye_c", DataType::FLOAT32);
-    check_fused(in.tril_c, "tril_c", DataType::FLOAT32);
-    check_fused(in.ones_c, "ones_c", DataType::FLOAT32);
-    check_fused(in.masks_c, "masks_c", DataType::FLOAT32);
+    check_gdn_tensor(in.g, "g", DataType::FLOAT32);
+    check_gdn_tensor(in.beta, "beta", DataType::FLOAT32);
+    check_gdn_tensor(in.eye_c, "eye_c", DataType::FLOAT32);
+    check_gdn_tensor(in.tril_c, "tril_c", DataType::FLOAT32);
+    check_gdn_tensor(in.ones_c, "ones_c", DataType::FLOAT32);
+    check_gdn_tensor(in.masks_c, "masks_c", DataType::FLOAT32);
     if (in.initial_state.has_value()) {
-        check_fused(*in.initial_state, "initial_state", DataType::FLOAT32);
+        check_gdn_tensor(*in.initial_state, "initial_state", DataType::FLOAT32);
     }
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
-    // Geometry: NP producers + NV receivers per head. Receivers of a head form a 1xNV row rectangle
-    // (the multicast target), so the grid must hold BH such rectangles: BH <= (grid.x / NV) * grid.y.
-    // Producers have no placement constraint. NP / NV come from ChunkGdnFusedProgramConfig::
-    // num_producers / num_receivers, or from the cost model when unset (chunk_gdn_fused below).
+
+    const auto grid = in.q.device()->compute_with_storage_grid_size();
+    if (attrs.impl == ChunkGdnImpl::Mono) {
+        // One core per head running the single-kernel program on head-major inputs.
+        TT_FATAL(
+            !attrs.v_flat && !attrs.qk_flat && !attrs.qk_norm,
+            "chunk_gdn: the mono program takes head-major q/k/v only (no flat inputs, no in-kernel qk-norm)");
+        TT_FATAL(
+            attrs.BH <= grid.x * grid.y,
+            "chunk_gdn: the mono program needs one core per head: BH={} exceeds the {}x{} grid",
+            attrs.BH,
+            grid.x,
+            grid.y);
+        return;
+    }
+    // Fused geometry: NP producers + NV receivers per head. Receivers of a head form a 1xNV row
+    // rectangle (the multicast target), so the grid must hold BH such rectangles: BH <= (grid.x / NV) *
+    // grid.y. Producers have no placement constraint. NP / NV come from ChunkGdnFusedProgramConfig::
+    // num_producers / num_receivers, or from the cost model when unset (chunk_gdn below).
     TT_FATAL(attrs.np >= 1, "chunk_gdn_fused: np must be >= 1 (got {})", attrs.np);
     TT_FATAL(attrs.nv >= 1, "chunk_gdn_fused: nv must be >= 1 (got {})", attrs.nv);
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     TT_FATAL(Vt % attrs.nv == 0, "chunk_gdn_fused: nv ({}) must divide Vt ({})", attrs.nv, Vt);
-    const auto grid = in.q.device()->compute_with_storage_grid_size();
     TT_FATAL(attrs.nv <= grid.x, "chunk_gdn_fused: nv ({}) exceeds the grid width {}", attrs.nv, grid.x);
     // Per-(head, slot) credit words live in one 4 KB tile of the u/mask CB.
     TT_FATAL(
@@ -132,18 +151,19 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
         grid.x * grid.y);
 }
 
-ChunkGdnFusedOperation::spec_return_value_t ChunkGdnFusedOperation::compute_output_specs(
+ChunkGdnDeviceOperation::spec_return_value_t ChunkGdnDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
-    // EXACTLY ChunkGdnScanOperation::compute_output_specs: o and final_state are both fp32 (a bf16
-    // o degraded full-model quality and was removed — see the phased scan op).
-    const auto o_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // o: bf16 from the mono kernel (its cb_out format), fp32 from the fused program — EXACTLY the phased
+    // scan's spec (a bf16 o degraded full-model quality there and was removed). final_state is fp32 on both.
+    const DataType o_dtype = attrs.impl == ChunkGdnImpl::Mono ? DataType::BFLOAT16 : DataType::FLOAT32;
+    const auto o_layout = TensorLayout(o_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
     return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
 }
 
-ChunkGdnFusedOperation::tensor_return_value_t ChunkGdnFusedOperation::create_output_tensors(
+ChunkGdnDeviceOperation::tensor_return_value_t ChunkGdnDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     auto specs = compute_output_specs(attrs, in);
     auto* device = in.q.device();
@@ -155,6 +175,9 @@ ChunkGdnFusedOperation::tensor_return_value_t ChunkGdnFusedOperation::create_out
     return outs;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Fused geometry cost model and placement
+// ---------------------------------------------------------------------------------------------------
 namespace {
 // QB2 constants, re-measured 2026-09-25 (Tracy device time, NC=64) after the scan folded its o and
 // state adds into DST accumulation: producer item under load, receiver step (period) per V-slice
@@ -358,7 +381,10 @@ FusedGeometryChoice choose_fused_geometry(
     return best;
 }
 
-std::vector<Tensor> chunk_gdn_fused(
+// ---------------------------------------------------------------------------------------------------
+// Launcher
+// ---------------------------------------------------------------------------------------------------
+std::vector<Tensor> chunk_gdn(
     const Tensor& q,
     const Tensor& k,
     const Tensor& v,
@@ -373,7 +399,7 @@ std::vector<Tensor> chunk_gdn_fused(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
+    const ChunkGdnDeviceProgramConfig& program_config,
     bool v_flat,
     uint32_t HV,
     bool qk_norm,
@@ -382,52 +408,14 @@ std::vector<Tensor> chunk_gdn_fused(
     uint32_t Hk) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
-    // Dim derivation identical to chunk_gdn_prep (the fused op consumes prep's inputs).
+    // Dim derivation identical to chunk_gdn_prep (both factories consume prep's inputs; the flat forms
+    // are Fused-only and rejected for Mono in validate).
     const uint32_t BH = qk_flat ? (q_shape[0] * HV) : q_shape[0];
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];
     const uint32_t val_dim = v_flat ? (v_shape[2] / HV) : v_shape[3];
-    // Geometry: the program config's pinned fields, the calibrated cost model for the rest. Resolved HERE (attrs
-    // construction), never in the factory — every field is hashed, so a different config compiles a fresh program
-    // instead of silently serving a stale cached one.
-    const auto grid0 = q.device()->compute_with_storage_grid_size();
-    const uint32_t np_pin = program_config.num_producers.value_or(0);
-    const uint32_t nv_pin = program_config.num_receivers.value_or(0);
-    TT_FATAL(
-        !program_config.num_producers.has_value() || np_pin >= 1,
-        "chunk_gdn_fused: num_producers must be >= 1 (got {})",
-        np_pin);
-    TT_FATAL(
-        !program_config.num_receivers.has_value() || nv_pin >= 1,
-        "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
-        nv_pin);
-    // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
-    const auto choice =
-        choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / tt::constants::TILE_WIDTH, nv_pin, np_pin);
-    TT_FATAL(
-        choice.nv >= 1,
-        "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
-        "(0 = free); the dispatch must choose phased",
-        BH,
-        grid0.x,
-        grid0.y,
-        nv_pin,
-        np_pin);
-    // Producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
-    // core, and the receiver's rotating credit c % NP would skip it anyway). Receivers per head must
-    // divide Vt (validated).
-    const uint32_t np = np_pin ? std::min<uint32_t>(np_pin, num_chunks) : choice.np;
-    const uint32_t nv = nv_pin ? nv_pin : choice.nv;
-    const uint32_t nbuf = program_config.handoff_depth;
-    TT_FATAL(nbuf >= 1 && nbuf <= 8, "chunk_gdn_fused: handoff_depth must be in [1, 8] (got {})", nbuf);
-    const bool unicast = program_config.unicast;
-    const bool posted = program_config.posted;
-    TT_FATAL(!posted || unicast, "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");
-    // Placement: the config's choice, else row-local whenever the (possibly pinned) geometry has a
-    // row-local layout.
-    const bool row_local = program_config.row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, nv, np));
-    const uint32_t placement = row_local ? 1u : 0u;
-    auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
+    auto attrs = ChunkGdnDeviceOperation::operation_attributes_t{
+        .impl = ChunkGdnImpl::Mono,
         .BH = BH,
         .num_chunks = num_chunks,
         .chunk_size = chunk_size,
@@ -439,18 +427,61 @@ std::vector<Tensor> chunk_gdn_fused(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
-        .np = np,
-        .nv = nv,
-        .nbuf = nbuf,
-        .unicast = unicast,
-        .posted = posted,
-        .placement = placement,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
-    auto tensor_args = ChunkGdnFusedOperation::tensor_args_t{
+    if (const auto* fused_cfg = std::get_if<ttnn::transformer::ChunkGdnFusedProgramConfig>(&program_config)) {
+        attrs.impl = ChunkGdnImpl::Fused;
+        // Geometry: the program config's pinned fields, the calibrated cost model for the rest. Resolved HERE
+        // (attrs construction), never in the factory — every field is hashed, so a different config compiles a
+        // fresh program instead of silently serving a stale cached one.
+        const auto grid0 = q.device()->compute_with_storage_grid_size();
+        const uint32_t np_pin = fused_cfg->num_producers.value_or(0);
+        const uint32_t nv_pin = fused_cfg->num_receivers.value_or(0);
+        TT_FATAL(
+            !fused_cfg->num_producers.has_value() || np_pin >= 1,
+            "chunk_gdn_fused: num_producers must be >= 1 (got {})",
+            np_pin);
+        TT_FATAL(
+            !fused_cfg->num_receivers.has_value() || nv_pin >= 1,
+            "chunk_gdn_fused: num_receivers must be >= 1 (got {})",
+            nv_pin);
+        // The model fills whatever the config leaves free (both, one, or none) so the pair fits the grid.
+        const auto choice = choose_fused_geometry(
+            grid0.x, grid0.y, BH, num_chunks, val_dim / tt::constants::TILE_WIDTH, nv_pin, np_pin);
+        TT_FATAL(
+            choice.nv >= 1,
+            "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with num_receivers={} num_producers={} "
+            "(0 = free); the dispatch must choose phased",
+            BH,
+            grid0.x,
+            grid0.y,
+            nv_pin,
+            np_pin);
+        // Producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
+        // core, and the receiver's rotating credit c % NP would skip it anyway). Receivers per head must
+        // divide Vt (validated).
+        attrs.np = np_pin ? std::min<uint32_t>(np_pin, num_chunks) : choice.np;
+        attrs.nv = nv_pin ? nv_pin : choice.nv;
+        attrs.nbuf = fused_cfg->handoff_depth;
+        TT_FATAL(
+            attrs.nbuf >= 1 && attrs.nbuf <= 8,
+            "chunk_gdn_fused: handoff_depth must be in [1, 8] (got {})",
+            attrs.nbuf);
+        attrs.unicast = fused_cfg->unicast;
+        attrs.posted = fused_cfg->posted;
+        TT_FATAL(
+            !attrs.posted || attrs.unicast,
+            "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");
+        // Placement: the config's choice, else row-local whenever the (possibly pinned) geometry has a
+        // row-local layout.
+        const bool row_local =
+            fused_cfg->row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, attrs.nv, attrs.np));
+        attrs.placement = row_local ? 1u : 0u;
+    }
+    auto tensor_args = ChunkGdnDeviceOperation::tensor_args_t{
         .q = q,
         .k = k,
         .v = v,
@@ -461,7 +492,7 @@ std::vector<Tensor> chunk_gdn_fused(
         .ones_c = ones_c,
         .masks_c = masks_c,
         .initial_state = initial_state};
-    return ttnn::device_operation::launch<ChunkGdnFusedOperation>(attrs, tensor_args);
+    return ttnn::device_operation::launch<ChunkGdnDeviceOperation>(attrs, tensor_args);
 }
 
 }  // namespace ttnn::prim

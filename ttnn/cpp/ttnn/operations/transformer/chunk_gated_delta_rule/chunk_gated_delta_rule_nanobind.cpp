@@ -5,7 +5,7 @@
 #include "chunk_gated_delta_rule.hpp"
 #include "chunk_gated_delta_rule_config.hpp"
 #include "device/chunk_gdn_phased.hpp"
-#include "device/chunk_gdn_fused.hpp"
+#include "device/chunk_gdn_device_operation.hpp"
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/device.hpp"

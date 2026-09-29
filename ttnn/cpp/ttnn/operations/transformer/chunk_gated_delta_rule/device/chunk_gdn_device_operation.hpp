@@ -1,19 +1,26 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fused prep→scan chunked Gated Delta Rule (ONE prim, ONE program, zero DRAM intermediates):
-// per head, NP PRODUCER cores run the unchanged prep reader+compute and a writer that NoC-writes
-// the 7 computed intermediates (v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv) straight into the
-// CBs of the head's NV RECEIVER cores (each carrying a V-slice) through a credit/valid handshake;
-// the receivers run the unchanged scan compute+writer. NP and NV come from
-// ChunkGdnFusedProgramConfig::num_producers / num_receivers, or from the cost model when unset.
-// Takes prep's inputs, returns scan's outputs — the seven fp32 DRAM tensors of the phased
-// hand-off simply never exist. The phased prims (chunk_gdn_phased.hpp) stay in-tree as the
-// bit-exact reference: the DRAM round trip they perform is a byte copy, so fused == phased
-// bit-for-bit as long as the shared math bodies and CB pack boundaries are untouched.
+// The chunk_gated_delta_rule device operation: ONE device op, two program factories for one contract —
+// inputs {q, k, v, g, beta, the constant tiles, initial_state} -> {o [BH,NC,C,V], final_state [BH,K,V]}.
+//   Mono  — the original single-kernel program: one core per head runs prep and scan for every chunk.
+//           The slowest path, kept as the benchmark/debug reference; o is bf16 (the kernel's cb_out).
+//   Fused — ONE program with zero DRAM intermediates: per head, NP PRODUCER cores run the prep
+//           reader+compute and a writer that NoC-writes the 7 computed intermediates (v_beta, nkd,
+//           q_decay, intra, k_dec_t, dl, t_inv) straight into the CBs of the head's NV RECEIVER cores
+//           (each carrying a V-slice) through a credit/valid handshake; the receivers run the scan
+//           compute+writer. NP and NV come from ChunkGdnFusedProgramConfig::num_producers /
+//           num_receivers, or from the cost model when unset. o is fp32 — exactly the phased scan's
+//           output spec — and fused == phased bit for bit as long as the shared math bodies and CB pack
+//           boundaries are untouched.
+// The program-config alternative names the factory, as a matmul program config names its factory, and
+// every field that changes the program is a hashed attribute. The phased prims (chunk_gdn_phased.hpp) are
+// a different contract — prep -> seven fp32 DRAM tensors -> scan, two programs — and stay separate ops:
+// they are the bit-exact reference the fused path is gated against.
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -26,14 +33,19 @@
 
 namespace ttnn::prim {
 
+// Which program factory runs. Hashed with the other attributes, so the two programs never share a cache entry.
+enum class ChunkGdnImpl : uint8_t { Mono, Fused };
+
 // Union of the prep and scan params (see chunk_gdn_phased.hpp for per-field semantics of the
-// prep-side v_flat/HV/qk_flat/Hk/qk_norm/scale block and the scan-side state flags).
-struct ChunkGdnFusedParams {
-    uint32_t BH;
-    uint32_t num_chunks;
-    uint32_t chunk_size;
-    uint32_t key_dim;
-    uint32_t val_dim;
+// prep-side v_flat/HV/qk_flat/Hk/qk_norm/scale block and the scan-side state flags), plus the fused
+// geometry. Mono uses the shape block and the state flags only; it rejects the flat forms in validate.
+struct ChunkGdnParams {
+    ChunkGdnImpl impl = ChunkGdnImpl::Fused;
+    uint32_t BH = 0;
+    uint32_t num_chunks = 0;
+    uint32_t chunk_size = 0;
+    uint32_t key_dim = 0;
+    uint32_t val_dim = 0;
     bool v_flat = false;
     uint32_t HV = 0;
     bool qk_flat = false;
@@ -42,7 +54,7 @@ struct ChunkGdnFusedParams {
     float scale = 1.0f;
     // Every geometry/transport field below is resolved from the ChunkGdnFusedProgramConfig (or the
     // cost model, for the fields it leaves free) at attrs construction — never in the factory: these
-    // fields being hashed is what keeps the program cache honest.
+    // fields being hashed is what keeps the program cache honest. Mono leaves them at their defaults.
     // Producers per head (NP). Producer p of a head owns chunks c = p, p+NP, ... and NoC-
     // writes them into the head's receivers in order (receiver-driven rotating ready credits).
     // Clamped to num_chunks.
@@ -78,30 +90,37 @@ struct ChunkGdnFusedParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct ChunkGdnFusedInputs {
-    Tensor q;                             // [BH, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
-    Tensor k;                             // [BH, NC, C, K] bf16 (or FLAT, as q)
-    Tensor v;                             // [BH, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;                             // [BH, NC, C, 1] fp32 (column)
-    Tensor beta;                          // [BH, NC, C, 1] fp32 (column)
-    Tensor eye_c;                         // [1,1,C,C] fp32
-    Tensor tril_c;                        // [1,1,C,C] fp32
-    Tensor ones_c;                        // [1,1,C,C] fp32
-    Tensor masks_c;                       // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10)
+struct ChunkGdnInputs {
+    Tensor q;        // [BH, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
+    Tensor k;        // [BH, NC, C, K] bf16 (or FLAT, as q)
+    Tensor v;        // [BH, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
+    Tensor g;        // [BH, NC, C, 1] fp32 (column)
+    Tensor beta;     // [BH, NC, C, 1] fp32 (column)
+    Tensor eye_c;    // [1,1,C,C] fp32
+    Tensor tril_c;   // [1,1,C,C] fp32
+    Tensor ones_c;   // [1,1,C,C] fp32
+    Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10); Fused only
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
 };
 
-struct ChunkGdnFusedProgramFactory {
+// One core per head, all chunks in sequence (chunk_gdn_mono_program_factory.cpp).
+struct ChunkGdnMonoProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const ChunkGdnFusedParams&, const ChunkGdnFusedInputs&, std::vector<Tensor>&);
+        const ChunkGdnParams&, const ChunkGdnInputs&, std::vector<Tensor>&);
 };
 
-struct ChunkGdnFusedOperation {
-    using operation_attributes_t = ChunkGdnFusedParams;
-    using tensor_args_t = ChunkGdnFusedInputs;
+// NP producers -> NV receivers per head over the NoC (chunk_gdn_fused_program_factory.cpp).
+struct ChunkGdnFusedProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ChunkGdnParams&, const ChunkGdnInputs&, std::vector<Tensor>&);
+};
+
+struct ChunkGdnDeviceOperation {
+    using operation_attributes_t = ChunkGdnParams;
+    using tensor_args_t = ChunkGdnInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<ChunkGdnFusedProgramFactory>;
+    using program_factory_t = std::variant<ChunkGdnMonoProgramFactory, ChunkGdnFusedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -109,11 +128,14 @@ struct ChunkGdnFusedOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// The per-head row-local cost model, calibrated on QB2:
+// ---------------------------------------------------------------------------------------------------
+// Fused geometry: the per-head row-local cost model, calibrated on QB2:
 //   T_fused(NV, NP) = NC * max(w_p / NP, t_step(Vt / NV)) + fill   over (NV | Vt, NP) with a feasible
 //   row-local layout, ties -> fewer cores, then smaller NV; T_phased(BH) from the measured table.
 // The op host uses it for whichever of num_receivers / num_producers / row_local the fused program
-// config leaves free; test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
+// config leaves free, and to decide fused vs phased when no program config is given;
+// test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
+// ---------------------------------------------------------------------------------------------------
 struct FusedGeometryChoice {
     uint32_t nv = 0;  // 0 => no fused geometry fits this grid
     uint32_t np = 0;
@@ -146,12 +168,18 @@ struct FusedPlacement {
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
 
-// Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
-// The geometry (NV receivers + NP producers per head, placement) comes from program_config, with the
-// calibrated cost model filling whatever it leaves free. Needs BH*(NV+NP) cores and a placement that
-// fits; validate FATALs otherwise, so the op-level dispatch must gate on grid size before choosing
-// this path (choose_fused_geometry(...).nv == 0 means no geometry fits).
-std::vector<Tensor> chunk_gdn_fused(
+// The device-level program config: the Mono or Fused alternative of ChunkGdnProgramConfig (the phased
+// alternative launches the two phased prims instead, see chunk_gated_delta_rule.cpp).
+using ChunkGdnDeviceProgramConfig =
+    std::variant<ttnn::transformer::ChunkGdnMonoProgramConfig, ttnn::transformer::ChunkGdnFusedProgramConfig>;
+
+// Returns {o [BH,NC,C,V], final_state [BH,K,V]} — o bf16 from Mono, fp32 from Fused; final_state fp32.
+// Fused: the geometry (NV receivers + NP producers per head, placement) comes from the program config,
+// with the calibrated cost model filling whatever it leaves free. Needs BH*(NV+NP) cores and a placement
+// that fits; validate FATALs otherwise, so the op-level dispatch must gate on grid size before choosing
+// this path (choose_fused_geometry(...).nv == 0 means no geometry fits). Mono needs BH cores and does
+// not accept flat q/k/v.
+std::vector<Tensor> chunk_gdn(
     const Tensor& q,
     const Tensor& k,
     const Tensor& v,
@@ -166,7 +194,7 @@ std::vector<Tensor> chunk_gdn_fused(
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
+    const ChunkGdnDeviceProgramConfig& program_config,
     bool v_flat = false,
     uint32_t HV = 0,
     bool qk_norm = false,

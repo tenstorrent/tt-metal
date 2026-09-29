@@ -34,7 +34,7 @@ VT = 4  # V = 128 -> 4 tiles; invariant across the Qwen GDN family
 
 # ---------------------------------------------------------------------------------------------
 # Inlined Python oracle of the fused geometry. Kept self-contained on purpose:
-# it is an independent re-derivation of chunk_gdn_fused.cpp (choose_fused_geometry,
+# it is an independent re-derivation of chunk_gdn_device_operation.cpp (choose_fused_geometry,
 # fused_row_local_feasible, fused_placement), so a bug has to be made twice to pass.
 # Cost-model constants: QB2, re-measured 2026-09-25 (Tracy device time, per-RISC zones) after the scan
 # folded its o and state adds into DST accumulation (the Horner WY inverse's producer item).

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Program factory for the standalone chunk_gated_delta_rule op.
+// The Mono program factory of the chunk_gated_delta_rule device op (chunk_gdn_device_operation.hpp).
 // Parallelism: one Tensix core per (B*HV) head; each core loops over NC chunks
 // holding the recurrent state S [K,V] on-core. All math is in the compute kernel,
 // derived from flash-linear-attention `naive_chunk_gated_delta_rule`.
 
-#include "chunk_gated_delta_rule_program_factory.hpp"
+#include "chunk_gdn_device_operation.hpp"
 #include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
@@ -59,8 +59,8 @@ constexpr uint32_t scr3 = tt::CBIndex::c_30;       // scratch [C,C]
 constexpr uint32_t s3 = tt::CBIndex::c_31;         // [K,V] ping-pong state buffer 3
 }  // namespace cb
 
-tt::tt_metal::ProgramDescriptor ChunkGatedDeltaRuleProgramFactory::create_descriptor(
-    const ChunkGatedDeltaRuleParams& attrs, const ChunkGatedDeltaRuleInputs& in, std::vector<Tensor>& outputs) {
+tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
+    const ChunkGdnParams& attrs, const ChunkGdnInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t BH = attrs.BH;
     const uint32_t NC = attrs.num_chunks;
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;

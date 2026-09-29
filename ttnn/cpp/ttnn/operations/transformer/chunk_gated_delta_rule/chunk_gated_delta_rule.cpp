@@ -12,8 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "device/chunk_gated_delta_rule_device_operation.hpp"
-#include "device/chunk_gdn_fused.hpp"
+#include "device/chunk_gdn_device_operation.hpp"
 #include "device/chunk_gdn_phased.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -279,14 +278,15 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     //   fused  — ONE program: per head NP producer cores run prep and NoC-write the 7 intermediates
     //            straight into NV receiver cores' CBs (zero DRAM intermediates).
     //   phased — prep -> (7 fp32 DRAM tensors) -> scan, two prims. The bit-exact reference.
-    //   mono   — the original single-kernel op, 1 core/head (benchmark/debug only).
-    // The program config names the path, as a matmul program config names its factory; without one
-    // the op chooses by the fused op's calibrated geometry cost model (chunk_gdn_fused.hpp): fused iff
-    // a row-local geometry fits this grid AND its predicted time beats the phased reference
-    // (fused_pays). On QB2's 11x10 grid that is every BH <= 48 (BH=64 needs 128 cores -> phased); the
-    // fused path is bit-exact vs phased and measured 1.2-1.9x faster at BH = 4..32. Each branch
-    // launches a DIFFERENT prim with its own program-cache hash, and every config field is hashed
-    // inside its prim's attributes.
+    //   mono   — the original single-kernel program, 1 core/head (benchmark/debug only).
+    // Fused and mono are the two program factories of one device op (chunk_gdn_device_operation.hpp);
+    // phased is the two prims of chunk_gdn_phased.hpp. The program config names the path, as a matmul
+    // program config names its factory; without one the op chooses by the fused path's calibrated
+    // geometry cost model: fused iff a row-local geometry fits this grid AND its predicted time beats
+    // the phased reference (fused_pays). On QB2's 11x10 grid that is every BH <= 48 (BH=64 needs 128
+    // cores -> phased); the fused path is bit-exact vs phased and measured 1.2-1.9x faster at
+    // BH = 4..32. Every config field is hashed inside the device op's attributes (the factory choice
+    // included), so each path has its own program-cache entries.
     const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
         const auto grid = dev->compute_with_storage_grid_size();
         const auto choice = ttnn::prim::choose_fused_geometry(grid.x, grid.y, BH, NC, V / tt::constants::TILE_WIDTH);
@@ -295,46 +295,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         }
         return ChunkGdnPhasedProgramConfig{};
     }();
-    const bool is_mono = std::holds_alternative<ChunkGdnMonoProgramConfig>(cfg);
-
     ttnn::Tensor o_c;          // [BH, NC, C, V]
     ttnn::Tensor final_state;  // [BH, K, V]
     // OPT-A/OPT-B are handled by the prep reader/compute, which both the phased and fused paths
-    // run unchanged; only the monolithic kernel lacks them.
-    TT_FATAL(!flat_v || !is_mono, "OPT-A flat v is not supported on the mono path");
+    // run unchanged; the mono program rejects the flat forms in its validate.
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
-    TT_FATAL(
-        !flat_qk || (!is_mono && qk_norm), "OPT-A flat q/k needs the phased or fused path + in-kernel norm (Ct==1)");
+    TT_FATAL(!flat_qk || qk_norm, "OPT-A flat q/k needs the in-kernel norm (chunk_size == 32)");
     TT_FATAL(!flat_qk || pad == 0, "OPT-A flat q/k requires T ({}) to be a multiple of chunk_size ({})", T, C);
-    if (const auto* fused_cfg = std::get_if<ChunkGdnFusedProgramConfig>(&cfg)) {
-        // Same preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS
-        // provides — zeros built above when the caller passed none), same outputs scan produces;
-        // the postprocessing below is shared.
-        auto fused = ttnn::prim::chunk_gdn_fused(
-            q_c,
-            k_c,
-            v_c,
-            g_c,
-            beta_c,
-            eye_c,
-            tril_c,
-            ones_c,
-            masks_c,
-            s0,
-            C,
-            output_final_state,
-            out_mem,
-            kernel_cfg,
-            *fused_cfg,
-            flat_v,
-            HV,
-            qk_norm,
-            scale,
-            flat_qk,
-            H);
-        o_c = fused[0];
-        final_state = fused[1];
-    } else if (const auto* phased_cfg = std::get_if<ChunkGdnPhasedProgramConfig>(&cfg)) {
+    if (const auto* phased_cfg = std::get_if<ChunkGdnPhasedProgramConfig>(&cfg)) {
         auto prep = ttnn::prim::chunk_gdn_prep(
             q_c,
             k_c,
@@ -380,8 +348,36 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             o_c = prep[static_cast<size_t>(std::atoi(dumpenv))];
         }
     } else {
-        auto results = ttnn::prim::chunk_gated_delta_rule(
-            q_c, k_c, v_c, g_c, beta_c, eye_c, tril_c, ones_c, s0, C, output_final_state, out_mem, kernel_cfg);
+        // Fused or mono: one device op whose program factory the config alternative selects. Same
+        // preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS provides —
+        // zeros built above when the caller passed none), same outputs scan produces; the
+        // postprocessing below is shared.
+        const ttnn::prim::ChunkGdnDeviceProgramConfig dev_cfg =
+            std::holds_alternative<ChunkGdnFusedProgramConfig>(cfg)
+                ? ttnn::prim::ChunkGdnDeviceProgramConfig{std::get<ChunkGdnFusedProgramConfig>(cfg)}
+                : ttnn::prim::ChunkGdnDeviceProgramConfig{ChunkGdnMonoProgramConfig{}};
+        auto results = ttnn::prim::chunk_gdn(
+            q_c,
+            k_c,
+            v_c,
+            g_c,
+            beta_c,
+            eye_c,
+            tril_c,
+            ones_c,
+            masks_c,
+            s0,
+            C,
+            output_final_state,
+            out_mem,
+            kernel_cfg,
+            dev_cfg,
+            flat_v,
+            HV,
+            qk_norm,
+            scale,
+            flat_qk,
+            H);
         o_c = results[0];
         final_state = results[1];
     }
