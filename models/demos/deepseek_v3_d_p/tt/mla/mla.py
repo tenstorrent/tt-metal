@@ -1377,9 +1377,6 @@ class ttMLA:
         cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
         update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
         already folded its single-shot onto the block-cyclic update_padded write)."""
-        # In-place ops re-impute the output topology from their inputs, so the fill would stamp the
-        # SP x TP sharded tt_kvpe's rank-2 distribution onto the TP-replicated cache. kv_cache_to_host
-        # keys on that declared rank and would then read the replicas back as tp x the rows.
         declared_topology = kvpe_cache.storage.tensor_topology()
         ttnn.kv_cache.fill_cache_for_user_(kvpe_cache.storage, tt_kvpe, cache_layer_idx)
         kvpe_cache.storage.update_tensor_topology(declared_topology)
