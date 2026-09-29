@@ -39,7 +39,8 @@ _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 # per-chip shard sizes (H, W), one row of results per size: "H,W" or "H,W;H,W;..."
 SHAPES = [tuple(int(x) for x in s.split(",")) for s in os.environ.get("AG_SHAPE", "2048,4096").split(";") if s]
 # one link direction's rate (GB/s) that link utilization is measured against: 48.5 = the bare one-hop stream measured
-# on a QuietBox (fabric_link_ceiling); a Galaxy's links are about half as fast, so it defaults to half of that there.
+# on a QuietBox (fabric_link_ceiling); a Galaxy's links are slower: its high_bw_all_gather 8-rank gate (94.3 GB/s per
+# chip, busiest hop 4 shards over 2 links) implies at least 26.9 GB/s per link, so 27 is the default on 32 chips.
 _LINK_GBPS_ENV = os.environ.get("AG_LINK_GBPS")
 TRIALS = int(os.environ.get("AG_TRIALS", "3"))
 PAYLOAD = int(os.environ.get("AG_PAYLOAD", "14336"))
@@ -158,7 +159,7 @@ def test_fabric_all_gather(mesh_device):
     into the same output. Reported per case: time, effective receive bandwidth per chip = shard bytes x (G - 1) / time,
     and link utilization = the busiest hop's bytes / (links x time) as a fraction of one link direction's rate."""
     rows, cols = tuple(mesh_device.shape)
-    link_gbps = float(_LINK_GBPS_ENV) if _LINK_GBPS_ENV else (48.5 / 2 if rows * cols == 32 else 48.5)
+    link_gbps = float(_LINK_GBPS_ENV) if _LINK_GBPS_ENV else (27.0 if rows * cols == 32 else 48.5)
     fabric = str(ttnn.get_fabric_config()).split(".")[-1]
     if not _REPORT:
         _REPORT.append(

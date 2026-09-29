@@ -1792,7 +1792,7 @@
   # Repurposed from the high_bw_all_gather gate (same 8x4 Blackhole-Galaxy Fabric2D XY torus): the fabric_all_gather
   # perf example (ttnn/ttnn/operations/examples/fabric_all_gather) measured in isolation. Per case: bit-exact output
   # on every chip, time (realtime profiler, slowest chip, median), effective receive GB/s per chip, and the busiest
-  # link's rate as a % of one Galaxy link direction (AG_LINK_GBPS, 24.25 by default on 32 chips). Reported, not
+  # link's rate as a % of one Galaxy link direction (AG_LINK_GBPS, 27 by default on 32 chips). Reported, not
   # gated. Axis rings at 16384 and 65536 rows per device (the 8-rank gate's 512K global rows is 65536), the whole mesh
   # (snake ring; two edge-disjoint Hamiltonian cycles using all four neighbours) at 2048 and 16384 (the 32-rank gate's
   # 512K is 16384); bf16 x 576, TILE; balanced rings, 1 and 2 links. Then output reuse (the fence) and a sub-device run.

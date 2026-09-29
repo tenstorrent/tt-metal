@@ -63,7 +63,7 @@ python -m ttnn.operations.examples.fabric_all_gather [options]
 Test environment variables (`test_fabric_all_gather.py`): `AG_FABRICS`, `AG_TOPOS`, `AG_LINKS`, `AG_VARIANTS`
 (`base`, `b` balanced, `d` desync, `bd`), `AG_SHAPE` (`H,W` or a list `H,W;H,W;...`, one row per size), `AG_DTYPE` (`bf16`, `bfp8`, `fp32`, `fp8`), `AG_LAYOUT` (`tile`, `rm`), `AG_DIM`, `AG_PAYLOAD`, `AG_TRIALS`,
 `AG_PROFILER` (`device` or `rt`), `AG_STRICT` (1 = an unroutable topology fails), `AG_REUSE_CALLS`, `AG_LINK_GBPS` (one link direction's rate for the utilization column: 48.5 GB/s by default,
-half that on a 32-chip Galaxy, whose links are about half as fast).
+27 on a 32-chip Galaxy, whose links are slower: high_bw_all_gather's 8-rank Galaxy gate implies ≥ 26.9).
 
 Each result row: time, effective receive GB/s per chip (shard bytes × (G − 1) / time), and the busiest hop's rate per
 link as a % of that peak. On the QuietBox a 1-link line reaches 98–99 % at 16–64 MiB, a 2-link ring ~80 %.
