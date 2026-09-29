@@ -977,7 +977,7 @@ class ChunkedPrefillPageTableGuardMixin:
             del tt_out
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
 
-    def prefill_forward_lanes(self, tokens, page_tables, kv_cache, prompt_lens):
+    def prefill_forward_lanes(self, tokens, page_tables, kv_cache, prompt_lens, slot_ids=None):
         """Lane-parallel prefill: one user per lane column, one forward pass.
 
         ``tokens`` is [lanes, S] (row i = lane i's user, right-padded to a
@@ -987,10 +987,14 @@ class ChunkedPrefillPageTableGuardMixin:
         KV (attention reduces over tp only; the lane MLP gather/scatter sums
         fractured K-chunks across lanes for whatever rows the columns carry).
 
-        Single-chunk only (S <= max_prefill_chunk_size), and every lane's last
-        token must fall in the same 32-token tile because the tail slice is a
-        device-replicated scalar; callers bucket prompts by padded length so
-        both hold, and prefill serially otherwise.
+        Long prompts run the eager chunk loop lane-parallel: every chunk step
+        prefills all four lanes' chunks at once (per-column KV fill via each
+        lane's own chunk table, one shared chunk_start since S is common), so
+        four long prompts cost ~one prompt's chunk sequence — the multi-pipe
+        prefill the capacity ladder needs. Every lane's last token must fall in
+        the same 32-token tile (the tail slice is a device-replicated scalar),
+        which also puts them in the same final chunk; callers bucket prompts by
+        padded length so this holds, and prefill serially otherwise.
 
         Returns host logits [lanes, vocab], each row at its lane's last token.
         """
@@ -1000,7 +1004,6 @@ class ChunkedPrefillPageTableGuardMixin:
         lanes = mesh_cfg.lanes
         assert tokens.dim() == 2 and tokens.shape[0] == lanes, f"tokens must be [lanes={lanes}, seq]"
         seq_len = int(tokens.shape[-1])
-        assert seq_len <= self.model_args[0].max_prefill_chunk_size, "lane prefill is single-chunk"
         last_idx = [int(p) - 1 for p in prompt_lens]
         assert len(last_idx) == lanes and all(0 <= i < seq_len for i in last_idx)
         tiles = {i // 32 for i in last_idx}
@@ -1025,24 +1028,107 @@ class ChunkedPrefillPageTableGuardMixin:
             )
             page_tables = torch.cat([page_tables, pad], dim=-1)
 
-        inputs = model.prepare_inputs_prefill(
-            tokens,
-            page_table=page_tables,
-            batch_size=1,
-            user_id=0,
-            lane_parallel=True,
-        )
-        prefill_input, rot_mats_global, rot_mats_local, page_table_tt, *_ = inputs
-        tt_logits = model.ttnn_prefill_forward(
-            prefill_input,
-            rot_mats_global=rot_mats_global,
-            rot_mats_local=rot_mats_local,
-            user_id=0,
-            page_table=page_table_tt,
-            get_last_token=self._prefill_get_last_token(max(last_idx)),
-            kv_cache=model_kv,
-            batch_size=1,
-        )
+        # Bounded sliding pools are PER-LAYER ring tensors addressed by
+        # RING-LOCAL block ids (slot s owns rows [s*rb, (s+1)*rb)); the global
+        # table's pool ids would index far past them — decode then reads
+        # never-written blocks and instantly garbles (the metal twin of the
+        # server's hybrid per-layer route). Feed per-layer tables: ring-local
+        # for sliding layers, the lane's global table for full-attention.
+        if slot_ids is not None:
+            slots_l = [int(slot_ids)] * lanes if isinstance(slot_ids, int) else [int(x) for x in slot_ids]
+            g_host = page_tables.reshape(lanes, -1).to(torch.int32)
+            per_layer, ring_cache = [], {}
+            for layer in getattr(model, "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                m = getattr(cfg, "cache_position_modulo", None) if cfg is not None else None
+                if not m:
+                    per_layer.append(g_host)
+                    continue
+                rb = int(m) // 64
+                if rb not in ring_cache:
+                    ring_cache[rb] = torch.stack(
+                        [torch.arange(s * rb, (s + 1) * rb, dtype=torch.int32) for s in slots_l]
+                    )
+                per_layer.append(ring_cache[rb])
+            if any(t is not g_host for t in per_layer):
+                model._active_page_tables_per_layer = per_layer
+
+        max_chunk = int(self.model_args[0].max_prefill_chunk_size)
+        if seq_len <= max_chunk:
+            inputs = model.prepare_inputs_prefill(
+                tokens,
+                page_table=page_tables,
+                batch_size=1,
+                user_id=0,
+                lane_parallel=True,
+            )
+            prefill_input, rot_mats_global, rot_mats_local, page_table_tt, *_ = inputs
+            tt_logits = model.ttnn_prefill_forward(
+                prefill_input,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                page_table=page_table_tt,
+                get_last_token=self._prefill_get_last_token(max(last_idx)),
+                kv_cache=model_kv,
+                batch_size=1,
+            )
+            last_in_chunk = last_idx
+        else:
+            # ── Lane-parallel eager chunk loop (mirrors the single-user eager
+            # path, with every per-chunk input carrying all lanes' rows) ──
+            # Bind a request key for this ROUND so the bounded sliding
+            # cross-chunk tail stash engages (key None deliberately bypasses
+            # it, which severs every lane's window at each chunk boundary —
+            # the ladder's first corruption). The stash tensors are per-column
+            # mesh tensors, so one key serves all four lanes' own tails.
+            req_key = int(page_tables[0, 0, 0]) + 1
+            for _m in self.model:
+                for _layer in getattr(_m, "layers", []):
+                    _cfg = getattr(getattr(_layer, "self_attn", None), "config", None)
+                    if _cfg is not None:
+                        _cfg._g4_active_req_key = req_key
+            chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk)
+            last_abs = max(last_idx)
+            last_chunk_start = (last_abs // chunk_size) * chunk_size
+            assert all(
+                i >= last_chunk_start for i in last_idx
+            ), f"lane prefill needs all last tokens in the final chunk (starts {last_chunk_start})"
+            tt_logits = None
+            for chunk_start in range(0, last_chunk_start + 1, chunk_size):
+                is_last = chunk_start == last_chunk_start
+                chunk_tokens = tokens[:, chunk_start : chunk_start + chunk_size]
+                chunk_pt = page_tables[..., chunk_start // block_size : (chunk_start + chunk_size) // block_size]
+                inputs = model.prepare_inputs_prefill(
+                    chunk_tokens,
+                    start_pos=chunk_start,
+                    page_table=page_tables,
+                    chunk_page_table=chunk_pt,
+                    batch_size=1,
+                    user_id=0,
+                    lane_parallel=True,
+                )
+                prefill_input, rot_mats_global, rot_mats_local, page_table_tt, chunk_pt_tt, *_ = inputs
+                step_logits = model.ttnn_prefill_forward(
+                    prefill_input,
+                    rot_mats_global=rot_mats_global,
+                    rot_mats_local=rot_mats_local,
+                    user_id=0,
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_pt_tt,
+                    chunk_start_idx=chunk_start,
+                    get_last_token=self._prefill_get_last_token(
+                        (last_abs - last_chunk_start) if is_last else (chunk_size - 1)
+                    ),
+                    kv_cache=model_kv,
+                    batch_size=1,
+                )
+                if is_last:
+                    tt_logits = step_logits
+                elif step_logits is not None:
+                    step_logits.deallocate(True)
+            last_in_chunk = [i - last_chunk_start for i in last_idx]
+
         # Row-major device order over (rows, cols): row 0 holds one device per
         # column, i.e. one full-vocab shard per lane (logits are tp-gathered
         # inside the forward), in lane order.
@@ -1050,7 +1136,7 @@ class ChunkedPrefillPageTableGuardMixin:
         out = torch.zeros(lanes, model.vocab_size, dtype=torch.float32)
         for lane in range(lanes):
             host = ttnn.to_torch(shards[lane]).float()
-            out[lane] = host[0, 0, last_idx[lane] % 32, : model.vocab_size]
+            out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
         tt_logits.deallocate(True)
         return out
 
