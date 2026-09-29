@@ -242,8 +242,10 @@ jobs:
           fi
           cp parts/run-*.log out/ 2>/dev/null || true
           # What the summary step needs, in one file it can trust: this job wrote it.
+          ctx="${CONTEXT:-}"
+          jq -e 'type == "object"' <<<"$ctx" >/dev/null 2>&1 || ctx='{}'
           jq -n --arg pr "$PR_NUMBER" --arg sha "$HEAD_SHA" --arg run "$RUN_URL" \
-                --arg result "$MEASURE_RESULT" --argjson context "${CONTEXT:-{\}}" \
+                --arg result "$MEASURE_RESULT" --argjson context "$ctx" \
                 '{pr_number: ($pr|tonumber), head_sha: $sha, run_url: $run, measure: $result, context: $context}' > out/meta.json
           cat out/report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the report
