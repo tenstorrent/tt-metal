@@ -78,7 +78,7 @@ log = subprocess.run(
         a.git,
         "log",
         "--first-parent",
-        "--no-merges",
+        "--diff-merges=first-parent",  # a merge commit IS the PR in repos that do not squash: keep it, with its diff
         "--numstat",
         f"--format={fmt}",
         a.ref,

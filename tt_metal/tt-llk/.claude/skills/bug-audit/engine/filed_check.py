@@ -323,7 +323,12 @@ elif argv[0] == "persist":
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     n_open = n_closed = 0
     for res in r.get("results", []):
-        m = next((c for c in res.get("matches", []) if c.get("same_bug")), None)
+        # an OPEN report is what makes a finding a duplicate: prefer it over a closed one
+        same = [c for c in res.get("matches", []) if c.get("same_bug")]
+        m = next(
+            (c for c in same if c.get("state", "").upper() == "OPEN"),
+            same[0] if same else None,
+        )
         if not m:
             continue
         e = disp.get(res["key"], {})
@@ -334,7 +339,8 @@ elif argv[0] == "persist":
             if is_open
             else "reported and closed, but still present in the audited tree"
         )
-        if m["kind"] == "pr" and not is_open:
+        m_repo = "/".join(m.get("url", "").split("github.com/", 1)[-1].split("/")[:2])
+        if m["kind"] == "pr" and not is_open and m_repo in ("", st["repo"]):
             # a PR merged AFTER the audited commit means the bug is fixed upstream, not "still present"
             pr = subprocess.run(
                 [
@@ -390,9 +396,18 @@ elif argv[0] == "persist":
         n_open += is_open
         n_closed += not is_open
     save(os.path.join(out, "dispositions.json"), disp)
+    missing = r.get("missing") or []
+    if missing:
+        print(
+            f"!! {len(missing)} finding(s) were not checked (the judge died) and are NOT known to be unfiled: {missing[:10]}"
+        )
     print(
         f"{n_open} already filed (open), {n_closed} reported-and-closed or fixed upstream; run consolidate.py"
     )
+    if missing:
+        sys.exit(
+            "INCOMPLETE: rerun candidates + filed-wave for the unchecked findings before filing anything"
+        )
 elif argv[0] == "show":
     disp = load(os.path.join(out, "dispositions.json"), {})
     for k, v in sorted(disp.items()):

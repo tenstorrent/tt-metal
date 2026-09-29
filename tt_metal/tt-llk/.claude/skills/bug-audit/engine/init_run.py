@@ -106,15 +106,19 @@ if dirty:
     )
 
 exts = tuple(e.strip() for e in a.ext.split(",") if e.strip())
+# -z: without it git C-quotes any path with non-ASCII or special characters (in quotes, each such byte an octal escape), and the quoted name
+# fails the extension test, so the file would silently fall out of scope
 submodules = [
     ln.split("\t", 1)[1]
-    for ln in git("ls-files", "-s").splitlines()
+    for ln in git("ls-files", "-s", "-z").split("\0")
     if ln.startswith("160000")
 ]
 listing = (
-    git("ls-files", "--recurse-submodules") if a.recurse_submodules else git("ls-files")
+    git("ls-files", "-z", "--recurse-submodules")
+    if a.recurse_submodules
+    else git("ls-files", "-z")
 )
-files = [f for f in listing.splitlines() if f.endswith(exts)]
+files = [f for f in listing.split("\0") if f and f.endswith(exts)]
 if submodules and not a.recurse_submodules:
     print(
         f"WARNING: {len(submodules)} submodule(s) are OUT of scope (each is one gitlink entry): "

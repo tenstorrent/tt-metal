@@ -53,4 +53,5 @@ const results = await pipeline(A.inputs, (p) =>
   agent(prompt(p), { label: `filed:${p.split('/').pop()}`, phase: 'Filed?', schema: SCHEMA, effort: 'low' }))
 const good = results.filter(Boolean)
 log(`checked ${good.length}/${A.inputs.length}: ${good.filter((r) => r.matches.some((m) => m.same_bug)).length} already reported`)
-return { results: good }
+// a finding whose judge died is NOT "not filed": report it so persist refuses to call the check complete
+return { results: good, missing: A.inputs.filter((p, i) => !results[i]) }

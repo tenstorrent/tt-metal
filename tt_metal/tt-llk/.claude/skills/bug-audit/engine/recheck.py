@@ -114,8 +114,12 @@ elif argv[0] == "persist":
             index = load(os.path.join(os.path.dirname(item["path"]), "index.json"), {})
         key = index.get(item.get("path")) or key_of(item["finding"])
         if key in rc:
+            # the waves it saw: a later pass that re-confirms this site is new evidence the recheck never judged
             rc[key].update(
-                outcome=item["outcome"], votes=item["votes"], reasons=item["reasons"]
+                outcome=item["outcome"],
+                votes=item["votes"],
+                reasons=item["reasons"],
+                after_wave=len(st.get("waves", [])),
             )
             n += 1
     save(path, rc)

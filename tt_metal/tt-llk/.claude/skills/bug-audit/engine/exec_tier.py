@@ -293,6 +293,18 @@ elif argv[0] == "run":
                 # a failure that reproduced: judge the rerun, not the first run (whose output may be a timeout)
                 rc, text = rc2, text2
             found = parse(text, tree, "tests", "test")
+            if rc == "timeout" and not found:
+                # it timed out on the first run AND the rerun: a reproducible hang, the lead this tier exists for
+                found = [
+                    {
+                        "kind": "test",
+                        "tool": "tests",
+                        "file": m["files"][0],
+                        "line": 0,
+                        "severity": "test-hang",
+                        "message": f"selected tests hung twice (timeout {ex['timeout']}s): {' '.join(chosen)[:300]}; see exec/tests-{b}.log",
+                    }
+                ]
             if rc not in (0, "timeout") and not found:
                 found = [
                     {

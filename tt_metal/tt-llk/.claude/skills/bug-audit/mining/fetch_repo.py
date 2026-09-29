@@ -46,7 +46,9 @@ FAILED = (
 
 def run(kind, quals, a, b):
     out = f"{outdir}/{kind}/{prefix}{a}_{b}.jsonl"
-    if os.path.exists(out) and b < dt.date.today():
+    # complete only if it was fetched AFTER the window ended: one saved while the window was still open (a rerun on a
+    # later day, a resumed full fetch) is missing whatever closed or opened after that, and is fetched again
+    if os.path.exists(out) and dt.date.fromtimestamp(os.path.getmtime(out)) > b:
         return
     r = subprocess.run(
         [

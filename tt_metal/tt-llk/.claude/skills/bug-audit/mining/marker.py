@@ -47,16 +47,19 @@ if cmd == "write":
     dumps = files(opt("--dumps"))
     if not repo or not dumps:
         sys.exit("write needs --repo and --dumps matching at least one file")
-    latest, n_issue, n_pr = "", 0, 0
+    latest, seen = "", set()
     for f in dumps:
         for ln in open(f):
             if not ln.strip():
                 continue
             x = json.loads(ln)
             is_pr = "mergedAt" in x or "mergeCommit" in x
-            n_pr += is_pr
-            n_issue += not is_pr
+            seen.add(
+                ("pr" if is_pr else "issue", x["number"])
+            )  # the full fetch and a refresh overlap by design
             latest = max(latest, x.get("mergedAt") or "", x.get("closedAt") or "")
+    n_pr = sum(1 for k, _ in seen if k == "pr")
+    n_issue = len(seen) - n_pr
     if not latest:
         sys.exit("no closed item in the dumps: nothing to mark")
     marker = {

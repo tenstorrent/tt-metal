@@ -9,9 +9,12 @@ verdicts exist only in the workflow's return value.
   verdicts/<batch>.json   every candidate with its status (confirmed / uncertain / refuted / needs_recheck) and votes
   done/<batch>.done       only when every assigned file passed the read check below
 The read check compares each file's reported line count and last non-blank line against the pinned tree. The
-contract-trace ledger is checked the same way: every boundary's "other side" must be a real file:line. A file
-that fails it (or was skipped) is recorded in reread.json, and its batch stays un-done so the next wave re-hunts it.
+contract-trace ledger is checked too: every boundary's "other side" must be a real file:line (or file:symbol, or a
+document outside the tree). A file that fails the read check (or was skipped) is recorded in reread.json, and its
+batch stays un-done so the next wave re-hunts it; an invalid boundary is set aside and reported, not re-hunted.
+Persisting the same output twice is refused, so a rerun after a crash cannot duplicate verdicts.
 """
+import hashlib
 import json
 import os
 import re
@@ -26,6 +29,11 @@ if len(sys.argv) != 2:
     sys.exit(__doc__)
 st = state(out)
 man = manifest(out)
+raw_sha = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()
+prior = next((w for w in st["waves"] if w.get("sha") == raw_sha), None)
+if prior:
+    print(f"already persisted as wave {prior['wave']}; nothing done")
+    sys.exit(0)
 raw = load(sys.argv[1])
 r = raw.get("result", raw) if isinstance(raw, dict) else raw
 if isinstance(r, str):
@@ -34,10 +42,15 @@ if isinstance(r, str):
 
 def last_nonblank(path):
     try:
-        with open(path, errors="replace") as fh:
-            lines = fh.read().splitlines()
+        with open(path, errors="replace", newline="") as fh:
+            text = fh.read()
     except OSError:
         return None, None
+    # count "\n" lines, as the hunter does: splitlines() also breaks on form feeds, U+2028 and the like, and a file
+    # holding them would fail the read check on every hunt and be re-hunted forever
+    lines = text.split("\n")
+    if text.endswith("\n"):
+        lines.pop()
     tail = next((ln for ln in reversed(lines) if ln.strip()), "")
     return len(lines), tail.strip()
 
@@ -208,7 +221,9 @@ if os.path.exists(lp):
         os.replace(lp + ".tmp", lp)
 ids = set(r.get("batches", []))
 st["in_flight"] = [b for b in st.get("in_flight", []) if b not in ids]
-st["waves"].append({"wave": wave_no, "raw": os.path.relpath(sys.argv[1], out), **stats})
+st["waves"].append(
+    {"wave": wave_no, "raw": os.path.relpath(sys.argv[1], out), "sha": raw_sha, **stats}
+)
 save(os.path.join(out, "state.json"), st)
 print(f"wave {wave_no}: " + ", ".join(f"{k} {v}" for k, v in stats.items()))
 if stats.get("ledger_entries"):

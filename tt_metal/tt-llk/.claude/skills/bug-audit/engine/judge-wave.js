@@ -67,6 +67,9 @@ const results = await pipeline(A.inputs, async (path) => {
     agent(judgePrompt(path, k), { label: `judge${k}:${path.split('/').pop()}`, phase: 'Judge', schema: SCHEMA })))
   if (!j1 || !j2) return { path, failed: true }
   const m2 = Object.fromEntries(j2.judgments.map((x) => [x.id, x]))
+  // a finding one judge left out is unjudged, not "no match": fail the case so it is rerun
+  const ids1 = new Set(j1.judgments.map((x) => x.id))
+  if (ids1.size !== Object.keys(m2).length || [...ids1].some((id) => !(id in m2))) return { path, failed: true }
   const matching = []
   let disagreements = 0
   const ties = []

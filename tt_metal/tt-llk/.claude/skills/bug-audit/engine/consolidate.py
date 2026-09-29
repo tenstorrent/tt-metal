@@ -43,6 +43,13 @@ for fn in sorted(os.listdir(os.path.join(out, "verdicts"))):
 recheck = load(os.path.join(out, "recheck.json"), {})
 for f in rows:
     rc = recheck.get(key_of(f))
+    if (
+        rc
+        and "after_wave" in rc
+        and isinstance(f.get("wave"), int)
+        and f["wave"] > rc["after_wave"]
+    ):
+        continue  # a verdict from a later pass than the recheck saw stands on its own
     if rc and rc.get("outcome") in ("confirmed", "refuted", "uncertain"):
         f["status_wave"], f["status"] = f["status"], rc["outcome"]
         f["recheck"] = rc

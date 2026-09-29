@@ -209,6 +209,8 @@ else:
         c = cases.get(cid)
         if not c:
             continue
+        if any(fx["oid"] in excl_fix for fx in c.get("fix", [])):
+            continue  # a held-out bug's twin case (an issue and its PR share one fix) must not reach the pack
         later = c.get("later") or {}
         suspicious = bool(later.get("reverts") or later.get("citing_later"))
         ok_verdict = t["verdict"] == "code-bug" or (
@@ -228,6 +230,7 @@ else:
                 or cid in excl
                 or cid in not_real
                 or cid not in cases
+                or any(fx["oid"] in excl_fix for fx in cases[cid].get("fix", []))
                 or (only and cid not in only)
             ):
                 continue

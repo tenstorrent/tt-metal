@@ -48,4 +48,5 @@ const results = await pipeline(A.inputs, (p) =>
   agent(prompt(p), { label: `dedup:${p.split('/').pop()}`, phase: 'Dedup', schema: SCHEMA, effort: 'low' }))
 const good = results.filter(Boolean)
 log(`dedup: ${good.reduce((s, r) => s + r.clusters.length, 0)} clusters over ${good.length}/${A.inputs.length} groups`)
-return { results: good }
+// a group whose judge died is reported, never silently read as "no duplicates"
+return { results: good, missing: A.inputs.filter((p, i) => !results[i]) }

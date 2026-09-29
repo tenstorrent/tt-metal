@@ -40,6 +40,7 @@ PATH = f"{HERE}/dispositions.json"
 REPO = state(HERE)["repo"]
 
 ACTIVE = ("in_progress", "pr_open")
+SYNCABLE = (None, "open", "in_progress", "pr_open", "pr_closed")
 DONE = (
     "merged",
     "wont_fix",
@@ -182,9 +183,8 @@ def cmd_show(a):
 def cmd_sync(a):
     """Ask GitHub about every recorded PR and move the finding's state to match reality."""
     d = load()
-    todo = {
-        k: v for k, v in d.items() if v.get("pr") and v.get("state") not in ("merged",)
-    }
+    # only states a PR can still move: a done state (not_a_bug, already_filed, ...) is never overwritten
+    todo = {k: v for k, v in d.items() if v.get("pr") and v.get("state") in SYNCABLE}
     if not todo:
         print("no open PRs to sync")
         return
@@ -213,7 +213,7 @@ def cmd_sync(a):
         info = json.loads(r.stdout)
         st = info["state"]
         new = {"MERGED": "merged", "CLOSED": "pr_closed", "OPEN": "pr_open"}.get(
-            st, v["state"]
+            st, v.get("state")
         )
         if new != v.get("state"):
             v["state"], v["updated"] = new, now()

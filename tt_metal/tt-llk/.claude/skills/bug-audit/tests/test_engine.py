@@ -68,7 +68,13 @@ def rundir(tmp_path):
     d = tmp_path / "run"
     write(
         str(d / "state.json"),
-        {"name": "t", "root": str(tmp_path / "tree"), "commit": "0" * 12, "waves": []},
+        {
+            "name": "t",
+            "root": str(tmp_path / "tree"),
+            "commit": "0" * 12,
+            "waves": [],
+            "repo": "o/r",
+        },
     )
     write(str(d / "batches" / "manifest.json"), [])
     os.makedirs(d / "findings")
@@ -448,3 +454,317 @@ def test_invalid_ledger_entry_is_reported_without_a_rehunt(rundir, tmp_path):
     assert [e["other_side"] for e in saved["ledger_invalid"]] == ["k.cpp"]
     assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
     assert "1 invalid" in open(rundir / "COVERAGE.md").read()
+
+
+# ---- review fixes: each test pins one failure that the earlier code produced -------------------------------------
+
+
+def test_rerunning_dedup_keeps_earlier_merges(rundir):
+    wh, bh, new = ("a/wormhole/k.h", 10), ("a/blackhole/k.h", 10), ("b/x.cpp", 5)
+    key = lambda s: f"{s[0]}:{s[1]}"  # noqa: E731
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {"findings": [finding(*wh), finding(*bh), finding(*new)]},
+    )
+    write(
+        str(rundir / "dedup.json"),
+        {
+            "auto": {},
+            "clusters": [
+                {"canonical": key(wh), "duplicates": [key(bh)], "relation": "arch-copy"}
+            ],
+        },
+    )
+    raw = rundir / "dedup_raw.json"
+    write(
+        str(raw), {"results": [{"clusters": []}]}
+    )  # a second wave that found nothing new
+    assert (
+        run(os.path.join(ENGINE, "dedup.py"), "--run", rundir, "persist", raw)[0] == 0
+    )
+    assert json.load(open(rundir / "dedup.json"))["clusters"][0]["duplicates"] == [
+        key(bh)
+    ], "the earlier merge survives"
+
+
+def test_a_recheck_does_not_overrule_a_later_confirmation(rundir):
+    k = ("r.cpp", 4)
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {
+            "findings": [
+                finding(*k, status="uncertain", wave=1),
+                finding(*k, status="confirmed", wave=3),
+            ]
+        },
+    )
+    write(
+        str(rundir / "recheck.json"),
+        {
+            "r.cpp:4": {
+                "outcome": "refuted",
+                "votes": {},
+                "reasons": [],
+                "why": "uncertain",
+                "after_wave": 2,
+            }
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    assert [
+        f"{f['file']}:{f['line']}" for f in json.load(open(rundir / "CONFIRMED.json"))
+    ] == ["r.cpp:4"]
+
+
+def test_deep_selection_excludes_a_held_out_fix_under_another_id(tmp_path):
+    _mined(tmp_path, n=2)
+    cases = [json.loads(x) for x in open(tmp_path / "cases.jsonl")]
+    cases[1]["fix"] = cases[0]["fix"]  # I101 is the PR twin of I100: same fix commit
+    write(str(tmp_path / "cases.jsonl"), cases)
+    tri = [
+        dict(json.loads(x), deep_priority=3) for x in open(tmp_path / "triage.jsonl")
+    ]
+    write(str(tmp_path / "triage.jsonl"), tri)
+    write(
+        str(tmp_path / "hold.jsonl"),
+        [{"id": "I100", "fix_commit": cases[0]["fix"][0]["oid"]}],
+    )
+    d = tmp_path / "deep"
+    code, _, err = run(
+        os.path.join(MINING, "select.py"),
+        "deep",
+        "--cases",
+        tmp_path / "cases.jsonl",
+        "--triage",
+        tmp_path / "triage.jsonl",
+        "--exclude",
+        tmp_path / "hold.jsonl",
+        "--out-dir",
+        d,
+    )
+    assert code == 0, err
+    picked = (
+        {
+            c["id"]
+            for p in d.glob("*.json")
+            for c in json.load(open(p)).get(
+                "cases",
+                json.load(open(p)) if isinstance(json.load(open(p)), list) else [],
+            )
+        }
+        if d.exists()
+        else set()
+    )
+    assert "I101" not in picked and "I101" not in err.split("->")[0].split(), (
+        picked,
+        err,
+    )
+
+
+def test_filed_check_prefers_an_open_match(rundir):
+    write(
+        str(rundir / "state.json"),
+        {
+            "name": "t",
+            "root": str(rundir),
+            "commit": "0" * 12,
+            "waves": [],
+            "repo": "o/r",
+        },
+    )
+    raw = rundir / "filed_raw.json"
+    closed = {
+        "number": 5,
+        "kind": "issue",
+        "state": "CLOSED",
+        "same_bug": True,
+        "why": "w",
+        "url": "https://github.com/o/r/issues/5",
+    }
+    opened = {
+        "number": 9,
+        "kind": "issue",
+        "state": "OPEN",
+        "same_bug": True,
+        "why": "w",
+        "url": "https://github.com/o/r/issues/9",
+    }
+    write(str(raw), {"results": [{"key": "f.cpp:1", "matches": [closed, opened]}]})
+    assert (
+        run(os.path.join(ENGINE, "filed_check.py"), "--run", rundir, "persist", raw)[0]
+        == 0
+    )
+    d = json.load(open(rundir / "dispositions.json"))["f.cpp:1"]
+    assert d["state"] == "already_filed" and d.get("issue") == 9, d
+
+
+def test_filed_check_persist_fails_when_a_judge_died(rundir):
+    write(
+        str(rundir / "state.json"),
+        {
+            "name": "t",
+            "root": str(rundir),
+            "commit": "0" * 12,
+            "waves": [],
+            "repo": "o/r",
+        },
+    )
+    raw = rundir / "filed_raw.json"
+    write(str(raw), {"results": [], "missing": ["/x/c0001.json"]})
+    code, out, _ = run(
+        os.path.join(ENGINE, "filed_check.py"), "--run", rundir, "persist", raw
+    )
+    assert code != 0 and "not checked" in out
+
+
+def _fake_gh(tmp_path, state):
+    b = tmp_path / "bin"
+    b.mkdir(exist_ok=True)
+    (b / "gh").write_text(
+        f'#!/bin/sh\necho \'{{"state":"{state}","mergedAt":null,"url":"u","title":"t"}}\'\n'
+    )
+    (b / "gh").chmod(0o755)
+    return str(b)
+
+
+@pytest.mark.parametrize(
+    "disp",
+    [{"state": "not_a_bug", "pr": 1}, {"state": "already_filed", "pr": 1}, {"pr": 1}],
+)
+def test_disposition_sync_leaves_done_states_and_survives_a_missing_state(
+    rundir, tmp_path, monkeypatch, disp
+):
+    monkeypatch.setenv(
+        "PATH", _fake_gh(tmp_path, "CLOSED") + os.pathsep + os.environ["PATH"]
+    )
+    write(str(rundir / "dispositions.json"), {"f.cpp:1": disp})
+    code, out, err = run(
+        os.path.join(ENGINE, "disposition.py"), "--run", rundir, "sync"
+    )
+    assert code == 0, out + err
+    after = json.load(open(rundir / "dispositions.json"))["f.cpp:1"]
+    if disp.get("state"):
+        assert (
+            after["state"] == disp["state"]
+        ), "a done state is never overwritten by a PR's state"
+    else:
+        assert (
+            after["state"] == "pr_closed"
+        ), "an entry with a PR and no state is synced, not a crash"
+
+
+def test_persisting_the_same_output_twice_is_refused(rundir, tmp_path):
+    tree = tmp_path / "tree"
+    write(str(tree / "k.cpp"), "int a;\n")
+    write(
+        str(rundir / "batches" / "manifest.json"),
+        [{"batch": "B-0000", "files": ["k.cpp"], "prio": "A", "root": str(tree)}],
+    )
+    os.makedirs(rundir / "done")
+    hunt = {
+        "files_read": [{"path": "k.cpp", "lines": 1, "last_line": "int a;"}],
+        "boundaries": [],
+        "findings": [],
+    }
+    raw = tmp_path / "wave.json"
+    write(
+        str(raw),
+        {
+            "results": [
+                {
+                    "batch": "B-0000",
+                    "ok": True,
+                    "hunt": hunt,
+                    "judged": [finding("k.cpp", 1, batch="B-0000")],
+                }
+            ]
+        },
+    )
+    for _ in range(2):
+        assert (
+            run(os.path.join(ENGINE, "persist_wave.py"), "--run", rundir, raw)[0] == 0
+        )
+    assert len(json.load(open(rundir / "verdicts" / "B-0000.json"))["findings"]) == 1
+    assert len(json.load(open(rundir / "state.json"))["waves"]) == 1
+    assert not os.path.exists(
+        rundir / "findings" / "B-0000.history.jsonl"
+    ), "a second pass must still be possible"
+
+
+def test_read_check_counts_newline_lines_only(tmp_path):
+    src = open(os.path.join(ENGINE, "persist_wave.py")).read()
+    ns = {"os": os}
+    exec(src[src.index("def last_nonblank") : src.index("_suffix_cache = {}")], ns)
+    f = tmp_path / "ff.c"
+    f.write_bytes(b"a\x0cb\n\x0c\nc\x1d\nlast\n")
+    assert ns["last_nonblank"](str(f)) == (
+        4,
+        "last",
+    ), "form feeds and friends are not line breaks"
+
+
+def test_marker_counts_each_item_once(tmp_path):
+    x = {
+        "number": 7,
+        "closedAt": "2025-01-05T00:00:00Z",
+        "createdAt": "2025-01-01T00:00:00Z",
+    }
+    write(str(tmp_path / "issue" / "2025-01-01_2025-01-07.jsonl"), [x])
+    write(str(tmp_path / "issue" / "closed_2025-01-03_2025-01-09.jsonl"), [x])
+    code, out, _ = run(
+        os.path.join(MINING, "marker.py"),
+        "write",
+        tmp_path / "m.json",
+        "--repo",
+        "o/r",
+        "--dumps",
+        f"{tmp_path}/issue/*.jsonl",
+    )
+    assert (
+        code == 0 and json.load(open(tmp_path / "m.json"))["counts"]["issues"] == 1
+    ), out
+
+
+def test_init_run_keeps_non_ascii_paths_in_scope(tmp_path):
+    import subprocess as sp
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    for name in ("a.c", "café.c"):
+        (tree / name).write_text("int x;\n")
+    sp.run(["git", "init", "-q", str(tree)], check=True)
+    sp.run(["git", "-C", str(tree), "add", "."], check=True)
+    sp.run(
+        [
+            "git",
+            "-C",
+            str(tree),
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "x",
+        ],
+        check=True,
+    )
+    out = tmp_path / "run"
+    code, o, e = run(
+        os.path.join(ENGINE, "init_run.py"),
+        "--root",
+        tree,
+        "--out",
+        out,
+        "--repo",
+        "o/r",
+        "--ext",
+        ".c",
+    )
+    assert code == 0, o + e
+    files = {
+        f
+        for b in json.load(open(out / "batches" / "manifest.json"))
+        for f in b["files"]
+    }
+    assert files == {"a.c", "café.c"}, files

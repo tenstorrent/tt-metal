@@ -188,13 +188,26 @@ elif argv[0] == "persist":
     r = raw.get("result", raw)
     r = json.loads(r) if isinstance(r, str) else r
     dj = load(path, {"auto": {}, "clusters": []})
-    dj["clusters"] = [
-        c
-        for res in r.get("results", [])
-        for c in res.get("clusters", [])
-        if c.get("duplicates")
-    ]
+    # MERGE with the clusters already recorded: `inputs` leaves out findings already marked duplicate, so a later
+    # dedup wave never sees them again -- replacing the list would silently undo every earlier merge.
+    merged = {
+        c["canonical"]: dict(c, duplicates=list(c["duplicates"]))
+        for c in dj.get("clusters", [])
+    }
+    for res in r.get("results", []):
+        for c in res.get("clusters", []):
+            if not c.get("duplicates"):
+                continue
+            cur = merged.setdefault(c["canonical"], {**c, "duplicates": []})
+            cur["duplicates"] = sorted(set(cur["duplicates"]) | set(c["duplicates"]))
+            cur["relation"] = c.get("relation", cur.get("relation"))
+    dj["clusters"] = list(merged.values())
     save(path, dj)
+    missing = r.get("missing") or []
+    if missing:
+        sys.exit(
+            f"INCOMPLETE: {len(missing)} group(s) were not judged (agent died); rerun them: {missing[:10]}"
+        )
     print(
         f"{len(dj['clusters'])} clusters recorded ({sum(len(c['duplicates']) for c in dj['clusters'])} duplicates); "
         "run consolidate.py"
