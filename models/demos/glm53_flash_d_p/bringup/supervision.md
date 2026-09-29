@@ -120,3 +120,21 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000; GLM profile gates X.1/P.1/X.3 patched; selftests 217 -> 218).
 - Added P.2 (owner's pick 2, after P.1 worked): mHC residual split by sequence across the 4 chips, deps P.1, X.3 now
   depends on P.2; gate = the 24 mHC component tests + ladder s4096 + last + profile total < 400 ms. Rerun from X.3.
+- P.2 PASS (8c677d694bc) attempt 1: chunk device 428 -> 276 ms (528 at X.1, 1.9x overall); all 24 mHC component PCCs >= 0.99999, layers >= 0.99994, state min 0.9984, host transfers 0; K.1 contract re-run passes with the split layout (agent check). Replicated path behind a switch. Accepted.
+- X.3 PASS (b044855cd2e): 56k all on device, layers >= 0.99954, state min 0.98247 (L01 KDA), full prefill 0->55k 2882.9 ms (4501 before P.1/P.2), 50k->55k chunk 283.9 ms (device 279), timeline_ok 1 (F52). Checked bit-identical accuracy P.1 == P.2: fresh timestamps; same device_model hook as the profile (276 ms = split); split only moves rows (exact) and replaces AR by RS over the same partials -> identical outputs expected. O.1 started.
+- 23:5x O.1 PASS (e0168ae0264): 6 forks used, every ttnn.bringup call covered by a random-input case, fork tests 0
+  failed. Run complete: 98/98 PASS, 0 deferred. Owner asked to push the branch and for a follow-up prompt for a
+  colleague (mHC investigation): glm53_mhc_followup_prompt.md at the repo root.
+
+## Final summary (2026-09-29)
+- Per-layer PCC at 56k (X.3): L0 0.99996, L1 0.99954, L2 0.99985, L3 0.99981, L4 0.99979; state min 0.98247
+  (L1 KDA recurrent; drifts with length). K.1 KDA state at the real end of the padded chunk: 0.99920 / conv 0.99998.
+- 50k->55k chunk: 283.9 ms (device 276-279 ms; 528 at X.1). 0->55k TTFT: 2882.9 ms (4501 before P.1/P.2).
+- Forks: sdpa extended (sparse_sdpa high_precision, CHANGELOG); dispatch, combine, offset_cumsum,
+  unified_routed_expert_moe (72 local / 288 experts, unchanged), rms_norm_ttnn reused; O.1 cases added to all six.
+- Upstream: main's KDA #57070 + #58049 cherry-picked; main bug reported to the author (prepare_chunk_recurrence
+  binds q as actual_start when it is absent; 14 nightly tests; CI never ran them after the merge).
+- Framework: F48 (intake), F49 gate commits carry fork / knowledge edits, F50 state.json gated metrics only, F51
+  contract step may change hooks.py, F52 profiler program count; selftests 197 -> 218.
+- Open: KDA state handover prefill -> decode (not supported; tt-metal PR #56443, tt-blaze draft #3265); KDA state
+  precision (fork prepare_chunk_recurrence); DSA latent/keys on local rows; shared expert TP 2.
