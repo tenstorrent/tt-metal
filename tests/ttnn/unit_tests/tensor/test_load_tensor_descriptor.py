@@ -77,7 +77,7 @@ def test_descriptor_owns_duplicate_during_native_read(tmp_path, monkeypatch, exp
     with path.open("rb") as original:
         assert ttnn.operations.core.load_tensor(f"/proc/self/fd/{original.fileno()}") is sentinel
         assert os.pread(original.fileno(), 8, 0) == b"original"
-        with expect_error(OSError):
+        with expect_error(OSError, message="Bad file descriptor"):
             os.fstat(observed[0])
 
 
@@ -95,7 +95,7 @@ def test_descriptor_duplicate_closes_on_native_error(tmp_path, monkeypatch, expe
         with expect_error(RuntimeError, message="invalid tensor"):
             ttnn.load_tensor(f"/proc/self/fd/{original.fileno()}")
         os.fstat(original.fileno())
-        with expect_error(OSError):
+        with expect_error(OSError, message="Bad file descriptor"):
             os.fstat(observed[0])
 
 
