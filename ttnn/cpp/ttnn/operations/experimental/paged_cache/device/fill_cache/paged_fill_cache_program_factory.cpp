@@ -95,6 +95,68 @@ std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     return grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 }
 
+// Per-core reader+writer runtime args for the fill_cache work-split. SINGLE SOURCE OF TRUTH for the arg
+// VALUES, shared by build_paged_fill_cache_artifacts (cache miss) and paged_fill_cache_run_args_for_coord
+// (cache hit). The cache-hit override MUST emit this full set (start_tile_id / start_row_num / num_rows),
+// not just noop: the partial-update fast path (UpdateProgramRunArgs) leaves any arg it does not re-supply
+// at whatever value is currently on the device, and an interleaved fill_cache program of a different shape
+// overwrites that shared per-core state -> re-applying only noop runs this program with the other
+// program's start/num_rows and writes out of bounds (observed as a DRAM write overrun on cache-hit reuse).
+std::vector<KernelRunArgs> emit_paged_fill_cache_kernel_run_args(
+    const std::vector<CoreCoord>& cores,
+    uint32_t num_cores,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
+    uint32_t num_blocks_per_core_group_1,
+    uint32_t num_blocks_per_core_group_2,
+    uint32_t Wt,
+    bool noop,
+    bool use_batch_idx_tensor,
+    uint32_t batch_idx_fallback) {
+    const uint32_t g1_numcores = core_group_1.num_cores();
+    const uint32_t g2_numcores = core_group_2.num_cores();
+    const auto noop_arg = static_cast<uint32_t>(noop);
+
+    KernelRunArgs reader_run_args{.kernel = FC_READER};
+    KernelRunArgs writer_run_args{.kernel = FC_WRITER};
+
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        const CoreCoord& core = cores.at(i);
+        uint32_t num_blocks_per_core = 0;
+        if (i < g1_numcores) {
+            num_blocks_per_core = num_blocks_per_core_group_1;
+        } else if (i < g1_numcores + g2_numcores) {
+            num_blocks_per_core = num_blocks_per_core_group_2;
+        }
+
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {
+                {"start_tile_id", num_blocks_written * Wt},
+                {"num_rows", num_blocks_per_core},
+                {"noop", noop_arg},
+            });
+
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {
+                {"start_row_num", num_blocks_written},
+                {"num_rows", num_blocks_per_core},
+                {"noop", noop_arg},
+            });
+        if (!use_batch_idx_tensor) {
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, core, {{"batch_idx_fallback", batch_idx_fallback}});
+        }
+
+        num_blocks_written += num_blocks_per_core;
+    }
+
+    return {std::move(reader_run_args), std::move(writer_run_args)};
+}
+
 // The tensor arguments every dispatch must (re)bind. Shared by the cache-miss artifact build and the
 // cache-hit override so the two cannot disagree about which optional tensors are present.
 Table<TensorParamName, TensorArgument> paged_fill_cache_tensor_args(const PagedFillCacheInputs& tensor_args) {
@@ -459,65 +521,33 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
 
     // ---------------- Run args ----------------
 
-    uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
-
-    // Core list shared with override_runtime_arguments (single source of truth for ordering).
-    const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
-
-    KernelRunArgs reader_run_args{.kernel = FC_READER};
-    KernelRunArgs writer_run_args{.kernel = FC_WRITER};
-
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-        const CoreCoord& core = cores.at(i);
-        uint32_t num_blocks_per_core = 0;
-        if (i < g1_numcores) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (i < g1_numcores + g2_numcores) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            num_blocks_per_core = 0;
-        }
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {
-                {"start_tile_id", num_blocks_written * Wt},
-                {"num_rows", num_blocks_per_core},
-                {"noop", static_cast<uint32_t>(noop)},
-            });
-
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {
-                {"start_row_num", num_blocks_written},
-                {"num_rows", num_blocks_per_core},
-                {"noop", static_cast<uint32_t>(noop)},
-            });
-        if (!use_batch_idx_tensor) {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"batch_idx_fallback", operation_attributes.batch_idx_fallback}});
-        }
-
-        num_blocks_written += num_blocks_per_core;
-    }
-
+    // Per-core run args via the shared emitter (single source of truth for the arg values); the cache-hit
+    // override re-derives the identical set. `cores` uses the same ordering as compute_paged_fill_cache_cores.
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.kernel_run_args = emit_paged_fill_cache_kernel_run_args(
+        compute_paged_fill_cache_cores(operation_attributes, tensor_args),
+        num_cores,
+        core_group_1,
+        core_group_2,
+        num_blocks_per_core_group_1,
+        num_blocks_per_core_group_2,
+        Wt,
+        noop,
+        use_batch_idx_tensor,
+        operation_attributes.batch_idx_fallback);
     run_args.tensor_args = paged_fill_cache_tensor_args(tensor_args);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// Cache-hit re-derivation, shared by both factories. Re-applies every tensor binding plus the values
-// the program hash excludes — batch_idx_fallback and noop — which would otherwise freeze at the
-// cache-miss value. Not re-applied: start_tile_id / start_row_num / num_rows. They come from the work
-// split over the input's padded shape and the device grid, both of which the program hash includes, so
-// a cache hit has them identical by construction.
+// Cache-hit re-derivation, shared by both factories. Re-applies every tensor binding AND the full per-core
+// run-arg set (start_tile_id / start_row_num / num_rows / noop / batch_idx_fallback). It must re-emit ALL
+// of them, not only the hash-excluded ones: the partial-update fast path (UpdateProgramRunArgs) leaves any
+// arg it does not re-supply at whatever value is currently on the device, and an interleaved fill_cache
+// program of a different shape overwrites that shared per-core state -> re-applying only noop would run
+// this program with the other program's start_row_num/num_rows/start_tile_id and write out of bounds
+// (observed as a DRAM write overrun on the second cache-hit reuse). Recompute the same work-split
+// build_paged_fill_cache_artifacts used and feed the shared emitter.
 ProgramRunArgs paged_fill_cache_run_args_for_coord(
     const PagedFillCacheParams& operation_attributes,
     const PagedFillCacheInputs& tensor_args,
@@ -526,25 +556,36 @@ ProgramRunArgs paged_fill_cache_run_args_for_coord(
     params.tensor_args = paged_fill_cache_tensor_args(tensor_args);
 
     // noop is hash-excluded, and on the mesh path depends on the dispatch coordinate.
-    const auto noop_arg = static_cast<uint32_t>(paged_fill_cache_noop(operation_attributes, coord));
+    const bool noop = paged_fill_cache_noop(operation_attributes, coord);
     const bool use_batch_idx_tensor = tensor_args.batch_idx_tensor_opt.has_value();
 
-    KernelRunArgs reader_run_args{.kernel = FC_READER};
-    KernelRunArgs writer_run_args{.kernel = FC_WRITER};
+    // Same work-split as build_paged_fill_cache_artifacts / compute_paged_fill_cache_cores.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t input_batch = input_tensor.padded_shape()[0];
+    const uint32_t num_heads = input_tensor.padded_shape()[1];
+    const uint32_t input_seq_len_t = input_tensor.padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t Wt = input_tensor.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t num_blocks_of_work = input_batch * num_heads * input_seq_len_t;
 
-    const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
-    for (const auto& core : cores) {
-        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"noop", noop_arg}});
-        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"noop", noop_arg}});
-        if (!use_batch_idx_tensor) {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"batch_idx_fallback", operation_attributes.batch_idx_fallback}});
-        }
-    }
+    tt_metal::distributed::MeshDevice* device = input_tensor.device();
+    const auto grid = device->compute_with_storage_grid_size();
+    constexpr bool row_major = true;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_blocks_of_work, row_major);
+    (void)all_cores;
+    const auto cores = grid_to_cores(num_cores, grid.x, grid.y, row_major);
 
-    params.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    params.kernel_run_args = emit_paged_fill_cache_kernel_run_args(
+        cores,
+        num_cores,
+        core_group_1,
+        core_group_2,
+        num_blocks_per_core_group_1,
+        num_blocks_per_core_group_2,
+        Wt,
+        noop,
+        use_batch_idx_tensor,
+        operation_attributes.batch_idx_fallback);
     return params;
 }
 
