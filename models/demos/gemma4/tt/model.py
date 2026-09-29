@@ -642,10 +642,15 @@ class Gemma4Model:
                     # meshes but on the (8,4) one-instance grid vocab shards
                     # over axis 0.
                     self.sampling.tt_sampling.sampling_all_gather_axis = self.mesh_config.tp_axis
-                    # Top-k/top-p on-device sampling is (1,N)-shaped too
-                    # (global-index broadcast add); this rail serves argmax
-                    # (decode_only force-argmax), so skip that program.
-                    self.sampling.tt_sampling._allow_topk_sampling = False
+                    # Top-k/top-p program on the fractured mesh: the crash we
+                    # saw predated the sampling_dp/axis fixes and the shard
+                    # helpers are axis-aware, so this may already work under
+                    # the final orientation. Default keeps it OFF
+                    # (greedy-only on-device); GEMMA4_FRACTURE_TOPK=1 enables
+                    # compiling it for the A/B.
+                    self.sampling.tt_sampling._allow_topk_sampling = os.environ.get(
+                        "GEMMA4_FRACTURE_TOPK", "0"
+                    ).lower() in ("1", "true", "yes")
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
                 topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
                 logger.info(

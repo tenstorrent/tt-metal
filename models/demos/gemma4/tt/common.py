@@ -93,10 +93,16 @@ def create_tt_model(
             # GEMMA4_GALAXY_LANES=1 additionally lane-shards the batch: one
             # lane per column with its own KV contents/page tables (slice 3b);
             # callers then pass lane-major global batches of lanes x 32.
+            # TP (heads) rides the size-8 axis whichever way the mesh is
+            # oriented — (8,4) and (4,8) are both valid TPxCP layouts and the
+            # physical link mapping differs per box, so the orientation is an
+            # A/B knob (MESH_DEVICE), not an assumption.
+            _shape = tuple(mesh_device.shape)
+            _tp_axis = 0 if _shape[0] == 8 else (1 if _shape[1] == 8 else 0)
             mesh_config = MeshConfig(
                 mesh_device.shape,
-                decode=ModeConfig(tp=mesh_device.shape[0]),
-                tp_axis=0,
+                decode=ModeConfig(tp=_shape[_tp_axis]),
+                tp_axis=_tp_axis,
                 weight_fracture=True,
             )
             mesh_config.lane_sharded = _lanes
