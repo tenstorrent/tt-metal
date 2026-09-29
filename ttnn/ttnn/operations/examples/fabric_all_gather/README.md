@@ -94,6 +94,34 @@ Known limitation: calls are not fenced against each other. A chip may start its 
 still relaying the previous one; with a different input per call that neighbour could relay newer data. The arrival
 counters stay consistent (they are re-armed by exactly what each call consumed).
 
+## Four neighbours per chip: two Hamiltonian cycles (emulated Galaxy)
+A snake ring over a 2D torus feeds each chip over two of its four neighbours. `scheme="dual_cycles"`
+(`cluster_axis=None`, `topology=Ring`, both torus sides ≥ 3) splits the torus into two edge-disjoint Hamiltonian
+cycles — found on the host, checked to use every edge exactly once — and runs the ring schedule on each, every cycle
+owning half of the DRAM banks. Every chip then uses all four neighbours, and the busiest hop carries half as much.
+
+No board here has four neighbours per chip, so this was run on a **32-chip Blackhole Galaxy (4 × 8 torus) under
+tt-emule**: the same kernels, each fabric packet's write / increment applied bit-exactly on the destination chip,
+no timing. Busiest hop from the plan (shards; time ≥ busiest × shard / (links × link rate)):
+
+| Topology on the 4 × 8 torus | Neighbours per chip | Busiest hop | Emulated (2D, 2D-torus X / Y / XY; 1 and 2 links) |
+|---|---|---|---|
+| ring along each column (G = 4) | 2 | 2 shards | bit-exact on all 32 chips |
+| ring along each row (G = 8) | 2 | 4 shards | bit-exact on all 32 chips |
+| snake ring over all 32 chips | 2 | 16 shards | bit-exact on all 32 chips |
+| **two Hamiltonian cycles over all 32 chips** | **4** | **8 shards** | bit-exact on all 32 chips |
+
+Two cycles halve the busiest hop of a whole-mesh gather (2× by the bandwidth bound); the speedup itself is not
+measured — it needs a real Galaxy. Under emulation FABRIC_1D is rejected by the control plane (no forwarding
+direction on a 2D mesh), and FABRIC_1D_RING aborts in the emulator's 1D routing path (an out-of-range L1 offset in
+the sender under emulation; the same kernel is bit-exact on FABRIC_1D_RING on hardware).
+
+Running it under tt-emule: build tt-metal with `-DTT_METAL_USE_EMULE=ON -DTT_EMULE_PATH=<tt-emule-blaze checkout>`
+(clang-20 toolchain, into its own build tree) at the tt-metal commit the emulator pins, link `libtt-umd.so*` and the
+`_ttnn*.so` files the way a normal build does, then run the test with `TT_METAL_EMULE_MODE=1
+TT_METAL_SLOW_DISPATCH_MODE=1 EMULE_FABRIC8=1 TT_METAL_MOCK_CLUSTER_DESC_PATH=<umd>/tests/cluster_descriptor_examples/blackhole_galaxy.yaml`
+and `FAG_TOPOS=4x8_axis0_ring,4x8_axis1_ring,4x8_snake_ring,4x8_dual_cycles FAG_FABRICS=2d_torus_xy FAG_TRIALS=0`.
+
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather.py -s

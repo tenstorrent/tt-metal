@@ -37,3 +37,19 @@ is not a multiple of the 8 DRAM banks (4×1 ring 124.9, line 87.5 GB/s per chip)
 
 Increment granularity: with a fused write + increment on every packet (the increment is issued only after its write
 lands, stalling the receiving router), G = 2 at one link ran at 24.5 GB/s per chip; one increment per 8 chunks gives 46.4.
+
+## Emulated 32-chip Blackhole Galaxy (4 × 8 torus) — tt-emule, 2026-09-29 (no timing)
+
+tt-emule-blaze `b72b652` against tt-metal `56dd501dd1f`; mock `blackhole_galaxy.yaml`; shard 1024 × 1024 bf16; placement
+`simple` (the emulator runs no Ethernet cores). Correctness: every chip's output == its group's shards, bit-exact.
+
+```
+fabric                topology           G   links  result                    busiest hop   neighbours/chip
+FABRIC_2D_TORUS_XY    4x8_axis0_ring      4   1, 2   bit-exact, 32 chips       2 shards      2
+FABRIC_2D_TORUS_XY    4x8_axis1_ring      8   1, 2   bit-exact, 32 chips       4 shards      2
+FABRIC_2D_TORUS_XY    4x8_snake_ring     32   1, 2   bit-exact, 32 chips      16 shards      2
+FABRIC_2D_TORUS_XY    4x8_dual_cycles    32   1, 2   bit-exact, 32 chips       8 shards      4
+FABRIC_2D, 2D_TORUS_X, 2D_TORUS_Y: the same four topologies, 2 links, all bit-exact (same loads)
+FABRIC_1D:       all four rejected by the control plane (no forwarding direction on a 2D mesh)
+FABRIC_1D_RING:  aborts in the emulator (out-of-range L1 offset in the sender on the 1D path)
+```
