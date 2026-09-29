@@ -2356,3 +2356,37 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile mo
   - Producer KV: kv_latent 0.999973, index_key 0.999982.
   - KDA state at 4064: recurrent L0 0.999878, L1 0.999204, L2 0.999672, L4 0.999796; conv >= 0.999984 on every layer.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## P.1 perf (run1, attempt 1): mHC residual mix as one batched matmul
+- `tt/residual.py`: `GLM_RESIDUAL_MIX=matmul` (the new default) or `addcmul` (the old path, unchanged). The profile
+  records it as `settings.residual_mix` (`GlmDeviceModel.perf_settings` in `bringup/hooks.py`).
+- How the matmul path works, per 32-token tile b:
+  - X'[b] = [x_0; x_1; x_2; x_3; y], [160, H] bf16. Built from 4 stream slices plus y, each reshaped
+    [1, 1, S, H] -> [1, S/32, 32, H], then concat on dim 2. These are tile-row copies only.
+  - Mix[b] is [(m, t), (k, t')] = delta(t, t') * coef_km, [128, 160] fp32. coef_km = comb[k, m], and post[m] when k = 4.
+  - Mix is built on the device from hc with 5 small ops: hc @ a load-time 0/1 selector [24, 640] (exact at HiFi4),
+    reshape to [1, S/32, 32, 640], multiply by a load-time diagonal mask, then 4 slices + concat on dim 2.
+  - out = matmul(Mix, X') batched over S/32, HiFi4, fp32 DEST, bf16 output (a single rounding). The result is
+    [1, S/32, (m, t), H]; 4 row slices + concat on dim -1 turn it back into [1, 1, S, 4H].
+  - If S % 32 != 0, the addcmul path runs instead.
+- `build_residual(cfg, mesh)` now takes the mesh, which it needs for the load-time constants. Both call sites are
+  updated (`tt/model.py`, `bringup/hooks.py`).
+- Numerics: the FPU reads the fp32 coefficients as tf32; x and y are bf16 and exact.
+  - Probe (S 5120, random, comb softmax, post in [0, 2]): rel L2 vs fp64 is 1.70e-3 (addcmul 1.66e-3; the bf16
+    output floor is about 1.6e-3). Matmul vs addcmul: rel 1.36e-3, and 10% of elements differ by a bf16 ulp.
+- Standalone timing (tt-probe, 2x2 mesh, S 5120), per call:
+  - addcmul 16.7 ms, matmul 6.4 ms.
+  - First version, 4 matmuls at M=32: 7.3 ms. Parts: build X' 2.0 ms, each M=32 matmul 1.06 ms, the M=128
+    matmul 2.2 ms, output unpack 1.8 ms.
+  - Explicit `MatmulMultiCoreReuseProgramConfig` fails for this shape (it needs N == per_core_N, and then the CB
+    does not fit), so the default config is used.
+- Gate: PASS.
+  - Component PCC: L00 attn 0.999994 / ffn 0.999993; L03 0.999996 / 0.999996; L04 0.999995 / 0.999995.
+  - Ladder last: worst layer L04 0.999941, pcc_state_min 0.998390, host_transfers_per_layer 0.
+  - Profile (chunk 51200->56320, device ms), matmul vs addcmul (`GLM_RESIDUAL_MIX=addcmul`, same run setup):
+    attn_residual 31.5 vs 82.8, ffn_residual 31.5 vs 82.8, total 427.3 vs 532. Programs for attn_residual: 360
+    vs 1880.
+- Probe scripts were deleted from `tests/ttnn/unit_tests/operations/glm53_box/probes/` (known issue).
+Re-run: the gate from the brief; the old path with `GLM_RESIDUAL_MIX=addcmul TT_METAL_DEVICE_PROFILER=1
+TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh
+--no-precompile --run-all models/demos/common/bringup/tests/test_profile.py`.
