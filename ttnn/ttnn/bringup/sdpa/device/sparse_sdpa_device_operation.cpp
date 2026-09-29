@@ -122,6 +122,15 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             attrs.v_dim);
     }
     TT_FATAL(idx.dtype() == DataType::UINT32, "indices must be uint32");
+    if (attrs.high_precision) {
+        TT_FATAL(
+            get_fp32_dest_acc_en(attrs.compute_kernel_config),
+            "sparse_sdpa high_precision requires fp32_dest_acc_en=true");
+        TT_FATAL(
+            q.dtype() == DataType::BFLOAT16 && attrs.kv_format == transformer::bringup::SparseKVFormat::BF16,
+            "sparse_sdpa high_precision supports bf16 q and a BF16 kv only");
+        TT_FATAL(!t.attention_sink.has_value(), "sparse_sdpa high_precision does not support attention_sink");
+    }
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
@@ -267,7 +276,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        t.attention_sink);
+        t.attention_sink,
+        attrs.high_precision);
 }
 
 Tensor sparse_sdpa(
@@ -281,7 +291,8 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    const std::optional<Tensor>& attention_sink) {
+    const std::optional<Tensor>& attention_sink,
+    bool high_precision) {
     using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -292,6 +303,7 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .high_precision = high_precision,
         },
         OperationType::tensor_args_t{
             .q = q,
