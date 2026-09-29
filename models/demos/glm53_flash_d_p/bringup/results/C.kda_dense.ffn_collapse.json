@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "norm_ratio_max_ffn_collapse_L00": {
+   "t": "2026-09-29T05:00:43",
+   "value": 1.0022172927856445
+  },
+  "norm_ratio_max_ffn_collapse_L01": {
+   "t": "2026-09-29T05:00:43",
+   "value": 1.0023853778839111
+  },
+  "norm_ratio_min_ffn_collapse_L00": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.99781334400177
+  },
+  "norm_ratio_min_ffn_collapse_L01": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.997691810131073
+  },
+  "pcc_ffn_collapse_L00": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.9999963246181512
+  },
+  "rel_l2_ffn_collapse_L00": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.002711486304178834
+  },
+  "rel_l2_ffn_collapse_L01": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.0035482149105519056
+  },
+  "row_rel_l2_max_ffn_collapse_L00": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.004134779330343008
+  },
+  "row_rel_l2_max_ffn_collapse_L01": {
+   "t": "2026-09-29T05:00:43",
+   "value": 0.006697157397866249
+  }
+ },
+ "task": "C.kda_dense.ffn_collapse"
+}
