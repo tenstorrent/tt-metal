@@ -627,6 +627,13 @@ class Gemma4Model:
                     tt_ccl=sampling_tt_ccl,
                 )
                 _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
+                if bool(self.mesh_config is not None and getattr(self.mesh_config, "weight_fracture", False)):
+                    # Penalty buffers are not fracture-aware (per-chip vocab
+                    # sharding over axis 0 breaks their eltwise shapes); skip
+                    # the penalties program on the one-instance mesh. Greedy /
+                    # penalty-free sampling is unaffected; a request that sets
+                    # penalties would fail loudly in apply_penalties.
+                    self.sampling.tt_sampling._allow_penalties_sampling = False
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
                 topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
                 logger.info(

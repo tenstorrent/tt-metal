@@ -403,6 +403,11 @@ class SamplingGenerator:
                 # under their sub-device config (untilize with sub_core_grids=None).
                 if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
                     continue
+                # Models may disable the penalty program the same way (attribute
+                # defaults True elsewhere): e.g. on a 2D-fractured mesh the
+                # penalty buffers' shapes don't match the vocab sharding yet.
+                if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
+                    continue
                 self._penalties_active = penalties_on
                 # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
                 # the live request params, and only the flag selects the program being compiled.
