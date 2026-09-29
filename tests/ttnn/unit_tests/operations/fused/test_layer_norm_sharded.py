@@ -516,25 +516,16 @@ def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_
 # A width-sharded grid with an idle row (more cores than real width-slices) must raise, not hang.
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize(
-    ("h", "w", "num_cores_w", "num_cores_h"),
+    ("h", "w", "num_cores_w", "num_cores_h", "expect_idle_shard_error"),
     [
-        (32, 256, 4, 2),  # 8 cores, tensor width needs all 8: valid
-        pytest.param(
-            32,
-            128,
-            4,
-            2,  # 8 cores, tensor width only needs 4: other 4 are idle
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=RuntimeError,
-                reason="idle shard row: tensor width only fills half the grid, other 4 cores are idle - "
-                "op must reject this, not hang",
-            ),
-        ),
+        (32, 256, 4, 2, False),  # 8 cores, tensor width needs all 8: valid
+        (32, 128, 4, 2, True),  # 8 cores, tensor width only needs 4: other 4 are idle
     ],
     ids=["grid_matches_tiles", "idle_row"],
 )
-def test_layer_norm_sharded_core_grid_utilization(device, h, w, num_cores_w, num_cores_h, use_welford):
+def test_layer_norm_sharded_core_grid_utilization(
+    device, h, w, num_cores_w, num_cores_h, expect_idle_shard_error, use_welford, expect_error
+):
     torch_input_tensor = generate_input_tensor(h, w, "random_normal", torch.float32)
 
     core_grid = ttnn.CoreRangeSet(
@@ -548,6 +539,11 @@ def test_layer_norm_sharded_core_grid_utilization(device, h, w, num_cores_w, num
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.Layout.TILE, device=device, memory_config=sharded_mem_config
     )
+
+    if expect_idle_shard_error:
+        with expect_error(RuntimeError, "does not align with tensor width"):
+            ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
+        return
 
     output_ttnn = ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
     ref_output_tensor = torch_layer_norm(torch_input_tensor)
