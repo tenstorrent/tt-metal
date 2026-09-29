@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
@@ -67,6 +68,7 @@ GATE_MODELS = {
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
+    "dsv41_flash": DeepSeekV41FlashConfig,
     "mistral_small_4": MistralSmall4Config,
 }
 
@@ -269,6 +271,7 @@ REGULAR_GATE_CASES = [
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
+    pytest.param("dsv41_flash", GateComputeMode.DEVICE_FP32, id="dsv41_flash-device_fp32"),
     # Mistral's router is softmax -> top-4 -> renormalize, which is the GPT-OSS rule: softmax is
     # monotonic, so top-k on logits equals top-k on softmax, and renormalizing the selected k equals
     # softmaxing them. The sigmoid device gate cannot express it (moe_grouped_topk.cpp's

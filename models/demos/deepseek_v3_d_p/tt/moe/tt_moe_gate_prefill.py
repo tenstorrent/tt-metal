@@ -17,6 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
@@ -350,6 +351,24 @@ class TtMoEGateConfig:
                     out_block_w=1,
                     per_core_M=2,
                     per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            # DeepSeek-V4.1 (5120 hidden, 384 experts): 12 N-tiles need per_core_N=2 to fit the 11-wide grid,
+            # 20 M-tiles over 10 rows give per_core_M=2. Measured per device (trace replay, BH): 15.3 us vs
+            # 282 us for TTNN's default; in0_block_w 8 with out_subblock_w 2 is the best of a 2D (in0_block_w x
+            # subblock x per_core) and 1D (best 39.7 us) sweep.
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV41FlashConfig.EMB_SIZE // 4, DeepSeekV41FlashConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=2,
+                    out_block_w=2,
+                    per_core_M=2,
+                    per_core_N=2,
                     transpose_mcast=False,
                     fuse_batch=True,
                 )
