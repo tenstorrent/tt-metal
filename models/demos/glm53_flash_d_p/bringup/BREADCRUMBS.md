@@ -1924,3 +1924,26 @@ Results:
 Watch: the all-CPU-block rel is 0.00237 of 0.003 (flips 64 of 96). The worst-head KDA state is still 0.047 of 0.05.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_07_ffn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.ffn_norm test (attempt 1)
+Reviewed the rendered component test for ffn_norm at layer 4. The rendered file was the bare `run_component_test`.
+I rewrote it from `test_c_kda_moe_attn_norm.py` (only STEP and the docstring changed) and kept its limits: chunk 1 and
+chunk 0, each checked for finite values, rel L2 <= 0.01, per-token ratio [0.99, 1.01], worst row <= 0.015, and
+coefficient in [0.996, 1.004]. Every limit is written `not x <= lim`. The gated metric pcc_ffn_norm_L04 is unchanged.
+Why: layer 4's post_attention_layernorm weight is nearly constant (0.309..0.334), so PCC passes a missing weight
+(0.99995), `1 + w` (0.99997), attn_norm's weight (0.99950) and w reversed (0.99990). Input row RMS is 0.0014..0.0175
+(chunk 0: 0.0012..0.041), so eps is visible.
+Sensitivity (CPU host script /tmp/kmffnnorm/sens.py, not kept; the numbers are in the test docstring): every wrong
+weight, w reversed (rel 0.0142, worst row 0.0152), eps 1.05e-5 / 9.5e-6, mean subtraction (worst row 0.045), 4 TP
+shards (0.042), x1.01, x1.005 (coefficient only), one row x1.02, a zero or neighbour row, and 32 zero rows or columns
+all fail at least one check. bf16 square accumulation and 5e-3 rsqrt row noise fail ratio and worst row. Not caught:
+x1.003.
+Results:
+- Device (default mode) passes already: PCC 0.999996, rel 0.00283, ratio [0.9989, 1.0009], worst row 0.0034,
+  coefficient 0.99987 (chunk 0 is the same). About 14 s.
+- Reference passes (0.00235 / [0.9998, 1.0002] / 0.0026 / 1.00000). Stub fails (PCC 0).
+- The first `FAIL pcc ... 0.000000` line in each run comes from the precompile collect pass.
+Next (implement): no module change is needed; add ffn_norm to `DEVICE_STEPS["kda_moe"]`. Keep eps exactly 1e-5 and
+the squares accumulated in fp32.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
