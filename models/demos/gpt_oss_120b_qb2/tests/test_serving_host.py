@@ -3,12 +3,14 @@
 
 """Host contracts; no checkpoint load, TT tensor allocation, or mesh access."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 import torch
 
+import ttnn
 from models.demos.gpt_oss_120b_qb2.tt.generator import Generator, TraceEvidence
 from models.demos.gpt_oss_120b_qb2.tt.generator_vllm import TTGptOssForCausalLM
 from models.demos.gpt_oss_120b_qb2.tt.model import decode_trace_buckets
@@ -155,3 +157,31 @@ def test_single_user_prefill_limits_cache_fill_to_valid_last_tile(last_tile, exp
         get_last_token=last_tile,
     )
     assert model._run_decoder_stack.call_args.kwargs["fill_seq_lens"] == [expected_fill]
+
+
+def test_serving_report_serializes_fabric_without_mutating_capabilities(monkeypatch, tmp_path):
+    adapter = object.__new__(TTGptOssForCausalLM)
+    adapter.model = SimpleNamespace(
+        n_layers=36,
+        kv_cache_owner="vllm",
+        precision_runtime_evidence=lambda: {},
+        precision_config=SimpleNamespace(
+            decoder_policy_for_layer=lambda index: SimpleNamespace(kv_cache_dtype=ttnn.bfloat8_b)
+        ),
+    )
+    adapter.generator = SimpleNamespace(capability_report=lambda: {})
+    adapter.mesh_device = SimpleNamespace(shape=(1, 4))
+    adapter.max_model_len = 131072
+    adapter.max_batch_size = 32
+    adapter._sliding_layers = list(range(0, 36, 2))
+    adapter._ring_block_base = 4640
+    adapter._cache_tensor_indices = []
+    adapter._cache_shapes = []
+    adapter.serving_counters = {}
+    fabric = adapter.model_capabilities["fabric_config"]["config"]
+    monkeypatch.setenv("GPT_OSS_120B_RESULTS", str(tmp_path))
+    adapter._write_serving_capability()
+    report = json.loads((tmp_path / "vllm_serving_capability.json").read_text())
+    assert report["model_capabilities"]["fabric_config"]["config"] == str(fabric)
+    assert adapter.model_capabilities["fabric_config"]["config"] is fabric
+    assert report["resident_layers"] == 36

@@ -1353,7 +1353,10 @@ class TTGptOssForCausalLM:
             "kv_cache_layer_tensor_indices": self._cache_tensor_indices,
             "kv_cache_layer_shapes": self._cache_shapes,
             "precision": self.model.precision_runtime_evidence(),
-            "model_capabilities": dict(self.model_capabilities),
+            "model_capabilities": {
+                **self.model_capabilities,
+                "fabric_config": {"config": str(self.model_capabilities["fabric_config"]["config"])},
+            },
             "serving_counters": dict(self.serving_counters),
             "generator": None if generator is None else generator.capability_report(),
         }
@@ -1361,12 +1364,13 @@ class TTGptOssForCausalLM:
     def _write_serving_capability(self):
         if self.generator is None or self.model.n_layers != MODEL_LAYERS:
             return
-        path = Path(__file__).resolve().parents[1] / "readiness_vllm" / "vllm_serving_capability.json"
+        root = Path(os.environ.get("GPT_OSS_120B_RESULTS", "generated/test_reports/gpt_oss_120b_qb2"))
+        path = root / "vllm_serving_capability.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(self.serving_capability(), indent=2) + "\n", encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as error:
+            logger.warning("Could not write GPT-OSS serving evidence to {}: {}", path, error)
 
 
 __all__ = ["TTGptOssForCausalLM"]
