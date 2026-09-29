@@ -469,7 +469,8 @@ void bind_sdpa(nb::module_& mod) {
                 id; the kernels select K/V slot user * index_cache_num_layers + index_cache_layer_idx. Mutually
                 exclusive with cache_batch_idx.
             index_cache_num_layers / index_cache_layer_idx (int): the layer fold of a user-major
-                [users*layers, n_kv, T, *] cache, used only with cache_batch_idx_tensor. Runtime (not hashed).
+                [users*layers, n_kv, T, d | v_dim] K/V cache, used only with cache_batch_idx_tensor. Runtime
+                (not hashed).
 
             Trace: the op re-points to whichever metadata tensors a dispatch passes (cache hits included), but a
             captured trace keeps the addresses it was captured with -- rewrite the SAME tensors in place (e.g.
