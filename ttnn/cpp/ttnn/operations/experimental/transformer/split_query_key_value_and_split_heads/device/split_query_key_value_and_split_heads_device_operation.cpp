@@ -67,6 +67,7 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_tensors = tensor_args.output_tensors;
+    TT_FATAL(operation_attributes.num_heads > 0, "num_heads must be greater than 0");
 
     if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() &&
         output_tensors[2].has_value()) {
@@ -78,7 +79,6 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
 
     const auto batch_size = input_tensor.padded_shape()[0];
     uint32_t num_heads = operation_attributes.num_heads;
-    TT_FATAL(num_heads > 0, "num_heads must be greater than 0");
     uint32_t num_output_tensors = 3;
     uint32_t M = input_tensor.padded_shape()[2];                                    // 384
     uint32_t K = input_tensor.padded_shape()[-1] / num_output_tensors / num_heads;  // 64
