@@ -63,13 +63,15 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc"},
+    "dense_full": {"attn_hc", "attn_hc_pre"},
     "moe_full": set(),
     "moe_shared": set(),
 }
 
 # iHC gate steps -> checkpoint prefix under model.layers.<i>. (tt/ihc.py:TtHcGates).
 _HC_STEPS = {"attn_hc": "hc_attn_layer"}
+# iHC pre-mix steps (tt/ihc.py:TtHcPre): no weights.
+_HC_PRE_STEPS = {"attn_hc_pre"}
 
 
 def _loader(spec):
@@ -124,11 +126,37 @@ def _hc_host_fn(mesh, module, hidden):
     return fn
 
 
-def device_component(mesh, spec, layer, step):
+def _hc_pre_host_fn(mesh, module, hidden):
+    """fn(ctx, streams_host [S, 4H], gates_host [S, 8]) -> sublayer input host [S, H] fp32 (harness boundary)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_host, row_split_to_device, streams_to_device
+
+    def fn(ctx, x, gates):
+        xd = streams_to_device(mesh, x, hidden)
+        gd = row_split_to_device(mesh, gates)
+        yd = module(xd, gd)
+        y = col_split_to_host(mesh, yd).float()
+        for t in (xd, gd, yd):
+            ttnn.deallocate(t)
+        return y
+
+    return fn
+
+
+def _device_step_fn(mesh, spec, layer, step, loader, cfg):
     if step in _HC_STEPS:
-        loader = _loader(spec)
-        cfg = _cfg(loader)
         return _hc_host_fn(mesh, _hc_module(mesh, spec, layer, step, loader, cfg), cfg.hidden_size)
+    if step in _HC_PRE_STEPS:
+        from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
+
+        return _hc_pre_host_fn(mesh, TtHcPre(mesh, cfg.hidden_size), cfg.hidden_size)
+    return None
+
+
+def device_component(mesh, spec, layer, step):
+    if step in _HC_STEPS or step in _HC_PRE_STEPS:
+        loader = _loader(spec)
+        return _device_step_fn(mesh, spec, layer, step, loader, _cfg(loader))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -160,11 +188,9 @@ class HybridDeviceModel:
         self.overrides = {}
         for i in self.ref.layer_ids:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
-            self.overrides[i] = {
-                s: _hc_host_fn(mesh, _hc_module(mesh, spec, i, s, loader, self.cfg), self.cfg.hidden_size)
-                for s in steps
-                if s in _HC_STEPS
-            }
+            self.overrides[i] = {s: _device_step_fn(mesh, spec, i, s, loader, self.cfg) for s in steps}
+            missing = [s for s, f in self.overrides[i].items() if f is None]
+            assert not missing, f"layer {i}: no device module for {missing}"
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
