@@ -472,6 +472,374 @@
   "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=8-nkv=1-s=2048-d=128-k256-q256-bf16]": {
    "original": "passed",
    "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_determinism[small-boundaries]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_determinism[v4-flash-full-selection]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_determinism[v4-pro-full-selection]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_determinism[bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_determinism[fp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_kv[-all_valid-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_kv[-all_valid-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_kv[-mid_tile_boundary-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_kv[-mid_tile_boundary-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_q[kv_dtype=DataType.BFLOAT16-kv_id=kv_bf16-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_q[kv_dtype=DataType.BFLOAT16-kv_id=kv_bf16-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_q[kv_dtype=DataType.FP8_E4M3-kv_id=kv_fp8-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_fp8_q[kv_dtype=DataType.FP8_E4M3-kv_id=kv_fp8-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-all_valid-h128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-all_valid-h32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-all_valid-h64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-all_valid-h96]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-mid_tile_boundary-h128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-mid_tile_boundary-h32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-mid_tile_boundary-h64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads[-mid_tile_boundary-h96]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads_aggressive_block[-all_valid]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_heads_aggressive_block[-mid_tile_boundary]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_multitoken[1chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_multitoken[2chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_multitoken[4chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-all_valid-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-all_valid-S=64-T=256-TOPK=64-kc=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-all_valid-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-few_valid-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-few_valid-S=64-T=256-TOPK=64-kc=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-few_valid-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-mid_tile_boundary-S=32-T=1024-TOPK=256-kc=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-mid_tile_boundary-S=64-T=256-TOPK=64-kc=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc[-mid_tile_boundary-S=64-T=512-TOPK=128-kc=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-all_valid-S=32-T=1024-TOPK=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-all_valid-S=64-T=256-TOPK=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-all_valid-S=64-T=512-TOPK=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-boundary-S=32-T=1024-TOPK=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-boundary-S=64-T=256-TOPK=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-boundary-S=64-T=512-TOPK=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-few_valid-S=32-T=1024-TOPK=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-few_valid-S=64-T=256-TOPK=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-few_valid-S=64-T=512-TOPK=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_query_subblock[h160_5grp]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_query_subblock[h192_2grp]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_kv_format_api_is_explicit": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink[small-boundaries]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink[v4-flash-full-selection]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink[v4-pro-full-selection]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_cache": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_dense_parity": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=bfp4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=dtype]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=heads]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=layout]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=memory]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_attention_sink_validation[invalid=shape]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_bad_layout_rejected_on_hit": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_bf16_multi_query_tile": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_block_cyclic_chunk_local_rejected": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_block_cyclic_sp1_identity": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_deepseek_attention_sink[scale=0.25]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_deepseek_attention_sink[scale=None]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_indexed_addr_change_on_hit": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_indexed_kv_cache": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_indexed_nd_sharded_kv": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_indexed_oob_rejected_on_hit": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_kv_len_no_recompile": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_nd_sharded_kv_len_change": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_output_dtype[q_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_output_dtype[q_fp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_oversized_persistent_kv": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_multi_chunk[-all_valid]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_multi_chunk[-mid_tile_boundary]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-all_valid]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_pcc_single_chunk[-boundary]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_rejects_kv_format_storage_mismatch[kv_dtype=DataType.BFLOAT16-kv_format=SparseKVFormat.FP8_E4M3-message=requires fp8_e4m3 storage]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_rejects_kv_format_storage_mismatch[kv_dtype=DataType.FP8_E4M3-kv_format=SparseKVFormat.BF16-message=requires bfloat16 storage]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_rejects_v_dim_larger_than_k_dim": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_runs": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_indexed_nd_sharded_kv": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv[arbitrary_scale]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv[gather_ring_wrap]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv[multi_chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv[scaled_e4m3_latent_bf16_rope]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv[single_chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv[two_slab_pipeline_wrap]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_kv_multi_query_tile": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_rejects_malformed_packed_width": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sparse_sdpa::test_sparse_sdpa_scaled_fp8_rejects_unaligned_rope_offset": {
+   "original": "passed",
+   "fork": "passed"
   }
  }
 }
