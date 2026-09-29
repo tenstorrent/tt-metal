@@ -1,0 +1,4 @@
+{
+  "arch": "Qwen38ForCausalLM",
+  "main_class": "models.demos.qwen38_27b_t3k.tt.generator_vllm:Qwen38ForCausalLM"
+}
