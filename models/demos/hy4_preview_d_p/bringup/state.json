@@ -23,6 +23,122 @@
   "started": "2026-09-29T04:28:53",
   "status": "PASS"
  },
+ "C.dense_full.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "d82201a7-cf40-43a0-a7ff-c8812d8b0ce6"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.dense_full.attention.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.dense_full.attention.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 1038.7,
+    "session_id": "2be29998-c2ab-40cf-99d2-ca47ff7f65c6",
+    "t": "2026-09-29T07:13:37"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.dense_full.attention.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.dense_full.attention.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 466.3,
+    "session_id": "d82201a7-cf40-43a0-a7ff-c8812d8b0ce6",
+    "t": "2026-09-29T07:22:47"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 28.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T07:15:00"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T07:23:18"
+   }
+  ],
+  "last_run": "2026-09-29T07:23:18",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.dense_full.attention.log",
+  "metrics": {
+   "chunk0_rel_l2_attention_L00": 0.0038347651716321707,
+   "chunk0_row_norm_ratio_max_attention_L00": 1.0021229982376099,
+   "chunk0_row_norm_ratio_min_attention_L00": 0.9979876279830933,
+   "chunk0_worst_row_rel_l2_attention_L00": 0.0062827980145812035,
+   "golden_rel_l2_attention_L00": 0.0038239331915974617,
+   "golden_row_norm_ratio_max_attention_L00": 1.002282738685608,
+   "golden_row_norm_ratio_min_attention_L00": 0.9977747201919556,
+   "golden_worst_row_rel_l2_attention_L00": 0.00520213320851326,
+   "pcc_attention_L00": 0.9999926593718659,
+   "probe_rel_l2_attention_L00": 0.00374642969109118,
+   "probe_row_norm_ratio_max_attention_L00": 1.0026545524597168,
+   "probe_row_norm_ratio_min_attention_L00": 0.9974666237831116,
+   "probe_worst_row_rel_l2_attention_L00": 0.006085921078920364,
+   "scaled_rel_l2_attention_L00": 0.004083799198269844,
+   "scaled_row_norm_ratio_max_attention_L00": 1.0017284154891968,
+   "scaled_row_norm_ratio_min_attention_L00": 0.9982922077178955,
+   "scaled_worst_row_rel_l2_attention_L00": 0.005751316901296377
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-29T07:22:49",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.dense_full.attn_hc": {
   "agent": {
    "defs": {
