@@ -2841,7 +2841,7 @@ tasks:
   deps:
   - X.2
   device: true
-  paths: &id004
+  paths:
   - models/demos/hy4_preview_d_p/tt
   - models/demos/hy4_preview_d_p/bringup/hooks.py
   brief:
@@ -2869,42 +2869,11 @@ tasks:
       device_ms_total: < 500
       host_transfers_per_layer: == 0
       pcc_chunk_out: '>= 0.97'
-- id: P.2
-  title: 'Routed experts: cut their device time without a precision change'
-  step: perf
-  role: perf
-  deps:
-  - P.1
-  device: true
-  paths: *id004
-  brief:
-    details: 'Baseline (X.1): experts 166.2 ms (32%, ~33 ms per MoE layer) for the 5120-token chunk; P.1''s result is the
-      new total. Measure per op first: masked_bincount / offset_cumsum, dispatch and combine over the fabric (axis 0), unified_routed_expert_moe
-      (ClampedSiluGlu, high_precision, HiFi4 + fp32 dest, bfp8 weights), post_combine_reduce and the axis-1 reduce_scatter
-      (fuse it with the shared expert''s, as the plan suggests). Then remove the largest avoidable cost (buffer sizing, program
-      configs, fused or overlapped collectives). No precision change: owner rule 7 (HiFi4 everywhere, fp32 accumulation where
-      it is now, same weight and cache dtypes, same top-k). Keep the old path selectable behind a switch and record the new
-      default in perf_settings() if the model has one. Frozen tests must pass unchanged (never edit a frozen test or its limits);
-      if a change cannot pass them, stop and report the numbers. A fork change goes behind an option whose default keeps the
-      current behaviour (skill bringup-fork-op). Report the measured before/after per op.'
-  gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py && scripts/run_safe_pytest.sh
-      --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py && scripts/run_safe_pytest.sh --run-all
-      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
-      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
-      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
-    metrics:
-      device_ms_experts: < 150
-      device_ms_total: < 505
-      host_transfers_per_layer: == 0
-      pcc_chunk_out: '>= 0.97'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - P.2
+  - P.1
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
