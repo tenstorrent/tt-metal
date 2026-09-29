@@ -1233,3 +1233,60 @@ Next (implement): only add ffn_norm to `DEVICE_STEPS["dsa_moe"]`. `_device_step`
 this layer, which is the module that passed here.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_10_ffn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.router test (attempt 1)
+
+Reviewed the rendered router component test (dsa_moe layer 3; output dense routing [2048, 288] bf16, 8 nonzeros per
+row, rows sum to routed_scaling_factor 2.5). I rewrote it from mimo_v2_6_d_p's test_c_full_moe_router.py, and it runs
+chunk 1 and chunk 0 like the ffn_norm test. The gated metric is unchanged: pcc_router_L03 (PCC >= 0.99, chunk 1).
+- Checks on both chunks, each written so that NaN fails:
+  - finite output with the golden's shape;
+  - exactly 8 nonzeros per row, and no negative weights;
+  - mean selection overlap >= 0.985 and worst row >= 0.5;
+  - on matched rows: weight rel L2 <= 0.005 and coefficient in [0.998, 1.002];
+  - every row sum within 0.015 of 2.5.
+- Sensitivity (CPU host scripts /tmp/dsarouter/sens{2,3,4}.py, not kept; the numbers are in the test docstring):
+  - The layer-3 bias is 7.42..7.79, so the choice score reaches 8.8. Three errors pass PCC but fail the overlap check:
+    a bf16 choice score (overlap 0.714), a TF32 choice score (0.947) and a bf16 bias (0.871; PCC 0.991).
+  - Checks that catch a bug PCC misses:
+    - the matched-row coefficient: scale x1.004 (1.00395);
+    - matched rel L2 and the row sums: routed scale missing or x1.01;
+    - the nonzero count: top-7 / top-9 and zeroed rows;
+    - the worst-row overlap: a copied row (0.0) and rolled experts (0.125).
+  - Dropped: a check that rows with a clear 8th-9th gap match exactly. Only 34 rows have a gap >= 0.02, so it caught
+    nothing the other checks miss. Proposed known issue.
+- Results:
+  - Reference passes: PCC 0.999818, overlap 0.99695, worst row 0.875, mrel 0.00163, coefficient 0.99995. Chunk 0:
+    0.999853 / 0.99805.
+  - Stub fails (PCC 0).
+  - The gate (device) fails with `NotImplementedError: no device module for router yet`, as expected before the
+    implement step.
+Next (implement), from the components entry (MiMo TtRouter, fp32 mode):
+- fp32 logits (HiFi4, fp32 acc and output), then sigmoid.
+- Recentre the bias by its mean at load. This matches the reference exactly, and afterwards a TF32 or bf16 choice
+  score still passes. Without recentring, keep bias + sigmoid in fp32.
+- topk 8, then gather the unbiased sigmoid, renormalize, and multiply by 2.5.
+- Return a dense [S, 288] (scatter into zeros).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_router.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.router implement (attempt 1)
+
+New module `tt/router.py:TtRouter`, adapted from the MiMo TtRouter fp32 path. It is replicated on the 2x2 mesh with no CCL:
+- typecast x to fp32, then `ttnn.linear` with an fp32 weight [4096, 288] (HiFi4, fp32 acc, fp32 out), then sigmoid;
+- add the fp32 bias, recentred by its mean at load: the choice score drops from ~8.8 to ~1.2, and top-k is shift
+  invariant;
+- `ttnn.topk(8)` on fp32 keys, `ttnn.gather` of the unbiased sigmoid, then `sum`, then `div` by (sum / 2.5);
+- `ttnn.scatter` into bf16 zeros, built at load for max_rows = the largest ladder chunk (8192) and sliced per chunk.
+It returns (dense bf16 [1,1,S,288], idx, weights fp32 [1,1,S,8]). The idx and weights are for a later device experts
+step.
+- `ttnn.topk` at width 288 (9 tiles) works unpadded, so the -inf padding fallback from components.yaml was not needed.
+- hooks.py:
+  - `_router_host_fn` does the bf16 upload and reads back chip 0's dense routing.
+  - `_device_step` handles "router".
+  - `DEVICE_STEPS["dsa_moe"]` now lists `router`, and also attn_residual, ffn_hc, ffn_collapse and ffn_norm. Their
+    swap tests (07-10) passed with the device modules, but no earlier step had added them.
+Result: PCC 0.999807, selection overlap 0.99683, worst row 0.875, matched rel L2 0.00124, coefficient 1.00005, row
+sums [2.4939, 2.5068]. Chunk 0: 0.999856 / 0.99811. This is on par with the CPU reference (0.99982 / 0.99695). About
+21 s.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_router.py`
