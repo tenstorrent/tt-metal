@@ -76,7 +76,6 @@ void kernel_main() {
     constexpr uint32_t SPLIT_NUM = get_named_compile_time_arg_val("SPLIT_NUM");
     constexpr uint32_t SPLIT_DEN = get_named_compile_time_arg_val("SPLIT_DEN");
     constexpr bool SEED = get_named_compile_time_arg_val("SEED") != 0;
-    constexpr uint32_t DEBUG_STAGE = get_named_compile_time_arg_val("DEBUG_STAGE");  // 5 / 6: study, no K/V reads
     constexpr uint32_t cb_q_rm = get_named_compile_time_arg_val("CB_Q_RM");
     constexpr uint32_t cb_k_rm = get_named_compile_time_arg_val("CB_K_RM");
     constexpr uint32_t cb_ids = get_named_compile_time_arg_val("CB_IDS");
@@ -298,9 +297,9 @@ void kernel_main() {
                 m[sst::kreq::DST_L1] = dst;
             }
             kreq_cb.push_back(1);
-            if constexpr (DEBUG_STAGE != 5 && DEBUG_STAGE < 6) {
-                union_gather<RING_DEPTH, BT>(noc, kv, dst, uni, slot0, split, valid, K_ROW_BYTES);
-            }
+
+            union_gather<RING_DEPTH, BT>(noc, kv, dst, uni, slot0, split, valid, K_ROW_BYTES);
+
             kack_cb.wait_front(1);
             kack_cb.pop_front(1);
             if (valid < k_chunk) {

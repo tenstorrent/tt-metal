@@ -26,9 +26,6 @@
 #include "api/compute/reconfig_data_format.h"
 #include "common.h"
 #include "../../kernels/zones.h"
-// Study builds (DEBUG_STAGE named arg): 1 = chunk-0 scores after the band, 2 = raw scores, 3 = probabilities leave
-// as the tile's output; 0 = the kernel.
-constexpr uint32_t SST_DEBUG_STAGE = get_named_compile_time_arg_val("DEBUG_STAGE");
 // compute_streaming.hpp reads EXP_APPROX_MODE (the correction exp's mode) and needs compute_common.hpp first.
 constexpr bool EXP_APPROX_MODE = get_named_compile_time_arg_val("MATH_APPROX") != 0;
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
@@ -97,7 +94,6 @@ void kernel_main() {
     static_assert(qsb <= dst_size, "a query group must fit DEST");
     // sub_exp packs qsb * sbw tiles into DEST: the full Skt width when one group fits, else one key-tile column.
     constexpr uint32_t exp_sbw = (qsb * Skt <= dst_size) ? Skt : 1;
-    static_assert(SST_DEBUG_STAGE == 0 || Skt == vDHt, "the stage dump reuses the output drain: Skt must equal vDHt");
 
     CircularBuffer q_in_cb(cb_q_in), k_in_cb(cb_k_in), qk_cb(cb_qk_im), scale_cb(cb_scale), ctrl_cb(cb_ctrl);
     CircularBuffer band_cb(cb_mask_band), corr_cb(cb_corr);
@@ -123,16 +119,9 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < n_chunks; ++chunk) {
             FUSED_ZONE("fz_ss_c_chunk");
             // K/V rows -> [Skt, DHt] tiles (the wait absorbs the gather).
-            if constexpr (SST_DEBUG_STAGE == 7 || SST_DEBUG_STAGE == 9) {
-                // Study: no tilize; the rows are consumed and the tile CB carries stale bytes.
-                CircularBuffer k_rm_cb(cb_k_rm);
-                k_rm_cb.wait_front(k_chunk);
-                k_rm_cb.pop_front(k_chunk);
-                k_in_cb.reserve_back(Skt * DHt);
-                k_in_cb.push_back(Skt * DHt);
-            } else {
-                compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(/*num_blocks=*/Skt, /*total_input_pages=*/k_chunk);
-            }
+
+            compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(/*num_blocks=*/Skt, /*total_input_pages=*/k_chunk);
+
             // The tilize left srcA / the packer in its formats: QK reads K (srcA) and Q (srcB); the downstream
             // packs share cb_qk_im's format (fp32 or bf16) until the final normalize.
             reconfig_full_operand(cb_k_in, cb_q_in);
@@ -147,28 +136,6 @@ void kernel_main() {
             k_in_cb.wait_front(Skt * DHt);
             q_in_cb.wait_front(Sqt * DQt);
             band_cb.wait_front(Skt);  // the writer's mask band of this chunk
-
-            if constexpr (SST_DEBUG_STAGE == 4 || SST_DEBUG_STAGE >= 6) {
-                // Study: no math; the gather / union / band path alone.  The out / sum tiles keep stale L1 bytes,
-                // the last chunk's normalize runs on them (finite or not: the output is not read).
-                sum_cur.push_back(Sqt);
-                out_cur.push_back(Sqt * vDHt);
-                band_cb.pop_front(Skt);
-                if (is_last) {
-                    max_cur.reserve_back(Sqt);
-                    max_cur.push_back(Sqt);
-                    sst::normalize_rows<vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_out_im>(
-                        sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt);
-                    max_cur.pop_front(Sqt);
-                } else {
-                    sum_cur.pop_front(Sqt);
-                    out_cur.pop_front(Sqt * vDHt);
-                }
-                qk_cb.push_back(Sqt * KT_stride);
-                qk_cb.pop_front(Sqt * KT_stride);
-                k_in_cb.pop_front(Skt * DHt);
-                continue;
-            }
 
             for (uint32_t qg = 0; qg < q_groups; ++qg) {
                 const uint32_t row_base = qg * qsb;
@@ -197,24 +164,14 @@ void kernel_main() {
 
                 // ===== The membership band: scores += band (0 / MASK_FLOOR) on every tile row of the group =====
                 qk_cb.wait_front((qg + 1) * qsb * KT_stride);
-                if constexpr (SST_DEBUG_STAGE != 2) {
-                    // srcA holds K's format after Phase 1; the band copy reads the band's (the helper's <true>
-                    // form reconfigures only when cb_qk_im's and the band's formats differ: right by coincidence)
-                    reconfig_data_format_srca(cb_mask_band);
-                    begin_mask_l1_accumulate<false>(cb_qk_im, cb_mask_band);
-                    apply_provided_mask_streaming<qsb, KT_stride, /*mask_stride=*/0>(cb_mask_band, cb_qk_im, qg, Skt);
-                    end_mask_l1_accumulate();
-                    pack_to_unpack_sync();
-                }
-                if constexpr (SST_DEBUG_STAGE == 1 || SST_DEBUG_STAGE == 2) {
-                    // Study: the held scores of chunk 0 (after the band at 1, raw at 2) leave as the output.
-                    if (is_first && qg == q_groups - 1) {
-                        compute_kernel_lib::untilize<Skt, cb_qk_im, cb_out_rm>(/*num_blocks=*/Sqt);
-                    }
-                    if (is_first) {
-                        continue;
-                    }
-                }
+
+                // srcA holds K's format after Phase 1; the band copy reads the band's (the helper's <true>
+                // form reconfigures only when cb_qk_im's and the band's formats differ: right by coincidence)
+                reconfig_data_format_srca(cb_mask_band);
+                begin_mask_l1_accumulate<false>(cb_qk_im, cb_mask_band);
+                apply_provided_mask_streaming<qsb, KT_stride, /*mask_stride=*/0>(cb_mask_band, cb_qk_im, qg, Skt);
+                end_mask_l1_accumulate();
+                pack_to_unpack_sync();
 
                 // ===== running row max (eltwise max against the previous chunk's on chunk > 0) =====
                 reconfig_data_format(cb_qk_im, cb_scale);
@@ -243,15 +200,6 @@ void kernel_main() {
                         /*sbw=*/exp_sbw);
                 }
                 pack_to_unpack_sync();
-                if constexpr (SST_DEBUG_STAGE == 3) {
-                    // Study: the probabilities of chunk 0 leave as the output.
-                    if (is_first && qg == q_groups - 1) {
-                        compute_kernel_lib::untilize<Skt, cb_qk_im, cb_out_rm>(/*num_blocks=*/Sqt);
-                    }
-                    if (is_first) {
-                        continue;
-                    }
-                }
 
                 // ===== Phase 2: probs @ V (the V tile columns of the same K/V tiles) -> out_cur band =====
                 reconfig_data_format(cb_k_in, cb_qk_im);
@@ -301,20 +249,7 @@ void kernel_main() {
             }  // query groups
 
             band_cb.pop_front(Skt);
-            if constexpr (SST_DEBUG_STAGE >= 1 && SST_DEBUG_STAGE <= 3) {
-                // Study builds: chunk 0 left the group loop early (the dump's untilize popped the held score
-                // tiles and filled the output drain).  Release what was reserved; the later chunks run the loop
-                // (their state is never drained) and the final untilize is skipped.
-                if (is_first) {
-                    sum_cur.push_back(Sqt);
-                    out_cur.push_back(Sqt * vDHt);
-                    k_in_cb.pop_front(Skt * DHt);
-                    swap_cb(max_prev, max_cur);
-                    swap_cb(sum_prev, sum_cur);
-                    swap_cb(out_prev, out_cur);
-                    continue;
-                }
-            }
+
             if (!is_first) {
                 max_prev.pop_front(Sqt);
                 sum_prev.pop_front(Sqt);
@@ -340,8 +275,7 @@ void kernel_main() {
         }
 
         q_in_cb.pop_front(Sqt * DQt);
-        if constexpr (SST_DEBUG_STAGE == 0 || SST_DEBUG_STAGE >= 4) {
-            compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
-        }
+
+        compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
     }
 }

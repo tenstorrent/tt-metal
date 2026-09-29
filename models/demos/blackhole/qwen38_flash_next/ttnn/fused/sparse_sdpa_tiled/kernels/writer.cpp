@@ -15,7 +15,7 @@
 // once per tile by a binary search of the union's two ascending ranges): the cell-by-cell first form wrote every
 // cell of every band and cost half the layer (2.75 of 5.45 ms at 28k on an 11x10 die, 2026-09-25).
 //
-// Named compile-time args: TQ H S CB BT SKT SQT VDHT K_ROW_BYTES OUT_ROW_BYTES RING_DEPTH DEBUG_STAGE and the CB ids
+// Named compile-time args: TQ H S CB BT SKT SQT VDHT K_ROW_BYTES OUT_ROW_BYTES RING_DEPTH and the CB ids
 // CB_OUT_RM CB_SCALE CB_COL_IDENTITY CB_MASK_BAND CB_BAND_TEMPLATE CB_POS CB_UNION CB_MEMBER CB_KREQ CB_KACK
 // CB_TILECTL.  Positional compile-time args: TensorAccessorArgs of out, kv.  Runtime args: 0 out, 1 kv addresses,
 // 2 tile_start, 3 tile_count.
@@ -98,8 +98,6 @@ void kernel_main() {
     constexpr uint32_t K_ROW_BYTES = get_named_compile_time_arg_val("K_ROW_BYTES");
     constexpr uint32_t OUT_ROW_BYTES = get_named_compile_time_arg_val("OUT_ROW_BYTES");
     constexpr uint32_t RING_DEPTH = get_named_compile_time_arg_val("RING_DEPTH");
-    constexpr uint32_t DEBUG_STAGE =
-        get_named_compile_time_arg_val("DEBUG_STAGE");  // 5+: study, no K/V reads; 8/9: no band
     constexpr uint32_t cb_out_rm = get_named_compile_time_arg_val("CB_OUT_RM");
     constexpr uint32_t cb_scale = get_named_compile_time_arg_val("CB_SCALE");
     constexpr uint32_t cb_col_identity = get_named_compile_time_arg_val("CB_COL_IDENTITY");
@@ -185,55 +183,53 @@ void kernel_main() {
             const uint32_t slots = (U - slot0) < CB ? (U - slot0) : CB;
             // The band first (its inputs are complete for the whole tile), then the gather share.
             band_cb.reserve_back(SKT);
-            if constexpr (DEBUG_STAGE != 8 && DEBUG_STAGE != 9) {
-                FUSED_ZONE("fz_ss_w_band");
-                const uint32_t base = band_cb.get_write_ptr();
-                // 1. every cell FLOOR: the template copied over the band (L1 -> L1 on this NoC)
-                noc.async_read(
-                    local_src, band_cb, band_bytes, experimental::local_addr(template_l1, noc.get_noc_id()), {});
-                noc.async_read_barrier();
-                // 2. the member cells: two zero words per query row copy at the block's four columns
-                for (uint32_t s = 0; s < slots; ++s) {
-                    uint32_t m = member[slot0 + s];
-                    if (m == 0) {
-                        continue;
-                    }
-                    const uint32_t kc0 = s * BT;
-                    volatile tt_l1_ptr uint32_t* tile_words =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (kc0 >> 5) * sst::BF16_TILE_BYTES);
-                    const uint32_t col = kc0 & 31;
-                    while (m) {
-                        const uint32_t qi = sst::ctz32(m);
-                        m &= m - 1;
-                        for (uint32_t r = 0; r < ROW_COPIES; ++r) {
-                            const uint32_t word = sst::tile_elem(qi + TQ * r, col) >> 1;
-                            tile_words[word] = 0;
-                            tile_words[word + 1] = 0;
-                        }
-                    }
+
+            FUSED_ZONE("fz_ss_w_band");
+            const uint32_t base = band_cb.get_write_ptr();
+            // 1. every cell FLOOR: the template copied over the band (L1 -> L1 on this NoC)
+            noc.async_read(local_src, band_cb, band_bytes, experimental::local_addr(template_l1, noc.get_noc_id()), {});
+            noc.async_read_barrier();
+            // 2. the member cells: two zero words per query row copy at the block's four columns
+            for (uint32_t s = 0; s < slots; ++s) {
+                uint32_t m = member[slot0 + s];
+                if (m == 0) {
+                    continue;
                 }
-                // 3. the diagonal cells in this chunk: the row's own incomplete block, its first tail_q tokens visible
-                //    (a member bit never sits on a row's own diagonal block: the reader marks members below complete)
-                for (uint32_t qi = 0; qi < TQ; ++qi) {
-                    const uint32_t slot = diag_slot_q[qi];
-                    if (slot < slot0 || slot >= slot0 + slots) {
-                        continue;
-                    }
-                    const uint32_t tail = tail_q[qi];  // 1..3
-                    const uint32_t w0 = (tail > 1 ? 0u : sst::MASK_FLOOR_BF16)
-                                        << 16;  // token 0 visible; token 1 by tail
-                    const uint32_t w1 = (tail > 2 ? 0u : sst::MASK_FLOOR_BF16) | (sst::MASK_FLOOR_BF16 << 16);
-                    const uint32_t kc0 = (slot - slot0) * BT;
-                    volatile tt_l1_ptr uint32_t* tile_words =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (kc0 >> 5) * sst::BF16_TILE_BYTES);
-                    const uint32_t col = kc0 & 31;
+                const uint32_t kc0 = s * BT;
+                volatile tt_l1_ptr uint32_t* tile_words =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (kc0 >> 5) * sst::BF16_TILE_BYTES);
+                const uint32_t col = kc0 & 31;
+                while (m) {
+                    const uint32_t qi = sst::ctz32(m);
+                    m &= m - 1;
                     for (uint32_t r = 0; r < ROW_COPIES; ++r) {
                         const uint32_t word = sst::tile_elem(qi + TQ * r, col) >> 1;
-                        tile_words[word] = w0;
-                        tile_words[word + 1] = w1;
+                        tile_words[word] = 0;
+                        tile_words[word + 1] = 0;
                     }
                 }
             }
+            // 3. the diagonal cells in this chunk: the row's own incomplete block, its first tail_q tokens visible
+            //    (a member bit never sits on a row's own diagonal block: the reader marks members below complete)
+            for (uint32_t qi = 0; qi < TQ; ++qi) {
+                const uint32_t slot = diag_slot_q[qi];
+                if (slot < slot0 || slot >= slot0 + slots) {
+                    continue;
+                }
+                const uint32_t tail = tail_q[qi];                                  // 1..3
+                const uint32_t w0 = (tail > 1 ? 0u : sst::MASK_FLOOR_BF16) << 16;  // token 0 visible; token 1 by tail
+                const uint32_t w1 = (tail > 2 ? 0u : sst::MASK_FLOOR_BF16) | (sst::MASK_FLOOR_BF16 << 16);
+                const uint32_t kc0 = (slot - slot0) * BT;
+                volatile tt_l1_ptr uint32_t* tile_words =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + (kc0 >> 5) * sst::BF16_TILE_BYTES);
+                const uint32_t col = kc0 & 31;
+                for (uint32_t r = 0; r < ROW_COPIES; ++r) {
+                    const uint32_t word = sst::tile_elem(qi + TQ * r, col) >> 1;
+                    tile_words[word] = w0;
+                    tile_words[word + 1] = w1;
+                }
+            }
+
             band_cb.push_back(SKT);
 
             kreq_cb.wait_front(1);
@@ -245,10 +241,10 @@ void kernel_main() {
                 dst = m[sst::kreq::DST_L1];
             }
             kreq_cb.pop_front(1);
-            if constexpr (DEBUG_STAGE != 5 && DEBUG_STAGE < 6) {
-                FUSED_ZONE("fz_ss_w_gather");
-                union_gather<RING_DEPTH, BT>(noc, kv, dst, uni, req_slot0, 0, split, K_ROW_BYTES);
-            }
+
+            FUSED_ZONE("fz_ss_w_gather");
+            union_gather<RING_DEPTH, BT>(noc, kv, dst, uni, req_slot0, 0, split, K_ROW_BYTES);
+
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
         }

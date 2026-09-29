@@ -94,10 +94,6 @@ class Config:
     seed: bool = True
     # Row-major K/V chunk slots in L1 (the reader runs this many chunks ahead of compute; 2 fits with bf16 state).
     k_slots: int = 1
-    # Study builds only: 1 = chunk-0 scores after the band, 2 = raw scores, 3 = probabilities leave as the output;
-    # 4 = compute skips the math (the gather / union / band path alone), 5 = the gather skips its NoC reads (the
-    # compute path alone, on whatever the K/V slots hold), 6 = both (the union / band / handshake floor).
-    debug_stage: int = 0
 
     @property
     def k_chunk(self) -> int:
@@ -341,7 +337,6 @@ def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DE
         "BT": config.block_tokens,
         "K_ROW_BYTES": g["W"] * 2,
         "RING_DEPTH": config.ring_depth,
-        "DEBUG_STAGE": int(config.debug_stage),
     }
     reader_named = {
         **shared,
@@ -396,7 +391,6 @@ def build(q, kv, block_ids, positions, out, *, scale: float, config: Config = DE
         "SCALE": _bits(scale),
         "QSB": g["qsb"],
         "MATH_APPROX": int(config.approx),
-        "DEBUG_STAGE": int(config.debug_stage),
         "CB_Q_RM": CB_Q_RM,
         "CB_Q_IN": CB_Q_IN,
         "CB_K_RM": CB_K_RM,
