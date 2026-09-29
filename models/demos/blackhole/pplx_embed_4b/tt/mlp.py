@@ -218,8 +218,11 @@ class PplxFusedSwigluMLP(MLP):
         Defaults are the best of perf_tools/bench_ff13_sweep.py 1 with the pack-thread SwiGLU kernel (2,20,8 1x2,
         214 us standalone); the fused path still loses to the legacy FF1 + FF3 + mul at bs1 e2e (15.7 -> 16.0 ms,
         NEGATIVE_RESULTS 58), so it stays opt-in. A subblock is capped at the DST half (8 tiles, 4 with
-        fp32_dest_acc_en). Grid is the full device, clamped for harvested parts. QWEN_MM_BLOCK_FF13 /
-        QWEN_MM_SUBBLOCK_FF13 are honoured if set so the config can be swept like the others.
+        fp32_dest_acc_en). K_block 40, which hides the SwiGLU batched (§60), is slower here: at M=512 the SwiGLU is
+        only 3% exposed and the kernel is data-movement-bound (NEGATIVE_RESULTS 61). Needs QWEN_FUSE_SWIGLU=1 as well
+        (the demo defaults it off at bs1, and without it no packed weight is built). Grid is the full device, clamped
+        for harvested parts. QWEN_MM_BLOCK_FF13 / QWEN_MM_SUBBLOCK_FF13 are honoured if set so the config can be swept
+        like the others.
         """
         gx, gy = self.args._clamp_grid_to_device((12, 10))
         mb, kb, nb = self.args._resolve_mm_blocks("QWEN_MM_BLOCK_FF13", default=(2, 20, 8))
