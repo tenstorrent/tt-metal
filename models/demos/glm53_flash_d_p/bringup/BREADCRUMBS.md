@@ -498,3 +498,29 @@ Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run
 - Gate results: PCC 0.999996, rel L2 0.0029, per-token norm ratio [0.9974, 1.0027], worst row rel L2 0.0052 (limits
   0.01 / [0.99, 1.01] / 0.015).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_norm.py`
+
+## S.kda_dense.08 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc through ffn_collapse plus ffn_norm on device, layer 0). Rewrote it from swap
+07's test. It keeps every swap-07 check and the gated pcc_swap_out. Added:
+- ffn_norm vs the CPU norm of the device ffn_in, and the module on layer 1's golden ffn_in (layer-0 weights on both
+  sides), at the component test's limits (rel <= 0.01, ratio [0.99, 1.01], worst row <= 0.015).
+- ffn_norm vs golden, which carries the upstream ffn_in error (0.0118): rel <= 0.015, ratio [0.98, 1.02], worst row
+  <= 0.03. Device: 0.0080 / [0.9951, 1.0032] / 0.0130.
+- ffn_norm's share of block out: block out vs the CPU tail (mlp, ffn_residual) from the CPU norm of the device ffn_in.
+  Limits: rel <= 0.004, ratio [0.99, 1.01]. Device: 0.0016 / [0.9977, 1.0023].
+- The swap-06 tail (metric `rel_l2_swap_out_vs_cpu_tail`) now runs CPU ffn_hc + collapse + norm. Limits unchanged;
+  device 0.0029 / [0.9874, 1.0130].
+- The swap-07 collapse-share tail (`cpu_fc_tail`) now puts the device norm on the CPU collapse, so only the collapse
+  differs. Limits unchanged. Device 7e-6: the device norm rounds its input to bf16.
+Sensitivity (CPU host scripts /tmp/s08_sens.py and /tmp/s08_fc.py, not kept): the mlp amplifies a norm scale error
+into block out by about 1.6x. Norm x1.005 passes every norm check (ratio 1.005) and gives tail rel 0.008, ratio 1.0157.
+Mean subtraction: tail rel 0.0116. eps 1.2e-5: 0.011. Last row x1.05: ratio 1.0178. Noise: bf16 output 0.0015;
+0.2% per-row rsqrt noise 0.0034 / [0.9836, 1.0184], which fails the ratio. Collapse bugs through the device-norm tail:
+x1.01 ratio 1.0125; one row's pre reversed 1.0080 (both fail [0.995, 1.005]); all-bf16 collapse passes (0.0024).
+Results: device passes (out PCC 0.999980, rel 0.0072, ratio [0.9797, 1.0087]). Reference passes (out rel 0.0017).
+Stub fails (PCC 0, every check).
+Watch: the block-out ratio minimum vs golden is still 0.9797 (limit 0.97). mlp and ffn_residual are next. The mlp
+amplifies upstream error, so check the block-out margin there first.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_08_ffn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
