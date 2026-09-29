@@ -394,6 +394,41 @@ def _isclose_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
+def _isclose_nan_stimuli_specs():
+    # The NaN arm of isclose, which _isclose_stimuli_specs (finite ramps only) never reaches.
+    # Eight lanes per period, so every pairing the EQUAL_NAN template flag changes -- and every
+    # one it must not -- appears in every face:
+    #   p%8: 0 (+NaN,+NaN) 1 (+NaN,x) 2 (x,+NaN) 3 (-NaN,+NaN) 4 (-NaN,-NaN)
+    #        5 (x,x) 6 (x,x+2) 7 (+NaN,-NaN)
+    # equal_nan=False answers 0 on lanes 0-4 and 7, equal_nan=True answers 1 on 0, 3, 4 and 7
+    # (both NaN, whatever the signs) and 0 on the one-sided lanes 1 and 2; 5 and 6 are the
+    # finite 1/0 controls. The goldens are torch.isclose(equal_nan=False/True). The NaNs are
+    # built from explicit fp32 bit patterns (0x7FC00000 / 0xFFC00000); torch's bfloat16 cast
+    # turns every NaN into one pattern, so the mixed-sign lanes are distinct at Float32 only.
+    nan = torch.tensor([0x7FC00000], dtype=torch.int32).view(torch.float32)
+    neg_nan = torch.tensor([0xFFC00000 - (1 << 32)], dtype=torch.int32).view(
+        torch.float32
+    )
+
+    def a_face(size, dtype, generator):
+        j, ramp = _positions_and_ramp(size)
+        k = j % 8
+        a = ramp.clone()
+        a = torch.where((k == 0) | (k == 1) | (k == 7), nan, a)
+        a = torch.where((k == 3) | (k == 4), neg_nan, a)
+        return a.to(dtype)
+
+    def b_face(size, dtype, generator):
+        j, ramp = _positions_and_ramp(size)
+        k = j % 8
+        b = ramp + torch.where(k == 6, 2.0, 0.0)
+        b = torch.where((k == 0) | (k == 2) | (k == 3), nan, b)
+        b = torch.where((k == 4) | (k == 7), neg_nan, b)
+        return b.to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
 def _eq_ne_stimuli_specs():
     # Eq/Ne compare paired operands (a = tile0, b = tile1). Fill the two tiles so even p ->
     # identical (Eq 1), odd p -> differ by 1.0 (Eq 0), a clean ~50/50 mix.
@@ -885,6 +920,31 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _isclose_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuIsclose, MathOperation.SfpuIscloseEqualNan],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
+    # Both-NaN, one-sided-NaN and mixed-sign-NaN pairs, which is where EQUAL_NAN changes the
+    # answer; see _isclose_nan_stimuli_specs for the lane table. Only on pipelines that deliver
+    # a NaN operand to the SFPU intact.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    effective_dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        else dest_acc
+    )
+    if not specials_safe(
+        formats.input_format, formats.output_format, effective_dest_acc
+    ):
+        pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
+
+    spec_A, spec_B = _isclose_nan_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 

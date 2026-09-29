@@ -2259,9 +2259,16 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.
         MathOperation.SfpuMask,
+        # mask_posinf is the same zero test on the mask operand (_sfpu_is_fp16_zero_), so it
+        # waits on the same thing as SfpuMask.
+        MathOperation.SfpuMaskPosinf,
         # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
         # operand; needs a per-cell read-back to say which is wrong before either is touched.
         MathOperation.SfpuIsclose,
+        # The equal_nan=True instantiation of the same kernel: its NaN arm is pinned by the
+        # dedicated probe in test_eltwise_binary_sfpu (test_eltwise_binary_sfpu_isclose_nan),
+        # but the rest of the (special, special) grid shares SfpuIsclose's open divergence.
+        MathOperation.SfpuIscloseEqualNan,
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
