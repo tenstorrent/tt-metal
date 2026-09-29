@@ -2067,6 +2067,118 @@
   "started": "2026-09-29T10:59:56",
   "status": "PASS"
  },
+ "C.moe_full.moe_combine": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "e5c4c21c-33e1-4508-952d-b834e5d1c5ba"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_full.moe_combine.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_full.moe_combine.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 435.6,
+    "session_id": "5dc181bc-3823-4fc3-907b-94c47600deea",
+    "t": "2026-09-29T15:23:37"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_full.moe_combine.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_full.moe_combine.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 129.5,
+    "session_id": "e5c4c21c-33e1-4508-952d-b834e5d1c5ba",
+    "t": "2026-09-29T15:27:01"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 25.0,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T15:24:51"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T15:27:28"
+   }
+  ],
+  "last_run": "2026-09-29T15:27:28",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.moe_full.moe_combine.log",
+  "metrics": {
+   "add_coef_experts_moe_combine_L01": 1.0000000000001996,
+   "add_coef_shared_moe_combine_L01": 1.0000000000000637,
+   "add_rel_l2_experts_moe_combine_L01": 1.4985503664440003e-10,
+   "add_rel_l2_shared_moe_combine_L01": 2.674796594573958e-10,
+   "add_worst_row_experts_moe_combine_L01": 3.542897402349952e-09,
+   "add_worst_row_shared_moe_combine_L01": 3.885155254296166e-09,
+   "pcc_moe_combine_L01": 0.9999974999450493,
+   "probe_rel_l2_expertsminusshared_moe_combine_L01": 0.0,
+   "probe_rel_l2_expertsplus0_moe_combine_L01": 0.0,
+   "rel_l2_moe_combine_L01": 0.002234400250017643,
+   "row_norm_ratio_max_moe_combine_L01": 1.0001558065414429,
+   "row_norm_ratio_min_moe_combine_L01": 0.9998379945755005,
+   "worst_row_rel_moe_combine_L01": 0.002403426915407181
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-29T15:27:03",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.moe_full.q_a": {
   "agent": {
    "defs": {
