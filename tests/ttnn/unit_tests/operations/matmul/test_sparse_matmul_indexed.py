@@ -17,6 +17,7 @@ import pytest
 import torch
 import ttnn
 
+from models.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -491,12 +492,15 @@ def test_indexed_bias_and_cache_rebinding(
             matmul_reference = a[0, slot if compact_a else 0].float() @ b_quantized[0, expert]
             expected = matmul_reference + bias[expert].float()
             if not fp32_dest_acc_en:
-                # Diagnose BF16 K-block accumulation separately from the added bias path.
-                baseline_error = (unbiased[slot] - matmul_reference).abs().max().item()
-                fused_error = (actual[slot] - expected).abs().max().item()
-                bias_delta_error = (actual[slot] - unbiased[slot] - bias[expert].float()).abs().max().item()
-                print(f"BF16 error: baseline={baseline_error}, fused={fused_error}, bias_delta={bias_delta_error}")
-            torch.testing.assert_close(actual[slot], expected, atol=0.3, rtol=0.03)
+                # BF16 K-block accumulation already exceeds 0.3 absolute error
+                # without bias on these unscaled inputs. Check the full result
+                # independently, then isolate bias from that accumulation error.
+                assert comp_pcc(expected, actual[slot], pcc=0.999)[0]
+                rounding_bound = torch.finfo(torch.bfloat16).eps * (unbiased[slot].abs() + bias[expert].float().abs())
+                bias_error = (actual[slot] - unbiased[slot] - bias[expert].float()).abs()
+                assert (bias_error <= rounding_bound).all(), "Fused bias exceeds BF16 operand rounding bound"
+            else:
+                torch.testing.assert_close(actual[slot], expected, atol=0.3, rtol=0.03)
 
 
 @pytest.mark.parametrize("invalid", ["no_indices", "dtype", "layout", "groups", "width"])
