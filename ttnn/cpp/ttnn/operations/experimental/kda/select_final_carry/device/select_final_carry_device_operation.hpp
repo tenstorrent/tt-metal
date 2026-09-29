@@ -23,12 +23,14 @@ struct SelectFinalCarryOperation {
 };
 
 Tensor select_final_carry(
-    const Tensor& rank_finals,
+    const Tensor& rank_final,
     const Tensor& prefix_final,
     const tt::tt_metal::MemoryConfig&,
     const Tensor& actual_start,
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows);
+    uint32_t local_rows,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology);
 
 }  // namespace ttnn::experimental::prim

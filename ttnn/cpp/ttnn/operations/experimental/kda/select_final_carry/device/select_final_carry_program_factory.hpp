@@ -3,13 +3,19 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
+#include "ttnn/distributed/types.hpp"
+
 #include "select_final_carry_device_operation_types.hpp"
-#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct SelectFinalCarryProgramFactory {
-    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+    // Allocates the line barrier and arrival semaphores once per workload, then one program per coordinate:
+    // each program's fabric routes depend on the device's place on the sequence-parallel line.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const SelectFinalCarryParams&,
         const SelectFinalCarryInputs&,
         std::vector<Tensor>&,
