@@ -3228,3 +3228,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
+
+## M.1 assemble (attempt 1)
+
+What
+- New `tt/model.py`: TtHy4Embedding (embed_tokens [V, 3072] bf16 per chip, hidden split over columns, tensorbin cache
+  `generated/hy4_preview_d_p/tt_cache/embed_tokens_bf16_cols`; ids row-split over axis 0 -> typecast fp32 -> concat x4
+  streams), TtHy4Block (the validated modules, built with the same hooks builders `_hc_module`, `_norm_module`, ... as
+  the component / swap / hybrid paths; run_block over `Hy4Reference.block_graph`, every step an override, a missing
+  step raises), TtHy4DeviceState (per-layer attention / indexer geometries + the latest full layers' device top-k),
+  TtHy4FinalNorm (hc_head = TtHcGates with hc_head_fn zero-padded to 8 rows + TtHcPre, then TtGatheredRmsNorm fp32 out),
+  TtHy4Model.
+- `hooks.py`: Hy4DeviceModel (ladder / profile adapter) is the `device_model` hook; `BRINGUP_HYBRID=1` keeps the hybrid.
+
+Decisions
+- Hidden state resident as [1, 1, S/2, 4 x 3072] fp32 per chip (tt/layout.py) end to end; dtypes at every boundary
+  match the hybrid's (bf16 attn_norm / q_resid / ffn_norm, fp32 streams / gates / sublayer outputs).
+- The router boundary is the device (idx, wts) tuple; experts take it directly (no dense [S, E] round trip).
+- Geometry (RoPE tables for max_seq, caches, scratch, dispatch/combine sizes) is built in `new_state` when the spec gives
+  one chunk for that seq (`_state_chunk`), else at the first layer call (first chunk, not counted as warm). A golden
+  prefix / zeros are written to the caches there too (harness boundary).
+- Each boundary is freed after its last reader, except "in" (the caller's) and "topk": the indexer returns its
+  geometry's persistent gather buffer (`g.idx_out`), which shared layers read; freeing it would break layers 2-4.
+- LM head on the host (fp32, sampled rows only, `lm_head=True` only).
+
+Result (gate, s4096): PASS. pcc_layer L00..L05 0.999984 / 0.999953 / 0.999921 / 0.999917 / 0.999900 / 0.999892,
+pcc_state_min 0.999965, host_transfers_per_layer 0, device_model_hybrid 0. Chunks 2.11 s / 7.18 s (chunk 1 includes
+program compiles for the new chunk offset); model load 159 s.
+
+Gotchas
+- The final norm path (TtHy4FinalNorm) is not exercised by the 0-5 subset ladder (ends_at_last is False); it is built
+  and untested.
+- `Ctx.length` is the full chunk (per-chip rows x mesh rows).
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    BRINGUP_HYBRID=1 ... (same command) for the hybrid harness
