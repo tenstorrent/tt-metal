@@ -296,3 +296,113 @@ def test_bw_gelu_program_cache_regression(device):
                     assert device.num_program_cache_entries() == entries_before
     finally:
         device.disable_and_clear_program_cache()
+
+
+# Layout, sharding and padding are data movement only: none of them may change a single value, so
+# every configuration below must be bit-identical (0 ULP) to the plain interleaved TILE call on the
+# same data. That checks the plumbing exactly, independent of the kernels' own accuracy, which the
+# exhaustive and ULP tests bound for the interleaved path.
+LAYOUT_DTYPES = (
+    pytest.param(ttnn.bfloat16, torch.bfloat16, id="bf16"),
+    pytest.param(ttnn.float32, torch.float32, id="fp32"),
+)
+
+
+def _core_range(x1, y1):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x1, y1))})
+
+
+def _sharded(memory_layout, shard_shape, grid, buffer_type=ttnn.BufferType.L1):
+    return ttnn.MemoryConfig(
+        memory_layout, buffer_type, ttnn.ShardSpec(grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+def _gelu_bw_as(input_data, grad_data, dtype, torch_dtype, variant, layout, memory_config, device):
+    input_tensor = ttnn.from_torch(input_data, dtype, layout=layout, device=device, memory_config=memory_config)
+    grad_tensor = ttnn.from_torch(grad_data, dtype, layout=layout, device=device, memory_config=memory_config)
+    output = ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant, memory_config=memory_config)[0]
+    assert output.layout == layout
+    return ttnn.to_torch(output).to(torch_dtype)
+
+
+def _layout_inputs(shape):
+    numel = torch.Size(shape).numel()
+    input_data = torch.linspace(-5.0, 5.0, numel, dtype=torch.float32).reshape(shape)
+    grad_data = torch.linspace(-2.0, 2.0, numel, dtype=torch.float32).reshape(shape).flip(-1)
+    return input_data, grad_data
+
+
+@pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
+@pytest.mark.parametrize("dtype,torch_dtype", LAYOUT_DTYPES)
+@pytest.mark.parametrize(
+    "memory_config",
+    (
+        # Every operand L1-sharded on one spec: the circular buffers alias the shards.
+        pytest.param(_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 128), _core_range(0, 7)), id="height"),
+        pytest.param(_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, (128, 64), _core_range(1, 1)), id="block"),
+        # DRAM-sharded: not aliasable, so every operand is addressed by page instead.
+        pytest.param(
+            _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (256, 64), _core_range(1, 0), ttnn.BufferType.DRAM),
+            id="width_dram",
+        ),
+    ),
+)
+def test_bw_gelu_sharded_matches_interleaved(variant, approximate, dtype, torch_dtype, memory_config, device):
+    input_data, grad_data = _layout_inputs((1, 1, 256, 128))
+    expected = _gelu_bw_as(
+        input_data, grad_data, dtype, torch_dtype, variant, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, device
+    )
+    actual = _gelu_bw_as(input_data, grad_data, dtype, torch_dtype, variant, ttnn.TILE_LAYOUT, memory_config, device)
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=0)
+
+
+@pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
+@pytest.mark.parametrize("dtype,torch_dtype", LAYOUT_DTYPES)
+@pytest.mark.parametrize(
+    "shape,memory_config",
+    (
+        pytest.param((1, 1, 256, 128), ttnn.DRAM_MEMORY_CONFIG, id="interleaved"),
+        # Each 100-element row splits into two 50-element width-shard pages, which are not NoC-aligned.
+        pytest.param(
+            (1, 1, 37, 100),
+            _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, (37, 50), _core_range(1, 0)),
+            id="width_sharded_unaligned",
+        ),
+    ),
+)
+def test_bw_gelu_row_major_matches_tile(variant, approximate, dtype, torch_dtype, shape, memory_config, device):
+    input_data, grad_data = _layout_inputs(shape)
+    expected = _gelu_bw_as(
+        input_data, grad_data, dtype, torch_dtype, variant, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, device
+    )
+    actual = _gelu_bw_as(
+        input_data, grad_data, dtype, torch_dtype, variant, ttnn.ROW_MAJOR_LAYOUT, memory_config, device
+    )
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=0)
+
+
+@pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
+@pytest.mark.parametrize("dtype,torch_dtype", LAYOUT_DTYPES)
+def test_bw_gelu_preserves_input_physical_padding(variant, approximate, dtype, torch_dtype, device):
+    """A 40x40 logical input padded to 96x96 (9 tiles) must get a 96x96 output: the op writes one
+    page per input tile, and sizing the output from the logical shape (64x64, 4 tiles) left it
+    undersized. The logical region must match the ordinarily tile-padded call exactly."""
+    input_data, grad_data = _layout_inputs((1, 1, 40, 40))
+    padded_shape = [1, 1, 96, 96]
+    input_tensor = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(input_data, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded_shape, 0.0
+    )
+    grad_tensor = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(grad_data, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded_shape, 0.0
+    )
+
+    output = ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0]
+
+    assert list(output.padded_shape) == padded_shape
+    expected = _gelu_bw_as(
+        input_data, grad_data, dtype, torch_dtype, variant, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, device
+    )
+    assert_with_ulp(
+        expected_result=expected, actual_result=ttnn.to_torch(output).to(torch_dtype)[..., :40, :40], ulp_threshold=0
+    )
