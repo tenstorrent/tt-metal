@@ -1585,3 +1585,27 @@ Results:
   add-share block.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_15_ffn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.attn_hc test (attempt 1)
+Reviewed the rendered component test for attn_hc at layer 4 (the same op as dsa_moe attn_hc, with layer 4's weights).
+I rewrote it from the dsa_moe attn_hc test, keeping its checks, and re-measured the limits on the layer-4 golden:
+- post is not saturated everywhere at layer 4: post stream 1 reaches 0.455, and the others are <= 2.1e-3 (column 7
+  ~1e-5). Layer 3's post max abs of 5e-4 would fail the fp32 reference (1.05e-3), so post max abs is 6e-3 here.
+- Worst single-column rel L2 is tightened from 0.07 to 0.05, so 19 Sinkhorn iterations (0.061) fail. The device is at
+  0.0245.
+- Every limit is written `not x <= lim`, so a NaN metric fails.
+- Limits: part rel L2 <= 0.01; max abs pre 0.02, post 6e-3, comb 0.02; worst column <= 0.05; comb column sums within
+  0.01; range checks.
+Sensitivity (CPU host script /tmp/kmhc/sens.py, not kept; the numbers are in the test docstring):
+- PCC alone catches stream order, comb transposed, comb base transposed and scales swapped.
+- The part and column checks catch the wrong softmax axis, 10/18/19 iterations, hc_eps 1e-5 and 0, x1.02 on any scale
+  or part, and a zeroed last row.
+- Not caught: rms eps 1e-6 or 1.2e-5, and x1.005 on any part (about the size of the device's own error).
+Results:
+- Device (the gate's default mode) passes, because `_device_step` builds tt/mhc.py for any layer. It scores PCC
+  0.999994, part rel 0.0047 / 0.0040 / 0.0031, max abs 6.3e-3 / 1.95e-3 / 7.8e-3, worst column 0.0245 (column 9),
+  column sums 0.9965..1.0007.
+- Reference passes (0.0017 / 0.0016 / 0.0015, worst column 0.0025). Stub fails (PCC 0).
+Next step: implement only needs to add attn_hc to `DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
