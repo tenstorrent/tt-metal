@@ -2692,3 +2692,37 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_06_attention.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_06_attention.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_06_attention.py
+
+## C.moe_shared.attn_residual.test.1 (test review, layer 2)
+
+What
+- Replaced the rendered test with the moe_full layer-1 attn_residual test (same step: iHC post, h_mid_j = in_j +
+  post_j * attn_out) at LAYER = 2. It keeps the same checks with the fixed parts tightened: rel L2 <= 0.005 (was
+  0.01), per-token per-stream norm ratio [0.995, 1.005] (was [0.99, 1.01]), addend coef tol 0.005 + 2 r/||t|| (was
+  0.01), addend rel 0.005 ||t|| + 2 r (was 0.01). The per-row limit is unchanged (0.05 ||t|| + 2 r + 1e-6).
+- CPU mutation study on the layer-2 golden: /tmp/hy4_c_res2/study.py (layer-1 limits) and full_tight.py / tight.py
+  (new limits), outside the repo. The table is in the test docstring.
+
+Decisions
+- Layer 2 golden: stream norms 70 / 65 / 73 / 335, post column means 0.21 / 0.24 / 0.22 / 0.0028, addend norms
+  37 / 45 / 40 / 0.64. The bf16 budget r/||t|| is 0.0023 / 0.0015 / 0.0023 on streams 0-2, so they can take tighter
+  limits. Stream 3's addend is below bf16 resolution (0.12), and the rounding-aware term covers it.
+- With the layer-1 limits, 1.01 x attn_out passed (coef 0.76 of tol). With the new limits it fails (1.24), and so
+  does 0.99 x. A bf16-output module still uses only 0.49 of the allowance (worst row, stream 3). All other 33
+  mutations fail either way.
+
+Gotchas
+- The bf16 golden h_mid fails the addend checks itself (stream 3 excess 1.18, row 10.6). It was rounded from
+  unrounded fp32 inputs, so it is not a module output and not the bar. The fp32 reference on the golden inputs scores 0.
+- The first "FAIL pcc ... 0.000000" line is the precompile pass. Ignore it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00101, ratio [0.9989, 1.0015], addend exact, worst row 0.001).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, TtHcPost via device_component; hooks already cover the step for any layer): PASS. Numbers are
+  identical to the reference: rel 0.00101, ratio [0.9989, 1.0015], coef 1.0, excess 0.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
