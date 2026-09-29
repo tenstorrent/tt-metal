@@ -1,0 +1,45 @@
+{
+ "metrics": {
+  "max_row_rel_l2_index_key_c0_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.003914250526577234
+  },
+  "max_row_rel_l2_index_key_c1_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.003508949186652899
+  },
+  "pcc_indexer_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.9986568093299866
+  },
+  "rel_l2_index_key_c0_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.002510959282517433
+  },
+  "rel_l2_index_key_c1_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.002477556699886918
+  },
+  "topk_overlap_indexer_L03_c0": {
+   "t": "2026-09-29T07:44:09",
+   "value": 1.0
+  },
+  "topk_overlap_mean_indexer_c0_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 1.0
+  },
+  "topk_overlap_mean_indexer_c1_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.9986563324928284
+  },
+  "topk_overlap_worst_row_indexer_c0_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 1.0
+  },
+  "topk_overlap_worst_row_indexer_c1_L03": {
+   "t": "2026-09-29T07:44:09",
+   "value": 0.9921875
+  }
+ },
+ "task": "C.dsa_moe.indexer"
+}

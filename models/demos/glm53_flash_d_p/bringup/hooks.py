@@ -43,7 +43,7 @@ DEVICE_STEPS = {
         "ffn_norm",
         "mlp",
     },
-    "dsa_moe": {"attn_hc", "attn_collapse", "attn_norm", "q_a"},
+    "dsa_moe": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "indexer"},
     "kda_moe": set(),
 }
 
@@ -160,8 +160,46 @@ class _KdaHostFn:
             ctx.extra["state_out"] = self.module.state_torch()
         return y
 
-    def load_state(self, tensors):
+    def load_state(self, tensors, length=None):
         self.module.load_state(tensors)
+
+    def state_torch(self):
+        return self.module.state_torch()
+
+
+class _IndexerHostFn:
+    """fn(ctx, attn_norm [S, H], q_resid [S, 1536]) -> host topk int32 [S, 2051] (-1 = none) around TtIndexer
+    (harness boundary: bf16 upload, read-back of the four per-chip row blocks, concatenated on the host). A
+    component ctx that carries ``state_prefix`` loads its pooled keys first and gets ``state_out`` back."""
+
+    def __init__(self, mesh, module, width):
+        self.mesh, self.module, self.width = mesh, module, width
+
+    def __call__(self, ctx, x, q_resid):
+        import ttnn
+        from models.demos.glm53_flash_d_p.tt.common import replicate
+
+        prefix = ctx.extra.get("state_prefix")
+        if prefix is not None and ctx.start > 0:
+            self.module.load_state(prefix, ctx.extra.get("prefix_len", ctx.start))
+        s = x.shape[-2]
+        xd = replicate(self.mesh, x.reshape(1, 1, s, x.shape[-1]).to(torch.bfloat16))
+        qd = replicate(self.mesh, q_resid.reshape(1, 1, s, q_resid.shape[-1]).to(torch.bfloat16))
+        td = self.module(xd, qd, ctx.start)
+        # chip d = 2 r + c holds rows d S/4 ..; get_device_tensors is in that (row-major) order
+        y = torch.cat(
+            [ttnn.to_torch(t).reshape(s // len(ttnn.get_device_tensors(td)), -1) for t in ttnn.get_device_tensors(td)]
+        )
+        y = y.view(torch.int32) if y.dtype == torch.uint32 else y.to(torch.int32)
+        y = y[:, : self.width].contiguous()
+        for t in (xd, qd, td):
+            ttnn.deallocate(t)
+        if prefix is not None:
+            ctx.extra["state_out"] = self.module.state_torch()
+        return y
+
+    def load_state(self, tensors, length=None):
+        self.module.load_state(tensors, length)
 
     def state_torch(self):
         return self.module.state_torch()
@@ -170,6 +208,10 @@ class _KdaHostFn:
 def _max_seq(spec):
     seqs = [r["seq"] for r in spec.get("ladder", [])] + [spec.get("target", {}).get("seq", 0)]
     return max(seqs)
+
+
+def _chunks(spec):
+    return sorted(({r["chunk"] for r in spec.get("ladder", [])} | {spec.get("target", {}).get("chunk", 0)}) - {0})
 
 
 def _device_step(mesh, spec, layer, step, loader, cfg):
@@ -197,6 +239,11 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.q_a import build_q_a
 
         return _norm_host_fn(mesh, build_q_a(mesh, loader, cfg, layer))
+    if step == "indexer":
+        from models.demos.glm53_flash_d_p.tt.indexer import build_indexer
+
+        module = build_indexer(mesh, loader, cfg, layer, _max_seq(spec), _chunks(spec))
+        return _IndexerHostFn(mesh, module, cfg.index_topk + cfg.index_kpool - 1)
     if step == "mlp" and not cfg.is_moe(layer):
         from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
 
@@ -218,12 +265,16 @@ class _RefState:
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
         if layer in self.dev:
-            self.dev[layer].load_state(tensors)
+            self.dev[layer].load_state(tensors, length)
 
     def to_torch(self, layer, length):
+        """The CPU state with the device-held tensors (a KDA layer's whole state, a DSA layer's pooled keys) on top."""
+        out = self.ref.state_tensors(self.s, layer, length)
         if layer in self.dev:
-            return self.dev[layer].state_torch()
-        return self.ref.state_tensors(self.s, layer, length)
+            out.update(self.dev[layer].state_torch())
+            if "index_key" in out:
+                out["index_key"] = out["index_key"][: length // self.ref.cfg.index_kpool]
+        return out
 
 
 class HybridDeviceModel:
