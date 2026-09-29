@@ -3297,3 +3297,36 @@ Gotchas
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+
+## P.1 perf (attention: matmul program configs)
+
+What
+- Per-op profile first (BRINGUP_PROFILE_OPS=1, rung last, chunk 51200->56320), attention per layer ~35.5 ms:
+  sparse_sdpa 13.9, linear_gate 6.57, o_proj 6.49, q_b 2.20, w_uv 0.89, w_uk 0.79, high_bw_all_gather of the
+  prefix 0.66 (not the bottleneck), 3 to_layout 1.24, concat 0.51, sigmoid 0.50, reduce_scatter 0.48, multiply 0.38.
+- The three big linears ran on ttnn's auto config at ~39 TFLOPS (HiFi4 peak on 11x10 ~150). `tt/attention.py`:
+  `mm_program_config(m, k, n, out_dtype)` builds a 2D-mcast config (M over the 10 grid rows, N over the 11 columns,
+  widest in0_block_w in 16 > 8 > ... whose CBs fit 1.4 MB, out_block = per_core_M x ~8 tiles so the fp32 output block
+  no longer caps in0_block_w). Built once per geometry (`_Geometry.mm`), used by q_b / gate / o_proj.
+- Switch: `HY4_ATTN_MM=tuned` (default) | `default` (ttnn's auto config, the pre-P.1 path). Recorded in the profile
+  settings through the new `Hy4DeviceModel.perf_settings()` (attn_mm, experts_mode, indexer_score).
+
+Decisions
+- No precision change: same HiFi4, fp32_dest_acc_en, packer_l1_acc off, same dtypes. On random inputs the tuned
+  outputs are bit-identical to the default config's (max |diff| 0 at m = 1024 / 2560 / 4096, all three linears).
+- packer_l1_acc left off. It is faster still at small in0_block_w (gate 3.20 -> 2.18 ms at block 4) but changes how
+  the K partials accumulate; with block 16 it adds little. Untried in the model.
+- Per-op before -> after (probe, m = 2560 per chip): q_b 2.23 -> 0.80, gate 6.59 -> 2.29, o_proj 6.52 -> 2.28 ms;
+  m = 1024: 1.11 / 3.29 / 3.26 -> 0.40 / 1.16 / 1.14; m = 4096: 3.68 / 10.91 / 11.22 -> 1.39 / 4.21 / 4.22.
+- sparse_sdpa (13.9 ms, ~26 TFLOPS) is now the largest attention op; untouched here (next candidate).
+
+Result (gate, all 8 commands PASS): device_ms_attention 212.8 -> 153.0, device_ms_total 519.1 -> 459.3 (wall 521 ->
+461 ms), host_transfers_per_layer 0, pcc_chunk_out 0.99989454 (identical to before). Other sections unchanged.
+
+Gotchas
+- 2D-mcast CB bytes = 2 x out_block_h x in0_block_w x 2 KB + 2 x out_block_w x in0_block_w x 2 KB + out block
+  (4 KB fp32 tiles; a bf16 output adds a separate 4 KB fp32 interm tile). 1.41 MB fitted, 1.66 MB did not.
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    HY4_ATTN_MM=default ... (same command) for the old matmul configs
