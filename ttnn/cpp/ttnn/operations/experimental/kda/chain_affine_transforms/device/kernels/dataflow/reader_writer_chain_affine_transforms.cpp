@@ -11,13 +11,15 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-// One worker owns a head's column block of the state: it streams each chronological step's A rows and the
-// matching B columns to compute, and writes the entry state and final carry that compute publishes.
-template <uint32_t Kt, uint32_t Vt, uint32_t Vc, uint32_t BH, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
-TT_KERNEL void dataflow(uint32_t head, uint32_t value_block) {
+// One worker owns one head's state: it streams each chronological step's [A | B] rows to compute and writes the
+// entry state and final carry that compute publishes.
+template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+TT_KERNEL void dataflow(uint32_t head) {
     constexpr uint32_t a_tiles = Kt * Kt;
-    constexpr uint32_t state_tiles = Kt * Vc;
+    constexpr uint32_t state_tiles = Kt * Vt;
     constexpr uint32_t row_tiles = Kt + Vt;
+    // A head's [K, V] state is one contiguous page range, stored in the DFB in page order.
+    const uint32_t state_page = head * state_tiles;
 
     const auto transforms = TensorAccessor(tensor::transforms);
     const auto initial_state = TensorAccessor(tensor::initial_state);
@@ -29,6 +31,28 @@ TT_KERNEL void dataflow(uint32_t head, uint32_t value_block) {
     DataflowBuffer out(dfb::out);
     Noc noc;
 
+    const auto write_state = [&](DataflowBuffer& source, const auto& destination) {
+        const uint32_t tile_bytes = source.get_entry_size();
+        for (uint32_t tile = 0; tile < state_tiles; ++tile) {
+            noc.async_write(
+                source, destination, tile_bytes, {.offset_bytes = tile * tile_bytes}, {.page_id = state_page + tile});
+        }
+        noc.async_write_barrier();
+    };
+
+    // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
+    initial.reserve_back(state_tiles);
+    {
+        const uint32_t tile_bytes = initial.get_entry_size();
+        for (uint32_t tile = 0; tile < state_tiles; ++tile) {
+            noc.async_read(
+                initial_state,
+                initial,
+                tile_bytes,
+                {.page_id = state_page + tile},
+                {.offset_bytes = tile * tile_bytes});
+        }
+    }
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
@@ -41,43 +65,12 @@ TT_KERNEL void dataflow(uint32_t head, uint32_t value_block) {
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
-    // This rank's chronological index: its entry state is the carry before its own step.
-    const uint32_t entry_step = (sp_rank + sp_size - topology.first_rank) % sp_size;
+    // This rank's chronological index: its entry state is the carry after entry_step - 1 steps.
+    const uint32_t entry_step = (topology.rank + sp_size - topology.first_rank) % sp_size;
 
-    const auto state_page = [head, value_block](uint32_t row, uint32_t column) {
-        return (head * Kt + row) * Vt + value_block * Vc + column;
-    };
-    const auto write_state = [&](DataflowBuffer& source, const auto& destination) {
-        const uint32_t tile_bytes = source.get_entry_size();
-        for (uint32_t row = 0; row < Kt; ++row) {
-            for (uint32_t column = 0; column < Vc; ++column) {
-                noc.async_write(
-                    source,
-                    destination,
-                    tile_bytes,
-                    {.offset_bytes = (row * Vc + column) * tile_bytes},
-                    {.page_id = state_page(row, column)});
-            }
-        }
-        noc.async_write_barrier();
-    };
-
-    initial.reserve_back(state_tiles);
-    {
-        const uint32_t tile_bytes = initial.get_entry_size();
-        for (uint32_t row = 0; row < Kt; ++row) {
-            for (uint32_t column = 0; column < Vc; ++column) {
-                noc.async_read(
-                    initial_state,
-                    initial,
-                    tile_bytes,
-                    {.page_id = state_page(row, column)},
-                    {.offset_bytes = (row * Vc + column) * tile_bytes});
-            }
-        }
-        noc.async_read_barrier();
-    }
     if (entry_step == 0) {
+        // initial is used once and holds exactly state_tiles entries, so its read pointer (the NoC source) still
+        // equals the write pointer the tiles were read into.
         write_state(initial, entry_state);
     }
     initial.push_back(state_tiles);
@@ -99,13 +92,13 @@ TT_KERNEL void dataflow(uint32_t head, uint32_t value_block) {
                     {.page_id = row_page + column},
                     {.offset_bytes = (row * Kt + column) * a_bytes});
             }
-            for (uint32_t column = 0; column < Vc; ++column) {
+            for (uint32_t column = 0; column < Vt; ++column) {
                 noc.async_read(
                     transforms,
                     b,
                     b_bytes,
-                    {.page_id = row_page + Kt + value_block * Vc + column},
-                    {.offset_bytes = (row * Vc + column) * b_bytes});
+                    {.page_id = row_page + Kt + column},
+                    {.offset_bytes = (row * Vt + column) * b_bytes});
             }
         }
         noc.async_read_barrier();

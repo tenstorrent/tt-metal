@@ -40,8 +40,6 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     // (DRAM-bound at 4 blocks: 137 us vs 78 us at 1 block for Galaxy SP8xTP4); at 1 or 2 blocks the kernel is
     // bound by the step-to-step dependency chain instead.
     const auto grid = device.compute_with_storage_grid_size();
-    TT_FATAL(BH <= grid.x * grid.y, "chain_affine_transforms: {} heads exceed {} compute cores", BH, grid.x * grid.y);
-    const uint32_t Vc = Vt;
     const auto cores = tt::tt_metal::num_cores_to_corerangeset(BH, grid, /*row_wise=*/true);
 
     const m2::KernelSpecName dataflow_kernel_name{"dataflow"};
@@ -68,8 +66,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const auto transform_format = tt::tt_metal::datatype_to_dataformat_converter(in.transforms.dtype());
     constexpr auto fp32 = tt::DataFormat::Float32;
     const uint32_t a_tiles = Kt * Kt;
-    const uint32_t state_tiles = Kt * Vc;
-    // Transform inputs are double-buffered so the next step's rows stream while compute applies this one.
+    const uint32_t state_tiles = Kt * Vt;
+    // Per-core storage: 4 * Kt * Vt FP32 state tiles plus 2 * Kt * (Kt + Vt) BF16 transform tiles, 384 KiB at the
+    // production K = V = 128. Transform inputs are double-buffered so the next step's rows stream while compute applies
+    // this one.
     m2::Group<m2::DataflowBufferSpec> dfbs = {
         make_dfb(initial_dfb, state_tiles, fp32),
         make_dfb(a_dfb, 2 * a_tiles, transform_format),
@@ -98,8 +98,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
                 m2::TensorBinding{entry_state_name, "entry_state"},
                 m2::TensorBinding{final_state_name, "final_state"},
             },
-        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Vc", Vc}, {"BH", BH}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block"}},
+        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"BH", BH}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
@@ -125,14 +125,14 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
                 m2::ConsumerOf(state_dfb, "state"),
                 m2::ProducerOf(out_dfb, "out"),
             },
-        .compile_time_args = {{"Kt", Kt}, {"Vc", Vc}, {"steps", attrs.steps}},
+        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"steps", attrs.steps}},
         .hw_config = std::move(compute_hw),
     };
 
     m2::KernelRunArgs dataflow_run{.kernel = dataflow_kernel_name};
     for (uint32_t head = 0; head < BH; ++head) {
         const tt::tt_metal::CoreCoord core{head % grid.x, head / grid.x};
-        m2::AddRuntimeArgsForNode(dataflow_run.runtime_arg_values, core, {{"head", head}, {"value_block", 0}});
+        m2::AddRuntimeArgsForNode(dataflow_run.runtime_arg_values, core, {{"head", head}});
     }
     m2::KernelRunArgs compute_run{.kernel = compute_kernel_name};
 

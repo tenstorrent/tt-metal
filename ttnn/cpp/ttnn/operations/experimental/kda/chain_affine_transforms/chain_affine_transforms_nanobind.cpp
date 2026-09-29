@@ -24,26 +24,33 @@ void bind_chain_affine_transforms(nb::module_& mod) {
 
             S_{s+1} = A_{rank(s)} @ S_s + B_{rank(s)},   rank(s) = (first_rank + s) mod P
 
-        Each step matches a separate FP32 matmul (whole key dimension in one block) followed by
-        an FP32 elementwise add. Returns this rank's entry state ``S_c``, where ``c`` is the
+        Each step is a matmul that accumulates the whole key dimension in FP32, followed by an
+        FP32 add. Returns this rank's entry state ``S_c``, where ``c`` is the
         rank's chronological index, and the completed carry ``S_P``.
 
         Args:
             transforms (ttnn.Tensor): Packed transitions ``[P, B*H, K, K + V]`` with ``P`` the
-                sequence-parallel mesh size. TILE-layout BFLOAT16 or FLOAT32 interleaved device tensor.
+                sequence-parallel mesh size. TILE-layout BFLOAT16 interleaved device tensor.
             initial_state (ttnn.Tensor): FLOAT32 TILE-layout ``[B*H, K, V]`` interleaved state.
 
         Keyword Args:
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute
-                position of the chunk's first token. Keep its address stable across trace replay.
+                position of the chunk's first token; pass [0] for zero-offset execution. Update its
+                contents, not its address, before replaying a captured trace.
             local_rows (int): Positive, 32-aligned token rows per SP device.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute-kernel configuration.
-            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence.
+                Defaults to HiFi2 with FP32 destination accumulation, which is required.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence. Native mesh
+                coordinates supply each device's rank.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: FLOAT32 TILE-layout ``[B*H, K, V]`` entry state
                 and final carry.
+
+        Note:
+            K and V must be positive and tile-aligned, with one core per ``B*H`` head. Inputs are
+            not modified.
         )doc",
         &ttnn::experimental::kda::chain_affine_transforms,
         nb::arg("transforms").noconvert(),

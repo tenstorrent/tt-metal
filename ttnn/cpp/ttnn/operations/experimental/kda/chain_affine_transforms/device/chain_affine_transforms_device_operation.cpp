@@ -26,12 +26,10 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         "{}: local_rows must be positive and 32-aligned",
         operation_name);
     kda_factory_detail::check_actual_start(in.transforms, in.actual_start, operation_name);
-    constexpr std::array accepted_transform_dtypes = {
-        tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32};
     kda_factory_detail::check_allocated_device_tensor(in.transforms, operation_name, "transforms");
     kda_factory_detail::check_layout(in.transforms, tt::tt_metal::Layout::TILE, operation_name, "transforms");
-    kda_factory_detail::check_dtype_in(
-        in.transforms, accepted_transform_dtypes, "BFLOAT16 or FLOAT32", operation_name, "transforms");
+    // BF16 b widens exactly through srcA; the kernel has no lossless path for FP32 transforms.
+    kda_factory_detail::check_dtype(in.transforms, tt::tt_metal::DataType::BFLOAT16, operation_name, "transforms");
     kda_factory_detail::check_interleaved(in.transforms, operation_name, "transforms");
     kda_factory_detail::check_allocated_device_tensor(in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_layout(in.initial_state, tt::tt_metal::Layout::TILE, operation_name, "initial_state");
@@ -40,6 +38,10 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_same_device(in.transforms, in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
+    TT_FATAL(
+        ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
+        "{}: fp32_dest_acc_en must be enabled; the FP32 product unpacks to DST for the add",
+        operation_name);
 
     const auto& t_shape = in.transforms.logical_shape();
     const auto& s_shape = in.initial_state.logical_shape();
@@ -49,9 +51,16 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         t_shape[1] == s_shape[0] && t_shape[2] == s_shape[1] && t_shape[3] == s_shape[1] + s_shape[2],
         "{}: transforms [P, B*H, K, K + V] must match initial_state [B*H, K, V]",
         operation_name);
+    TT_FATAL(s_shape[0] > 0, "{}: B*H must be positive", operation_name);
     TT_FATAL(
-        s_shape[1] % tt::constants::TILE_WIDTH == 0 && s_shape[2] % tt::constants::TILE_WIDTH == 0,
-        "{}: K and V must be tile aligned",
+        s_shape[1] > 0 && s_shape[2] > 0 && s_shape[1] % tt::constants::TILE_WIDTH == 0 &&
+            s_shape[2] % tt::constants::TILE_WIDTH == 0,
+        "{}: K and V must be positive and tile aligned",
+        operation_name);
+    TT_FATAL(
+        t_shape[0] == attrs.steps && s_shape[0] == attrs.batch_heads && s_shape[1] == attrs.key_dim &&
+            s_shape[2] == attrs.value_dim,
+        "{}: input shapes must match operation attributes",
         operation_name);
     const auto* mesh = in.transforms.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
@@ -59,6 +68,14 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         t_shape[0] == mesh->shape()[attrs.sequence_parallel_axis],
         "{}: transforms must hold one transition per sequence-parallel rank",
         operation_name);
+    // One core per head.
+    const auto grid = mesh->compute_with_storage_grid_size();
+    TT_FATAL(
+        attrs.batch_heads <= grid.x * grid.y,
+        "{}: supports at most {} batch-heads on this device, got {}",
+        operation_name,
+        grid.x * grid.y,
+        attrs.batch_heads);
 }
 
 ChainAffineTransformsOperation::spec_return_value_t ChainAffineTransformsOperation::compute_output_specs(
@@ -102,11 +119,12 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows) {
+    // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
+    // launcher indexes both shapes before dispatching validation.
     const auto& t_shape = transforms.logical_shape();
     const auto& s_shape = initial_state.logical_shape();
-    TT_FATAL(
-        t_shape.rank() == 4 && s_shape.rank() == 3,
-        "chain_affine_transforms: expected transforms [P, B*H, K, K + V] and initial_state [B*H, K, V]");
+    TT_FATAL(t_shape.rank() == 4, "chain_affine_transforms: transforms must be rank 4 [P, B*H, K, K + V]");
+    TT_FATAL(s_shape.rank() == 3, "chain_affine_transforms: initial_state must be rank 3 [B*H, K, V]");
     auto outputs = ttnn::device_operation::launch<ChainAffineTransformsOperation>(
         ChainAffineTransformsParams{
             .steps = static_cast<uint32_t>(t_shape[0]),

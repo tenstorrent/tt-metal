@@ -223,8 +223,9 @@ def _distributed_prefix(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
-    One kernel applies the gathered transforms with an FP32 matmul and add per step.
-    Return local entry and the replicated final carry on each independent TP line.
+    The transforms are gathered as BF16; ``chain_affine_transforms`` derives the order from
+    ``actual_start`` and applies them with FP32 accumulation. Return the local entry state and
+    the replicated final carry on each independent TP line.
     """
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
@@ -250,7 +251,7 @@ def _distributed_prefix(
     )
     return ttnn.experimental.kda.chain_affine_transforms(
         gathered,
-        ttnn.reshape(initial_state, (batch_heads, key_dim, value_dim)),
+        initial_state,
         actual_start=actual_start,
         local_rows=local_rows,
         memory_config=output_memory,
