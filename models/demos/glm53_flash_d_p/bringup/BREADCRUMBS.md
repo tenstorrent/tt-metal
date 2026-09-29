@@ -1729,3 +1729,28 @@ Watch: the norm-share rel margin is 2.5x (0.00016 of 0.0004). The flips vs the C
 as device steps join (known issue).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_03_attn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.attention test (attempt 1)
+Reviewed the rendered component test for the KDA attention at layer 4. The rendered file was the bare
+`run_component_test`. I rebuilt it from the frozen layer-0 test (`test_c_kda_dense_attention.py`, same module): LAYER = 4,
+and the same checks and limits. PCC is gated (metric `pcc_attention_L04`). Also asserted: finite, rel L2 <= 0.02,
+per-token norm ratio [0.98, 1.02], every 128-row block <= 0.03, worst row <= 0.1. Post-chunk state: recurrent rel
+<= 0.03, worst head <= 0.05, conv <= 0.02.
+Re-measured on the layer-4 golden with a CPU mutation script (/tmp/kmoeattn/sens.py, not kept; the numbers are in the
+test docstring):
+- Every state bug passes PCC (0.9973..0.99993), like layer 0. Each fails the block check (0.047..0.24) and the
+  worst-row check (0.43..1.21). The recurrent-state bugs fail the head limit too (0.27..0.56).
+- Noise: bf16 blocks 0.0045 / head 0.0048; 1% noise 0.018 / 0.017; 3% noise 0.053 / 0.050.
+- At layer 4, dropping the o_norm weight (0.99939) and dropping the conv silu (0.99296) also pass PCC. The rel check
+  catches both.
+- Not caught: x0.99 (rel 0.010), as at layer 0.
+Results:
+- Device passes already. `_device_step` builds ttKDA for any KDA layer, and the host wrapper exposes `state_out`.
+  Scores: PCC 0.99998, rel 0.0073, blocks <= 0.0077, worst row 0.029, ratio [0.9887, 1.0001]; state rec 0.0166,
+  worst head 0.047, conv 0.0017.
+- Reference passes (0.999998 / 0.0019; state 0.0008 / 0.0014 / 0.0019). Stub fails (PCC 0).
+Watch: the worst-head margin is small (0.047 of 0.05). It is head 20, slow-decay key row 124 (row scale 0.949), not
+the fast-decay bias. Known issues Proposed has the entry. Implement only needs to add attention to
+`DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attention.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
