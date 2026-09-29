@@ -155,27 +155,34 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         preparation);
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_preparation + 1);
 
-    const std::size_t cacheEntriesBeforeCapture = this->device_->num_program_cache_entries();
-    ProgramDescriptor uncachedProgramDescriptor = program_descriptor;
-    uncachedProgramDescriptor.custom_program_hash = 0x56820;
+    const std::size_t cache_entries_before_capture = this->device_->num_program_cache_entries();
+    ProgramDescriptor uncached_program_descriptor = program_descriptor;
+    uncached_program_descriptor.custom_program_hash = 0x56820;
     {
         ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
         EXPECT_EQ(
             ttnn::experimental::prepare_generic_op(
                 std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
             preparation);
-        auto uncachedPreparation = ttnn::experimental::prepare_generic_op(
-            std::vector<Tensor>{device_input_tensor, device_output_tensor}, uncachedProgramDescriptor);
-        EXPECT_GT(uncachedPreparation.max_program_config_size_bytes, 0);
+        auto uncached_preparation = ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, uncached_program_descriptor);
+        EXPECT_GT(uncached_preparation.max_program_config_size_bytes, 0);
     }
-    EXPECT_EQ(this->device_->num_program_cache_entries(), cacheEntriesBeforeCapture);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_capture);
 
+    // Kernels compile after the workload is created, so a compilation failure exercises the cache insertion order.
     const std::size_t cache_entries_before_failure = this->device_->num_program_cache_entries();
-    ProgramDescriptor oversized_program_descriptor = program_descriptor;
-    oversized_program_descriptor.kernels.front().common_runtime_args.resize(1 << 20);
+    ProgramDescriptor uncompilable_program_descriptor = program_descriptor;
+    uncompilable_program_descriptor.kernels.front().kernel_source = "void kernel_main() { undefined_function(); }";
+    uncompilable_program_descriptor.kernels.front().source_type = KernelDescriptor::SourceType::SOURCE_CODE;
     EXPECT_THROW(
         ttnn::experimental::prepare_generic_op(
-            std::vector<Tensor>{device_input_tensor, device_output_tensor}, oversized_program_descriptor),
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, uncompilable_program_descriptor),
+        std::exception);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_failure);
+    EXPECT_THROW(
+        ttnn::generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, uncompilable_program_descriptor),
         std::exception);
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_failure);
 

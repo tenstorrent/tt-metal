@@ -11,7 +11,8 @@
 // Experimental and subject to change: this header carries no API-stability guarantee.
 namespace tt::tt_metal::experimental::program_preparation {
 
-/// Program-memory use established by non-dispatch workload preparation.
+/// Program-memory use established by non-dispatch workload preparation, reported for diagnostics and measurement.
+/// prepare() itself rejects a workload that does not fit, so callers need not compare these sizes to a limit.
 struct ProgramCapacity {
     uint32_t max_program_config_size_bytes = 0;
     uint32_t max_kernel_binary_size_bytes = 0;
