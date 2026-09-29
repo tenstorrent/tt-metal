@@ -73,6 +73,14 @@ class VaeHWParallelConfig(NamedTuple):
             width_parallel=ParallelFactor(*width),
         )
 
+    @classmethod
+    def from_axes(cls, mesh: ttnn.MeshDevice | ttnn.MeshShape, *, h_axis: int, w_axis: int) -> VaeHWParallelConfig:
+        shape = mesh.shape if isinstance(mesh, ttnn.MeshDevice) else mesh
+        return cls(
+            height_parallel=ParallelFactor(factor=int(shape[h_axis]), mesh_axis=h_axis),
+            width_parallel=ParallelFactor(factor=int(shape[w_axis]), mesh_axis=w_axis),
+        )
+
 
 class AudioTParallelConfig(NamedTuple):
     axis0: ParallelFactor

@@ -16,8 +16,8 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.models.transformers.transformer_fibo import FiboCheckpoint
-from models.tt_dit.models.vae.vae_fibo import FiboVAEDecoderAdapter
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, Flux2VaeParallelConfig
+from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
@@ -76,7 +76,6 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "sp": (2, 1),
         "encoder_tp": (2, 0),
         "encoder_sp": (2, 1),
-        "vae_tp_axis": None,
         "vae_h_axis": 0,
         "vae_w_axis": 1,
         "vlm_tp": (4, 0),
@@ -92,9 +91,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp": (1, 1),
         "encoder_tp": (2, 0),
         "encoder_sp": None,
-        "vae_tp_axis": None,
         "vae_h_axis": 0,
-        "vae_w_axis": None,
+        "vae_w_axis": 1,
         "vlm_tp": (2, 0),
         "num_links": 2,
         "sequence_lengths": (1024, 1536, 3072),
@@ -105,7 +103,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp": (4, 1),
         "encoder_tp": (4, 0),
         "encoder_sp": (4, 1),
-        "vae_tp_axis": None,
         "vae_h_axis": 0,
         "vae_w_axis": 1,
         "vlm_tp": (4, 0),
@@ -133,7 +130,7 @@ class FiboPipelineConfig:
 
     dit_parallel_config: DiTParallelConfig
     encoder_parallel_config: EncoderParallelConfig
-    vae_parallel_config: Flux2VaeParallelConfig
+    vae_parallel_config: VaeHWParallelConfig
     vlm_parallel_config: EncoderParallelConfig
 
     use_torch_text_encoder: bool
@@ -156,7 +153,7 @@ class FiboPipelineConfig:
         num_links: int | None = None,
         dit_parallel_config: DiTParallelConfig | None = None,
         encoder_parallel_config: EncoderParallelConfig | None = None,
-        vae_parallel_config: Flux2VaeParallelConfig | None = None,
+        vae_parallel_config: VaeHWParallelConfig | None = None,
         vlm_parallel_config: EncoderParallelConfig | None = None,
         use_torch_text_encoder: bool = False,
         use_torch_vae_decoder: bool = False,
@@ -182,9 +179,8 @@ class FiboPipelineConfig:
             encoder_parallel_config=encoder_parallel_config
             or EncoderParallelConfig.from_tuples(tp=preset["encoder_tp"], sp=preset["encoder_sp"]),
             vae_parallel_config=vae_parallel_config
-            or Flux2VaeParallelConfig.from_axes(
+            or VaeHWParallelConfig.from_axes(
                 submesh_shape(dit_parallel_config),
-                tp_axis=preset["vae_tp_axis"],
                 h_axis=preset["vae_h_axis"],
                 w_axis=preset["vae_w_axis"],
             ),
@@ -274,7 +270,7 @@ class FiboPipeline(PipelineAPIMixin):
             )
 
         logger.info("creating VAE decoder...")
-        self._vae = FiboVAEDecoderAdapter(
+        self._vae = WanVaeDecoder2DAdapter(
             checkpoint_name=config.checkpoint_name,
             parallel_config=config.vae_parallel_config,
             use_torch=config.use_torch_vae_decoder,
@@ -336,6 +332,7 @@ class FiboPipeline(PipelineAPIMixin):
         self,
         *,
         prompts: Sequence[str],
+        images: Sequence[Image.Image | None] | None = None,
         negative_prompts: Sequence[str] | None = None,
         num_inference_steps: int,
         seed: int = 0,

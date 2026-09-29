@@ -821,7 +821,7 @@ def upsample(
     x: ttnn.Tensor,
     /,
     *,
-    scale_factor: int,
+    scale_factor: int | Sequence[int],
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """Wrapper around ttnn.upsample that allows for padded tensors."""

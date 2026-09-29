@@ -11,7 +11,7 @@ transformer, and the VAE decoder.
 ## Details
 
 - Transformer: `models/tt_dit/models/transformers/transformer_fibo.py`
-- VAE decoder: `models/tt_dit/models/vae/vae_fibo.py`
+- VAE decoder: `models/tt_dit/models/vae/vae_wan_2d.py` (the Wan 2.2 VAE on a single frame)
 - Prompt expansion: `models/tt_dit/pipelines/fibo/vlm.py`
 - Pipeline: `models/tt_dit/pipelines/fibo/pipeline_fibo.py`
 
