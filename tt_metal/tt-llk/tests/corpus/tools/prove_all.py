@@ -4,7 +4,7 @@
 #
 # prove_all.py — the reusable, re-runnable "prove-every-op" driver (laneMH).
 #
-# Runs BOTH proof engines across ALL 134 kernel-decided board ops at the
+# Runs BOTH proof engines across EVERY kernel-decided board op at the
 # current pin and emits the master coverage ledger, in one command.
 #
 #   * formal_equiv.py  (laneJO)  — z3 QF_BV translation validation on the
@@ -103,6 +103,7 @@ DOMAIN_OVERLAY = HERE / "prove_all_domain_overlay.tsv"
 FAST_OPS = HERE / "prove_all_fast_ops.tsv"
 FORMAL_ENGINE = HERE / "formal_equiv.py"
 BITEXACT_ENGINE = HERE / "bitexact_sweep.py"
+GALAXY_SHARD = HERE / "galaxy_shard.sh"  # laneMK 32-chip exhaustive streamer
 ELF_TEXT_SHA = HERE / "elf_text_sha.py"
 OPS_TSV = CORPUS / "sweep_2x2_ops.tsv"
 VENV_PY = TESTS / ".venv/bin/python"
@@ -198,8 +199,10 @@ def load_board():
     for r in read_tsv(BOARD):
         if r.get("class") in ("WIN", "PARITY", "LOSS"):
             board[r["op"]] = r["class"]
-    if len(board) != 134:
-        sys.exit(f"FATAL: board op count {len(board)} != 134")
+    # No count assert here: load_manifest() below checks manifest-vs-board set
+    # equality and names the differing ops, which subsumes a count check and
+    # reports it usefully.  A hardcoded 134 only added a second thing to update
+    # whenever the board legitimately gains or loses a raced op.
     return board
 
 
@@ -626,6 +629,133 @@ def run_bitexact_batch(rows, out_dir, flags, jobs, timeout):
 
 
 # ---------------------------------------------------------------------------
+# Engine: silicon_stream  (laneMK 32-chip exhaustive sweep on real silicon).
+# ---------------------------------------------------------------------------
+# galaxy_shard.sh ALREADY does the whole job: it gates object identity once,
+# shards one op's input space across the 32 chips of a galaxy node, drives the
+# per-chip streamer (binary_stream_sweep.py / fp32_stream_sweep.py) and folds
+# the slices back with galaxy_combine.py.  This engine only invokes it and
+# translates the verdict it already writes.  Nothing here re-implements the
+# sharding, the identity gate, or the verdict parsing — galaxy_combine's own
+# exact-token parser reads the verdict file back.
+SILICON_CLASS_MAP = {
+    # the combiner's two decided verdicts; INCOMPLETE / REFUSED-IDENTITY are
+    # deliberately absent so they fall through to UNSWEPT (an operational
+    # failure the driver reports), exactly like a failed formal leg.
+    "BIT-EXACT-ALL-INPUTS": "SILICON-EXHAUSTIVE",
+    "DIVERGENT": "DIVERGENCE-CERTIFIED",
+}
+
+
+def _verdict_tokens(text):
+    """galaxy_combine's own exact-token parser, not a second copy of it."""
+    if str(HERE) not in sys.path:
+        sys.path.insert(0, str(HERE))
+    import galaxy_combine  # noqa: E402
+
+    return galaxy_combine.verdict_tokens(text)
+
+
+def silicon_space(arity_space):
+    """The manifest's arity_space already names the space; 2^N -> N bits."""
+    m = re.search(r"2\^(\d+)$", arity_space or "")
+    return 1 << int(m.group(1)) if m else None
+
+
+def run_silicon_stream(op, man_row, out_dir, args, timeout):
+    rec = {"op": op, "engine": "silicon_stream", "reason": man_row.get("reason", "")}
+
+    def refuse(verdict, reason):
+        return dict(rec, **{"class": "UNSWEPT", "verdict": verdict, "reason": reason})
+
+    sem, hand = man_row["sem_node"], man_row["hand_node"]
+    if sem in ("-", "") or hand in ("-", ""):
+        return refuse("NO-NODE-IDS", "no sem/hand node in manifest")
+    space = silicon_space(man_row["arity_space"])
+    if space is None:
+        return refuse(
+            "NO-INPUT-SPACE",
+            f"arity_space {man_row['arity_space']!r} names no 2^N input space",
+        )
+    if not args.silicon_farm_root or not args.silicon_venv:
+        return refuse(
+            "NO-FARM",
+            "silicon_stream needs --silicon-farm-root and --silicon-venv "
+            "(the galaxy node's staged tree and harness python)",
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)  # NPAR / BAND_BITS / STAGGER / GOLDEN pass through
+    env.update(
+        OP=op,
+        # one-operand spaces stream through fp32_stream_sweep.py, joint
+        # two-operand spaces through binary_stream_sweep.py — the same choice
+        # galaxy_shard.sh's own SWEEP knob makes.
+        SWEEP="fp32" if man_row["arity_space"].startswith("single-") else "binary",
+        SPACE=str(space),
+        SEM=sem,
+        HAND=hand,
+        FARM_ROOT=str(args.silicon_farm_root),
+        VENV=str(args.silicon_venv),
+        OUT=str(out_dir),
+    )
+    if args.silicon_idmap:
+        env["IDMAP"] = str(args.silicon_idmap)
+
+    t0 = time.time()
+    log = out_dir / f"{op}-shard.log"
+    try:
+        with log.open("w") as fh:
+            run = subprocess.run(
+                ["bash", str(GALAXY_SHARD)],
+                env=env,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+            )
+    except subprocess.TimeoutExpired:
+        return dict(
+            refuse("SHARD-TIMEOUT", f"galaxy_shard.sh wall timeout {timeout}s expired"),
+            wall_s=timeout,
+        )
+
+    verdict_file = out_dir / f"{op}-VERDICT.txt"
+    tokens = _verdict_tokens(verdict_file.read_text()) if verdict_file.is_file() else {}
+    summary = verdict_file.read_text().strip() if verdict_file.is_file() else ""
+    verdict = tokens.get("VERDICT", "NO-VERDICT-FILE")
+    cls = SILICON_CLASS_MAP.get(verdict, "UNSWEPT")
+    # The shard driver's exit status is part of the verdict, not decoration:
+    # the combiner prints VERDICT=BIT-EXACT-ALL-INPUTS while still failing its
+    # numeric gate, and that failure is what rc carries.  DIVERGENT is only
+    # ever printed for a complete cover, so it stands on the verdict alone.
+    if cls == "SILICON-EXHAUSTIVE" and run.returncode != 0:
+        cls = "UNSWEPT"
+    driver_log = out_dir / "DRIVER.log"
+    geometry = (
+        _verdict_tokens(driver_log.read_text().splitlines()[0])
+        if driver_log.is_file() and driver_log.read_text().strip()
+        else {}
+    )
+    return dict(
+        rec,
+        **{
+            "class": cls,
+            "verdict": verdict,
+            "shard_rc": run.returncode,
+            "covered": tokens.get("covered"),
+            "numeric_gate": tokens.get("numeric_gate"),
+            "geometry": {
+                k: geometry[k]
+                for k in ("SWEEP", "NPAR", "BAND_BITS", "SPACE")
+                if k in geometry
+            },
+            "shard_summary": summary,
+            "wall_s": round(time.time() - t0, 1),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Engine: classify  (no run — recorded infeasibility / cross-lane scope).
 # ---------------------------------------------------------------------------
 def run_classify(op, man_row):
@@ -845,13 +975,16 @@ def write_summary(out_dir, rows, prov, wall, fast_ops):
         f"prove_all MASTER PROOF-COVERAGE SUMMARY  ({PIN}, cc1plus "
         f"{prov['shas'].get('cc1plus','?')[:12]})"
     )
-    L.append("134 board-decided ops; one provability class each (strict precedence).")
+    L.append(
+        f"{len(rows)} board-decided ops; one provability class each "
+        "(strict precedence)."
+    )
     L.append(
         f"engines RE-RUN live: formal_equiv (z3 TV) + bitexact_sweep (2^16 sim). "
         f"overlays: KC-silicon + JO-domain (recorded, provenance-pinned)."
     )
     L.append("=" * 78)
-    L.append("PROVABILITY CLASS CENSUS (all 134):")
+    L.append(f"PROVABILITY CLASS CENSUS (all {len(rows)}):")
     for c in CLASS_ORDER:
         if cen.get(c):
             tag = "  <== MACHINE-CERTIFIED-EQUAL" if c in MACHINE_CERTIFIED else ""
