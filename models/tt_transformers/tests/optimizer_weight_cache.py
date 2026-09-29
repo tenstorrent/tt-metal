@@ -493,6 +493,21 @@ def prune(root: Path = STORE_ROOT, limit_gb: float = STORE_GB) -> None:
             recipe.unlink(missing_ok=True)
 
 
+def _deferring(raw):
+    """`raw` (a class attribute: function, staticmethod or classmethod) returning a deferred state dict.
+
+    The descriptor kind is kept: wrapping a staticmethod as a plain function would bind `self` and
+    shift every argument by one.
+    """
+    if isinstance(raw, staticmethod):
+        inner = raw.__func__
+        return staticmethod(lambda *a, **k: lazy.wrap_state_dict(inner(*a, **k)))
+    if isinstance(raw, classmethod):
+        inner = raw.__func__
+        return classmethod(lambda cls, *a, **k: lazy.wrap_state_dict(inner(cls, *a, **k)))
+    return lambda self, *a, **k: lazy.wrap_state_dict(raw(self, *a, **k))
+
+
 class RunCache:
     """This run's TT_CACHE_PATH (a scratch directory, removed afterwards) with the store installed.
 
@@ -515,22 +530,33 @@ class RunCache:
         install()
         print(f"WEIGHT_STORE {'on' if enabled() else 'off'} root={STORE_ROOT} scratch={self.path}", flush=True)
 
-    def build(self, build_model):
+    def build(self, build_model, loaders=None):
         """`build_model()` with the checkpoint's tensors deferred, so stored weights skip the torch work.
 
-        The checkpoint dict `ModelArgs.load_state_dict` returns is made of deferred tensors for the
-        duration of the call. If deferral cannot reproduce eager execution exactly (a write into a
-        checkpoint tensor, its memory exposed; see optimizer_lazy_weights), or the build raises, the
-        model is built again with eager tensors: the result is always the one the eager build gives.
+        The checkpoint dict each checkpoint loader returns is made of deferred tensors for the
+        duration of the call. `loaders` names them as (owner class, attribute) pairs; the default is
+        tt-transformers' `ModelArgs.load_state_dict`. A model with its own args class passes its own
+        loader: gemma4 loads through `Gemma4ModelArgs.load_state_dict`, a staticmethod, and with only
+        the default hooked every gemma4 build reported `deferred: sources=0` and paid the full torch
+        load (~9 s per run, 2026-09-28). If deferral cannot reproduce eager execution exactly (a write
+        into a checkpoint tensor, its memory exposed; see optimizer_lazy_weights), or the build raises,
+        the model is built again with eager tensors: the result is always the one the eager build gives.
         """
         if not lazy_enabled():
             return build_model()
-        from models.tt_transformers.tt.model_config import ModelArgs
+        if loaders is None:
+            from models.tt_transformers.tt.model_config import ModelArgs
+
+            loaders = [(ModelArgs, "load_state_dict")]
 
         lazy.reset()
-        original = ModelArgs.__dict__.get("load_state_dict")
-        if original is not None:
-            ModelArgs.load_state_dict = lambda args, *a, **k: lazy.wrap_state_dict(original(args, *a, **k))
+        restore = []
+        for owner, name in loaders:
+            raw = owner.__dict__.get(name)
+            if raw is None:
+                continue
+            restore.append((owner, name, raw))
+            setattr(owner, name, _deferring(raw))
         failure = None
         try:
             result = build_model()
@@ -540,8 +566,8 @@ class RunCache:
                 raise
             result, failure = None, lazy.STATE.taint or f"{type(exc).__name__}: {exc}"
         finally:
-            if original is not None:
-                ModelArgs.load_state_dict = original
+            for owner, name, raw in reversed(restore):
+                setattr(owner, name, raw)
         if failure is None:
             return result
         STATS.redone = failure[:200]

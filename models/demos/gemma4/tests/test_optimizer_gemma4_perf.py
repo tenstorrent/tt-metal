@@ -93,6 +93,7 @@ def test_optimizer_gemma4_perf(monkeypatch):
     from models.demos.gemma4.demo.sampling_utils import build_device_sampling_params, model_can_sample_on_device
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
+    from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     model_path = os.environ["HF_MODEL"]
@@ -143,7 +144,9 @@ def test_optimizer_gemma4_perf(monkeypatch):
                     num_layers=depth or None,
                     paged_attention_config=paged_attention_config,
                     bounded_sliding_kv_cache=lc["bounded_sliding"],
-                )
+                ),
+                # gemma4's own checkpoint loader, so the store's deferred weights engage here too.
+                loaders=[(Gemma4ModelArgs, "load_state_dict")],
             )
             gc.collect()
             cache.loaded()
