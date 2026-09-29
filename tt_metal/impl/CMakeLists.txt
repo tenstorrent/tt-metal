@@ -158,9 +158,10 @@ if(TT_METAL_USE_EMULE)
     target_link_libraries(
         impl
         PRIVATE
-            tt-emule::headers
+            tt_emule_runtime
             dl
     )
+    target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulation)
 endif()
 
 # Generate Inspector RPC stub file

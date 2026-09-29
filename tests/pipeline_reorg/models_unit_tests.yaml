@@ -503,6 +503,20 @@
   team: models
   budget_type: unit
 
+- name: PaddleOCR-VL-1.6 unit tests
+  cmd: |
+    export HF_MODEL=PaddlePaddle/PaddleOCR-VL-1.6 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/PaddlePaddle/PaddleOCR-VL-1.6
+    pytest --timeout 170 models/demos/blackhole/paddleocr_vl/tests/test_text_decoder_pcc.py models/demos/blackhole/paddleocr_vl/tests/test_vision_permutation.py
+  model: paddleocr-vl-1.6
+  model_family: PaddleOCR
+  skus:
+    bh_p150:
+      timeout: 3
+      tier: 3
+  owner_id: U08LRGDNXSM # Sam Tisi
+  team: models
+  budget_type: unit
+
 - name: Gemma-4-E4B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
@@ -828,7 +842,8 @@
       timeout: 22
       tier: 1
     bh_galaxy:
-      timeout: 10
+      # The suite completed in 13 minutes; allow 4 minutes of margin.
+      timeout: 17
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -836,7 +851,7 @@
 
 - name: DeepSeek-V3 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
@@ -857,7 +872,7 @@
 
 - name: DeepSeek-V3 module unit tests (host-side)
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export MESH_DEVICE=N150
     pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
       --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
@@ -1194,7 +1209,8 @@
 # Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
 - name: TT-DiT Flux.2-dev multihost unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1 # Program size (28864) too large for kernel config buffer (26624) on ACTIVE_ETH
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
@@ -1843,7 +1859,7 @@
 
 - name: TT-Transformers common unit tests
   cmd: |
-    unset TT_METAL_WATCHER
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     pytest --tb=short --ignore=models/common/tests/modules models/common/tests
   model: tt-transformers-common
@@ -2177,4 +2193,31 @@
       tier: 3
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
+  budget_type: unit
+
+- name: DiffusionDrive unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    # The checkpoint is a raw .pth on the Hub, not a pre-staged MLPerf asset, so this
+    # job fetches it; prepare_assets.py downloads into the workspace, not HF_HUB_CACHE.
+    # HF_HOME is deliberately NOT set: the container already points HF_HUB_CACHE at
+    # /mnt/MLPerf/huggingface/hub, and overriding HF_HOME only redirects the xet
+    # cache/logs onto that same :ro mount, which fails with EROFS.
+    export HF_HUB_OFFLINE=0
+    python3 models/experimental/diffusion_drive/scripts/prepare_assets.py
+    # A missing asset is now a failure, not a skip -- the real-checkpoint gate below
+    # must not be able to quietly opt out of running.
+    export DD_REQUIRE_ASSETS=1
+    pytest --timeout 600 \
+      models/experimental/diffusion_drive/tests/pcc/ \
+      models/experimental/diffusion_drive/tests/sanity/
+  model: diffusiondrive
+  model_family: DiffusionDrive
+  skus:
+    # 5:49 measured end-to-end on WH N300 in CI (47 tests + 730 MB asset fetch).
+    wh_n300:
+      timeout: 10
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
   budget_type: unit

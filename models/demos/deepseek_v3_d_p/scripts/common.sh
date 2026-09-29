@@ -51,16 +51,16 @@ case "${MODEL:-}" in
   KIMI_K2_7)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
     VARIANT_ID="kimi_k2_7"; LAYERS_ID="L61"; NODE_SUFFIX="-$MARGIN_ID-$TRACE_ID"
-    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
+    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
     ;;
-  GLM5_2)
+  GLM5_3)
     TEST_FUNC="test_glm_prefill_transformer_chunked_no_pcc"
     # The GLM test has no perf_margin param, so its node id has no margin token.
-    VARIANT_ID="glm52"; LAYERS_ID="L78"; NODE_SUFFIX="-$TRACE_ID"
-    ENV_VARS='GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8 TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k'
+    VARIANT_ID="glm53"; LAYERS_ID="L78"; NODE_SUFFIX="-$TRACE_ID"
+    ENV_VARS='GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4 TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k'
     ;;
   *)
-    echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_2  (got '${MODEL:-<unset>}')" >&2
+    echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3  (got '${MODEL:-<unset>}')" >&2
     echo "  e.g.  export MODEL=KIMI_K2_7" >&2
     # Sourced, so return; the || exit covers the case where this file is executed directly.
     return 1 2>/dev/null || exit 1

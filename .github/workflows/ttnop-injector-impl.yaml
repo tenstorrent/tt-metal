@@ -165,7 +165,7 @@ jobs:
           echo "enabled-skus=$ENABLED_SKUS" >> "$GITHUB_OUTPUT"
       - name: Build test matrix
         id: build-matrix
-        uses: ./.github/actions/prepare-test-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
           enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}

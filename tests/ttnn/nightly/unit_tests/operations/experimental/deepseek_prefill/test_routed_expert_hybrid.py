@@ -39,7 +39,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
-    reshard_expert_weights_nd,
     _ISL_EXHAUSTIVE_MODELS,
     _ISL_EXHAUSTIVE_SWEEP,
     _ISL_FUNCTIONAL_SWEEP,
@@ -167,11 +166,10 @@ def run_routed_expert_hybrid(
         weights_dtype=weights_dtype,
         activation=activation,
         hybrid_token_threshold=threshold,
+        # One weight set serves both bands, so a placement is not a per-band choice: whichever band
+        # claims the count reads the weights in the layout the module built them in.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
-    # One weight set serves both bands, so a placement is not a per-band choice: whichever band
-    # claims the count reads the weights in whatever layout they were left in.
-    if weights_dram_sharded:
-        reshard_expert_weights_nd(tt_expert, device)
     tt_output = tt_expert(tt_input, idx_tensor([active_tokens]), idx_tensor([0]))
 
     # For a 1-device replicated tensor, ConcatMeshToTensor(dim=0) with 1 slice returns the tensor.
@@ -215,8 +213,8 @@ def _xfail_blackhole(request, silicon_arch_name):
 
 def _isl_params(active_sweep, only_models=None):
     """Per-model dims and shipped threshold crossed with a token sweep, all against the fixed
-    _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so non-baseline models stay gated
-    behind the extended_model marker; `only_models` restricts to a subset of model names.
+    _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so every model runs; `only_models`
+    restricts to a subset of model names.
 
     A model with no threshold is dropped rather than run at `None`: that is the single-op path
     test_single_routed_expert already grades, and it would not exercise a split at all.
@@ -226,7 +224,7 @@ def _isl_params(active_sweep, only_models=None):
     split either, so there would be nothing here for it to grade.
     """
     params = []
-    for name, config, extended in SINGLE_EXPERT_MODELS:
+    for name, config, _extended in SINGLE_EXPERT_MODELS:
         if only_models is not None and name not in only_models:
             continue
         threshold = _threshold_of(config)
@@ -240,7 +238,6 @@ def _isl_params(active_sweep, only_models=None):
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
                     threshold,
-                    marks=pytest.mark.extended_model if extended else (),
                     # "-t" keeps ids collision-free under -k: "512" is a substring of "5120".
                     id=f"{name}-t{active}",
                 )

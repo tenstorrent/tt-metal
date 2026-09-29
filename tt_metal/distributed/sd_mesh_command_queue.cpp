@@ -6,9 +6,11 @@
 #include <tt_stl/fmt.hpp>
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/program/slow_dispatch.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
@@ -17,8 +19,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
-#include "tt_metal/impl/emulation/emule_deferred_mesh_dispatch.hpp"
-#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#include "emule_deferred_mesh_dispatch.hpp"
+#include "emulated_program_runner.hpp"  // emule mesh register/run split
 #endif
 #include <utility>
 #include <unordered_set>
@@ -236,7 +238,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
     // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
-    // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+    // by the outer begin_mesh_dispatch).
 
     if (configure_only_) {
         log_warning(tt::LogMetal, "DISPATCH_PROGRAM cfg_only={}", configure_only_);
@@ -248,8 +250,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
-    // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+    // First device: full launch (compiles, finalizes, allocates CBs, dispatches)
+    tt_metal::slow_dispatch::LaunchProgramAsync(*local_devices[0], program, /*force_slow_dispatch=*/false);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop
@@ -262,7 +264,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     if (blocking) {
         // Can be parallelized: wait across all devices
         for (auto* device : local_devices) {
-            tt_metal::detail::WaitProgramDone(device, program);
+            tt_metal::slow_dispatch::WaitProgramDone(*device, program);
+            tt_metal::detail::ReadDeviceProfilerResults(device);
         }
     } else {
         {
@@ -307,7 +310,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
         // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
-        // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
+        // fiber-registration race), then run once.
         // Excludes the socket feeders' pump_device(): a dispatch onto a parked run resumes it.
         bool already_registered = false;
         if (tt::tt_metal::emule::deferred_mesh_dispatch_enabled() && !blocking) {

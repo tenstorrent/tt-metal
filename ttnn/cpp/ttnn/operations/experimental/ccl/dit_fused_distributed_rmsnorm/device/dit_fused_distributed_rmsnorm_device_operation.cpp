@@ -394,14 +394,6 @@ Tensor dit_fused_distributed_rmsnorm(
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    // get_usable_topology reaches into the fabric context, which is null when the op runs on a
-    // single device with fabric uninitialized (TP=1, ring_size==1). At num_devices==1 there is no
-    // ring / all-gather and the topology is never used (every ring path is guarded on
-    // ring_size>1), so skip the fabric query and use a harmless default.
-    tt::tt_fabric::Topology topology_ = (num_devices > 1)
-                                            ? ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis)
-                                            : tt::tt_fabric::Topology::Linear;
-
     auto operation_attributes = OperationType::operation_attributes_t(
         epsilon,
         num_heads_per_device,
@@ -411,7 +403,7 @@ Tensor dit_fused_distributed_rmsnorm(
         cluster_axis,
         static_cast<uint32_t>(num_preferred_links.value_or(1)),
         static_cast<uint32_t>(num_devices),
-        topology_,
+        topology,
         multi_device_global_semaphore,
         subdevice_id,
         kernel_config_val,

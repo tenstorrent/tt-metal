@@ -85,6 +85,7 @@ class PrefillRunParams:
     # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
+    mtp_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -139,6 +140,7 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    supports_mtp: bool = False
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
@@ -300,13 +302,16 @@ class PrefillModelAdapter(ABC):
 DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
+    "llama_3p1_8b": "models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b:Llama31PrefillAdapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
+    "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
