@@ -1295,6 +1295,13 @@ tasks:
     kind: op
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-09-29T12:22:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py: 1b0fbc8eef1b672564423efe169963bad3d8b456770d38e7ffc9876b5d928fe7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_full.08
   title: 'moe_full block with steps 1-8 on device (last: ffn_hc)'
   step: implement
