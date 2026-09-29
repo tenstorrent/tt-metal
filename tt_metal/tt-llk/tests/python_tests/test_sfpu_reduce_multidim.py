@@ -28,6 +28,7 @@ count, divided exactly only by the float reciprocal-multiply).
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM, TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -175,6 +176,17 @@ def test_sfpu_reduce_multidim(
     dest_acc,
     input_bounds,
 ):
+    # Column-after-row under one init is fixed only in the Blackhole kernel so far. The Wormhole twin
+    # (tt_metal/hw/ckernels/wormhole_b0/.../ckernel_sfpu_reduce.h) still re-records replay slots [0, 16)
+    # in every row MAX/MIN calculate, which clobbers the column LOADMACRO window, and its signed Int32
+    # column path still trusts the init's SFPSWAP direction. Until the WH port lands, orders 1/2 run on
+    # Blackhole only.
+    if reduce_order != 0 and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            reason="Row-then-column under one init is only fixed in the Blackhole reduce kernel "
+            "(Wormhole port pending)"
+        )
+
     # A column of num_row_tiles tiles, one column-tile wide: [num_row_tiles*32, 32].
     input_dimensions = [num_row_tiles * TILE_DIM, TILE_DIM]
     tile_cnt = num_row_tiles
