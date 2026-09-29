@@ -56,9 +56,11 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
-// Loads the coefficients _sfpu_tanh_polynomial_ reads. calculate_tanh needs no init constants:
-// SFPNONLINEAR's TANH_MODE uses its internal LUT.
-inline void tanh_polynomial_init() {
+// Loads the coefficients _sfpu_tanh_polynomial_ reads (softcap, situ_glu). calculate_tanh needs no
+// init constants: SFPNONLINEAR's TANH_MODE uses its internal LUT. The template parameters are unused;
+// they keep the Blackhole signature so tanh_tile_init needs no Quasar branch.
+template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en /*unused*/>
+inline void tanh_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
     sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;

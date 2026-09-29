@@ -20,7 +20,7 @@
 // gate and up are pinned in dst simultaneously, so the activation runs in one pass with no
 // intermediate materialized to L1/DRAM. See api/compute/situ_glu.h for the kernel-facing API.
 //
-// Init: tanh_polynomial_init claims all three vConstFloatPrgm registers, so the sigmoid half cannot use
+// Init: tanh_init claims all three vConstFloatPrgm registers, so the sigmoid half cannot use
 // the stock reciprocal -- see _situ_glu_reciprocal_ below.
 
 namespace ckernel::sfpu {
@@ -32,7 +32,7 @@ struct SituGluConfigKimi {
 };
 
 // Newton reciprocal with 2.0 as a literal. The stock sfpu_reciprocal_iter reads that
-// constant from vConstFloatPrgm0, which tanh_polynomial_init has loaded with a tanh coefficient.
+// constant from vConstFloatPrgm0, which tanh_init has loaded with a tanh coefficient.
 // Identical to sfpu_reciprocal_iter for MAX_ITER >= 1, the only values instantiated here;
 // it drops the stock MAX_ITER == 0 case, which returns the raw estimate. Keep in sync with recip.h.
 template <int MAX_ITER>
@@ -96,7 +96,7 @@ inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx,
 
 inline void situ_glu_init() {
     // One tanh init serves the whole op; the sigmoid half claims no vConstFloatPrgm.
-    tanh_polynomial_init();
+    tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
 }
 
 }  // namespace ckernel::sfpu
