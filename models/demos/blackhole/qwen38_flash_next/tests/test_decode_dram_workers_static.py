@@ -34,6 +34,26 @@ def _mesh(banks: int = BANKS):
     return SimpleNamespace(dram_grid_size=lambda: ttnn.CoreCoord(banks, 1))
 
 
+def test_mesh_assignment_preserves_coordinate_and_bank_order():
+    class AssignmentMesh:
+        shape = (1, 2)
+
+        def __init__(self):
+            self.queries = []
+
+        def get_optimal_dram_bank_to_logical_worker_assignment(self, noc, coordinate):
+            row, column = tuple(coordinate)
+            self.queries.append((noc, row, column))
+            return {2: ttnn.CoreCoord(column, 7), 0: ttnn.CoreCoord(column, 9), 1: ttnn.CoreCoord(column, 0)}
+
+    mesh = AssignmentMesh()
+    assert dm.mesh_dram_bank_worker_signatures(mesh) == {
+        (0, 0): ((0, 9), (0, 0), (0, 7)),
+        (0, 1): ((1, 9), (1, 0), (1, 7)),
+    }
+    assert mesh.queries == [(ttnn.NOC.RISCV_0_default, 0, 0), (ttnn.NOC.RISCV_0_default, 0, 1)]
+
+
 def test_two_readers_are_the_default_and_the_switch_admits_one_or_two(expect_error) -> None:
     assert dm.WORKERS_ENV == "QWEN38_DRAM_WORKERS" and dm.DEFAULT_WORKERS_PER_DRAM_BANK == 2
     assert dm.default_decode_dram_workers({}) == 2

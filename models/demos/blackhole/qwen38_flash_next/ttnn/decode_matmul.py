@@ -201,10 +201,12 @@ def mesh_dram_bank_worker_signatures(mesh_device) -> dict[tuple[int, int], tuple
     signatures: dict[tuple[int, int], tuple[tuple[int, int], ...]] = {}
     for row in range(rows):
         for column in range(columns):
-            assignment = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment_at_mesh_coordinate(
-                mesh_device, ttnn.NOC.RISCV_0_default, ttnn.MeshCoordinate(row, column)
+            assignment = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
+                ttnn.NOC.RISCV_0_default, ttnn.MeshCoordinate(row, column)
             )
-            signatures[(row, column)] = tuple((int(core.x), int(core.y)) for core in assignment)
+            signatures[(row, column)] = tuple(
+                (int(assignment[bank].x), int(assignment[bank].y)) for bank in sorted(assignment)
+            )
     return signatures
 
 
