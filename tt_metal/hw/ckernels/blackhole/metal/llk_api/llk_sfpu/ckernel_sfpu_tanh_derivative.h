@@ -103,7 +103,7 @@ inline void tanh_derivative_init() {
 //               adjacent inputs never step up by more than 1 ULP.
 //   bf16 dest, and bf16 data through an fp32 dest:  all 65,280 finite inputs correctly rounded.
 //   NaN and ±inf of either sign:  0.
-// MATH_ISOLATE cycles/tile at ITERATIONS=32: 2619.6 (fp32 dest) / 2651.5 (bf16 dest), against
+// MATH_ISOLATE cycles/tile at ITERATIONS=32: 2369.5 (fp32 dest) / 2401.5 (bf16 dest), against
 // 2843.6 / 2875.6 for the two-piece fit. v_if on the SFPU predicates rather than branches, so
 // the fit paid for both of its pieces on every element.
 // =============================================================================
@@ -112,27 +112,35 @@ inline void tanh_derivative_init() {
 // sends ±inf and NaN to 0, and what bounds |k| <= 130 in the range reduction below.
 constexpr float SECH2_FLUSH_LIMIT = 45.0f;
 
+// Cody-Waite split of -ln2, and the degree-6 minimax of _sfpu_exp_fp32_accurate_ for exp(r).
+constexpr float SECH2_INV_LN2 = 1.4426950408889634f;
+constexpr float SECH2_LN2_HI = -0.6931152343750000f;  // -ln2, high 13 bits
+constexpr float SECH2_LN2_LO = -3.19461832987e-05f;   // -ln2 - SECH2_LN2_HI
+constexpr float SECH2_C2 = 4.99999851e-1f, SECH2_C3 = 1.66664720e-1f, SECH2_C4 = 4.16695364e-2f;
+constexpr float SECH2_C5 = 8.37312452e-3f, SECH2_C6 = 1.37805939e-3f;
+
 // 4·exp(-2a) to fp32 accuracy for 0 <= a < SECH2_FLUSH_LIMIT.
 //
-// Cody-Waite reduction -2a = k·ln2 + r, the degree-6 minimax of _sfpu_exp_fp32_accurate_ for
-// exp(r) on |r| <= ln2/2, and 2^(k+2) written straight into the exponent field. k·LN2_HI is
-// exact (a 13-bit constant times |k| <= 130) and so is its sum with -2a (Sterbenz), so r
-// carries only the LN2_LO rounding. The ×4 goes into the exponent *before* the FTZ test, so
-// the result stays normal out to a ≈ 44.4 where exp(-2a) alone is already subnormal; folding
-// it into the argument as +ln4 instead would cost ~60 fp32 ULP at the far end.
-sfpi_inline sfpi::vFloat sech2_exp4_neg2x(sfpi::vFloat a) {
-    constexpr float INV_LN2 = 1.4426950408889634f;
-    constexpr float LN2_HI = -0.6931152343750000f;  // -ln2, high 13 bits
-    constexpr float LN2_LO = -3.19461832987e-05f;   // -ln2 - LN2_HI
-    constexpr float C2 = 4.99999851e-1f, C3 = 1.66664720e-1f, C4 = 4.16695364e-2f;
-    constexpr float C5 = 8.37312452e-3f, C6 = 1.37805939e-3f;
-
+// Cody-Waite reduction -2a = k·ln2 + r, the minimax above for exp(r) on |r| <= ln2/2, and
+// 2^(k+2) written straight into the exponent field. k·LN2_HI is exact (a 13-bit constant
+// times |k| <= 130) and so is its sum with -2a (Sterbenz), so r carries only the LN2_LO
+// rounding. The ×4 goes into the exponent *before* the FTZ test, so the result stays normal
+// out to a ≈ 44.4 where exp(-2a) alone is already subnormal; folding it into the argument as
+// +ln4 instead would cost ~60 fp32 ULP at the far end.
+//
+// Every fp32 constant here costs two SFPLOADI per row if written as a literal, and the
+// compiler does not hoist them. So the reduction constants come in as vFloats the caller
+// loads once before its row loop, and C2..C4 sit in vConstFloatPrgm0..2 (programmed by
+// tanh_derivative_sech2_init). C5 stays a literal: a fourth hoisted vFloat runs out of LRegs.
+sfpi_inline sfpi::vFloat sech2_exp4_neg2x(
+    sfpi::vFloat a, sfpi::vFloat inv_ln2, sfpi::vFloat ln2_hi, sfpi::vFloat ln2_lo) {
     sfpi::vFloat t = a * -2.0f;
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(t * INV_LN2, k_int);
-    sfpi::vFloat r = k * LN2_HI + t;
-    r = k * LN2_LO + r;
-    sfpi::vFloat p = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4, C5, C6);
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(t * inv_ln2, k_int);
+    sfpi::vFloat r = k * ln2_hi + t;
+    r = k * ln2_lo + r;
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        r, 1.0f, 1.0f, sfpi::vConstFloatPrgm0, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2, SECH2_C5, SECH2_C6);
 
     sfpi::vInt e = sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int + 2;
     sfpi::vFloat result = 0.0f;
@@ -143,6 +151,12 @@ sfpi_inline sfpi::vFloat sech2_exp4_neg2x(sfpi::vFloat a) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_tanh_derivative_sech2() {
+    // Loop-invariant: loaded once here instead of two SFPLOADI each per row. Non-const on
+    // purpose; a const vFloat live across the row loop fails to compile.
+    sfpi::vFloat inv_ln2 = SECH2_INV_LN2;
+    sfpi::vFloat ln2_hi = SECH2_LN2_HI;
+    sfpi::vFloat ln2_lo = SECH2_LN2_LO;
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = 0.0f;
@@ -153,7 +167,7 @@ inline void calculate_tanh_derivative_sech2() {
         sfpi::vFloat a = sfpi::setsgn(val, 0);
 
         v_if(a < SECH2_FLUSH_LIMIT) {
-            sfpi::vFloat e4 = sech2_exp4_neg2x(a);  // 4e, exact at x = 0 (the whole chain is)
+            sfpi::vFloat e4 = sech2_exp4_neg2x(a, inv_ln2, ln2_hi, ln2_lo);  // 4e, exact at x = 0 (the whole chain is)
 
             // den = (1 + e)² = e4·q + 1 with q = (e + 2)/4, a single fused rounding. That
             // rounding and q's are recovered exactly -- 0.5 - q by Sterbenz, 1 - den because
@@ -193,8 +207,12 @@ inline void calculate_tanh_derivative_sech2() {
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // Nothing to load: no LUT, every constant is a literal, and the reciprocal seeds from
-    // SFPARECIP. sfpu_reciprocal_iter reads vConstFloatPrgm0 and would need an init here.
+    // The exp polynomial's C2..C4, read by sech2_exp4_neg2x. This takes all three programmable
+    // constants, so sfpu_reciprocal_iter (which wants Prgm0 = 2.0) cannot be swapped in for the
+    // SFPARECIP-seeded reciprocal without moving one of them back to a literal.
+    sfpi::vConstFloatPrgm0 = SECH2_C2;
+    sfpi::vConstFloatPrgm1 = SECH2_C3;
+    sfpi::vConstFloatPrgm2 = SECH2_C4;
 }
 
 }  // namespace sfpu
