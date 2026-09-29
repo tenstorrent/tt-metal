@@ -723,28 +723,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t max_global_q_chunks_per_core =
         global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
 
-    // Blackhole serves DRAM slowest on the low rows, so a causal remainder that is the minority of the grid goes to
-    // the last cores; a majority stays where it is, concentrating it on the bottom rows measured slower.
-    const bool remainder_on_last_cores =
-        is_causal && device->arch() == tt::ARCH::BLACKHOLE && 2 * global_q_cores_doing_extra <= num_cores;
-    const uint32_t global_q_first_extra_core = remainder_on_last_cores ? (num_cores - global_q_cores_doing_extra) : 0u;
-    auto global_q_range_for_core = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
-        const uint32_t extras_before =
-            std::min(i > global_q_first_extra_core ? i - global_q_first_extra_core : 0u, global_q_cores_doing_extra);
-        uint32_t start = i * global_q_base_chunks_per_core + extras_before * global_q_extra_chunks_per_core;
-        uint32_t count = global_q_base_chunks_per_core;
-        if (i >= global_q_first_extra_core && i < global_q_first_extra_core + global_q_cores_doing_extra) {
-            count += global_q_extra_chunks_per_core;
-        }
-        if (start >= total_q_chunks) {
-            start = total_q_chunks;
-            count = 0;
-        } else if (start + count > total_q_chunks) {
-            count = total_q_chunks - start;
-        }
-        return {start, count};
-    };
-
     const uint32_t q_buffer_factor = (max_global_q_chunks_per_core > 1) ? 2 : 1;
 
     // Host code is responsible for determining matmul configuration
@@ -807,6 +785,30 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         Sk_chunk_t,
         Skt);
     const bool kv_chains_possible = kv_chain_mode != 0;
+    // Blackhole serves DRAM slowest on the low rows of the full grid, so a minority causal remainder goes to the last
+    // cores where that was measured to pay: block float Q or the reader forwarded chains (main's order otherwise).
+    const bool remainder_on_last_cores =
+        is_causal && device->arch() == tt::ARCH::BLACKHOLE && 2 * global_q_cores_doing_extra <= num_cores &&
+        (kv_chain_mode == 2 || input_tensor_q.dtype() == DataType::BFLOAT8_B ||
+         input_tensor_q.dtype() == DataType::BFLOAT4_B) &&
+        num_cores == device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const uint32_t global_q_first_extra_core = remainder_on_last_cores ? (num_cores - global_q_cores_doing_extra) : 0u;
+    auto global_q_range_for_core = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
+        const uint32_t extras_before =
+            std::min(i > global_q_first_extra_core ? i - global_q_first_extra_core : 0u, global_q_cores_doing_extra);
+        uint32_t start = i * global_q_base_chunks_per_core + extras_before * global_q_extra_chunks_per_core;
+        uint32_t count = global_q_base_chunks_per_core;
+        if (i >= global_q_first_extra_core && i < global_q_first_extra_core + global_q_cores_doing_extra) {
+            count += global_q_extra_chunks_per_core;
+        }
+        if (start >= total_q_chunks) {
+            start = total_q_chunks;
+            count = 0;
+        } else if (start + count > total_q_chunks) {
+            count = total_q_chunks - start;
+        }
+        return {start, count};
+    };
     // Every non causal program carries the chain semaphores, as on main, whether or not a chain forms.
     const bool kv_chain_semaphores = !is_causal || kv_chains_possible;
     // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
