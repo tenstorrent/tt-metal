@@ -31,17 +31,33 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
 }
 
 namespace {
-ttnn::Tensor l1_sharded(
-    tt::tt_metal::distributed::MeshDevice* device, const std::vector<CoreCoord>& cores, uint32_t rows) {
+tt::tt_metal::TensorSpec l1_sharded_spec(const std::vector<CoreCoord>& cores, uint32_t rows) {
     using namespace tt::tt_metal;
     const MemoryConfig mc(
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
         ShardSpec(rect_ranges(cores), {rows, 32}, ShardOrientation::ROW_MAJOR));
-    const TensorSpec spec(
+    return TensorSpec(
         ttnn::Shape({static_cast<uint32_t>(cores.size()) * rows, 32}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mc));
-    return create_device_tensor(spec, device);
+}
+
+// The per-launch scratch specs (arena, relay words) of a plan, built once: rect_ranges + the sharded spec cost ~tens
+// of us per call otherwise.
+const std::pair<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>& scratch_specs(const FlatRoutedExpertPlan& plan) {
+    static std::mutex mu;
+    static std::map<const FlatRoutedExpertPlan*, std::pair<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>> cache;
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = cache.find(&plan);
+    if (it == cache.end()) {
+        it = cache
+                 .emplace(
+                     &plan,
+                     std::make_pair(
+                         l1_sharded_spec(plan.arena_cores(), plan.arena_tiles * 32), l1_sharded_spec(plan.relays, 32)))
+                 .first;
+    }
+    return it->second;
 }
 }  // namespace
 
@@ -86,8 +102,9 @@ ttnn::Tensor flat_routed_expert(
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     // per-launch scratch: the arena (every role's buffers) and the relays' freed words; freed right after the launch
     // (the device reads them in order), so they never pin L1 against the next op's circular buffers
-    ttnn::Tensor arena = l1_sharded(device, plan->arena_cores(), plan->arena_tiles * 32);
-    ttnn::Tensor words = l1_sharded(device, plan->relays, 32);
+    const auto& [arena_spec, words_spec] = scratch_specs(*plan);  // plans live in the (never freed) plan cache
+    ttnn::Tensor arena = create_device_tensor(arena_spec, device);
+    ttnn::Tensor words = create_device_tensor(words_spec, device);
     auto y = ttnn::prim::flat_routed_expert(
         cfg,
         FlatRoutedExpertInputs{
