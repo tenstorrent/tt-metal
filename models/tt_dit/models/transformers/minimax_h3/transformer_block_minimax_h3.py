@@ -147,9 +147,9 @@ class MiniMaxH3TransformerBlock(Module):
         # The six modulation gathers run as one-hot matmuls (exact, 3x cheaper than ttnn.embedding at 15 s);
         # MINIMAX_H3_ADALN_GATHER=embedding restores the gather op.
         self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "matmul")
-        # MINIMAX_H3_FOLD_NORM_WEIGHT=1: multiply the norms' static weight into the (1 + scale) table rows instead
-        # of into the per-token weight (same bf16 products, two full-sequence multiplies fewer per block).
-        self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT") == "1"
+        # The norms' static weight is multiplied into the (1 + scale) table rows rather than into the per-token
+        # weight (two full-sequence multiplies fewer per block); MINIMAX_H3_FOLD_NORM_WEIGHT=0 restores the old order.
+        self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
