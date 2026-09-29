@@ -680,3 +680,23 @@ Watch: the worst-column margin is 2x (0.034 of 0.07). Later dsa_moe swaps should
 run the CPU tail from the device inputs of the step they add (see the kda_dense swaps 06-10).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_01_attn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.attn_collapse test (attempt 1)
+
+Reviewed the rendered component test for attn_collapse at layer 3 (the same weightless op as kda_dense attn_collapse).
+I rewrote it from the kda_dense test and dropped the second-layer run: at layer 3 the streams already differ (rel ~1.0
+from stream 0) and pre spans 9e-4..0.98. So PCC catches stream and pre order bugs here (pre reversed, pre 0/1 swapped,
+stream-major rows, last stream dropped, post instead of pre, unweighted mean: PCC <= 0.79).
+Checks: the gated PCC; finite; rel L2 <= 0.01; per-token norm ratio [0.99, 1.01] (tighter than layer 0's
+[0.985, 1.015], so x1.01 fails at 1.0128); worst per-token rel L2 <= 0.008 (new).
+Sensitivity (CPU host script /tmp/dsacol/sens.py, not kept; numbers in the test docstring). These pass PCC 0.99 and
+fail the extra checks: pre normalized to sum 1, output x1.01 / x1.02, pre column 0 x1.01 (worst row 0.0103), last row
+or last 32 rows zeroed, last 32 columns zeroed, one row's pre reversed. Noise: fp32 reference 0.0027 / worst row
+0.0037; all-bf16 products and accumulation 0.0039 / 0.0047; 0.3% element noise 0.0040 / 0.0047.
+Results: device passes already, because `_device_step` builds tt/collapse.py for any layer. It scores PCC 0.999995,
+rel 0.0031, ratio [0.9974, 1.0028], worst row 0.0042. Reference passes (0.0027 / [0.9975, 1.0028] / 0.0037). Stub
+fails (PCC 0).
+Watch: the worst-row margin is about 1.9x (0.0042 of 0.008). The next step, implement, only needs to add attn_collapse
+to `DEVICE_STEPS["dsa_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
