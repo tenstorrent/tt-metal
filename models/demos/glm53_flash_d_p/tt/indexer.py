@@ -133,8 +133,9 @@ class TtIndexer:
         ttnn.deallocate(a)
         return b
 
-    def __call__(self, x: ttnn.Tensor, q_resid: ttnn.Tensor, start: int) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, q_resid: ttnn.Tensor, start: int, q_local: bool = False) -> ttnn.Tensor:
         """x (attn_norm) [1, 1, S, H], q_resid [1, 1, S, 1536], both replicated bf16 TILE; start a multiple of 4.
+        q_local: q_resid is already this chip's [1, 1, S/4, 1536] rows (the split residual layout).
         Returns this chip's [1, 1, S/4, 2176] uint32 ROW_MAJOR token ids (0xFFFFFFFF = none). Updates the cache."""
         s = x.shape[-2]
         assert start % KP == 0 and start % s == 0, f"chunk start {start} must be a multiple of S={s}"
@@ -147,9 +148,10 @@ class TtIndexer:
         ttnn.fill_cache(self.cache, pooled, batch_idx=0, update_idx=p0)
         ttnn.deallocate(pooled)
 
-        qr = self._local_rows(q_resid)
+        qr = q_resid if q_local else self._local_rows(q_resid)
         q = ttnn.linear(qr, self.wq, dtype=ttnn.bfloat16, compute_kernel_config=self.mm, memory_config=MC)
-        ttnn.deallocate(qr)
+        if qr is not q_resid:
+            ttnn.deallocate(qr)
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=MC
         )

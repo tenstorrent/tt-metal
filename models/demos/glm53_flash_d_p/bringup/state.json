@@ -3952,6 +3952,10 @@
   "status": "PASS",
   "waiting": null
  },
+ "O.1": {
+  "attempts": 0,
+  "status": "TODO"
+ },
  "P.1": {
   "agent": {
    "defs": {
@@ -4037,6 +4041,110 @@
   "reason": [],
   "role": "perf",
   "started": "2026-09-29T21:55:17",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "61703216-1655-4299-87e9-91c2d44ddaf0"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/P.2.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/P.2.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 1124.8,
+    "session_id": "61703216-1655-4299-87e9-91c2d44ddaf0",
+    "t": "2026-09-29T22:57:57"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 447.5,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T22:39:11"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T23:05:27"
+   }
+  ],
+  "last_run": "2026-09-29T23:05:27",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/P.2.log",
+  "metrics": {
+   "device_ms_total": 276.2,
+   "host_transfers_per_layer": 0,
+   "pcc_attn_collapse_L00": 0.9999971606902534,
+   "pcc_attn_collapse_L03": 0.999995281624158,
+   "pcc_attn_collapse_L04": 0.9999953446373058,
+   "pcc_attn_hc_L00": 0.9999986168826368,
+   "pcc_attn_hc_L03": 0.9999980915721566,
+   "pcc_attn_hc_L04": 0.999993591221996,
+   "pcc_attn_norm_L00": 0.9999960234251392,
+   "pcc_attn_norm_L03": 0.9999960057061041,
+   "pcc_attn_norm_L04": 0.9999960113191931,
+   "pcc_attn_residual_L00": 0.9999936815610965,
+   "pcc_attn_residual_L03": 0.9999960388186001,
+   "pcc_attn_residual_L04": 0.9999952147591741,
+   "pcc_ffn_collapse_L00": 0.9999963246181512,
+   "pcc_ffn_collapse_L03": 0.9999957546705509,
+   "pcc_ffn_collapse_L04": 0.9999954798258497,
+   "pcc_ffn_hc_L00": 0.9999937902318317,
+   "pcc_ffn_hc_L03": 0.9999987544993965,
+   "pcc_ffn_hc_L04": 0.9999985568649976,
+   "pcc_ffn_norm_L00": 0.9999958153106521,
+   "pcc_ffn_norm_L03": 0.9999959771734774,
+   "pcc_ffn_norm_L04": 0.9999960070774252,
+   "pcc_ffn_residual_L00": 0.9999930724764524,
+   "pcc_ffn_residual_L03": 0.9999957516945172,
+   "pcc_ffn_residual_L04": 0.9999952514669904,
+   "pcc_layer_L00": 0.9999752004233728,
+   "pcc_layer_L01": 0.9999665558776015,
+   "pcc_layer_L02": 0.9999865028898893,
+   "pcc_layer_L03": 0.9999553474830585,
+   "pcc_layer_L04": 0.9999405339315828,
+   "pcc_state_min": 0.99838979218403
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-09-29T22:57:59",
   "status": "PASS",
   "waiting": null
  },
@@ -7276,6 +7384,104 @@
   "started": "2026-09-29T21:01:00",
   "status": "PASS",
   "waiting": "pick opportunities in models/demos/glm53_flash_d_p/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
+ },
+ "X.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "84a781ee-627e-4ae6-bf3d-7f9bab097b18"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/X.3.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/X.3.fix.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 1324.9,
+    "session_id": "84a781ee-627e-4ae6-bf3d-7f9bab097b18",
+    "t": "2026-09-29T22:23:17"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 0,
+  "duration_s": 204.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T22:01:12"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T22:26:42"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-29T22:30:27"
+   }
+  ],
+  "last_run": "2026-09-29T22:26:42",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/X.3.log",
+  "metrics": {
+   "op_rows": 869,
+   "pcc_layer_L00": 0.9999613387540743,
+   "pcc_layer_L01": 0.9995411739541044,
+   "pcc_layer_L02": 0.9998495330142849,
+   "pcc_layer_L03": 0.9998083368802079,
+   "pcc_layer_L04": 0.9997896455273576,
+   "pcc_state_min": 0.9824670382803375,
+   "pos_chunk": 5120,
+   "prefill_ms_full": 4504.8,
+   "timeline_ok": 0
+  },
+  "rc": 0,
+  "reason": [
+   "  cmd rc=0 (205s), log: /localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/X.3.log",
+   "  ok       pcc_layer_L00 = 0.9999613387540743 (need >= 0.97)",
+   "  ok       pcc_layer_L01 = 0.9995411739541044 (need >= 0.97)",
+   "  ok       pcc_layer_L02 = 0.9998495330142849 (need >= 0.97)",
+   "  ok       pcc_layer_L03 = 0.9998083368802079 (need >= 0.97)",
+   "  ok       pcc_layer_L04 = 0.9997896455273576 (need >= 0.97)",
+   "  ok       pcc_state_min = 0.9824670382803375 (need >= 0.97)",
+   "  ok       prefill_ms_full = 4504.8 (need > 0)",
+   "  ok       pos_chunk = 5120 (need >= 1)",
+   "  ok       op_rows = 869 (need >= 1)",
+   "  FAIL     timeline_ok = 0 (need == 1)"
+  ],
+  "role": "fix",
+  "started": "2026-09-29T22:23:17",
+  "status": "TODO",
+  "waiting": null
  },
  "_run": {
   "branch": "dnijemcevic/glm53_prefill",
