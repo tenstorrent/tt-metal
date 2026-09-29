@@ -109,8 +109,7 @@ public:
 
 #ifdef ARCH_QUASAR
     // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
-    // Only the original object drains, and only if it or any of its copies moved data (push/pop/implicit
-    // read/write). Copies passed into helpers never drain; the original must outlive them.
+    // Only the original object drains. Copies passed into helpers never drain; the original must outlive them.
     ~DataflowBuffer();
 #endif
 
@@ -422,7 +421,11 @@ private:
 #ifndef COMPILE_FOR_TRISC
     friend struct noc_traits_t<DataflowBuffer>;
 
+#ifdef ARCH_QUASAR
+    void write_barrier_impl(uint8_t noc_id) const;
+#else
     void write_barrier_impl(const Noc &noc) const;
+#endif
 #endif
 
     struct ScopedLockRegion {
@@ -483,8 +486,7 @@ private:
     // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
     // recorded on the original, and only the original drains.
     DataflowBuffer* drain_owner_ = this;
-    // Gate the destructor: drain only if data moved; write-barrier only if entries were drained out.
-    bool has_traffic_ = false;
+    // Write-barrier in the destructor only if entries were drained out of the DFB.
     bool has_outbound_writes_ = false;
 #endif
 };
