@@ -130,8 +130,8 @@ The semaphore scheme needs `_llk_math_pack_sync_init_` to seed MATH_PACK first.
 That seeds `num_sem = 2` under `SyncHalf` and `1` under `SyncFull` — the count
 is what makes a second bank available to claim.
 
-**Do not mix the two schemes** in one kernel; `llk_pack_common.h:134` says so
-explicitly.
+**Do not mix the two schemes** in one kernel; the doc comment on
+`_llk_pack_dest_dvalid_section_done_` says so explicitly.
 
 Under `SyncHalf` the *release* is the bank flip:
 `_llk_math_dest_section_done_` (and its dvalid counterpart) calls
