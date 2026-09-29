@@ -2254,3 +2254,46 @@ Next (implement): the device ffn_residual (`tt/residual.py`) already works in th
 `DEVICE_STEPS["kda_moe"]` if it is not there yet.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_13_ffn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## M.1 assemble (attempt 1)
+The ladder had run on the hybrid model: 40 host round-trips per layer, and layer 4 was entirely on the CPU. I built
+the all-device model.
+- `tt/model.py`:
+  - `TtGlmModel`: embedding -> `TtGlmBlock` per layer -> `TtFinalNorm`; `prefill_chunk(ids, start, on_layer)` is there
+    for the contract step.
+  - `TtGlmBlock` builds the validated modules with the same `build_*` functions the component hooks use, keys them by
+    the reference block graph (`block_graph(cfg, layer)`, the same list as `GlmReference.block_graph`) and runs them
+    through `run_block`. Each boundary is freed after its last reader; the block input belongs to the caller.
+- `bringup/hooks.py`:
+  - `GlmDeviceModel` is the ladder / profile adapter; `device_model` returns it by default.
+  - `BRINGUP_HYBRID=1` selects the old `HybridDeviceModel`, which is unchanged.
+  - `_DeviceState` reads and loads state through the blocks. State lives in the modules: KDA carries, the indexer's
+    pooled-key cache, the MLA latent cache.
+Decisions:
+- Residual on the device: replicated [1, 1, S, 4 H] bf16. The streams are packed on the last dim, which is the same
+  memory as the reference's [S * 4, H], so `to_host` / `from_host` are plain reshapes.
+- Embedding: a replicated ROW_MAJOR bf16 table (1.27 GB per chip), cached at
+  `generated/glm53_flash_d_p/tt_cache/embed_bf16`. The lookup output is concatenated 4x to make the streams.
+- Indexer -> MLA: the indexer's per-chip [1, 1, S/4, 2176] uint32 rows go straight into `TtMLA`, with no host
+  compaction. The device format already puts valid ids first and a contiguous 0xFFFFFFFF tail: at start 0, rows below
+  2047 take the dense row, and every other row sees at least 512 pools.
+- Router -> experts: the dense [S, 288] routing, as in the swap tests. idx / wts are freed at once. Passing
+  (idx, wts) directly would skip one topk; that is left to perf.
+- Final norm: the 4 streams are summed in fp32, multiplied by 1/4, then `TtRMSNorm`, then bf16. The ladder never
+  reaches it on this subset (layers 0-4 of 45). A probe against `glm_ref.rms_norm` of the mean (random [1024, 4096],
+  2x2 FABRIC_2D) gave PCC 1.000000, rel 0.0024.
+- LM head: on the host (`logits`, sampled rows, only when the stack ends at layer 44).
+Results:
+- Gate (s4096): passes.
+  - host_transfers_per_layer 0.
+  - Layer PCC: L00 0.99998, L01 0.99997, L02 0.99999, L03 0.99996, L04 0.99995.
+  - pcc_state_min 0.99916.
+  - Chunks 0.42 s / 0.45 s (the hybrid took 13.5 s / 12.2 s). Model load 6 s from the warm caches.
+- s16384 (8192-token chunks) also passes: worst layer 0.99993, state 0.99269, 0 host transfers, warm chunk 2.08 s.
+  The 16.5 s first chunk is program compilation.
+Gotchas:
+- ttKDA and the experts' dispatch / combine modules are built lazily on the first chunk of each length. They are
+  built once, not per chunk, and only warm chunks count toward host transfers.
+- A tt-probe run saves its script under `tests/ttnn/...`. I deleted it (known issue).
+Re-run: `PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
+(`BRINGUP_HYBRID=1` for the hybrid).
