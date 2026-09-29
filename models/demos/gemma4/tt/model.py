@@ -595,8 +595,14 @@ class Gemma4Model:
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
         _fracture_env = os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
         _is_2d = is_mesh and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1
-        # One-instance fracture: rows are the vocab/TP axis, not sampling groups.
-        self.sampling_dp = 1 if (_fracture_env and _is_2d) else (mesh_device.shape[0] if is_mesh else 1)
+        # One-instance fracture: rows are the vocab/TP axis, not sampling groups
+        # — EXCEPT under lanes, where each lane column samples its own 32 rows
+        # independently (the row-sharded sampling_dp contract, lane-major).
+        _lanes_on = bool(mesh_config is not None and getattr(mesh_config, "lane_sharded", False))
+        if _fracture_env and _is_2d:
+            self.sampling_dp = mesh_config.lanes if _lanes_on else 1
+        else:
+            self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
 
         # dFlash residual-tap capture (armed by dflash_capture_taps; consumed by
         # the dFlash drafter — see tt/dflash_drafter.py).
@@ -739,7 +745,10 @@ class Gemma4Model:
             # sampler (no row sampling-DP), no llama-TG row-sharded behaviors.
             _tp_axis = 0 if _shape[0] == 8 else 1
             args.sampling_all_gather_axis = _tp_axis
-            args.sampling_dp = 1
+            _lanes_env = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+            # Under lanes each lane column is an independent sampling group of
+            # 32 rows; otherwise one pooled sampler (no row sampling-DP).
+            args.sampling_dp = _shape[1 - _tp_axis] if _lanes_env else 1
             args.is_galaxy = False
         else:
             args.sampling_all_gather_axis = 1  # gather across TP (column) axis

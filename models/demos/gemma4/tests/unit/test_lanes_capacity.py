@@ -146,7 +146,7 @@ def test_lanes_capacity(mesh_device, reset_seeds, request):
     print(
         f"[capacity] decode step median {steady * 1e3:.1f}ms -> "
         f"{B_g / steady:.0f} tok/s aggregate at {B_g} users (host-loop"
-        f"{', traced' if ENABLE_TRACE else ', eager'})"
+        f"{', traced' if ENABLE_TRACE else ', eager'}{', device-sampled' if DEVICE_SAMPLE else ''})"
     )
 
     # ── Oracle: all 128 rows answer their own question ─────────────────────
