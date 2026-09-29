@@ -190,7 +190,9 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     // block
     const auto shard_spec = a.shard_spec().value();
     // check dims
+    TT_FATAL(args.subblock_wt > 0, "subblock_w must be greater than 0.");
     TT_FATAL(args.block_wt % args.subblock_wt == 0, "block_w must be divisible by subblock_w.");
+    TT_FATAL(args.num_links > 0, "num_links must be greater than 0.");
     TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
     TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
     const auto bbox = shard_spec.grid.bounding_box();

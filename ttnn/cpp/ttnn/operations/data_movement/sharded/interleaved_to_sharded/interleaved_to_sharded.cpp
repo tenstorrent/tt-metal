@@ -33,6 +33,11 @@ ttnn::Tensor interleaved_to_sharded(
     const ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned) {
+    TT_FATAL(
+        shard_shape[0] > 0 && shard_shape[1] > 0,
+        "shard_shape must be greater than 0 in both dims, got [{}, {}]",
+        shard_shape[0],
+        shard_shape[1]);
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
