@@ -19,7 +19,7 @@
 //
 // Runtime args (indices 0..3):
 //   0: dram_src_addr       – base DRAM buffer address (interleaved across banks)
-//   1: eth_l1_staging_addr – ETH L1 unreserved base; first 16 bytes hold timing output
+//   1: eth_l1_staging_addr – ETH L1 unreserved base; first 64 bytes are reserved
 //   2: bank_id             – which DRAM bank this core is assigned to
 //   3: read_vc             – static NOC request VC for this stream
 
@@ -38,9 +38,12 @@ void kernel_main() {
     const uint32_t bank_id = get_arg_val<uint32_t>(2);
     const uint32_t read_vc = get_arg_val<uint32_t>(3);
 
-    // Timing output occupies the first 16 bytes; data staging starts after.
+    // The first 16 bytes hold timing output. Start data at the next 64-byte
+    // NOC-word boundary; unaligned Blackhole read destinations truncate the
+    // tail of each transaction.
     volatile tt_l1_ptr uint32_t* timing_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_staging_addr);
-    const uint32_t l1_data_addr = eth_l1_staging_addr + 16;
+    constexpr uint32_t l1_staging_header_bytes = 64;
+    const uint32_t l1_data_addr = eth_l1_staging_addr + l1_staging_header_bytes;
 
     // Compute the NOC address for this core's assigned DRAM bank once.
     // bank_to_dram_offset[bank_id] is added inside get_noc_addr_from_bank_id.

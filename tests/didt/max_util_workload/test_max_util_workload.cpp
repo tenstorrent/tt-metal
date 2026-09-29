@@ -51,6 +51,7 @@ using namespace tt;
 namespace unit_tests::didt::max_util_workload {
 
 static constexpr uint32_t kOutputSentinel = 0xFFFFFFFFu;
+static constexpr uint32_t kEthL1StagingHeaderBytes = 64;
 
 // ---------------------------------------------------------------------------
 // Test configuration
@@ -88,7 +89,7 @@ struct MaxUtilConfig {
     // ETH DRAM streaming fields (filled by setup_eth_stream_config before build_program).
     uint32_t eth_dram_buffer_addr = 0;  // DRAM src base address for ETH streaming
     uint32_t eth_pages_per_bank = 0;    // pages per bank read per iteration
-    uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (first 16 bytes = timing scratch)
+    uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (64-byte header, first 16 bytes = timing scratch)
     // DRAM read transaction size. Larger values generally amortize NOC command
     // overhead better; Blackhole supports bursts up to 16 KiB.
     uint32_t eth_page_size = 1024;
@@ -363,7 +364,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
     uint32_t num_banks = static_cast<uint32_t>(device->num_dram_channels());
     uint32_t page_size_bytes = cfg.eth_page_size;
 
-    cfg.eth_pages_per_bank = (eth_l1_size - 16) / page_size_bytes;
+    cfg.eth_pages_per_bank = (eth_l1_size - kEthL1StagingHeaderBytes) / page_size_bytes;
 
     // ETH kernel runs 8x fewer loops than the compute kernel to match duration.
     // Also scale by utilization percentage to match the compute kernel duration.
