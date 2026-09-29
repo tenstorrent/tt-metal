@@ -1353,6 +1353,13 @@ tasks:
     kind: router
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T10:59:40'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_router.py: 549e1d22546dc73ea27c19d9a4a2f55a67e090a9a92eacef650f581fa3efa074
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.11
   title: 'dsa_moe block with steps 1-11 on device (last: router)'
   step: implement
