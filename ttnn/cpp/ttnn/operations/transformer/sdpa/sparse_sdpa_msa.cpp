@@ -21,7 +21,11 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
+    uint32_t index_cache_num_layers,
+    uint32_t index_cache_layer_idx) {
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
 
@@ -52,8 +56,9 @@ ttnn::Tensor sparse_sdpa_msa(
         block_cyclic = ttnn::prim::BlockCyclicLayout{sp, chunk_local};
         // The causal query positions are derived from the rank along cluster_axis against the cache's block-cyclic
         // SP striping, so the two must name the same mesh axis.
+        const bool causal = chunk_start_idx.has_value() || chunk_start_idx_tensor.has_value();
         TT_FATAL(
-            !chunk_start_idx.has_value() || !cluster_axis.has_value() || cluster_axis.value() == sp_axis,
+            !causal || !cluster_axis.has_value() || cluster_axis.value() == sp_axis,
             "sparse_sdpa_msa: causal cluster_axis ({}) must equal block_cyclic_sp_axis ({})",
             cluster_axis.value_or(0),
             sp_axis);
@@ -80,7 +85,11 @@ ttnn::Tensor sparse_sdpa_msa(
         cache_batch_idx,
         chunk_start_idx,
         cluster_axis,
-        block_cyclic);
+        block_cyclic,
+        chunk_start_idx_tensor,
+        cache_batch_idx_tensor,
+        index_cache_num_layers,
+        index_cache_layer_idx);
 }
 
 }  // namespace ttnn::transformer
