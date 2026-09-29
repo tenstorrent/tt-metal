@@ -240,6 +240,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -1830,6 +1831,42 @@ KNOBS = {
     # replay-reissue-latency-unproved / record-hoist-peel-* /
     # post-autoincr-window-carried-peel-launch-arithmetic-unproven).
     "counted-capture-peel": "-mtt-tensix-optimize-counted-capture-peel",
+    # ---- CENSUS-20260929: the options the stack defines that had no knob.
+    # Until this block the KNOBS table covered 75 of the 92 -mtt-tensix-*
+    # options the 21-stage stack adds; the other 17 had never been offered
+    # to the attribution scan at all, so their absence from every
+    # knob-attribution.json meant "never asked", not "asked, silent".  All
+    # of these are Init(0) and outside the reviewed ON set, so the booking
+    # A/B is on-plus: (reviewed-ON + flag) vs plain reviewed-ON.
+    "crosslane": "-mtt-tensix-optimize-crosslane",
+    "hoisted-prgm-reuse": "-mtt-tensix-optimize-hoisted-prgm-reuse",
+    "lreg-rename-chains": "-mtt-tensix-optimize-lreg-rename-chains",
+    "pressure-schedule": "-mtt-tensix-optimize-pressure-schedule",
+    "replay-hoist-completion-guard": "-mtt-tensix-replay-hoist-completion-guard",
+    "macro-ims": "-mtt-tensix-macro-ims",
+    "macro-ims-carrier": "-mtt-tensix-macro-ims-carrier",
+    "macro-planner-analyze": "-mtt-tensix-macro-planner-analyze",
+    "macro-planner-verify": "-mtt-tensix-macro-planner-verify",
+    "dump-effects": "-mtt-tensix-dump-effects",
+    # crossrow-pairing-stall-words has only ever been measured JOINTLY, as
+    # half of the crossrow-2datum knob (which also carries
+    # hoisted-prgm-reuse); its own reach was never isolated.
+    "crossrow-pairing-stall-words": "-mtt-tensix-optimize-crossrow-pairing-stall-words",
+    # LICENSED (value-changing): the pass refuses without -fassociative-math,
+    # exactly like the reassoc knobs above, so the license travels with it.
+    "reassoc-loop-carried": "-fassociative-math -fno-signed-zeros "
+    "-fno-trapping-math -mtt-tensix-optimize-reassoc-loop-carried",
+    # The four tuning PARAMETERS.  A parameter has no on/off, so the census
+    # asks the only boolean question it can: does moving it off its default
+    # change code anywhere?  The three min-benefit knobs go to 0 (the most
+    # permissive threshold, Init(-1) = auto); ims-budget goes to 1 (Init(0)
+    # already means "engine default").  A firing count here is a REACH
+    # measurement, not a tuning result -- the value sweep is separate work.
+    "delivery-shape-min-benefit-0": "-mtt-tensix-optimize-delivery-shape "
+    "-mtt-tensix-delivery-shape-min-benefit=0",
+    "replay-hoist-min-benefit-0": "-mtt-tensix-replay-hoist-min-benefit=0",
+    "mop-form-min-benefit-0": "-mtt-tensix-mop-form-min-benefit=0",
+    "ims-budget-1": "-mtt-tensix-ims-budget=1",
 }
 
 
@@ -2137,8 +2174,46 @@ KNOB_MODES = {
     # reproducibility, NOT booked, NOT a promotion candidate without a
     # new silicon winner + R9 witness.
     "counted-capture-peel": "on-plus",
+    # ---- CENSUS-20260929.
+    # planner-replay and mop-form were SOLO, and both flags are in the
+    # reviewed ON set while their enabling pipelines (macro-planner /
+    # the replay former) are NOT in the solo OFF base -- so their solo leg
+    # was structurally an A/A and their recorded no-fire measured the leg
+    # shape, not the pass.  drop-one is the only shape that can see them.
+    "planner-replay": "drop-one",
+    "mop-form": "drop-one",
+    # Every option that had no knob before this census: default-off flags
+    # outside the reviewed ON set, so (ON + flag) vs plain ON.
+    "crosslane": "on-plus",
+    "hoisted-prgm-reuse": "on-plus",
+    "lreg-rename-chains": "on-plus",
+    "pressure-schedule": "on-plus",
+    "replay-hoist-completion-guard": "on-plus",
+    "macro-ims": "on-plus",
+    "macro-ims-carrier": "on-plus",
+    "macro-planner-analyze": "on-plus",
+    "macro-planner-verify": "on-plus",
+    "dump-effects": "on-plus",
+    "crossrow-pairing-stall-words": "on-plus",
+    "reassoc-loop-carried": "on-plus",
+    "delivery-shape-min-benefit-0": "on-plus",
+    "replay-hoist-min-benefit-0": "on-plus",
+    "mop-form-min-benefit-0": "on-plus",
+    "ims-budget-1": "on-plus",
 }
 
+
+# Two options the stack defines that this census deliberately does NOT give a
+# knob, with the reason, so "no row" is never mistaken for "not looked at":
+#
+#   -mtt-tensix-optimize-lp-schedule   riscv.opt: "Removed; using this option
+#       is an error."  preflight already proves the removed flags error on
+#       use; a knob leg would be a guaranteed COMPILE_FAIL, not a measurement.
+#   -mtt-tensix-dst-layout-32b         a whole-TU DECLARATION, not an
+#       optimization, and the harness owns it: dst_layout_flags() appends it
+#       to EVERY leg whose flags carry a consumer and whose node declares
+#       dest_acc:Yes.  An A/B knob would either duplicate what the harness
+#       already appends (A/A) or contradict the node's declared Dst layout.
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
 # A licensed knob's flag string deliberately CHANGES VALUES (here:
 # floating-point reassociation under -fassociative-math, the explicit
@@ -2349,6 +2424,20 @@ def node_dest_acc_32b(node):
         return False
     return m.group(1).split(".")[-1] == "Yes"
 
+
+
+# ---- identical-leg memo (LEG-MEMO-20260929) --------------------------------
+# The classify phase keys its cache on the WORK DIR, so a census that asks 27
+# knobs about one row compiles the reviewed-ON leg 27 times: it is the "off"
+# leg of every on-plus knob and the "knob" leg of every drop-one knob.  The
+# compiler is deterministic, so the same (pytest node, effective flag string,
+# row env) triple always yields the same ELFs; the repeats copy the first
+# occurrence's archived build and hash file instead of recompiling.  Every
+# reused leg drops a REUSED-<leg>.txt naming its source, so nothing inherits
+# silently, and the memo lives only for one process (a resumed run rebuilds
+# nothing it already has on disk).
+_LEG_MEMO = {}
+_LEG_MEMO_LOCK = threading.Lock()
 
 def dst_layout_flags(flags, node):
     """Effective flag string for one (leg flags, pytest node) pair: appends
@@ -3492,22 +3581,74 @@ class Sweep:
         hashes = {}
         for leg, flags in legs:
             flags = dst_layout_flags(flags, node)  # lane DZ: 32b-Dst wiring
+            extra_env = row_env(row, sel)
+            memo_key = (node, flags, tuple(sorted(extra_env.items())))
+            (work / f"flags-{leg}.txt").write_text(flags + "\n")
+            reused = self._leg_memo_take(memo_key, work, leg)
+            if reused is not None:
+                hashes[leg] = reused
+                continue
             rt = work / f"rt-{leg}"
             shutil.rmtree(rt, ignore_errors=True)
             rt.mkdir(parents=True)
-            (work / f"flags-{leg}.txt").write_text(flags + "\n")
             rc = self._pytest(
                 node,
                 ["--compile-producer"],
-                self._env("bh", rt, flags, extra=row_env(row, sel)),
+                self._env("bh", rt, flags, extra=extra_env),
                 work / f"compile-{leg}.log",
             )
             if rc != 0 or not self._passed(work / f"compile-{leg}.log"):
+                self._leg_memo_fail(memo_key)
                 return self._classify_compile_fail(row, sel, work, leg)
             hashes[leg] = self._hash_build(rt, work / f"hashes-{leg}.txt")
             self._archive_build(rt, work / f"elf-{leg}")
             shutil.rmtree(rt, ignore_errors=True)
+            self._leg_memo_put(memo_key, hashes[leg], work / f"elf-{leg}",
+                               work / f"hashes-{leg}.txt")
         return self._classify_verdict(sel, work, [leg for leg, _ in legs], hashes)
+
+    # ---- identical-leg memo (LEG-MEMO-20260929) ----
+    def _leg_memo_take(self, key, work, leg):
+        """Hash entries for a leg this run already compiled with the SAME
+        (node, flags, env), or None if this thread must compile it.  Blocks
+        while another thread is compiling that same leg."""
+        while True:
+            with _LEG_MEMO_LOCK:
+                entry = _LEG_MEMO.get(key)
+                if entry is None:
+                    _LEG_MEMO[key] = {"event": threading.Event(), "hit": None}
+                    return None                      # this thread compiles it
+            entry["event"].wait()
+            hit = entry["hit"]
+            if hit is None:                          # producer failed: retry
+                with _LEG_MEMO_LOCK:
+                    if _LEG_MEMO.get(key) is entry:
+                        del _LEG_MEMO[key]
+                continue
+            entries, src_elf, src_hashes = hit
+            shutil.copy2(src_hashes, work / f"hashes-{leg}.txt")
+            if src_elf.is_dir():
+                shutil.copytree(src_elf, work / f"elf-{leg}", dirs_exist_ok=True)
+            (work / f"REUSED-{leg}.txt").write_text(
+                "byte-identical leg: same pytest node, same effective flag "
+                "string and same row env as a leg already compiled in this "
+                f"run; build copied from {src_elf}\n"
+            )
+            return entries
+
+    def _leg_memo_put(self, key, entries, elf_dir, hash_file):
+        with _LEG_MEMO_LOCK:
+            entry = _LEG_MEMO.get(key)
+        if entry is None:
+            return
+        entry["hit"] = (entries, elf_dir, hash_file)
+        entry["event"].set()
+
+    def _leg_memo_fail(self, key):
+        with _LEG_MEMO_LOCK:
+            entry = _LEG_MEMO.pop(key, None)
+        if entry is not None:
+            entry["event"].set()
 
     # ------------- batched classify producer sessions (laneCH) -------------
     # The classify phase previously paid one pytest producer session per
