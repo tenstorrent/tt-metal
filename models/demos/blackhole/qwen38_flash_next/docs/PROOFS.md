@@ -1,5 +1,10 @@
 # Release proofs
 
+> Historical source notes from Samuel Jett (sjettTT, sjett@tenstorrent.com), frozen at
+> `cd9a11771107ea2c27da3303a0556ff7343e4af5`. Measurements and implementation details below
+> describe that source snapshot. Use the [port README](../README.md) for current commands and
+> [PROVENANCE.md](../PROVENANCE.md) for dependencies and the separation of source and port evidence.
+
 The runs that verified this release end to end on hardware, from a fresh clone, following the README as written.
 Where a proof quotes acceptance divergence indices measured before the GDN gate fix of 2026-09-06, the current
 indices are in `NUMERICS.md`.

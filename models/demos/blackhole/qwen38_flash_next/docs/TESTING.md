@@ -1,5 +1,10 @@
 # Testing
 
+> Historical source notes from Samuel Jett (sjettTT, sjett@tenstorrent.com), frozen at
+> `cd9a11771107ea2c27da3303a0556ff7343e4af5`. Measurements and implementation details below
+> describe that source snapshot. Use the [port README](../README.md) for current commands and
+> [PROVENANCE.md](../PROVENANCE.md) for dependencies and the separation of source and port evidence.
+
 The no-device tests, the acceptance gate, the reference corpus and the regression harness.
 
 ## The no-device tests
