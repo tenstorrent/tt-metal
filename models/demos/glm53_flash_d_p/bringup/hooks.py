@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Bring-up hooks for glm53_flash_d_p: the framework reaches the model only through these functions.
+
+CPU side (reference role): reference, and optionally tokenizer, hf_model, hf_layers.
+Device side (implement role): device_params, device_component, device_model.
+Contract side (contract role): contract_independent_pcc (optional).
+See models/demos/common/bringup/reference/interface.py and testing/harness.py for the contracts.
+"""
+
+
+def reference(spec, layers=None, dtype=None):
+    raise NotImplementedError("reference step: write models/demos/glm53_flash_d_p/reference/ and return it here")
+
+
+def device_component(mesh, spec, layer, step):
+    raise NotImplementedError(f"implement step: no device module for {step} yet")
+
+
+def device_model(mesh, spec, layers, lm_head=True):
+    raise NotImplementedError("implement step: no device model yet")
