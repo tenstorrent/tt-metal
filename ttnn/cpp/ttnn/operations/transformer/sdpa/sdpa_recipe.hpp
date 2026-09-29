@@ -16,6 +16,11 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
 uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
 uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config);
 
+// Q tile rows the dense/joint compute kernel processes per chunk. STANDARD and LOW_PRECISION pair Q
+// rows, so an odd chunk is padded with one zero row (read as zeros, output dropped): the compute kernel
+// only ever sees whole row pairs and compiles a single group path.
+uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles);
+
 // Recipe QK/PV matmul subblock width for a K chunk or head dim of `tiles` tiles: the largest of 4, 2 and 1
 // dividing it (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W).
 uint32_t recipe_subblock_width(uint32_t tiles);
