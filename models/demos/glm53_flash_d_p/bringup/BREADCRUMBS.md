@@ -144,3 +144,33 @@ Gotcha: the run_safe_pytest precompile pass prints the whole metric set once wit
 pass. Ignore that block.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_01_attn_hc.py`
 (prefix with `BRINGUP_IMPL=reference` or `BRINGUP_IMPL=stub` to check the other two modes).
+
+## C.kda_dense.attn_collapse test (attempt 1)
+
+Reviewed the rendered component test for attn_collapse (layer 0, s4096 chunk 1). Kept the gated PCC and added checks,
+measured on the golden with a CPU-only host script:
+- At layer 0 the four streams of `in` are identical (embedding copied), so pre-column or stream order is invisible,
+  and PCC passes a dropped last stream (0.9998), output x1.02 (0.999998), and 32 zeroed rows (0.9934).
+- Added: rel L2 <= 0.01 and per-token norm ratio in [0.985, 1.015] (those bugs: rel 0.021 / 0.020 / 0.115).
+- Added: the same module (the step has no weights) on layer 1's golden `in` / `attn_hc` / `attn_in`, where the
+  streams differ; pre reversed gives rel 1.27, pre 0/1 swapped 0.29, stream-major rows 1.28.
+- Headroom: bf16 products accumulated in bf16 give rel 0.0036, ratio [0.994, 1.004].
+Results: reference passes (PCC 0.999998; rel L2 0.0021 at L00, 0.0026 at L01). Stub fails (PCC 0). Device mode fails
+with NotImplementedError until the implement step adds the module.
+Implement: the device_component for attn_collapse is called with layer 0's ctx and fed layer 1's inputs too; the
+input `in` is token-major [S * 4, H] (row 4s + n), the output is [S, H] (or reshapeable).
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_collapse.py`
+
+## C.kda_dense.attn_collapse implement (attempt 1)
+
+What was done:
+- `tt/collapse.py:TtHcCollapse` (+ `build_collapse(cfg)`): replicated, no CCL, no weights. `x [1, 1, S, 4H]` (streams
+  packed along the last dim = token-major `[S * 4, H]`), `hc [1, 1, S, K]` fp32 (pre = columns 0..3) -> DeepSeek
+  `tt_mhc._streams` / `_cols` -> each stream `ttnn.typecast` to fp32 -> `_mix` (multiply + 3 x addcmul, column
+  broadcast) in fp32 -> one `ttnn.typecast` to bf16 -> `[1, 1, S, H]`.
+- `hooks.py`: `_collapse_host_fn` (harness boundary: x uploaded bf16, hc fp32, chip 0 read back) for `attn_collapse`
+  and `ffn_collapse` (same module); `DEVICE_STEPS["kda_dense"]` now has `attn_collapse`.
+Decisions: fp32 accumulate with a single bf16 round, matching `glm_ref.hc_collapse` (the component notes).
+Result: pcc_attn_collapse_L00 0.999997; L00 rel L2 0.00238, ratio [0.9964, 1.0027]; L01 (distinct streams) rel L2
+0.00298, ratio [0.9960, 1.0036].
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_collapse.py`
