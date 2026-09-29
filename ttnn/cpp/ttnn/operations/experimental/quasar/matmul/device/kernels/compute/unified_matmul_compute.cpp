@@ -6,13 +6,9 @@
 // subblock (what DST holds) at a time; running sums spill to C_partials between K chunks (or
 // accumulate there via packer_l1_acc) and the last K chunk packs into C_slice for the writer.
 // Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks, k_tile.
-//
-// Compute threads (Quasar NEOs; one thread elsewhere): the subblocks are dealt round-robin in walk
-// order, thread t taking subblocks t, t + T, ... Every thread sees the whole A and B slices (one
-// resident copy). A thread's share of C_slice and C_partials holds its subblocks back to back and is
-// C_entries_per_thread entries (one with several threads, one per tile with one), so a thread
-// reserves / waits for its share once per K chunk and packs / reloads subblocks into it with block
-// calls at running tile offsets.
+// Compute threads (Quasar NEOs; one thread elsewhere) take the subblocks round-robin in walk order
+// and all see the whole A and B slices; a thread's subblocks sit back to back in its share of
+// C_slice / C_partials (C_entries_per_thread entries), reserved and pushed once per K chunk.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <cstdint>
@@ -40,9 +36,7 @@ template <
     uint32_t packer_l1_acc,
     uint32_t partials_format_differs>            // C_partials and C_slice hold different formats
 TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C slices, per batch
-    // The packer starts on the first K chunk's target (C_slice when there is a single K chunk).
-    constexpr uint32_t first_pack_target_id = num_K_chunks == 1 ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, first_pack_target_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
     constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
@@ -73,14 +67,9 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
-                // With K spill the target flips between C_partials and C_slice on every C slice. The packer bakes
-                // the output DFB's L1 base into its descriptor at init, so re-init it at each flip; a format
-                // reconfig alone would leave the data in the other DFB.
-                if constexpr (num_K_chunks > 1) {
-                    if (K_chunk == 0 || last_K_chunk) {
-                        pack_init(pack_target_id);
-                    }
-                }
+                // The packer bakes the output DFB's L1 base into its descriptor at init, so point it at this K
+                // chunk's target (a format reconfig alone would leave the data in the other DFB).
+                pack_init(pack_target_id);
                 // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
                 // onto them, and the finished sum is packed without accumulation.
                 if constexpr (partials_format_differs) {
@@ -97,15 +86,19 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_init(pack_target_id);
 #endif
 
-                // The last K chunk reloads the partials the second-to-last one left in this thread's share and
-                // holds them until the reloads are done; earlier K chunks released theirs below.
-                if (last_K_chunk && K_chunk > 0) {
+                // The previous K chunk's partials stay in this thread's share of C_partials while their credits
+                // are released (this NEO is the share's only writer, and each subblock is reloaded before it is
+                // overwritten), so the reserve below gets the share back. dummy_unpack orders the pop after the
+                // wait on Quasar (a no-op elsewhere).
+                if (K_chunk > 0) {
                     C_partials.wait_front(C_entries_per_thread);
+                    dummy_unpack(dfb::C_partials);
+                    C_partials.pop_front(C_entries_per_thread);
                 }
                 pack_target.reserve_back(C_entries_per_thread);
 
                 // (m_tile, n_tile) is the subblock's first tile within the C slice; entry_tile is where this
-                // thread's next subblock sits in its share of C_slice / C_partials.
+                // thread's next subblock sits in its share.
                 uint32_t subblock = 0;
                 uint32_t entry_tile = 0;
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
@@ -166,32 +159,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
 
                 if (!has_subblocks) {
                     dummy_pack(pack_target_id);
-                }
-                pack_target.push_back(C_entries_per_thread);
-
-                // The partials pushed this K chunk are only credits: the next K chunk reloads them (or has the
-                // packer add onto them) and rewrites the share in place, so pop them so its reserve gets the share
-                // back (this NEO is the share's only writer, and each subblock is reloaded before it is
-                // overwritten). Two exceptions: the last K chunk pushed nothing here, and the second-to-last K
-                // chunk's share is what the last K chunk reloads.
-                const bool second_to_last_K_chunk = K_chunk + 2 == num_K_chunks;
-                if (!last_K_chunk && !second_to_last_K_chunk) {
-                    // Pop without reading: dummy_unpack orders the pop after the wait on Quasar (a no-op
-                    // elsewhere).
-                    C_partials.wait_front(C_entries_per_thread);
-                    dummy_unpack(dfb::C_partials);
-                    C_partials.pop_front(C_entries_per_thread);
-                }
-                if (last_K_chunk && K_chunk > 0) {
-                    if (!has_subblocks) {
-                        dummy_unpack(dfb::C_partials);
-                    }
-                    C_partials.pop_front(C_entries_per_thread);
-                }
-                if (!has_subblocks) {
                     dummy_unpack(dfb::A_slice);
                     dummy_unpack(dfb::B_slice);
                 }
+                pack_target.push_back(C_entries_per_thread);
                 A_slice.pop_front(A_slice_tiles);
                 B_slice.pop_front(B_slice_tiles);
             }
