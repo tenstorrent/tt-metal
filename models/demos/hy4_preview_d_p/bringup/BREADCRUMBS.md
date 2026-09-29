@@ -1392,3 +1392,33 @@ Gotchas
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_04_q_a.py
+
+## C.moe_full.indexer test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test with test_c_dense_full_indexer.py's checks at LAYER = 1: gated pcc_indexer_L01
+  = mean per-row set overlap (`topk_overlap`, pads -1 / 0xFFFFFFFF dropped), threshold 0.99; asserted extras: integer
+  S x 2048 output, causal, no repeats, exactly min(pos + 1, 2048) valid per row, worst row >= 0.97, own position
+  selected, and a second call on chunk 0 that must return exactly [0, pos] per row.
+- Re-ran the layer-0 CPU mutation study on the layer-1 golden (/tmp/hy4_idx1/study.py, check.py, outside the repo,
+  1 s per variant). Table in the test docstring.
+
+Gotchas
+- Layer-1 margins are a bit thinner than layer 0: fp32 reference 0.99908 (worst row 0.9971), bf16 scores 0.99568
+  (0.9863), bfp8 + bf16 scores 0.99395 (0.9854). Positional match of the fp32 reference is 0.761.
+- As at layer 0, t <= s + 1, own key dropped, top-2047 and a padded last row pass the 0.99 overlap; the structural
+  checks catch each (verified with the test's helpers). RoPE positions + 1 scores 0.98512 (fails the gate).
+- The first "FAIL pcc_indexer_L01" line in each run is the precompile collect pass; the real run is the second block.
+- The device gate already runs TtHy4Indexer at layer 1 (device_component builds _INDEXER_STEPS for any layer), even
+  though DEVICE_STEPS["moe_full"] is still empty.
+
+Results
+- BRINGUP_IMPL=reference: PASS (overlap 0.999083, worst row 0.99707, self 1.0; chunk 0 exact).
+- BRINGUP_IMPL=stub: FAIL (overlap 0.000488).
+- Gate (device, existing TtHy4Indexer): PASS, overlap 0.995925, worst row 0.98877, 5 rows < 0.99, self 1.0, chunk 0
+  exact (layer 0 device: 0.99708).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
