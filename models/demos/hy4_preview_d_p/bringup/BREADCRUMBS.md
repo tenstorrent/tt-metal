@@ -2196,3 +2196,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
+
+## C.moe_full.ffn_residual test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test with the layer-1 attn_residual test's checks, applied to out_j = h_mid_j +
+  post_j * mlp_out (inputs h_mid, ffn_hc, mlp_out; post = ffn_hc cols 4-7). Gated PCC (0.99) kept. Against the
+  golden: not a CPU bridge, size, finite, rel L2 <= 0.01, per-token per-stream norm ratio [0.99, 1.01], and the
+  rounding-aware addend checks in float64 (|coef - 1| <= 0.01 + 2 r/||t||, excess, worst row).
+- Added a second run with each row's post gates rotated by (row mod 4), compared with the CPU step
+  (`ref.component`) on the same inputs: the same addend checks, plus rel L2 <= 0.005 and ratio [0.995, 1.005].
+  The checks are in one helper, `_check(tag, ...)`. The rotated metrics are recorded with a `rot_` prefix.
+- CPU mutation studies (/tmp/hy4_c_ffnres1/study.py and rot.py, outside the repo). The tables are in the test
+  docstring.
+
+Decisions
+- Rotated second run: stream 2's post gate is ~1.6e-6 (addend norm 0.031 vs stream norm 73), so a dropped stream-2
+  addend passes every golden check (excess 0.69). With rotated gates it scores rel 0.39 and excess 73.
+- The golden limits are the same as attn_residual layer 1. 1.01 x mlp_out fails the stream ratio (1.0113). 1.005 x
+  passes both runs; this is a blind spot, at the bf16 tolerance of stream 3's addend.
+
+Gotchas
+- ||mlp_out|| is 8216 at layer 1 (stream 3's addend norm 265 is larger than the stream, 153).
+- Addend norms must be float64 (`tgt.double().norm()`). With fp32 norms the exact reference scores coefficient
+  1.013-1.03.
+- The first "FAIL pcc_ffn_residual_L01: pcc=0.000000" line comes from the precompile collect pass. Ignore it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999997, rel 0.00253, ratio [0.9973, 1.0030], addend exact; rotated exact).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, TtHcPost via device_component; it is already registered for both hc_post steps): PASS.
+  pcc_ffn_residual_L01 0.999997, rel 0.00253, addend rel 5.8e-5, rotated run within limits.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
