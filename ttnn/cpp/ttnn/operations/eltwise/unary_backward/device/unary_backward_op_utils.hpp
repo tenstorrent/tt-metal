@@ -32,7 +32,7 @@ struct UnaryBackwardKernelSpec {
     // Kernel to use instead of compute_kernel_path when DEST accumulates in float32, which halves
     // the DEST slots (8 -> 4 in SyncHalf). A gradient whose chain needs more than four live tiles
     // supplies a variant that fits; empty means compute_kernel_path fits either way.
-    std::string_view compute_kernel_path_fp32_dest = {};
+    std::string_view compute_kernel_path_fp32_dest;
 };
 
 const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type);

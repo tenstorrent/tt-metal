@@ -13,17 +13,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "operand_reconfig.hpp"
 
 namespace ckl = compute_kernel_lib;
-
-// The unpacker only has to switch format between the two operand buffers when they carry
-// different formats, which the program factory signals with MIXED_OPERAND_DATA_FORMATS; for
-// the same-dtype case the configuration compute_kernel_hw_startup() installs covers both.
-#ifdef MIXED_OPERAND_DATA_FORMATS
-constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
-#else
-constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
-#endif
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
