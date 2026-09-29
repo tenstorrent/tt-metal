@@ -10,19 +10,27 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b
+    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b (1 device: bfloat8_b with QWEN36_F_MLP_GU_BF8=1)
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
+    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b (1 device: bfloat8_b with QWEN36_F_MLP_GU_BF8=1)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
-    """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
-    interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
+    """Packed [gate|up] weight: prepare_for_fused_swiglu tile-pair interleave, then (tp>1)
+    column-parallel shard on the 2N dim so each device holds its interleaved slice.
+
+    tp=1 (single-device prefill fused-swiglu minimal_matmul) skips the mesh_mapper: the
+    single-device caller's `mesh` is a plain ttnn.Device (ttnn.CreateDevice), not a MeshDevice,
+    and shard_tensor_to_mesh_mapper requires a MeshDevice.
+
+    dtype: bfloat4_b (default); the single-device caller passes tpc.mlp_gate_up_dtype()
+    (bfloat8_b with QWEN36_F_MLP_GU_BF8=1)."""
     import torch
 
     from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
@@ -38,9 +46,9 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     return ttnn.as_tensor(
         gate_w,
         preprocess=pack,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1) if tp > 1 else None,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache_path,
@@ -151,11 +159,39 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # gate/up: bfloat4_b (bandwidth; default); bfloat8_b with QWEN36_F_MLP_GU_BF8=1 (accuracy item, tp_common
+    # F flags). down: bfloat8_b (accuracy). as_tensor puts the dtype in the cache file name, so each dtype has
+    # its own cache files. (Imported by name: the tp > 1 branch's local `tpc` import makes `tpc` a local of this
+    # whole function, unbound on this path.)
+    from models.demos.blackhole.qwen36.tt.tp_common import mlp_gate_up_dtype
+
+    # sequence_parallel (SP prefill, tp=1) lands here too (tp == 1) but runs the TP-path _forward_tp, which
+    # never reads the single-device packed w_gate_up (its _fuse_gateup_agmm is False at tp=1) and keeps the
+    # TP gate/up dtype (bfloat4_b): skip both single-device-only additions on that path.
+    _sp = args is not None and getattr(args, "sequence_parallel", False)
+    gu_dtype = ttnn.bfloat4_b if _sp else mlp_gate_up_dtype()
+
+    # Prefill-only packed [gate|up] weight for the single-device fused-swiglu minimal_matmul
+    # (T>512; see Qwen36MLP.forward). w1/w3 stay for decode and T<=512 prefill. New cache name --
+    # tile-pair-interleaved layout is incompatible with the plain w1/w3 cache.
+    wgu = (
+        _build_gate_up(
+            state_dict["gate_proj.weight"],
+            state_dict["up_proj.weight"],
+            mesh_device,
+            1,
+            str(tensor_cache_path / "mlp.w_gate_up_swiglu_1dev.weight") if tensor_cache_path else None,
+            dtype=gu_dtype,
+        )
+        if use_gateup_agmm and not _sp
+        else None
+    )
+
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", gu_dtype),
         w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w3=load("up_proj", gu_dtype),
+        w_gate_up=wgu,
     )
 
 
@@ -186,15 +222,34 @@ class Qwen36MLP:
             and getattr(args, "mlp_w1_weight_memcfg", None) is not None
             and not self._mlp_1d_decode
         )
+        # Single-device forward() path only (not TP, not sequence_parallel at tp=1: both run _forward_tp).
+        _single_dev = self.num_devices == 1 and not self._sequence_parallel
         # Prefill fused-swiglu AGMM (ff_norm skips its AG; layer.py sets _fuse_ff_agmm to match).
-        from models.demos.blackhole.qwen36.tt import tp_common as tpc
-
+        self._prefill_progcfg_fn = tpc.make_prefill_progcfg_fn(mesh_device) if _single_dev else None
+        # Decode (T==1) 1D matmul progcfg (see tp_common measured table); single-device only.
+        self._decode_progcfg_fn = tpc.make_decode_progcfg_fn(mesh_device) if _single_dev else None
+        # minimal_matmul worker grid (single device only; see _prefill_matmul).
+        self._mm_grid = None
+        if _single_dev:
+            g = mesh_device.compute_with_storage_grid_size()
+            self._mm_grid = ttnn.CoreCoord(g.x, g.y)
+        # M3 ZB (tp_common M3 table): shared zero bias [1, 2048] for the M1 S2 down projection. Set by
+        # Qwen36Model at load (one tensor for all layers); None = the M1 S2 ttnn.matmul (unchanged).
+        self._m3_zero_bias = None
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
         self.weights = load_mlp_weights(
             mesh_device, state_dict, tensor_cache_path, args=args, use_gateup_agmm=use_gateup_agmm
         )
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+        # step2 (2026-09-22): routed through tpc.prefill_matmul_ckc() -- see QWEN36_PREFILL_MM_*
+        # flags in tp_common.py. Legacy values (packer_l1_acc=False, fp32_dest_acc_en=True) unless
+        # overridden. Single-device forward() only: _forward_tp (TP, and sequence_parallel at tp=1)
+        # keeps the legacy prefill config it was tuned with.
+        self.compute_kernel_config = (
+            tpc.prefill_matmul_ckc()
+            if _single_dev
+            else ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            )
         )
         # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
@@ -202,6 +257,114 @@ class Qwen36MLP:
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+        # I-3 (single device, 13x10 grid; tp_common I3 table): QWEN36_I3_MLP_PROGCFG -> explicit decode
+        # gate/up 1D progcfgs; QWEN36_I3_MLP_FUSED_GU -> one DRAM-sharded [gate | up] decode matmul.
+        self._i3_mlp_pc_fn = tpc.i3_mlp_decode_progcfg_fn(mesh_device) if _single_dev else None
+        self._i3_gu = None
+        if _single_dev and tpc.i3_enabled("MLP_FUSED_GU") and tpc.i3_grid_ok(mesh_device):
+            self._i3_gu = self._build_i3_fused_gate_up(mesh_device)
+
+    # I-3 MLP_FUSED_GU: T2 D6f-R028 (in0 L1 width-sharded on 8x8 cores, 1 tile each; weight DRAM
+    # width-sharded, 48 tiles per bank; DRAM-sharded progcfg wpb 2, in0_block_w 4, per_core_N 6).
+    _I3_GU_SHARD_W_TILES = 48
+    _I3_GU_IN0_GRID = (8, 8)
+
+    def _build_i3_fused_gate_up(self, mesh_device):
+        """[gate | up] decode weight [dim, 2*hidden] bfp4 (bfp8 with QWEN36_F_MLP_GU_BF8=1), DRAM width-sharded,
+        from the loaded w1/w3 (device concat of whole tiles: the same tiles as w1/w3). Returns (weight, in0_memcfg,
+        progcfg, hidden) or None when the shape is not the swept one (dim 2048, hidden 6144)."""
+        w1, w3 = self.weights.w1, self.weights.w3
+        k, hidden = int(w1.shape[-2]), int(w1.shape[-1])
+        if (k, hidden) != (2048, 6144) or tuple(w3.shape) != tuple(w1.shape):
+            return None
+        cat = ttnn.concat([w1, w3], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wgu = ttnn.to_memory_config(cat, tpc.i3_dram_width_memcfg(k, self._I3_GU_SHARD_W_TILES))
+        ttnn.deallocate(cat)
+        in0_mc = tpc.i3_l1_width_memcfg(k, *self._I3_GU_IN0_GRID)
+        pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=4, per_core_M=1, per_core_N=6, fused_activation=None, num_workers_per_dram_bank=2
+        )
+        return wgu, in0_mc, pc, hidden
+
+    def _i3_fused_gate_up_decode(self, x, ckc):
+        """I-3 MLP_FUSED_GU decode: hidden = silu(x @ w1) * (x @ w3) via one DRAM-sharded matmul on the
+        [gate | up] weight, S2I, 2 slices and one multiply (silu as the multiply's input activation)."""
+        wgu, in0_mc, pc, hidden = self._i3_gu
+        xs = ttnn.to_memory_config(x, in0_mc)
+        y = ttnn.linear(
+            xs, wgu, compute_kernel_config=ckc, program_config=pc, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
+        ttnn.deallocate(xs)
+        yi = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(y)
+        lead = list(yi.shape)[:-1]
+        zeros = [0] * len(lead)
+        gate = ttnn.slice(yi, zeros + [0], lead + [hidden], memory_config=ttnn.L1_MEMORY_CONFIG)
+        up = ttnn.slice(yi, zeros + [hidden], lead + [2 * hidden], memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(yi)
+        out = ttnn.multiply(
+            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        return out
+
+    def _prefill_progcfg(self, T, x, w, env_flag):
+        """Swept 2D progcfg for a DRAM-output prefill matmul (single device); None keeps auto-config."""
+        if self._prefill_progcfg_fn is None or os.environ.get(env_flag) == "1":
+            return None
+        fp32_acc = getattr(self.compute_kernel_config, "fp32_dest_acc_en", True)
+        return self._prefill_progcfg_fn(T, x.shape[-1], w.shape[-1], x.dtype, w.dtype, fp32_acc)
+
+    # Measured on P150, bit-identical vs auto: w2 down (K=6144,N=2048) minimal default config wins,
+    # 0.241/0.433ms (T=2048/4096) vs swept-2D 0.311/0.546ms. w1/w3 up (K=2048,N=6144): swept 2D wins
+    # at T=2048 (0.308ms) but the picker falls back to in0_block_w=2 at T=4096 (1.167ms), where a
+    # swept MinimalMatmulConfig(8,8,8) gets 0.577ms -> use minimal only when the 2D pick is weak.
+    def _prefill_matmul(self, x, w, T, env_flag, activation=None, memory_config=None):
+        """T>512 up/down-proj matmul: swept 2D progcfg, or minimal_matmul when it wins (see above).
+
+        memory_config: output placement override (default None -> DRAM, prior behavior). Used by the
+        QWEN36_MLP_L1_OUT A/B (see forward()) to try an L1-resident down-proj output at T<=1024.
+        """
+        out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        if os.environ.get(env_flag) == "1":
+            # Escape hatch: plain ttnn-auto config, bypassing both the picker and minimal_matmul.
+            return ttnn.linear(
+                x,
+                w,
+                activation=activation,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=out_mc,
+            )
+        pc = self._prefill_progcfg(T, x, w, env_flag)
+        use_minimal = os.environ.get("QWEN36_MLP_MINIMAL_MM", "1") != "0" and (
+            x.shape[-1] > w.shape[-1] or pc is None or pc.in0_block_w < 4
+        )
+        if use_minimal:
+            config = (
+                ttnn.MinimalMatmulConfig(
+                    M_block_size=8, K_block_size=8, N_block_size=8, compute_with_storage_grid_size=self._mm_grid
+                )
+                if x.shape[-1] <= w.shape[-1]
+                else None  # down-proj: default minimal_matmul config measured best
+            )
+            fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation == "silu" else None
+            return ttnn.experimental.minimal_matmul(
+                x,
+                w,
+                fused_activation=fused_activation,
+                config=config,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=out_mc,
+            )
+        return ttnn.linear(
+            x,
+            w,
+            activation=activation,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=out_mc,
+            program_config=pc,
         )
 
     def forward(self, x, mode=None):
@@ -213,11 +376,94 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
+        # Fused path (fused SwiGLU minimal_matmul + _prefill_matmul down-proj) is used for ALL
+        # prefill T (T>1): at T<=512 the old else-branch's L1-interleaved outputs made ttnn's
+        # matmul auto-config fall back to the naive MatmulMultiCoreProgramConfig kernel (930us/
+        # layer down-proj measured at T=512 vs 43us on the fused path; matmul_program_config.cpp:1183).
+        # QWEN36_MLP_LEGACY_SHORT=1 restores the old T<=512 else-branch for A/B testing.
+        legacy_short = T <= 512 and os.environ.get("QWEN36_MLP_LEGACY_SHORT") == "1"
+        # Step1 task F10A (G4): L1-resident fused-swiglu output + down-proj output, now default ON
+        # and raised to T<=2048 (the production chunk size) -- was default OFF, capped at T<=1024.
+        # QWEN36_MLP_L1_OUT=0 restores the pre-F10A default (off at every T) exactly.
+        l1_out_ab = T <= 2048 and os.environ.get("QWEN36_MLP_L1_OUT", "1") != "0"
+        if T > 1 and not legacy_short:
+            # Fused single-device SwiGLU: one minimal_matmul(fuse_swiglu=True) replaces w1(silu)+w3+mul.
+            # Weight pairing: prepare_for_fused_swiglu(cat([w1_KN, w3_KN], -1), ndev=1, gate_is_first=True)
+            # (PCC 0.999995 vs silu(x@w1)*(x@w3)). P150: 0.615ms vs 0.70ms at T=2048 (config=None), and
+            # 1.08ms vs 1.7ms at T=4096 (MinimalMatmulConfig(8,8,8) on the device grid) -- both measured.
+            use_fused_swiglu = (
+                w.w_gate_up is not None
+                and os.environ.get("QWEN36_MLP_FUSED_SWIGLU", "1") != "0"
+                and os.environ.get("QWEN9B_MLP_UP_AUTO") != "1"
+            )
+            if use_fused_swiglu:
+                # step2 (2026-09-22): QWEN36_PREFILL_MINIMAL_CFG/_FP32_ACC (tp_common.py) gate the
+                # explicit config on both branches. Legacy (MINIMAL_CFG=0) keeps the exact T>=4096
+                # MinimalMatmulConfig(8,8,8) at its binding-default (1,1) subblock, and config=None
+                # below 4096 -- both bit-identical to the pre-flag code.
+                if T >= 4096:
+                    if tpc.PREFILL_MINIMAL_CFG:
+                        cfg = (
+                            ttnn.MinimalMatmulConfig(
+                                M_block_size=8,
+                                K_block_size=8,
+                                N_block_size=8,
+                                subblock_h=2,
+                                subblock_w=2,
+                                compute_with_storage_grid_size=self._mm_grid,
+                            )
+                            if tpc.PREFILL_MM_FP32_ACC
+                            else ttnn.MinimalMatmulConfig(
+                                M_block_size=4,
+                                K_block_size=8,
+                                N_block_size=16,
+                                subblock_h=2,
+                                subblock_w=4,
+                                compute_with_storage_grid_size=self._mm_grid,
+                            )
+                        )
+                    else:
+                        cfg = ttnn.MinimalMatmulConfig(
+                            M_block_size=8, K_block_size=8, N_block_size=8, compute_with_storage_grid_size=self._mm_grid
+                        )
+                else:
+                    # I-2 S1 (QWEN36_I2_S1=1): T2 S1-M085 blocking; None -> the pre-I-2 config.
+                    cfg = tpc.i2_swiglu_minimal_config(T, self._mm_grid) or tpc.prefill_minimal_matmul_config(
+                        T, x.shape[-1], w.w_gate_up.shape[-1], self._mm_grid
+                    )
+                hidden = ttnn.experimental.minimal_matmul(
+                    x,
+                    w.w_gate_up,
+                    fuse_swiglu=True,
+                    config=cfg,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                w1_out = self._prefill_matmul(x, w.w1, T, "QWEN9B_MLP_UP_AUTO", activation="silu")
+                w3_out = self._prefill_matmul(x, w.w3, T, "QWEN9B_MLP_UP_AUTO")
+                hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+                ttnn.deallocate(w1_out)
+                ttnn.deallocate(w3_out)
+        elif T == 1 and self._i3_gu is not None and tpc.i3_one_tile_row(x):
+            # I-3 MLP_FUSED_GU (decode): one DRAM-sharded [gate | up] matmul; mc is L1 here (T == 1).
+            hidden = self._i3_fused_gate_up_decode(x, ckc)
+        else:
+            up_pc = (
+                self._decode_progcfg_fn(x.shape[-1], w.w1.shape[-1])
+                if (T == 1 and self._decode_progcfg_fn is not None)
+                else None
+            )
+            if T == 1 and self._i3_mlp_pc_fn is not None and tpc.i3_one_tile_row(x):
+                # I-3 MLP_PROGCFG: swept decode gate/up progcfg (None for an unswept shape -> keep up_pc).
+                up_pc = self._i3_mlp_pc_fn(x.shape[-1], w.w1.shape[-1]) or up_pc
+            w1_out = ttnn.linear(
+                x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, program_config=up_pc
+            )
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, program_config=up_pc)
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
         down_pc = None
         if (
             T > 1
@@ -225,7 +471,69 @@ class Qwen36MLP:
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
-        output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
+        elif T == 1 and self._decode_progcfg_fn is not None:
+            down_pc = self._decode_progcfg_fn(hidden.shape[-1], w.w2.shape[-1])
+        if down_pc is not None:
+            output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
+        elif T > 1 and not legacy_short:
+            # M1 S2 (QWEN36_M1_S2=1, T == 2048; tp_common M1 table): 2D-mcast ttnn.matmul 13x10 bw8
+            # pcM7 pcN5 1x5 fuse_batch (H V2_bw8) instead of minimal_matmul(config=None); same in0 and
+            # output placement. Takes precedence over I-2 S2. None -> the path below, unchanged.
+            m1_pc = (
+                tpc.m1_prefill_2d_progcfg("S2", T, hidden.shape[-1], w.w2.shape[-1], self._mm_grid)
+                if self._mm_grid is not None and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
+                else None
+            )
+            # I-2 S2 (QWEN36_I2_S2=1, T <= 2048): 2D-mcast ttnn.linear (T2 S2-D008) instead of
+            # minimal_matmul(config=None); same output placement. None -> the pre-I-2 path.
+            i2_pc = (
+                tpc.i2_prefill_2d_progcfg("S2", T, hidden.shape[-1], w.w2.shape[-1], self._mm_grid)
+                if self._mm_grid is not None and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
+                else None
+            )
+            if m1_pc is not None and self._m3_zero_bias is not None:
+                # M3 ZB (QWEN36_M3_ZB=1): the same M1 S2 program via ttnn.linear + the shared zero bias
+                # (FUSE_BIAS path; N1 N-f: bit-identical to minimal_matmul). Allocated at model load.
+                output = ttnn.linear(
+                    hidden,
+                    w.w2,
+                    bias=self._m3_zero_bias,
+                    program_config=m1_pc,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+            elif m1_pc is not None:
+                assert not tpc.m3_enabled("ZB"), (
+                    "QWEN36_M3_ZB=1 but the M1 S2 zero bias was not allocated at model load "
+                    "(Qwen36Model._m3_alloc_zero_biases); the forward never allocates it"
+                )
+                output = ttnn.matmul(
+                    hidden,
+                    w.w2,
+                    program_config=m1_pc,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                )
+            elif i2_pc is not None:
+                output = ttnn.linear(
+                    hidden,
+                    w.w2,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=i2_pc,
+                )
+            else:
+                output = self._prefill_matmul(
+                    hidden,
+                    w.w2,
+                    T,
+                    "QWEN9B_MLP_DOWN_AUTO",
+                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else None,
+                )
+        else:
+            output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
 

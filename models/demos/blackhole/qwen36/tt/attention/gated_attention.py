@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Qwen3.5-9B gated full-attention layer — composes config/weights/prefill/decode."""
 
+import os
+
 import ttnn
 from models.demos.blackhole.qwen36.tt.attention.config import AttentionConfig
 from models.demos.blackhole.qwen36.tt.attention.decode import decode_forward
@@ -23,11 +25,14 @@ class Qwen36GatedAttention:
 
         self.weights = load_attention_weights(mesh_device, state_dict, tensor_cache_path)
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        self._prefill_progcfg_fn = tpc.make_prefill_progcfg_fn(mesh_device)
+
+        # step2 (2026-09-22): routed through tpc.prefill_matmul_ckc() -- see QWEN36_PREFILL_MM_*
+        # flags in tp_common.py. Legacy values (packer_l1_acc=False, fp32_dest_acc_en=True) unless
+        # overridden.
+        self.compute_kernel_config = tpc.prefill_matmul_ckc()
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=True,
@@ -52,9 +57,28 @@ class Qwen36GatedAttention:
         chunk_page_table=None,
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
+        last_row_only=False,
+        last_row_tile_slices=False,
+        last_row_pos_tensor=None,
     ):
+        """last_row_only (M2 LASTROW; paged prefill, Branch A only): keep the K/V fill and the full SDPA,
+        then compute gate / head concat / gate multiply / o_proj for row T - 1 only -> [1, 1, dim].
+        last_row_tile_slices (M4 R4A) / last_row_pos_tensor (M4 R4B), with last_row_only only: see
+        gated_attention_forward_ttnn's prefill_last_row_tile_slices / prefill_last_row_pos_tensor."""
+        assert last_row_only or (
+            not last_row_tile_slices and last_row_pos_tensor is None
+        ), "last_row_tile_slices / last_row_pos_tensor (M4) need last_row_only (M2 LASTROW)"
         T = x.shape[1]
-        mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
+        # F3/F10A (G1): short prefills (T <= QWEN36_ATTN_L1_MAX_T, default 2048 — raised from 1024
+        # for the T=2048 production chunk size, step1 task F10A) also get L1 placement for the
+        # attention-layer glue ops (linears, rms_norm, fused rotary, concatenate_heads, gate,
+        # chunked SDPA output); longer prefill keeps DRAM (memory_config=None) exactly as before.
+        # QWEN36_ATTN_L1_MAX_T=0 restores the pre-F10A default (1024) exactly.
+        _attn_l1_max_t = int(os.environ.get("QWEN36_ATTN_L1_MAX_T", "2048"))
+        if _attn_l1_max_t == 0:
+            _attn_l1_max_t = 1024
+        # Decode (T==1) is unconditionally L1, same as before this change.
+        mc = ttnn.L1_MEMORY_CONFIG if (T == 1 or T <= _attn_l1_max_t) else None
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
         # Branches are mutually exclusive on T; decode (T==1) is checked first to keep the hot path short.
@@ -76,6 +100,17 @@ class Qwen36GatedAttention:
             )
         elif self.use_paged_attention and T > 1 and chunk_page_table is not None:
             # Branch A — paged prefill
+            _m2_row = {}
+            if last_row_only:
+                # M2 LASTROW: the 1-row gate / o_proj matmuls take the full-attention decode program
+                # configs (I-3 FA_PROGCFG table; None -> ttnn auto-config), never the M = T prefill config.
+                from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+                _m2_row = dict(prefill_last_row_only=True, decode_progcfg_fn=tpc.i3_fa_decode_progcfg_fn(self.device))
+                if last_row_tile_slices:
+                    _m2_row["prefill_last_row_tile_slices"] = True  # M4 R4A
+                if last_row_pos_tensor is not None:
+                    _m2_row["prefill_last_row_pos_tensor"] = last_row_pos_tensor  # M4 R4B
             return prefill_forward(
                 x=x,
                 cos=cos,
@@ -92,9 +127,12 @@ class Qwen36GatedAttention:
                 chunk_start_idx=chunk_start_idx,
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 use_paged_attention=True,
+                prefill_progcfg_fn=getattr(self, "_prefill_progcfg_fn", None),
+                **_m2_row,
             )
         else:
             # Branch C — concat prefill
+            assert not last_row_only, "last_row_only needs the paged prefill branch (chunk_page_table)"
             output, new_key, new_value = prefill_forward(
                 x=x,
                 cos=cos,
@@ -107,6 +145,7 @@ class Qwen36GatedAttention:
                 past_key=self.past_key,
                 past_value=self.past_value,
                 use_paged_attention=False,
+                prefill_progcfg_fn=getattr(self, "_prefill_progcfg_fn", None),
             )
             self.past_key = new_key
             self.past_value = new_value

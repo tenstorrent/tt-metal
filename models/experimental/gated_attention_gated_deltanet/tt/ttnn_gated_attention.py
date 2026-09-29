@@ -49,6 +49,105 @@ def apply_rotary_pos_emb_ttnn(q, k, cos, sin):
     return q_embed, k_embed
 
 
+def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
+    """Apply RoPE to query and key tensors using the fused ttnn.experimental.rotary_embedding_hf op.
+
+    Prefill-only (T > 1): q/k must be [1, n_heads, seq_len, head_dim] TILE bf16; cos/sin must be
+    [1, 1, seq_len, rotary_dim] (reshaped here from [1, seq_len, rotary_dim] if 3-D) TILE bf16,
+    with cos/sin seq_len >= q/k seq_len. rotary_embedding_hf implements HF rotate_half semantics
+    directly, so this replaces the hand-rolled slice/neg/concat/mul/add of apply_rotary_pos_emb_ttnn.
+
+    When rotary_dim == head_dim (full rotary), the op runs directly on q and k. Otherwise (partial
+    rotary, e.g. Qwen3.5's rotary_dim=64 of head_dim=256), the op runs only on the rotary slice and
+    the untouched pass-through dims are concatenated back on: slice + rotary + slice + concat = 4
+    ops per tensor (8 total), vs. ~10 ops for the legacy elementwise path.
+    """
+    if len(cos.shape) == 3:
+        cos = ttnn.reshape(cos, [cos.shape[0], 1, cos.shape[1], cos.shape[2]])  # metadata only
+        sin = ttnn.reshape(sin, [sin.shape[0], 1, sin.shape[1], sin.shape[2]])
+
+    rotary_dim = cos.shape[-1]
+    head_dim = q.shape[-1]
+
+    if rotary_dim == head_dim:
+        q_embed = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, memory_config=memory_config)
+        k_embed = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False, memory_config=memory_config)
+        return q_embed, k_embed
+
+    q_rot = q[..., :rotary_dim]
+    q_pass = q[..., rotary_dim:]
+    q_rot_embed = ttnn.experimental.rotary_embedding_hf(
+        q_rot, cos, sin, is_decode_mode=False, memory_config=memory_config
+    )
+    ttnn.deallocate(q_rot)
+    q_embed = ttnn.concat([q_rot_embed, q_pass], dim=-1, memory_config=memory_config)
+    ttnn.deallocate(q_rot_embed)
+    ttnn.deallocate(q_pass)
+
+    k_rot = k[..., :rotary_dim]
+    k_pass = k[..., rotary_dim:]
+    k_rot_embed = ttnn.experimental.rotary_embedding_hf(
+        k_rot, cos, sin, is_decode_mode=False, memory_config=memory_config
+    )
+    ttnn.deallocate(k_rot)
+    k_embed = ttnn.concat([k_rot_embed, k_pass], dim=-1, memory_config=memory_config)
+    ttnn.deallocate(k_rot_embed)
+    ttnn.deallocate(k_pass)
+
+    return q_embed, k_embed
+
+
+def apply_rotary_pos_emb_fused_one(x, cos, sin, memory_config=None):
+    """apply_rotary_pos_emb_fused for ONE tensor (the same ops per tensor): x [1, n_heads, S, head_dim] TILE,
+    cos/sin [1, S', rotary_dim] or [1, 1, S', rotary_dim] with S' >= S. Used when q and k need different
+    cos/sin rows (qwen36 M4 R4B: q = the last 32 rows of the chunk, k = the whole chunk)."""
+    if len(cos.shape) == 3:
+        cos = ttnn.reshape(cos, [cos.shape[0], 1, cos.shape[1], cos.shape[2]])  # metadata only
+        sin = ttnn.reshape(sin, [sin.shape[0], 1, sin.shape[1], sin.shape[2]])
+    rotary_dim = cos.shape[-1]
+    if rotary_dim == x.shape[-1]:
+        return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, memory_config=memory_config)
+    x_rot = x[..., :rotary_dim]
+    x_pass = x[..., rotary_dim:]
+    x_rot_embed = ttnn.experimental.rotary_embedding_hf(
+        x_rot, cos, sin, is_decode_mode=False, memory_config=memory_config
+    )
+    ttnn.deallocate(x_rot)
+    x_embed = ttnn.concat([x_rot_embed, x_pass], dim=-1, memory_config=memory_config)
+    ttnn.deallocate(x_rot_embed)
+    ttnn.deallocate(x_pass)
+    return x_embed
+
+
+def apply_rotary_pos_emb_decode_head_major(q, k, cos, sin, q_memory_config=None):
+    """Decode (T == 1, B == 1) RoPE on HEAD-MAJOR q/k [1, 1, H, head_dim] (no head transposes).
+
+    cos/sin must be ROW-REPLICATED [1, 32, rotary_dim] (the same position on all 32 rows; the same
+    2 tiles as [1, 1, rotary_dim]). rotary_embedding_hf then runs in prefill mode on the
+    [1, 1, H, rotary_dim] slice with the H heads as the "sequence" rows, so every head row gets the
+    same rotation. Partial rotary: slice + rotary + slice + concat per tensor (4 ops), vs. ~13 ops
+    per tensor for the rotate_half chain of apply_rotary_pos_emb_ttnn. q's output goes to
+    q_memory_config (DRAM for paged_scaled_dot_product_attention_decode).
+    """
+    cos4 = ttnn.reshape(cos, [cos.shape[0], 1, cos.shape[1], cos.shape[2]])  # metadata only
+    sin4 = ttnn.reshape(sin, [sin.shape[0], 1, sin.shape[1], sin.shape[2]])
+    rotary_dim = cos.shape[-1]
+    outs = []
+    for x, mc in ((q, q_memory_config), (k, None)):
+        if rotary_dim == x.shape[-1]:
+            x_emb = ttnn.experimental.rotary_embedding_hf(x, cos4, sin4, is_decode_mode=False, memory_config=mc)
+            outs.append(x_emb)
+            continue
+        x_rot = x[..., :rotary_dim]
+        x_pass = x[..., rotary_dim:]
+        x_emb = ttnn.experimental.rotary_embedding_hf(x_rot, cos4, sin4, is_decode_mode=False)
+        ttnn.deallocate(x_rot)
+        outs.append(ttnn.concat([x_emb, x_pass], dim=-1, memory_config=mc))
+        ttnn.deallocate(x_emb)
+        ttnn.deallocate(x_pass)
+    return outs[0], outs[1]
+
+
 def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     """
     Zero-centered RMSNorm using TTNN: x * rsqrt(mean(x^2) + eps) * (1 + weight).
@@ -59,6 +158,27 @@ def rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     x_normed = ttnn.multiply(x, inv_rms)
     scale = ttnn.add(weight, 1.0)
     return ttnn.multiply(x_normed, scale)
+
+
+# INT-4: upstream PR #57395 inverts exp_approx_mode in the SDPA compute kernels (prefill and decode
+# share compute_common.hpp, whose exp_tile_first_column now negates the flag for the LLK): the
+# post-PR True runs the rescale exp that the pre-PR False ran. Every SDPA config in this file used
+# False before the PR, so they pass _sdpa_exp_approx_pre_pr_false() to keep that kernel.
+# QWEN36_I4_SDPA_EXP_COMPAT=0 passes the literal False (the post-PR accurate rescale exp).
+I4_SDPA_EXP_COMPAT_DEFAULT = "1"
+
+
+def i4_sdpa_exp_compat_value():
+    """Effective raw QWEN36_I4_SDPA_EXP_COMPAT value ("0" or "1"); anything else is an error."""
+    v = _os.environ.get("QWEN36_I4_SDPA_EXP_COMPAT", I4_SDPA_EXP_COMPAT_DEFAULT)
+    if v not in ("0", "1"):
+        raise ValueError(f"QWEN36_I4_SDPA_EXP_COMPAT must be 0 or 1 (got {v!r})")
+    return v
+
+
+def _sdpa_exp_approx_pre_pr_false():
+    """exp_approx_mode value that selects the kernel the pre-PR #57395 exp_approx_mode=False ran."""
+    return i4_sdpa_exp_compat_value() == "1"
 
 
 def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=None):
@@ -74,11 +194,17 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=No
     grid_size = device.compute_with_storage_grid_size()
     if chunk_start_idx is not None and chunk_start_idx == 0:
         # First chunk of paged prefill: no divisibility constraint.
-        # Use small chunks on Blackhole — chunked_sdpa has higher L1 overhead
-        # than regular sdpa (page table indirection + block metadata).
-        # 256/256 causes L1 clash; 64/64 is safe on Blackhole P150.
-        q_chunk = 64
-        k_chunk = 64
+        # Swept on P150 at S=4096 (8x256 q, 2x256 kv, causal): 64/64 2.81 ms, 128/128 1.52 ms,
+        # 256/128 1.07 ms; 256/256 does not fit L1. QWEN36_SDPA_PREFILL_CHUNKS="q,k" overrides.
+        env = _os.environ.get("QWEN36_SDPA_PREFILL_CHUNKS")
+        if env:
+            q_chunk, k_chunk = (int(v) for v in env.split(","))
+        elif seq_len >= 4096:
+            q_chunk, k_chunk = 256, 128
+        elif seq_len >= 2048:
+            q_chunk, k_chunk = 128, 128
+        else:
+            q_chunk, k_chunk = 64, 64
     elif chunk_start_idx is not None and chunk_start_idx > 0:
         # Subsequent chunks of paged prefill: chunk sizes must divide chunk_start_idx.
         # (x & -x) extracts the largest power-of-2 factor of x.
@@ -114,8 +240,38 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=No
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=False,
+        exp_approx_mode=_sdpa_exp_approx_pre_pr_false(),
     )
+
+
+# INT-4 (QWEN36_I4_SDPA_Q64, default "1"): the flexible chunked SDPA runs q_chunk 64 / k_chunk 128
+# with exp_approx_mode=True. It needs the SDPA op with upstream PR #57395 (which inverts the meaning
+# of exp_approx_mode: True now selects the rescale exp the old False did, so the kernel is the same)
+# and the T3d causal K/V chains for the flexible chunked paged path (on by default in the op;
+# TT_METAL_SDPA_CHUNKED_KV_CHAINS=0 turns them off). Measured on P150 (8 heads, 2048-token chunks):
+# 496/1356 us -> 203/500 us at chunk start 0/2048, bit-exact in the op tests. "0" = the pre-INT-4
+# config (q/k_chunk 128, or 64 with QWEN9B_SDPA_QK64=1) with the pre-PR False exp kernel (see
+# I4_SDPA_EXP_COMPAT_DEFAULT); the K/V chains of the op stay on.
+I4_SDPA_Q64_DEFAULT = "1"
+I4_FLEX_Q_CHUNK, I4_FLEX_K_CHUNK = 64, 128
+
+
+def i4_sdpa_q64_value():
+    """Effective raw QWEN36_I4_SDPA_Q64 value ("0" or "1"); anything else is an error."""
+    v = _os.environ.get("QWEN36_I4_SDPA_Q64", I4_SDPA_Q64_DEFAULT)
+    if v not in ("0", "1"):
+        raise ValueError(f"QWEN36_I4_SDPA_Q64 must be 0 or 1 (got {v!r})")
+    return v
+
+
+def flexible_sdpa_q_chunk():
+    """q_chunk of the flexible chunked SDPA. Every chunk start the model writes to the device
+    chunk_start_idx tensor must be a multiple of it: the op reads the offset on device and has no
+    host check (the model's chunk starts are 0 and multiples of chunk_size, which is asserted to be
+    a multiple of 128)."""
+    if i4_sdpa_q64_value() == "1":
+        return I4_FLEX_Q_CHUNK
+    return 64 if _os.environ.get("QWEN9B_SDPA_QK64") == "1" else 128
 
 
 def _get_flexible_sdpa_program_config(device):
@@ -124,17 +280,27 @@ def _get_flexible_sdpa_program_config(device):
     2048-token GDN chunk) so ONE program serves all chunk positions — required so a single
     captured trace can be replayed per chunk in chunk-outer prefill.
 
-    Default 128 (not 64): 128 still divides 2048, and a microbench showed q/k=128 is ~2x faster
-    than 64 on the prefill SDPA shape (16 q-heads / 4 kv-heads, d=256, KV~32k) — numerically exact
-    (only tiling granularity changes). Opt back to 64 with QWEN9B_SDPA_QK64=1 if 128 ever clashes
-    with L1 in the paged chunked-SDPA path on a given prompt length.
+    QWEN36_I4_SDPA_Q64=1 (default): q_chunk 64, k_chunk 128, exp_approx_mode=True (see the
+    I4_SDPA_Q64_DEFAULT note above). QWEN36_I4_SDPA_Q64=0: the pre-INT-4 config below.
+
+    Pre-INT-4 default 128 (not 64): 128 still divides 2048, and a microbench showed q/k=128 is ~2x
+    faster than 64 on the prefill SDPA shape (16 q-heads / 4 kv-heads, d=256, KV~32k) — numerically
+    exact (only tiling granularity changes). Opt back to 64 with QWEN9B_SDPA_QK64=1 if 128 ever
+    clashes with L1 in the paged chunked-SDPA path on a given prompt length.
     """
-    qk = 64 if _os.environ.get("QWEN9B_SDPA_QK64") == "1" else 128
+    if i4_sdpa_q64_value() == "1":
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=I4_FLEX_Q_CHUNK,
+            k_chunk_size=I4_FLEX_K_CHUNK,
+            exp_approx_mode=True,
+        )
+    qk = flexible_sdpa_q_chunk()
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=qk,
         k_chunk_size=qk,
-        exp_approx_mode=False,
+        exp_approx_mode=_sdpa_exp_approx_pre_pr_false(),
     )
 
 
@@ -149,7 +315,7 @@ def _get_paged_sdpa_decode_program_config(device, max_seq_len):
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
         q_chunk_size=32,
         k_chunk_size=64,
-        exp_approx_mode=False,
+        exp_approx_mode=_sdpa_exp_approx_pre_pr_false(),
     )
 
 
@@ -160,6 +326,26 @@ def _get_sdpa_compute_kernel_config():
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
+    )
+
+
+def _get_qknorm_compute_kernel_config(device):
+    """Device compute-kernel config for the fast-path q/k rms_norm calls, gated behind
+    QWEN36_ATTN_QKNORM_HIFI2 (default "1" as of step1-F10c phase 2 -- PCC-validated, see the call
+    site's comment; set to "0" for the legacy op-default HiFi4).
+
+    Built the way models/common/rmsnorm.py's compute_kernel_config_hifi2 is (HiFi2,
+    fp32_dest_acc_en, packer_l1_acc=True), but via ttnn.init_device_compute_kernel_config for the
+    device arch, matching models/tt_dit/layers/normalization.py's pattern. gemma4's
+    attention/operations.py deliberately keeps HiFi4 for q/k norm accuracy; this HiFi2 override was
+    PCC-gated (val_b + compare_logits + gt_check where runnable) before being defaulted on here.
+    """
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     )
 
 
@@ -207,6 +393,50 @@ def gated_attention_forward_ttnn(
     chunk_page_table=None,  # [1, num_blocks_in_chunk] int32 — blocks for this chunk only
     chunk_start_idx=None,  # int — absolute position of this chunk in the full sequence
     chunk_start_idx_tensor=None,  # device tensor [1] int32 — runtime offset for trace-replay (flexible SDPA)
+    prefill_progcfg_fn=None,
+    # De-interleaved/packed prefill fast path (see weights.py load_attention_weights): when all
+    # three are given and T > 1, replaces the q/k/v projection + head-split block below with two
+    # matmuls (q, packed k|v) plus ttnn.experimental.nlp_create_qkv_heads. Decode (T == 1) and
+    # callers that don't pass these (e.g. other models) keep using the plain path.
+    q_deint_weight=None,
+    gate_deint_weight=None,
+    kv_packed_weight=None,
+    # F9: single fused [Q|K|V] weight (weights.py AttentionWeights.qkv_fused). When given (and
+    # QWEN36_ATTN_FUSED_QKV != "0"), replaces the q_deint_weight + kv_packed_weight two-matmul
+    # step with one matmul + the single-input form of ttnn.experimental.nlp_create_qkv_heads.
+    # Falls back to the q_deint_weight/kv_packed_weight two-matmul path when None.
+    qkv_fused_weight=None,
+    # Paged-decode (T == 1, B == 1) options, default off (qwen36 attention/decode.py sets them from
+    # its QWEN36_I1_* flags):
+    #   decode_head_major_rope: keep q/k/v head-major [1, 1, H, D] (no head transposes) and apply
+    #     RoPE with apply_rotary_pos_emb_decode_head_major. Used only when cos/sin are the
+    #     row-replicated [1, 32, rotary_dim] form; any other cos/sin shape keeps the default path.
+    #   decode_concat_reshape: SDPA output [1, B, H, D] -> [B, T, H*D] with one reshape instead of
+    #     transpose + concatenate_heads.
+    # T == 1 with both qkv_fused_weight and gate_deint_weight given: q|k|v from one matmul on the
+    # fused [Q|K|V] weight + one on gate_deint (2 matmuls instead of q_proj/k_proj/v_proj's 3).
+    decode_head_major_rope=False,
+    decode_concat_reshape=False,
+    # T == 1: optional `(k, n) -> program_config | None` for the decode projection matmuls (qwen36 I-3
+    # QWEN36_I3_FA_PROGCFG, set by qwen36 attention/decode.py for B == 1 paged decode). None (default)
+    # keeps program_config=None (ttnn auto-config) for every decode matmul, as before.
+    decode_progcfg_fn=None,
+    # qwen36 M2 LASTROW (default off): paged chunked prefill (T > 1, chunk_page_table, gate_deint fast path)
+    # keeps the q|k|v projection, K/V cache fill and the full chunked SDPA, then computes the gate linear,
+    # head concat, sigmoid-gate multiply and o_proj for row T - 1 only. Output [B=1, 1, hidden]. The two
+    # 1-row matmuls use decode_progcfg_fn(k, n) (None -> auto-config), never the M = T prefill config.
+    prefill_last_row_only=False,
+    # qwen36 M4 (default off; with prefill_last_row_only only):
+    #   prefill_last_row_tile_slices (R4A): the row-(T-1) reads of the gate input and of the SDPA output are a
+    #     tile-aligned [T-32:T] slice (TILE path) + row 31 of that block, instead of a [T-1:T] slice (whose
+    #     non-tile-aligned begin untilizes the whole tensor); the SDPA-output block is head-concatenated
+    #     ([1, H, 32, D] -> [1, 32, H*D]) before its row cut. Copies only: bit-exact.
+    #   prefill_last_row_pos_tensor (R4B): int32 [1] device tensor = absolute position of row T - 1. The
+    #     chunked SDPA over all T query rows becomes paged_scaled_dot_product_attention_decode for row T - 1
+    #     (q-norm + RoPE on q rows [T-32:T] only, with cos/sin rows [T-32:T]; K/V path and paged fills
+    #     unchanged and before it). Numerics change (decode SDPA kernel).
+    prefill_last_row_tile_slices=False,
+    prefill_last_row_pos_tensor=None,
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -239,41 +469,314 @@ def gated_attention_forward_ttnn(
     T = hidden_states.shape[1]
     scaling = head_dim**-0.5
 
+    # memory_config is only threaded into the extra prefill-only ops added for F3 (fast-path q/k
+    # rms_norm, fused rotary + its concats, concatenate_heads, gate sigmoid/multiply, chunked SDPA
+    # output) when T > 1. Those ops were never passed memory_config for decode (T == 1) before this
+    # change (only the linears/nlp_create_qkv_heads/o_proj were, via the memory_config param
+    # directly) -- gating on T > 1 keeps decode byte-for-byte identical to before.
+    _prefill_mc = memory_config if T > 1 else None
+
+    # Paged-decode options (see the decode_head_major_rope / decode_concat_reshape kwargs). Both
+    # apply only to the paged decode branch below (T == 1, page_table + paged cache) with B == 1.
+    _paged_decode = page_table is not None and paged_kv_cache_key is not None and T == 1
+    _dec_hm = (
+        decode_head_major_rope
+        and _paged_decode
+        and B == 1
+        and cos is not None
+        and len(cos.shape) == 3
+        and cos.shape[-2] == 32
+        and sin is not None
+        and list(sin.shape) == list(cos.shape)
+    )
+    _dec_cat_reshape = decode_concat_reshape and _paged_decode and B == 1
+
     # Q projection: 2x wide
     ckc = compute_kernel_config
-    qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
-    # Split into query and gate
-    query_states, gate = ttnn.chunk(qg, 2, dim=-1)
-    ttnn.deallocate(qg)
-    gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
-    # Q norm + transpose to [B, H_q, T, D]
-    if norm_weights_pre_offset:
-        query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
+    def _pc_row(x_in, w_in):
+        # M2 LASTROW 1-row matmuls: the decode program config for (K, N), or None (auto-config).
+        return decode_progcfg_fn(x_in.shape[-1], w_in.shape[-1]) if decode_progcfg_fn is not None else None
+
+    def _pc(x_in, w_in):
+        if T <= 1:
+            return decode_progcfg_fn(x_in.shape[-1], w_in.shape[-1]) if decode_progcfg_fn is not None else None
+        if prefill_progcfg_fn is None:
+            return None
+        return prefill_progcfg_fn(
+            T, x_in.shape[-1], w_in.shape[-1], x_in.dtype, w_in.dtype, getattr(ckc, "fp32_dest_acc_en", True)
+        )
+
+    # F9: fused single-matmul Q|K|V path, gated on qkv_fused_weight being available and the
+    # QWEN36_ATTN_FUSED_QKV env override (default on). Falls back to the F3 two-matmul
+    # (q_deint + kv_packed) path when qkv_fused_weight is None or the override is "0".
+    _fused_qkv = qkv_fused_weight is not None and _os.environ.get("QWEN36_ATTN_FUSED_QKV", "1") != "0"
+    if prefill_last_row_only:
+        assert (
+            B == 1
+            and T > 1
+            and T % 32 == 0
+            and gate_deint_weight is not None
+            and (_fused_qkv or (q_deint_weight is not None and kv_packed_weight is not None))
+            and paged_kv_cache_key is not None
+            and page_table is not None
+            and chunk_page_table is not None
+            and use_optimized_concat
+        ), "prefill_last_row_only: paged chunked prefill fast path (B == 1, tile-aligned T, gate_deint) only"
+    # qwen36 M4 (see the prefill_last_row_tile_slices / prefill_last_row_pos_tensor kwargs).
+    _r4a = bool(prefill_last_row_tile_slices)
+    _r4b = prefill_last_row_pos_tensor is not None
+    if _r4a or _r4b:
+        assert prefill_last_row_only and T >= 32, "M4 R4A / R4B need prefill_last_row_only (M2 LASTROW)"
+    if _r4b:
+        assert (
+            _os.environ.get("QWEN36_ROPE_LEGACY") != "1" and _os.environ.get("QWEN36_ATTN_KV_BF8", "0") != "1"
+        ), "M4 R4B: needs the fused prefill RoPE (QWEN36_ROPE_LEGACY != 1) and bf16 Q (QWEN36_ATTN_KV_BF8 != 1)"
+    if (
+        gate_deint_weight is not None
+        and (_fused_qkv or (q_deint_weight is not None and kv_packed_weight is not None))
+        and T > 1
+        and T % 32 == 0
+    ):  # nlp_create_qkv_heads needs a tile-aligned seq
+        # Fast path (prefill only): weight columns were de-interleaved once at load time
+        # (weights.py load_attention_weights), so head-splitting is a single fused
+        # ttnn.experimental.nlp_create_qkv_heads instead of a copying reshape + chunk, a separate
+        # gate reshape, two more K/V reshapes, and three transposes.
+        if _fused_qkv:
+            # F9: one matmul for the fused [Q-block | K-block | V-block] weight (each block
+            # head-major, see weights.py) instead of separate q and kv_packed matmuls.
+            qkv = ttnn.linear(
+                hidden_states,
+                qkv_fused_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, qkv_fused_weight),
+            )  # [B, T, H*Dh + 2*Hkv*Dh]
+        else:
+            q = ttnn.linear(
+                hidden_states,
+                q_deint_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, q_deint_weight),
+            )  # [B, T, H*Dh]
+            kv = ttnn.linear(
+                hidden_states,
+                kv_packed_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, kv_packed_weight),
+            )  # [B, T, 2*Hkv*Dh]
+        if prefill_last_row_only:
+            # M2 LASTROW: the gate is needed for row T - 1 only.
+            if _r4a:
+                # M4 R4A: tile-aligned 32-row block (TILE path), then its row 31 (small untilize path).
+                _hs_blk = hidden_states[:, T - 32 : T, :]
+                _hs_last = ttnn.to_layout(_hs_blk[:, 31:32, :], ttnn.TILE_LAYOUT)
+                ttnn.deallocate(_hs_blk)
+            else:
+                _hs_last = ttnn.to_layout(hidden_states[:, T - 1 : T, :], ttnn.TILE_LAYOUT)
+            gate = ttnn.linear(
+                _hs_last,
+                gate_deint_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc_row(_hs_last, gate_deint_weight),
+            )  # [1, 1, H*Dh]
+            ttnn.deallocate(_hs_last)
+        else:
+            gate = ttnn.linear(
+                hidden_states,
+                gate_deint_weight,
+                compute_kernel_config=ckc,
+                memory_config=memory_config,
+                program_config=_pc(hidden_states, gate_deint_weight),
+            )  # [B, T, H*Dh] flat, used as-is later
+        if _fused_qkv:
+            qkv4 = ttnn.reshape(qkv, [B, 1, T, num_attention_heads * head_dim + 2 * num_key_value_heads * head_dim])
+            query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+                qkv4,
+                num_heads=num_attention_heads,
+                num_kv_heads=num_key_value_heads,
+                transpose_k_heads=False,
+                memory_config=memory_config,
+            )  # [B,H,T,Dh], [B,Hkv,T,Dh], [B,Hkv,T,Dh]
+            ttnn.deallocate(qkv)
+        else:
+            q4 = ttnn.reshape(q, [B, 1, T, num_attention_heads * head_dim])  # metadata only
+            kv4 = ttnn.reshape(kv, [B, 1, T, 2 * num_key_value_heads * head_dim])
+            query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+                q4,
+                kv4,
+                num_heads=num_attention_heads,
+                num_kv_heads=num_key_value_heads,
+                transpose_k_heads=False,
+                memory_config=memory_config,
+            )  # [B,H,T,Dh], [B,Hkv,T,Dh], [B,Hkv,T,Dh]
+            ttnn.deallocate(q)
+            ttnn.deallocate(kv)
+        if _r4b:
+            # M4 R4B: only query row T - 1 is attended; keep the last 32-row tile block of the heads
+            # ([B, H, 32, Dh], TILE path) for the q-norm / RoPE below and free the full query.
+            _q_blk = query_states[:, :, T - 32 : T, :]
+            ttnn.deallocate(query_states)
+            query_states = _q_blk
+
+        # Q/K norm on head-major tensors: rms_norm reduces over the last dim (Dh), which is the
+        # same dim being normalized whether heads sit at dim 2 (old path, pre-transpose) or dim 1
+        # (here) — numerically identical, so no transpose is needed before or after.
+        # QWEN36_ATTN_QKNORM_HIFI2 (default "1" as of step1-F10c phase 2, 2026-09-21): the op
+        # runs its default HiFi4 only if this is set to "0". Data (val_b T=2048/4096: -1.6/-2.1ms;
+        # compare_logits vs logits_after_f10b.pt: PCC=0.999920/0.999810 at T=512/1024, argmax
+        # match at T=512/1024/2048/4096; traced_4k demo TTFT 0.162s, no regression) supports
+        # defaulting this on -- see patches/step1_f10c_kvbf8_qknorm_lmhead.patch. Set to "0" to
+        # restore the legacy HiFi4 q/k rms_norm for A/B.
+        _qknorm_ckc = (
+            _get_qknorm_compute_kernel_config(device)
+            if _os.environ.get("QWEN36_ATTN_QKNORM_HIFI2", "1") != "0"
+            else None
+        )
+        if norm_weights_pre_offset:
+            query_states = ttnn.rms_norm(
+                query_states,
+                weight=q_norm_weight,
+                epsilon=norm_eps,
+                memory_config=_prefill_mc,
+                compute_kernel_config=_qknorm_ckc,
+            )
+            key_states = ttnn.rms_norm(
+                key_states,
+                weight=k_norm_weight,
+                epsilon=norm_eps,
+                memory_config=_prefill_mc,
+                compute_kernel_config=_qknorm_ckc,
+            )
+        else:
+            query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+            key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+    elif T == 1 and qkv_fused_weight is not None and gate_deint_weight is not None:
+        # Decode with the fused weights: one matmul on the [Q-block | K-block | V-block] weight
+        # (each block head-major, weights.py) + one on the gate-only weight, instead of q_proj
+        # (q|gate interleaved per head) + k_proj + v_proj. The fused weights hold the same bfp8
+        # values as columns of q_proj/k_proj/v_proj, so q/k/v/gate are the same values; only the
+        # head split changes (tile-aligned slices + reshape, no chunk).
+        qkv = ttnn.linear(
+            hidden_states,
+            qkv_fused_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, qkv_fused_weight),
+        )  # [B, 1, H*Dh + 2*Hkv*Dh]
+        gate = ttnn.linear(
+            hidden_states,
+            gate_deint_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, gate_deint_weight),
+        )  # [B, 1, H*Dh] flat, used as-is later
+        _q_w = num_attention_heads * head_dim
+        _kv_w = num_key_value_heads * head_dim
+        query_states = qkv[:, :, :_q_w]
+        key_states = qkv[:, :, _q_w : _q_w + _kv_w]
+        value_states = qkv[:, :, _q_w + _kv_w : _q_w + 2 * _kv_w]
+        ttnn.deallocate(qkv)
+        query_states = ttnn.reshape(query_states, [B, T, num_attention_heads, head_dim])
+        key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
+        value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
+        if norm_weights_pre_offset:
+            query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
+            key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
+        else:
+            query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+            key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+        if not _dec_hm:
+            # to [B, H, T, D] as the q_proj path below
+            query_states = ttnn.transpose(query_states, 1, 2)
+            key_states = ttnn.transpose(key_states, 1, 2)
+            value_states = ttnn.transpose(value_states, 1, 2)
     else:
-        query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
-    query_states = ttnn.transpose(query_states, 1, 2)
+        qg = ttnn.linear(
+            hidden_states,
+            q_proj_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, q_proj_weight),
+        )
+        qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
+        # Split into query and gate
+        query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+        ttnn.deallocate(qg)
+        gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
 
-    # K projection + norm + transpose to [B, H_kv, T, D]
-    key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
-    if norm_weights_pre_offset:
-        key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
-    else:
-        key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
-    key_states = ttnn.transpose(key_states, 1, 2)
+        # Q norm + transpose to [B, H_q, T, D]
+        if norm_weights_pre_offset:
+            query_states = ttnn.rms_norm(query_states, weight=q_norm_weight, epsilon=norm_eps)
+        else:
+            query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+        if not _dec_hm:  # head-major decode keeps [B, T, H, D]
+            query_states = ttnn.transpose(query_states, 1, 2)
 
-    # V projection + transpose to [B, H_kv, T, D]
-    value_states = ttnn.linear(hidden_states, v_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
-    value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
-    value_states = ttnn.transpose(value_states, 1, 2)
+        # K projection + norm + transpose to [B, H_kv, T, D]
+        key_states = ttnn.linear(
+            hidden_states,
+            k_proj_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, k_proj_weight),
+        )
+        key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
+        if norm_weights_pre_offset:
+            key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
+        else:
+            key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+        if not _dec_hm:
+            key_states = ttnn.transpose(key_states, 1, 2)
 
-    # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement)
-    if T == 1 and len(cos.shape) == 3:
+        # V projection + transpose to [B, H_kv, T, D]
+        value_states = ttnn.linear(
+            hidden_states,
+            v_proj_weight,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+            program_config=_pc(hidden_states, v_proj_weight),
+        )
+        value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
+        if not _dec_hm:
+            value_states = ttnn.transpose(value_states, 1, 2)
+
+    # RoPE — for decode (T==1), use reshape (metadata-only) instead of unsqueeze (data movement).
+    # For prefill (T>1, tile-aligned), use the fused rotary_embedding_hf op
+    # (apply_rotary_pos_emb_fused): ~4 ops/tensor (slice + rotary + slice + concat) instead of the
+    # ~10-op hand-rolled rotate_half. QWEN36_ROPE_LEGACY=1 forces the legacy elementwise path for A/B.
+    # Head-major paged decode (decode_head_major_rope): rotary_embedding_hf on [1, 1, H, rotary_dim]
+    # with the row-replicated cos/sin; q goes straight to DRAM (the paged SDPA decode input).
+    _rope_legacy = _os.environ.get("QWEN36_ROPE_LEGACY") == "1"
+    if _dec_hm:
+        query_states, key_states = apply_rotary_pos_emb_decode_head_major(
+            query_states, key_states, cos, sin, q_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    elif T == 1 and len(cos.shape) == 3:
+        if cos.shape[-2] != 1:  # row-replicated [1, 32, rd] decode cos/sin on a non-head-major path: one row
+            cos = cos[:, :1, :]
+            sin = sin[:, :1, :]
         cos_4d = ttnn.reshape(cos, [cos.shape[0], 1, 1, cos.shape[-1]])
         sin_4d = ttnn.reshape(sin, [sin.shape[0], 1, 1, sin.shape[-1]])
         query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos_4d, sin_4d)
+    elif _r4b:
+        # M4 R4B: q holds rows [T-32:T] only -> RoPE with the same rows of the chunk cos/sin (tile-aligned
+        # slices); k keeps the whole chunk and the full cos/sin (the same ops as the fused path below).
+        if len(cos.shape) == 3:
+            _cos_blk, _sin_blk = cos[:, T - 32 : T, :], sin[:, T - 32 : T, :]
+        else:
+            _cos_blk, _sin_blk = cos[:, :, T - 32 : T, :], sin[:, :, T - 32 : T, :]
+        query_states = apply_rotary_pos_emb_fused_one(query_states, _cos_blk, _sin_blk, memory_config=_prefill_mc)
+        ttnn.deallocate(_cos_blk)
+        ttnn.deallocate(_sin_blk)
+        key_states = apply_rotary_pos_emb_fused_one(key_states, cos, sin, memory_config=_prefill_mc)
+    elif T > 1 and T % 32 == 0 and not _rope_legacy:
+        query_states, key_states = apply_rotary_pos_emb_fused(
+            query_states, key_states, cos, sin, memory_config=_prefill_mc
+        )
     else:
         query_states, key_states = apply_rotary_pos_emb_ttnn(query_states, key_states, cos, sin)
 
@@ -282,11 +785,15 @@ def gated_attention_forward_ttnn(
     _paged_sdpa_done = False
     if paged_kv_cache_key is not None and page_table is not None and T > 1 and chunk_page_table is not None:
         # Paged prefill: fill K/V into paged cache, then chunked SDPA.
-        # Q/K/V stay bfloat16 — no typecast. Production models (Qwen3_VL) typecast to
-        # bfloat8_b, but on Blackhole P150 this causes L1 clashes in downstream ops
+        # Q/K/V stay bfloat16 by default — no typecast. Production models (Qwen3_VL) typecast to
+        # bfloat8_b, but on Blackhole P150 this previously caused L1 clashes in downstream ops
         # (head concat, gate multiply, output projection) whose programs were compiled
         # for bfloat16. The core fix (paged KV) eliminates the growing-concat L1 issue;
-        # the bfloat8_b optimization can be added later with matching downstream changes.
+        # QWEN36_ATTN_KV_BF8=1 (default "0", see below) re-enables the bfloat8_b typecast for
+        # A/B testing; the downstream concat/gate/o_proj path is left untouched (it reads
+        # whatever dtype SDPA emits), matching the "leave the SDPA output dtype as it comes
+        # out" note this flag was added under.
+        _kv_bf8 = _os.environ.get("QWEN36_ATTN_KV_BF8", "0") == "1"
 
         # Slice K/V to page_len to handle tile-padded tensors.
         block_size_cache = paged_kv_cache_key.shape[2]
@@ -294,33 +801,76 @@ def gated_attention_forward_ttnn(
         key_fill = key_states[:, :, :page_len, :] if page_len < key_states.shape[2] else key_states
         value_fill = value_states[:, :, :page_len, :] if page_len < value_states.shape[2] else value_states
 
+        if _kv_bf8:
+            # Typecast to whatever dtype the paged cache itself was allocated with (matches
+            # tt_transformers/tt/attention.py's k_heads_1KSD_8b/v_heads_1VSD_8b pattern,
+            # ~1141/1153: `ttnn.typecast(k_heads, dtype=keys.dtype)`). The cache is bfloat16
+            # unless model.py's allocate_kv_caches (~2743) was run with QWEN_SDPA_BF8=1, so
+            # this flag only yields an actual bfloat8_b cast when QWEN_SDPA_BF8=1 too --
+            # otherwise it typecasts bfloat16 -> bfloat16 (a harmless no-op copy).
+            key_fill = ttnn.typecast(key_fill, dtype=paged_kv_cache_key.dtype)
+            value_fill = ttnn.typecast(value_fill, dtype=paged_kv_cache_value.dtype)
+
         ttnn.experimental.paged_fill_cache(paged_kv_cache_key, key_fill, chunk_page_table, batch_idx=0)
         ttnn.experimental.paged_fill_cache(paged_kv_cache_value, value_fill, chunk_page_table, batch_idx=0)
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
 
-        if chunk_start_idx_tensor is not None:
+        # QWEN36_ATTN_KV_BF8 also typecasts Q to bfloat8_b right before SDPA (matches
+        # tt_transformers/tt/attention.py ~1218: `ttnn.typecast(q_heads, dtype=... or
+        # ttnn.bfloat8_b)`). query_states itself is left unmodified -- it's deallocated
+        # unconditionally further below -- so this is a separate tensor used only here.
+        _q_for_sdpa = ttnn.typecast(query_states, dtype=ttnn.bfloat8_b) if _kv_bf8 else query_states
+
+        if _r4b:
+            # M4 R4B: row 31 of the RoPE'd q block ([1, H, 32, Dh] -> head-transpose [1, 32, H, Dh] -> dim-1
+            # slice, TILE path) = query row T - 1 as the decode SDPA wants it ([1, B=1, H, Dh], DRAM), then the
+            # paged decode SDPA (decode kernel + decode program config, no compute_kernel_config, as the
+            # paged decode branch below) over the paged cache up to position prefill_last_row_pos_tensor
+            # (the K/V of this chunk were filled just above). Output [1, 1, H, Dh].
+            _q_t = ttnn.transpose(query_states, 1, 2)
+            _q_row = _q_t[:, 31:32, :, :]
+            ttnn.deallocate(_q_t)
+            _q_row_dram = ttnn.to_memory_config(_q_row, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(_q_row)
+            attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                _q_row_dram,
+                paged_kv_cache_key,
+                paged_kv_cache_value,
+                cur_pos_tensor=prefill_last_row_pos_tensor,
+                page_table_tensor=page_table,
+                is_causal=True,
+                scale=scaling,
+                program_config=_get_paged_sdpa_decode_program_config(
+                    device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
+                ),
+            )
+            ttnn.deallocate(_q_row_dram)
+        elif chunk_start_idx_tensor is not None:
             # Flexible chunked SDPA: chunk_start_idx is a runtime device tensor and the
-            # program config is fixed (q/k_chunk=64), so a single captured trace replays
-            # for every chunk position (chunk-outer per-chunk prefill).
+            # program config is fixed (_get_flexible_sdpa_program_config), so a single captured
+            # trace replays for every chunk position (chunk-outer per-chunk prefill). The device
+            # chunk start must be a multiple of flexible_sdpa_q_chunk() (no host check in the op).
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                query_states,
+                _q_for_sdpa,
                 paged_kv_cache_key,
                 paged_kv_cache_value,
                 page_table,
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 scale=scaling,
+                memory_config=_prefill_mc,
                 program_config=_get_flexible_sdpa_program_config(device),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
             )
         else:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                query_states,
+                _q_for_sdpa,
                 paged_kv_cache_key,
                 paged_kv_cache_value,
                 page_table,
                 chunk_start_idx,
                 scale=scaling,
+                memory_config=_prefill_mc,
                 program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
             )
@@ -336,8 +886,12 @@ def gated_attention_forward_ttnn(
         # paged_update_cache with page_table expects input [1, B, num_kv_heads, head_dim],
         # where page_table.shape[0] == input.shape[1] == B.
         # This is different from the non-paged path which uses [1, B*num_kv_heads, T, head_dim].
-        k_for_paged = ttnn.reshape(key_states, [1, B, num_key_value_heads, head_dim])
-        v_for_paged = ttnn.reshape(value_states, [1, B, num_key_value_heads, head_dim])
+        if _dec_hm:  # already [1, B=1, Hkv, D]
+            k_for_paged = key_states
+            v_for_paged = value_states
+        else:
+            k_for_paged = ttnn.reshape(key_states, [1, B, num_key_value_heads, head_dim])
+            v_for_paged = ttnn.reshape(value_states, [1, B, num_key_value_heads, head_dim])
         # Shard to L1 (HEIGHT_SHARDED on B cores) for paged_update_cache
         _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(B - 1, 0))})
         _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
@@ -352,9 +906,13 @@ def gated_attention_forward_ttnn(
             paged_kv_cache_value, v_sharded, update_idxs_tensor=cur_pos_tensor, page_table=page_table
         )
         # Paged SDPA decode
-        q_decode = ttnn.transpose(query_states, 1, 2)  # [B, H_q, 1, D] -> [B, 1, H_q, D] = [1, B, H_q, D] for B=1
+        if _dec_hm:  # already [1, B=1, H_q, D] in DRAM (head-major RoPE output)
+            q_decode = query_states
+        else:
+            q_decode = ttnn.transpose(query_states, 1, 2)  # [B, H_q, 1, D] -> [B, 1, H_q, D] = [1, B, H_q, D] for B=1
         # paged_scaled_dot_product_attention_decode requires Q in DRAM when not sharded
         # (sdpa_decode_device_operation.cpp:89). transpose preserves L1 layout from query_states.
+        # (A tensor already in DRAM is returned as is: no op.)
         q_decode = ttnn.to_memory_config(q_decode, ttnn.DRAM_MEMORY_CONFIG)
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_decode,
@@ -368,7 +926,8 @@ def gated_attention_forward_ttnn(
                 device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
             ),
         )
-        attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
+        if not _dec_cat_reshape:  # decode_concat_reshape flattens [1, B, H_q, D] directly below
+            attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
         new_key = paged_kv_cache_key
         new_value = paged_kv_cache_value
         _paged_sdpa_done = True  # Skip the bottom SDPA section (attn_output already computed)
@@ -547,19 +1106,63 @@ def gated_attention_forward_ttnn(
         )
     ttnn.deallocate(query_states)
 
+    _row_heads_concat_done = False
+    if _r4b:
+        # M4 R4B: the decode SDPA output [1, B=1, H, D] flattens (H, D) row-major = the head concat of row
+        # T - 1 (one reshape, as decode_concat_reshape) -> [1, 1, H*D].
+        attn_output = ttnn.reshape(attn_output, [B, 1, num_attention_heads * head_dim])
+        _row_heads_concat_done = True
+    elif prefill_last_row_only and _r4a:
+        # M4 R4A: SDPA output rows [T-32:T] (TILE path) -> head concat [1, 32, H*D] -> row 31 -> [1, 1, H*D].
+        _sdpa_full = attn_output
+        _sdpa_blk = _sdpa_full[:, :, T - 32 : T, :]
+        ttnn.deallocate(_sdpa_full)
+        _cat_blk = ttnn.transformer.concatenate_heads(_sdpa_blk, memory_config=_prefill_mc)
+        ttnn.deallocate(_sdpa_blk)
+        attn_output = ttnn.to_layout(_cat_blk[:, 31:32, :], ttnn.TILE_LAYOUT)
+        ttnn.deallocate(_cat_blk)
+        _row_heads_concat_done = True
+    elif prefill_last_row_only:
+        # M2 LASTROW: keep SDPA output row T - 1 only: [1, H, T, D] -> [1, H, 1, D].
+        _sdpa_full = attn_output
+        attn_output = ttnn.to_layout(_sdpa_full[:, :, T - 1 : T, :], ttnn.TILE_LAYOUT)
+        ttnn.deallocate(_sdpa_full)
+
     # Convert from [B, H, T, D] back to [B, T, H*D]
-    if use_optimized_concat:
-        attn_output = ttnn.transformer.concatenate_heads(attn_output)
+    if _row_heads_concat_done:
+        pass  # M4 R4A / R4B: already [1, 1, H*D]
+    elif _dec_cat_reshape:
+        # Paged decode, B == T == 1: the SDPA output is [1, 1, H, D]; its row-major flatten of
+        # (H, D) is the head concat, so one reshape replaces transpose + concatenate_heads.
+        attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
+    elif use_optimized_concat:
+        attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=_prefill_mc)
     else:
         attn_output = ttnn.transpose(attn_output, 1, 2)
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
 
-    # Apply sigmoid gate
-    gate = ttnn.sigmoid(gate)
-    attn_output = ttnn.multiply(attn_output, gate)
+    # Apply sigmoid gate. F6-E: prefill (T>1) fuses sigmoid(gate) into the multiply's
+    # second-operand activation (one op instead of two); decode (T==1, _prefill_mc is always None
+    # there) always takes the legacy two-op path unchanged. QWEN36_ATTN_GATE_FUSED=0 restores the
+    # legacy two-op path at any T.
+    if T > 1 and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0":
+        attn_output = ttnn.multiply(
+            attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
+        )
+    else:
+        gate = ttnn.sigmoid(gate, memory_config=_prefill_mc)
+        attn_output = ttnn.multiply(attn_output, gate, memory_config=_prefill_mc)
     ttnn.deallocate(gate)
 
-    # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    # Output projection (M2 LASTROW: 1 row -> the decode program config, never the M = T one)
+    attn_output = ttnn.linear(
+        attn_output,
+        o_proj_weight,
+        compute_kernel_config=ckc,
+        memory_config=memory_config,
+        program_config=_pc_row(attn_output, o_proj_weight)
+        if prefill_last_row_only
+        else _pc(attn_output, o_proj_weight),
+    )
 
     return attn_output, new_key, new_value

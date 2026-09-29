@@ -10,12 +10,9 @@ Run all:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s
 Run 128:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
 Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "b8"
 
-GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
-(PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
-with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — the bulk of the
-preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
-  QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
-  QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+GDN prefill uses a cost model to select the fastest program config at runtime. To pick a specific
+program config or a geometry for benchmarking, set Qwen36ModelArgs.gdn_program_config to one of:
+ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMonoProgramConfig.
 """
 
 import hashlib
@@ -29,6 +26,13 @@ import requests
 import torch
 from loguru import logger
 from tracy import signpost
+
+# QWEN36_TRACE_GUARD=1 (T7): turn on Metal's trace-allocation tracker, which makes every
+# ttnn.execute_trace fail on the host BEFORE replay if a device buffer allocated while a trace was
+# parked is still alive (it would be corrupted by the replay). Metal reads this once at process
+# start, so it must be exported before ttnn is imported (the root conftest imports ttnn lazily).
+if os.environ.get("QWEN36_TRACE_GUARD", "0") == "1":
+    os.environ.setdefault("TT_METAL_TRACE_ALLOC_TRACKING", "1")
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
@@ -932,8 +936,21 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     }
 
 
+def _check_trace_guard():
+    """QWEN36_TRACE_GUARD=1 must actually have enabled the trace-allocation tracker."""
+    if os.environ.get("QWEN36_TRACE_GUARD", "0") != "1":
+        return
+    from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
+
+    assert TRACE_ALLOC_TRACKING, (
+        "QWEN36_TRACE_GUARD=1 but the trace-allocation tracker is off: ttnn was imported before "
+        "text_demo set TT_METAL_TRACE_ALLOC_TRACKING; export TT_METAL_TRACE_ALLOC_TRACKING=1 too"
+    )
+
+
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):
     """Traced prefill + paged decode. Returns (generated_tokens, perf_dict)."""
+    _check_trace_guard()
     T = token_ids.shape[1]
 
     # Paged KV cache + DeltaNet state
@@ -945,6 +962,12 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     # Identity page table
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
+    # Greedy on-device argmax (single device): prefill + traced decode return a uint32 token, so the
+    # host reads 4 bytes instead of the logits. QWEN36_ONDEV_ARGMAX=0 keeps the host argmax of the
+    # logits. Set before the trace capture below (the token ops compile in its warmup passes).
+    ondev_argmax = model.num_devices == 1 and os.environ.get("QWEN36_ONDEV_ARGMAX", "1") == "1"
+    model.set_greedy_token_output(ondev_argmax)
+
     # Chunk-outer prefill trace (one 2048-token chunk replayed per chunk)
     assert _should_use_chunked_trace(model), "chunk-seq GDN prefill must be enabled"
     chunk_size = 2048
@@ -952,11 +975,27 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     logger.info(f"Capturing prefill trace at bucket_size={bucket_size} (prompt {T} tokens, chunk-outer replay)...")
     signpost("compile_prefill")
     t_cap = time.time()
-    # Warm masked buckets only for short prompts (T < chunk_size)
-    model.capture_prefill_trace_chunked(
-        device, page_table, chunk_size=chunk_size, warmup_masked_buckets=(T < chunk_size)
+    # Always warm masked-bucket programs before parking the trace: a long prompt's tail (T not a
+    # multiple of chunk_size) also runs the eager masked-bucket path, so skipping this warmup for
+    # T >= chunk_size left its first compile to happen post-park, corrupting the cached program and
+    # hanging the NEXT masked-bucket call (#48536; matches vLLM, which always passes True).
+    # Parked-trace-safe order (T7, 2026-09-25): prepare every prefill program/buffer (incl. the
+    # per-request eager programs), prime the decode trace while NO trace is parked, then capture the
+    # prefill trace. The old order (capture prefill -> prime decode after the first prefill) put the
+    # decode kernel binaries/constants/trace inputs in the parked prefill trace's scratch; the next
+    # prefill replay corrupted them (layout-dependent decode hang, same class as #48536).
+    gen = Generator([model], [model.args], device)
+    from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
+
+    model.prepare_prefill_trace_chunked(
+        device, page_table, chunk_size=chunk_size, warmup_masked_buckets=True, max_prompt_len=bucket_size
     )
-    logger.info(f"Prefill trace captured in {time.time() - t_cap:.1f}s")
+    signpost("compile_decode")
+    # Dummy decode input: last prompt token at position T. prime_decode_trace restores the GDN state
+    # it advances, and the first real decode step rewrites this KV slot.
+    prime_decode_trace(gen, model, token_ids[:, -1:].to(torch.long), torch.tensor([T]), page_table)
+    model.capture_prefill_trace_chunked(device, page_table, chunk_size=chunk_size, prepared=True)
+    logger.info(f"Prefill prepare + decode prime + prefill trace capture in {time.time() - t_cap:.1f}s")
     pad_len = bucket_size - T
     # Pad bucket with last real token (token 0 corrupts DeltaNet state)
     last_token = token_ids[:, -1:].expand(1, pad_len) if pad_len > 0 else token_ids[:, :0]
@@ -969,18 +1008,17 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
         logits = model.prefill_masked_bucket(token_ids, page_table, actual_len=T)
     else:
         logits = model.prefill_traced_chunked(padded_token_ids, page_table, actual_len=T)
-    logits_torch = ttnn.to_torch(logits).squeeze()
-    next_token = logits_torch.argmax().item()
-    ttft = time.time() - t0
+    if ondev_argmax:
+        next_token = int(ttnn.to_torch(logits).reshape(-1)[0])
+        ttft = time.time() - t0
+        assert 0 <= next_token < model.vocab_size, f"prefill token {next_token} out of range"
+    else:
+        logits_torch = ttnn.to_torch(logits).squeeze()
+        next_token = logits_torch.argmax().item()
+        ttft = time.time() - t0
 
-    assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
-    gen = Generator([model], [model.args], device)
-
-    # Decode trace with GDN snapshot/restore (stock capture would double-advance state)
-    from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
-
-    signpost("compile_decode")
-    prime_decode_trace(gen, model, torch.tensor([[next_token]], dtype=torch.long), torch.tensor([T]), page_table)
+        assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
+    # (The decode trace was already primed above, before the prefill trace was parked.)
 
     generated = [next_token]
     decode_times = []
@@ -998,11 +1036,17 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
             enable_trace=True,
             read_from_device=True,
         )
-        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
-        next_token = int(dl.argmax())
-        decode_times.append(time.time() - t_step)
+        v = out[0] if isinstance(out, tuple) else out
+        if ondev_argmax:
+            next_token = int(v.reshape(-1)[0])
+            decode_times.append(time.time() - t_step)
+            assert 0 <= next_token < model.vocab_size, f"traced decode token {next_token} out of range at step {i}"
+        else:
+            dl = v.squeeze().float()
+            next_token = int(dl.argmax())
+            decode_times.append(time.time() - t_step)
 
-        assert not torch.isnan(dl).any(), f"NaN in traced decode at step {i}"
+            assert not torch.isnan(dl).any(), f"NaN in traced decode at step {i}"
         generated.append(next_token)
         current_pos += 1
 

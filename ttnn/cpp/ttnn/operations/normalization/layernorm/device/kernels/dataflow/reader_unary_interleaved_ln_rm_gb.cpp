@@ -145,63 +145,78 @@ void kernel_main() {
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
+            // Gamma/beta are read once per core and compute never pops them (it waits on
+            // block.start() + block.full_block_size() entries), so their buffers already hold every
+            // block. Reserve all blocks at once, issue every DRAM stick read back to back with one
+            // barrier, then every local face-1 copy with one barrier, then push block by block (same
+            // push counts as before). The buffers are fresh at ncht == 0 (write pointer at the base),
+            // so entry t is at write_ptr + t * tile_bytes: the same address the per-block code used
+            // (block write pointer = base + block.start() * tile_bytes).
+            uint32_t gb_entries = 0;
             for (auto block : generic::blocks(Wt, blk)) {
+                gb_entries += block.full_block_size();
+            }
 #ifdef FUSE_GAMMA
-                {
-                    dfb_gamma.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                    const UnicastEndpoint local_ep;
-                    uint32_t idx = 0;
+            dfb_gamma.reserve_back(static_cast<uint16_t>(gb_entries));
+#endif
+#ifdef FUSE_BETA
+            dfb_beta.reserve_back(static_cast<uint16_t>(gb_entries));
+#endif
+            // Phase 1: one row-major stick (one tile-width row) per tile from DRAM into row 0 of the tile.
+            for (auto block : generic::blocks(Wt, blk)) {
+                for (auto r : block.local()) {
+                    const uint32_t t = block.start() + r;
+#ifdef FUSE_GAMMA
+                    noc.async_read(
+                        addrg, dfb_gamma, gamma_row_bytes, {.page_id = t}, {.offset_bytes = t * gamma_tile_bytes});
+#endif
+#ifdef FUSE_BETA
+                    noc.async_read(
+                        addrb, dfb_beta, beta_row_bytes, {.page_id = t}, {.offset_bytes = t * beta_tile_bytes});
+#endif
+                }
+            }
+            noc.async_read_barrier();
+
+            // Phase 2: local copy of the second half-row (datums 16..31) to row 0 of face 1.
+            {
+                const UnicastEndpoint local_ep;
+                for (auto block : generic::blocks(Wt, blk)) {
                     for (auto r : block.local()) {
-                        noc.async_read(
-                            addrg,
-                            dfb_gamma,
-                            gamma_row_bytes,
-                            {.page_id = block.start() + r},
-                            {.offset_bytes = idx * gamma_tile_bytes});
-                        noc.async_read_barrier();
+                        const uint32_t t = block.start() + r;
+#ifdef FUSE_GAMMA
                         noc.async_read(
                             local_ep,
                             dfb_gamma,
                             gamma_half_row_bytes,
                             {.noc_x = my_x[noc.get_noc_id()],
                              .noc_y = my_y[noc.get_noc_id()],
-                             .addr = dfb_gamma.get_write_ptr() + (idx * gamma_tile_bytes) + gamma_half_row_bytes},
-                            {.offset_bytes = (idx * gamma_tile_bytes) + gamma_face_bytes});
-                        idx++;
-                    }
-                    noc.async_read_barrier();
-                    dfb_gamma.push_back(static_cast<uint16_t>(block.full_block_size()));
-                }
+                             .addr = dfb_gamma.get_write_ptr() + (t * gamma_tile_bytes) + gamma_half_row_bytes},
+                            {.offset_bytes = (t * gamma_tile_bytes) + gamma_face_bytes});
 #endif
-
 #ifdef FUSE_BETA
-                {
-                    dfb_beta.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                    const UnicastEndpoint local_ep;
-                    uint32_t idx = 0;
-                    for (auto r : block.local()) {
-                        noc.async_read(
-                            addrb,
-                            dfb_beta,
-                            beta_row_bytes,
-                            {.page_id = block.start() + r},
-                            {.offset_bytes = idx * beta_tile_bytes});
-                        noc.async_read_barrier();
                         noc.async_read(
                             local_ep,
                             dfb_beta,
                             beta_half_row_bytes,
                             {.noc_x = my_x[noc.get_noc_id()],
                              .noc_y = my_y[noc.get_noc_id()],
-                             .addr = dfb_beta.get_write_ptr() + (idx * beta_tile_bytes) + beta_half_row_bytes},
-                            {.offset_bytes = (idx * beta_tile_bytes) + beta_face_bytes});
-                        idx++;
-                    }
-                    noc.async_read_barrier();
-                    dfb_beta.push_back(static_cast<uint16_t>(block.full_block_size()));
-                }
+                             .addr = dfb_beta.get_write_ptr() + (t * beta_tile_bytes) + beta_half_row_bytes},
+                            {.offset_bytes = (t * beta_tile_bytes) + beta_face_bytes});
 #endif
-            }  // wt loop
+                    }
+                }
+            }
+            noc.async_read_barrier();
+
+            for (auto block : generic::blocks(Wt, blk)) {
+#ifdef FUSE_GAMMA
+                dfb_gamma.push_back(static_cast<uint16_t>(block.full_block_size()));
+#endif
+#ifdef FUSE_BETA
+                dfb_beta.push_back(static_cast<uint16_t>(block.full_block_size()));
+#endif
+            }
         }
 #endif
         offs += Wt;

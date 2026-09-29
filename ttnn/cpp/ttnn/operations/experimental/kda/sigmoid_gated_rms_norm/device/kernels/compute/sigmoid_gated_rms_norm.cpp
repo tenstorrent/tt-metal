@@ -78,16 +78,28 @@ void apply_weight(uint32_t Vt, DataflowBuffer& tmp) {
     tmp.push_back(Vt);
 }
 
+// gate_silu == 0: sigmoid(gate). gate_silu == 1: silu(gate) = gate * sigmoid(gate), SFPU silu_tile, which runs
+// the same non-approximate _sfpu_sigmoid_ as sigmoid_tile() and then one SFPU multiply by gate (see
+// ckernel_sfpu_silu.h).
+template <uint32_t gate_silu>
 void activate_gate(uint32_t Vt, DataflowBuffer& norm) {
     norm.reserve_back(Vt);
     pack_reconfig_data_format(dfb::norm);
     reconfig_data_format_srca(dfb::gate);
     copy_init(dfb::gate);
-    sigmoid_tile_init();
+    if constexpr (gate_silu) {
+        silu_tile_init();
+    } else {
+        sigmoid_tile_init();
+    }
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
+        if constexpr (gate_silu) {
+            silu_tile(0);
+        } else {
+            sigmoid_tile(0);
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::norm, i);
@@ -112,7 +124,7 @@ void multiply_output(uint32_t Vt, DataflowBuffer& out) {
     out.push_back(Vt);
 }
 
-template <uint32_t Vt>
+template <uint32_t Vt, uint32_t gate_silu>
 TT_KERNEL void compute(uint32_t wi_count) {
     compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
     DataflowBuffer x(dfb::x);
@@ -146,7 +158,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         apply_weight(Vt, tmp);
         tmp.wait_front(Vt);
         norm.pop_front(Vt);
-        activate_gate(Vt, norm);
+        activate_gate<gate_silu>(Vt, norm);
         norm.wait_front(Vt);
         gate.pop_front(Vt);
         multiply_output(Vt, out);

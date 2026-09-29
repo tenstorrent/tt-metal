@@ -75,3 +75,28 @@ def test_flash_mla_decode(
         reuse_k,
         max_cores_per_head_batch=4,
     )
+
+
+@pytest.mark.parametrize("batch, nh", [(4, 128), (2, 128)])
+@pytest.mark.parametrize("use_paged_attention", [True, False])
+def test_flash_mla_decode_column_groups(device, batch, nh, use_paged_attention, function_level_defaults, reset_seeds):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8 or grid.y < 8:
+        pytest.skip("needs an 8x8 compute grid")
+    run_flash_mla_decode_impl(
+        device,
+        batch,
+        1024,
+        nh,
+        1,
+        512,
+        64,
+        64,
+        ttnn.bfloat16,
+        None,
+        ttnn.bfloat8_b,
+        use_paged_attention=use_paged_attention,
+        block_size=64,
+        reuse_k=True,
+        q_column_groups=True,
+    )

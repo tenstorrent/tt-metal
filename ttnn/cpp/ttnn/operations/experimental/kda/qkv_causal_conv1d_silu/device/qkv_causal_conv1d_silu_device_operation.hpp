@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 
 #include "qkv_causal_conv1d_silu_device_operation_types.hpp"
 #include "qkv_causal_conv1d_silu_program_factory.hpp"
+#include "qkv_causal_conv1d_silu_tiled_program_factory.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::experimental::prim {
@@ -16,7 +18,9 @@ struct QkvCausalConv1dSiluOperation {
     using tensor_args_t = QkvCausalConv1dSiluInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<QkvCausalConv1dSiluProgramFactory>;
+    // The input layout selects the factory: ROW_MAJOR -> QkvCausalConv1dSiluProgramFactory,
+    // TILE -> QkvCausalConv1dSiluTiledProgramFactory.
+    using program_factory_t = std::variant<QkvCausalConv1dSiluProgramFactory, QkvCausalConv1dSiluTiledProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -26,18 +30,20 @@ struct QkvCausalConv1dSiluOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
+// Returns {q, k, v}, plus new_state when return_conv_state is true (TILE input only).
 std::vector<Tensor> qkv_causal_conv1d_silu(
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
-    uint32_t,
-    uint32_t,
-    uint32_t,
-    uint32_t,
-    const tt::tt_metal::MemoryConfig&,
-    const DeviceComputeKernelConfig&);
+    const Tensor& input,
+    const std::optional<Tensor>& history,
+    const Tensor& tap0,
+    const Tensor& tap1,
+    const Tensor& tap2,
+    const Tensor& tap3,
+    uint32_t q_width,
+    uint32_t k_width,
+    uint32_t v_width,
+    uint32_t channel_chunk_size,
+    bool return_conv_state,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::experimental::prim

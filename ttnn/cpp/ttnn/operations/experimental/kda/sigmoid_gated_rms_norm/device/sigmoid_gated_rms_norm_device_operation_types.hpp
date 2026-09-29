@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <variant>
 #include <vector>
 
@@ -11,6 +12,9 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
+
+// Gate factor: SIGMOID -> sigmoid(gate); SILU -> gate * sigmoid(gate).
+enum class SigmoidGatedRmsNormGateActivation : uint8_t { SIGMOID, SILU };
 
 struct SigmoidGatedRmsNormParams {
     uint32_t batch;
@@ -21,6 +25,10 @@ struct SigmoidGatedRmsNormParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+    SigmoidGatedRmsNormGateActivation gate_activation = SigmoidGatedRmsNormGateActivation::SIGMOID;
+    // The op reads gate tile columns [gate_col_offset_tiles, gate_col_offset_tiles + H*V/32) of each tile row;
+    // the tile-row stride is the gate's padded width in tiles, so the gate may be wider than H*V.
+    uint32_t gate_col_offset_tiles = 0;
 };
 
 struct SigmoidGatedRmsNormInputs {

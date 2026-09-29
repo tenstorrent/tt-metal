@@ -27,13 +27,18 @@ Tensor rms_norm(
     const std::optional<const Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const Tensor>& residual_output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
     TT_FATAL(
         input_tensor.layout() != Layout::ROW_MAJOR,
         "ttnn::rms_norm does not support ROW_MAJOR input tensors. Use TILE layout.");
+    TT_FATAL(
+        !residual_output_tensor.has_value() || (rank != 0 && input_tensor.logical_volume() != 0),
+        "ttnn::rms_norm residual_output_tensor needs a non-empty input of rank >= 1");
 
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
@@ -72,8 +77,13 @@ Tensor rms_norm(
             input_tensor.tensor_spec().tile().get_height(),
             input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
-        std::nullopt,  // dtype
-        prim::LayerNormType::RMSNORM);
+        dtype,
+        prim::LayerNormType::RMSNORM,
+        prim::DistributedLayerNormStage::NOT_DISTRIBUTED,
+        /*stats=*/std::nullopt,
+        /*recip_tensor=*/std::nullopt,
+        /*fused_activation=*/std::nullopt,
+        residual_output_tensor);
 }
 
 }  // namespace ttnn

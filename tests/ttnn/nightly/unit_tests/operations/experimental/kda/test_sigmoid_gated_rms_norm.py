@@ -640,3 +640,197 @@ def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expe
     sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory configuration must be interleaved"):
         _run(input_tt, gate_tt, weight_tt, memory_config=sharded_config)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# gate_activation ("sigmoid" | "silu") and gate column window (gate_col_offset_tiles, gate row stride from the gate's
+# padded width). Shapes follow the Qwen3.5-2B GDN prefill chunk: o from ChunkGdnFused(output_head_major=True) is fp32
+# head-major [H, T, V] = [16, 2048, 128]; the gate is z = the first 2048 columns of the [1, 2048, 2112] z|a|0|b|0
+# projection. Golden is float64: rmsnorm(o per head) * w -> concat heads -> * act(z).
+# ---------------------------------------------------------------------------------------------------------------------
+_GDN_SEQUENCE = 2048
+_GDN_NUM_HEADS = 16
+_GDN_VALUE_DIM = 128
+_GDN_EPSILON = 1e-6
+
+
+def _gdn_compute_kernel_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def _gdn_golden(
+    o: torch.Tensor,
+    gate: torch.Tensor,
+    weight: torch.Tensor,
+    *,
+    num_heads: int,
+    epsilon: float,
+    gate_activation: str,
+    gate_col_offset: int,
+) -> torch.Tensor:
+    heads_batch, sequence, value_dim = o.shape
+    batch = heads_batch // num_heads
+    x = o.double().reshape(batch, num_heads, sequence, value_dim)
+    normalized = x * torch.rsqrt(x.square().mean(dim=-1, keepdim=True) + epsilon) * weight.double()
+    y = normalized.permute(0, 2, 1, 3).reshape(batch, sequence, num_heads * value_dim)
+    z = gate.double()[..., gate_col_offset : gate_col_offset + num_heads * value_dim]
+    act = torch.sigmoid(z) if gate_activation == "sigmoid" else z * torch.sigmoid(z)
+    return y * act
+
+
+def _pcc_and_max_abs(expected: torch.Tensor, actual: torch.Tensor) -> tuple[float, float]:
+    e = expected.double().flatten()
+    a = actual.double().flatten()
+    ec = e - e.mean()
+    ac = a - a.mean()
+    pcc = float((ec @ ac) / (ec.norm() * ac.norm()))
+    return pcc, float((a - e).abs().max())
+
+
+def _gdn_inputs(
+    device: ttnn.Device, *, gate_width: int, gate_memory_config: ttnn.MemoryConfig, seed: int = 2026
+) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]]:
+    generator = torch.Generator().manual_seed(seed)
+    o = torch.randn(_GDN_NUM_HEADS, _GDN_SEQUENCE, _GDN_VALUE_DIM, generator=generator, dtype=torch.float32)
+    gate = (2.0 * torch.randn(1, _GDN_SEQUENCE, gate_width, generator=generator)).to(torch.bfloat16)
+    weight = torch.randn(_GDN_VALUE_DIM, generator=generator, dtype=torch.bfloat16)
+    device_tensors = (
+        _to_device(o, device, dtype=ttnn.float32),
+        _to_device(gate, device, dtype=ttnn.bfloat16, memory_config=gate_memory_config),
+        _to_device(weight, device, dtype=ttnn.bfloat16),
+    )
+    return (o, gate, weight), device_tensors
+
+
+@pytest.mark.parametrize("gate_memory", ["dram", "l1"])
+@pytest.mark.parametrize("gate_width", [2048, 2112], ids=["gate2048", "gate2112"])
+@pytest.mark.parametrize("gate_activation", ["sigmoid", "silu"])
+def test_sigmoid_gated_rms_norm_gdn_gate_activation_and_window(
+    device: ttnn.Device, gate_activation: str, gate_width: int, gate_memory: str
+) -> None:
+    gate_memory_config = ttnn.L1_MEMORY_CONFIG if gate_memory == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    (o, gate, weight), (o_tt, gate_tt, weight_tt) = _gdn_inputs(
+        device, gate_width=gate_width, gate_memory_config=gate_memory_config
+    )
+    output_tt = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+        o_tt,
+        gate_tt,
+        weight_tt,
+        _GDN_NUM_HEADS,
+        epsilon=_GDN_EPSILON,
+        compute_kernel_config=_gdn_compute_kernel_config(device),
+        output_dtype=ttnn.bfloat16,
+        gate_activation=gate_activation,
+    )
+    assert output_tt.dtype == ttnn.bfloat16
+    assert tuple(output_tt.shape) == (1, _GDN_SEQUENCE, _GDN_NUM_HEADS * _GDN_VALUE_DIM)
+    actual = ttnn.to_torch(output_tt)
+    expected = _gdn_golden(
+        o,
+        gate,
+        weight,
+        num_heads=_GDN_NUM_HEADS,
+        epsilon=_GDN_EPSILON,
+        gate_activation=gate_activation,
+        gate_col_offset=0,
+    )
+    pcc, max_abs = _pcc_and_max_abs(expected, actual)
+    logger.info(
+        f"[G1] gdn case act={gate_activation} gate_width={gate_width} gate_mem={gate_memory}: "
+        f"pcc={pcc:.7f} max_abs={max_abs:.6f} ref_max_abs={float(expected.abs().max()):.4f}"
+    )
+    assert pcc >= 0.9999, f"pcc {pcc}"
+    ttnn.deallocate(output_tt)
+
+
+def test_sigmoid_gated_rms_norm_gdn_gate_column_offset(device: ttnn.Device) -> None:
+    (o, gate, weight), (o_tt, gate_tt, weight_tt) = _gdn_inputs(
+        device, gate_width=2112, gate_memory_config=ttnn.DRAM_MEMORY_CONFIG, seed=2027
+    )
+    output_tt = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+        o_tt,
+        gate_tt,
+        weight_tt,
+        _GDN_NUM_HEADS,
+        epsilon=_GDN_EPSILON,
+        compute_kernel_config=_gdn_compute_kernel_config(device),
+        output_dtype=ttnn.bfloat16,
+        gate_activation="silu",
+        gate_col_offset_tiles=2,
+    )
+    actual = ttnn.to_torch(output_tt)
+    expected = _gdn_golden(
+        o, gate, weight, num_heads=_GDN_NUM_HEADS, epsilon=_GDN_EPSILON, gate_activation="silu", gate_col_offset=64
+    )
+    pcc, max_abs = _pcc_and_max_abs(expected, actual)
+    logger.info(
+        f"[G1] gdn case act=silu gate_width=2112 gate_mem=dram offset_tiles=2: pcc={pcc:.7f} max_abs={max_abs:.6f}"
+    )
+    assert pcc >= 0.9999, f"pcc {pcc}"
+
+
+def test_sigmoid_gated_rms_norm_explicit_gate_defaults_are_bit_identical(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=819)
+    implicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
+    entries = device.num_program_cache_entries()
+    explicit = ttnn.to_torch(
+        ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            _NUM_HEADS,
+            epsilon=_EPSILON,
+            output_dtype=ttnn.float32,
+            gate_activation="sigmoid",
+            gate_col_offset_tiles=0,
+        )
+    )
+    assert device.num_program_cache_entries() == entries
+    assert_bit_identical(implicit, explicit, name="implicit vs explicit gate defaults")
+    silu = ttnn.to_torch(
+        ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            input_tt, gate_tt, weight_tt, _NUM_HEADS, epsilon=_EPSILON, gate_activation="silu"
+        )
+    )
+    assert device.num_program_cache_entries() == entries + 1
+    assert not torch.equal(implicit, silu)
+
+
+@pytest.mark.parametrize(
+    ("gate_width", "gate_activation", "gate_col_offset_tiles", "message"),
+    [
+        (2112, "sigmoid", 3, "gate must have shape"),
+        (2048, "sigmoid", 1, "gate must have shape"),
+        (2048, "relu", 0, "gate_activation must be"),
+    ],
+    ids=["offset-past-end", "offset-on-exact-width", "bad-activation"],
+)
+def test_sigmoid_gated_rms_norm_rejects_invalid_gate_window(
+    device: ttnn.Device,
+    expect_error: Callable,
+    gate_width: int,
+    gate_activation: str,
+    gate_col_offset_tiles: int,
+    message: str,
+) -> None:
+    _, (o_tt, gate_tt, weight_tt) = _gdn_inputs(
+        device, gate_width=gate_width, gate_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            o_tt,
+            gate_tt,
+            weight_tt,
+            _GDN_NUM_HEADS,
+            epsilon=_GDN_EPSILON,
+            gate_activation=gate_activation,
+            gate_col_offset_tiles=gate_col_offset_tiles,
+        )

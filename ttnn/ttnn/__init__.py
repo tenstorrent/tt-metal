@@ -585,7 +585,15 @@ experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+from ttnn.operations.transformer import (
+    SDPAProgramConfig,
+    PagedCacheGeometryOverride,
+    SparseKVFormat,
+    ChunkGdnMonoProgramConfig,
+    ChunkGdnPhasedProgramConfig,
+    ChunkGdnFusedProgramConfig,
+    ChunkGdnWyInverse,
+)
 
 transformer.SparseKVFormat = SparseKVFormat
 

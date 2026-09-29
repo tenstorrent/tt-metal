@@ -8,6 +8,8 @@ pass through unchanged. The gated attention TTNN op handles the partial
 application internally — we just need to generate cos/sin for the rotary
 portion (head_dim=64).
 """
+import os
+
 import torch
 
 import ttnn
@@ -131,18 +133,26 @@ class Qwen36RoPESetup:
         )
         return cos_ttnn, sin_ttnn
 
-    def get_cos_sin_host(self, pos):
+    def get_cos_sin_host(self, pos, rows=1):
         """Return cos/sin at position as host ttnn tensors for copy_host_to_device_tensor.
 
         Returns tensors on HOST (no device= arg) for fast DMA to pre-allocated device buffers.
-        Shape: [1, 1, rope_head_dim] — must match _trace_cos/_trace_sin device buffer shapes.
+        Shape: [1, rows, rope_head_dim] — must match _trace_cos/_trace_sin device buffer shapes.
         Layout: TILE_LAYOUT — must match device buffer layout for copy compatibility.
+
+        rows=1 (default): [1, 1, 64]. rows=32 (I-1 D4A, see Qwen36Model.prepare_decode_inputs_host):
+        the same row replicated on all 32 rows, [1, 32, 64] (the same 2 tiles as [1, 1, 64]), so the
+        decode RoPE can run rotary_embedding_hf on [1, 1, H, 64] with the heads as the "seq" rows.
 
         `pos` is the ROPE position (= KV position + rope_delta for a multimodal request); the
         caller is responsible for the offset so decode reads the absolute 1D table correctly.
         """
-        cos = self.cos_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
-        sin = self.sin_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+        if rows == 1:
+            cos = self.cos_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+            sin = self.sin_cpu[pos : pos + 1].unsqueeze(0).contiguous()  # [1, 1, 64]
+        else:
+            cos = self.cos_cpu[pos : pos + 1].expand(rows, -1).unsqueeze(0).contiguous()  # [1, rows, 64]
+            sin = self.sin_cpu[pos : pos + 1].expand(rows, -1).unsqueeze(0).contiguous()  # [1, rows, 64]
         cos_host = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         sin_host = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         return cos_host, sin_host
@@ -235,4 +245,38 @@ class Qwen36RoPESetup:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
+        return cos, sin
+
+    def rope_device_table_enabled(self):
+        """QWEN36_ROPE_DEVICE_TABLE (step1 F10B item C, default "1"): whether the persistent
+        full-max_seq_len device table (self.cos_device/self.sin_device, built in __init__ -- until
+        now only read by decode's single-position fast path in get_rot_mats) may be sliced directly
+        for prefill cos/sin instead of recomputing on host and uploading. Text-only only: callers
+        must also check self._req_cos is None (an M-RoPE request stages a per-sequence host table
+        that has no device-resident counterpart, so it always keeps the host path). "0" restores
+        the pre-F10B host-compute-and-upload path unconditionally."""
+        return os.environ.get("QWEN36_ROPE_DEVICE_TABLE", "1") != "0"
+
+    def get_prefill_rot_mats_table_slice(self, start, length):
+        """Device-only cos/sin for TEXT-ONLY prefill: ttnn.slice of the persistent device table
+        instead of prefill_cos_sin_torch (host) + ttnn.from_torch (upload). Caller must have already
+        checked rope_device_table_enabled() and self._req_cos is None (M-RoPE keeps the host path --
+        see get_prefill_rot_mats).
+
+        Bit-identical to get_prefill_rot_mats(start, length) for a text-only request: both source
+        from the same compute_rope_freqs table built once in __init__ (cos_cpu/sin_cpu here,
+        cos_device/sin_device on device); the device table is never mutated after __init__. Verified
+        by scripts/step1/test_rope_table_slice.py (PCC/bit-exact check for start in {0, chunk_size}).
+
+        Returns cos, sin ttnn device tensors [1, length, head_dim], TILE, bf16 -- same shape/dtype/
+        layout as get_prefill_rot_mats's return and as the persistent _chunk_cos_buf/_chunk_sin_buf
+        trace buffers (model.py), so this is a drop-in at either use site.
+        """
+        assert self._req_cos is None, "table-slice RoPE is text-only; use get_prefill_rot_mats for M-RoPE requests"
+        end = start + length
+        assert (
+            end <= self.max_seq_len
+        ), f"get_prefill_rot_mats_table_slice: [{start},{end}) exceeds max_seq_len={self.max_seq_len}"
+        cos = ttnn.slice(self.cos_device, (0, start, 0), (1, end, self.head_dim))
+        sin = ttnn.slice(self.sin_device, (0, start, 0), (1, end, self.head_dim))
         return cos, sin

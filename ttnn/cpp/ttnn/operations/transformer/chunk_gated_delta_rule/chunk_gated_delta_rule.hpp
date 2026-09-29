@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "chunk_gated_delta_rule_config.hpp"
 
 namespace ttnn::transformer {
 
@@ -30,8 +31,18 @@ namespace ttnn::transformer {
  *               [B*HV, T, V]  TILE       (when output_head_major)
  *   final_state [B, HV, K, V]  (present iff output_final_state)
  *
- * use_mcast: The scan phase multicasts its shared inputs from one core per head to that head's
- * sibling V-block cores instead of re-reading the same DRAM pages.
+ * program_config: which device implementation runs and how it is laid out (chunk_gated_delta_rule_config.hpp):
+ * ChunkGdnFusedProgramConfig (one program, NP producers -> NV receivers per head over the NoC),
+ * ChunkGdnPhasedProgramConfig (prep -> DRAM -> scan, the bit-exact reference) or
+ * ChunkGdnMonoProgramConfig (the single-kernel op). std::nullopt: the fused path with the cost
+ * model's geometry when it fits this grid and is predicted to beat phased, else phased. All three
+ * paths are bit-identical for the same inputs and compute_kernel_config.
+ *
+ * wy_inverse: how each chunk's WY inverse T_inv = (I + N)^-1 is computed — ChunkGdnWyInverse::HORNER
+ * (matrix engine, every architecture; the reference), SFPU (one forward-substitution solve on the
+ * SFPU, Blackhole and chunk_size == 32 only) or AUTO (SFPU wherever supported, Horner elsewhere).
+ * Unlike program_config this changes the arithmetic (PCC-class between methods); for a given method
+ * every path is still bit-identical.
  *
  * output_head_major: the kernel natively produces o head-major ([BH,T,V]); the default
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
@@ -50,12 +61,19 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     uint32_t chunk_size = 64,
     bool use_qk_l2norm = false,
     bool output_head_major = false,
-    bool use_mcast = true,
+    const std::optional<ChunkGdnProgramConfig>& program_config = std::nullopt,
+    ChunkGdnWyInverse wy_inverse = ChunkGdnWyInverse::AUTO,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
-    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    // gb_flat (Option B): passing `sel` enables it (see chunk_gated_delta_rule.cpp). g/beta are then
+    // read straight from the model's [B,T,HV] fp32 tensor by the prep reader, skipping the
+    // headvec_split_tile permute+reshape. `sel` is the [1,1,32,32*HV] fp32 TILE one-hot head
+    // selector (tile h picks head h's column). Fused path only. Build it once on the model/layer
+    // (device-resident before trace capture, like eye/tril/ones/masks).
+    const std::optional<ttnn::Tensor>& sel = std::nullopt);
 
 }  // namespace ttnn::transformer

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prefill forward passes for Qwen3.5-9B gated attention.
 
-Branch A: paged prefill (chunk_page_table is not None) — no memory_config, no cur_pos_tensor.
+Branch A: paged prefill (chunk_page_table is not None) — uses memory_config (F3: L1 for short
+prefill via QWEN36_ATTN_L1_MAX_T), no cur_pos_tensor.
 Branch C: concat prefill (else) — uses memory_config, past_key/past_value; returns new_key/new_value.
 """
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import gated_attention_forward_ttnn
@@ -26,11 +27,29 @@ def prefill_forward(
     past_key=None,
     past_value=None,
     use_paged_attention=False,
+    prefill_progcfg_fn=None,
+    prefill_last_row_only=False,
+    decode_progcfg_fn=None,
+    prefill_last_row_tile_slices=False,
+    prefill_last_row_pos_tensor=None,
 ):
-    """Dispatch prefill to paged (Branch A) or concat (Branch C) path."""
+    """Dispatch prefill to paged (Branch A) or concat (Branch C) path.
+
+    prefill_last_row_only / decode_progcfg_fn (M2 LASTROW, Branch A only): see
+    gated_attention_forward_ttnn; the output is then row T - 1 only ([1, 1, dim]).
+    prefill_last_row_tile_slices (M4 R4A) / prefill_last_row_pos_tensor (M4 R4B): with
+    prefill_last_row_only only (Branch A); see gated_attention_forward_ttnn."""
+    _m4 = {}
+    if prefill_last_row_tile_slices:
+        _m4["prefill_last_row_tile_slices"] = True
+    if prefill_last_row_pos_tensor is not None:
+        _m4["prefill_last_row_pos_tensor"] = prefill_last_row_pos_tensor
     if use_paged_attention and chunk_page_table is not None:
-        # Branch A — paged prefill: fill K/V into paged cache + chunked SDPA
-        # No memory_config, no cur_pos_tensor.
+        # Branch A — paged prefill: fill K/V into paged cache + chunked SDPA.
+        # memory_config=mc threads L1 placement (short prefill, F3) into the attention-layer glue
+        # ops (rms_norm, fused rotary, concatenate_heads, gate, chunked SDPA output); paged_fill_cache
+        # and the paged KV cache itself are untouched (stay DRAM) — mc is not used for those.
+        # No cur_pos_tensor (that's decode-only).
         output, _, _ = gated_attention_forward_ttnn(
             hidden_states=x,
             q_proj_weight=weights.q_proj,
@@ -48,6 +67,7 @@ def prefill_forward(
             norm_eps=config.norm_eps,
             compute_kernel_config=ckc,
             use_optimized_concat=True,
+            memory_config=mc,
             norm_weights_pre_offset=True,
             page_table=page_table,
             paged_kv_cache_key=paged_kv_cache_key,
@@ -55,11 +75,22 @@ def prefill_forward(
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             chunk_start_idx_tensor=chunk_start_idx_tensor,
+            prefill_progcfg_fn=prefill_progcfg_fn,
+            q_deint_weight=weights.q_deint,
+            gate_deint_weight=weights.gate_deint,
+            kv_packed_weight=weights.kv_packed,
+            qkv_fused_weight=weights.qkv_fused,
+            prefill_last_row_only=prefill_last_row_only,
+            decode_progcfg_fn=decode_progcfg_fn,
+            **_m4,
         )
         return output
     else:
         # Branch C — concat path: non-paged prefill and short-sequence paged prefill.
         # Has memory_config=mc, past_key/past_value; returns new_key/new_value.
+        assert (
+            not prefill_last_row_only and not _m4
+        ), "prefill_last_row_only (M2/M4) needs the paged prefill branch (Branch A)"
         output, new_key, new_value = gated_attention_forward_ttnn(
             hidden_states=x,
             q_proj_weight=weights.q_proj,
@@ -81,5 +112,9 @@ def prefill_forward(
             use_optimized_concat=True,
             memory_config=mc,
             norm_weights_pre_offset=True,
+            prefill_progcfg_fn=prefill_progcfg_fn,
+            q_deint_weight=weights.q_deint,
+            gate_deint_weight=weights.gate_deint,
+            kv_packed_weight=weights.kv_packed,
         )
         return output, new_key, new_value

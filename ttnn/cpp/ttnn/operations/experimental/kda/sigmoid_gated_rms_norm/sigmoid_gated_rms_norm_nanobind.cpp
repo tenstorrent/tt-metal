@@ -4,6 +4,10 @@
 #include "sigmoid_gated_rms_norm_nanobind.hpp"
 #include "sigmoid_gated_rms_norm.hpp"
 
+#include <string>
+
+#include <nanobind/stl/string.h>
+
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail {
@@ -12,12 +16,14 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
     ttnn::bind_function<"sigmoid_gated_rms_norm", "ttnn.experimental.kda.">(
         mod,
         R"doc(
-        Apply per-head RMS normalization followed by sigmoid gating.
+        Apply per-head RMS normalization followed by sigmoid (or SiLU) gating.
 
         For input head ``h``:
 
             normalized = input / sqrt(mean(input², dim=V) + epsilon)
-            output = normalized * weight * sigmoid(gate)
+            z = gate[..., 32*gate_col_offset_tiles + h*V : 32*gate_col_offset_tiles + (h+1)*V]
+            output = normalized * weight * sigmoid(z)        # gate_activation="sigmoid"
+            output = normalized * weight * z * sigmoid(z)    # gate_activation="silu"
 
         The operation converts head-first input ``[B*H, T, V]`` into time-first
         output ``[B, T, H*V]`` for the following output projection.
@@ -25,8 +31,12 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         Args:
             input (ttnn.Tensor): Input tensor ``[B*H, T, V]``. Must be an
                 interleaved TILE-layout device tensor with FLOAT32 or BFLOAT16 dtype.
-            gate (ttnn.Tensor): Sigmoid gate ``[B, T, H*V]``. Must be an
-                interleaved TILE-layout BFLOAT16 device tensor.
+            gate (ttnn.Tensor): Gate ``[B, T, W]`` with
+                ``W >= 32*gate_col_offset_tiles + H*V``. Must be an interleaved
+                (DRAM or L1) TILE-layout BFLOAT16 device tensor. The op reads the
+                ``H*V`` columns that start at tile column ``gate_col_offset_tiles``;
+                the tile-row stride is the gate's padded width, so ``gate`` can be a
+                wider projection output (for example z|a|b) read in place.
             weight (ttnn.Tensor): Per-value RMSNorm weight ``[V]``. Must be an
                 interleaved TILE-layout BFLOAT16 device tensor.
             num_heads (int): Number of heads ``H``. The input leading dimension
@@ -40,6 +50,10 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
                 Compute-kernel configuration.
             output_dtype (ttnn.DataType): Output dtype, either FLOAT32 or BFLOAT16.
                 Defaults to FLOAT32.
+            gate_activation (str): ``"sigmoid"`` (default) or ``"silu"``. ``"silu"``
+                uses the SFPU SiLU, which is the same non-approximate SFPU sigmoid
+                as ``"sigmoid"`` followed by one multiply by the gate value.
+            gate_col_offset_tiles (int): First gate tile column to read. Defaults to 0.
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
@@ -57,7 +71,9 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("epsilon") = 1e-5f,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output_dtype") = ttnn::DataType::FLOAT32);
+        nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
+        nb::arg("gate_activation") = std::string("sigmoid"),
+        nb::arg("gate_col_offset_tiles") = 0u);
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail

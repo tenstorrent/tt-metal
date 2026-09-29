@@ -237,7 +237,7 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
             "__init__",
             [](ttnn::prim::LayerNormInputs* t, const ttnn::Tensor& input) {
                 new (t) ttnn::prim::LayerNormInputs{
-                    input, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+                    input, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
             },
             nb::arg("input"))
         .def_rw("input", &ttnn::prim::LayerNormInputs::input)
@@ -245,7 +245,8 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
         .def_rw("weight", &ttnn::prim::LayerNormInputs::weight)
         .def_rw("bias", &ttnn::prim::LayerNormInputs::bias)
         .def_rw("stats", &ttnn::prim::LayerNormInputs::stats)
-        .def_rw("recip_tensor", &ttnn::prim::LayerNormInputs::recip_tensor);
+        .def_rw("recip_tensor", &ttnn::prim::LayerNormInputs::recip_tensor)
+        .def_rw("residual_output", &ttnn::prim::LayerNormInputs::residual_output);
 }
 
 void bind_normalization_layernorm_device_operation(nb::module_& mod) {

@@ -248,6 +248,9 @@ class TPGatedDeltaNet:
         self._gdn_flat_qkv = True
         # Fuse adapter output relayout with rms_norm + head-flatten
         self._gdn_fuse_out = True
+        self.gdn_program_config = getattr(args, "gdn_program_config", None)
+        # WY-inverse arithmetic (ttnn.ChunkGdnWyInverse); None = the op's AUTO (the SFPU solve on Blackhole).
+        self.gdn_wy_inverse = getattr(args, "gdn_wy_inverse", None)
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
@@ -273,7 +276,7 @@ class TPGatedDeltaNet:
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
 
-        self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
+        self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE, HV=self.Nv)
         self.conv_states = None
         self.rec_state = None
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
@@ -758,8 +761,16 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles only applies to the fused op; the seq adapter has no such param.
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        # const_tiles / program_config only apply to the fused op; the seq adapter has neither param.
+        _extra = (
+            {
+                "const_tiles": self._fused_const_tiles,
+                "program_config": self.gdn_program_config,
+                "wy_inverse": self.gdn_wy_inverse,
+            }
+            if _use_fused
+            else {}
+        )
         o, final_state = _delta_fn(
             q,
             k,
@@ -1170,7 +1181,15 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        _extra = (
+            {
+                "const_tiles": self._fused_const_tiles,
+                "program_config": self.gdn_program_config,
+                "wy_inverse": self.gdn_wy_inverse,
+            }
+            if _use_fused
+            else {}
+        )
         o, final_state = _delta_fn(
             q,
             k,
