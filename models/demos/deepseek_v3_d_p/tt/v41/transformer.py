@@ -10,7 +10,8 @@ target layers), seed the DSpark window rings, advance the state. After the last 
 with the last block's pre, final norm, LM head on the last real token.
 
 The layer list is any execution-ordered subset of V4.1 layers whose sources are present (a full model is
-layers 0..39); Engram layers need F5 and are rejected at construction.
+layers 0..39). Engram layers (1, 14) apply their n-gram update to the streams before their block; the hash
+depends only on tokens and carries the last tokens across chunks. Text only (no image mask yet, 10.2).
 """
 
 from typing import Callable
@@ -41,6 +42,8 @@ class TtV41Transformer(LightweightModule):
         max_seq_len: int,
         chunk: int,
         dspark_weights: dict | None = None,
+        engram: dict | None = None,
+        engram_hash=None,
         weight_cache_path=None,
         topology=ttnn.Topology.Linear,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
@@ -53,8 +56,11 @@ class TtV41Transformer(LightweightModule):
         self.mesh_device, self.config = mesh_device, config
         self.layers, self.chunk, self.max_seq_len = list(layers), chunk, max_seq_len
         assert self.layers == sorted(set(self.layers)), "layers must be in execution order"
-        if engram := [l for l in self.layers if l in config.ENGRAM_LAYER_IDS]:
-            raise NotImplementedError(f"Engram layers {engram} need F5 (tt-metal_tracker-8y7.8.6)")
+        needed = [l for l in self.layers if l in config.ENGRAM_LAYER_IDS]
+        self.engram = dict(engram or {})
+        assert sorted(self.engram) == needed, f"Engram modules for layers {needed} required, got {sorted(self.engram)}"
+        assert not needed or engram_hash is not None, "Engram layers need the n-gram hasher"
+        self.engram_hash = engram_hash
         self.embedding = TtV41Embedding(mesh_device, config, embed_weight)
         self.blocks = []
         if weight_cache_path is not None:
@@ -101,16 +107,25 @@ class TtV41Transformer(LightweightModule):
         state = V41PrefillState(self.mesh_device, self.config, self.max_seq_len, self.chunk, self.layers)
         rings = self.dspark.new_rings() if self.dspark is not None else None
         logits = None
+        history = self.engram_hash.new_history() if self.engram else None
         while state.start < total:
             start = state.start
             length = min(self.chunk, total - start)
             chunk_tokens = torch.zeros(self.chunk, dtype=torch.int64)
             chunk_tokens[:length] = tokens[start : start + length]
+            engram_inputs = {}
+            if self.engram:
+                ids, history = self.engram_hash(tokens[start : start + length], history)
+                engram_inputs = {
+                    l: e.prepare(ids[:, self.engram_hash.layer_index(l)], self.chunk) for l, e in self.engram.items()
+                }
             h = self.embedding(self._token_ids(chunk_tokens))
             x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
             pre = initial_pre_mix(self.mesh_device, self.config, self.chunk)
             taps = []
             for layer, block in zip(self.layers, self.blocks):
+                if layer in self.engram:
+                    x = self.engram[layer](x, engram_inputs[layer])
                 if self.dspark is not None and layer in self.config.DSPARK_TARGET_LAYER_IDS:
                     taps.append(self.dspark.tap(x))
                 x, pre = block(x, pre, state, length)
