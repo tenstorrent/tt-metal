@@ -77,7 +77,26 @@ sides run on the same device against the same golden.
 
 ## Scope
 
-v1: elementwise unary SFPU ops and typecast perf, Wormhole and Blackhole. Next
-(v1.1): elementwise binary SFPU ops. Later: ternary and structural SFPU kernels,
-plots, ttnn-level timing, Quasar (needs the emulator). A changed kernel the report
-cannot attribute to a covered op is listed under the report's notes.
+| family | detected from | perf | accuracy |
+|---|---|---|---|
+| elementwise unary SFPU | `perf_eltwise_unary_sfpu.py` | ✅ | every finite bf16/fp16 input, fp32 strided, special values |
+| typecast | `perf_eltwise_unary_typecast.py` | ✅ | – |
+| elementwise binary SFPU (v1.1) | `perf_eltwise_binary_sfpu.py` | ✅ | random pairs from the functional test's domain, special-value cross product; comparisons and integer ops compared exactly |
+
+Binary ops use the functional driver `sfpu_binary()` of `test_eltwise_binary_sfpu.py`, so
+operand layout, domains and golden are the functional test's. Ops the harness cannot
+feed in full say so in the report (logsigmoid is measured on x in [-8, 3.9]: its x > 4
+branch reads a device-computed exp(-x) the harness cannot supply). Not covered: `Mask`,
+`AddTopRow`, `CopyDest` (not elementwise functions of their inputs).
+
+Later: ternary and structural SFPU kernels (reduce, topk, cumsum, welford), plots,
+ttnn-level timing, Quasar (needs the emulator). A changed kernel the report cannot
+attribute to a covered op is listed under the report's notes.
+
+## Developing without a device
+
+`run --simulator` runs detection and accuracy on ttsim (`TT_METAL_SIMULATOR`, with
+`TT_METAL_DISABLE_SFPLOADMACRO=1`); perf is skipped, since ttsim cycles are not
+silicon's. ttsim does not model every format the report measures (Int32 and fp32
+binary SFPU inputs abort it), so a simulator run is a check of the tool, not of a PR.
+The hardware-free tests are `tests/python_tests/test_sfpu_report_hw_free.py`.

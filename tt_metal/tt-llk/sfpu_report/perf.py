@@ -55,8 +55,11 @@ _ENV = {"LLK_PERF_RUN_TYPES": ",".join(RUN_TYPES)}
 
 
 def build(side, arch, family, ops, schedule, log, jobs=8):
-    """Compile the side's variants once; every iteration reuses the ELFs."""
-    runner.pytest(
+    """Compile the side's variants once; every iteration reuses the ELFs.
+
+    Returns the pytest exit code: 5 means no variant matched ``ops``.
+    """
+    return runner.pytest(
         side,
         arch,
         ["--compile-producer", "-n", str(jobs), *_args(family, ops, schedule)],
@@ -101,7 +104,8 @@ def sweep(
     runs = {}
     for schedule in schedules:
         for side in (base, head):
-            build(side, arch, family, ops, schedule, log, jobs)
+            if build(side, arch, family, ops, schedule, log, jobs) == 5:
+                return None  # no perf test covers these ops
         runs[schedule] = {"base": [], "head": []}
         for i in range(1, iterations + 1):
             for side in (base, head):

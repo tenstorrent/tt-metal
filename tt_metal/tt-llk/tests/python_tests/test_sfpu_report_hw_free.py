@@ -175,3 +175,80 @@ def test_report_stays_under_the_comment_limit():
     summary = _summary()
     summary["accuracy"] = summary["accuracy"] * 400
     assert len(report.render([summary])) < 65536
+
+
+def test_binary_ops_are_their_own_family():
+    assert cli._family_of("Tanh") == "unary"
+    assert cli._family_of("Typecast") == "typecast"
+    assert cli._family_of("SfpuLogsigmoid") == "binary"
+    assert cli._family_of("SfpuDivInt32") == "binary"
+
+
+def test_binary_enum_names_map_to_math_operations():
+    names = cli._binary_enum_to_op()
+    assert names["LOGSIGMOID"] == "SfpuLogsigmoid"
+    assert names["ATAN2"] == "SfpuAtan2"
+    assert names["DIV_INT32"] == "SfpuDivInt32"
+
+
+def test_exact_ops_count_wrong_lanes():
+    import torch
+
+    d = {
+        "src": torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        "src_b": torch.tensor([2.0, 2.0, 2.0, NAN]),
+        "golden": torch.tensor([1.0, 0.0, 0.0, 0.0]),
+        "result": torch.tensor([1.0, 1.0, 0.0, 0.0]),
+    }
+    stats = accuracy._exact_stats(d)
+    assert (stats["lanes"], stats["wrong"]) == (4, 1)
+    assert stats["wrong_examples"][0][:2] == (2.0, 2.0)
+
+
+def test_binary_specials_are_keyed_by_the_operand_pair():
+    import torch
+
+    d = {
+        "binary": True,
+        "src": torch.tensor([INF, INF, 1.0]),
+        "src_b": torch.tensor([INF, -INF, 1.0]),
+        "result": torch.tensor([INF, NAN, 2.0]),
+    }
+    spec = accuracy._specials(d)
+    assert len(spec) == 3
+    assert {v[1] for v in spec.values()} == {(INF, INF), (INF, -INF), (1.0, 1.0)}
+
+
+def test_report_renders_exact_ops():
+    summary = _summary()
+    summary["accuracy"] = [
+        {
+            "key": ["SfpuElwLt", "Float16_b", "Float16_b", "No", "No"],
+            "binary": True,
+            "base": {
+                "metric": "exact",
+                "lanes": 16384,
+                "wrong": 0,
+                "wrong_examples": [],
+            },
+            "head": {
+                "metric": "exact",
+                "lanes": 16384,
+                "wrong": 12,
+                "wrong_examples": [],
+            },
+            "worse": 12,
+            "better": 0,
+            "bit_identical": False,
+            "specials": {
+                "changed": [
+                    {"class": "pair", "input": [INF, INF], "old": 0.0, "new": NAN}
+                ],
+                "nan_propagates": {"base": True, "head": True},
+            },
+        }
+    ]
+    text = report.render([summary])
+    assert "a lane is right or wrong" in text
+    assert "⚠️ 12" in text
+    assert "`(inf, inf)`" in text

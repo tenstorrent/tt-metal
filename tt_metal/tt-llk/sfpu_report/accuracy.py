@@ -29,7 +29,13 @@ CLASSES = ("nan", "inf", "zero", "subnormal", "extreme")
 def measure(side, arch, ops, out_dir, log, jobs=8):
     """Dump the side's raw results for ``ops`` (MathOperation names) to ``out_dir``."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    env = {"SFPU_REPORT_DUMP": str(out_dir), "SFPU_REPORT_OPS": ",".join(ops)}
+    unary = [o for o in ops if not o.startswith("Sfpu")]
+    binary = [o for o in ops if o.startswith("Sfpu")]
+    env = {
+        "SFPU_REPORT_DUMP": str(out_dir),
+        "SFPU_REPORT_OPS": ",".join(unary),
+        "SFPU_REPORT_BINARY_OPS": ",".join(binary),
+    }
     runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs)
     return out_dir
 
@@ -43,7 +49,12 @@ def _sweep_stats(d):
 
     in_fmt, out_fmt = DataFormat[d["in"]], DataFormat[d["out"]]
     src, golden, result = d["src"], torch.as_tensor(d["golden"]), d["result"]
+    if d.get("exact"):
+        return _exact_stats(d)
     mask = measurable_mask(src, golden, result, in_fmt)
+    if d.get("binary"):
+        # A lane is measurable only if both operands are.
+        mask = mask & measurable_mask(d["src_b"], golden, result, in_fmt)
     distance = ulp_distance(golden, result)
     stats = ulp_stats(distance, mask)
     nonfinite = nonfinite_failures(
@@ -74,6 +85,39 @@ def _sweep_stats(d):
     }
 
 
+def _same(result, golden):
+    """Lane-wise: identical value, NaN-ness and sign (so -0 != +0)."""
+    import torch
+
+    r, g = result.to(torch.float64), torch.as_tensor(golden).to(torch.float64)
+    both_nan = torch.isnan(r) & torch.isnan(g)
+    return both_nan | ((r == g) & (torch.signbit(r) == torch.signbit(g)))
+
+
+def _exact_stats(d):
+    """Comparisons and integer ops: a lane is right or wrong, there is no ULP."""
+    import torch
+
+    golden = torch.as_tensor(d["golden"]).reshape(-1)
+    wrong = ~_same(d["result"].reshape(-1), golden)
+    lanes = int(wrong.numel())
+    return {
+        "metric": "exact",
+        "lanes": lanes,
+        "wrong": int(wrong.sum()),
+        "wrong_examples": [
+            (
+                float(d["src"].reshape(-1)[i]),
+                float(d["src_b"].reshape(-1)[i]) if "src_b" in d else None,
+                float(golden[i]),
+                float(d["result"].reshape(-1)[i]),
+            )
+            for i in wrong.nonzero().flatten()[:3].tolist()
+        ],
+        "_wrong": wrong,
+    }
+
+
 def _specials(d):
     """{input bits: (class, input, result)} for each distinct special input.
 
@@ -85,9 +129,19 @@ def _specials(d):
     import torch
 
     src, result = d["src"].reshape(-1), d["result"].reshape(-1)
+    bits = lambda t, i: int(
+        t[i].to(torch.float64).view(torch.int64)
+    )  # noqa: E731; NaN != NaN
     out = {}
+    if d.get("binary"):
+        src_b = d["src_b"].reshape(-1)
+        for i in range(result.numel()):
+            key = (bits(src, i), bits(src_b, i))
+            if key not in out:
+                out[key] = ("pair", (float(src[i]), float(src_b[i])), float(result[i]))
+        return out
     for i, cls in enumerate(d["classes"]):
-        key = int(src[i].to(torch.float32).view(torch.int32))  # bits: NaN != NaN
+        key = bits(src, i)
         if key not in out:
             out[key] = (cls, float(src[i]), float(result[i]))
     return out
@@ -129,7 +183,7 @@ def compare(base_dir, head_dir):
     import torch
 
     records = {}
-    for kind in ("sweep", "specials"):
+    for kind in ("sweep", "random", "specials"):
         for head_file in sorted(Path(head_dir).glob(f"*__{kind}.pt")):
             base_file = Path(base_dir) / head_file.name
             h = _load(head_file)
@@ -138,11 +192,27 @@ def compare(base_dir, head_dir):
                 rec.setdefault("missing", []).append(f"base {kind}")
                 continue
             b = _load(base_file)
-            if kind == "sweep":
+            if kind in ("sweep", "random"):
                 bs, hs = _sweep_stats(b), _sweep_stats(h)
-                both = bs["_measured"] & hs["_measured"]
-                rec["worse"] = int(((hs["_distance"] > bs["_distance"]) & both).sum())
-                rec["better"] = int(((hs["_distance"] < bs["_distance"]) & both).sum())
+                rec["kind"] = kind
+                rec["binary"] = bool(h.get("binary"))
+                rec["coverage"] = h.get("coverage")
+                if bs.get("metric") == "exact":
+                    rec["worse"] = int((hs["_wrong"] & ~bs["_wrong"]).sum())
+                    rec["better"] = int((~hs["_wrong"] & bs["_wrong"]).sum())
+                    bs.pop("_wrong")
+                    hs.pop("_wrong")
+                else:
+                    both = bs["_measured"] & hs["_measured"]
+                    rec["worse"] = int(
+                        ((hs["_distance"] > bs["_distance"]) & both).sum()
+                    )
+                    rec["better"] = int(
+                        ((hs["_distance"] < bs["_distance"]) & both).sum()
+                    )
+                    for side in (bs, hs):
+                        side.pop("_distance")
+                        side.pop("_measured")
                 rec["head_digest"] = hashlib.sha256(
                     h["result"].contiguous().view(torch.uint8).numpy().tobytes()
                 ).hexdigest()
@@ -151,9 +221,6 @@ def compare(base_dir, head_dir):
                     if b["result"].dtype == h["result"].dtype
                     else False
                 )
-                for s in (bs, hs):
-                    s.pop("_distance")
-                    s.pop("_measured")
                 rec["base"], rec["head"] = bs, hs
             else:
                 rec["specials"] = specials_diff(_specials(b), _specials(h))
