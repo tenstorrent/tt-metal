@@ -5,11 +5,18 @@
 OUT  ?= $(if $(CRAQ_PROVE_OUT),$(CRAQ_PROVE_OUT),$(HOME)/craq-keep/prove-all)
 JOBS ?= 8
 
-.PHONY: prove-all prove-all-selftest prove-all-manifest prove-all-force shard-selftest
+.PHONY: prove-all prove-all-anchor prove-all-selftest prove-all-manifest \
+        prove-all-force shard-selftest
 
 ## prove every board op at the current pin and emit the master coverage ledger
 prove-all:
 	python3 prove_all.py --all --out $(OUT) --jobs $(JOBS)
+
+## same, but first take the bitexact leg's DEVICE ANCHORS on silicon, so its
+## executor-validation gate can pass (needs a board; anchors are then re-used
+## by every later plain `prove-all` on the same OUT tree)
+prove-all-anchor:
+	python3 prove_all.py --all --allow-hardware --out $(OUT) --jobs $(JOBS)
 
 ## re-prove every op from scratch (ignore cached verdicts)
 prove-all-force:

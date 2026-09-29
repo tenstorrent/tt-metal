@@ -11,8 +11,15 @@
 #     FINAL emitted SFPU stream (sem vs hand, all inputs, Dst-state), on the
 #     PINNED instrumented craq-sim (value-observation trace patch).
 #   * bitexact_sweep.py (laneJN) — exhaustive 2^16 single-input sweep on the
-#     PINNED craq-sim (sim-only probe/sweep/verdict; the device-anchor
-#     validation gate is a separate stage this driver does not run).
+#     PINNED craq-sim.  That engine only counts a sweep whose executor it has
+#     validated bitwise against the row's DEVICE ANCHORS, and the anchors are
+#     produced by the engine's own `anchor` stage (one silicon pytest run per
+#     leg).  Nothing used to call that stage, so under this driver's bitexact/
+#     tree the anchors never existed and every row came back
+#     EXECUTOR-UNVALIDATED -> SCOPE-REFUSED.  --allow-hardware now runs the
+#     engine's existing `anchor` stage into the SAME --out tree first, so its
+#     `all` stage can validate.  The anchors are resume-safe: once a run has
+#     left them there, later prove_all runs re-use them with no device.
 #
 # The two engines are REUSED as libraries/subprocesses — this driver never
 # re-implements any proof logic.  Two provenance-pinned overlays that are NOT
@@ -513,6 +520,60 @@ def run_formal(op, man_row, out_dir, flags, timeout):
 # ---------------------------------------------------------------------------
 # Engine: bitexact_sweep  (sim-only probe/sweep/verdict for a batch of rows).
 # ---------------------------------------------------------------------------
+def bitexact_cmd(bdir, rows, stage, flags, jobs, timeout):
+    """The engine invocation — one spelling, reused by every stage."""
+    return [
+        str(VENV_PY),
+        str(BITEXACT_ENGINE),
+        "--out",
+        str(bdir),
+        "--rows",
+        ",".join(rows),
+        "--stage",
+        stage,
+        "--jobs",
+        str(jobs),
+        "--timeout",
+        str(timeout),
+        "--sim",
+        str(BITEXACT_SIM),
+        "--flags",
+        flags,
+    ]
+
+
+def run_bitexact_anchor(rows, out_dir, flags, jobs, timeout):
+    """Run bitexact_sweep's OWN device-anchor stage into the same --out tree.
+
+    This is the engine's `anchor` stage verbatim (serial silicon pytest runs
+    under /tmp/tt-device.lock + /tmp/tt-llk-sfpu-silicon.lock, dumping
+    rows/<row>/anchor-{sem,hand}.npz) — the exact artifact its `validate`
+    stage compares the sim probe against.  Returns the rows that now have
+    both legs' anchors; rows without them keep the engine's honest
+    EXECUTOR-UNVALIDATED verdict.
+    """
+    bdir = out_dir / "bitexact"
+    bdir.mkdir(parents=True, exist_ok=True)
+    log = bdir / "bitexact-anchor.log"
+    with log.open("w") as fh:
+        subprocess.run(
+            bitexact_cmd(bdir, rows, "anchor", flags, jobs, timeout),
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+        )
+    have = [
+        r
+        for r in rows
+        if (bdir / "rows" / r / "anchor-sem.npz").exists()
+        and (bdir / "rows" / r / "anchor-hand.npz").exists()
+    ]
+    print(
+        f"  [bitexact] device anchors present for {len(have)}/{len(rows)} rows "
+        f"(log {log})"
+    )
+    return have
+
+
 def run_bitexact_batch(rows, out_dir, flags, jobs, timeout):
     """Drive bitexact_sweep.py on `rows` (sim-only) and parse its ledger."""
     bdir = out_dir / "bitexact"
@@ -522,24 +583,7 @@ def run_bitexact_batch(rows, out_dir, flags, jobs, timeout):
     ledger.unlink(missing_ok=True)
     with log.open("w") as fh:
         run = subprocess.run(
-            [
-                str(VENV_PY),
-                str(BITEXACT_ENGINE),
-                "--out",
-                str(bdir),
-                "--rows",
-                ",".join(rows),
-                "--stage",
-                "all",
-                "--jobs",
-                str(jobs),
-                "--timeout",
-                str(timeout),
-                "--sim",
-                str(BITEXACT_SIM),
-                "--flags",
-                flags,
-            ],
+            bitexact_cmd(bdir, rows, "all", flags, jobs, timeout),
             stdout=fh,
             stderr=subprocess.STDOUT,
         )
@@ -896,6 +940,14 @@ def main():
     ap.add_argument("--timeout", type=int, default=1800, help="per-op wall seconds")
     ap.add_argument("--force", action="store_true", help="ignore cached verdicts")
     ap.add_argument(
+        "--allow-hardware",
+        action="store_true",
+        help="run bitexact_sweep's device-anchor stage (silicon, serial under "
+        "the device flocks) before the sim batch, so its executor-validation "
+        "gate has anchors to validate against; without this the bitexact rows "
+        "stay EXECUTOR-UNVALIDATED -> SCOPE-REFUSED",
+    )
+    ap.add_argument(
         "--no-gate",
         action="store_true",
         help="deprecated compatibility spelling; provenance is always enforced",
@@ -940,7 +992,11 @@ def main():
     # cached / to-run split
     to_run = []
     for op in ops:
-        if not args.force:
+        # A verdict cached before any anchor existed says SCOPE-REFUSED, and
+        # the cache key cannot see that anchors have since appeared -- so an
+        # anchoring run always re-proves its own rows.
+        anchoring = args.allow_hardware and man[op]["engine"] == "bitexact"
+        if not args.force and not anchoring:
             c = valid_cached(out_dir, op, cache_keys[op])
             if c is not None:
                 engine_recs[op] = c
@@ -962,6 +1018,14 @@ def main():
 
     # bitexact batch (sim-only, parallel inside the engine)
     if bitexact_ops:
+        if args.allow_hardware:
+            print(
+                f"  [bitexact] device-anchor stage on {len(bitexact_ops)} rows "
+                "(silicon, serial under the device flocks) ..."
+            )
+            run_bitexact_anchor(
+                bitexact_ops, out_dir, flags, args.jobs, args.timeout
+            )
         print(
             f"  [bitexact] running {len(bitexact_ops)} rows (2^16 sim, jobs={args.jobs}) ..."
         )

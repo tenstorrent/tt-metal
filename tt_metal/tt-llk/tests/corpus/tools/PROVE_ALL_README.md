@@ -20,7 +20,7 @@ class, then joins in two provenance-pinned overlays under a strict precedence.
 | engine / overlay | what it proves | how |
 |---|---|---|
 | `formal_equiv.py` (laneJO) | per-lane bit-exact equivalence over **all** inputs | z3 QF_BV translation validation on the **final emitted SFPU stream**, on the pinned *instrumented* craq-sim; VALIDATION GATE = concrete replay reproduces every trace snapshot before any verdict |
-| `bitexact_sweep.py` (laneJN) | single-input **2^16** exhaustive equivalence | sweep on the pinned craq-sim (sim-only `probe/sweep/verdict`) |
+| `bitexact_sweep.py` (laneJN) | single-input **2^16** exhaustive equivalence | sweep on the pinned craq-sim; VALIDATION GATE = the sim executor must reproduce the row's **device anchors** bitwise on both legs (see below) |
 | classify (no run) | 2^32 single-input / cross-lane | recorded infeasibility / one-lane-model scope refusal, with reason |
 | KC-silicon overlay | device-exhaustive 2^16 | **recorded** laneKC silicon sweeps (a device campaign; not re-run here) |
 | JO-domain overlay | documented-deliverable-domain equivalence | **recorded** laneJO z3 re-proofs (upgrade clamp / mulint32) |
@@ -39,6 +39,44 @@ INFEASIBLE-2^32 > NOT-EXHAUSTIBLE > SCOPE-REFUSED > UNSWEPT
 ```
 
 `machine-certified-equal := SILICON-EXHAUSTIVE ∪ SMT-PROVEN-ALL-INPUTS`.
+
+## The bitexact leg needs device anchors (`--allow-hardware`)
+
+`bitexact_sweep.py` only counts a sweep whose executor it has **validated**:
+the pinned craq-sim must reproduce, bitwise on both legs, the row's
+`rows/<row>/anchor-{sem,hand}.npz` — dumps of the *same* registered stimuli
+taken from a **silicon** run of the same two pytest nodes. Without them the
+engine reports `EXECUTOR-UNVALIDATED`, which the driver maps to
+`SCOPE-REFUSED`: the whole 32-row leg then asserts nothing.
+
+The anchors are produced by the engine's own `anchor` stage, and until now
+nothing ever invoked it, so under the driver's `bitexact/` tree they never
+existed. `prove_all.py --allow-hardware` runs that stage (serial silicon
+pytest runs under `/tmp/tt-device.lock` + `/tmp/tt-llk-sfpu-silicon.lock`)
+into the same `--out` tree before the sim batch:
+
+```
+make prove-all-anchor          # silicon: anchor + prove, one command
+```
+
+* **One-time cost, then reusable.** The anchors are ~KB `.npz` dumps and the
+  stage skips any leg already present, so after one anchoring run a plain
+  `make prove-all` on the same `--out` tree validates with **no device**.
+  Anchors are therefore a *recordable* artifact — but they must be produced on
+  silicon once; there is no way to synthesize them from the tree.
+* Rows whose anchors did not appear keep the honest
+  `EXECUTOR-UNVALIDATED` / `SCOPE-REFUSED` verdict — the flag adds evidence,
+  it never relaxes the gate.
+* `--allow-hardware` always re-proves its own rows: a verdict cached before
+  any anchor existed says `SCOPE-REFUSED`, and the cache key cannot see that
+  anchors have since appeared.
+
+Note that every op routed to `bitexact` is also covered by the KC-silicon
+overlay, which outranks `SIM-BIT-EXACT-16`. A validated sim leg therefore
+never changes a `provability_class`; it appears as independent corroboration
+in the ledger's `equal_evidence` / `engine_verdict` columns. That is the
+intended design (device evidence supersedes simulator evidence), not a
+discarded result.
 
 ## Routing is data-driven and auditable
 
