@@ -137,8 +137,36 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
 - The qualitative suite is in `readiness_qualitative/`, covering prompt format and answer
   quality on the shared six prompts at 256 tokens against a native-bfloat16 control. It is not
   an accuracy gate: no top-1/top-5/top-100 and no AIME24 reference exist yet.
-- Stage 5 optimization families were not measured on this mesh. `num_links` is 1 here against
-  QB2's 2, which halves collective bandwidth and makes the collective families the dominant
-  question, yet `ccl_dtype`, residual layout and the fused CCL paths are carried over from the
-  two-link measurement. `fused_grid` and `rs_core_offset` still hold Blackhole values that no
-  Wormhole worker grid can satisfy, so those families cannot run as written.
+- The residual and fused-CCL families are still unmeasured here. `fused_grid` and
+  `rs_core_offset` hold Blackhole values that no 8x8 worker grid can satisfy, so `mmrs`,
+  `agmm` and the sharded-residual path cannot run without T3K-legal values first. A shape
+  error is not a rejection, so this family remains open.
+
+## Collective dtype
+
+`num_links` is 1 here against QB2's 2, so the collective carries twice the hops on half the
+links, and the dtype it moves was carried over from the two-link measurement. Measured warmed,
+single variable through `precision_config`, 20 warm-up steps then 100 timed steps at ISL 128:
+
+| batch | ccl bfloat16 | ccl bfloat8_b | saving |
+| ---: | --- | --- | --- |
+| 1 | 71.522 ms, 13.98 t/s/u | 59.543 ms, 16.79 t/s/u | 11.98 ms, 16.8% |
+| 8 | 101.411 ms, 9.86 t/s/u | 89.462 ms, 11.18 t/s/u | 11.95 ms, 11.8% |
+
+Every arm held a spread under 0.2% between p10 and p90. The saving is the same 12 ms at both
+batches, not a larger fraction at higher concurrency: the all-reduce workspace is
+`[1, 1, 32, 5120 * TP]`, tile-padded to 32 rows whatever the batch, so its payload is fixed per
+decode step and halving the dtype halves a constant cost. That puts the bfloat16 collective at
+roughly 24 ms of every step, about 0.37 ms per layer.
+
+It costs nothing measurable. Against the same fp32 reference and the same teacher-forced
+tokens, mean top-1000 logit PCC moves 0.8963 to 0.8989, two of seven steps negative and five
+positive, with identical top-10 overlap at every step and 7/7 greedy agreement. Free-running
+greedy output is byte-identical across all four arms above.
+
+The value is not reachable from the platform overlay as the merge stands. `_TP_POLICY` is
+applied before the caller policy, and `decoder_policy` always supplies `ccl_dtype` from the
+precision policy, so a platform entry for it is overwritten. Moving this to bfloat8_b therefore
+means either a T3K precision artifact selected at deployment, or giving the platform overlay
+ownership of the keys precision also sets. Both reach QB2's shipping path, where this is
+unmeasured, so the choice is deliberately left open rather than taken here.
