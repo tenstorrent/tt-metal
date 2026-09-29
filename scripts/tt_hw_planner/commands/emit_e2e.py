@@ -1801,8 +1801,31 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
         reasons.append(f"G2/G3: tests/e2e made no forward progress ({_e2e.detail})")
     else:
         if not _e2e.ok:
-            tail = "\n".join(pytest_out.splitlines()[-15:])
-            reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={_e2e.detail}); tail:\n{tail}")
+            # A KILLED RUN AND A FAILING RUN CALL FOR OPPOSITE RESPONSES, AND THIS TOLD THEM APART
+            # NOWHERE. A step reports through two channels -- its output and its exit status -- and a
+            # signal death says nothing in the first: SIGKILL has no handler, so there is no
+            # traceback and the output simply stops mid-line. This branch quoted the raw returncode
+            # and the literal last 15 lines, which for a killed run are whatever routine chatter
+            # happened to be printing. So a run terminated from outside arrived as "rc=-9" plus
+            # fifteen deprecation warnings, and the agent spent a round inferring the kill from `ps`
+            # before concluding, correctly, that nothing in the model was wrong.
+            #
+            # Both halves are already solved elsewhere and are reused rather than re-spelled:
+            # `signal_note` turns a negative returncode into the signal that caused it, and
+            # `_extract_error` picks a log's actual failure lines (its whitelist keeps the stage
+            # markers, so "how far it got" survives a hang that has no exception to anchor on).
+            from models.experimental.perf_automation.agent.perf_test_gen import _extract_error, signal_note
+
+            _sig = signal_note(_e2e.detail)
+            _why = _extract_error(pytest_out) or "\n".join(pytest_out.splitlines()[-15:])
+            if _sig:
+                reasons.append(
+                    f"G2/G3: tests/e2e was KILLED, not failed: {_sig}. The output stops mid-run with "
+                    f"no traceback because a signal leaves none. Nothing here says the pipeline is "
+                    f"wrong -- do not rewrite working code on this evidence. Last output:\n{_why}"
+                )
+            else:
+                reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={_e2e.detail}); tail:\n{_why}")
         if batch > 1:
             _batch_reason = _batch_gate_reason(batch, pytest_out)
             if _batch_reason:
