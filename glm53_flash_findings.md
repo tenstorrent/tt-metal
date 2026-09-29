@@ -92,7 +92,7 @@ state 143 MB. The 4-stream residual is 168 MB per 5120-token chunk in bf16.
 
 - bfp8 experts: about 11-12 MoE layers fit per chip; bfp4: about 20.
 - Proposed subset `layers: "0-7"`: 3 dense + 5 MoE, 2 of them DSA, about 9 GiB of experts per chip at bfp8. The
-  minimum that covers every block type is 0-3. A subset result is never reported as the full model.
+  minimum that covers every block type is 0-4 (0-3 has no kda_moe; corrected at intake, which chose 0-4). A subset result is never reported as the full model.
 - Block types: `kda_dense` (layers 0-2), `dsa_moe` (3, 7, ..., 43), `kda_moe` (every other layer from 4 to 44). Each
   also includes the two mHC steps.
 
