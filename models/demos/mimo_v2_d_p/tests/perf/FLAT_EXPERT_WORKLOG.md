@@ -655,3 +655,84 @@ less work, but the split still reserves down cores for H = 7168 output columns).
 Tried at M 4096 (all worse than the defaults): TP4 1 subgrid G4 (64 gate/up cores) 5201.7 us, 1 subgrid G2 4875.1,
 3 subgrids (48 gate/up cores) 4258.9 (vs 3515.1); MiMo l1acc gate/up 4975.3 (vs 4469.3); MiMo reader-tail down
 (`MIMO_FL_RDOWN=1`) fails the reader-down tensor bounds check at MiMo's shape (not pursued).
+
+## MoE block: all-gather architecture (2026-09-28)
+
+`MIMO_MOE_AG=1` (implies the flat expert; tt/moe_ag.py, kernels tt/kernels/moe_ag/, tests tests/perf/test_moe_ag.py,
+test_hbw_ag_probe.py): no dispatch / combine. Per MoE layer on the 2x2:
+x TILE -> row major -> `ttnn.experimental.high_bw_all_gather` over the rows (x, top-k indices, weights; persistent
+outputs) -> RoutePlan (generic_op, 64 cores: counts / regions / token_index / y_slot on device, trace safe) -> flat
+expert, indexed (token_index) -> UntilizeActive (bfp8 y -> bf16 rows, only tiles holding tokens) -> LocalReduce
+phase 1 (the other row's tokens: sum_k w * y) -> high_bw_all_gather over the rows -> LocalReduce phase 2 (this row's
+tokens + the peer's partial as a weight-1 pair) -> high_bw_all_gather over the cols -> AddRowsTiled (col sum +
+tilize) -> [1, 1, S, H] TILE replicated over TP. Decoder layers vs HF: L1 0.99957, L5 0.99197 (dispatch path 0.99956
+/ 0.99196).
+
+**high_bw_all_gather on our FABRIC_2D 2x2** works without fabric changes (no L1_SMALL: it warns and puts its
+semaphores in L1; it synchronizes only on a program-cache miss). Over the rows, us (4 links; it scales with links,
+1 / 2 links are slower than ttnn.all_gather):
+| | 640 tok/chip | 2048 |
+|---|---|---|
+| x RM 8 KB pages: hbw / ttnn.all_gather | 71 / 105 | 192 / 224 |
+| x TILE: hbw / ttnn.all_gather | 57 / 73 | 153 / 218 |
+| x RM 2 KB pages ([S * 4, 1024]) hbw | 58 | 153 |
+| top-k idx or weights [S, 8] 16-bit: hbw / all_gather | 15 / 29 | 19-21 / 71 |
+
+**Pieces** (us, uniform routing, one chip): RoutePlan 29 / 53 (first version 93 / 120: an O(cores x experts)
+L1 loop per core; now expert cores do the column prefix, go signals by multicast); ttnn.to_layout(y) 255 / 637 vs
+UntilizeActive 200 / 457 (bfp8 untilize is compute bound, ~1300-1800 cycles per tile in both; the real fix is
+row-major bf16 y from the expert); LocalReduce 101 / 297 (~370 GB/s DRAM); fused send-back phase 1 + 2 = 132 / 379 vs
+reduce + exchange add 147 / 439; AddRowsTiled 60 / 144 vs add + ttnn tilize 116 / 292; UntilizeX (2 KB pages) 47 / 120
+vs to_layout 27 / 92 (`MIMO_MOE_AG_XPPR=4` knob only; default one 8 KB page per token row).
+
+**Layer device time** (busy, slowest chip, 0 ctx; first all-gather version: to_layout untilize, separate adds,
+ttnn tilize), ms: L1 640 3.98 -> 2.84, L1 2048 10.07 -> 7.10, L5 640 5.15 -> 4.08, L5 2048 10.87 -> 8.49.
+
+**After fused send-back + AddRowsTiled + UntilizeActive** (busy, slowest chip, 0 ctx, ms; dispatch path -> now):
+L1 640 3.98 -> 2.70 (-32%), L1 2048 10.07 -> 6.85 (-32%), L5 640 5.15 -> 3.93 (-24%), L5 2048 10.87 -> 8.17 (-25%).
+At 2048 the slowest chip's MoE data movement: x untilize 92, gathers 189 + 33, plan 60, UntilizeActive 628 (real
+routing loads chip 2), reduce phase 1 / 2 214 / 304, gathers 192 / 187 (+ waits for the slowest expert), col add 143.
+
+**Galaxy generalisation (proxy meshes, test_moe_ag_mesh.py, random routing / y, block only):**
+- rows = 1 (1x4): no gather; rows = 2: fused fast path; rows > 2 (4x1): LocalReduce writes the [T, H] partials as
+  bf16 tiles (tilize fused: 276 vs 201 + 161 us at 4x1 S640) -> ttnn.reduce_scatter over the rows (row-major RS is a
+  slice / tilize / concat composite: 1287 vs 822 us, not used).
+- TP over > 2 cols: `MIMO_MOE_AG_TP=rsag` default (ttnn RS + AG on tiles: 1x4 162 / 284 us vs hbw gather + 4-way
+  SumBlocksTiled 220 / 404 at S 640 / 1280); 2 cols keep hbw gather + AddRowsTiled.
+- PCC of the final sums vs host >= 0.999993 on 2x2 / 4x1 / 1x4; EPC 8 (Galaxy count) at T 5120 and 16384 on 4x1:
+  0.999998 (RoutePlan 48 / 127 us; 8x8 cores, lists up to T entries in L1).
+- 4x1 EPC 8, T 5120 (= Galaxy chunk 5120): gather 227 (ring, 4 links), plan 48, untilize 86, LocalReduce 282 (writes
+  the dense [T, H]), reduce-scatter 284 us. The > 2-row send-back moves the dense partials although a chip touches
+  only ~22% of the tokens on a Galaxy: estimated Galaxy (8 rows, 2 links) ~0.5-0.7 ms gather + ~0.65 ms RS per layer,
+  i.e. no better than dispatch / combine (~0.9-1.2 ms by the per-entry model) -- the Galaxy needs a sparse send-back.
+- Untestable here: 8-row fabric (2 links, torus or line), 4-col TP at 2 links, hbw on the Galaxy's FABRIC_2D_TORUS_XY,
+  T 5120 with the real 32-chip expert placement in the model (the flat expert with EPC 8).
+
+## Row-major bf16 y (2026-09-29): no MoE-output untilize
+
+`flat_routed_expert(..., y_row_major=True)` (FlatRoutedExpertConfig.y_row_major, part of the program key; the plan is
+unchanged): y is [rows, H] bf16 ROW_MAJOR, one 8 KB page per flat row. Down compute (se6_dcompute.cpp, also on the
+reader tails) pack-untilizes each row tile (`pack_untilize_dest<cpw, pcd>`; in this mode the column-pass width is the
+largest divisor of PCD that fits DST, so any PCD works) and pushes it as PCD pages; the writers (se6_drecv.cpp,
+se9_rdown.cpp via se_yrm.hpp) send one PCD * 64-byte segment per token row, several row tiles in flight on write
+transaction ids 8.. (ids 1..3 are the h links), retired in order, write trid reset to 0 at exit. The out CB (Float16_b)
+reuses the arena's out region, as many bf16 row tiles as the arena holds (<= 2 MT, <= 8). Default stays bfp8 TILE.
+MiMo: moe_ag uses it by default (MIMO_MOE_AG_YRM=0: bfp8 + UntilizeActive, built lazily); LocalReduce reads y directly;
+the 151 MB (2048 tok/chip) untilized-y buffer is gone.
+
+Checks: tests/unit/test_flat_expert_yrm.py (MiMo / K2 reader tails / TP4 / TP2, 2 launches incl. moved arena): row-major
+y within 1.2% of the 16-value block max of the bfp8 y (= bfp8 rounding), PCC >= 0.998 vs the quantized reference.
+test_flat_routed_expert_op.py 4/4 (needed CT 7/8 in the Python builder's se11_xrd args, from the x_pages_per_row change).
+Decoder layers: L0 0.99998531 (same), L1 0.99956720 -> 0.99958960, L5 0.99196511 -> 0.99202095 (y no longer bfp8).
+Loop test R6 @2048: worst hidden 0.99931, K 0.99924, V 0.99759 (unchanged).
+
+Expert alone (test_flat_expert_indexed.py, one chip, 64 experts): row-major y costs +1.6..5.2% vs bfp8 y (writes in
+flight or a deeper out CB made no difference once pipelined; first, serial per-row-tile version was +8..12%): plausibly
+the 2x y write bytes against the weight stream (largest on uniform routing, the most weight-bound).
+Layer (8K ctx, slowest chip busy, bfp8+UntilizeActive -> row-major y):
+| layer | tok/chip | layer | expert | MoE ops after the expert |
+|---|---|---|---|---|
+| L1 SWA+MoE | 640 | 2.77 -> 2.56 ms | 989 -> 997 us | 686 -> 466 us |
+| L5 GA+MoE | 640 | 4.40 -> 4.25 ms | 1801 -> 1923 us | 696 -> 440 us |
+| L1 SWA+MoE | 2048 | 6.81 -> 6.26 ms | 2075 -> 2123 us | 1782 -> 1195 us |
+| L5 GA+MoE | 2048 | 8.99 -> 8.56 ms | 2588 -> 2646 us | 1727 -> 1245 us |

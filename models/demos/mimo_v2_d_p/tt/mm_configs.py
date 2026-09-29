@@ -63,3 +63,30 @@ def best_mm_config(device, M, K, N):
         if pc is not None and _l1_bytes(pc) <= L1_BUDGET:
             return pc
     return None
+
+
+def router_mm_config(device, M, N=256, in0_block_w=16):
+    """MoE router logits [M, 4096] x [4096, N] (fp32 out, HiFi4, fp32 dest): one N tile per grid column, M over up to 10
+    grid rows, a wide in0 block. Measured on BH (tests/perf/test_router_matmul.py): 32 / 90 us at M 640 / 2048 vs
+    105 / 234 us for ttnn's default pick (in0_block_w 16 beats 2-8 and 32-64; bit-identical logits)."""
+    grid = device.compute_with_storage_grid_size()
+    Mt, Nt = math.ceil(M / TILE), N // TILE
+    gx = min(Nt, grid.x)
+    per_n = math.ceil(Nt / gx)
+    per_m = math.ceil(Mt / grid.y)
+    gy = math.ceil(Mt / per_m)
+    sub_w = _largest_div(per_n, 4)
+    sub_h = _largest_div(per_m, max(1, 4 // sub_w))
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        out_block_h=per_m,
+        out_block_w=per_n,
+        per_core_M=per_m,
+        per_core_N=per_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )

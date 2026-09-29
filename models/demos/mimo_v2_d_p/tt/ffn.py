@@ -10,8 +10,8 @@ Hidden states are ``[1, 1, S_local, H]``: sequence block-cyclic over SP rows, re
   sigmoid scores renormalised (``norm_topk_prob``), x routed_scaling_factor (1.0). Same routing rule as Kimi.
 * MoE: DeepSeek EP substrate (routing_setup -> dispatch -> unified_routed_expert_ffn(Silu) -> combine ->
   reduce), experts spread over all chips (2x2: 64/chip, Galaxy 8x4: 8/chip). No shared expert.
-  ``MIMO_FLAT_EXPERT=1``: the routed experts run on the flat streamed expert op (``tt/flat_expert.py``), which reads
-  the row-major bf16 dispatch buffer and the routing's counts / regions directly (no tilize, one program per chip).
+  Default: the all-gather MoE block (``tt/moe_ag.py``; ``MIMO_MOE_AG=0`` for dispatch / combine) with the flat
+  streamed expert op (``tt/flat_expert.py``; ``MIMO_FLAT_EXPERT=0`` for unified_routed_expert_moe).
 """
 
 import math
@@ -34,7 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert, FlatRoutedExpert
-from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config
+from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config, router_mm_config
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_dir, cache_name
 
 
@@ -147,9 +147,16 @@ class TtGate:
         self.cfg = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
         )
+        # tuned 2D config (bit-identical logits; 32 / 90 us vs 105 / 234 us default at 640 / 2048 tokens per chip).
+        # HiFi4 stays: the matmul is x-read bound (HiFi2 is no faster and flips ~4% of tokens' top-8)
+        self._pcs = {}
+        self.mesh_device = mesh_device
 
     def __call__(self, x):
-        logits = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg)
+        M = x.shape[-2]
+        if M not in self._pcs:
+            self._pcs[M] = router_mm_config(self.mesh_device, M, N=self.E)
+        logits = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg, program_config=self._pcs[M])
         w, idx = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits,
             self.bias,
@@ -191,12 +198,14 @@ def routed_expert_hybrid_threshold() -> int | None:
 
 
 def flat_expert_enabled() -> bool:
-    """``MIMO_FLAT_EXPERT=1``: routed experts on the flat streamed expert C++ op (flat_routed_expert) instead of
+    """Routed experts on the flat streamed expert C++ op (flat_routed_expert, default); ``MIMO_FLAT_EXPERT=0``:
     unified_routed_expert_moe; ``=py``: the Python generic_op builder it was ported from."""
-    return os.environ.get("MIMO_FLAT_EXPERT", "0") in ("1", "py")
+    return os.environ.get("MIMO_FLAT_EXPERT", "1") in ("1", "py")
 
 
-def build_flat_expert(mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dgs, ndg, max_tok, weights_dtype):
+def build_flat_expert(
+    mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix=None
+):
     """One FlatExpert over the mesh: device (r, c) runs the experts the EP table puts there (the same global ids the
     unified op reads through its global expert idx table: table[c, r], get_ep_mesh_mapper's sharding)."""
     rows, cols = tuple(mesh_device.shape)
@@ -205,8 +214,9 @@ def build_flat_expert(mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dg
         experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
     )
     gids = [[int(g) for g in table[c, r]] for r in range(rows) for c in range(cols)]
-    tw = lambda g, n: sd[f"experts.{g}.{n}.weight"].T.float().contiguous()  # nn.Linear [out, in] -> x @ W [in, out]
-    weights = [[(tw(g, "gate_proj"), tw(g, "up_proj"), tw(g, "down_proj")) for g in gl] for gl in gids]
+    # nn.Linear [out, in] -> x @ W [in, out]; bf16 (the checkpoint values are bf16-exact); built only on a cache miss
+    tw = lambda g, n: sd[f"experts.{g}.{n}.weight"].T.contiguous()
+    weights = lambda: [[(tw(g, "gate_proj"), tw(g, "up_proj"), tw(g, "down_proj")) for g in gl] for gl in gids]
     wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
     cls = FlatExpert if os.environ.get("MIMO_FLAT_EXPERT") == "py" else FlatRoutedExpert
     return cls(
@@ -220,7 +230,15 @@ def build_flat_expert(mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dg
         wdtype=wdtype,
         act="silu",
         pin=1,
+        **({"cache_prefix": cache_name(mesh_device, cache_prefix, "experts")} if cls is FlatRoutedExpert else {}),
     )
+
+
+def moe_ag_enabled() -> bool:
+    """The all-gather MoE block (tt/moe_ag.py, default): high_bw_all_gather of x / top-k over the dispatch axis,
+    on-device route plan, the flat expert in indexed mode, local weighted reduce, gather + add send-back. Needs the
+    flat expert. ``MIMO_MOE_AG=0``: the DeepSeek dispatch / combine substrate."""
+    return os.environ.get("MIMO_MOE_AG", "1") == "1" and flat_expert_enabled()
 
 
 def moe_capacity_factor(K: int, E: int, n_dev: int) -> int:
@@ -300,8 +318,27 @@ class TtMoE:
             init_zeros=True,
         )
         self.flat = None
-        if flat_expert_enabled():
-            self.flat = build_flat_expert(mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype)
+        self.ag = None
+        if moe_ag_enabled():
+            from models.demos.mimo_v2_d_p.tt.moe_ag import MoeAgBlock
+
+            table_g = ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
+            )
+            gids = [[int(g) for g in table_g[c, r]] for r in range(dgs) for c in range(ndg)]
+            self.ag = MoeAgBlock.get(
+                mesh_device,
+                chunk_size_per_chip=seq_len_per_chip,
+                hidden=H,
+                k=K,
+                n_global=E,
+                gids=gids,
+                buf_rows=max_buf,
+            )
+        if flat_expert_enabled() or moe_ag_enabled():
+            self.flat = build_flat_expert(
+                mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix
+            )
             self.expert = None
         else:
             self._init_unified(mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix)
@@ -344,8 +381,43 @@ class TtMoE:
             hybrid_token_threshold=routed_expert_hybrid_threshold(),
         )
 
+    def _call_ag(self, x):
+        """All-gather block: x [1,1,S,H] TILE -> [1,1,S,H] TILE (replicated over TP)."""
+        S = x.shape[2]
+        idx, w = self.gate(x)
+        x_rm = self.ag.to_rm(x)
+        w_rm = ttnn.reshape(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (1, 1, S, self.K))
+        idx4 = ttnn.reshape(idx, (1, 1, S, self.K))
+        gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
+        ttnn.deallocate(x_rm)
+        ttnn.deallocate(w_rm)
+        counts, regions, token_index, _ = self.ag.plan()
+        y = self.expert_indexed(gx, counts, regions, token_index)
+        out = self.ag.reduce(y)
+        ttnn.deallocate(y)
+        return out
+
+    def expert_indexed(self, gx, counts, regions, token_index):
+        """The routed experts on the gathered tokens: flat row r of the output reads gathered row token_index[r].
+        ``MIMO_MOE_AG_EMB=1`` (A/B): build the flat buffer locally with ttnn.embedding and run the flat expert on it."""
+        gx2 = ttnn.reshape(gx, (gx.shape[-2], gx.shape[-1]))
+        if os.environ.get("MIMO_MOE_AG_EMB") == "1":
+            buf = ttnn.embedding(token_index, gx2, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            buf = ttnn.reshape(buf, (buf.shape[-2], buf.shape[-1]))
+            yrm = {"y_row_major": self.ag.y_rm} if isinstance(self.flat, FlatRoutedExpert) else {}
+            y = self.flat(buf, counts, regions, **yrm)
+            ttnn.deallocate(buf)
+            return y
+        if not isinstance(self.flat, FlatRoutedExpert):  # the Python builder: tiled y (reduce untilizes it)
+            return self.flat(gx2, counts, regions, token_index=token_index, x_pages_per_row=self.ag.xppr)
+        return self.flat(
+            gx2, counts, regions, token_index=token_index, x_pages_per_row=self.ag.xppr, y_row_major=self.ag.y_rm
+        )
+
     def __call__(self, x):
         """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H]."""
+        if self.ag is not None:
+            return self._call_ag(x)
         idx, w = self.gate(x)
         offsets, counts, regions, _ = self.routing_setup(
             ttnn_top_k_experts_indices=idx, num_routed_experts=self.E, num_experts_per_tok=self.K
