@@ -1,4 +1,28 @@
 {
+ "B.1": {
+  "attempts": 0,
+  "duration_s": 7.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T02:23:32"
+   }
+  ],
+  "last_run": "2026-09-29T02:23:32",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/B.1.log",
+  "metrics": {
+   "all_gather_maxabs": 0.0,
+   "all_reduce_rel_err_axis0": 0.002739726100116968,
+   "all_reduce_rel_err_axis1": 0.0027027027681469917,
+   "chips": 4,
+   "mesh_cols": 2,
+   "mesh_rows": 2
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T02:23:24",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 399.9,
