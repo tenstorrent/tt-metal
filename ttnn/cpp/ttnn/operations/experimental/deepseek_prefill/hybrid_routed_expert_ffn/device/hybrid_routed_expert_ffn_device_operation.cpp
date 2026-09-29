@@ -4,7 +4,7 @@
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 
 #include "hybrid_program_factory.hpp"
-#include "combine/combine_fabric2d_device_operation.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
@@ -29,8 +29,8 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
     TT_FATAL(
         t.output.buffer() != t.x.buffer(),
         "hybrid routed expert overlapped with combine needs an output distinct from dispatched_buffer");
-    combine::CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
-        combine_attributes(op, t), combine_inputs(t));
+    ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation::
+        validate_on_program_cache_miss(combine_attributes(op, t), combine_inputs(t));
 }
 
 }  // namespace
@@ -65,8 +65,8 @@ void HybridRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
 HybridRoutedExpertFfnDeviceOperation::spec_return_value_t HybridRoutedExpertFfnDeviceOperation::compute_output_specs(
     const operation_attributes_t& op, const tensor_args_t& t) {
     if (op.overlap_combine) {
-        return combine::CombineFabric2dDeviceOperation::compute_output_specs(
-            combine_attributes(op, t), combine_inputs(t));
+        return ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation::
+            compute_output_specs(combine_attributes(op, t), combine_inputs(t));
     }
     return t.output.tensor_spec();
 }
