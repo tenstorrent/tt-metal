@@ -409,6 +409,33 @@ one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep
 the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
 conditioner fidelity rather than output quality.
 
+## Denoise tuning knobs (4x8, 768P 15 s)
+
+Defaults now: the six adaLN modulation gathers run as one-hot matmuls (exact; `MINIMAX_H3_ADALN_GATHER=embedding`
+restores `ttnn.embedding`), the norms' static weight is multiplied into the 6-row modulation table instead of the
+per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores), and the AGMM / fused-MMRS tables carry rows for the 15 s
+per-device length (`agmm_config.py`, `mmrs_config.py`). Everything below is opt-in and leaves the numerics unchanged
+when unset; each was measured on the block perf test and the 15 s clip and gated with the 2-step-denoise comparison
+described in the next paragraph.
+
+| env | effect |
+|---|---|
+| `MINIMAX_H3_FAST=1` | the measured recipe: `MINIMAX_H3_ADALN_CACHE=1`, `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1`, `MINIMAX_H3_SDPA_PV_FIDELITY=LoFi` (explicit settings win) |
+| `MINIMAX_H3_ADALN_CACHE=1` | keep every block's modulation tables per timestep vector (eager path; a 50-step schedule holds ~1.3 GB of tables per device) |
+| `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]` | typecast those linears' weights to bfloat8_b after loading (`out`/`ff2` need a bf8 residual for the fused addcmul, so they are normally left bf16) |
+| `MINIMAX_H3_SDPA_PV_FIDELITY` / `MINIMAX_H3_SDPA_QK_FIDELITY` / `MINIMAX_H3_SDPA_FIDELITY` | ring-SDPA fidelity per matmul phase or for both (`SDPAProgramConfig.qk_math_fidelity` / `pv_math_fidelity`). LoFi on PV keeps the logits at HiFi2; LoFi on both phases degrades the output |
+| `MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS=auto[:threshold]` | ring SDPA without a running row max on the blocks whose q/k RMSNorm gains bound the scaled logits (`SDPAProgramConfig.fixed_offset_softmax`, offset = the block's bound); a block range list or `all` also works |
+| `MINIMAX_H3_MM_FIDELITY`, `MINIMAX_H3_MM_FP32_ACC=0` | fidelity / fp32 accumulation of the five block matmuls (bandwidth-bound at this shape: no gain) |
+| `MINIMAX_H3_SDPA_CHUNKS=q,k`, `MINIMAX_H3_AGMM_BLOCKS=K,N:Mb,Kb,Nb[,sh,sw];...`, `MINIMAX_H3_MMRS_BLOCKING=gx,gy,Mb,Kb,Nb,sh,sw[,workers[,window]]` | sweep overrides for the ring SDPA chunking and the linears' blockings |
+| `MINIMAX_H3_SDPA_KV_DTYPE=bfloat8_b`, `MINIMAX_H3_SDPA_DST_FULL_SYNC=1`, `MINIMAX_H3_SEQ_ALIGN_TILES=2` | measured and rejected (slower, or the wider padding breaks the ring mask's single partial tail chunk); kept for experiments |
+| `trace_denoise=True, bucket_denoise=False` (create_pipeline) | trace the step at the exact 256-aligned length instead of the bucket ladder (no gain on the 4x8: the step is device-bound) |
+
+Numerics gate: the 50-step clip's PSNR against a reference run only distinguishes bit-identical from broken, because
+any bf16-level difference diverges chaotically over the sampling trajectory. A 2-step run (`H3_PERF_STEPS=2`) compared
+against a 2-step reference measures per-forward error; a pure accumulation-order change lands a few dB below the
+bit-identical case, and a *more* precise SDPA (HiFi4) lands about as far from the HiFi2 reference as the bf8-weight and
+LoFi-PV recipes do.
+
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
