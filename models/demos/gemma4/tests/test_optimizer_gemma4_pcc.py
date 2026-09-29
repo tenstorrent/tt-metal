@@ -6,17 +6,21 @@ The Gemma 4 counterpart of models/tt_transformers/tests/test_optimizer_pcc.py, w
 and the same printed lines, so an optimizer reads both gates the same way:
 
 1. PCC of the logits at every teacher-forced position -- the prefill's last position, then
-   FORCED_TOKENS decode steps -- against the Hugging Face bf16 reference, held to the floor
-   PCC_THRESHOLD on the worst position ("PCC: x" is the number an optimizer parses).
+   FORCED_TOKENS decode steps -- against the Hugging Face bf16 reference. A broken model is refused
+   by two floors on the per-position PCC (see BROKEN_PCC / LOW_PCC below); "PCC: x" (the worst
+   position) is still printed for an optimizer to record.
 2. Top-1 / top-5 agreement with the reference's argmax and the mean correlation, held RELATIVE to a
    baseline pinned from the unmodified tree (generated/optimizer_accuracy_baseline_<model dir>.json).
 
-The model is built with gemma4's own create_tt_model, prefilled with ttnn_prefill_forward, and decoded
-one teacher-forced token at a time with ttnn_decode_forward, untraced -- the calls
-tests/unit/test_model.py::test_full_model_decode makes, extended to every position. Weights come from
-the converted-weight store (models/tt_transformers/tests/optimizer_weight_cache.py) through a fresh
-per-run TT_CACHE_PATH: gemma4's own warm cache reloads tensorbins straight onto the mesh, which is the
-pinned-memory path that stalls on this QB2.
+The model is built and run through gemma4's own Gemma4Generator -- from_pretrained, then
+prefill_forward_text and decode_forward, untraced, returning logits -- with the same paged-attention
+config, page table and bounded sliding-window KV cache as test_optimizer_gemma4_perf.py, so the gate
+checks the decode path the perf test times. (It used to call ttnn_decode_forward with page_table=None,
+a non-paged KV path the perf test never runs: a paged-SDPA edit passed it and then crashed in the
+timed run, 2026-09-29.) Each decode step is fed the reference token (teacher forcing). Weights come
+from the converted-weight store (models/tt_transformers/tests/optimizer_weight_cache.py) through a
+fresh per-run TT_CACHE_PATH: gemma4's own warm cache reloads tensorbins straight onto the mesh, which
+is the pinned-memory path that stalls on this QB2.
 """
 
 from __future__ import annotations
@@ -40,13 +44,19 @@ from models.tt_transformers.tests.optimizer_weight_cache import RunCache
 HF_MODEL_ID = os.environ.get("HF_MODEL_ID") or "google/gemma-4-26B-A4B-it"
 MESH_SHAPE = (1, 4)  # QB2: four Blackhole chips in a row, TP=4
 
-# Absolute floor for the worst logits PCC over every teacher-forced position: a model that no longer
-# correlates with the reference at all. Not the tt-transformers 0.90: the unmodified tree's worst
-# position on this checkpoint is 0.633 (step 79 of 128, 2026-09-28), and gemma4's own full-model
-# check passes at 0.84 on one position (tests/pcc_thresholds.json). The pinned top-1/top-5/mean
-# checks below are what judge a change; this only refuses a broken model.
-PCC_THRESHOLD = 0.50
+# Floors on the per-position logits PCC that refuse a BROKEN model; the pinned top-1/top-5/mean checks
+# below are what judge a change. A single worst position is not a usable floor on this checkpoint: a
+# few teacher-forced positions have a near-flat reference distribution, and their PCC swung 0.46-0.70
+# across 40 gate runs of healthy trees (steps 31 and 33, independent of the mean scores); a worst-step
+# floor of 0.50 refused three changes whose top-1/top-5/mean all beat the pin (2026-09-29). So:
+#  - any position below BROKEN_PCC fails (a model that no longer correlates with the reference), and
+#  - more than MAX_LOW_POSITIONS positions below LOW_PCC fails (degradation beyond the fragile ones).
+# The unmodified tree's worst position is 0.633 (step 79, 2026-09-28): zero positions below LOW_PCC.
+BROKEN_PCC = float(os.environ.get("PCC_GATE_BROKEN_PCC", "0.25"))
+LOW_PCC = float(os.environ.get("PCC_GATE_LOW_PCC", "0.50"))
+MAX_LOW_POSITIONS = int(os.environ.get("PCC_GATE_MAX_LOW_POSITIONS", "2"))
 MAX_SEQ_LEN = 1024
+PAGE_BLOCK_SIZE = 32  # the perf test's paged-attention block size
 PROMPT_TOKENS = 128
 FORCED_TOKENS = 128
 
@@ -178,10 +188,15 @@ def _vocab_logits(tensor, vocab_size: int) -> torch.Tensor:
 @pytest.mark.timeout(3600)
 def test_optimizer_gemma4_pcc(monkeypatch):
     """Teacher-forced prefill + FORCED_TOKENS decode steps against Hugging Face, every layer."""
-    from models.demos.gemma4.tt.common import create_tt_model
+    import math
+
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
+    from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+    from models.tt_transformers.tt.common import PagedAttentionConfig
 
     model_path = _model_path()
-    mesh_device = model = model_args = tt_kv_cache = None
+    mesh_device = generator = tt_kv_cache = None
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     cache = RunCache(CACHE_ROOT, "gemma4-pcc-")
     monkeypatch.setenv("TT_CACHE_PATH", cache.path)
@@ -199,39 +214,48 @@ def test_optimizer_gemma4_pcc(monkeypatch):
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*MESH_SHAPE), l1_small_size=24576, num_command_queues=1
         )
-        model_args, model, tt_kv_cache, _state_dict = cache.build(
-            lambda: create_tt_model(
+        # The perf test's paged-attention setup, so both tests run one decode path.
+        paged_attention_config = PagedAttentionConfig(
+            block_size=PAGE_BLOCK_SIZE, max_num_blocks=math.ceil(MAX_SEQ_LEN / PAGE_BLOCK_SIZE)
+        )
+        lc = resolve_gemma4_demo_long_context(MAX_SEQ_LEN, mesh_device, model_path, paged_attention=True)
+        generator, tt_kv_cache, _tokenizer = cache.build(
+            lambda: Gemma4Generator.from_pretrained(
                 mesh_device=mesh_device,
+                model_path=model_path,
                 max_batch_size=1,
                 max_seq_len=MAX_SEQ_LEN,
-                model_path=model_path,
-                create_kv_cache=True,
-            )
+                paged_attention_config=paged_attention_config,
+                bounded_sliding_kv_cache=lc["bounded_sliding"],
+            ),
+            loaders=[(Gemma4ModelArgs, "load_state_dict")],
         )
-        _state_dict = None
         gc.collect()
         cache.loaded()
-        vocab = model_args.vocab_size
-        replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+        vocab = generator.model_args[0].vocab_size
+        page_table = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(
+            1, paged_attention_config.max_num_blocks
+        )
+
+        def _host_logits(out) -> torch.Tensor:
+            """One position's logits as a flat host row, [vocab]."""
+            first = out[0] if isinstance(out, (tuple, list)) else out
+            if not isinstance(first, torch.Tensor):
+                first = _vocab_logits(first, vocab)
+            return first.float().reshape(-1, first.shape[-1])[0, :vocab]
 
         t0 = time.perf_counter()
-        tokens_tt = ttnn.from_torch(
-            prompt.to(torch.int32),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=replicate,
+        last = _host_logits(
+            generator.prefill_forward_text(
+                prompt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=[PROMPT_TOKENS],
+                warmup_prefill=False,
+                enable_trace=False,
+                sampling_params=None,
+            )
         )
-        embeds = ttnn.to_layout(
-            ttnn.reshape(model.embed_tokens(tokens_tt), (1, 1, PROMPT_TOKENS, model_args.hidden_size)),
-            ttnn.TILE_LAYOUT,
-        )
-        prefill_out = model.ttnn_prefill_forward(
-            embeds, page_table=None, kv_cache=tt_kv_cache, input_ids_torch=prompt, embeds_torch=None
-        )
-        prefill_logits = _vocab_logits(prefill_out, vocab)
-        prefill_out.deallocate(True)
-        last = prefill_logits[-1] if prefill_logits.shape[0] >= PROMPT_TOKENS else prefill_logits[0]
         prefill_pcc = _pcc(last, hf_logits[PROMPT_TOKENS - 1])
         top1_hits, top5_hits = [], []
         hit1, hit5 = _agreement(last, hf_logits[PROMPT_TOKENS - 1])
@@ -241,15 +265,16 @@ def test_optimizer_gemma4_pcc(monkeypatch):
         decode_pccs = []
         for step, token in enumerate(forced):
             position = PROMPT_TOKENS + step
-            device_inputs = model.prepare_inputs_decode(torch.tensor([token]), torch.tensor([position]), page_table=None)
-            logits, _ = model.ttnn_decode_forward(
-                x=device_inputs[0],
-                current_pos=device_inputs[1],
-                rot_mat_idxs=device_inputs[2],
-                page_table=device_inputs[3],
-                kv_cache=tt_kv_cache,
+            step_logits = _host_logits(
+                generator.decode_forward(
+                    torch.tensor([[token]], dtype=torch.long),
+                    torch.tensor([position], dtype=torch.int64),
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    enable_trace=False,
+                    sampling_params=None,
+                )
             )
-            step_logits = _vocab_logits(logits, vocab)[0]
             decode_pccs.append(_pcc(step_logits, hf_logits[position]))
             hit1, hit5 = _agreement(step_logits, hf_logits[position])
             top1_hits.append(hit1)
@@ -259,19 +284,29 @@ def test_optimizer_gemma4_pcc(monkeypatch):
         positions = len(top1_hits)
         top1_pct = 100.0 * sum(top1_hits) / positions
         top5_pct = 100.0 * sum(top5_hits) / positions
-        mean_pcc = (prefill_pcc + sum(decode_pccs)) / positions
-        worst_pcc = min(prefill_pcc, min(decode_pccs))
+        all_pccs = [prefill_pcc, *decode_pccs]
+        mean_pcc = sum(all_pccs) / positions
+        worst_pcc = min(all_pccs)
         worst_step = min(range(len(decode_pccs)), key=decode_pccs.__getitem__)
+        low_positions = sum(1 for value in all_pccs if value < LOW_PCC)
         print(
             f"ACCURACY positions={positions} top1_pct={top1_pct:.2f} top5_pct={top5_pct:.2f} "
             f"mean_corr={mean_pcc:.6f} worst_corr={worst_pcc:.6f} worst_step={worst_step} "
-            f"prefill_corr={prefill_pcc:.6f} device_seconds={elapsed:.1f} tree={_git_head()}",
+            f"low_positions={low_positions} prefill_corr={prefill_pcc:.6f} device_seconds={elapsed:.1f} "
+            f"tree={_git_head()}",
             flush=True,
         )
 
         baseline = _load_baseline()
         pin = os.environ.get("PCC_GATE_PIN_BASELINE") == "1" or baseline is None
         failures = []
+        if worst_pcc < BROKEN_PCC:
+            failures.append(f"worst position PCC {worst_pcc:.6f} < {BROKEN_PCC} (step {worst_step})")
+        if low_positions > MAX_LOW_POSITIONS:
+            failures.append(f"{low_positions} positions have PCC < {LOW_PCC}, more than {MAX_LOW_POSITIONS}")
+        if pin and failures:
+            # Never pin a broken model as the baseline every later change is held to.
+            pin = False
         if pin:
             path = _baseline_path()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,7 +330,7 @@ def test_optimizer_gemma4_pcc(monkeypatch):
                 f"to top1 >= base-{TOP1_DROP_PTS}, top5 >= base-{TOP5_DROP_PTS}, mean_corr >= base-{MEAN_PCC_DROP}.",
                 flush=True,
             )
-        else:
+        elif baseline is not None:
             if top1_pct < baseline["top1_pct"] - TOP1_DROP_PTS:
                 failures.append(f"top-1 {top1_pct:.2f}% < baseline {baseline['top1_pct']:.2f}% - {TOP1_DROP_PTS}")
             if top5_pct < baseline["top5_pct"] - TOP5_DROP_PTS:
@@ -324,10 +359,8 @@ def test_optimizer_gemma4_pcc(monkeypatch):
             f"{min(decode_pccs):.6f} | PCC: {worst_pcc:.6f}",
             flush=True,
         )
-        assert worst_pcc >= PCC_THRESHOLD
     finally:
-        model = None
-        model_args = None
+        generator = None
         tt_kv_cache = None
         gc.collect()
         if mesh_device is not None:
