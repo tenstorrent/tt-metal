@@ -2144,3 +2144,29 @@ Results:
 Next: the device shared expert (`tt/mlp.py:TtDenseMLP` via the hooks) already works in this swap.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_11_shared_expert.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.moe_add test (attempt 1)
+Reviewed the rendered moe_add test for kda_moe layer 4 (`mlp_out = experts_out + shared_out`, [2048, 4096], no
+weights, s4096 chunk 1). The rendered file was the bare `run_component_test`. I rebuilt it from the frozen
+`test_c_dsa_moe_moe_add.py` (same checks) with layer-4 limits. The gated metric pcc_moe_add_L04 (PCC >= 0.99) is
+unchanged.
+- Golden: row norms experts 4.00, shared 1.33, out 4.27. Shared / experts per row is 0.076..1.59, median 0.32
+  (layer 3: 0.16..4.5). The fp32 sum of the bf16 golden inputs is at rel 0.0023 vs the golden.
+- Sensitivity: /tmp/kmoe_add/probe.py, which is /tmp/moe_add_probe.py with layer 4 plus a few more mutations. It runs
+  on the host only, needs only the golden tensors, and is not kept. The numbers are in the test docstring.
+- Two limits changed from layer 3. Everything else carries over.
+  - Shared rel: <= 0.012 (was 0.009). A truncating bf16 output scores 0.0091 here.
+  - Shared coefficient: [0.996, 1.004] (was [0.995, 1.005]). This catches shared x1.005 (1.005); truncating scores
+    0.9978.
+Results:
+- Device (default mode) already passes through `tt/moe_add.py` via `_device_step`'s `moe_add` branch:
+  - PCC 0.999996.
+  - vs golden: rel 0.00285, ratio [1.0002, 1.0010].
+  - vs the fp32 sum: rel 0.00174, ratio [1.0003, 1.0009], worst row 0.0019.
+  - Coefficients: experts 1.00052, shared 1.00086 (shared rel 0.0054).
+  - About 7 s.
+- Reference passes (exact against the fp32 sum). Stub fails (PCC 0).
+- The first `FAIL pcc=0` line in each log comes from the precompile collect pass.
+Next (implement): no module change is needed. Add moe_add to `DEVICE_STEPS["kda_moe"]` if it is not there yet.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_moe_add.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
