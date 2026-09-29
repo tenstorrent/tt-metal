@@ -13,6 +13,7 @@ Run:
 """
 import os
 
+import pytest
 import torch
 from loguru import logger
 
@@ -67,9 +68,18 @@ def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
+@pytest.mark.parametrize(
+    "in_dtype",
+    [
+        pytest.param(ttnn.bfloat16, id="in_bf16"),
+        pytest.param(ttnn.bfloat8_b, id="in_bf8"),
+        pytest.param(ttnn.bfloat4_b, id="in_bf4"),
+    ],
+)
+def test_mlp_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     """Prefill-path (S>32) TP MLP vs torch SwiGLU. Exercises the 2D prefill matmul for w1/w3
-    and the (now default) explicit w2 down-proj progcfg."""
+    bf8 is the 27B Wormhole gather dtype. bfp4 was rejected and is not a shipped path.
+    """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
     nd = mesh_device.get_num_devices()
@@ -91,12 +101,14 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     xf = x.to(torch.float32)[0, 0]  # [T, dim]
     ref = (torch.nn.functional.silu(xf @ g.T) * (xf @ u.T)) @ d.T  # [T, dim]
 
-    # Prefill fused gate/up AGMM expects a K-sharded input (ff_norm skips its
-    # post-norm all-gather in the real model); the op gathers it back internally.
-    x_tt = shard_to_device(mesh_device, x, dim=-1) if nd > 1 else replicate_to_device(mesh_device, x)
+    # Prefill fused gate/up AGMM (Blackhole) wants a K-sharded input; Wormhole expects full width.
+    if nd > 1 and mlp._fuse_gateup_agmm:
+        x_tt = shard_to_device(mesh_device, x, dim=-1, dtype=in_dtype)
+    else:
+        x_tt = replicate_to_device(mesh_device, x, dtype=in_dtype)
     out = mlp.forward(x_tt)
     out_torch = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].to(torch.float32)  # [T, dim]
 
     passing, pcc = comp_pcc(ref, out_torch, get_pcc_threshold(request, default=0.97))
-    logger.info(f"MLP TP PREFILL PCC (T={T}) = {pcc}")
+    logger.info(f"MLP TP PREFILL PCC (T={T}, in={in_dtype}) = {pcc}")
     assert passing, f"MLP TP prefill PCC too low: {pcc}"

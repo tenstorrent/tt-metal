@@ -206,6 +206,10 @@ checkpoint. They must run on the `(1,4)` mesh with `FABRIC_1D` (the
 | `test_gdn_tp.py`      | TP Gated DeltaNet: decode + chunk-prefill                           |
 | `test_model_tp.py`    | full-model TP contract: paged+traced path matches the bespoke oracle |
 | `test_generate_tp.py` | full-model bespoke `generate_tp` on a real prompt (answer oracle)   |
+| `test_mtp_tp.py`      | MTP drafter head PCC vs torch (prefill and one decode step)         |
+| `test_spec_lossless.py` | spec decode matches plain greedy, token for token                 |
+| `test_spec_determinism.py` | spec decode is identical across repeat runs                     |
+| `test_mtp_torch_ref.py` | host MTP reference (pure CPU)                                      |
 
 Run the 27B TP suite (with `HF_MODEL=Qwen/Qwen3.6-27B` or `Qwen/Qwen3.5-27B`,
 `MESH_DEVICE=P150x4`):
@@ -216,6 +220,10 @@ pytest models/demos/blackhole/qwen36/tests/test_attention_tp.py -v -s
 pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
 pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_mtp_tp.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_spec_lossless.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_spec_determinism.py -v -s
+pytest models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py -v -s
 ```
 
 > The MoE-specific tests (`test_moe_tp.py`, and the MoE path in `test_model_tp.py` /
@@ -223,6 +231,74 @@ pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
 > `HF_MODEL=Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4`. On the dense 27B they are inert
 > (`num_experts == 0`), and the dense/MoE checkpoints must not be mixed in one run
 > (each test file `setdefault`s or expects a single `HF_MODEL`).
-
 > `test_substate.py` and `test_weight_mapping.py` are pure-CPU and need no device.
 > `test_weight_mapping.py`'s shape constants assume the 9B checkpoint.
+
+## Wormhole
+
+The same code runs on Wormhole, with two validated configurations. Blackhole-only fusions are
+gated off (`is_blackhole()`), and the GDN kernels pick Wormhole-appropriate defaults for the
+chunk-seq activation memory, the chunk output dtype, and the conv FIR padding layout.
+
+| Config | Device | Mesh | `HF_MODEL` | `MESH_DEVICE` |
+| --- | --- | --- | --- | --- |
+| 9B | N300 | 1x2 | `Qwen/Qwen3.5-9B` | `N300` |
+| 27B | T3K | 1x8 | `Qwen/Qwen3.6-27B` | `T3K` |
+
+```bash
+# 9B on N300 (no MTP: permuted RoPE falls back to plain decode)
+HF_MODEL=Qwen/Qwen3.5-9B MESH_DEVICE=N300 \
+  pytest models/demos/blackhole/qwen36/demo/text_demo.py -k traced_128 -v -s
+
+# 27B on T3K, plain decode
+HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=T3K QWEN36_SPEC=0 \
+  pytest models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k" -v -s
+
+# 27B on T3K, MTP speculative decode (demo default is K=7)
+HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=T3K QWEN36_SPEC=1 \
+  pytest models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k" -v -s
+```
+
+### Performance
+
+Warm trace replay, batch 1 greedy. TTFT is wall clock including prefill and the first token.
+The 9B has no MTP path. The 27B MTP columns are speculative decode at K=7.
+
+| ISL | 9B / N300 TTFT | 9B decode | 27B / T3K TTFT | 27B decode | 27B MTP TTFT | 27B MTP decode | speedup | acceptance |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 128 | 0.19 s | 23.06 tok/s | 0.37 s | 16.95 tok/s | 0.99 s | 46.79 tok/s | 2.76x | 4.27/7 |
+| 4k | 0.82 s | 22.52 tok/s | 1.12 s | 16.87 tok/s | 1.66 s | 43.80 tok/s | 2.60x | 4.05/7 |
+| 8k | 1.94 s | 22.24 tok/s | 2.07 s | 16.90 tok/s | 2.72 s | 32.01 tok/s | 1.89x | 2.69/7 |
+| 16k | 4.04 s | 22.06 tok/s | 4.43 s | 16.44 tok/s | 5.07 s | 32.83 tok/s | 2.00x | 2.79/7 |
+| 32k | 8.82 s | 22.11 tok/s | 10.30 s | 16.12 tok/s | 11.13 s | 43.67 tok/s | 2.71x | 4.29/7 |
+| 64k | 20.96 s | 21.98 tok/s | 26.76 s | 15.28 tok/s | 28.77 s | 26.86 tok/s | 1.76x | 2.34/7 |
+| 128k | 39.66 s | 20.48 tok/s | 54.47 s | 14.36 tok/s | 58.38 s | 43.83 tok/s | 3.05x | 4.94/7 |
+| 256k | 166.22 s | 18.04 tok/s | 256.87 s | 11.59 tok/s | 274.48 s | 16.10 tok/s | 1.39x | 2.53/7 |
+
+Decode falls off at 256k as paged-KV attention grows (9B −22%, 27B −32%). TTFT is near-linear in ISL.
+
+### Accuracy
+
+Full-depth logits vs the HuggingFace reference, real weights:
+
+| Gate | 9B / N300 | 27B / T3K |
+| --- | --- | --- |
+| prefill logits PCC (≥ 0.98) | 0.9984 | 0.9957 |
+| decode logits PCC, 5 steps (≥ 0.95) | 0.9948 | 0.9939 |
+
+```bash
+pytest models/demos/blackhole/qwen36/tests/unit/test_prefill.py \
+       models/demos/blackhole/qwen36/tests/unit/test_decode.py -v -s
+```
+
+### Known limitations
+
+- Greedy decode runs on device; temperature sampling does not (`QWEN35_TEMP=0`).
+- Batched GDN prefill is capped at batch 2–4, below the serving batch.
+- GDN decode batch-splits above B=16 at fp32 recurrent state on N300.
+- Run single-device and multi-device test files in **separate pytest processes**: one process
+  opening both layouts mis-sizes the chunk-seq L1 reservation.
+- Qwen3.5-9B on N300 does not run MTP. Permuted RoPE makes the demo fall back to plain decode.
+- MTP is batch 1, draft length K=7 (`QWEN36_SPEC_DRAFT_LEN` overrides). `QWEN36_SPEC=0` is plain decode.
+- No-repeat-ngram (`QWEN35_NO_REPEAT_NGRAM`) skips MTP and uses plain decode.
+- MTP greedy picks on device. Temperature sampling stays on the host.

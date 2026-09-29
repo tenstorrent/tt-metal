@@ -5,7 +5,7 @@
 
 Handles:
 - Stripping 'model.language_model.' prefix
-- Filtering out vision encoder and MTP weights
+- Filtering out vision encoder weights (MTP weights are KEPT — the spec-decode drafter)
 - Renaming combined in_proj_qkv → qkv_proj (DeltaNet layers; the op uses the fused weight)
 - Splitting combined conv1d.weight into separate Q, K, V conv weights (DeltaNet layers)
 - Renaming lm_head.weight → output.weight
@@ -45,9 +45,7 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Filter out vision encoder weights (check original key — no prefix stripping yet)
         if "visual" in key or key.startswith("model.visual"):
             continue
-        # Filter out MTP (multi-token prediction) weights (original key)
-        if key.startswith("mtp"):
-            continue
+        # mtp.* is not filtered; it has no model. prefix and is not "layers.", so it passes through.
 
         # Strip the language-model prefix. Two checkpoint sources produce different
         # prefixes for the same internal weights:
@@ -142,6 +140,13 @@ def is_fp8_checkpoint(model_path) -> bool:
     return any(k.endswith(".weight_scale_inv") for k in weight_map)
 
 
+def load_mtp_tensors(model_path) -> Dict[str, torch.Tensor]:
+    """Read mtp.* from the checkpoint; AutoModelForCausalLM drops them before remap."""
+    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+    return load_hf_state_dict_filtered(model_path, ["mtp"])
+
+
 def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
     """Load Qwen3.5 FP8 weights: block-wise dequant + minimal key remap.
 
@@ -207,8 +212,9 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
 
     state_dict: Dict[str, torch.Tensor] = {}
     for key, tensor in dequantized.items():
-        if "visual" in key or key.startswith("mtp"):
+        if "visual" in key:
             continue
+        # mtp.* is kept: no prefix to strip, so it passes through the else branch.
         short = key
         for prefix in ("model.language_model.", "model."):
             if short.startswith(prefix):

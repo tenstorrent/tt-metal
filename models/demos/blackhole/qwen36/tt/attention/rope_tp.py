@@ -7,11 +7,126 @@ Ported from models/demos/qwen35_27b/tt/rope.py. Only the rotary portion
 HuggingFace split-halves format. These operate on per-device head shards, so
 they are unchanged by TP (each device rotates its local heads).
 """
+
 import itertools
 
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+ROPE_PERM_VERSION = "v1"  # bump when the channel permutation changes; it is part of the weight-cache name
+
+
+def rope_full_head_dim(args):
+    """full_head_dim so cos/sin width matches TPAttention; None keeps HF-width partial rope."""
+    return args.head_dim if getattr(args, "rope_permuted_enabled", False) else None
+
+
+def rope_channel_perm(head_dim, rope_dim):
+    """Index list P: permuted channel i holds HF channel P[i], so full-width rotate-half matches partial rope."""
+    assert head_dim % 2 == 0 and rope_dim % 2 == 0, (head_dim, rope_dim)
+    assert 0 < rope_dim <= head_dim, (head_dim, rope_dim)
+    half, rh = head_dim // 2, rope_dim // 2
+    perm = [None] * head_dim
+    for j in range(rh):
+        perm[j] = j
+        perm[half + j] = rh + j
+    # Pass-through slots land in matched (p, p+half) pairs (cos=1/sin=0).
+    free = [i for i in range(rh, half)] + [i for i in range(half + rh, head_dim)]
+    for slot, src in zip(free, range(rope_dim, head_dim)):
+        perm[slot] = src
+    assert sorted(perm) == list(range(head_dim)), "rope_channel_perm is not a permutation"
+    return perm
+
+
+def _rope_perm_row_index(device, out_rows, head_dim, rope_dim, stride):
+    """Row-index tensor for the gather; identity segment when stride > head_dim (q_proj gate half)."""
+    half, rh = head_dim // 2, rope_dim // 2
+
+    def seg(a, b):
+        return ttnn.arange(a, b, 1, device=device, dtype=ttnn.uint32)
+
+    segments = []
+    for base in range(0, out_rows, stride):
+        segments += [
+            seg(base, base + rh),
+            seg(base + rope_dim, base + rope_dim + (half - rh)),
+            seg(base + rh, base + rope_dim),
+            seg(base + rope_dim + (half - rh), base + head_dim),
+        ]
+        if stride > head_dim:
+            segments.append(seg(base + head_dim, base + stride))
+    idx = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=0)
+    return ttnn.reshape(idx, (1, out_rows))
+
+
+def permute_rope_channels(w, head_dim, rope_dim, device, stride=None):
+    """Permute head_dim output channels via ttnn.embedding. Use host reshape for 1D: ttnn.reshape corrupts 1D<->2D."""
+    is_1d = w.dim() == 1
+    if is_1d:
+        assert w.shape[0] == head_dim, w.shape
+        out_rows, stride = head_dim, head_dim
+        w = w.reshape(head_dim, 1)
+    else:
+        stride = stride or head_dim
+        out_rows = w.shape[0]
+        assert out_rows % stride == 0, (w.shape, stride)
+
+    idx = _rope_perm_row_index(device, out_rows, head_dim, rope_dim, stride)
+    # Replicate the gather across the mesh, then read back one shard.
+    table = ttnn.from_torch(
+        w,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    gathered = ttnn.embedding(idx, table)
+    shards = ttnn.get_device_tensors(gathered)
+    out = ttnn.to_torch(ttnn.from_device(shards[0] if shards else gathered)).reshape(w.shape)
+    ttnn.deallocate(table)
+    ttnn.deallocate(gathered)
+    return out.reshape(head_dim) if is_1d else out
+
+
+def to_full_width_rot_mats(cos_r, sin_r, head_dim, rope_dim, device):
+    """Widen HF cos/sin to head_dim in permuted order; pass-through slots are cos=1/sin=0."""
+    if head_dim == rope_dim:
+        return cos_r, sin_r
+    half, rh = head_dim // 2, rope_dim // 2
+    lead = list(cos_r.shape[:-1])
+    start = [0] * (len(lead) + 1)
+
+    def widen(src, fill_value):
+        t = ttnn.from_torch(
+            src,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        # Permuted layout: rope halves at 0 and head_dim/2, tail fills the rest.
+        pieces = [
+            ttnn.slice(t, start, lead + [rh]),
+            ttnn.full(lead + [half - rh], fill_value, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+            ttnn.slice(t, start[:-1] + [rh], lead + [rope_dim]),
+            ttnn.full(
+                lead + [head_dim - half - rh],
+                fill_value,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            ),
+        ]
+        out = ttnn.concat(pieces, dim=-1)
+        shards = ttnn.get_device_tensors(out)
+        res = ttnn.to_torch(ttnn.from_device(shards[0] if shards else out))
+        ttnn.deallocate(t)
+        ttnn.deallocate(out)
+        return res
+
+    return widen(cos_r, 1.0), widen(sin_r, 0.0)
 
 
 def build_rope_tables(device, rope_dim, max_seq_len, theta):
@@ -249,38 +364,117 @@ def apply_interleaved_mrope(freqs, mrope_section):
     return freqs_t
 
 
-def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
-    """Return [cos, sin] each [1, B, 1, rope_dim] for the given per-user positions.
+_ROPE_DEV_TABLES = {}
+# Minimum row count the device RoPE table is built at; unrelated to args.dim.
+_ROPE_TABLE_MIN_ROWS = 4096
 
-    positions: torch.Tensor [B] of int positions. Built on host (small) then
-    replicated to the mesh — matches apply_partial_rope_decode's expected layout.
-    """
+
+def _rope_dev_tables(device, rope_dim, n_rows, theta, full_head_dim=None):
+    """ROW_MAJOR device cos/sin, grown on demand. full_head_dim widens via to_full_width_rot_mats."""
+    key = (id(device), int(rope_dim), float(theta), int(full_head_dim or 0))
+    ent = _ROPE_DEV_TABLES.get(key)
+    if ent is not None and ent["rows"] >= n_rows:
+        return ent["cos"], ent["sin"]
+    rows = max(int(n_rows), 2 * ent["rows"] if ent else 0, _ROPE_TABLE_MIN_ROWS)
     inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
-    pos = positions.float()
-    freqs = torch.outer(pos, inv_freq)  # [B, rope_dim/2]
-    emb = torch.cat([freqs, freqs], dim=-1)  # [B, rope_dim]
-    B = positions.shape[0]
-    cos = emb.cos().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
-    sin = emb.sin().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
-    cos_tt = ttnn.from_torch(
-        cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
-    )
-    sin_tt = ttnn.from_torch(
-        sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device)
-    )
+    freqs = torch.outer(torch.arange(rows).float(), inv_freq)
+    emb = torch.cat([freqs, freqs], dim=-1)
+    cos_t, sin_t = emb.cos(), emb.sin()
+    if full_head_dim is not None and full_head_dim != rope_dim:
+        cos_t, sin_t = to_full_width_rot_mats(cos_t, sin_t, full_head_dim, rope_dim, device)
+
+    def _mk(t):
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
+    ent = {"rows": rows, "cos": _mk(cos_t), "sin": _mk(sin_t)}
+    _ROPE_DEV_TABLES[key] = ent
+    return ent["cos"], ent["sin"]
+
+
+def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions, full_head_dim=None):
+    """[cos, sin] each [1, B, 1, W] for per-user positions; a sequence of ints stays torch-free."""
+    W = full_head_dim or rope_dim
+    pos_i = [int(p) for p in (positions.reshape(-1).tolist() if isinstance(positions, torch.Tensor) else positions)]
+    if is_blackhole():
+        # Positions are ints; rebuilding the float row from the int list is bit-identical.
+        inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
+        pos = torch.tensor(pos_i, dtype=torch.float32)
+        freqs = torch.outer(pos, inv_freq)
+        emb = torch.cat([freqs, freqs], dim=-1)
+        B = len(pos_i)
+        cos, sin = emb.cos(), emb.sin()
+        if W != rope_dim:
+            cos, sin = to_full_width_rot_mats(cos, sin, W, rope_dim, device)
+        cos = cos.reshape(1, B, 1, W).to(torch.bfloat16)
+        sin = sin.reshape(1, B, 1, W).to(torch.bfloat16)
+        cos_tt = ttnn.from_torch(
+            cos,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        sin_tt = ttnn.from_torch(
+            sin,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        return cos_tt, sin_tt
+    assert min(pos_i) >= 0, f"negative rope position {min(pos_i)}"
+    tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, max(pos_i) + 1, theta, full_head_dim=full_head_dim)
+    B = len(pos_i)
+    idx = ttnn.Tensor(pos_i, [1, B], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
+
+    def _gather(tbl):
+        r = ttnn.embedding(idx, tbl)
+        r = ttnn.reshape(r, (1, B, 1, W))  # metadata-only while ROW_MAJOR
+        return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+    cos_tt, sin_tt = _gather(tbl_cos), _gather(tbl_sin)
+    ttnn.deallocate(idx)
     return cos_tt, sin_tt
 
 
-def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_section=None, attention_scaling=1.0):
-    """Return [cos, sin] each [1, 1, seq_len, rope_dim].
+def rot_mats_prefill(
+    device,
+    rope_dim,
+    seq_len,
+    theta,
+    position_ids=None,
+    mrope_section=None,
+    attention_scaling=1.0,
+    full_head_dim=None,
+):
+    """Return [cos, sin] each [1, 1, seq_len, W].
 
     position_ids: 3D M-RoPE indices [3, bs, seq_len] (or 2D [bs, seq_len], expanded inside
     get_rot_mats). When None, defaults to text positions arange(seq_len) — the (t==h==w) case
     where interleaved-mrope collapses to ordinary 1D RoPE, so the result is independent of
     mrope_section and identical to the pre-M-RoPE behaviour.
     """
+    W = full_head_dim or rope_dim
+    if position_ids is None and not is_blackhole():
+        # Text positions are arange(seq_len), a contiguous table prefix; slice on device.
+        tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, seq_len, theta, full_head_dim=full_head_dim)
+
+        def _slice(tbl):
+            r = ttnn.slice(tbl, [0, 0], [seq_len, W])  # ROW_MAJOR: no tile alignment
+            r = ttnn.reshape(r, (1, 1, seq_len, W))  # metadata-only while ROW_MAJOR
+            return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+
+        return _slice(tbl_cos), _slice(tbl_sin)
+
     inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
     if position_ids is None:
+        # Blackhole text-only: the original host path expects explicit positions.
         position_ids = torch.arange(seq_len).view(1, -1)
     if mrope_section is None:
         # Any split works for text (t==h==w); use an even-ish T/H/W partition of rope_dim//2.
@@ -288,21 +482,47 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
         base = half // 3
         mrope_section = [base, base, half - 2 * base]
     cos, sin = get_rot_mats(inv_freq, position_ids, mrope_section, attention_scaling)
+    if W != rope_dim:
+        cos, sin = to_full_width_rot_mats(cos.reshape(-1, rope_dim), sin.reshape(-1, rope_dim), W, rope_dim, device)
     cos = ttnn.from_torch(
-        cos.reshape(1, 1, seq_len, rope_dim).to(torch.bfloat16),
+        cos.reshape(1, 1, seq_len, W).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
     sin = ttnn.from_torch(
-        sin.reshape(1, 1, seq_len, rope_dim).to(torch.bfloat16),
+        sin.reshape(1, 1, seq_len, W).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
     return cos, sin
+
+
+def shard_rot_mats_decode(cos_tt, sin_tt, shard_cfg):
+    """Shard decode cos/sin onto the same grid as the tensor being rotated."""
+    cos_tt = ttnn.unsqueeze_to_4D(cos_tt)
+    sin_tt = ttnn.unsqueeze_to_4D(sin_tt)
+    return (
+        ttnn.interleaved_to_sharded(cos_tt, shard_cfg),
+        ttnn.interleaved_to_sharded(sin_tt, shard_cfg),
+    )
+
+
+def apply_rope_full_decode(x_sh, cos_sh, sin_sh, memory_config=None):
+    """Permuted decode RoPE is one op; the output shard spec is copied from the input."""
+    return ttnn.experimental.rotary_embedding_hf(
+        x_sh, cos_sh, sin_sh, is_decode_mode=True, memory_config=memory_config or x_sh.memory_config()
+    )
+
+
+def apply_rope_full_prefill(x, cos_tt, sin_tt, memory_config=None):
+    """Permuted prefill RoPE is one op."""
+    return ttnn.experimental.rotary_embedding_hf(
+        x, cos_tt, sin_tt, is_decode_mode=False, memory_config=memory_config or ttnn.L1_MEMORY_CONFIG
+    )
 
 
 def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
@@ -346,6 +566,7 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
     """
     # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
+    # chunked SDPA in forward_prefill_paged still clashes with this L1 output.
     _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]

@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole mesh.
+"""TP Gated DeltaNet decode and chunk-prefill checks on a Blackhole or Wormhole mesh.
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
+
+import gc
 import os
 
 import pytest
@@ -13,7 +15,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import (
     compute_pcc,
     get_pcc_threshold,
@@ -30,6 +32,20 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
+
+
+def _pf_in(mesh_device, args, t):
+    """K-sharded prefill input only when the fused AGMM in-proj is active; else replicated full K."""
+    fused = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None and is_blackhole()
+    return shard_to_device(mesh_device, t, dim=-1) if fused else replicate_to_device(mesh_device, t)
+
+
+def _parametrize_prefill_in_dtype():
+    """Prefill activation dtypes this arch produces. bf8 is Wormhole-only and omitted on Blackhole."""
+    dtypes = [pytest.param(ttnn.bfloat16, id="in_bf16")]
+    if not is_blackhole():
+        dtypes.append(pytest.param(ttnn.bfloat8_b, id="in_bf8"))
+    return pytest.mark.parametrize("in_dtype", dtypes)
 
 
 @torch.no_grad()
@@ -210,17 +226,19 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        # Decode leaves rec_state in L1; the next conv1d's CBs clash unless it is spilled.
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched: per-user prefill(return_state) -> assemble -> single batched decode ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     rec_list, conv_list = [], []
     for u in range(B):
-        _, rec_u, conv_u = gb.forward_prefill(
-            shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, return_state=True
-        )
+        _, rec_u, conv_u = gb.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, return_state=True)
         rec_list.append(rec_u)
         conv_list.append(conv_u)
     gb.assemble_batched_state(rec_list, conv_list)
@@ -275,9 +293,12 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -285,9 +306,11 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     for u in reversed(range(B)):  # reverse order: every write must preserve the already-written rows
         gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         gu.reset_state()
-        gu.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        gu.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
+        gu._spill_rec_state_to_dram()
         gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
         gu.rec_state, gu.conv_states = None, None
+        del gu
 
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
@@ -359,7 +382,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=Tmax, capture_state=True)
+        g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=Tmax, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
 
@@ -369,7 +392,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     x_pad = torch.zeros(B, Tmax, args.dim, dtype=torch.bfloat16)
     for u in range(B):
         x_pad[u, : lens[u], :] = xp[u][0, 0]
-    gb.forward_prefill_batched(shard_to_device(mesh_device, x_pad, dim=-1), chunk_size=Tmax, valid_lens=lens)
+    gb.forward_prefill_batched(_pf_in(mesh_device, args, x_pad), chunk_size=Tmax, valid_lens=lens)
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim]
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
     out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
@@ -414,7 +437,7 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gref.reset_state()
     gref._stable_state = True
-    gref.forward_prefill_batched(shard_to_device(mesh_device, x.unsqueeze(0), dim=-1), chunk_size=C)
+    gref.forward_prefill_batched(_pf_in(mesh_device, args, x.unsqueeze(0)), chunk_size=C)
     out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     # ---- test: two CARRIED chunks ----
@@ -422,8 +445,8 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     g.reset_state()
     g._stable_state = True
     g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
-    g.forward_prefill_batched(shard_to_device(mesh_device, x[:, :C].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
-    g.forward_prefill_batched(shard_to_device(mesh_device, x[:, C:].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
+    g.forward_prefill_batched(_pf_in(mesh_device, args, x[:, :C].unsqueeze(0)), chunk_size=C, carry=True)
+    g.forward_prefill_batched(_pf_in(mesh_device, args, x[:, C:].unsqueeze(0)), chunk_size=C, carry=True)
     out_t = ttnn.to_torch(g.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     thr = get_pcc_threshold(request, default=0.99)
@@ -436,11 +459,14 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
+@_parametrize_prefill_in_dtype()
+def test_gdn_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     """Check that chunk-prefill and step-by-step decode agree on the same T=128 tokens.
 
     Both paths start from zero state. No hand-written reference — this is a
     self-consistency check between forward_prefill and forward_decode.
+
+    bf8 prefill is Wormhole-only: Blackhole's AGMM gather intermediate is bf16, so a bf8 in0 is copied with no conversion.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
@@ -457,8 +483,9 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
-    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    x_tt = _pf_in(mesh_device, args, x)  # K-sharded on BH (fused AGMM), full-width on WH
+    if in_dtype != x_tt.dtype:
+        x_tt = ttnn.typecast(x_tt, in_dtype)
     composer = tp_composer(mesh_device)
 
     # ---- Prefill ----
@@ -508,8 +535,7 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
-    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    x_tt = _pf_in(mesh_device, args, x)  # K-sharded on BH (fused AGMM), full-width on WH
     composer = tp_composer(mesh_device)
 
     import models.demos.blackhole.qwen36.tt.gdn.fused_chunk as fc
@@ -575,7 +601,8 @@ def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure
     tt_ccl = TT_CCL(mesh_device)
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
-    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    if not gdn._out_colpar_prefill:
+        pytest.skip("column-parallel prefill out-proj is Blackhole-only")
     composer = tp_composer(mesh_device)
 
     x = torch.randn(1, 1, OUTER_CHUNK_SIZE, args.dim, dtype=torch.bfloat16)
@@ -631,7 +658,8 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
     from models.tt_transformers.tt.ccl import TT_CCL
 
     gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
-    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    if not gdn._out_colpar_prefill:
+        pytest.skip("column-parallel prefill out-proj is Blackhole-only")
     composer = tp_composer(mesh_device)
     x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
 
@@ -668,3 +696,218 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
+
+
+def _snapshot_layer_state(gdn, mesh_device):
+    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states)."""
+    comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    return (
+        ttnn.to_torch(gdn.rec_state, mesh_composer=comp),
+        ttnn.to_torch(gdn.conv_carry, mesh_composer=comp) if gdn.conv_carry is not None else None,
+        [ttnn.to_torch(c, mesh_composer=comp) for c in gdn.conv_states] if gdn.conv_states is not None else None,
+    )
+
+
+def _restore_layer_state(gdn, mesh_device, snap):
+    rec, carry, convs = snap
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+
+    def _back(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+
+    r = _back(rec, gdn.rec_state.dtype)
+    ttnn.copy(r, gdn.rec_state)
+    ttnn.deallocate(r)
+    if carry is not None and gdn.conv_carry is not None:
+        c = _back(carry, gdn.conv_carry.dtype)
+        ttnn.copy(c, gdn.conv_carry)
+        ttnn.deallocate(c)
+    if convs is not None and gdn.conv_states is not None:
+        for j, cs in enumerate(convs):
+            cc = _back(cs, gdn.conv_states[j].dtype)
+            ttnn.copy(cc, gdn.conv_states[j])
+            ttnn.deallocate(cc)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, request):
+    """MAC FIR vs native conv1d on a masked bucket. Asserts only that both paths run and stay finite."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    # Same entry point as forward_prefill. pad_layout=None is TILE on Blackhole and ROW_MAJOR on Wormhole.
+    from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import (
+        _causal_conv1d_fir as causal_conv1d_fir_dispatch,
+    )
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    nd = mesh_device.get_num_devices()
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), tt_ccl)
+    composer = tp_composer(mesh_device)
+
+    T, VL = 128, 4  # verify's bucket and its K+1 real candidates at the shipping K=3
+    C = gdn.qkv_dim_tp
+    qkv_t = torch.randn(1, T, C, dtype=torch.bfloat16)
+    qkv = lambda: ttnn.from_torch(  # noqa: E731 - fresh copy per path; the conv consumes its input
+        qkv_t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    logger.info(f"devices={nd} gdn layer={li} bucket T={T} valid_len={VL} qkv_dim_tp={C} K={gdn.K}")
+
+    fir_out, fir_state = causal_conv1d_fir_dispatch(
+        qkv(),
+        None,
+        None,
+        gdn.K,
+        mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        conv_state=None,
+        weight_taps=gdn.tw["conv_taps"],
+        bias_dev=None,
+        valid_len=VL,
+        # pad_layout=None selects TILE on Blackhole and ROW_MAJOR on Wormhole.
+    )
+    # The carry difference is known; the question is the output on the real rows.
+    nat_out, nat_state = gdn._conv1d_prefill(qkv(), T, None)
+
+    # Output is 3-D; compose one device since every device sees the same inputs.
+    _dev0 = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[  # noqa: E731
+        0
+    ].float()
+    f_o = _dev0(fir_out)
+    n_o = _dev0(nat_out)
+    assert f_o.shape == n_o.shape, f"shape mismatch FIR {tuple(f_o.shape)} vs native {tuple(n_o.shape)}"
+    assert torch.isfinite(f_o).all() and torch.isfinite(n_o).all(), "non-finite conv output"
+
+    real_pcc = compute_pcc(f_o[:VL], n_o[:VL])
+    pad_pcc = compute_pcc(f_o[VL:], n_o[VL:])
+    st_pcc = compute_pcc(_dev0(fir_state), _dev0(nat_state))
+    logger.info(
+        f"FIR vs native conv @ masked bucket: REAL rows[0:{VL}] PCC={real_pcc:.6f}  "
+        f"PAD rows[{VL}:] PCC={pad_pcc:.6f}  carry PCC={st_pcc:.6f} (carry EXPECTED to differ: "
+        f"native reads the tail at T={T}, the FIR at valid_len={VL})"
+    )
+    # One-hot carry select vs _shift_register_tail name the same rows but are not the same bytes.
+    tail = gdn._shift_register_tail(qkv(), VL, None, C)
+    tail = ttnn.to_layout(tail, ttnn.TILE_LAYOUT)
+    t_o, f_s = _dev0(tail), _dev0(fir_state)
+    tail_pcc = compute_pcc(t_o, f_s)
+    tail_max = float((t_o - f_s).abs().max())
+    logger.info(
+        f"carry fix: _shift_register_tail(valid_len={VL}) vs the FIR one-hot select -> "
+        f"PCC={tail_pcc:.8f} max|diff|={tail_max:.3e} "
+        f"({'BIT-IDENTICAL' if tail_max == 0.0 else 'equivalent but NOT bit-identical'})"
+    )
+
+    logger.info(
+        "REAL near 1.0 => the conv OUTPUT is equivalent under masking and the only thing a native "
+        "swap must fix is the carry (recoverable: _shift_register_tail(qkv, valid_len) picks exactly "
+        "the rows the FIR's one-hot matmul does). REAL below 1.0 => the output itself differs and a "
+        "carry fix alone is not enough -- which is what the reverted attempt assumed."
+    )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc, request):
+    """Chunk vs recurrent on one GDN layer: cold, warm, and one real token in a masked bucket."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    # T must exceed 32 or the in-projection takes the decode branch, which wants a replicated activation.
+    W, T = 128, 64  # warmup tokens, then a short chunk (both 32-multiples for the fused kernel)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} warmup={W} chunk={T}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), tt_ccl)
+    composer = tp_composer(mesh_device)
+
+    warm_x = torch.randn(1, 1, W, args.dim, dtype=torch.bfloat16)
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+
+    # K-sharded input only when fused AGMM is live (Blackhole, T>32); otherwise the activation is full width.
+    def _feed_prefill(t, S):
+        if gdn._fuse_agmm and S > 32:  # 32 = tile height; see forward_prefill's T>TILE gate
+            return shard_to_device(mesh_device, t, dim=-1)
+        return replicate_to_device(mesh_device, t)
+
+    def _chunk_rows(valid_len=None, n=None):
+        out = gdn.forward_prefill(_feed_prefill(x, T), chunk_size=T, valid_len=valid_len, capture_state=True)
+        rows = ttnn.to_torch(out, mesh_composer=composer)[0, 0].float()
+        return rows[: n if n is not None else T]
+
+    def _decode_rows(n):
+        rows = []
+        for t in range(n):
+            ot = gdn.forward_decode(replicate_to_device(mesh_device, x[:, :, t : t + 1, :]))
+            rows.append(ttnn.to_torch(ot, mesh_composer=composer)[0, 0, 0].float())
+        return torch.stack(rows, dim=0)
+
+    results = {}
+
+    gdn.reset_state()
+    cold_chunk = _chunk_rows()
+    gdn.reset_state()
+    cold_dec = _decode_rows(T)
+    results["cold"] = (cold_chunk, cold_dec)
+
+    # Warm: one prefill fills both conv carries, then each path continues from that snapshot.
+    gdn.reset_state()
+    gdn._stable_state = True  # carry the state in place, as the model does during serving
+    ttnn.deallocate(gdn.forward_prefill(_feed_prefill(warm_x, W), chunk_size=W, capture_state=True))
+    snap = _snapshot_layer_state(gdn, mesh_device)
+
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm_chunk = _chunk_rows()
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm_dec = _decode_rows(T)
+    results["warm"] = (warm_chunk, warm_dec)
+
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm1_chunk = _chunk_rows(valid_len=1, n=1)
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm1_dec = _decode_rows(1)
+    results["warm1"] = (warm1_chunk, warm1_dec)
+
+    for label, (chunk_rows, dec_rows) in results.items():
+        n = chunk_rows.shape[0]
+        pcc = compute_pcc(dec_rows, chunk_rows)
+        cos = torch.nn.functional.cosine_similarity(dec_rows, chunk_rows, dim=-1)
+        per_pos = " ".join(f"t{t}={float(cos[t]):.5f}" for t in range(min(n, 4)))
+        logger.info(f"[{label}] chunk-vs-decode PCC={pcc:.6f} cos(min)={float(cos.min()):.6f} [{per_pos}]")
+
+    cold_pcc = compute_pcc(results["cold"][1], results["cold"][0])
+    warm_pcc = compute_pcc(results["warm"][1], results["warm"][0])
+    warm1_pcc = compute_pcc(results["warm1"][1], results["warm1"][0])
+    logger.info(f"ATTRIBUTION: cold={cold_pcc:.6f} warm={warm_pcc:.6f} warm1={warm1_pcc:.6f}")
+    if cold_pcc > 0.99 and warm_pcc < 0.99:
+        logger.error(
+            "chunk and decode agree from ZERO state but not from a CARRIED state -> the defect is "
+            "in the carried recurrent/conv state handoff, not kernel precision"
+        )
+
+    # Wormhole agrees more loosely than Blackhole. A warm drop is a carried-state defect.
+    _default_thr = 0.9995 if is_blackhole() else 0.999
+    thr = get_pcc_threshold(request, default=_default_thr)
+    assert cold_pcc > thr, f"cold-start chunk vs decode regressed (PCC={cold_pcc:.6f})"
+    # A warm-regime drop is a carried recurrent/conv state defect.
+    assert warm_pcc > thr, (
+        f"chunk vs decode from a CARRIED state is only PCC={warm_pcc:.6f} (cold-start is "
+        f"{cold_pcc:.6f}, and torch parity for this regime is >= 0.9999) — the carried "
+        "recurrent/conv state handoff regressed"
+    )
+    assert warm1_pcc > thr, (
+        f"a single-token masked chunk from a carried state is only PCC={warm1_pcc:.6f} — this is "
+        "exactly what verify_forward runs per step"
+    )
