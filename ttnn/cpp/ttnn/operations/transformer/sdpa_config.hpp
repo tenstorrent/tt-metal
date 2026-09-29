@@ -26,6 +26,9 @@ struct SDPAProgramConfig {
     // Streaming SDPA kernels: softmax with a constant zero row max (no reduce, subtract or rescale). Only
     // valid when the caller bounds scale * QK^T so bf16 exp stays finite (|scale * S| well below ~80).
     bool fixed_offset_softmax = false;
+    // Fixed-offset softmax shift: P = exp(scale * S - fixed_offset). Set it at/above the block's max scaled
+    // logit; rows whose max is below fixed_offset - 80 underflow to a zero output row (Blackhole only).
+    float fixed_offset = 0.0f;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

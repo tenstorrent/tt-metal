@@ -1205,6 +1205,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const auto pv_math_fidelity =
         args.program_config.has_value() ? args.program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
     const bool fixed_offset_softmax = args.program_config.has_value() && args.program_config->fixed_offset_softmax;
+    const float fixed_offset = args.program_config.has_value() ? args.program_config->fixed_offset : 0.0f;
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
@@ -1788,6 +1789,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             use_streaming_compute, "fixed_offset_softmax requires the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_FIXED_OFFSET_SOFTMAX"] = "1";
+        if (fixed_offset != 0.0f) {
+            TT_FATAL(
+                mesh_device->arch() == tt::ARCH::BLACKHOLE, "fixed_offset is folded into the Blackhole exp macro only");
+            TT_FATAL(!use_attention_sink, "fixed_offset does not shift the attention-sink term");
+            defines["SDPA_FIXED_OFFSET_BITS"] = std::to_string(std::bit_cast<uint32_t>(fixed_offset));
+        }
+    } else {
+        TT_FATAL(fixed_offset == 0.0f, "fixed_offset requires fixed_offset_softmax");
     }
     if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
         defines["SDPA_PROFILE_ZONES"] = "1";

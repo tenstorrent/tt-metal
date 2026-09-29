@@ -20,6 +20,7 @@
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -41,6 +42,13 @@
 #define SDPA_FIXED_OFFSET_SOFTMAX 0
 #endif
 constexpr bool sdpa_fixed_offset_softmax = SDPA_FIXED_OFFSET_SOFTMAX == 1;
+// Fixed-offset softmax shift c (fp32 bits): P = exp(scale * S - c), folded into the pack exp's constants.
+// The approximate exp is exact-range limited to scale * S - c in about [-87, +0.7]; below, P underflows to 0.
+#ifndef SDPA_FIXED_OFFSET_BITS
+#define SDPA_FIXED_OFFSET_BITS 0
+#endif
+// Row-sum seed for fixed mode: a row whose every P underflowed still normalizes to 0 instead of 0/0.
+constexpr float sdpa_fixed_sum_epsilon = 1.1754944e-38f;  // bf16 min normal
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
@@ -355,6 +363,25 @@ ALWI void sdpa_copy_tiles(
     }
 }
 
+// Fixed-offset softmax: pack num_tiles tiles filled with value into out_cb (no push). MATH SFPU fill.
+ALWI void sdpa_fill_tiles(uint32_t out_cb, uint32_t num_tiles, float value, uint32_t dst_size) {
+    fill_tile_init();
+    configure_single_tile_pack(out_cb);
+    for (uint32_t base = 0; base < num_tiles; base += dst_size) {
+        const uint32_t n = (num_tiles - base < dst_size) ? (num_tiles - base) : dst_size;
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; i++) {
+            fill_tile(i, value);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; i++) {
+            sdpa_pack_tile_ooo(i, out_cb, base + i);
+        }
+        tile_regs_release();
+    }
+}
+
 // Fixed-offset softmax: pack num_tiles zero tiles (x - x of src_cb's finite tile 0) into out_cb (no push).
 ALWI void sdpa_pack_zero_tiles(uint32_t src_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t dst_size) {
     reconfig_data_format(src_cb, src_cb);
@@ -420,11 +447,8 @@ void blocked_matmul_and_pack(
     tile_regs_release();
 }
 
-/**
- * Fixed-offset softmax QK^T subblock: matmul into DEST, exp(scale * S) on the PACK SFPU, pack P to out_cb
- * and L1-accumulate the tile row sums into sum_cb[row]. overwrite_sum starts the sums on column 0 instead
- * of accumulating onto them. Restores out_cb's row pack width so the caller's nocfg packs stay valid.
- */
+// Fixed-offset softmax QK^T subblock: matmul into DEST, exp(scale * S - c) on the PACK SFPU, pack P to out_cb
+// and L1-accumulate the tile row sums onto the seeded sum_cb[row]; restores out_cb's row pack width on exit.
 template <uint32_t in1_stride, uint32_t out_num_cols, int fidelity>
 void blocked_matmul_exp_pack(
     uint32_t in0_cb,
@@ -438,8 +462,7 @@ void blocked_matmul_exp_pack(
     uint32_t subblock_w,
     uint32_t subblock_h,
     uint32_t inner_dim,
-    uint32_t matmul_stride,
-    bool overwrite_sum) {
+    uint32_t matmul_stride) {
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -462,21 +485,13 @@ void blocked_matmul_exp_pack(
     const uint32_t row_base = row_subblock_idx * subblock_h;
     pack_contiguous_rows_nocfg(out_cb, row_base, subblock_h, out_num_cols, out_col_offset, subblock_w);
     configure_single_tile_pack(sum_cb);
-    const bool overwrite = overwrite_sum && out_col_offset == 0;
+    PACK((llk_pack_reconfig_l1_acc(1)));
     dst_index = 0;
 #pragma GCC unroll 1
     for (uint32_t i = 0; i < subblock_h; i++) {
-        if (overwrite) {
-            PACK((llk_pack_reconfig_l1_acc(0)));
-        } else {
-            PACK((llk_pack_reconfig_l1_acc(1)));
-        }
 #pragma GCC unroll 1
         for (uint32_t j = 0; j < subblock_w; ++j) {
             pack_tile<true>(dst_index++, sum_cb, row_base + i);
-            if (overwrite && j == 0) {
-                PACK((llk_pack_reconfig_l1_acc(1)));
-            }
         }
     }
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1472,8 +1487,12 @@ static void sdpa_inner_loop_step(
     // Fixed mode: the accumulators start on is_first_iter, empty or seeded from prev; every later chunk
     // L1-accumulates onto the same tiles with no push/pop until the last chunk publishes them.
     const bool acc_overwrite = !fixed || (is_first_iter && !seed_from_prev);
+    // The row sum is seeded (epsilon or prev) in fixed mode, so only the standard path overwrites it.
+    constexpr bool sum_overwrite = !fixed;
 
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    if constexpr (!fixed) {
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    }
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
@@ -1496,9 +1515,14 @@ static void sdpa_inner_loop_step(
             if (seed_from_prev) {
                 CircularBuffer(prev.sum).wait_front(Sq_chunk_t);
                 sdpa_copy_tiles(prev.sum, 0, cur.sum, 0, Sq_chunk_t, dst_size);
+            } else {
+                sdpa_fill_tiles(cur.sum, Sq_chunk_t, sdpa_fixed_sum_epsilon, dst_size);
             }
             reconfig_data_format(cb_qkt_im, cb_qkt_im);
         }
+        // After the MATH-side fill: PACK reaches this init only once it has packed those tiles, so the
+        // shared SFPU state is not rewritten under the exp macro (the fold needs SDPA_FIXED_OFFSET_BITS).
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None, DST_ACCUM_MODE, SDPA_FIXED_OFFSET_BITS>();
     }
 
     // Mask plan for this chunk (single source of truth; reused by the mask stamp below).
@@ -1577,7 +1601,7 @@ static void sdpa_inner_loop_step(
                     qkt_subblock_h,
                     actual_sbw,
                     /*skip_pack_configure=*/true,
-                    acc_overwrite);
+                    sum_overwrite);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
                 mm_no_mop_reinit_short<QK_MATH_FIDELITY>(
@@ -1599,8 +1623,7 @@ static void sdpa_inner_loop_step(
                             actual_sbw,
                             qkt_subblock_h,
                             in0_block_w,
-                            in0_block_w,
-                            acc_overwrite);
+                            in0_block_w);
                     }
                 } else {
                     blocked_matmul_and_pack<true, KT_stride, KT_stride, QK_MATH_FIDELITY>(
@@ -1824,7 +1847,7 @@ static void sdpa_inner_loop_step(
                             qkt_subblock_h,
                             actual_sbw,
                             /*skip_pack_configure=*/false,
-                            acc_overwrite);
+                            sum_overwrite);
                     }
                     if constexpr (qktv_first_group_reads_inplace_row) {
                         // PACK half only; SEMGET head-of-line-blocks the unpack thread, so the
@@ -1896,7 +1919,7 @@ static void sdpa_inner_loop_step(
                             qkt_subblock_h,
                             actual_sbw,
                             /*skip_pack_configure=*/false,
-                            acc_overwrite);
+                            sum_overwrite);
                     }
                 }
                 if constexpr (qktv_first_group_reads_inplace_row) {

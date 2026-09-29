@@ -33,12 +33,14 @@ enum class InputClamping : uint8_t {
 template <
     bool approx = false,
     uint32_t scale = 0x3F800000,
-    InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    uint32_t offset = 0>
 ALWI void exp_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(
         exponential,
         sfpu::exp_init,
-        (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en)));
+        (approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en, offset)));
 }
 
 // clang-format off
@@ -86,13 +88,18 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.
  */
+// offset (fp32 bits, approximate modes only): the init folds it into the exp constants so the op
+// computes exp(scale * x - offset) at no per-element cost.
 template <
     bool approx = false,
     uint32_t scale = 0x3F800000,
-    InputClamping input_clamping = InputClamping::ClampToNegative, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    InputClamping input_clamping = InputClamping::ClampToNegative,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    uint32_t offset = 0>
 ALWI void exp_packthread_tile_init() {
     PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
-        sfpu::exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en>));
+        sfpu::
+            exp_init<approx, scale, (input_clamping == InputClamping::ClampToNegative), is_fp32_dest_acc_en, offset>));
 }
 
 /**

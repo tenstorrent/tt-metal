@@ -422,6 +422,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto pv_math_fidelity =
         program_config.has_value() ? program_config->pv_math_fidelity.value_or(math_fidelity) : math_fidelity;
     const bool fixed_offset_softmax = program_config.has_value() && program_config->fixed_offset_softmax;
+    const float fixed_offset = program_config.has_value() ? program_config->fixed_offset : 0.0f;
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
@@ -746,6 +747,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         TT_FATAL(
             use_streaming_compute, "fixed_offset_softmax requires the streaming compute path (fp32_dest_acc_en=false)");
         defines_map["SDPA_FIXED_OFFSET_SOFTMAX"] = "1";
+        if (fixed_offset != 0.0f) {
+            TT_FATAL(device->arch() == tt::ARCH::BLACKHOLE, "fixed_offset is folded into the Blackhole exp macro only");
+            TT_FATAL(!use_attention_sink, "fixed_offset does not shift the attention-sink term");
+            defines_map["SDPA_FIXED_OFFSET_BITS"] = std::to_string(std::bit_cast<uint32_t>(fixed_offset));
+        }
+    } else {
+        TT_FATAL(fixed_offset == 0.0f, "fixed_offset requires fixed_offset_softmax");
     }
     if (operation_attributes.output_concat_heads) {
         defines_map["OUT_CONCAT_HEADS"] = "1";
