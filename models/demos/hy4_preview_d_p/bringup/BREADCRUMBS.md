@@ -2407,3 +2407,33 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
+
+## C.moe_shared.attn_norm test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line component test (moe_shared layer 2, attn_norm) with the reviewed layer-1 attn_norm
+  test (test_c_moe_full_attn_norm.py) at LAYER = 2, with the same limits: gated pcc_attn_norm_L02 (0.99); not a CPU
+  bridge; finite output, element count; vs golden rel L2 <= 0.008, row norm ratio in [0.993, 1.007], worst row
+  <= 0.015; module run again on golden x 0.1 (bf16) vs the CPU step, rel <= 0.01, worst row <= 0.02. The docstring has
+  the mutation tables measured on the layer-2 golden.
+- CPU mutation study: /tmp/hy4_an2/study.py (outside the repo; the layer-1 /tmp/hy4_an1 script with L = 2).
+
+Decisions
+- Kept the layer-1 limits. Pessimistic bf16 on layer 2: rel 0.0037 / ratio [0.9954, 1.0043] / row 0.0057.
+- Layer-2 w is flat ([0.084, 0.159]), so 1 + w, no weight and a permuted w (TP layout bug) all pass PCC (0.996-0.998).
+  They fail rel L2 (0.087 to 7.5). Every mutation that passes PCC fails at least one added check.
+- Eps matters more here: the smallest row's mean(x^2) is 0.94x eps (11 rows below eps). Eps 1e-6 scores rel 0.133.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.00235, ratio [0.99988, 1.00012], row 0.0025; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): already PASS, because the dense_full attn_norm module serves every block type. pcc 0.999996, rel
+  0.00288, ratio [0.99903, 1.00143], row 0.0032; scaled rel 0.00188, row 0.00253.
+
+Gotchas
+- The first "FAIL pcc_attn_norm_L02: pcc=0.0" line comes from the precompile collect pass. The real run follows it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
