@@ -74,7 +74,7 @@ def _dram_chunk_size_bytes(cache) -> int:
 def _num_layers_from_cache(cache, num_users: int) -> int:
     """Layer count a KV cache holds, recovered from its folded batch dim. init_kvpe_cache lays caches
     out user-major with shape[0] = num_users * num_layers, so dividing the batch dim by num_users gives
-    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.2 index
+    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.3 index
     cache (which allocate_kv_cache sizes to num_full)."""
     return cache.shape[0] // num_users
 
@@ -230,7 +230,7 @@ def _build_and_serialize_merged_kv_chunk_table(
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
-    the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.2 index); ``("dflash", (k_cache, v_cache))``
+    the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.3 index); ``("dflash", (k_cache, v_cache))``
     for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
     :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
     keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module.
@@ -350,7 +350,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                     "stages are out of config order."
                 )
             # Size the config to the GLOBAL layer total, summed over the gathered stages: the KVPE cache's
-            # every layer, and the index cache's full-indexer layers only (GLM-5.2 cross-layer reuse — the
+            # every layer, and the index cache's full-indexer layers only (GLM-5.3 cross-layer reuse — the
             # shared layers own no indexer slot; GLM-5.1 / dense have one per layer, so it equals num_layers).
             cfg.num_layers = merged_num_layers(stage_layout)
         cfg.max_sequence_length = seq_len
