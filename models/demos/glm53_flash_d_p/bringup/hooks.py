@@ -55,6 +55,7 @@ DEVICE_STEPS = {
         "ffn_collapse",
         "ffn_norm",
         "router",
+        "experts",
     },
     "kda_moe": set(),
 }
@@ -159,6 +160,25 @@ def _router_host_fn(mesh, module):
         dense, idx, wts = module(xd)
         y = replicated_to_host(dense).reshape(s, -1)
         for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return y
+
+    return fn
+
+
+def _experts_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H] bf16 around TtExperts
+    (harness boundary: bf16 upload, chip-0 read-back)."""
+    import ttnn
+    from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+
+    def fn(ctx, x, r):
+        s = x.shape[-2]
+        xd = replicate(mesh, x.reshape(1, 1, s, x.shape[-1]).to(torch.bfloat16))
+        rd = replicate(mesh, r.reshape(1, 1, s, r.shape[-1]).to(torch.bfloat16))
+        yd = module(xd, dense=rd)
+        y = replicated_to_host(yd).reshape(s, -1)
+        for t in (xd, rd, yd):
             ttnn.deallocate(t)
         return y
 
@@ -321,6 +341,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.router import build_router
 
         return _router_host_fn(mesh, build_router(mesh, loader, cfg, layer, max(_chunks(spec))))
+    if step == "experts":
+        from models.demos.glm53_flash_d_p.tt.experts import build_experts
+
+        return _experts_host_fn(mesh, build_experts(mesh, loader, cfg, layer, max(_chunks(spec))))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
