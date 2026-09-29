@@ -1844,3 +1844,31 @@ Results:
 Next step: implement only needs to add ffn_hc to `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.06 test (attempt 1)
+Reviewed the rendered swap test for kda_moe layer 4 with attn_hc, attn_collapse, attn_norm, attention, attn_residual and
+ffn_hc on the device. The rendered file was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 05 test
+(every check kept) and added the ffn_hc checks and share design from dsa_moe swap 08:
+- ffn_hc-share block: the device outputs through h_mid fixed, then the CPU ffn_hc and tail. Block out vs it is the
+  ffn_hc share: flips <= 40, same-routing rel <= 0.0035, ratio [0.975, 1.01], flipped-row ratio [0.9, 1.1]. The
+  residual share is now that block vs the residual-share block, and it reproduces swap 05 exactly.
+- ffn_hc vs golden and vs the fp32 CPU ffn_hc of the same device h_mid, both at the layer-4 component limits (post max
+  abs 0.01, worst column 0.06). The same-input check also runs on chunk 0.
+- Changed limits: the lower same-routing per-row ratio bound of block out vs golden and vs the all-CPU block, from
+  0.985 to 0.975. The device ffn_hc alone takes both to 0.980. The small off-diagonal comb entries are a few percent
+  low, and the stream-3 rows fed by a large stream 0 shrink up to 1.75%. I checked this from a one-off tensor dump,
+  since removed. It is the component test's accepted worst-column error, not a new bug. Known issues Proposed has the
+  entry. Every upper bound stays tight.
+Limits come from a CPU perturbation study (/tmp/kmoe06/sens.py, device-free, not kept; the numbers are in the test
+docstring). At layer 4, block out carries comb about 1:1 (comb x1.005 gives rel 0.0049) but sees post only weakly
+(post x1.02 gives 0.0030). So post x1.01 and pre x1.01 are caught by the same-input coefficient, not by the share.
+Not caught: comb x1.002, post x1.005, rms eps 1.2e-5 / 1e-6.
+Results:
+- Device passes: PCC 0.999991, rel 0.0043. Vs the all-CPU block 51 flips / 0.00235 (limit 0.003) / [0.9804, 1.0033].
+  ffn_hc vs CPU same input 0.00037 / 0.00139 / 0.00146, worst column 0.0349. ffn_hc share 2 / 0.00056 /
+  [0.9825, 1.0046]. Every swap 05 number is unchanged. About 95 s for the real pass, 182 s total.
+- Reference passes (PCC 0.999997, every share exact). Stub fails (PCC 0 and every check).
+Watch: the all-CPU-block rel is 0.00235 of 0.003 (1.3x margin), with 51 flips of 96. The worst-head state margin is
+still 0.048 of 0.05. ffn_residual's comb term will see the same comb bias.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_06_ffn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
