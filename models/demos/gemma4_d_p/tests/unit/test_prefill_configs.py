@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import ttnn
+from models.demos.gemma4_d_p.tt.attention.operations import projection_math_fidelity
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config
 from models.demos.gemma4_d_p.tt.rms_norm import _block_shard_geometry
@@ -28,6 +30,19 @@ GRID = SimpleNamespace(x=11, y=10)
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
     assert ring_sdpa_chunk_sizes(slab, sliding) == expected
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (256, ttnn.MathFidelity.HiFi2),
+        (511, ttnn.MathFidelity.HiFi2),
+        (512, ttnn.MathFidelity.LoFi),
+        (1024, ttnn.MathFidelity.LoFi),
+    ],
+)
+def test_projection_math_fidelity(rows, expected):
+    assert projection_math_fidelity(rows) == expected
 
 
 def _tensor(rows, cols):
