@@ -75,6 +75,12 @@ public:
     // Dispatch-stall markers received from all devices (host-side counts; no device read).
     uint64_t dispatch_stall_events() const { return dispatch_stall_events_.load(std::memory_order_relaxed); }
     uint64_t dispatch_stall_cycles() const { return dispatch_stall_cycles_.load(std::memory_order_relaxed); }
+
+    // Testing only: while paused, the receiver thread stops reading the D2H socket, so the device-side profiler
+    // path backs up until dispatch_s waits for record slots. Records are held, not dropped; unpausing drains
+    // them. Do not wait on the device (e.g. Finish) while paused: its sync check needs the receiver. Shutdown
+    // drains regardless.
+    void pause_receiver_for_testing(bool paused) { receiver_paused_.store(paused, std::memory_order_release); }
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
@@ -207,6 +213,7 @@ private:
     std::atomic<uint64_t> num_published_batches_{0};  // count of batches published to the ring
     std::atomic<uint64_t> dispatch_stall_events_{0};  // dispatch-stall markers received
     std::atomic<uint64_t> dispatch_stall_cycles_{0};  // device cycles those stalls lasted
+    std::atomic<bool> receiver_paused_{false};        // see pause_receiver_for_testing()
 
     static constexpr size_t kMaxConsumerBatchPerDevice = 1u << 15;  // max batch size per device
     static constexpr size_t kMaxConsumerBatchCap = 1u
