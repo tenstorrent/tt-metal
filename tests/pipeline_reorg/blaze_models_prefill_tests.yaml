@@ -386,6 +386,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace.py -vvv --tb=short
     '
   test_type: kimi_dflash
   test_tags: [kimi_k2_7, dflash]

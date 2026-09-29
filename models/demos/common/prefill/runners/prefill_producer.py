@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -140,10 +141,14 @@ def _chunk_slice(pool, actual_start: int, actual_isl=None):
     return _pool_slice(pool, actual_start, CHUNK_SIZE, actual_isl)
 
 
-def _h2d_rows(tokens):
+def _h2d_rows(tokens, actual_start: int = 0):
+    # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
+    # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
+    # start is chunk-aligned).
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
+    tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
@@ -154,7 +159,10 @@ def _mtp_rows(pool, actual_start: int, actual_isl=None):
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
     align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
-    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
+    # Each chip's lookahead follows its own last row: actual_start + (c + 1) * stride for a chunk-aligned start,
+    # the rotated last position otherwise (see _h2d_rows).
+    last = [row[-1] for row in rotated_chunk_positions(actual_start, sp, stride)]
+    rows = [_pool_slice(pool, last[c] + 1, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -1566,7 +1574,9 @@ def main() -> None:
         metadata = _pack_metadata(slot_id, actual_start, actual_end)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        _push(service, payload_bytes, _h2d_rows(tokens), _mtp_rows(pool, actual_start, actual_isl), metadata)
+        _push(
+            service, payload_bytes, _h2d_rows(tokens, actual_start), _mtp_rows(pool, actual_start, actual_isl), metadata
+        )
         return (time.perf_counter() - push_start) * 1000.0
 
     warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))

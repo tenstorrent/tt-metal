@@ -770,3 +770,65 @@ def test_fewer_than_three_variants_keeps_the_strict_worst_rule(tmp_path):
     r = _eval_multi(cur, base)
     assert r["regress_signal_basis"] == "worst_variant"
     assert r["verdict"] == "regressed"
+
+
+def test_worst_rule_keeps_the_strict_verdict_and_reports_the_typical_one(tmp_path):
+    """The Quasar optimizer keeps or reverts an attempt on the strict rule."""
+    names = [f"MathOperation.Op{i}" for i in range(13)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    cur[names[0]] = 359.0  # one variant +1.41%
+    cur[names[1]] = 340.0  # one variant -3.95%
+    r = perf_eval.evaluate(
+        perf_eval._read_csv(_multi_csv(tmp_path / "c.csv", cur)),
+        perf_eval._read_csv(base),
+        op=None,
+        goal="no_regress",
+        noise_pct=0.5,
+        regress_pct=0.5,
+        improve_pct=0.5,
+        primary_metric=perf_eval.PRIMARY_METRIC,
+        regress_rule="worst",
+    )
+    assert r["verdict"] == "regressed" and r["exit_code"] == 1
+    assert r["regress_signal_basis"] == "worst_variant"
+    assert r["single_variant_outlier"] is False
+    assert (r["variants_improved"], r["variants_neutral"], r["variants_regressed"]) == (
+        1,
+        11,
+        1,
+    )
+    assert r["verdict_typical"] == "neutral"
+
+
+def test_metric_alias_and_regress_rule_reach_the_cli(tmp_path):
+    names = [f"MathOperation.Op{i}" for i in range(4)]
+    base = _multi_csv(tmp_path / "b.csv", {n: 354.0 for n in names})
+    cur = dict.fromkeys(names, 354.0)
+    cur[names[0]] = 372.0
+    out = tmp_path / "r.json"
+    rc = perf_eval.main(
+        [
+            "--current",
+            str(_multi_csv(tmp_path / "c.csv", cur)),
+            "--baseline",
+            str(base),
+            "--metric",
+            "mean(MATH_ISOLATE)",
+            "--regress-rule",
+            "worst",
+            "--regress-pct",
+            "0.5",
+            "--goal",
+            "no_regress",
+            "--json-out",
+            str(out),
+        ]
+    )
+    r = json.loads(out.read_text())
+    assert rc == 1 and r["verdict"] == "regressed"
+    assert r["primary_metric"].startswith("mean(MATH_ISOLATE)")
+    assert "mean(MATH_ISOLATE)" not in (
+        r["worst_variant"].get("thread_breakdown") or {}
+    )
+    assert "mean(L1_TO_L1)" in r["worst_variant"]["thread_breakdown"]

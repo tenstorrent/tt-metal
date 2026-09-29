@@ -27,7 +27,7 @@ It is schema-agnostic: every perf module has a different set of parameter
 columns, so the variant key is "all columns that are not a metric column"
 (`mean(...)`, `std(...)`, `TEXT_SIZE(...)`). The default headline metric is
 `mean(L1_TO_L1)` (total L1->L1 cycles). Isolate-only tests require an explicit
---primary-metric selection, agreed before inspecting results; the evaluator
+--primary-metric (alias --metric) selection, agreed before inspecting results; the evaluator
 never substitutes a more favorable metric. It uses the `TILE_LOOP` marker
 (per-tile, the most comparable number), falling back to `KERNEL`.
 
@@ -64,14 +64,18 @@ from typing import Any
 
 PRIMARY_METRIC = "mean(L1_TO_L1)"
 MARKER_PREFERENCE = ("TILE_LOOP", "KERNEL")
+# "median": the population decides (worst variant below three variants).
+# "worst": any variant slower than the threshold regresses.
+REGRESS_RULES = ("median", "worst")
 METRIC_PREFIXES = ("mean(", "std(", "TEXT_SIZE(")
 # Extra context metrics surfaced in the report when present.
 CONTEXT_METRICS = (
+    "mean(L1_TO_L1)",
     "mean(UNPACK_ISOLATE)",
     "mean(MATH_ISOLATE)",
     "mean(PACK_ISOLATE)",
 )
-SUPPORTED_PRIMARY_METRICS = (PRIMARY_METRIC, *CONTEXT_METRICS)
+SUPPORTED_PRIMARY_METRICS = tuple(dict.fromkeys((PRIMARY_METRIC, *CONTEXT_METRICS)))
 
 
 def _read_csv(
@@ -349,11 +353,14 @@ def evaluate(
     regress_pct: float,
     improve_pct: float,
     primary_metric: str = PRIMARY_METRIC,
+    regress_rule: str = "median",
 ) -> dict[str, Any]:
     """Return a `perf` result dict. Pure function for easy unit testing."""
 
     if primary_metric not in SUPPORTED_PRIMARY_METRICS:
         raise ValueError(f"unsupported primary metric: {primary_metric}")
+    if regress_rule not in REGRESS_RULES:
+        raise ValueError(f"unsupported regress rule: {regress_rule}")
     for name, value in (
         ("noise_pct", noise_pct),
         ("regress_pct", regress_pct),
@@ -531,7 +538,11 @@ def evaluate(
     # reason_code single_variant_outlier so a real one-variant regression stays
     # visible instead of silently passing. With fewer than three variants a
     # median is not robust, so those keep the strict worst-variant rule.
-    robust = len(deltas) >= 3
+    #
+    # regress_rule="worst" keeps the strict any-variant rule for callers that
+    # decide on it by design (the Quasar optimizer loop keeps or reverts each
+    # attempt on it and reports verdict_typical).
+    robust = regress_rule == "median" and len(deltas) >= 3
     regress_signal = median if robust else worst
     outlier_only = robust and worst > regress_pct >= median
     if regress_signal > regress_pct:
@@ -540,6 +551,16 @@ def evaluate(
         base_verdict = "improved"
     else:
         base_verdict = "neutral"
+    # Per-variant tally, and the verdict the median variant alone would give.
+    n_regressed = sum(1 for d in deltas if d > regress_pct)
+    n_improved = sum(1 for d in deltas if d < -improve_pct)
+    n_neutral = len(deltas) - n_regressed - n_improved
+    if median > regress_pct:
+        typical = "regressed"
+    elif median < -improve_pct:
+        typical = "improved"
+    else:
+        typical = "neutral"
 
     # Map to goal-aware verdict + exit code.
     if base_verdict == "regressed":
@@ -575,6 +596,8 @@ def evaluate(
     breakdown: dict[str, Any] = {}
     cur_row, base_row = worst_variant.get("_cur"), worst_variant.get("_base")
     for metric in CONTEXT_METRICS:
+        if metric == primary_metric:
+            continue
         cur_m = _to_float(cur_row.get(metric)) if cur_row else None
         base_m = _to_float(base_row.get(metric)) if base_row else None
         if cur_m is None or base_m is None or base_m <= 0:
@@ -607,7 +630,10 @@ def evaluate(
         "regress_pct": regress_pct,
         "regress_signal": regress_signal,
         "regress_signal_basis": "median" if robust else "worst_variant",
-        "variants_over_threshold": sum(1 for d in deltas if d > regress_pct),
+        "variants_over_threshold": n_regressed,
+        "variants_improved": n_improved,
+        "variants_neutral": n_neutral,
+        "variants_regressed": n_regressed,
         "single_variant_outlier": outlier_only,
         "improve_pct": improve_pct,
         "variants_compared": len(deltas),
@@ -616,6 +642,7 @@ def evaluate(
         "delta_pct_worst": round(worst, 3),
         "delta_pct_best": round(best, 3),
         "verdict": verdict,
+        "verdict_typical": typical,
         "worst_variant": worst_variant,
         "exit_code": exit_code,
     }
@@ -677,6 +704,15 @@ def _format_summary(result: dict[str, Any]) -> str:
                 result["variants_compared"],
             )
         )
+        lines.append(
+            "  variants: %d improved, %d neutral, %d regressed  (typical variant: %s)"
+            % (
+                result.get("variants_improved", 0),
+                result.get("variants_neutral", 0),
+                result.get("variants_regressed", 0),
+                result.get("verdict_typical", "?"),
+            )
+        )
         wv = result.get("worst_variant") or {}
         if wv:
             lines.append(
@@ -732,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--primary-metric",
+        "--metric",
+        dest="primary_metric",
         choices=SUPPORTED_PRIMARY_METRICS,
         default=PRIMARY_METRIC,
         help="Cycle metric selected by the test contract; no automatic fallback",
@@ -740,6 +778,12 @@ def main(argv: list[str] | None = None) -> int:
     # delta within +/-0.5% is treated as noise (neutral), not a regression or a
     # real improvement.
     p.add_argument("--noise-pct", type=float, default=0.5)
+    p.add_argument(
+        "--regress-rule",
+        choices=REGRESS_RULES,
+        default="median",
+        help="Regression signal: the median variant, or any single variant",
+    )
     p.add_argument(
         "--regress-pct",
         type=float,
@@ -862,6 +906,7 @@ def main(argv: list[str] | None = None) -> int:
             regress_pct=args.regress_pct,
             improve_pct=args.improve_pct,
             primary_metric=args.primary_metric,
+            regress_rule=args.regress_rule,
         )
     if args.test:
         result["test"] = args.test

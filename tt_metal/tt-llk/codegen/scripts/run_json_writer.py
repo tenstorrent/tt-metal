@@ -6,8 +6,8 @@
 Atomic writer for the Activity-Monitor-aware run.json.
 
 Implements the live-update contract defined by:
-  - /proj_sw/user_dev/${USER}/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md
-  - /proj_sw/user_dev/${USER}/llk_code_gen/dashboard/RUN_JSON_SPEC.md
+  - /proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md
+  - /proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md
 
 Every subcommand updates <LOG_DIR>/run.json by writing a temp file in the
 same directory and atomically renaming it into place so the dashboard never
