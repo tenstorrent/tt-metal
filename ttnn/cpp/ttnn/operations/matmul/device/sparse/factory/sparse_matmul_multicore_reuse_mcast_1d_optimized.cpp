@@ -157,8 +157,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
     const MeshTensor& in1_sparsity_mesh_tensor = in1_sparsity_tensor.mesh_tensor();
 
-    auto [fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args_subset(device->arch(), operation_attributes.compute_kernel_config.value());
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
+    const bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+    const bool packer_l1_acc = compute_kernel_config.packer_l1_acc;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -781,7 +782,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
         // The op resolves a TTNN ComputeKernelConfig and passes every field it resolves on to the
         // kernel, so translating the resolved config is faithful with nothing to pin back.
-        auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+        auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
         // When accumulating in fp32 with the K reduction split across blocks, the partials buffer
         // holds Float32 and is reloaded into DEST between blocks. Unless that reload's view is marked
