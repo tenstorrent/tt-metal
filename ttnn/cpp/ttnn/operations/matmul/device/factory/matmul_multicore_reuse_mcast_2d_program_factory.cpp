@@ -757,14 +757,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
     tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
-    // These matmul in0/in1 DM kernels drive their DFB credits EXPLICITLY (reserve_back/push_back on the
-    // sender/receiver, TRISC pop on the compute consumer). config_1xx applies on WH/BH, config_2xx on Quasar
-    // (each is ignored on the other arch, selected at program construction). On Quasar, leaving implicit-sync ON
-    // for those DFBs makes the runtime's final-credit reconciliation add one extra ACK on top of the explicit
-    // pops -> in0 tile-counter underflow; so opt every bound DFB out of implicit sync with
-    // disable_dfb_implicit_sync_for_all -- matching the 1D mcast factory
-    // (matmul_multicore_reuse_mcast_1d_program_factory.cpp) and the sibling matmul factories. WH/BH keep the
-    // explicit processor/noc placement. (quasar_porting.md §4/§7)
+    // These matmul in0/in1 DM kernels manage their DFB credits explicitly (reserve_back/push_back on the
+    // sender/receiver, TRISC pop on the consumer). On Quasar, implicit-sync would add an extra final-credit ACK
+    // on top of those explicit pops -> in0 tile-counter underflow, so opt the bound DFBs out of implicit sync.
+    // config_1xx (WH/BH placement) and config_2xx (Quasar) are each ignored on the other arch.
     const auto dm_hw_config = [](tt_metal::DataMovementProcessor proc,
                                  tt_metal::NOC noc) -> DataMovementHardwareConfig {
         return DataMovementHardwareConfig{
@@ -969,8 +965,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
-        // Quasar single-NOC: the block-sharded in0 mcast range must stay ascending [min..max] (the NOC_1
-        // swap above degenerates it on Quasar, whose preferred NOC is NOC_1). (quasar_porting.md §11)
+        // Quasar single-NOC / non-torus: the block-sharded in0 mcast range must stay ascending [min..max].
+        // in0_noc = preferred_noc_for_dram_write(arch), which is NOC_1 on Quasar (the default case), so the
+        // NOC_1 swap above fires and reverses the range; undo it here.
         if (is_quasar_mm && in0_mcast_receiver_grid_diff_coord_start > in0_mcast_receiver_grid_diff_coord_end) {
             std::swap(in0_mcast_receiver_grid_diff_coord_start, in0_mcast_receiver_grid_diff_coord_end);
         }
@@ -1070,10 +1067,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
 
         // Quasar is single-NOC / non-torus, so a multicast rectangle MUST be ascending [min..max] regardless
-        // of NOC. The NOC-direction swaps above encode WH/BH NOC_1 (high->low, torus) walks, and since
-        // preferred_noc_for_dram_*(QUASAR) returns NOC_1, they degenerate the rectangle to [max..min] on
-        // Quasar -> the sender blocks forever in noc_async_write_multicast (waypoint NMLW), surfacing as a
-        // compute 0x19 downstream. Re-normalize each corner per-axis on Quasar. (quasar_porting.md §11)
+        // of NOC. The swaps above encode WH/BH torus reverse walks: the in0 mcast keys off in0_noc
+        // (= preferred_noc_for_dram_write = NOC_1 on Quasar) and the in1 mcast off in1_noc
+        // (= preferred_noc_for_dram_read = NOC_0 on Quasar), so on Quasar BOTH swaps fire and reverse their
+        // rectangles to [max..min]. The sender then blocks forever in noc_async_write_multicast (waypoint
+        // NMLW), surfacing as a compute 0x19 downstream. Re-normalize each corner per-axis on Quasar.
         if (is_quasar_mm) {
             if (in0_mcast_start.x > in0_mcast_end.x) {
                 std::swap(in0_mcast_start.x, in0_mcast_end.x);

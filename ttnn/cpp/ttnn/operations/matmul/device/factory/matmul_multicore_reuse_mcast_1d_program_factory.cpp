@@ -1044,9 +1044,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
-    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc resolves
-    // to NOC_1 on Quasar, so the WH/BH swap above degenerates it to [max..min] -> NoC "multicast invalid
-    // range" and the in0 sender hangs (waypoint NMWW). Re-normalize to ascending on Quasar. (recipe §11)
+    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc =
+    // preferred_noc_for_dram_write(arch), which is NOC_1 on Quasar, so the WH/BH NOC_1 swap above reverses it
+    // to [max..min] -> NoC "multicast invalid range" and the in0 sender hangs (waypoint NMWW). Re-normalize to
+    // ascending on Quasar.
     if (device.arch() == tt::ARCH::QUASAR) {
         const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
@@ -2012,9 +2013,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
-    // Quasar single-NOC / non-torus: mcast rectangle MUST be ascending [min..max]. in1_noc resolves to NOC_1
-    // on Quasar so the swap above does NOT fire and the rectangle stays [max..min] (start=bottom_right) ->
-    // "multicast invalid range". Re-normalize to ascending on Quasar. (recipe §11)
+    // Quasar single-NOC / non-torus: the mcast rectangle MUST be ascending [min..max]. in1_noc =
+    // preferred_noc_for_dram_read(arch), which is NOC_0 on Quasar, so the NOC_0 swap above fires and already
+    // yields ascending; this per-axis re-normalization is a defensive no-op on Quasar (kept symmetric with the
+    // in0 path, whose NOC_1 swap genuinely reverses the rectangle).
     if (device.arch() == tt::ARCH::QUASAR) {
         const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
@@ -4348,9 +4350,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
-    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc resolves
-    // to NOC_1 on Quasar, so the WH/BH swap above degenerates it to [max..min] -> NoC "multicast invalid
-    // range" (e.g. 9-5-2-2) and the in0 sender hangs (waypoint NMWW). Re-normalize to ascending. (recipe §11)
+    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc =
+    // preferred_noc_for_dram_write(arch), which is NOC_1 on Quasar, so the WH/BH NOC_1 swap above reverses it
+    // to [max..min] -> NoC "multicast invalid range" (e.g. 9-5-2-2) and the in0 sender hangs (waypoint NMWW).
+    // Re-normalize to ascending on Quasar.
     if (device.arch() == tt::ARCH::QUASAR) {
         const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
@@ -5486,9 +5489,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }
-    // Quasar single-NOC / non-torus: mcast rectangle MUST be ascending [min..max]. in1_noc resolves to NOC_1
-    // on Quasar so the swap above does NOT fire and the rectangle stays [max..min] (start=bottom_right) ->
-    // "multicast invalid range". Re-normalize to ascending. (recipe §11)
+    // Quasar single-NOC / non-torus: the mcast rectangle MUST be ascending [min..max]. in1_noc =
+    // preferred_noc_for_dram_read(arch), which is NOC_0 on Quasar, so the NOC_0 swap above fires and already
+    // yields ascending; this per-axis re-normalization is a defensive no-op on Quasar (kept symmetric with the
+    // in0 path, whose NOC_1 swap genuinely reverses the rectangle).
     if (device.arch() == tt::ARCH::QUASAR) {
         const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
