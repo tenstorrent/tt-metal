@@ -12,7 +12,7 @@ from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
     pack_sliding_rope_device,
     packed_rope_columns,
 )
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity, ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
@@ -152,12 +152,26 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
     return caches_4d, caches_2d, caches_2d_packed
 
 
-def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
+def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len, *, tp_degree):
     """Reason this chunk geometry is unusable, or None. The ring SDPA validates the rest at compile."""
     if max_seq_len <= 0 or prefill_chunk_size <= 0:
         return "sequence and chunk lengths must be positive"
-    if prefill_chunk_size % (cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
-        return "prefill chunks must divide max_seq_len and contain whole CP-local tiles"
+    if max_seq_len % prefill_chunk_size:
+        return "prefill chunks must divide max_seq_len"
+    # The residual is sequence-parallel over TP between layers: each TP device keeps 1/TP of the slab's rows.
+    if prefill_chunk_size % (cp_degree * tp_degree * ttnn.TILE_SIZE):
+        return (
+            f"prefill chunk {prefill_chunk_size} must be a multiple of CP x TP x {ttnn.TILE_SIZE} = "
+            f"{cp_degree * tp_degree * ttnn.TILE_SIZE} for the sequence-parallel residual"
+        )
+    # Sliding layers step through the per-rank slab in whole K chunks (the op accepts k 128 only).
+    slab = prefill_chunk_size // cp_degree
+    sliding_k_chunk = ring_sdpa_chunk_sizes(slab, sliding=True)[1]
+    if slab % sliding_k_chunk:
+        return (
+            f"prefill chunk {prefill_chunk_size} gives a {slab}-token slab per CP rank; sliding attention needs a "
+            f"multiple of its {sliding_k_chunk}-token K chunk (chunk a multiple of {cp_degree * sliding_k_chunk})"
+        )
     return None
 
 
@@ -184,7 +198,9 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+        geometry_error = prefill_chunk_geometry_error(
+            prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
+        )
         if geometry_error:
             raise ValueError(geometry_error)
 

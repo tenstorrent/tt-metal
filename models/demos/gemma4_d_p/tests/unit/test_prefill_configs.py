@@ -11,6 +11,7 @@ import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import projection_math_fidelity
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config
+from models.demos.gemma4_d_p.tt.model import prefill_chunk_geometry_error
 from models.demos.gemma4_d_p.tt.rms_norm import _block_shard_geometry
 
 GRID = SimpleNamespace(x=11, y=10)
@@ -97,3 +98,26 @@ def test_rms_norm_block_shard_geometry(rows, expected):
 
 def test_rms_norm_block_shard_falls_back_when_blocks_overflow_l1():
     assert _block_shard_geometry(2048, 5376) is None
+
+
+@pytest.mark.parametrize(
+    "chunk, cp, tp, max_seq_len, error",
+    [
+        (2048, 8, 4, 262144, None),
+        (8192, 8, 4, 262144, None),
+        (4096, 4, 8, 262144, None),
+        # Issue #57836's sizes: 416 rows per CP rank split four ways is not whole tiles.
+        (3328, 8, 4, 19968, "sequence-parallel residual"),
+        # 4x8: a 384-token slab split eight ways is 48 rows, not whole tiles.
+        (1536, 4, 8, 6144, "sequence-parallel residual"),
+        # Without TP the residual split allows a 160-token slab, which is not whole 128-token sliding K chunks.
+        (1280, 8, 1, 2560, "sliding attention"),
+        (12288, 8, 4, 262144, "must divide max_seq_len"),
+    ],
+)
+def test_prefill_chunk_geometry_error(chunk, cp, tp, max_seq_len, error):
+    message = prefill_chunk_geometry_error(chunk, cp, max_seq_len, tp_degree=tp)
+    if error is None:
+        assert message is None
+    else:
+        assert error in message
