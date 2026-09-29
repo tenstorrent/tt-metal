@@ -1823,3 +1823,24 @@ Watch: the all-CPU-block rel margin is 1.4x (0.00217 of 0.003) and the flips are
 steps join (known issue). The worst-head state margin is still 0.048 of 0.05.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_05_attn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.ffn_hc test (attempt 1)
+Reviewed the rendered component test for ffn_hc at layer 4 (the attn_hc op with layer 4's hc_ffn_* weights, on h_mid).
+I rewrote it from the dsa_moe ffn_hc test (layer 3), kept its checks, and re-measured the limits on the layer-4 golden:
+- post column 4 reaches 1.70 here (0.40 at layer 3), and one bf16 ulp there is 7.8e-3. So post max abs goes from 5e-3
+  to 0.01. The device is at 4.9e-3, and post x1.01 gives 0.018.
+- Worst single-column rel L2 goes from 0.07 to 0.06. The device is at 0.0347 (column 15, comb [1, 3]). 19 / 21
+  iterations give 0.081 / 0.082, and pre scale x1.02 gives 0.087.
+- pre columns 2 / 3 are ~1e-6 (hc_eps), so a missing `+ hc_eps` on pre is caught here (worst column 0.98).
+- Unchanged: part rel L2 <= 0.01; max abs pre / comb 0.02; coefficient in [0.995, 1.005]; comb column sums within
+  0.01; range checks; every limit is written `not x <= lim`, so NaN fails.
+Sensitivity: CPU host script /tmp/kmffnhc/sens.py (not kept); the numbers are in the test docstring. Not caught: rms eps
+1e-6 / 1.2e-5 / 2e-5, and x1.005 on one part.
+Results:
+- Device (the gate's default mode) passes, because `_device_step` builds tt/mhc.py for any layer. It scores PCC 0.999999,
+  part rel 0.0011 / 0.0022 / 0.0019, max abs 2.9e-3 / 4.9e-3 / 6.8e-3, coefficient 0.9995 / 1.0004 / 0.9990, worst
+  column 0.0347, and column sums 0.9969..1.0008.
+- Reference passes (0.0010 / 0.0017 / 0.0011, worst column 0.0036). Stub fails (PCC 0).
+Next step: implement only needs to add ffn_hc to `DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
