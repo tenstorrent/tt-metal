@@ -153,7 +153,11 @@ void kernel_main() {
     }
 #endif
 
-    const uint32_t tile_bytes = dfb_in.get_tile_size();
+    // get_entry_size(), not get_tile_size(): on Quasar get_tile_size() reads a stale descriptor array
+    // on the program-cache partial-update (cache-hit) reuse path, returning a wrong per-tile size that
+    // corrupts the write below (DRAM write overrun on the 2nd+ fill_cache call). The input DFB entry is
+    // one tile (factory: .entry_size = single_tile_size), so get_entry_size() is the correct per-tile size.
+    const uint32_t tile_bytes = dfb_in.get_entry_size();
 
     const auto out_gen = TensorAccessor(tensor::cache);
     const auto page_table_gen = TensorAccessor(tensor::page_table);

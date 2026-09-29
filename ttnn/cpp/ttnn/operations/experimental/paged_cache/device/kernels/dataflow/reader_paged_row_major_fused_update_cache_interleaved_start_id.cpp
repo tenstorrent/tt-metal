@@ -70,7 +70,9 @@ void kernel_main() {
     dfb_input.reserve_back(1);
     dfb_input.push_back(1);
 
-    const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
+    // get_entry_size(), not get_tile_size(): get_tile_size() reads a stale descriptor on Quasar's
+    // program-cache partial-update reuse path (cache DFB entry is one tile). See fill_cache overrun.
+    const uint32_t cache_tile_bytes = dfb_cache.get_entry_size();
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
