@@ -8,6 +8,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/experimental/sharded_tensor_view.hpp"
+#include "ttnn/core/tensor/retained_tensor_view_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
@@ -124,22 +125,6 @@ Tensor create_device_tensor(
 
     return output;
 }
-
-class RetainedTensorViewFactory {
-public:
-    // Every reinterpretation, of an owner or of a retained view, records a root holder. Its MeshBuffer aliases memory
-    // without owning or retaining it, so it cannot be the base of a retained view.
-    static void validate_source(const DeviceStorage& source) {
-        TT_FATAL(
-            source.root_mesh_tensor_holder_ == nullptr,
-            "A sharded tensor view requires a source that owns its allocation or is itself a sharded tensor view; "
-            "reinterpreted storage is not supported");
-    }
-
-    static DeviceStorage create(const DeviceStorage& owning_storage, MeshTensor view_mesh_tensor) {
-        return DeviceStorage::create_retained_view(owning_storage, std::move(view_mesh_tensor));
-    }
-};
 
 Tensor experimental::create_sharded_tensor_view(
     const Tensor& owner, const TensorSpec& tensor_spec, DeviceAddr shard_offset) {

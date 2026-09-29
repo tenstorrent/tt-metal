@@ -14,6 +14,7 @@
 
 #include "ttnn/tensor/storage.hpp"
 #include "tt_metal/impl/tensor/mesh_tensor_impl.hpp"
+#include "ttnn/core/tensor/retained_tensor_view_factory.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
@@ -92,6 +93,8 @@ struct DeviceStorage::MeshTensorHolder {
     // deallocating any link invalidates everything downstream of it. Every DeviceStorage copy of the view
     // shares this holder, so deallocating any copy releases the retention for all of them.
     std::shared_ptr<MeshTensorHolder> retained_owner_;
+    // Set on every reinterpretation. It holds no reference, so it does not extend any allocation's lifetime.
+    bool is_reinterpretation_ = false;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
     MeshTensorHolder(MeshTensor mesh_tensor) {
@@ -158,10 +161,10 @@ DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor rei
     DeviceStorage(
         std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
         owning_storage.coords_,
-        owning_storage.get_root_mesh_tensor()) {
+        owning_storage.mesh_tensor_holder_->is_retained_view() ? nullptr : owning_storage.get_root_mesh_tensor()) {
+    mesh_tensor_holder_->is_reinterpretation_ = true;
     // A reinterpretation of a retained view is itself a retained view of that view: it follows the view's source
-    // chain, and deallocating it releases only the reinterpretation instead of the view's owner. It still records the
-    // root, as every reinterpretation does, which marks it as a reinterpretation that cannot be a view's base.
+    // chain, which is its only strong reference to the root, and deallocating it releases only the reinterpretation.
     if (owning_storage.mesh_tensor_holder_->is_retained_view()) {
         mesh_tensor_holder_->retained_owner_ = owning_storage.mesh_tensor_holder_;
     }
@@ -172,6 +175,17 @@ DeviceStorage DeviceStorage::create_retained_view(
     auto view_holder = std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor));
     view_holder->retained_owner_ = owning_storage.mesh_tensor_holder_;
     return DeviceStorage(std::move(view_holder), owning_storage.coords_, nullptr);
+}
+
+void RetainedTensorViewFactory::validate_source(const DeviceStorage& source) {
+    TT_FATAL(
+        !source.mesh_tensor_holder_->is_reinterpretation_,
+        "A sharded tensor view requires a source that owns its allocation or is itself a sharded tensor view; "
+        "reinterpreted storage is not supported");
+}
+
+DeviceStorage RetainedTensorViewFactory::create(const DeviceStorage& owning_storage, MeshTensor view_mesh_tensor) {
+    return DeviceStorage::create_retained_view(owning_storage, std::move(view_mesh_tensor));
 }
 
 DeviceStorage::DeviceStorage(

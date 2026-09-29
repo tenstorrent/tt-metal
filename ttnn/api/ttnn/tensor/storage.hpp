@@ -237,8 +237,9 @@ private:
     // it depends on invalidates the view.
     static DeviceStorage create_retained_view(
         const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
-    // Defined only in tensor_ops.cpp, for ttnn::experimental::create_sharded_tensor_view. A friend class keeps
-    // ttnn::experimental out of this widely included header.
+    // Declared in ttnn/core/tensor/retained_tensor_view_factory.hpp, for
+    // ttnn::experimental::create_sharded_tensor_view. A friend class keeps ttnn::experimental out of this widely
+    // included header.
     friend class RetainedTensorViewFactory;
 
     // Invariant: should never be nullptr.

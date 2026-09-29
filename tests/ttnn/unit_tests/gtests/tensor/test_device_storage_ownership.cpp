@@ -156,6 +156,24 @@ TEST_F(DeviceStorageOwnershipTest, ReinterpretedShardedTensorViewTracksItsSource
     EXPECT_FALSE(second.is_allocated()) << "a reinterpretation of a view must be invalidated with its source";
 }
 
+TEST_F(DeviceStorageOwnershipTest, ReinterpretedShardedTensorViewDeallocationReleasesRoot) {
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    uint32_t ownerAddress = 0;
+    Tensor reinterpreted = [&] {
+        Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+        ownerAddress = owner.buffer()->address();
+        Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, 4096);
+        return ttnn::unchecked_reinterpret_layout(view, Layout::ROW_MAJOR);
+    }();
+
+    reinterpreted.deallocate(/*force=*/true);
+
+    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    EXPECT_EQ(replacement.buffer()->address(), ownerAddress)
+        << "deallocating the only reference to the owner must release its allocation";
+}
+
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocatesWithoutForce) {
     const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
     const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
