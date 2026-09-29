@@ -408,3 +408,32 @@ Gotchas
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_q_a.py
+
+## S.dense_full.04 test (attempt 1)
+
+What was done
+- Reviewed the rendered swap test (attn_hc, attn_hc_pre, attn_norm, q_a on device). Kept the gated pcc_swap_out
+  (0.98) and the trail; carried over swap 03's asserted checks (attn_hc gates, attn_x, attn_norm vs golden / vs CPU /
+  x 0.1 eps check, topk set overlap, attn_out, h_mid, block out rel), and added for q_a: q_resid vs golden at the
+  component limits (rel 0.008, row ratio [0.994, 1.006], worst row 0.015), vs the CPU q_a on the device attn_norm
+  (same limits), and the q_a module on the device attn_norm x 0.01 vs CPU (rel 0.01, worst row 0.02; the eps check).
+- Mutation table (CPU, study script /tmp/hy4_s04/study.py, outside the repo) in the test docstring.
+
+Gotchas
+- Nearly every q_a bug passes the 0.98 out gate: row halves swapped 0.9886, per-K norm then sum 0.9935, missing
+  reduce 0.9990; only the zero stub (0.975) and no norm weight (0.971) fail it. The q_resid checks catch them all;
+  attn_out / h_mid worst row catch zeroed rows (proposed in known_issues.md).
+- run_safe_pytest's up-front collect pass prints a first block with pcc 0 / rel 1.0 (no device module run); only the
+  second block is the real run.
+- ttnn/ttnn/bringup/INDEX.md, known_issues.md and repo_map.md already had uncommitted changes from earlier steps when
+  this step started.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999999, q_resid rel 0.00165, topk overlap 0.99926, out rel 0.00167).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device): PASS. pcc_swap_out 0.999998; q_resid rel 0.00200 / ratio [0.99889, 1.00063] / worst row 0.00306;
+  vs CPU same input 0.00176; x0.01 0.00175; attn_norm rel 0.00214; topk overlap 0.99925; attn_out 0.00186; h_mid
+  0.00189 / 0.0034; out rel 0.00201.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_04_q_a.py
