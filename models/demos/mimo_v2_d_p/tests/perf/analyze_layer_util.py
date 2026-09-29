@@ -64,6 +64,9 @@ def classify(ops, kind, S, kv_actual):
             fid = r["MATH FIDELITY"] or "HiFi2"
             part = "router matmul" if N == 256 else "dense MLP" if N == 8192 or K == 8192 else "attention matmuls"
             out.append((part, t, 2 * M * K * N, fid))
+        elif "KSplitMerge" in op:  # the K-split merge (sdpa_k_split_merge): SDPA time, no math
+            out.append(("SDPA", t, 0, "HiFi2"))
+            continue
         elif "SDPA" in op:
             chunk = S * SP
             keys = WINDOW if kind == "SWA" else kv_actual + chunk / 2
@@ -71,7 +74,7 @@ def classify(ops, kind, S, kv_actual):
             after_sdpa = True
             continue
         elif op.startswith("GenericOp") and after_sdpa:
-            out.append(("SDPA", t, 0, "HiFi2"))  # the K-split merge
+            out.append(("SDPA", t, 0, "HiFi2"))  # the K-split merge (older runs: a generic_op)
         elif op.startswith("FlatRoutedExpert") or op.startswith("UnifiedRoutedExpert"):
             out.append(("routed experts", t, 4 * S * 6 * H * I_MOE, "LoFi"))
         elif op.startswith("BinaryNg") and out and out[-1][0] == "dense MLP":
