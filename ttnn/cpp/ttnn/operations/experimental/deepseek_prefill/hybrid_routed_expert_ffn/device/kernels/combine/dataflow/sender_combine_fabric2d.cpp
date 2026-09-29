@@ -13,6 +13,9 @@
 // cannot go back to the reader until that read has drained. noc_async_writes_flushed() is exactly that
 // guarantee and is cheaper than a barrier.
 
+// Before any include: the compile-time and runtime argument headers below branch on these.
+#define CMBF2D_OVERLAPPED 1
+
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -23,7 +26,6 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "combine_fabric2d_sender_ct_args.hpp"
 
-#define CMBF2D_OVERLAPPED 1
 namespace cmbf2d_ns = hyb_cmbf2d;
 
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/sender_combine_fabric2d_body.hpp"
