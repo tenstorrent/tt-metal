@@ -8,10 +8,11 @@ PYTHON="$(command -v python3 || command -v python)"
 SKIP_RESET=0
 CONTINUE_ON_FAILURE=0
 RESET_CMD="tt-smi -glx_reset"
+MGD="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto"
 
 usage() {
 	cat << EOF
-Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links]
+Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
 Run the deployment test suite (Ethernet, DRAM, PCIe read/write).
 Must be run from the repository root with the tests already built.
@@ -30,6 +31,8 @@ Optional:
     --no-eth-links                          Do not require a specific number of Ethernet links per
                                             chip. Use on partially cabled systems, otherwise
                                             10 links per chip are expected.
+    --mgd <path>                            Path to the mesh graph descriptor (.textproto) file to
+                                            use for the Ethernet, DRAM and PCIe tests (default: $MGD).
     -h                                      Display this help message and exit
 
 Examples:
@@ -73,6 +76,11 @@ do
 		ETH_TEST_EXPECTED_LINKS=0
 		export ETH_TEST_EXPECTED_LINKS
 		;;
+	--mgd)
+		if [ -z "$2" ]; then echo "Missing argument to $1"; exit 1; fi
+		MGD="$2"
+		shift
+		;;
 	-h)
 		usage
 		exit
@@ -85,6 +93,20 @@ do
 	esac
 	shift
 done
+
+if [ -n "$MGD" ]; then
+	case "$MGD" in
+	/*) ;;
+	*) MGD="$PWD/$MGD" ;;
+	esac
+	if [ ! -f "$MGD" ]; then echo "Mesh graph descriptor not found: $MGD"; exit 1; fi
+fi
+
+# All deployment tests (eth, DRAM, PCIe) source the MGD purely via this env var.
+if [ -n "$MGD" ]; then
+	TT_MESH_GRAPH_DESC_PATH="$MGD"
+	export TT_MESH_GRAPH_DESC_PATH
+fi
 
 mkdir -p "$LOGDIR"
 
@@ -148,6 +170,7 @@ emit_setup() {
 	emit "$(printf '%-24s %s' 'Using board resets:' "$using_board_resets")"
 	emit "$(printf '%-24s %s' 'Continue on failure:' "$([ "$CONTINUE_ON_FAILURE" -eq 1 ] && echo true || echo false)")"
 	emit "$(printf '%-24s %s' 'Checking eth links:' "$checking_eth_links")"
+	emit "$(printf '%-24s %s' 'Mesh graph descriptor:' "${MGD:-<auto>}")"
 }
 
 # emit_status <text> <passed|failed>: print a line ending in a pass/fail verdict.
