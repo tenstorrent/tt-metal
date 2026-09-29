@@ -55,13 +55,11 @@ constexpr uint32_t kWidthShardedCapMinOutPages = 1024;
 // Axes 2 and 3 of the 4D page map are H and W; anything below is an outer axis.
 constexpr uint32_t kFirstTileAxis = 2;
 
+// `work[i]` is the page count of `cores_in_order[i]`; page ranges are handed out in that order.
 struct CoreSplit {
     CoreRangeSet all_cores;
     std::vector<CoreCoord> cores_in_order;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t work_per_core_1 = 0;
-    uint32_t work_per_core_2 = 0;
+    std::vector<uint32_t> work;
 };
 
 std::optional<uint32_t> tuned_core_cap(const Tensor& input, const Tensor& output, const RepeatCodegenParams& params) {
@@ -94,24 +92,54 @@ CoreSplit split_work(const Tensor& input, uint32_t total_work, std::optional<uin
                                     total_work,
                                     /*row_wise=*/false)
                               : tt::tt_metal::split_work_to_cores(grid_size, total_work, /*row_wise=*/false);
-    return CoreSplit{
-        .all_cores = all_cores,
-        .cores_in_order = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false),
-        .core_group_1 = core_group_1,
-        .core_group_2 = core_group_2,
-        .work_per_core_1 = work_per_core_1,
-        .work_per_core_2 = work_per_core_2,
-    };
+    CoreSplit split{
+        .all_cores = all_cores, .cores_in_order = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false)};
+    split.work.reserve(split.cores_in_order.size());
+    for (const auto& core : split.cores_in_order) {
+        uint32_t work = 0;
+        if (core_group_1.contains(core)) {
+            work = work_per_core_1;
+        } else if (core_group_2.contains(core)) {
+            work = work_per_core_2;
+        }
+        split.work.push_back(work);
+    }
+    return split;
 }
 
-uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
-    if (split.core_group_1.contains(core)) {
-        return split.work_per_core_1;
+// A last-dim row-major repeat keeps the row count, so when input and output are HEIGHT_SHARDED in L1
+// over the same cores with the same rows per shard, every output row lives on the core that holds its
+// input row. Giving each core exactly its own shard's rows keeps both the read and the write local; a
+// grid-wide split would send every row across the NoC twice to reach a handful of shard cores.
+std::optional<CoreSplit> shard_local_split(const Tensor& input, const Tensor& output, uint32_t total_pages) {
+    const auto& in_mc = input.memory_config();
+    const auto& out_mc = output.memory_config();
+    if (in_mc.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED ||
+        out_mc.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED || in_mc.buffer_type() != BufferType::L1 ||
+        out_mc.buffer_type() != BufferType::L1) {
+        return std::nullopt;
     }
-    if (split.core_group_2.contains(core)) {
-        return split.work_per_core_2;
+    const auto& in_shard = in_mc.shard_spec();
+    const auto& out_shard = out_mc.shard_spec();
+    if (!in_shard.has_value() || !out_shard.has_value() || in_shard->grid != out_shard->grid ||
+        in_shard->orientation != out_shard->orientation || in_shard->shape[0] != out_shard->shape[0]) {
+        return std::nullopt;
     }
-    return 0;
+    const uint32_t rows = in_shard->shape[0];
+    if (rows == 0 || total_pages % rows != 0) {
+        return std::nullopt;
+    }
+    // The buffer places shard i on the i-th core of its grid in shard orientation.
+    auto cores = corerange_to_cores(
+        in_shard->grid, std::nullopt, /*row_wise=*/in_shard->orientation == ShardOrientation::ROW_MAJOR);
+    const uint32_t active = total_pages / rows;
+    if (active > cores.size()) {
+        return std::nullopt;
+    }
+    cores.resize(active);
+    CoreSplit split{.all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(cores)), .cores_in_order = std::move(cores)};
+    split.work.assign(active, rows);
+    return split;
 }
 
 }  // namespace
@@ -188,12 +216,14 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     ProgramDescriptor desc;
 
     // An outer-axis TILE repeat into L1 reads each source tile once and writes all of its copies,
-    // instead of re-reading the source once per output page. Only placements whose destination pages
-    // the accessor maps one tile per page qualify.
+    // instead of re-reading the source once per output page. The writes go through a TensorAccessor
+    // by global page id, which validation guarantees is the interleaved page grid for a sharded output.
+    // BLOCK_SHARDED stays on the sequenced pair, whose writer's core cap was tuned for that placement.
     const auto out_layout = output.memory_config().memory_layout();
     const bool direct_outer_tile =
         !is_row_major && operation_attributes.rep_dim < kFirstTileAxis && dst_buffer->buffer_type() == BufferType::L1 &&
-        (out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == TensorMemoryLayout::WIDTH_SHARDED);
+        (out_layout == TensorMemoryLayout::INTERLEAVED || out_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+         out_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     if (direct_outer_tile) {
         const uint32_t tile_bytes = tt::tile_size(cb_data_format);
         const uint32_t total_in_pages = operation_attributes.total_out_pages / operation_attributes.num_repeats;
@@ -223,10 +253,10 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         reader_desc.config = ReaderConfigDescriptor{};
 
         uint32_t start = 0;
-        for (const auto& core : split.cores_in_order) {
-            const uint32_t n = work_for_core(split, core);
+        for (size_t i = 0; i < split.cores_in_order.size(); ++i) {
+            const uint32_t n = split.work[i];
             reader_desc.emplace_runtime_args(
-                core, {src_buffer, dst_buffer, start, n, operation_attributes.num_repeats});
+                split.cores_in_order[i], {src_buffer, dst_buffer, start, n, operation_attributes.num_repeats});
             start += n;
         }
 
@@ -234,10 +264,15 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         return desc;
     }
 
-    const CoreSplit split = split_work(
-        input,
-        operation_attributes.total_out_pages,
-        is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
+    std::optional<CoreSplit> local_split =
+        is_last_dim_rm ? shard_local_split(input, output, operation_attributes.total_out_pages) : std::nullopt;
+    const CoreSplit split =
+        local_split.has_value()
+            ? std::move(*local_split)
+            : split_work(
+                  input,
+                  operation_attributes.total_out_pages,
+                  is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
 
     if (!is_row_major) {
         // TILE-interleaved path: shared pluggable sequencer reader (seq_id=1 == SEQ_REPEAT)
@@ -286,8 +321,9 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         writer_desc.config = WriterConfigDescriptor{};
 
         uint32_t start = 0;
-        for (const auto& core : split.cores_in_order) {
-            const uint32_t n = work_for_core(split, core);
+        for (size_t i = 0; i < split.cores_in_order.size(); ++i) {
+            const auto& core = split.cores_in_order[i];
+            const uint32_t n = split.work[i];
             reader_desc.emplace_runtime_args(
                 core,
                 {src_buffer,
@@ -374,8 +410,9 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t start = 0;
-    for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
+    for (size_t i = 0; i < split.cores_in_order.size(); ++i) {
+        const auto& core = split.cores_in_order[i];
+        const uint32_t n = split.work[i];
         reader_desc.emplace_runtime_args(core, {src_buffer, n, start});
         writer_desc.emplace_runtime_args(core, {dst_buffer, n, start});
         start += n;

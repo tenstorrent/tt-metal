@@ -44,8 +44,18 @@ struct CodegenLegPlan {
     // interleaved in the requested buffer type, followed by one placement hop.
     MemoryConfig final_mc;
     bool final_in_place = false;
-    // Repeated axes in execution order.
+    // Per-axis leg repeat counts. A repeat of a size-1 axis followed by one of the next axis is folded
+    // into the latter as the product: both orders visit the output pages identically, and the fold
+    // saves a whole-tensor leg. The folded axis keeps count 1 and the router views the result back to
+    // the requested shape.
+    ttsl::SmallVector<uint32_t> leg_repeats;
+    // Axes with a leg, in execution order.
     std::vector<uint32_t> rep_dims;
+    // How many legs run row-major: all of them for a ROW_MAJOR input and on the round trip, none for a
+    // TILE input copying tile pages. The round trip runs its outer-axis legs row-major too, between the
+    // one untilize and the one retilize: retilizing first and then copying the padded tile planes
+    // along the outer axis costs more device time than widening the row-major intermediate.
+    size_t row_major_legs = 0;
 };
 
 CodegenLegPlan plan_codegen_legs(

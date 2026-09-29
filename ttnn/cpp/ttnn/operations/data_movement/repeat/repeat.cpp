@@ -241,6 +241,9 @@ ttnn::Tensor repeat_dim_codegen(
     }
 
     auto out = ttnn::prim::repeat_codegen(working, params, std::move(prim_output));
+    if (pad == 0) {
+        return out;
+    }
 
     auto expected_shape = shape;
     expected_shape[dim] *= repetitions;
@@ -340,64 +343,43 @@ ttnn::Tensor repeat_via_codegen(
     const ttsl::SmallVector<uint32_t>& repetition_vector,
     const MemoryConfig& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    const auto& shape = tensor.logical_shape();
-    const uint32_t ndim = shape.rank();
     // The whole-call gate budgeted L1 against this same plan.
     const auto plan = repeat_codegen::plan_codegen_legs(tensor, repetition_vector, output_mem_config);
-    const bool round_trip = plan.round_trip;
-    const MemoryConfig& intermediate_mc = plan.intermediate_mc;
-    const MemoryConfig& final_mc = plan.final_mc;
     const std::optional<Tensor> final_out = plan.final_in_place ? optional_output_tensor : std::nullopt;
-    std::vector<uint32_t> rep_dims = plan.rep_dims;
+    const size_t num_legs = plan.rep_dims.size();
 
     ttnn::Tensor working = tensor;
     if (plan.unshard_input) {
         working = ttnn::to_memory_config(working, interleaved_in(BufferType::DRAM), std::nullopt);
     }
 
-    if (round_trip) {
+    if (plan.round_trip) {
         // Not to_layout: for a padded tensor it calls untilize_with_unpadding directly, while
         // ttnn::untilize routes the same unpadding untilize to its codegen prim where it can.
         working = ttnn::untilize(working);
     }
 
-    // Unit outer axes of a TILE tensor only factor one tile-page plane, so every outer repeat
-    // collapses into one leg over a [1, H, W] view.
-    const uint32_t outer_rank = ndim - 2;
-    const auto outer_reps =
-        std::count_if(rep_dims.cbegin(), rep_dims.cend(), [&](uint32_t d) { return d < outer_rank; });
-    if (!round_trip && working.layout() == ttnn::TILE_LAYOUT && outer_reps >= 2 &&
-        !working.memory_config().is_sharded() &&
-        std::all_of(shape.cbegin(), shape.cbegin() + outer_rank, [](uint32_t s) { return s == 1; })) {
-        uint32_t combined = 1;
-        for (uint32_t d = 0; d < outer_rank; ++d) {
-            combined *= repetition_vector[d];
-        }
-        std::erase_if(rep_dims, [&](uint32_t d) { return d < outer_rank; });
-        const bool is_final = rep_dims.empty();
-        const auto flat = ttnn::view(working, ttnn::Shape({1, shape[-2], shape[-1]}));
-        const auto flat_out = repeat_dim_codegen(
-            flat, 0, combined, is_final ? final_mc : intermediate_mc, is_final ? final_out : std::nullopt);
-        ttsl::SmallVector<uint32_t> collapsed_shape(shape.cbegin(), shape.cend());
-        for (uint32_t d = 0; d < outer_rank; ++d) {
-            collapsed_shape[d] = repetition_vector[d];
-        }
-        working = ttnn::view(flat_out, ttnn::Shape(collapsed_shape));
-    }
-
-    for (size_t i = 0; i < rep_dims.size(); ++i) {
-        const bool is_final = i + 1 == rep_dims.size();
-        const uint32_t d = rep_dims[i];
+    for (size_t i = 0; i < num_legs; ++i) {
+        const bool is_final = i + 1 == num_legs;
+        const uint32_t d = plan.rep_dims[i];
         working = repeat_dim_codegen(
             working,
             d,
-            repetition_vector[d],
-            is_final ? final_mc : intermediate_mc,
+            plan.leg_repeats[d],
+            is_final ? plan.final_mc : plan.intermediate_mc,
             is_final ? final_out : std::nullopt);
     }
 
-    if (round_trip) {
+    if (plan.round_trip) {
         working = ttnn::to_layout(working, ttnn::TILE_LAYOUT, tensor.dtype());
+    }
+    // A folded leg leaves its size-1 axis unexpanded; the pages are already in output order.
+    auto out_shape = tensor.logical_shape();
+    for (size_t d = 0; d < repetition_vector.size(); ++d) {
+        out_shape[d] *= repetition_vector[d];
+    }
+    if (working.logical_shape() != out_shape) {
+        working = ttnn::view(working, out_shape);
     }
     if (!same_placement(working.memory_config(), output_mem_config)) {
         working = ttnn::to_memory_config(working, output_mem_config, std::nullopt);

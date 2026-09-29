@@ -95,7 +95,7 @@ bool tile_geometry_ok(const Tensor& input) {
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
-// A measured perf loss with no identified mechanism, matched exactly. `input_shard_cores` is 0 for an
+// A measured perf loss matched exactly on one case, not on a condition. `input_shard_cores` is 0 for an
 // interleaved input; a sharded input or output is ROW_MAJOR-oriented. An interleaved output matches in
 // either buffer type unless `output_buffer` pins one.
 struct UngeneralizedDemotion {
@@ -109,12 +109,12 @@ struct UngeneralizedDemotion {
     std::optional<BufferType> output_buffer;
 };
 
-// Ungeneralized: each entry is one measured case, not a condition. Replace an entry with a predicate once
-// the cause of its loss is known.
 constexpr TensorMemoryLayout kInterleaved = TensorMemoryLayout::INTERLEAVED;
 constexpr TensorMemoryLayout kHeight = TensorMemoryLayout::HEIGHT_SHARDED;
 constexpr TensorMemoryLayout kWidth = TensorMemoryLayout::WIDTH_SHARDED;
 const std::array<UngeneralizedDemotion, 13> kUngeneralizedDemotions = {{
+    // No mechanism identified; each entry is one measured case. Replace with a predicate once the cause
+    // of the loss is known.
     {{1, 2, 6, 12}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 8, 16}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 12, 24}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
@@ -123,11 +123,23 @@ const std::array<UngeneralizedDemotion, 13> kUngeneralizedDemotions = {{
     {{1, 2, 18, 36}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 20, 40}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
     {{1, 2, 22, 44}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 64, 128}, {2, 2, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kWidth, 4, kWidth, {}},
+    // Identified but not fixed: the higher-dim row-major leg splits its sticks over the whole grid, so
+    // every worker reads from the few cores holding the HEIGHT_SHARDED input, a many-to-few read hotspot
+    // native avoids by repeating each shard where it lies. The output is interleaved, so no split keeps
+    // both sides local. Kept exact because the edge of that loss in shard count and size is unmeasured.
+    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 8, kInterleaved, BufferType::L1},
+    // Identified, and addressed in the factory, but the only measurement taken predates that fix, so
+    // these stay demoted until a measurement against the current factory says otherwise. A last-dim
+    // row-major repeat from one HEIGHT_SHARDED placement to the same rows per shard is split over the
+    // shard cores themselves, so every row is read and written locally instead of crossing the NoC
+    // twice (shard_local_split).
     {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
+    // An outer-axis TILE repeat into a HEIGHT_SHARDED L1 output reads each source tile once and writes
+    // every copy from the reader, instead of re-reading the source once per output page from every
+    // core of the grid (direct_outer_tile).
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::BFLOAT16, Layout::TILE, kHeight, 8, kHeight, {}},
     {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::TILE, kHeight, 8, kHeight, {}},
-    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 8, kInterleaved, BufferType::L1},
-    {{1, 2, 64, 128}, {2, 2, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kWidth, 4, kWidth, {}},
 }};
 
 bool placement_matches(const MemoryConfig& memory_config, TensorMemoryLayout layout, uint32_t shard_cores) {
@@ -277,24 +289,38 @@ CodegenLegPlan plan_codegen_legs(
     // A repeated shape does not tile the input's shard spec, so intermediates are interleaved.
     plan.intermediate_mc = interleaved_in(plan.unshard_input ? BufferType::DRAM : input_mc.buffer_type());
 
+    const bool tile_legs = input.layout() == ttnn::TILE_LAYOUT && !plan.round_trip;
+    plan.leg_repeats.assign(repeat_dims.cbegin(), repeat_dims.cbegin() + ndim);
+    // The highest axis a fold may land on. A row-major leg must keep the stick whole, and a TILE leg
+    // copies whole tile pages exactly only along an outer axis. Ascending, so a run of size-1 axes
+    // chains into one leg.
+    const int32_t fold_limit = static_cast<int32_t>(ndim) - (tile_legs ? 3 : 2);
+    for (int32_t d = 0; d + 1 <= fold_limit; ++d) {
+        if (shape[d] == 1 && plan.leg_repeats[d] > 1 && plan.leg_repeats[d + 1] > 1) {
+            plan.leg_repeats[d + 1] *= plan.leg_repeats[d];
+            plan.leg_repeats[d] = 1;
+        }
+    }
+
+    // Row-major legs repeat the stick first, so tiny multi-dim repeats do not carry a wider
+    // intermediate through the per-stick work. TILE legs run outermost first.
+    for (uint32_t i = 0; i < ndim; ++i) {
+        const uint32_t d = tile_legs ? i : ndim - 1 - i;
+        if (plan.leg_repeats[d] > 1) {
+            plan.rep_dims.push_back(d);
+        }
+    }
+    plan.row_major_legs = tile_legs ? 0 : plan.rep_dims.size();
+
+    // On a round trip the retilize produces the result, and it cannot land in a shard spec.
+    const bool last_leg_writes_result = !plan.round_trip;
     auto out_shape = shape;
     for (uint32_t d = 0; d < ndim; ++d) {
         out_shape[d] *= repeat_dims[d];
     }
     plan.final_in_place =
-        !plan.round_trip && shard_spec_is_page_identical(output_mem_config, out_shape, input.layout());
+        last_leg_writes_result && shard_spec_is_page_identical(output_mem_config, out_shape, input.layout());
     plan.final_mc = plan.final_in_place ? output_mem_config : interleaved_in(output_mem_config.buffer_type());
-
-    for (uint32_t d = 0; d < ndim; ++d) {
-        if (repeat_dims[d] > 1) {
-            plan.rep_dims.push_back(d);
-        }
-    }
-    // Row-major legs repeat the stick first, so tiny multi-dim repeats do not carry a wider
-    // intermediate through the per-stick work.
-    if (plan.round_trip || input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        std::reverse(plan.rep_dims.begin(), plan.rep_dims.end());
-    }
     return plan;
 }
 
@@ -388,9 +414,9 @@ bool supported_by_codegen(
         // Not yet on device (e.g. host-side probing); nothing to bound against.
         return true;
     }
-    // Every leg runs row-major, in the order the router executes them. Each leg's CB shares L1 with
-    // the input, the round trip's untilized copy and every leg output so far; all of them are counted
-    // as live for the whole call, which never undercounts whatever the allocator frees in between.
+    // The row-major legs, in the order the router executes them. Each one's CB shares L1 with the
+    // input, the round trip's untilized copy and every leg output so far; all of them are counted as
+    // live for the whole call, which never undercounts whatever the allocator frees in between.
     const CodegenLegPlan plan = plan_codegen_legs(input, repeat_dims, output_mem_config);
     uint64_t committed = l1_bytes_per_bank(input, input.tensor_spec());
     // What the first leg reads: the input where it lies, its interleaved DRAM copy, or the round trip's
@@ -403,10 +429,10 @@ bool supported_by_codegen(
         leg_in = spec_like(input, shape, Layout::ROW_MAJOR, plan.intermediate_mc);
         committed += l1_bytes_per_bank(input, leg_in);
     }
-    for (size_t i = 0; i < plan.rep_dims.size(); ++i) {
+    for (size_t i = 0; i < plan.row_major_legs; ++i) {
         const uint32_t d = plan.rep_dims[i];
         auto out_shape = leg_in.logical_shape();
-        out_shape[d] *= repeat_dims[d];
+        out_shape[d] *= plan.leg_repeats[d];
         const MemoryConfig& leg_mc = i + 1 == plan.rep_dims.size() ? plan.final_mc : plan.intermediate_mc;
         const auto leg_out = spec_like(input, out_shape, Layout::ROW_MAJOR, leg_mc);
         committed += l1_bytes_per_bank(input, leg_out);
