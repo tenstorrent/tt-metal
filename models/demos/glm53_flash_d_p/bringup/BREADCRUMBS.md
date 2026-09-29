@@ -2093,3 +2093,28 @@ Results:
 Next: the device experts module (`tt/experts.py`) and its hook already work for layer 4 in this swap.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_10_experts.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.shared_expert test (attempt 1)
+Reviewed the rendered shared_expert test for kda_moe layer 4. The rendered file was the bare `run_component_test`; I
+rebuilt it from the frozen `test_c_dsa_moe_shared_expert.py` (same checks on chunk 1 and chunk 0, plus the clamp probe)
+with layer-4 limits. The gated metric pcc_shared_expert_L04 (PCC >= 0.99, chunk 1) is unchanged.
+- Sensitivity: /tmp/kmse/s{1,2,3}.py, which are /tmp/glm_se/s*.py with L = 4 and probe scales 4 / 8 / 16. CPU only,
+  not kept. The numbers are in the test docstring. (s2's printed "pcc" is an fp32-sum artefact above 1; s3's is right.)
+- The clamps never engage on the layer-4 golden (max gate 2.16, |up| 4.72), so every clamp bug is exact on it. The
+  probe is 16 * x (layer 3: 4 * x): 4 * x engages nothing, and at 8 * x limit 9.9 / 10.1 pass the coefficient.
+- Limits (layer 3 in brackets). Golden, chunks 1 and 0: rel <= 0.007 (0.008; bfp8 h alone 0.0073 now fails),
+  ratio [0.995, 1.005] (0.993..1.007; catches x1.005 and HiFi2-like truncation by ratio too), worst row <= 0.012
+  (0.015), coef [0.997, 1.003], blocks [0.997, 1.003] (0.996..1.004; catches the second half x1.005 at 1.0049).
+  Probe: rel <= 0.008, ratio [0.993, 1.007], worst row <= 0.02 (0.016; bfp8 weights score 0.0158 here), coef
+  [0.997, 1.003].
+- These limits pass bfp8 weights (golden 0.0057, probe 0.0071 / worst row 0.0158) and fail bfp8 x and h.
+Results:
+- Device (default mode) already passes through `tt/mlp.py:TtDenseMLP` with the layer-4 shared weights: PCC 0.999996,
+  rel 0.00289, ratio [0.9983, 1.0000], worst row 0.0038, coef 0.99920, blocks [0.99914, 0.99927]; chunk 0 0.00284 /
+  0.99922; probe 0.00266 / 0.99919. About 7 s for the real pass. The device coefficient runs 0.08% low (layer 3
+  0.99984); the host simulation predicted 0.99983.
+- Reference passes (0.0019 / worst row 0.0026; probe exact). Stub fails (PCC 0).
+- The first `FAIL pcc ... 0.000000` line in each run comes from the precompile collect pass.
+Next (implement): no module change is needed; add shared_expert to `DEVICE_STEPS["kda_moe"]` if not there yet.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_shared_expert.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
