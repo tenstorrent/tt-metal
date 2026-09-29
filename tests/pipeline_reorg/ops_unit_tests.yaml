@@ -466,6 +466,35 @@
   budget_type: unit
   category: ccl
 
+- name: fabric_all_gather example accuracy + perf (Galaxy, LoudBox)
+  # Perf example ttnn/ttnn/operations/examples/fabric_all_gather: bit-exact gather on every chip, per-chip bandwidth
+  # from the realtime profiler (reported, not gated yet), one preallocated output reused call after call (the fence),
+  # and a run confined to a sub-device. Category fabric_examples is not in the nightly schedule: dispatch
+  # tt-metal-l2-nightly with additional_test_categories=fabric_examples to run it. FAG_STRICT=1 fails a topology
+  # the fabric cannot route instead of reporting it.
+  cmd: |
+    rc=0
+    T=tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather.py
+    export FAG_PROFILER=rt FAG_LINKS=1,2 FAG_VARIANTS=base,b
+    NDEV=$(python3 -c 'import ttnn; print("NDEV", ttnn.get_num_devices())' 2>/dev/null | awk '/^NDEV/ {print $2}')
+    if [ "$NDEV" = "32" ]; then
+      FAG_STRICT=1 FAG_FABRICS=1d_ring FAG_TOPOS=8x4_axis0_ring,8x4_axis1_ring pytest $T -s || rc=1
+      FAG_STRICT=1 FAG_FABRICS=2d_torus_xy FAG_TOPOS=8x4_axis0_ring,8x4_axis1_ring,8x4_snake_ring,8x4_dual_cycles pytest $T -s || rc=1
+    else
+      FAG_STRICT=1 FAG_FABRICS=1d,2d FAG_TOPOS=2x4_axis0_line,2x4_axis1_line pytest $T -s || rc=1
+      FAG_FABRICS=1d_ring,2d FAG_TOPOS=2x4_axis1_ring,2x4_snake_ring pytest $T -s || rc=1
+    fi
+    exit $rc
+  skus:
+    bh_galaxy:
+      timeout: 20
+    bh_loudbox:
+      timeout: 25
+  owner_id: "" # TODO: Marko Staletovic's Slack ID
+  team: ttnn
+  budget_type: e2e
+  category: fabric_examples
+
 - name: ttnn nightly docs examples tests
   # docs_examples runs on viommu-stable SKUs.
   cmd: 'pytest tests/ttnn/docs_examples -xv -m "not disable_fast_runtime_mode" --timeout=600'

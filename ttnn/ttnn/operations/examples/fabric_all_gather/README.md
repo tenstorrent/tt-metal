@@ -57,6 +57,10 @@ python -m ttnn.operations.examples.fabric_all_gather [options]
 | `--payload` | int (bytes) | `14336` | router max payload |
 | `--trials` | int | `3` | measured launches per case (median) |
 
+Test environment variables (`test_fabric_all_gather.py`): `FAG_FABRICS`, `FAG_TOPOS`, `FAG_LINKS`, `FAG_VARIANTS`
+(`base`, `b` balanced, `d` desync, `bd`), `FAG_SHAPE`, `FAG_DTYPE`, `FAG_DIM`, `FAG_PAYLOAD`, `FAG_TRIALS`,
+`FAG_PROFILER` (`device` or `rt`), `FAG_STRICT` (1 = an unroutable topology fails), `FAG_REUSE_CALLS`.
+
 A topology the fabric cannot route (no direct link for a hop, or fewer links than requested) is reported as
 unsupported instead of failing.
 
@@ -111,9 +115,44 @@ hit the same DRAM bank at the same time. It measures the same as the default: th
 The per-port chunk counts are computed on the host and passed as runtime args. Counting them on device (one walk per
 shard entry, before the first read) cost ~10 µs per call, 3–7% of a 16 MiB gather.
 
-Known limitation: calls are not fenced against each other. A chip may start its next call while a neighbour is
-still relaying the previous one; with a different input per call that neighbour could relay newer data. The arrival
-counters stay consistent (they are re-armed by exactly what each call consumed).
+### Reusing one output: preallocated, fenced, inside a sub-device
+`fabric_all_gather(..., output=out)` writes a preallocated output (gathered shape, TILE, DRAM interleaved) in place,
+so a caller can allocate it once and reuse it for every call. Reuse needs a fence: chip A's next call must not write
+into chip B's output while B's previous result is still being read (by B's relays, or by whatever B queued after
+the gather). Each port's sender therefore opens its connection by sending a *ready* increment to the peer port that
+writes into this chip, and sends nothing itself until its own peer's ready has arrived. A chip reaching the
+program means everything queued before it on that chip has finished, so a ready says "you may write into my output
+now". Each call sends and consumes exactly one ready per sending port, so the counters are back at 0 after every
+call. The fence costs nothing measurable (ring: 154 vs 155 GB/s).
+
+`test_fabric_all_gather_output_reuse` checks it: 8 calls into one output, a different input each, no host sync, a
+clone after every call, with one chip (a different one each call) kept busy before its clone. Without the fence the
+late chip's snapshot already holds its neighbours' next-call data (the test fails); with it every snapshot is exact.
+
+- `sub_core_grid` (a `CoreRangeSet` of logical worker cores) confines the op: port, copy and probe cores are picked
+  inside it (each port as close as the grid allows to the column of its Ethernet core).
+- `subdevice_id`: the sub-device those cores form. Pass it with its cores as `sub_core_grid` (the Python API can't
+  look a sub-device's cores up); the op's one-time semaphore setup then synchronizes only that sub-device.
+- `ready_semaphore`, `data_valid_semaphore`: caller-owned global semaphores (initial value 0, both or neither)
+  covering every core the op may use, e.g. all of `sub_core_grid`. The op then allocates nothing and never
+  synchronizes, so it can overlap with work on other sub-devices. Without them it creates its own once per set of
+  port cores, and synchronizes once after creating them.
+
+`test_fabric_all_gather_subdevice` runs the gather in a 4-column strip that is its own sub-device, with its own and
+with caller-owned semaphores.
+
+## CI
+`tests/pipeline_reorg/ops_unit_tests.yaml`, entry *fabric_all_gather example accuracy + perf (Galaxy, LoudBox)*,
+category `fabric_examples`, SKUs `bh_galaxy` (8 × 4: axis rings on FABRIC_1D_RING; axis rings, snake ring and
+two Hamiltonian cycles on FABRIC_2D_TORUS_XY) and `bh_loudbox` (2 × 4 lines, plus ring / snake where the fabric
+routes them). It is not scheduled; run it with
+
+```bash
+gh workflow run tt-metal-l2-nightly.yaml --ref <branch> -f run_wormhole=false -f additional_test_categories=fabric_examples
+```
+
+Bandwidth there comes from the realtime profiler (`FAG_PROFILER=rt`; CI builds have no device profiler) and is
+reported, not gated.
 
 ## Four neighbours per chip: two Hamiltonian cycles (emulated Galaxy)
 A snake ring over a 2D torus feeds each chip over two of its four neighbours. `scheme="dual_cycles"`

@@ -10,9 +10,11 @@ in group order along dim 0 (or along dim -2 when every leading dim is 1).
 Per chip, per direction (toward the next / previous chip in the group) and per link there is one *port* core:
   reader (RISCV_1, NoC0): reads its chip's own shard from the input, then the shards it relays, from the output,
                           each chunk only once the arrival counter says it has landed.
-  sender (RISCV_0, NoC1): sends every chunk into the same pages of the neighbour's output; every packet is a fused
-                          write + increment of the neighbour port's arrival counter. After its sends it waits until
-                          everything it expects from upstream has arrived, then re-arms the counter.
+  sender (RISCV_0, NoC1): first tells the peer port that writes into this chip that it may (a *ready*), and waits for
+                          its own peer's ready (the fence between calls); then sends every chunk into the same pages
+                          of the neighbour's output, every 8th packet a fused write + increment of the neighbour
+                          port's arrival counter. After its sends it waits until everything it expects from upstream
+                          has arrived, then re-arms the counter.
   Line:  toward p+1 it sends shards p, p-1, ..., 0; toward p-1 it sends p, p+1, ..., G-1.
   Ring:  toward p+1 it sends G//2 shards (p, p-1, ...); toward p-1 the other G-1-G//2 (p, p+1, ...).
 Chunks: runs of up to payload/page tiles that sit consecutively in one DRAM bank (interleaved pages i, i+B, i+2B, ...,
@@ -194,6 +196,10 @@ void kernel_main() {
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);  // my counter; the downstream port's is at the same address
     const uint32_t expect_in = get_arg_val<uint32_t>(a++);     // increments I receive from upstream
     const uint32_t total = get_arg_val<uint32_t>(a++);         // chunks I send (host-counted)
+    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);    // my ready counter; the peer's is at the same address
+    const uint32_t send_ready = get_arg_val<uint32_t>(a++);    // 1 = tell the peer's port that sends to me I've started
+    const uint32_t ready_x = get_arg_val<uint32_t>(a++);       // that port core (NoC coords)
+    const uint32_t ready_y = get_arg_val<uint32_t>(a++);
     const uint32_t peer_x = get_arg_val<uint32_t>(a++);        // downstream port core (NoC coords)
     const uint32_t peer_y = get_arg_val<uint32_t>(a++);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
@@ -203,17 +209,31 @@ void kernel_main() {
     a += num_shards;
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
 
-    if (num_shards > 0) {
+    if (num_shards > 0 || send_ready) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
         for (uint32_t h = 0; h < num_headers; ++h) {
             hdrs[h] = PacketHeaderPool::allocate_header();
             route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
         }
+        conn.open();
+        // Fence between calls. This program running here means every earlier command on this chip is done, including
+        // whatever read the output of the previous call, so the peer may now write into my output: say so. Then send
+        // nothing until the peer has said the same (each call sends, and consumes, exactly one ready per port).
+        if (send_ready) {
+            hdrs[0]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+        }
+        if (num_shards > 0) {
+            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            noc_semaphore_wait_min(ready, 1);
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+            noc_async_atomic_barrier();
+        }
         const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
         uint32_t chunks_left = total;
         uint32_t sent = 0;
-        conn.open();
         // Up to `group` chunks in flight; the read pointer sits on a group boundary of a 2-group CB (no wrap).
         uint32_t h = 0, unflushed = 0;
         for (uint32_t k = 0; k < num_shards; ++k) {
@@ -355,6 +375,17 @@ def _schedule(p, G, ring, balance=False):
     return fwd, bwd
 
 
+_OPP = {"fwd": "bwd", "bwd": "fwd"}
+
+
+def _needs_ready(chips, coord, j, d):
+    """Whether port (ring j, direction d) of `coord` sends a ready to its peer: the peer's opposite-direction port
+    sends to `coord` (its peer is `coord`), so it waits for that ready before writing into `coord`'s output."""
+    rg = chips[coord]["rings"][j]
+    peer = rg["next"] if d == "fwd" else rg["prev"]
+    return peer is not None and bool(chips[peer]["rings"][j][_OPP[d]])
+
+
 def _num_banks(mesh_device):
     g = mesh_device.dram_grid_size()
     return g.x * g.y
@@ -376,18 +407,23 @@ def _chunks_per_shard(shard_pages, first_bank, stride, num_banks, run_pages, par
 _PROBE_CACHE = {}
 
 
-def probe_ethernet_cores(mesh_device, connections):
+def probe_ethernet_cores(mesh_device, connections, allowed):
     """connections: {coord: [(peer_coord, link_index), ...]} -> {(coord, peer_coord, link_index): (noc_x, noc_y)}.
 
-    One probe program per chip; each connection gets its own probe core (logical (i, last row))."""
+    One probe program per chip; each connection gets its own probe core: the first cores, left to right, of the
+    lowest row of `allowed` (logical (x, y) set) that has enough of them."""
     key = (id(mesh_device), ttnn.get_fabric_config(), tuple(sorted((k, tuple(v)) for k, v in connections.items())))
     if key in _PROBE_CACHE:
         return _PROBE_CACHE[key][1]
     rows, cols = tuple(mesh_device.shape)
-    grid = mesh_device.compute_with_storage_grid_size()
     k_max = max(len(v) for v in connections.values())
-    assert k_max <= grid.x, "more connections per chip than probe cores in one row"
-    cores = [ttnn.CoreCoord(i, grid.y - 1) for i in range(k_max)]
+    row = next(
+        (y for y in sorted({y for _, y in allowed}, reverse=True) if sum(1 for _, yy in allowed if yy == y) >= k_max),
+        None,
+    )
+    if row is None:
+        raise ValueError(f"fabric_all_gather: no row of the core grid has {k_max} cores for the placement probe")
+    cores = [ttnn.CoreCoord(x, row) for x in sorted(x for x, y in allowed if y == row)[:k_max]]
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -493,21 +529,20 @@ def _chip_maps(mesh_device, coord):
     return _eth_physical_lists(mesh_device).get(uid, (None, False, {}))
 
 
-def _worker_below(mesh_device, coord, noc_x, taken, grid):
-    """Logical worker core in physical NoC column noc_x closest below the Ethernet row, not yet taken; else the
-    nearest physical column. Worker coordinates are translated, so they are mapped back per chip."""
+def _worker_below(mesh_device, coord, noc_x, taken, allowed):
+    """Logical worker core (from `allowed`) in physical NoC column noc_x closest below the Ethernet row, not yet
+    taken; else the nearest physical column. Worker coordinates are translated, so they are mapped back per chip."""
     t2p = _chip_maps(mesh_device, coord)[2]
     best = None
-    for x in range(grid.x):
-        for y in range(grid.y):
-            lc = ttnn.CoreCoord(x, y)
-            if (x, y) in taken:
-                continue
-            v = mesh_device.worker_core_from_logical_core(lc)
-            score = (abs(t2p.get(v.x, v.x) - noc_x), v.y)
-            if best is None or score < best[0]:
-                best = (score, lc)
-    return best[1]
+    for x, y in sorted(allowed):
+        lc = ttnn.CoreCoord(x, y)
+        if (x, y) in taken:
+            continue
+        v = mesh_device.worker_core_from_logical_core(lc)
+        score = (abs(t2p.get(v.x, v.x) - noc_x), v.y)
+        if best is None or score < best[0]:
+            best = (score, lc)
+    return best[1] if best is not None else None
 
 
 def hamiltonian_decomposition(R, C, seed=1, tries=20000):
@@ -562,7 +597,30 @@ def hamiltonian_decomposition(R, C, seed=1, tries=20000):
     raise ValueError(f"no Hamiltonian decomposition found for a {R}x{C} torus")
 
 
-def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", scheme="ring", balance=False):
+def allowed_cores(mesh_device, sub_core_grid=None):
+    """Logical (x, y) worker cores the op may use: the whole compute grid, or the cores of `sub_core_grid`."""
+    if sub_core_grid is None:
+        grid = mesh_device.compute_with_storage_grid_size()
+        return {(x, y) for x in range(grid.x) for y in range(grid.y)}
+    return {
+        (x, y)
+        for r in sub_core_grid.ranges()
+        for x in range(r.start.x, r.end.x + 1)
+        for y in range(r.start.y, r.end.y + 1)
+    }
+
+
+def plan(
+    mesh_device,
+    *,
+    cluster_axis,
+    topology,
+    num_links,
+    placement="auto",
+    scheme="ring",
+    balance=False,
+    sub_core_grid=None,
+):
     """Rings, per-port shard schedules and core placement for every chip.
 
     scheme "ring":        one ring (or line) per group, in group order.
@@ -585,7 +643,7 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", sc
     elif scheme == "ring":
         groups = build_groups(mesh_shape, cluster_axis)
         ring_lists = [[grp] for grp in groups]
-        ring = topology == ttnn.Topology.Ring
+        ring = topology == ttnn.Topology.Ring and len(groups[0]) > 2  # a 2-chip ring is a line
     else:
         raise ValueError(f"fabric_all_gather: unknown scheme {scheme!r}")
     G = len(groups[0])
@@ -615,9 +673,9 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", sc
     connections = {}
     for coord, ch in chips.items():
         conns = []
-        for rg in ch["rings"]:
+        for j, rg in enumerate(ch["rings"]):
             for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
-                if peer is None or not rg[d]:
+                if peer is None or not (rg[d] or _needs_ready(chips, coord, j, d)):
                     continue
                 links = ttnn.get_forwarding_link_indices(node(coord), node(peer))
                 if len(links) < num_links:
@@ -628,10 +686,10 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", sc
                 rg[f"{d}_links"] = links[:num_links]
                 conns += [(peer, links[l]) for l in range(num_links)]
         connections[coord] = conns
-    grid = mesh_device.compute_with_storage_grid_size()
+    allowed = allowed_cores(mesh_device, sub_core_grid)
     if placement == "auto" and os.environ.get("TT_METAL_EMULE_MODE"):
         placement = "simple"  # the emulator runs no Ethernet cores (nothing to probe) and has no NoC timing
-    eth = probe_ethernet_cores(mesh_device, connections) if placement == "auto" else None
+    eth = probe_ethernet_cores(mesh_device, connections, allowed) if placement == "auto" else None
     # Port cores: one per (ring, direction, link) on every chip, including receive-only ends of a line.
     for coord, ch in chips.items():
         taken = set()
@@ -640,9 +698,9 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", sc
             for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
                 for l in range(num_links):
                     core = None
-                    if eth is not None and rg[d] and peer is not None:
+                    if eth is not None and rg.get(f"{d}_links"):
                         ex = eth_noc_column(mesh_device, coord, eth[(coord, peer, rg[f"{d}_links"][l])])
-                        core = _worker_below(mesh_device, coord, ex, taken, grid)
+                        core = _worker_below(mesh_device, coord, ex, taken, allowed)
                         ch.setdefault("eth_cols", {})[(j, d, l)] = ex
                     elif isinstance(placement, dict):
                         core = placement.get((j, d, l))
@@ -651,16 +709,21 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", sc
                         taken.add((core.x, core.y))
         for key, core in ports.items():  # receive-only ports, or simple placement: any free core
             if core is None:
-                ports[key] = _worker_below(mesh_device, coord, 0, taken, grid)
-                taken.add((ports[key].x, ports[key].y))
+                ports[key] = _worker_below(mesh_device, coord, 0, taken, allowed)
+                if ports[key] is not None:
+                    taken.add((ports[key].x, ports[key].y))
         copy = []
-        for l in range(num_links):
-            for y in list(range(grid.y // 2, grid.y)) + list(range(grid.y // 2)):
-                free = [x for x in range(grid.x) if (x, y) not in taken]
+        ys = sorted({y for _, y in allowed})
+        mid = ys[len(ys) // 2]
+        for l in range(num_links):  # one per link, from the middle row down (away from the Ethernet row), then up
+            for y in [y for y in ys if y >= mid] + [y for y in ys if y < mid]:
+                free = sorted(x for x, yy in allowed if yy == y and (x, y) not in taken)
                 if free:
                     copy.append(ttnn.CoreCoord(free[0], y))
                     taken.add((free[0], y))
                     break
+        if len(copy) < num_links or any(c is None for c in ports.values()):
+            raise ValueError(f"fabric_all_gather: the core grid has too few cores for {len(ports)} ports + copy cores")
         ch["ports"], ch["copy"] = ports, copy
     for ch in chips.values():
         ch["n_rings"] = n_rings
@@ -690,6 +753,7 @@ def create_mesh_program_descriptor(
     chips,
     *,
     num_links,
+    ready_addr=0,
     cb_bytes=112 * 1024,
     inc_every=8,
     desync=False,
@@ -747,8 +811,12 @@ def create_mesh_program_descriptor(
             mine = sum(_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in sends)
             head = [in_addr, out_addr, shard_pages, first, stride, rot, arrival_addr, full, mine]
             reader_rt[core.x][core.y] = head + [len(sends)] + packed
-            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, -(-recv // inc_every), mine]
-            if sends:
+            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, -(-recv // inc_every), mine, ready_addr]
+            # the peer's port that sends to me waits for my ready (see _needs_ready)
+            send_ready = _needs_ready(chips, coord, j, d)
+            rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
+            args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
+            if rg.get(f"{d}_links"):
                 pc = virt(chips[peer]["ports"][(j, d, l)])
                 pn = node(peer)
                 args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), len(sends)] + packed
@@ -817,6 +885,12 @@ def output_shape(input_tensor, G, dim):
     return shape
 
 
+def worker_cores(chips):
+    """The logical cores the op runs on (the same on every chip: the union over chips)."""
+    cores = {(c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + ch["copy"]}
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(cores)])
+
+
 def fabric_all_gather(
     input_tensor,
     *,
@@ -829,11 +903,31 @@ def fabric_all_gather(
     balance=False,
     desync=False,
     output=None,
+    subdevice_id=None,
+    sub_core_grid=None,
+    ready_semaphore=None,
+    data_valid_semaphore=None,
 ):
     """All-gather `input_tensor` (TILE, DRAM interleaved, one shard per chip) over each group; returns the output.
 
     scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
-    topology=Ring); the output is then in row-major chip order."""
+    topology=Ring); the output is then in row-major chip order.
+
+    output: a preallocated output (the gathered shape, TILE, DRAM interleaved), written in place and returned; it
+        can be reused call after call. Calls are fenced: no chip writes into a neighbour's output before the
+        neighbour has started the same call, i.e. finished everything queued before it (including whatever read the
+        previous result).
+    sub_core_grid: logical worker cores (CoreRangeSet) the op may use; it picks its port and copy cores inside it.
+    subdevice_id: the sub-device those cores belong to. Pass it together with its cores as sub_core_grid (the op
+        cannot look a sub-device's cores up); the internal one-time semaphore setup then synchronizes only it.
+    ready_semaphore, data_valid_semaphore: caller-owned global semaphores (initial value 0) covering every core the
+        op uses (e.g. all of sub_core_grid; `worker_cores(plan(...)[0])` lists them), supplied together. They are
+        left at 0 after every call. With them the op allocates nothing and never synchronizes, so it can run
+        alongside work on other sub-devices."""
+    if (ready_semaphore is None) != (data_valid_semaphore is None):
+        raise ValueError("fabric_all_gather: ready_semaphore and data_valid_semaphore go together")
+    if subdevice_id is not None and sub_core_grid is None:
+        raise ValueError("fabric_all_gather: pass the sub-device's cores as sub_core_grid along with subdevice_id")
     mesh_device = input_tensor.device()
     chips, ring = plan(
         mesh_device,
@@ -843,23 +937,45 @@ def fabric_all_gather(
         placement=placement,
         scheme=scheme,
         balance=balance,
+        sub_core_grid=sub_core_grid,
     )
     G = next(iter(chips.values()))["G"]
+    want = output_shape(input_tensor, G, dim)
     if output is None:
         output = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(output_shape(input_tensor, G, dim)),
-            input_tensor.dtype,
-            ttnn.TILE_LAYOUT,
-            mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.Shape(want), input_tensor.dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
         )
-    port_cores = {(c.x, c.y) for ch in chips.values() for c in ch["ports"].values()}
-    key = (id(mesh_device), tuple(sorted(port_cores)))
-    if key not in _SEM_CACHE:
-        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in port_cores])
-        _SEM_CACHE[key] = (mesh_device, ttnn.create_global_semaphore(mesh_device, cores, 0))
-    arrival_addr = int(ttnn.get_global_semaphore_address(_SEM_CACHE[key][1]))
+    elif (
+        list(output.shape) != want
+        or output.dtype != input_tensor.dtype
+        or output.layout != ttnn.TILE_LAYOUT
+        or output.memory_config().buffer_type != ttnn.BufferType.DRAM
+        or output.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    ):
+        raise ValueError(f"fabric_all_gather: output must be {want} {input_tensor.dtype} TILE DRAM interleaved")
+    if ready_semaphore is not None:
+        sems = (data_valid_semaphore, ready_semaphore)
+    else:
+        port_cores = {(c.x, c.y) for ch in chips.values() for c in ch["ports"].values()}
+        key = (id(mesh_device), tuple(sorted(port_cores)))
+        if key not in _SEM_CACHE:
+            cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(port_cores)]
+            )
+            sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2))
+            # every chip's counters must be zero before any chip's first call can increment a neighbour's
+            ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id] if subdevice_id is not None else [])
+            _SEM_CACHE[key] = (mesh_device, sems)
+        sems = _SEM_CACHE[key][1]
+    arrival_addr, ready_addr = (int(ttnn.get_global_semaphore_address(x)) for x in sems)
     desc = create_mesh_program_descriptor(
-        mesh_device, input_tensor, output, arrival_addr, chips, num_links=num_links, desync=desync
+        mesh_device,
+        input_tensor,
+        output,
+        arrival_addr,
+        chips,
+        num_links=num_links,
+        ready_addr=ready_addr,
+        desync=desync,
     )
     return ttnn.generic_op([input_tensor, output], desc)
