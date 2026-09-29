@@ -2156,6 +2156,26 @@ class Gemma4Model:
         pos_flat = current_pos.reshape(-1)
         batch = tok_flat.shape[0]
 
+        # Lane-sharded decode (galaxy one-instance slice 3b): callers pass the
+        # GLOBAL batch — lanes x 32, lane-major, with vLLM-style pad rows
+        # (pos -1). Each control tensor shards its batch dim over the lane
+        # axis, so every chip receives its own lane's slice at exactly the
+        # per-chip shapes the ops already expect; nothing downstream changes.
+        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        if lane_sharded:
+            lanes = self.mesh_config.lanes
+            if batch != lanes * 32:
+                raise ValueError(
+                    f"lane-sharded decode expects a lane-major global batch of lanes*32 = {lanes*32}, got {batch}"
+                )
+            if self.hidden_size_per_layer_input and self.per_layer_input_weights:
+                raise NotImplementedError("lane-sharded decode with per-layer inputs (E2B/E4B) is not supported")
+            lane_map = lambda d: self.mesh_config.lane_shard_mapper(self.mesh_device, d)  # noqa: E731
+            batch_local = 32
+        else:
+            lanes = 1
+            batch_local = batch
+
         # Stage token IDs (not embeddings): embed_tokens runs on device in
         # ttnn_decode_forward. Non-PLI models pad to sampling width [1,1,1,32] so
         # ``ttnn.sampling(output_tensor=...)`` can write the next token into this
@@ -2165,20 +2185,27 @@ class Gemma4Model:
         # C++ to_dtype path is skipped. An int32->uint32 conversion would instead query
         # tile metadata on a row-major host buffer and emit the #18536 warning.
         tok_i64 = tok_flat.to(torch.int64)
+        tok_mapper = replicate
         if self._tt_vllm_always_refresh_decode_trace_inputs:
             tok_host = tok_i64.reshape(1, batch)
+            if lane_sharded:
+                tok_mapper = lane_map(1)
         else:
             pad_w = self._DECODE_TOKEN_FEEDBACK_WIDTH
-            if batch > pad_w:
-                raise ValueError(f"Decode batch {batch} exceeds token feedback width {pad_w}")
-            if batch < pad_w:
-                tok_i64 = F.pad(tok_i64, (0, pad_w - batch), "constant", 0)
-            tok_host = tok_i64.reshape(1, 1, 1, pad_w)
+            if batch_local > pad_w:
+                raise ValueError(f"Decode batch {batch_local} exceeds token feedback width {pad_w}")
+            if lane_sharded:
+                tok_host = tok_i64.reshape(1, 1, lanes, pad_w)
+                tok_mapper = lane_map(2)
+            else:
+                if batch < pad_w:
+                    tok_i64 = F.pad(tok_i64, (0, pad_w - batch), "constant", 0)
+                tok_host = tok_i64.reshape(1, 1, 1, pad_w)
         tokens_tt = ttnn.from_torch(
             tok_host,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
-            mesh_mapper=replicate,
+            mesh_mapper=tok_mapper,
         )
 
         # Position: [1, 32] uint32 padded — per-user positions in the first
@@ -2196,18 +2223,31 @@ class Gemma4Model:
         pos_rope[pos_rope < 0] = 0
         pos_rope = pos_rope.reshape(1, batch)
         pos_padded = F.pad(pos_rope, (0, 32 - batch), "constant", 0) if batch < 32 else pos_rope
-        pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
+        pos_tt = ttnn.from_torch(
+            pos_padded,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=lane_map(1) if lane_sharded else replicate,
+        )
 
         # int32 positions [batch] for KV cache update + SDPA (per user).
         pos_int32_tt = ttnn.from_torch(
-            pos_i64.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate
+            pos_i64.to(torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=lane_map(0) if lane_sharded else replicate,
         )
 
         # Page table [batch, max_blocks] — one row per user.
         page_table_tt = None
         if page_table is not None:
             pt = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
-            page_table_tt = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate)
+            page_table_tt = ttnn.from_torch(
+                pt,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.int32,
+                mesh_mapper=lane_map(0) if lane_sharded else replicate,
+            )
 
         # PLI (E2B/E4B per-layer inputs). 31B has none. Batched PLI would need
         # per-user stacking + model-side per-user slicing — not yet wired up.
