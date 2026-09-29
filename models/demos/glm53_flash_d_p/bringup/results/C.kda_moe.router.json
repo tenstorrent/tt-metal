@@ -1,0 +1,61 @@
+{
+ "metrics": {
+  "matched_coef_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 1.000031590461731
+  },
+  "matched_coef_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 1.000015139579773
+  },
+  "matched_rel_l2_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.0013389677042141557
+  },
+  "matched_rel_l2_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.0013998326612636447
+  },
+  "pcc_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.9998120145473872
+  },
+  "pcc_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.9997230417238674
+  },
+  "row_sum_max_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 2.505859375
+  },
+  "row_sum_max_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 2.505859375
+  },
+  "row_sum_min_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 2.494140625
+  },
+  "row_sum_min_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 2.494140625
+  },
+  "selection_overlap_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.99908447265625
+  },
+  "selection_overlap_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.99908447265625
+  },
+  "worst_row_overlap_router_L04": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.875
+  },
+  "worst_row_overlap_router_L04_c0": {
+   "t": "2026-09-29T17:37:47",
+   "value": 0.875
+  }
+ },
+ "task": "C.kda_moe.router"
+}
