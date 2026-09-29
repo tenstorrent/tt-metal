@@ -99,10 +99,10 @@ class BgeM3MLP(LightweightModule):
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
 
-        # Optimizations sets a minimal_matmul config and no program config for a
-        # shape whose 2D multicast config does not fit L1, such as single-chip
-        # S8192 on Wormhole. Take minimal_matmul there; ttnn.linear would select
-        # its own config and clash.
+        # Optimizations sets a minimal_matmul config and no program config for the
+        # bfloat8_b S8192 shapes it tuned (N300 B12 data parallel, single-chip demo).
+        # Take minimal_matmul there. Every other shape, including bfloat16 S8192 on
+        # one Wormhole chip, keeps ttnn.linear, whose auto config fits L1.
         if self.config.wi_minimal_config is not None and self.config.wi_prg_config is None:
             activated = ttnn.experimental.minimal_matmul(
                 input_tensor=hidden_states,

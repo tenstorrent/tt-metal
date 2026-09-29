@@ -150,8 +150,19 @@ def _build_mlp_optimizations(
 ):
     """MLP program/memory configs. The S8192 (JiT) shape resolves minimal_matmul
     configs for Wi/Wo; other shapes use tuned or default program configs."""
-    wi_minimal = _mlp_wi_minimal_matmul_config(
-        mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+    # The S8192 minimal_matmul configs below were tuned for bfloat8_b (N300 B12 data
+    # parallel, and the bfloat8_b single-chip demo). Their circular buffers are sized
+    # for 1088 B tiles; with bfloat16 (2048 B tiles) the Wi buffers reach 2,481,376 B
+    # against the 1,499,136 B Wormhole L1 and the program fails at first enqueue
+    # (test_model_full_end_to_end[S8192] on wh_n150 since #58149). bfloat16 keeps the
+    # ttnn.linear path, whose auto config splits the output block to fit L1.
+    minimal_matmul_dtype_ok = dtype == ttnn.bfloat8_b
+    wi_minimal = (
+        _mlp_wi_minimal_matmul_config(
+            mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
+        if minimal_matmul_dtype_ok
+        else None
     )
     wi_prg = (
         None
@@ -171,8 +182,12 @@ def _build_mlp_optimizations(
         )
     else:
         wo_prg_tuned = None
-    wo_minimal = _mlp_wo_minimal_matmul_config(
-        mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+    wo_minimal = (
+        _mlp_wo_minimal_matmul_config(
+            mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
+        if minimal_matmul_dtype_ok
+        else None
     )
 
     ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
