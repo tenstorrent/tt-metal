@@ -1,28 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_prefill_rows``: the prefill slab's GDN body as the two rows programs around the unchanged chunk prims.
+"""GDN prefill slab with fused input preparation and gated output programs.
 
-One registry name for the pair.  It replaces the slab branch of ``ttnn/gdn.py`` from the projection's landing slices
-to the gated rows -- ``_project_rows``' slices, ``_shifted_rows_slab``, ``_causal_conv_rows``, ``_make_chunk_inputs``,
-the composite's own head-major relayout and q scale, ``_gate_and_project_rows``' typecast / weighted norm / head fold
-/ sigmoid gate and ``commit_rows_full``'s history tile -- with
+Samuel Jett's producer preserves the source normalization, query scaling and
+chunk-major bytes. The public GDN adapter restores its documented token-major
+interface; the owned upstream operation selects its supported implementation.
+The existing projection, output projection, reduce-scatter and state ownership
+remain in Qwen38TTNNGDN. Source-era timing and program counts in docs/PREFILL.md
+are historical measurements, not measurements of this adapter.
 
-1. ``gdn_pre_rows.run``: the projection to the chunk prims' pad-free inputs (q_c, k_c, v, beta_c, g_c) plus the z
-   sigmoid ``sig`` the epilogue no longer waits for the scan to compute;
-2. ``ttnn.prim.chunk_gdn_prep`` and ``ttnn.prim.chunk_gdn_scan``, the two device operations
-   ``ttnn.transformer.chunk_gated_delta_rule`` runs internally, called here on the pages the pre program wrote --
-   argument for argument what the composite passes for these shapes (:func:`chunk_prims`), so the recurrence is the
-   chain's unchanged;
-3. ``gdn_post_rows.post_cast`` + ``post_norm``: the gated rows and the next pass's history tile.
-
-The two dense linears at the ends (the projection, the out-projection and its reduce-scatter) are the chain's own and
-are called through ``Qwen38TTNNGDN``; every arithmetic op between them is the chain op's LLK sequence in the chain
-op's destination width with one pack per op, so the class is **BITWISE**: the gated rows, the recurrent final state
-and the history tile are the chain's bits.
-
-Opt-in (never in ``DEFAULT_ON``): ``QWEN38_FUSED=gdn_prefill_rows``, and then only for a slab rows state that carries
-the fused buffers (:func:`admits`).  The 32-row, 128-row, lane and decode bodies never reach this module.
+The registry admits this body only for a slab carrying the fused buffers.
+The composed control and every other row shape retain their normal dispatch.
 """
 
 from __future__ import annotations

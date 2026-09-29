@@ -1,47 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_rows_wrap``: the MTP verify rows' body as the prefill lane's two programs around the two chunk prims.
+"""GDN verify rows with fused input preparation and gated output programs.
 
-Stage A of the verify-rows scan design: WRAP the unchanged ``prim::chunk_gdn_prep`` / ``prim::chunk_gdn_scan`` in
-``gdn_pre_rows`` (the projection to the prims' inputs) and ``gdn_post_rows`` (the scan's output to the gated tile),
-both of which are the chain's own LLK sequences in the chain's DEST widths and are proven BITWISE against the chain
-on one die.  One GDN layer's verify body becomes
+The recurrence uses the public GDN adapter over Samuel Jett's normalized and
+scaled producer buffers. Forward and masked commit calls share that adapter.
+Persistent buffers belong to the rows state; the body releases only its own
+intermediates. QWEN38_FUSED_OFF=gdn_rows_wrap restores the composed control.
 
-    projection linear + S2I -> qkv landing slice -> gdn_pre_rows -> chunk_gdn_prep -> chunk_gdn_scan
-                            -> post_cast -> post_norm -> out-projection linear + reduce-scatter
-
-The window between the S2I and the out-projection matmul is **6 programs** (the qkv landing slice, ``gdn_pre_rows``,
-the two prims, ``post_cast``, ``post_norm``) where the chain runs **53** (the design's programs 3..55: the landing and
-z/a/b slices, the FIR row selects and the conv, the GQA expands, both norms, the masks, the beta and decay gates, the
-composite's own seven relayout programs, the two prims and the six epilogue programs), so the layer's verify segment
-from the all-gather to the reduce-scatter is 11 programs against 58.  The two prims are
-the same two device operations the composite launches and they are handed the layouts ``gdn_pre_rows`` already wrote,
-so the composite's relayout disappears with the rest of the glue rather than moving to Python as it does in
-``gdn_rows_prims_direct`` (step 1 of the same lane, which this form subsumes when both are on).
-
-Class BITWISE, by construction and by each program's own die proof: every arithmetic step is the chain op's LLK
-sequence in the chain op's destination width with one pack per op, the row shifts and page maps are data movement,
-and the recurrence is the identical pair of prims on identical bytes.
-
-A production default (the registry's ``DEFAULT_ON``) since the served pass pair of 2026-09-25 on the 1x4 line: the
-gated rows, o and the final state bitwise the composite's on the die, the pass 7.3-9.8 ms shorter with tokens per pass
-and the accept histograms identical.  ``QWEN38_FUSED_OFF=gdn_rows_wrap`` restores the chain (every rows state
-allocated under the switch keeps the chain's layouts).  ``QWEN38_FUSED_GDN_ROWS_WRAP_GATED_DRAM=1`` writes
-the gated tile to DRAM and moves it into the out-projection's activation shard with one extra program, the fallback
-if a sharded output ever refuses the post writer's accessor (the default writes that shard directly, as the chain's
-gate multiply and the fused ``gdn_step`` both do).
-
-Admission is a property of the rows state, decided once when it is allocated (``attach``): the 32-row verify form
-with the wrap's own buffers attached.  The 128-row long chunk, the prefill slab and the slab's flat-q/k form keep the
-chain, so the warm pass and the capture take the same branch on the served tensors.
-
-What the wrap owns and the chain no longer writes: with the wrap on, ``rows_state.q`` / ``k`` / ``beta`` / ``g`` (the
-chain's layouts) are never filled -- the prims' layouts live in this module's buffers instead, and ``rows_state.v``
-(already the composite's flat-v form) and ``rows_state.qkv`` (the history advance reads it) are shared with the
-chain.  The commit's masked re-run therefore runs here too (``chunk``), against the prim-layout committed mask
-``selectors.committed_mask_c``; the two 1-row-step anchor switches of ``commit_rows`` read the chain's layouts and
-are refused while the wrap owns the buffers.
+The source's September2026 direct-phase timings and program counts describe
+its historical implementation; public relayout and upstream path selection
+must be measured separately. The numerical policy of the surrounding fused
+producer and epilogue stays unchanged.
 """
 
 from __future__ import annotations
@@ -66,17 +36,7 @@ HEAD_DIM = pre.HEAD_DIM  # 128
 VALUE_WIDTH = pre.VALUE_WIDTH  # 1536
 QKV_WIDTH = pre.QKV_WIDTH  # 2560
 PROJECTION_WIDTH = pre.PROJECTION_WIDTH  # 4160
-# The composite's ``scale``; ``_chunk_rows`` passes the same python float.  The prep ignores it unless ``qk_norm``
-# (q/k arrive flat), and here they do not: ``gdn_pre_rows`` already folded both scales into q.  It is a COMPILE-TIME
-# argument of the prep kernel (``SCALE_BITS``), so the composite's value is what keeps the compiled program the
-# composite's; the call is spelled as ``gdn_prefill_rows.chunk_prims`` spells it and the two are pinned together.
-SCALE = HEAD_DIM**-0.5
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
-# The GDN layer's verify segment with the wrap on, for the micro-test's report: the all-gather, the projection
-# linear, its S2I, the qkv landing slice, gdn_pre_rows, the two prims, post_cast, post_norm, the out-projection
-# linear and the reduce-scatter.  The chain runs 58 of them (the same 5 either side of the 53 it replaces).
-PROGRAMS_PER_LAYER = 11
-CHAIN_PROGRAMS_PER_LAYER = 58
 
 
 def _release(*tensors) -> None:
@@ -334,19 +294,14 @@ def admits(gdn, full_hidden, rows_state, state, *, full_tile: bool = False) -> b
 register(
     FusedKernel(
         name=NAME,
-        replaces="the GDN verify-rows body between the projection's sharded-to-interleaved and the out-projection "
-        "matmul (53 programs: the landing and z/a/b slices, the FIR row selects, conv and SiLU, the GQA expands, both "
-        "q/k norms and scales, the v/beta/g row masks and gates, the composite's seven relayout programs, the two "
-        "chunk prims and the six epilogue programs) as gdn_pre_rows + chunk_gdn_prep + chunk_gdn_scan + post_cast + "
-        "post_norm",
+        replaces="the GDN verify-rows preparation and epilogue with gdn_pre_rows, public chunk_gated_delta_rule, "
+        "post_cast and post_norm",
         tolerance=BITWISE,
         fused=rows_body_wrap,
         composed=rows_body_composed,
         admits=admits,
-        # no captured-input gate: the proof is each program's own device test against the chain on one die, the rows
-        # micro-test's wrap arm (the gated tile, o and the final state bitwise the composite's, eager and replayed, at
-        # every commit mask; 2026-09-25 on the line) and the served pass pair (tokens per pass and the accept
-        # histograms identical, the pass 7.3-9.8 ms shorter)
+        # The original producer/epilogue proof is preserved. Public recurrence compatibility
+        # requires the adapter and real-model before/after tests on the selected native build.
         gate=None,
     )
 )

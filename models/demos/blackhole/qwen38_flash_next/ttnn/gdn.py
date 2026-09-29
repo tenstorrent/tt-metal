@@ -1795,10 +1795,6 @@ class Qwen38TTNNGDN:
         # so a trace capture keeps the choice; the 32-row, 128-row, lane and decode bodies never read it.
         self._prefill_rows = fused.resolve_admitted("gdn_prefill_rows")
         self._prefill_rows_on = fused.enabled("gdn_prefill_rows")
-        # the rows recurrence (forward_rows, commit_rows): the composite, or the two chunk prims called directly under
-        # QWEN38_FUSED=gdn_rows_prims_direct where the call's tensors meet the form's contract (shapes only, so the
-        # warm pass and the capture take one branch)
-        self._rows_chunk = fused.resolve_admitted("gdn_rows_prims_direct")
         # the rows body between the projection and the out-projection: the wrap's two programs around the two prims
         # (a default) where the rows state carries its buffers, the chain elsewhere and under QWEN38_FUSED_OFF=gdn_rows_wrap
         self._rows_body_call = fused.resolve_admitted("gdn_rows_wrap")
@@ -1847,17 +1843,6 @@ class Qwen38TTNNGDN:
         if on is None:
             on = self._prefill_rows_on = fused.enabled("gdn_prefill_rows")
         return on
-
-    def _chunk_rows_kernel(self):
-        """The rows recurrence over one chunk: the composite ``ttnn.transformer.chunk_gated_delta_rule`` (the default)
-        or, under QWEN38_FUSED=gdn_rows_prims_direct, its two phase prims called directly where the call's tensors meet
-        the form's contract (ttnn/fused/gdn_rows_prims_direct); resolved once (fakes that skip ``__init__`` resolve
-        here)."""
-
-        kernel = self.__dict__.get("_rows_chunk")
-        if kernel is None:
-            kernel = self._rows_chunk = fused.resolve_admitted("gdn_rows_prims_direct")
-        return kernel
 
     def _rows_body_wrap(self):
         """Today's rows body from the projection to the out-projection: on a rows state that carries the wrap's
@@ -2971,10 +2956,9 @@ class Qwen38TTNNGDN:
         # and in-kernel l2 norm with ``scale`` folded in); otherwise the head-major buffers as they are.
         q_rows = ttnn.reshape(rows_state.q, (1, tile_rows, QK_WIDTH_PER_DEVICE)) if rows_state.flat_qk else rows_state.q
         k_rows = ttnn.reshape(rows_state.k, (1, tile_rows, QK_WIDTH_PER_DEVICE)) if rows_state.flat_qk else rows_state.k
-        # The recurrence itself: the composite, or (opt-in, admitted by shape) its two prims called directly; one
-        # resolved callable serves the warm pass and the capture.
-        kernel = self._chunk_rows_kernel()
-        output, final_state = kernel(self, q_rows, k_rows, v_rows, g_rows, beta_rows, initial_state, constants)
+        output, final_state = self._chunk_rows_composite(
+            q_rows, k_rows, v_rows, g_rows, beta_rows, initial_state, constants
+        )
         _deallocate(*masked)
         return self._validate_chunk_rows(output, final_state, rows_state, initial_state, tile_rows)
 
@@ -2996,9 +2980,11 @@ class Qwen38TTNNGDN:
         return output, final_state
 
     def _chunk_rows_composite(self, q_rows, k_rows, v_rows, g_rows, beta_rows, initial_state, constants):
-        """Today's recurrence call: the composite over the one chunk, its relayout and its two phase prims inside it
-        (``output_head_major`` keeps the kernel's TILE layout: no untilize, no row-major permute).  The composed chain
-        of ``gdn_rows_prims_direct``, whose fused form calls the same two prims from Python."""
+        """Public recurrence with the existing unfused input scale and head-major output.
+
+        Unlike the fused producer adapter, these q inputs still require the original
+        HEAD_DIM**-0.5 fold performed by the public operation.
+        """
 
         return ttnn.transformer.chunk_gated_delta_rule(
             q_rows,
