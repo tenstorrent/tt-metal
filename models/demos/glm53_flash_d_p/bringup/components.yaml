@@ -1,0 +1,415 @@
+# GLM-5.3-Flash (layers 0-4) on the 2x2 p300c mesh (FABRIC_2D): every block step mapped to TTNN. Plan and reasoning
+# in plan.md. Chip (r, c), TP index d = 2r + c. Every matmul HiFi4 (owner rule); fp8 weights dequantized to bf16 at
+# load, routed experts bfp8. Component boundaries match the reference (reference/glm_ref.py): residual streams
+# [S * 4, H] token-major (= [S, 4 x 4096] packed, stream n at columns n*4096..), mHC coefficients [S, 24] fp32,
+# every other boundary [S, *] replicated on all chips. Modules that split work over chips gather back to that at
+# their output; the assembled model (M.1) may keep a split between steps.
+# Every constant (Sinkhorn consts, index tables, masks, chunk-start scalars, dispatch tables) is built once at load
+# and sliced on device per chunk; no host transfer inside a forward (agent rule 5).
+# Nothing is tagged OPGEN or CPU: each step has an op or a composition (searches recorded per entry).
+components:
+# ======================================================================================================== kda_dense
+- block_type: kda_dense
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: 'ttnn.typecast (bf16 -> fp32) -> ttnn.matmul (x [S, 16384] @ hc_attn_fn^T [16384, 24], fp32, HiFi4 + fp32 acc)
+    -> ttnn.mean(x*x) + ttnn.rsqrt (eps 1e-5, applied after the linear: no learned weight, commutes) -> ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn
+    (consts from hc_attn_scale / hc_attn_base, n 4, 20 iterations, eps 1e-6) -> ttnn.concat [pre | post | comb] -> [S, 24] fp32'
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.project / hc_pre, build_consts
+  searched:
+  - 'glm53_flash_findings.md: mHC row (tt_mhc.py, op deepseek_prefill.mhc_split_sinkhorn)'
+  - 'deepseek_v3_d_p/reference/mhc/mhc_reference.py:sinkhorn_knopp vs glm_ref.py:hc_weights: same order (row softmax + eps, column
+    normalise, then iters - 1 x (row, column)), same pre = sigmoid(.) + eps, post = 2 sigmoid(.)'
+  - 'grep norm_eps tt_mhc.py: RMS eps is a config field (GLM 1e-5; DeepSeek 1e-6)'
+  notes: 'Replicated, no CCL. The fused op is fp32-only (TtMHCWrap asserts it), so the bf16 residual is cast to fp32 for the
+    projection and the kernel. Check the kernel''s output order of pre/post/comb against the [pre 4 | post 4 | comb 16 row-major]
+    boundary (comb[i, j] at column 8 + 4i + j).'
+- block_type: kda_dense
+  step: attn_collapse
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 streams [S, 4096], 4 pre columns [S, 1]) -> ttnn.multiply + 3 x ttnn.addcmul (column broadcast) -> attn_in [S, 4096]
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix / _streams / _cols
+  searched:
+  - 'tt_mhc.py:_mix (addcmul measured 1.63x faster than mac there)'
+  notes: 'Replicated, no CCL. Accumulate in fp32 then round to bf16 once (the reference sums in fp32 and casts: hc_collapse).'
+- block_type: kda_dense
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'input_layernorm, w * rms(x) (plain w; the reference rounds the normalized x to the activation dtype before * w).'
+- block_type: kda_dense
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttKDA (TP=2 on mesh axis 1, SP=2 on axis 0): ttnn.linear fused input projection [q | k | v | f_a | g_a | b] (per TP rank,
+    HiFi4) -> ttnn.experimental.kda.qkv_causal_conv1d_silu (conv tail from state; SP halo via exchange_convolution_carry) -> ttnn.linear
+    f_b (+ dt_bias) -> bounded decay -5 * sigmoid(exp(A_log) * .) -> ttnn.sigmoid(beta, fp32) -> KDARecurrence (chunk 64, carried fp32
+    state, grouped scan over SP; affine prefix and scan at HiFi4) -> ttnn.experimental.kda.sigmoid_gated_rms_norm (o_norm, g_b g_a gate)
+    -> ttnn.linear o_proj (row-parallel) -> ttnn.experimental.reduce_scatter_minimal_async (axis 1) -> ttnn.all_gather (dim -1, axis 1)
+    + ttnn.all_gather (dim -2, axis 0) -> attn_out [S, 4096] replicated'
+  reuse: models/demos/deepseek_v3_d_p/tt/kda/kda.py:ttKDA (+ weights.py, recurrence.py, convolution.py, chronological_selections.py),
+    models/demos/deepseek_v3_d_p/tt/kimi_k3/kda_state.py (state across chunks)
+  searched:
+  - 'glm53_flash_findings.md: KDA row (tt/kda, ops experimental/kda; low-rank gate and -5 bound supported; never run on 1x4 or 2x2)'
+  - 'deepseek_v3_d_p/reference/kda/weights.py: canonical KDA weight names are exactly GLM''s (q/k/v_proj, q/k/v_conv1d, A_log, f_a/f_b,
+    dt_bias, b_proj, g_a/g_b, o_norm, o_proj)'
+  - 'kda.py:ttKDA.__init__: needs distinct SP and TP axes; SP size is the mesh extent on the SP axis (2 here); grouped scan needs K == V
+    (128 == 128)'
+  - 'kda/config.py: recurrence affine_prefix / scan default HiFi2, kimi_k3_program_config tuned for 96 heads and p150b'
+  notes: 'Each mesh row takes its S/2 half of the chunk (ttnn.mesh_partition, dim -2, cluster_axis 0, local split); each column holds
+    heads 32c..32c+31. Owner rules: set every fidelity to HiFi4 (recurrence config and output projection, which kimi_k3_program_config
+    puts at HiFi2), and read the core grid from the device (p300c 11x10), do not reuse Kimi-K3''s tuned grid. actual_start is a device
+    uint32 scalar: build a table of all 64-aligned starts up to max_seq at load and slice it on device per chunk (no per-chunk upload).
+    A chunk at start 0 uses zeroed state (preallocated). Verify at implement that ttKDA''s SP segment order under a chunk-aligned
+    actual_start is the contiguous halves this plan feeds it; fallback: build ttKDA on each 1x2 row submesh with SP=1 (both rows
+    compute the whole chunk, no SP halo).'
+- block_type: kda_dense
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 residual streams, post [S, 1] x 4, comb [S, 1] x 16) -> per output stream j ttnn.multiply(post_j, attn_out) + 4 x ttnn.addcmul(res_i,
+    comb[i, j]) -> ttnn.concat -> h_mid [S, 16384]
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post
+  searched:
+  - 'tt_mhc.py:hc_post (new_j = post_j * x + sum_i comb[i, j] * residual_i, i.e. comb^T, as glm_ref.py:hc_residual)'
+  notes: 'Replicated, no CCL. The reference casts post and comb to the activation dtype before mixing (hc_residual); match that.'
+- block_type: kda_dense
+  step: ffn_hc
+  tag: COMPOSED
+  ttnn: as attn_hc with hc_ffn_fn / hc_ffn_base / hc_ffn_scale
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap
+  searched:
+  - 'as attn_hc'
+  notes: 'Same module class as attn_hc, second set of weights.'
+- block_type: kda_dense
+  step: ffn_collapse
+  tag: COMPOSED
+  ttnn: as attn_collapse
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix
+  searched:
+  - 'as attn_collapse'
+  notes: 'Same module as attn_collapse.'
+- block_type: kda_dense
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: post_attention_layernorm.
+- block_type: kda_dense
+  step: mlp
+  tag: COMPOSED
+  ttnn: 'ttnn.linear gate / up (column-parallel, 3072 per chip, HiFi4 + fp32 acc, fp32 out) -> ttnn.minimum(gate, 10) -> ttnn.silu -> ttnn.clamp(up,
+    -10, 10) -> ttnn.multiply -> ttnn.linear down (row-parallel, K 3072) -> ttnn.all_reduce (cluster_axis=None: axis 1 then axis 0)'
+  reuse: models/demos/mimo_v2_6_d_p/tt/mlp.py:TtDenseMLP (2x2 variant models/demos/mimo_v2_6_d_p_2x2/tt)
+  searched:
+  - 'repo_map: MoE tensor parallel (shared_mlp.py), Collectives and MoE dispatch on a 2D mesh (all_reduce cluster_axis=None)'
+  - 'known_issues: HiFi2 matmul shrinks output norms'
+  - 'glm_ref.py:clamped_swiglu: silu(min(g, 10)) * clamp(u, +-10)'
+  notes: 'Layers 0-2, intermediate 12288 / 4 = 3072 per chip (chip d: columns 3072d..). fp8 x 128x128 block scale dequantized to bf16 at load.'
+- block_type: kda_dense
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: as attn_residual (post * mlp_out + comb^T @ h_mid, ffn coefficients)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post
+  searched:
+  - 'as attn_residual'
+  notes: 'Block output [S, 16384], replicated.'
+# ======================================================================================================== dsa_moe
+- block_type: dsa_moe
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: as kda_dense attn_hc
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap
+  searched:
+  - 'as kda_dense attn_hc'
+  notes: 'Same module for every block type.'
+- block_type: dsa_moe
+  step: attn_collapse
+  tag: COMPOSED
+  ttnn: as kda_dense attn_collapse
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix
+  searched:
+  - 'as kda_dense attn_collapse'
+  notes: 'Same module for every block type.'
+- block_type: dsa_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: input_layernorm.
+- block_type: dsa_moe
+  step: q_a
+  tag: COMPOSED
+  ttnn: ttnn.linear q_a_proj ([4096 -> 1536], bf16 from fp8, replicated, HiFi4 + fp32 acc) -> ttnn.bringup.rms_norm (q_a_layernorm, eps 1e-5)
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py (q_a path), models/demos/mimo_v2_6_d_p/tt/rms_norm.py
+  searched:
+  - 'glm53_flash_findings.md: MLA row (mla.py q/kv projections)'
+  notes: 'Replicated on all S rows (small, [S, 1536]); no CCL. Shared by the indexer (wq_b) and MLA (q_b).'
+- block_type: dsa_moe
+  step: indexer
+  tag: COMPOSED
+  ttnn: 'keys (all S rows, replicated): ttnn.linear wk [4096 -> 128] -> ttnn.layer_norm (k_norm w + b, eps 1e-6) ; ttnn.linear index_kpool_compress_gate
+    [4096 -> 128] -> + ape -> pool by 4: ttnn.reshape [S, 128] -> [S/4, 512] + 4 x ttnn.slice [S/4, 128] -> elementwise softmax over the 4
+    (ttnn.maximum, ttnn.exp, ttnn.add, ttnn.div, fp32) -> sum_j p_j * k_j -> write into the pooled-key cache at row start/4 (ttnn.fill_cache
+    / slice_write). queries (this chip''s S/4 rows): ttnn.linear wq_b [1536 -> 32 x 128] -> heads [1, 32, S/4, 128]; ttnn.linear weights_proj
+    [4096 -> 32] (32^-0.5 x 128^-0.5 = 2^-6 folded into the weight, exact) -> ttnn.experimental.indexer_score_dsa (k = pooled cache, kv_len
+    = (start + S)/4, chunk_start_idx = kv_len - 1 so the op masks nothing, HiFi4) -> + pool-causal mask on the chunk''s own pool columns
+    (constant per chunk size and chip) -> ttnn.experimental.topk_large_indices (k 512, valid_length kv_len) -> pool ids x 4 + [0, 1, 2, 3]
+    (ttnn.repeat_interleave + add) -> ttnn.concat tail tokens (constant relative table + start) + sentinel pad to 2176 -> rows with position
+    < 2047 replaced by the constant dense causal rows (ttnn.where) -> topk [S/4, 2176] uint32; component boundary: all_gather (axis 1, axis
+    0) and slice to [S, 2051] int32 with -1'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/indexer.py (score / top-k plumbing, weight upload; drop its RoPE and block-cyclic paths),
+    models/demos/glm53_flash_d_p/reference/glm_ref.py:_indexer (semantics)
+  searched:
+  - 'glm53_flash_findings.md: indexer rows (indexer_score, topk_large_indices; key pooling missing, candidate for op-gen)'
+  - 'ttnn/cpp/ttnn/operations/experimental/indexer_score/indexer_score_nanobind.cpp: score = sum_h relu(q . k) * w over one shared key
+    head; causal mask is per key row (t <= chunk_start + s), kv_len masks the unwritten tail; compute config honours only math_fidelity'
+  - 'topk_large_indices_nanobind.cpp: bf16 row-major, k in [16, 2048] multiple of 16, -inf -> 0xFFFFFFFF, valid_length at runtime'
+  - 'sdpa_nanobind.cpp:sparse_sdpa: indices [1, 1, S, TOPK] uint32, sentinels must be a contiguous tail, TOPK divisible by k_chunk_size
+    (128)'
+  - 'ttnn/ttnn/bringup/INDEX.md: no indexer fork'
+  notes: 'Why composed and not OPGEN: key pooling is a reshape, 4 slices and elementwise softmax over 4 tensors; the pool-level causal rule
+    (pool p visible to query q iff 4p + 3 <= q) differs from the op''s per-row rule, so the op runs unmasked (chunk_start_idx = kv_len - 1)
+    and a constant additive mask covers the chunk''s own pools (earlier pools are always visible); sentinel compaction follows from the
+    selection: for q >= 2047 at least 512 pools are visible, so the pool part has no sentinels and the tail (placed after it) ends in
+    sentinels; for q < 2047 the selected set is every token 0..q, a constant row. Scores are bf16 out of the op (the reference ranks fp32):
+    expect near-tie flips; the test checks selection overlap. Queries split by sequence: chip d takes rows d*S/4 .. (S/4 = 1280 at chunk
+    5120, 512 at 2048, 2048 at 8192, all tile aligned). Pool rows are complete only: chunk starts are multiples of 4 (all ladder chunks).'
+- block_type: dsa_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: 'latent (all S rows, replicated): ttnn.linear kv_a_proj_with_mqa [4096 -> 512] (bf16 from fp8) -> ttnn.bringup.rms_norm (kv_a_layernorm, eps
+    1e-5) -> write into the row-major latent cache [1, 1, max_seq, 512] at start. queries (this chip''s S/4 rows, all 64 heads): ttnn.linear
+    q_b [1536 -> 64 x 256] -> heads [1, 64, S/4, 256] -> ttnn.matmul with w_uk [64, 256, 512] (absorbed kv_b) -> q_lat [1, 64, S/4, 512]
+    -> ttnn.to_layout ROW_MAJOR -> ttnn.transformer.sparse_sdpa (kv = latent cache, indices topk [1, 1, S/4, 2176], v_dim 512, scale 256^-0.5
+    = 1/16 passed explicitly (the default is K_DIM^-0.5 = 512^-0.5), HiFi4) -> ttnn.matmul with w_uv [64, 512, 256] -> concat heads [S/4,
+    16384] -> ttnn.linear o_proj [16384 -> 4096] (bf16 from fp8) -> ttnn.all_gather (dim -2, axis 1) + ttnn.all_gather (dim -2, axis 0)
+    -> attn_out [S, 4096] replicated'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA (absorbed kv_b, sparse_sdpa call; drop RoPE and the 576-wide latent), models/demos/deepseek_v3_d_p/tt/kimi_k3/attention.py
+    (NoPE MLA)
+  searched:
+  - 'glm53_flash_findings.md: MLA and sparse attention rows (cache built around a 576-wide latent; sparse_sdpa needs 32+ heads per chip)'
+  - 'sdpa_nanobind.cpp:sparse_sdpa: q [1, H, S, K_DIM] with H a multiple of 32, kv [1, 1, T, K_DIM] bf16 row-major, V = kv[..., :v_dim],
+    default scale K_DIM^-0.5, Blackhole single-chip'
+  - 'grep kv_lora_rank / qk_rope_head_dim models/demos/deepseek_v3_d_p/tt/kimi_k3/attention.py (NoPE MLA keeps 64 zero rope columns)'
+  notes: 'Why sequence split, not TP by head: 64 heads / 4 chips = 16, below sparse_sdpa''s 32; with all 64 heads on each chip and S/4 query
+    rows, no head-to-sequence reshard is needed, the caches are small (latent 58 MB, pooled keys 3.6 MB at 56k) and replicated, and the
+    only CCL is the all_gather of the output. Sparse attention cost per query is fixed (2051 keys), so the quarters are balanced. Every
+    chip computes the latent for all S rows (a [S, 4096] x [4096, 512] matmul) so the cache needs no gather. The latent cache stays 512
+    wide (no rope columns). Its rows past start + S are never selected (indices are causal).'
+- block_type: dsa_moe
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: as kda_dense attn_residual
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post
+  searched:
+  - 'as kda_dense attn_residual'
+  notes: 'Same module for every block type.'
+- block_type: dsa_moe
+  step: ffn_hc
+  tag: COMPOSED
+  ttnn: as kda_dense ffn_hc
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap
+  searched:
+  - 'as kda_dense attn_hc'
+  notes: 'Same module for every block type.'
+- block_type: dsa_moe
+  step: ffn_collapse
+  tag: COMPOSED
+  ttnn: as kda_dense attn_collapse
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix
+  searched:
+  - 'as kda_dense attn_collapse'
+  notes: 'Same module for every block type.'
+- block_type: dsa_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: post_attention_layernorm. Check the per-channel max of its output (MoE input) before choosing expert activation dtypes (known issue).
+- block_type: dsa_moe
+  step: router
+  tag: COMPOSED
+  ttnn: 'ttnn.linear (fp32 weight [4096 -> 288], HiFi4 + fp32 acc, fp32 out) -> ttnn.sigmoid -> ttnn.add (fp32 e_score_correction_bias [1, 288])
+    -> ttnn.topk (8) -> ttnn.gather (unbiased sigmoid) / ttnn.sum / ttnn.div -> x 2.5 -> idx / weights [S, 8]; dense [S, 288] via ttnn.scatter
+    (bf16) only for the component boundary'
+  reuse: models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (fp32 mode)
+  searched:
+  - 'repo_map: Sigmoid + correction-bias (noaux_tc) router on device, noaux_tc router with a large correction bias'
+  - 'known_issues: A large correction bias makes noaux_tc top-k selection precision-bound, moe_grouped_topk selects on TF32 keys'
+  - 'glm53_flash_findings.md: moe_grouped_topk hard-coded to 256 experts'
+  notes: 'Replicated, every chip routes all S tokens, no CCL. route_scale 2.5 (routed_scaling_factor), norm_topk_prob. Not verified: ttnn.topk
+    at width 288 (9 tiles); fallback: pad the scores to 320 or 512 columns with -inf bias columns (constant, built at load).'
+- block_type: dsa_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: 'ttnn.mesh_partition (x, idx, wts along the sequence, cluster_axis 0 -> S/2 rows per mesh row) -> ttnn.experimental.deepseek_prefill.masked_bincount
+    -> ttnn.bringup.offset_cumsum (cluster_axis 0) -> ttnn.bringup.dispatch (dispatch_group_size 2, cluster_axis 0, fabric) -> ttnn.bringup.unified_routed_expert_moe
+    (ClampedSiluGlu, bfp8 weights, bf16 ROW_MAJOR x, high_precision=True, HiFi4 + fp32 dest) -> ttnn.bringup.combine (cluster_axis 0) ->
+    ttnn.experimental.deepseek_prefill.post_combine_reduce (weighted top-k sum) -> ttnn.all_reduce (cluster_axis 1) -> ttnn.all_gather
+    (dim -2, cluster_axis 0) -> experts_out [S, 4096] replicated'
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts (2D dispatch), models/demos/deepseek_v3_d_p/tt/moe (tt_dispatch.py, tt_combine.py,
+    init_helpers.py:ExpertMapping)
+  searched:
+  - 'repo_map: MoE expert parallel (EP), Fused routed experts at a chosen fidelity with bf16 activations, Collectives and MoE dispatch on
+    a 2D mesh (2x2)'
+  - 'ttnn/ttnn/bringup/INDEX.md: unified_routed_expert_ffn (ClampedSiluGlu = silu(min(gate, 10)) * clamp(up, +-10), matches glm_ref.py:clamped_swiglu;
+    high_precision), dispatch / combine / offset_cumsum (source behaviour on a 2-device axis)'
+  - 'known_issues: TtReduceModule always reduce-scatters (use post_combine_reduce + all_reduce axis 1 + all_gather axis 0), Expert counts
+    are global, unified_routed_expert_moe works in place, The fused routed-expert kernel accumulates K-blocks in bf16 L1 partials'
+  notes: 'EP=4, 288 / 4 = 72 experts per chip; dispatch groups = mesh columns (144 experts each), chip (r, c) holds experts 144c + 72r ..
+    + 71 (ExpertMapping col-major, device index 2c + r). Counts / offsets [1, 288] global per chip. Experts fp8 x 128x128 block scale ->
+    bfp8 on the host at load, cached. Not verified: unified_routed_expert_moe and the dispatch tables with 72 local / 288 global experts
+    (MiMo ran 64 / 256); check at the start of the component. Fallback: the per-expert loop (models/demos/mimo_v2_6_d_p/tt/experts.py
+    _loop_experts: extract -> ttnn.linear -> insert), with the clamps composed as in mlp.'
+- block_type: dsa_moe
+  step: shared_expert
+  tag: COMPOSED
+  ttnn: as kda_dense mlp (clamped SwiGLU, intermediate 2048 -> 512 per chip, TP=4, all_reduce cluster_axis=None)
+  reuse: models/demos/mimo_v2_6_d_p/tt/mlp.py:TtDenseMLP, models/demos/deepseek_v3_d_p/tt/moe/tt_shared_expert.py
+  searched:
+  - 'glm53_flash_findings.md: shared expert row (tt_shared_expert.py, tt_ffn.py)'
+  - 'repo_map: MoE tensor parallel (shared_mlp.py)'
+  notes: 'Same module class as the dense MLP with the shared-expert weights (fp8 -> bf16). In the assembled model the shared partial can
+    be added to the experts partial before one reduce (a perf option; the component keeps its own reduce).'
+- block_type: dsa_moe
+  step: moe_add
+  tag: NATIVE
+  ttnn: ttnn.add (experts_out + shared_out, replicated [S, 4096])
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: No CCL.
+- block_type: dsa_moe
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: as kda_dense ffn_residual
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post
+  searched:
+  - 'as kda_dense attn_residual'
+  notes: 'Same module for every block type.'
+# ======================================================================================================== kda_moe
+- block_type: kda_moe
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: as kda_dense attn_hc
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap
+  searched:
+  - 'as kda_dense attn_hc'
+  notes: 'Same module for every block type.'
+- block_type: kda_moe
+  step: attn_collapse
+  tag: COMPOSED
+  ttnn: as kda_dense attn_collapse
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix
+  searched:
+  - 'as kda_dense attn_collapse'
+  notes: 'Same module for every block type.'
+- block_type: kda_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: input_layernorm.
+- block_type: kda_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: as kda_dense attention (ttKDA, TP=2 on axis 1, SP=2 on axis 0, all_gather back to [S, 4096])
+  reuse: models/demos/deepseek_v3_d_p/tt/kda/kda.py:ttKDA
+  searched:
+  - 'as kda_dense attention'
+  notes: 'Same module as kda_dense (layer 4 weights).'
+- block_type: kda_moe
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: as kda_dense attn_residual
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post
+  searched:
+  - 'as kda_dense attn_residual'
+  notes: 'Same module for every block type.'
+- block_type: kda_moe
+  step: ffn_hc
+  tag: COMPOSED
+  ttnn: as kda_dense ffn_hc
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap
+  searched:
+  - 'as kda_dense attn_hc'
+  notes: 'Same module for every block type.'
+- block_type: kda_moe
+  step: ffn_collapse
+  tag: COMPOSED
+  ttnn: as kda_dense attn_collapse
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix
+  searched:
+  - 'as kda_dense attn_collapse'
+  notes: 'Same module for every block type.'
+- block_type: kda_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: post_attention_layernorm.
+- block_type: kda_moe
+  step: router
+  tag: COMPOSED
+  ttnn: as dsa_moe router
+  reuse: models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter
+  searched:
+  - 'as dsa_moe router'
+  notes: 'Same module (layer 4 weights); re-measure the selection-precision margins on this layer''s golden (known issue: router mutations
+    score differently per layer).'
+- block_type: kda_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: as dsa_moe experts
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts
+  searched:
+  - 'as dsa_moe experts'
+  notes: 'Same module (layer 4 weights).'
+- block_type: kda_moe
+  step: shared_expert
+  tag: COMPOSED
+  ttnn: as dsa_moe shared_expert
+  reuse: models/demos/mimo_v2_6_d_p/tt/mlp.py:TtDenseMLP
+  searched:
+  - 'as dsa_moe shared_expert'
+  notes: 'Same module (layer 4 weights).'
+- block_type: kda_moe
+  step: moe_add
+  tag: NATIVE
+  ttnn: ttnn.add
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: No CCL.
+- block_type: kda_moe
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: as kda_dense ffn_residual
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post
+  searched:
+  - 'as kda_dense attn_residual'
+  notes: 'Same module for every block type.'
+# ======================================================================================================== model
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.minimum (engine ids, V - 1; vocab 154880 is not a power of two) -> ttnn.embedding (replicated bf16 table) -> ttnn.repeat [1, 4] (4
+    identical residual streams, [S, 16384])
+  reuse: models/demos/mimo_v2_6_d_p/tt/model.py (embedding), models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:mhc_expand
+  searched:
+  - 'known_issues: Masking the engine''s pad id when the vocab is not a power of two'
+  - 'tt_mhc.py:mhc_expand'
+  notes: Replicated, no CCL.
+- block_type: model
+  step: final_norm
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 streams) -> ttnn.add x 3 -> ttnn.multiply 0.25 (unweighted mean of the streams) -> ttnn.bringup.rms_norm (norm, eps 1e-5)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  searched:
+  - 'glm_ref.py:forward_chunk (mean over the 4 streams, then norm); tt_mhc.py:TtMHCHead is the weighted DeepSeek-V4 head, not GLM''s'
+  notes: Replicated, no CCL.
+- block_type: model
+  step: lm_head
+  tag: COMPOSED
+  ttnn: ttnn.slice (last tokens) -> ttnn.linear (vocab-sharded, 38720 rows per chip, bf16, HiFi4) -> ttnn.all_gather (dim -1, axis 1) + ttnn.all_gather
+    (dim -1, axis 0)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt (LM head over the 2x2 mesh)
+  searched:
+  - 'repo_map: Collectives and MoE dispatch on a 2D mesh'
+  notes: Untied LM head. Logits only for the last tokens of a chunk.

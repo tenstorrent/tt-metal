@@ -4,3 +4,12 @@ intake:
   files:
     models/demos/glm53_flash_d_p/bringup/spec.yaml: 96c6f0426cc59ae8711aa43b1f37913d7bf4c11dabb8e417ffc21cc2c8f90a9e
   note: ''
+plan:
+  by: dnijemcevic
+  at: '2026-09-29T03:11:42'
+  files:
+    models/demos/glm53_flash_d_p/bringup/plan.yaml: 236b319e0469b33f5f8d457d3ee905bd54ab2a7116868b83a80a1e67a252a7bb
+    models/demos/glm53_flash_d_p/bringup/plan.md: ce5dc6da426c805cac84462cee93f697fffc451132322dcba47b83eabb8b6a29
+    models/demos/glm53_flash_d_p/bringup/components.yaml: f4f4514e5cb1f28bb89c517f0dc65c4ca9047462d3ec70330e24263627544013
+  note: ''
+  ledger: ef3d2c5edd980d21bb7d49e4308f2eb643408e8db15e5320646405387df2cbb4
