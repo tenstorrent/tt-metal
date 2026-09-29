@@ -12,7 +12,6 @@
 
 #include "device/sdpa_decode_device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/device.hpp"
 using namespace tt::tt_metal;
 
 namespace {
@@ -53,9 +52,6 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<bool> share_cache) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -114,10 +110,6 @@ ttnn::Tensor paged_scaled_dot_product_attention_decode(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
-
     if (!program_config.has_value()) {
         program_config = ttnn::operations::transformer::SDPAProgramConfig{
             input_tensor_q.device()->compute_with_storage_grid_size(),
@@ -193,9 +185,6 @@ ttnn::Tensor flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -261,9 +250,6 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
     // NOTE: If V tensor is not provided, the operator assumes that V is subset of K in the hidden dimension.
     // and V will be read from the K tensor buffer.
 

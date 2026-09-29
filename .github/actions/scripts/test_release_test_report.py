@@ -9,6 +9,7 @@ derivation is allowed to claim a pass and when it must refuse.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -18,14 +19,16 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from file_rtl_sim_jira import parse_failed  # noqa: E402
+from create_jira import parse_failed  # noqa: E402
 from release_test_report import (  # noqa: E402
+    HORIZON_REQUIREMENT,
     FAILED,
     INCONCLUSIVE,
     PASSED,
     build,
     classify,
     load_expected,
+    parse_horizon,
     parse_junit_dir,
     parse_results_block,
     render_markdown,
@@ -312,3 +315,144 @@ def test_results_block_wins_even_when_the_summary_is_truncated(expected):
     verdict, passed, failed = classify(expected, parse_failed(detail), "failure", detail)
     assert verdict == FAILED
     assert [r["filter"] for r in passed] == ["*Alpha*"] and len(failed) == 1
+
+
+# --- Horizon (AIIPSW-15) evidence, pulled from the tt-umd-horizon repo ---------
+
+
+def _horizon(tmp_path, tests, ts=None, schema="horizon-test-results/v1"):
+    from datetime import datetime, timezone
+
+    ts = ts or datetime.now(timezone.utc).isoformat()
+    p = tmp_path / "horizon-results.json"
+    p.write_text(
+        json.dumps(
+            {
+                "schema": schema,
+                "tested_sha": "abc123def456",
+                "timestamp": ts,
+                "run_url": "http://horizon/run",
+                "tests": tests,
+            }
+        )
+    )
+    return str(p)
+
+
+def test_horizon_fresh_green_becomes_evidence(tmp_path):
+    path = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
+    status, evidence = parse_horizon(path)
+    assert status == PASSED
+    rows = evidence[HORIZON_REQUIREMENT][PASSED]
+    assert [r["filter"] for r in rows] == ["test_horizon_cluster"]
+    assert rows[0]["config"] == "horizon" and rows[0]["runner"] == "gtest"
+
+
+def test_horizon_failure_is_reported(tmp_path):
+    path = _horizon(
+        tmp_path,
+        [{"name": "test_axi_device", "result": "passed"}, {"name": "test_horizon_dma", "result": "failed"}],
+    )
+    status, evidence = parse_horizon(path)
+    assert status == FAILED
+    hits = evidence[HORIZON_REQUIREMENT]
+    assert [r["filter"] for r in hits[PASSED]] == ["test_axi_device"]
+    assert [r["filter"] for r in hits[FAILED]] == ["test_horizon_dma"]
+
+
+def test_horizon_missing_file_is_inconclusive(tmp_path):
+    assert parse_horizon("") == (INCONCLUSIVE, {})
+    assert parse_horizon("/nonexistent/horizon.json") == (INCONCLUSIVE, {})
+    truncated = tmp_path / "half.json"
+    truncated.write_text('{"schema": "horizon-test-results/v1", "tests": [')
+    assert parse_horizon(str(truncated)) == (INCONCLUSIVE, {}), "a truncated upload must not crash the report"
+
+
+def test_horizon_non_object_root_is_inconclusive(tmp_path):
+    """Valid JSON that is not an object (array, string, null) must degrade, not raise."""
+    for i, body in enumerate(['[{"name": "t", "result": "passed"}]', '"horizon-test-results/v1"', "null", "42"]):
+        p = tmp_path / f"root{i}.json"
+        p.write_text(body)
+        assert parse_horizon(str(p)) == (INCONCLUSIVE, {}), body
+
+
+def test_horizon_stale_is_inconclusive(tmp_path):
+    path = _horizon(tmp_path, [{"name": "t", "result": "passed"}], ts="2020-01-01T00:00:00Z")
+    assert parse_horizon(path, max_age_days=7) == (INCONCLUSIVE, {})
+
+
+def test_horizon_wrong_schema_is_inconclusive(tmp_path):
+    path = _horizon(tmp_path, [{"name": "t", "result": "passed"}], schema="something-else/v1")
+    assert parse_horizon(path) == (INCONCLUSIVE, {})
+
+
+def test_horizon_evidence_flows_into_the_requirement(mapping, tmp_path):
+    """A green Horizon result makes AIIPSW-15 render with passing evidence."""
+    path = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
+    _status, evidence = parse_horizon(path)
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED, extra_evidence=evidence)
+
+    covered = {r["key"] for r in report["requirements"] if r["passed"]}
+    assert HORIZON_REQUIREMENT in covered
+    md = render_markdown(report, META)
+    assert "AIIPSW-15" in md and "test_horizon_cluster" in md
+
+
+def test_no_horizon_evidence_leaves_the_requirement_uncovered(mapping):
+    """Without Horizon input, AIIPSW-15 stays in the no-evidence section."""
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED)  # no extra_evidence
+    covered = {r["key"] for r in report["requirements"] if r["passed"]}
+    assert HORIZON_REQUIREMENT not in covered
+
+
+def test_evidence_carries_no_test_counts(mapping):
+    """Counts drift whenever a test lands; the map must not assert them.
+
+    Inverted on purpose: strip the numeric forms that are immutable (PR refs,
+    release versions, ticket keys, PR tallies for a closed window) and flag what is left,
+    rather than trying to enumerate every way a count can be phrased.
+    """
+    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b|\bAIIPSW-\d+\b", re.IGNORECASE)
+    offenders = []
+    for r in mapping["requirements"]:
+        residue = allowed.sub("", r.get("evidence", ""))
+        found = re.findall(r"\b\d+\b", residue)
+        if found:
+            offenders.append((r["key"], found))
+    assert not offenders, f"hard-coded counts will go stale: {offenders}"
+
+
+def test_out_of_scope_requirements_leave_the_ratio_alone(mapping):
+    """A platform this gate cannot test must not inflate the denominator."""
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED)
+    scoped = [r for r in report["requirements"] if r.get("in_scope", True)]
+    oos = [r for r in report["requirements"] if not r.get("in_scope", True)]
+    assert oos, "fixture expects at least one out-of-scope requirement"
+
+    md = render_markdown(report, META)
+    assert f"of {len(scoped)} requirements" in md
+    assert f"of {len(report['requirements'])} requirements" not in md, "denominator must exclude out-of-scope"
+
+    # they are still named once, so nothing looks forgotten
+    for r in oos:
+        assert r["key"] in md and r["key"] in render_plain(report, META)
+    # ...but not as a row in the no-evidence table
+    assert md.count(oos[0]["key"]) == 1
+
+
+def test_the_count_guard_actually_catches_a_violation(mapping):
+    """Guards that scan the wrong key pass silently; prove this one bites."""
+    import copy
+
+    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b|\bAIIPSW-\d+\b", re.IGNORECASE)
+
+    def offenders(m):
+        return [r["key"] for r in m["requirements"] if re.findall(r"\b\d+\b", allowed.sub("", r.get("evidence", "")))]
+
+    assert offenders(mapping) == [], "the shipped map must be clean"
+    bad = copy.deepcopy(mapping)
+    bad["requirements"][0]["evidence"] = "NOT EXECUTED. 50 op tests in models/x/"
+    assert offenders(bad), "an injected count must be caught"

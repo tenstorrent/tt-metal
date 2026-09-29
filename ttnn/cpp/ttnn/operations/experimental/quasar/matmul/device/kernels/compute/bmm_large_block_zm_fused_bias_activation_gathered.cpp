@@ -28,7 +28,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
@@ -282,12 +283,12 @@ void kernel_main() {
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
         if constexpr (batch > 1) {
-            PACK((llk_pack_relu_config(ReluConfig::none())));
+            pack_relu_config(ReluConfig::none());
         }
 #endif
 
         if constexpr (batch > 1) {
-            PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+            pack_reconfig_data_format(mm_partials_cb_id);
         }
 
         // Wait to receive in1
@@ -310,13 +311,15 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
             if (last_out) {
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                pack_relu_config(ReluConfig::zero());
             }
 #endif
 
             // Wait to receive in0 block
             if (block == 0) {
                 input0_cb.reserve_back(in0_block_num_tiles);
+                // Requires Quasar pack-side drain
+                dummy_pack(input0_cb_id);
                 input0_cb.push_back(in0_block_num_tiles);
             }
             input0_cb.wait_front(in0_block_num_tiles);
@@ -402,12 +405,12 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                        PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                        pack_reconfig_data_format(mm_out_cb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
 
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_l1_acc(0);
 #endif
 
                         uint32_t start_dst_index = 0;
@@ -431,9 +434,9 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
                         if (block == 0) {  // no accumulation for first iteration
-                            PACK((llk_pack_reconfig_l1_acc(0)));
+                            pack_reconfig_l1_acc(0);
                         } else if (block == 1) {
-                            PACK((llk_pack_reconfig_l1_acc(1)));
+                            pack_reconfig_l1_acc(1);
                         }
 #endif
 
@@ -454,6 +457,10 @@ void kernel_main() {
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
                 mm_partials_cb.wait_front(out_block_num_tiles);
+                // a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES can
+                // retire before the WAIT_TILES it follows). dummy_unpack() orders POP after WAIT via an
+                // UNPACR_NOP (required on Quasar, no-op on WH/BH); it reads nothing.
+                dummy_unpack(mm_partials_cb_id);
                 mm_partials_cb.pop_front(out_block_num_tiles);
             }
             if (block == num_blocks - 2 && spill) {
@@ -478,6 +485,8 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         // Release in1
         sync_buf.reserve_back(1);
+        // Requires Quasar pack-side drain
+        dummy_pack(sync_cb);
         sync_buf.push_back(1);
         UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
         UNPACK((update_rd_ptr_to_ring_index(

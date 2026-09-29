@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/numeric/bfloat16.h"
 #include "experimental/kernel_args.h"
 #include "../common.hpp"
@@ -44,7 +45,7 @@ FORCE_INLINE void scatter_along_chunk(
     const DataflowBuffer& index_dfb,
     const DataflowBuffer& source_dfb,
     const DataflowBuffer& output_dfb,
-    const DataflowBuffer& fp32_temp_dfb,
+    const Scratchpad<volatile float>& fp32_temp,
     const uint32_t& input_stick_size,
     const index_type& input_offset,
     const uint32_t& input_chunk_size,
@@ -54,7 +55,6 @@ FORCE_INLINE void scatter_along_chunk(
     const uint32_t index_l1_read_addr = index_dfb.get_read_ptr();
     const uint32_t source_l1_read_addr = source_dfb.get_read_ptr();
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
-    const uint32_t fp32_temp_l1_write_addr = fp32_temp_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
@@ -62,8 +62,6 @@ FORCE_INLINE void scatter_along_chunk(
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_l1_read_addr);
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
-    volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
 
     // each index from the index chunk is checked whether it points
     // to any of the elements in the current output range (defined by
@@ -78,35 +76,28 @@ FORCE_INLINE void scatter_along_chunk(
         }
         volatile uint16_t& source_value = source_l1_read_ptr[index_in_index_chunk];
         const index_type& output_index = index_value - input_offset;
-        fp32_temp_l1_write_ptr[output_index] =
-            perform_reduction(fp32_temp_l1_write_ptr[output_index], source_value, scatter_reduction_type);
+        fp32_temp[output_index] = perform_reduction(fp32_temp[output_index], source_value, scatter_reduction_type);
     }
 }
 
 // copies source stick to destination stick (first phase of scatter)
 FORCE_INLINE void copy_input_to_fp32_temp(
-    const DataflowBuffer& input_dfb, const DataflowBuffer& fp32_temp_dfb, uint32_t input_chunk_size) {
+    const DataflowBuffer& input_dfb, const Scratchpad<volatile float>& fp32_temp, uint32_t input_chunk_size) {
     const uint32_t input_l1_read_addr = input_dfb.get_read_ptr();
-    const uint32_t fp32_temp_l1_write_addr = fp32_temp_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
-    volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
     for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
-        fp32_temp_l1_write_ptr[index_in_input_chunk] = bf16_to_fp32(input_l1_read_ptr[index_in_input_chunk]);
+        fp32_temp[index_in_input_chunk] = bf16_to_fp32(input_l1_read_ptr[index_in_input_chunk]);
     }
 }
 
 FORCE_INLINE void copy_fp32_temp_to_output(
-    const DataflowBuffer& fp32_temp_dfb, const DataflowBuffer& output_dfb, uint32_t chunk_size) {
-    const uint32_t fp32_temp_l1_read_addr = fp32_temp_dfb.get_read_ptr();
+    const Scratchpad<volatile float>& fp32_temp, const DataflowBuffer& output_dfb, uint32_t chunk_size) {
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
-    volatile tt_l1_ptr float* fp32_temp_l1_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_read_addr);
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
 
     for (uint32_t copy_i = 0; copy_i < chunk_size; ++copy_i) {
-        output_l1_write_ptr[copy_i] = fp32_to_bf16(fp32_temp_l1_read_ptr[copy_i]);
+        output_l1_write_ptr[copy_i] = fp32_to_bf16(fp32_temp[copy_i]);
     }
 }
 
@@ -147,7 +138,7 @@ void kernel_main() {
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
     DataflowBuffer input_dfb(dfb::input);
-    DataflowBuffer fp32_temp_dfb(dfb::fp32_temp);
+    Scratchpad<volatile float> fp32_temp(scratch::fp32_temp);
     DataflowBuffer output_dfb(dfb::output);
     DataflowBuffer index_dfb(dfb::index);
     DataflowBuffer source_dfb(dfb::source);
@@ -167,9 +158,8 @@ void kernel_main() {
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
             input_dfb.wait_front(ONE_PAGE);
-            fp32_temp_dfb.reserve_back(ONE_PAGE);
 
-            copy_input_to_fp32_temp(input_dfb, fp32_temp_dfb, input_chunk_length);
+            copy_input_to_fp32_temp(input_dfb, fp32_temp, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -203,7 +193,7 @@ void kernel_main() {
                         index_dfb,
                         source_dfb,
                         output_dfb,
-                        fp32_temp_dfb,
+                        fp32_temp,
                         input_stick_size,
                         input_offset,
                         input_chunk_length,
@@ -215,13 +205,10 @@ void kernel_main() {
             }
 
             input_dfb.pop_front(ONE_PAGE);
-            fp32_temp_dfb.push_back(ONE_PAGE);
-            fp32_temp_dfb.wait_front(ONE_PAGE);
             output_dfb.reserve_back(ONE_PAGE);
 
             // third phase: push to the output dfb with fp32->bf16 conversion
-            copy_fp32_temp_to_output(fp32_temp_dfb, output_dfb, input_chunk_length);
-            fp32_temp_dfb.pop_front(ONE_PAGE);
+            copy_fp32_temp_to_output(fp32_temp, output_dfb, input_chunk_length);
             output_dfb.push_back(ONE_PAGE);
         }
         next_inplace<N>(coord, input_dims);

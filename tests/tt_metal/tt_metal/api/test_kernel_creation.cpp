@@ -64,7 +64,8 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto& dispatch_core_config = get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            MetalContext::instance(mesh_device->impl().get_context_id()).get_dispatch_core_config();
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
         MetalEnvImpl& env_impl =
             MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();

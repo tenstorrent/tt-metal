@@ -13,6 +13,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 using ttnn::ccl::generate_slice_sequence_on_dim;
@@ -89,4 +90,69 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
         ASSERT_EQ(args[arg_offset++], expected_tensor_slice_shape.y);
         ASSERT_EQ(args[arg_offset++], expected_tensor_slice_shape.x);
     }
+}
+
+// Worker-count heuristic input: the cores that stay on the grid after choose_worker_cores shifts every
+// selected core by core_grid_offset. The regression behind #57507 / #57519: an 11x10 Blackhole grid
+// with the reduce-scatter pushed below an 8-row matmul (offset (0, 8)) leaves 22 cores, not 110.
+namespace {
+tt::tt_metal::CoreRangeSet rectangular_grid(uint32_t num_cols, uint32_t num_rows) {
+    return tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(num_cols - 1, num_rows - 1)));
+}
+}  // namespace
+
+TEST(ReduceScatterDefaultWorkers, PlaceableCoreCountNoOffsetIsWholeGrid) {
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(11, 10), tt::tt_metal::CoreCoord(0, 0)),
+        110u);
+}
+
+TEST(ReduceScatterDefaultWorkers, PlaceableCoreCountRowOffsetKeepsBottomRows) {
+    // Offset (0, 8): rows 0 and 1 shift onto rows 8 and 9, rows 2..9 shift off the grid.
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(11, 10), tt::tt_metal::CoreCoord(0, 8)),
+        22u);
+    // Wormhole-shaped grid, same offset.
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(8, 8), tt::tt_metal::CoreCoord(0, 6)),
+        16u);
+}
+
+TEST(ReduceScatterDefaultWorkers, PlaceableCoreCountColumnAndDiagonalOffsets) {
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(11, 10), tt::tt_metal::CoreCoord(1, 0)),
+        100u);
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(11, 10), tt::tt_metal::CoreCoord(1, 8)),
+        20u);
+}
+
+TEST(ReduceScatterDefaultWorkers, PlaceableCoreCountOffsetPastTheGridIsZero) {
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(11, 10), tt::tt_metal::CoreCoord(0, 10)),
+        0u);
+    EXPECT_EQ(
+        ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(
+            rectangular_grid(11, 10), tt::tt_metal::CoreCoord(11, 0)),
+        0u);
+}
+
+TEST(ReduceScatterDefaultWorkers, PlaceableCoreCountNonRectangularGrid) {
+    // Two disjoint blocks: columns 0..7 over rows 0..9 and columns 8..10 over rows 0..5.
+    tt::tt_metal::CoreRangeSet grid(std::vector<tt::tt_metal::CoreRange>{
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 9)),
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(8, 0), tt::tt_metal::CoreCoord(10, 5))});
+    EXPECT_EQ(ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(grid, tt::tt_metal::CoreCoord(0, 0)), 98u);
+    // Offset (0, 8): the tall block keeps its rows 0..1 (16 cores); the short block's rows shift to 8..13, all
+    // outside it and outside the tall block's columns.
+    EXPECT_EQ(ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(grid, tt::tt_metal::CoreCoord(0, 8)), 16u);
+    // Offset (0, 4): tall block rows 0..5 stay (48 cores); short block rows 0..1 land on its own rows 4..5 (6 cores).
+    EXPECT_EQ(ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(grid, tt::tt_metal::CoreCoord(0, 4)), 54u);
 }

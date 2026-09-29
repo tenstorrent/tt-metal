@@ -88,6 +88,15 @@ inline void llk_unpack_AB(
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that bcast_row_idx is unused
     LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
     LLK_TDMA_GUARD_NOTE_TDMA(operandB);
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandA,
+        "unpack_AB: operandA DFB differs from the one llk_unpack_AB_init programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandB,
+        "unpack_AB: operandB DFB differs from the one llk_unpack_AB_init programmed");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

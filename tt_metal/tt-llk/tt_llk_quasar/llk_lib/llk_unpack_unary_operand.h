@@ -15,32 +15,19 @@
 using namespace ckernel;
 
 /**
- * @brief Returns the NOP Tensix instruction for unused unpacker engine
- *
- * @tparam UNP_SEL: unpacker engine in use
- */
-template <std::uint32_t UNP_SEL>
-constexpr std::uint32_t nop_insn_for_unused_unpacker_engine()
-{
-    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be UNP_A or UNP_B");
-    constexpr auto unpacr_engine = UNP_SEL == p_unpacr::UNP_A ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/);
-}
-
-/**
  * @brief MOP configuration for unpack of unary operations
  * @details Sets up MOP for unpacking a single operand by tiles
  * Specialized for tiny-tile unpack where each face is a separate tile in HW.
  * Works for any unpack resource
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
@@ -78,9 +65,9 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     temp.set_inner_loop_len(MOP_INNER_LOOP - 1); // Inner loop iterates over num_faces-1 where the dvalid unpacking is done as the END_OP
     temp.set_end_ops(unpack_tile_w_dvalid_instrn, reset_dest_tile_cnt_instrn);
 
-    // If IS_32b_DEST_EN and UNP_SEL = UNP_A, zero out the SRCB reg
+    // If EN_32BIT_DEST and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
-    if constexpr (IS_32b_DEST_EN)
+    if constexpr (EN_32BIT_DEST)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
         temp.set_start_op(clr_unused_unpacr_engine);
@@ -95,12 +82,12 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * works for any unpack resource
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert(
@@ -127,9 +114,9 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
 
-    // If IS_32b_DEST_EN and UNP_SEL = UNP_A, zero out the SRCB reg
+    // If EN_32BIT_DEST and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
-    if constexpr (IS_32b_DEST_EN && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
+    if constexpr (EN_32BIT_DEST && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
         temp.set_end_op(clr_unused_unpacr_engine);
@@ -142,15 +129,15 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
  * @brief Builds the MOP for unpack to SrcA or SrcB with a tile transpose (A -> A^T or B -> B^T).
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
- * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Does NOT support tiny-tiles
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
+inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape tensor_shape)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
 
@@ -214,7 +201,7 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
         TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1 /*Value*/)); // Inc Src by 1 tile, because above UNPACR0/1_FACE do not inc counters
 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
-    if constexpr (IS_32b_DEST_EN)
+    if constexpr (EN_32BIT_DEST)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
         temp.set_end_op(clr_unused_unpacr_engine);
@@ -294,7 +281,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB, values = <true/false>
- * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
@@ -309,7 +296,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
 template <
     std::uint32_t UNP_SEL,
     bool TRANSPOSE_EN,
-    bool IS_32b_DEST_EN,
+    bool EN_32BIT_DEST,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                   = false>
 inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
@@ -330,7 +317,7 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
 
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-        _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+        _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
         return;
     }
 
@@ -351,23 +338,23 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     }
     else if constexpr (TRANSPOSE_EN)
     {
-        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tensor_shape);
+        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles, tensor_shape);
     }
     else
     {
         if constexpr (UNP_SEL == p_unpacr::UNP_DEST) // workaround for unpack to dest, since not supported for tiny tile currently
         {
-            _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+            _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
         }
         else
         {
             if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
             {
-                _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+                _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
             }
             else // Using tiny-tiles
             {
-                _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tensor_shape);
+                _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles, tensor_shape);
             }
         }
     }

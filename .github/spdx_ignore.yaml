@@ -17,6 +17,8 @@ ignore:
     - env/
     - eevenv/
     - built/
-    - models/demos/t3000/llama2_70b/reference/
     - infra/
     - models/demos/deepseek_v3/reference/deepseek/
+    - models/common/reference_rope.py
+    - models/common/LICENSE-Llama-3.1
+    - models/experimental/xtts_v2/reference/coqui/

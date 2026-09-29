@@ -6,6 +6,7 @@
 
 #include <array>
 #include <optional>
+#include <stdexcept>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -19,7 +20,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 #include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
@@ -43,13 +43,17 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant) {
+    // Unlike ttnn, fast_lut variant is not supported (no fast-lut backward kernel)
+    if (variant == GeluVariant::FAST_LUT) {
+        throw std::invalid_argument("gelu: GeluVariant::FAST_LUT is not supported for training");
+    }
+
     auto out = autograd::create_tensor();
-    out->set_value(ttnn::gelu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        static const std::string approx_mode = "none";
-        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
-        tensor->add_grad(dL_dt);
+    out->set_value(ttnn::gelu(tensor->get_value(), variant));
+    autograd::GradFunction grad = [tensor, out, variant]() {
+        auto dL_dt = ttnn::gelu_bw(out->get_grad(), tensor->get_value(), variant);
+        tensor->add_grad(dL_dt[0].value());
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));

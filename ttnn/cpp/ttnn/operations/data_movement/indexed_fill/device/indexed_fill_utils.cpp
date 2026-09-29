@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::data_movement::indexed_fill {
@@ -89,6 +90,15 @@ bool is_native_indexed_fill_sharding(
         return false;
     }
 
+    // The native path always enumerates workers row-major and assigns `my_batch_id = i`
+    // directly to the i-th worker, but the actual buffer/shard-to-core mapping follows the
+    // shard's orientation. A COL_MAJOR grid would therefore write each logical batch to the
+    // wrong output core on a multi-row grid; fall back to the generic path in that case.
+    if (in_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
     // One batch per core: shard grid must cover exactly B = padded_shape()[0] cores,
     // and each shard must hold exactly H*W rows (= one whole batch slab).
     const auto& padded = input_a_spec.padded_shape();
@@ -150,6 +160,37 @@ bool is_shard_local_indexed_fill(
         return false;
     }
 
+    // The shard-local kernel derives each core's shard/column index from its row-major
+    // position `i` in create_program_artifacts()'s core list (corerange_to_cores(..., row_wise
+    // = true)), which only matches the tensor's actual shard-to-core assignment when the shard
+    // is ROW_MAJOR-oriented. A COL_MAJOR shard would read/write the wrong shard on multi-row /
+    // multi-column grids, so fall back to the generic path in that case instead.
+    if (a_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
+    if (layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The factory's shard_row = i / shard_n_x and cx = i % shard_n_x only match
+        // corerange_to_cores(row_wise = true) when the shard grid is a full rectangle.
+        // (WIDTH_SHARDED needs no such check: cx = i holds for any grid shape.)
+        if (a_shard.grid.num_cores() != a_shard.grid.bounding_box().size()) {
+            return false;
+        }
+
+        // The kernel gives each shard row B / n_y batches, so an indivisible B has no valid
+        // per-core batch count.
+        const auto& padded = input_a_spec.padded_shape();
+        if (padded.rank() < 1) {
+            return false;
+        }
+        const uint32_t B = padded[0];
+        const uint32_t n_y = a_shard.grid.bounding_box().grid_size().y;
+        if (n_y == 0 || B % n_y != 0) {
+            return false;
+        }
+    }
+
     // input_b: must be interleaved OR the same WIDTH_SHARDED layout (same grid, same shard
     // width). Direct L1 arithmetic works for WIDTH_SHARDED because every core has all `b`
     // input_b batches locally, so `replace_src` (a global index in [0, b)) always resolves
@@ -177,6 +218,9 @@ bool is_shard_local_indexed_fill(
             return false;
         }
         if (b_mem.shard_spec()->shape[1] != a_shard.shape[1]) {
+            return false;
+        }
+        if (b_mem.shard_spec()->orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
             return false;
         }
     }
@@ -241,53 +285,32 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
+tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     bool is_tile) {
-    using namespace tt::tt_metal;
-    auto* device = input_tensor.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    uint32_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
-    }
-    uint32_t tensor_width = padded_out_shape[-1];
-
-    const uint32_t height_align = is_tile ? tt::constants::TILE_HEIGHT : 1u;
-    const uint32_t width_align = is_tile ? tt::constants::TILE_WIDTH : 1u;
-
-    // The div_up + round_up approach distributes pages as uniformly as possible.
-    // When tensor_height (or tensor_width for WIDTH_SHARDED) is less than num_cores,
-    // some cores receive shards that map entirely to padding and are handled by
-    // early-return guards in the reader/writer kernels.  Effective parallelism is
-    // therefore min(total_pages, num_cores), not num_cores.
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * height_align);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), height_align);
-        shard_shape = {shard_height, tensor_width};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), width_align);
-        shard_shape = {tensor_height, shard_width};
-    } else {
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * height_align);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), height_align);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), width_align);
-        shard_shape = {shard_height, shard_width};
-    }
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+    // IndexedFill: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
+    return common::synthesize_output_shard_spec(
+        input_tensor.device()->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = is_tile,
+         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+         .caller_tag = "IndexedFill"});
 }
 
 tt::tt_metal::MemoryConfig resolve_output_memory_config(
     const Tensor& input_tensor_a,
     const ttnn::Shape& padded_out_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
+    // indexed_fill preserves the output shape, so an ND-sharded output config already
+    // carries the authoritative shard distribution. Re-deriving a legacy shard_spec here
+    // is unnecessary and would rewrite an ND-origin config onto the legacy shard-spec path.
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
+        return output_mem_config;
+    }
+
     if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value()) {
         return output_mem_config;
     }
@@ -299,7 +322,7 @@ tt::tt_metal::MemoryConfig resolve_output_memory_config(
                   input_tensor_a.padded_shape(),
                   padded_out_shape,
                   input_tensor_a.layout() == tt::tt_metal::Layout::TILE)
-            : generate_shard_spec_all_cores(
+            : generate_output_shard_spec(
                   input_tensor_a,
                   padded_out_shape,
                   output_mem_config.memory_layout(),

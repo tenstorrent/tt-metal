@@ -38,6 +38,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -83,8 +84,6 @@ def generate_parallel_matmul_exp_combinations(
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
-        if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
-            continue
         dest_sync_modes = (DestSync.Half, DestSync.Full)
         implied_math_modes = (
             (ImpliedMathFormat.Yes,)
@@ -216,6 +215,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             dest_acc,
             formats.input_format,
             exp_input_dimensions,
+            unpack_to_srcs=True,
         )
 
     num_faces = 4
@@ -277,7 +277,10 @@ def test_sfpu_exp_parallel_matmul_quasar(
     outcome = configuration.run()
 
     res_exp = torch.tensor(outcome.result, dtype=torch_format)
-    res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)
+    res_matmul = torch.tensor(
+        stimuli.collect_buffer_c_results(TestConfig.TENSIX_LOCATION),
+        dtype=torch_format,
+    )
 
     assert len(res_exp) == len(golden_exp), "exp"
     assert len(res_matmul) == len(golden_matmul), "matmul"

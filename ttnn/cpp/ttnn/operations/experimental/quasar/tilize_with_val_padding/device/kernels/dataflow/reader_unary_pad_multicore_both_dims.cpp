@@ -131,17 +131,15 @@ void kernel_main() {
                 }
             } else {
                 // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
-                // buffer. The aligned-down source is a full NoC address, so it is supplied directly via
-                // UnicastEndpoint (decomposed into x/y/local addr; NOC_XY_ADDR repacks it unchanged).
+                // buffer. The aligned-down source is a full NoC address, supplied opaquely via
+                // PrecomposedUnicastEndpoint.
                 const uint64_t aligned_src_noc_addr = (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask;
                 CoreLocalMem<uint32_t> temp_dst(temp_addr);
                 noc.async_read(
-                    UnicastEndpoint{},
+                    PrecomposedUnicastEndpoint{},
                     temp_dst,
                     width_size + dram_alignment,
-                    {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(aligned_src_noc_addr),
-                     .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(aligned_src_noc_addr),
-                     .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(aligned_src_noc_addr)},
+                    {.noc_addr = aligned_src_noc_addr},
                     {.offset_bytes = 0});
 
                 // Block before copying data from tmp to cb buffer

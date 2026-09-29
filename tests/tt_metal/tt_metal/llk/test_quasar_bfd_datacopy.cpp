@@ -52,16 +52,19 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
 
     const std::uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32 tile
 
+    // The direct reader/writer kernels address a single DRAM bank (bank_id
+    // 0). Use page_size = whole buffer so the allocator places each buffer in
+    // one bank, and advance the DRAM pointer by the native tile size.
     distributed::ReplicatedBufferConfig src_global_config{.size = single_tile_size * TILES_STREAMED_PER_INPUT};
     distributed::DeviceLocalBufferConfig src_local_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+        .page_size = single_tile_size * TILES_STREAMED_PER_INPUT, .buffer_type = BufferType::DRAM};
     auto src0_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
     auto src1_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
     auto src2_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
 
     auto dst_dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = single_tile_size * TOTAL_TILES},
-        {.page_size = single_tile_size, .buffer_type = BufferType::DRAM},
+        {.page_size = single_tile_size * TOTAL_TILES, .buffer_type = BufferType::DRAM},
         mesh_device.get());
 
     const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
@@ -106,7 +109,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
             .num_threads = 1,
             .dfb_bindings = {experimental::ProducerOf(dfb, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::KernelSpec reader0_spec = make_reader_spec(IN0_DFB);
@@ -122,7 +125,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -155,7 +158,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"num_cycles", NUM_CYCLES}, {"num_loops", NUM_LOOPS}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -192,18 +195,13 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src2_dram_buffer, src2_vec, /*blocking=*/true);
 
-    const std::uint32_t src_aligned_page_size =
-        static_cast<std::uint32_t>(src0_dram_buffer->get_reference_buffer()->aligned_page_size());
-    const std::uint32_t dst_aligned_page_size =
-        static_cast<std::uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
-
     auto reader_run_args = [&](const std::shared_ptr<distributed::MeshBuffer>& buf) {
         return experimental::MakeRuntimeArgsForSingleNode(
             node,
             {{"src_addr", buf->address()},
              {"src_bank_id", 0u},
              {"num_tiles", TILES_STREAMED_PER_INPUT},
-             {"dram_page_stride", src_aligned_page_size}});
+             {"dram_page_stride", single_tile_size}});
     };
 
     experimental::ProgramRunArgs params;
@@ -221,12 +219,12 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
                 {{"dst_addr", dst_dram_buffer->address()},
                  {"dst_bank_id", 0u},
                  {"num_tiles", TOTAL_TILES},
-                 {"dram_page_stride", dst_aligned_page_size}}),
+                 {"dram_page_stride", single_tile_size}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<std::uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);

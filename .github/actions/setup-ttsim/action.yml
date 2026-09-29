@@ -3,11 +3,12 @@ description: |
   Install the ttsim simulator binary for a given SKU from a pre-uploaded
   artifact, and export the env vars needed to run tests under the simulator
   (TT_METAL_SIMULATOR_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE,
-  TT_METAL_DISABLE_SFPLOADMACRO). The caller workflow is expected to have
-  published each simulator binary as its own ttsim-lib-<library> artifact (see the
-  fetch-ttsim job pattern in ttsim-sanity-tests-impl.yaml). Which binary a SKU gets is
-  declared by that SKU's ttsim_lib in .github/sku_config.yaml, so callers pass only the
-  SKU and this action downloads the single artifact holding that library.
+  TT_METAL_DISABLE_SFPLOADMACRO, TT_METAL_QUASAR_NOC_API_VERSION). The
+  caller workflow is expected to have published each simulator binary as its own
+  ttsim-lib-<library> artifact (see the fetch-ttsim job pattern in
+  ttsim-sanity-tests-impl.yaml). Which binary a SKU gets is declared by that SKU's
+  ttsim_lib in .github/sku_config.yaml, so callers pass only the SKU and this
+  action downloads the single artifact holding that library.
 
 inputs:
   sku:
@@ -68,7 +69,7 @@ runs:
         case "$asset" in
           libttsim_wh*) soc=wormhole_b0_80_arch.yaml ;;
           libttsim_bh*) soc=blackhole_140_arch.yaml ;;
-          libttsim_qsr*) soc=quasar_32_arch.yaml ;;
+          libttsim_qsr*) soc=quasar_32_arch_ttsim.yaml ;;
           *) echo "::error::Cannot derive an arch from ttsim_lib '$asset' for SKU '${{ inputs.sku }}'."; exit 1 ;;
         esac
 
@@ -87,6 +88,7 @@ runs:
           echo "TT_METAL_SIMULATOR=${{ inputs.root }}/sim/libttsim.so"
           echo "TT_METAL_SLOW_DISPATCH_MODE=1"
           echo "TT_METAL_DISABLE_SFPLOADMACRO=1"
+          echo "TT_METAL_QUASAR_NOC_API_VERSION=1"
         } >> "$GITHUB_ENV"
 
     - name: Download ttsim binaries artifact
