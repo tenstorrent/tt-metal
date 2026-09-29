@@ -88,7 +88,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 const std::uint32_t dvalids_per_tile =
                     (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : static_cast<std::uint32_t>(num_faces_r_dim_A * num_faces_c_dim_A);
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                if constexpr (is_fp32_dest_acc_en)
+                {
+                    // 32-bit dest math is ELWADD, which also needs SrcA: one per tile, ahead of its SrcB faces
+                    for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_blocks * tiles_in_block; tile++)
+                    {
+                        _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(1);
+                        _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(dvalids_per_tile);
+                    }
+                }
+                else
+                {
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                }
             }
             else
             {
@@ -210,7 +222,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             if constexpr (!unpack_to_dest)
             {
                 const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                if constexpr (is_fp32_dest_acc_en)
+                {
+                    // 32-bit dest also unpacks one SrcA per tile, which has to be consumed too
+                    for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_blocks * tiles_in_block; tile++)
+                    {
+                        _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(dvalids_per_tile);
+                        _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(1);
+                    }
+                }
+                else
+                {
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                }
             }
             else
             {
@@ -268,7 +292,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_Res                 = params.buffer_Res;
 #endif
-
 
     {
         ZONE_SCOPED("INIT")
