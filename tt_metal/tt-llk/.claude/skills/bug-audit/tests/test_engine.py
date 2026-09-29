@@ -30,6 +30,10 @@ def run(script, *argv):
             runpy.run_path(script, run_name="__main__")
     except SystemExit as e:
         code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        if e.code is not None and not isinstance(e.code, int):
+            err.write(
+                f"{e.code}\n"
+            )  # what the interpreter prints for sys.exit("message")
     finally:
         sys.argv, sys.path[:] = saved_argv, saved_path
     return code, out.getvalue(), err.getvalue()
@@ -774,3 +778,51 @@ def test_init_run_keeps_non_ascii_paths_in_scope(tmp_path):
         for f in b["files"]
     }
     assert files == {"a.c", "café.c"}, files
+
+
+def _git_tree(tmp_path, names):
+    import subprocess as sp
+
+    tree = tmp_path / "tree"
+    for name in names:
+        (tree / name).parent.mkdir(parents=True, exist_ok=True)
+        (tree / name).write_text("int x;\n")
+    git = lambda *a: sp.run(["git", *a], cwd=tree, check=True)  # noqa: E731
+    git("init", "-q")
+    git("add", ".")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x")
+    return tree
+
+
+def _init(tmp_path, tree, *extra):
+    out = tmp_path / "run"
+    code, o, e = run(
+        os.path.join(ENGINE, "init_run.py"),
+        "--root",
+        tree,
+        "--out",
+        out,
+        "--repo",
+        "o/r",
+        "--ext",
+        ".c",
+        *extra,
+    )
+    if code:
+        return code, o + e, set()
+    m = json.load(open(out / "batches" / "manifest.json"))
+    return code, o + e, {f for b in m for f in b["files"]}
+
+
+def test_init_run_include_and_exclude_take_comma_lists_like_prio(tmp_path):
+    tree = _git_tree(tmp_path, ["a/x.c", "b/y.c", "c/z.c"])
+    code, out, files = _init(
+        tmp_path, tree, "--include", "a/*,b/*", "--exclude", "b/*,c/*"
+    )
+    assert code == 0 and files == {"a/x.c"}, out
+
+
+def test_init_run_refuses_an_empty_scope(tmp_path):
+    tree = _git_tree(tmp_path, ["a/x.c"])
+    code, out, _ = _init(tmp_path, tree, "--include", "nowhere/*")
+    assert code != 0 and "no file" in out.lower(), out

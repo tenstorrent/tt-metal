@@ -131,9 +131,16 @@ if submodules and not a.recurse_submodules:
 if a.since:
     changed = set(git("diff", "--name-only", f"{a.since}...{commit}").splitlines())
     files = [f for f in files if f in changed]
-if a.include:
-    files = [f for f in files if any(fnmatch.fnmatch(f, g) for g in a.include)]
-files = [f for f in files if not any(fnmatch.fnmatch(f, g) for g in a.exclude)]
+# comma lists, like --prio: a whole list taken as one glob matches nothing, silently
+include = [g.strip() for x in a.include for g in x.split(",") if g.strip()]
+exclude = [g.strip() for x in a.exclude for g in x.split(",") if g.strip()]
+if include:
+    files = [f for f in files if any(fnmatch.fnmatch(f, g) for g in include)]
+files = [f for f in files if not any(fnmatch.fnmatch(f, g) for g in exclude)]
+if not files:
+    sys.exit(
+        "no file in scope: check --include, --exclude, --ext and --since against the tree"
+    )
 
 prio_rules = []
 for spec in a.prio:
