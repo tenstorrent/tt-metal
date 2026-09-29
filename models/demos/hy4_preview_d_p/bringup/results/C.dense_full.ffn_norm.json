@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "pcc_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.9999959852756733
+  },
+  "rel_l2_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.0028360511641949415
+  },
+  "row_norm_ratio_max_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 1.0007054805755615
+  },
+  "row_norm_ratio_min_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.9987414479255676
+  },
+  "syn_rel_l2_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.0017051680479198694
+  },
+  "syn_row_norm_ratio_max_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 1.0010030269622803
+  },
+  "syn_row_norm_ratio_min_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.9993281960487366
+  },
+  "syn_worst_row_rel_l2_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.002034855540841818
+  },
+  "worst_row_rel_l2_ffn_norm_L00": {
+   "t": "2026-09-29T08:49:16",
+   "value": 0.0035232696682214737
+  }
+ },
+ "task": "C.dense_full.ffn_norm"
+}
