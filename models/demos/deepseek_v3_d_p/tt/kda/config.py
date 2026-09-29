@@ -53,8 +53,7 @@ class KDAProgramConfig:
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Stage short-lived activations (the QKV slice and its row-major copy for the convolution, the
-    # bounded-decay intermediates, and the gated-norm output before the output projection) in L1;
-    # only for local lengths where they fit comfortably.
+    # bounded-decay intermediates, and the gated-norm output before the output projection) in L1.
     stage_activations_in_l1: bool = False
 
     def __post_init__(self) -> None:
@@ -85,7 +84,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        # Galaxy SP8xTP4 at T=5120; other geometries keep DRAM staging (the largest staged
-        # activation, 640x9216 BF16, is ~98 KB per core in L1).
+        # 640 local rows: Galaxy SP8xTP4 at T=5120, LoudBox SP2xTP4 at T=1280, SP1xTP8 at T=640. The
+        # largest staged activation there is the TP4 QKV block (640x9216 BF16); its tiled and row-major
+        # copies coexist during the untilize, about 200 KB per L1 bank on Blackhole. SP4xTP2 at T=2560
+        # also qualifies, with a TP2 block twice as wide.
         stage_activations_in_l1=active_seq_len_local == 640,
     )
