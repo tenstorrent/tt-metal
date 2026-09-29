@@ -165,3 +165,30 @@ def test_all_gather_4x1_line_ring(mesh_device):
         cluster_axis=0,
         rows_per_device=65536,
     )
+
+
+_2D_CONFIGS = [
+    pytest.param(ag._device_params(getattr(ttnn.FabricConfig, name)), id=name.lower())
+    for name in ("FABRIC_2D", "FABRIC_2D_TORUS_X", "FABRIC_2D_TORUS_Y", "FABRIC_2D_TORUS_XY")
+]
+
+
+@pytest.mark.parametrize("device_params", _2D_CONFIGS, indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device,cluster_axis", [((4, 1), 0), ((2, 2), None)], indirect=["mesh_device"], ids=["4x1_axis0", "2x2_mesh"]
+)
+def test_all_gather_2d_compare(mesh_device, cluster_axis):
+    """G = 4 on the 2D fabric configs (a line without a wrap, a ring with one), 72 MiB per chip, for comparison
+    with fabric_all_gather's 4x1 / 2x2_snake topologies."""
+    case_name, dtype, width, layout, expected_page_size = next(c for c in ag._TEST_CASES if c[0] == "bf16_tiles")
+    print(f"FABRIC_2D_COMPARE op=high_bw_all_gather fabric={ttnn.get_fabric_config()} cluster_axis={cluster_axis}")
+    ag._run_high_bw_all_gather_perf(
+        mesh_device,
+        dtype,
+        width,
+        layout,
+        expected_page_size,
+        min_bandwidth_gbps=0.0,
+        cluster_axis=cluster_axis,
+        rows_per_device=65536,
+    )
