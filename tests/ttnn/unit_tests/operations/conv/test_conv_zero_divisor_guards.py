@@ -39,6 +39,30 @@ def _conv2d_stride_with_kernel_folding(device):
     _conv2d(device, stride=(0, 2), conv_config=ttnn.Conv2dConfig(enable_kernel_stride_folding=True))
 
 
+def _prepare_conv_weights_stride_with_kernel_folding(device):
+    w = ttnn.from_torch(torch.randn(32, 32, 3, 3).bfloat16(), dtype=ttnn.bfloat16)
+    ttnn.prepare_conv_weights(
+        weight_tensor=w,
+        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        weights_format="OIHW",
+        in_channels=32,
+        out_channels=32,
+        batch_size=1,
+        input_height=8,
+        input_width=8,
+        kernel_size=[3, 3],
+        stride=[0, 2],
+        padding=[1, 1],
+        dilation=[1, 1],
+        has_bias=False,
+        groups=1,
+        device=device,
+        input_dtype=ttnn.bfloat16,
+        conv_config=ttnn.Conv2dConfig(enable_kernel_stride_folding=True),
+    )
+
+
 def _conv2d_act_block_w_div(device):
     config = ttnn.Conv2dConfig(act_block_w_div=0, shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED)
     _conv2d(device, in_channels=256, out_channels=64, conv_config=config)
@@ -100,6 +124,7 @@ def _conv3d_groups(device):
     [
         (_conv2d_stride, "stride must be greater than 0"),
         (_conv2d_stride_with_kernel_folding, "stride must be greater than 0"),
+        (_prepare_conv_weights_stride_with_kernel_folding, "stride must be greater than 0"),
         (_conv2d_act_block_w_div, "act_block_w_div must be greater than 0"),
         (_conv2d_act_block_h_override, r"act_block_h_override \(16\) must be a multiple of 32"),
         (_conv_transpose2d_stride, "stride must be greater than 0"),
@@ -109,6 +134,7 @@ def _conv3d_groups(device):
     ids=[
         "conv2d_stride",
         "conv2d_stride_kernel_folding",
+        "prepare_conv_weights_stride_kernel_folding",
         "conv2d_act_block_w_div",
         "conv2d_act_block_h_override",
         "conv_transpose2d_stride",

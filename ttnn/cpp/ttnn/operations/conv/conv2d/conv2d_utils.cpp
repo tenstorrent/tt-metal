@@ -1515,6 +1515,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding_n4,
     const Conv2dConfig& /*conv_config*/) {
+    TT_FATAL(stride[0] > 0 && stride[1] > 0, "stride must be greater than 0, got ({}, {})", stride[0], stride[1]);
     // Calculate padded dimensions first - this is what the folding operation will see
     uint32_t padded_height = input_height + padding_n4[0] + padding_n4[1];
     uint32_t padded_width = input_width + padding_n4[2] + padding_n4[3];
