@@ -759,6 +759,13 @@ tasks:
     kind: mlp
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-29T09:10:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py: 248945b03b80201653f23429d1102f17a29d692a72d192e1ad73ebe496c5b63c
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.dense_full.11
   title: 'dense_full block with steps 1-11 on device (last: mlp)'
   step: implement
