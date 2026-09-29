@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM interface translation for the selected TP4 Qwen generator."""
+"""vLLM interface translation for the selected tensor-parallel Qwen generator."""
 
 import json
 import os
@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import resolve_mesh_tp
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import resolve_mesh_tp, supported_device_counts
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator
 from models.demos.qwen38_27b_qb2.tt.model import ModelCache
 
@@ -89,8 +89,11 @@ class Qwen38ForCausalLM:
         # the default shared 256K pool even when admission permits eight users.
         if tokens % 32 or not cls._MAX_CONTEXT <= tokens <= 1179648:
             raise ValueError("Explicit KV pool must be 32-token aligned within 262144..1179648")
-        if kwargs.get("num_devices", 4) != 4 or kwargs.get("tt_data_parallel", 1) != 1:
-            raise ValueError("Explicit KV pool requires TP4")
+        # The bound is per-device, and every qualified mesh holds one KV head per device: four
+        # heads shard across four chips and replicate across eight. So the measured pool size
+        # carries over, but data parallelism would multiply it.
+        if kwargs.get("num_devices", 4) not in supported_device_counts() or kwargs.get("tt_data_parallel", 1) != 1:
+            raise ValueError("Explicit KV pool requires a single qualified mesh")
         return tokens
 
     @classmethod
@@ -114,9 +117,11 @@ class Qwen38ForCausalLM:
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         pages, heads, block, dim = kv_cache_shape
-        if (heads, block, dim) != (1, 32, 256):
-            raise ValueError(f"Expected TP4 cache [pages,1,32,256], got {kv_cache_shape}")
         model = self.generator.model
+        attention = next(layer for layer in model.layers if layer.kind == "full_attention")
+        expected = attention.state_shapes(batch_size=self.batch_size, num_pages=pages)["key"][1:]
+        if (heads, block, dim) != expected:
+            raise ValueError(f"Expected cache [pages, {', '.join(map(str, expected))}], got {kv_cache_shape}")
         self.cache = ModelCache(
             [layer.allocate_state(batch_size=self.batch_size, num_pages=pages) for layer in model.layers],
             self.batch_size,

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP4 decoder on a 1x4 Blackhole mesh; optimized single-chip kernels are the baseline.
+"""Tensor-parallel decoder on a qualified mesh; optimized single-chip kernels are the baseline.
 
 Only setup partitions Torch weights. Runtime attention, recurrence, paged cache,
 and logical-tail handling reuse Qwen38Decoder with local head dimensions.
@@ -57,6 +57,11 @@ _TP_POLICY = {
         "prefill_1d_down_k": 17,
     },
 }
+
+
+def supported_device_counts():
+    """Device counts a qualified mesh can have, for callers that validate before opening one."""
+    return frozenset(key[2] for key in _SUPPORTED_MESHES)
 
 
 def tp_policy(tp):

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Serving state and canonical split sampling for the TP4 Qwen text model."""
+"""Serving state and canonical split sampling for the tensor-parallel Qwen text model."""
 
 import os
 import time
@@ -799,29 +799,34 @@ class Qwen38Generator:
         if len(cache.layers) != len(self.model.layers):
             raise ValueError("Cache must cover every model layer")
         for layer, state in zip(self.model.layers, cache.layers):
+            # The layer owns the geometry, which narrows with the tensor-parallel width.
+            shapes = layer.state_shapes(batch_size=cache.batch_size, num_pages=cache.num_pages)
             if layer.kind == "full_attention":
                 if any(
                     t is None
                     or t.dtype != getattr(ttnn, layer.policy["kv_dtype"])
                     or t.layout != ttnn.TILE_LAYOUT
                     or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG
-                    or tuple(t.shape) != (cache.num_pages, 1, 32, 256)
-                    for t in (state.key, state.value)
+                    or tuple(t.shape) != shapes[name]
+                    for name, t in (("key", state.key), ("value", state.value))
                 ):
-                    raise ValueError("Full-attention cache violates the TP4 selected-dtype page contract")
+                    raise ValueError(f"Full-attention cache violates the selected-dtype page contract {shapes['key']}")
             elif (
                 state.recurrent is None
-                or tuple(state.recurrent.shape) != (cache.batch_size, 12, 128, 128)
+                or tuple(state.recurrent.shape) != shapes["recurrent"]
                 or state.recurrent.dtype != ttnn.float32
                 or state.recurrent.layout != ttnn.TILE_LAYOUT
                 or state.recurrent.memory_config() != ttnn.DRAM_MEMORY_CONFIG
                 or state.conv is None
-                or tuple(state.conv.shape) != (cache.batch_size, 3, 2560)
+                or tuple(state.conv.shape) != shapes["conv"]
                 or state.conv.dtype != ttnn.bfloat16
                 or state.conv.layout != ttnn.ROW_MAJOR_LAYOUT
                 or state.conv.memory_config() != ttnn.DRAM_MEMORY_CONFIG
             ):
-                raise ValueError("Linear state violates the FP32 recurrence / BF16 row-major convolution contract")
+                raise ValueError(
+                    "Linear state violates the FP32 recurrence / BF16 row-major convolution contract "
+                    f"(expected recurrent {shapes['recurrent']}, conv {shapes['conv']})"
+                )
         if isinstance(page_table, ttnn.Tensor):
             if (
                 page_table.dtype != ttnn.int32
