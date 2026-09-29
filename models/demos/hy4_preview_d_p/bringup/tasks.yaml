@@ -165,6 +165,13 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-29T04:49:44'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py: 3da81a0ceaa11b43822a872a18ae554e07e6cbcd5ac28ef95616b4c5da12e15d
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.dense_full.01
   title: 'dense_full block with steps 1-1 on device (last: attn_hc)'
   step: implement
