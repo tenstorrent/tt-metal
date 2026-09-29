@@ -1,19 +1,23 @@
 # FastH3 pipeline optimizations
 
-FastH3 is `MiniMaxH3Pipeline` with a distillation adapter (4 forwards), optionally VSA, and a
-T-sharded audio vocoder. This file is the ranked list of open levers, what each is worth **measured**,
-and what has already been closed — so nobody spends device time re-deriving a settled result.
+FastH3 is `MiniMaxH3Pipeline` with a distillation adapter (4 forwards) and a T-sharded audio vocoder.
+This file is the ranked list of open levers, what each is worth **measured**, and what has already been
+closed — so nobody spends device time re-deriving a settled result.
 
-Companion docs: `models/MiniMaxH3.md` (component perf),
-`models/transformers/minimax_h3/VSA_README.md` (VSA entry point), `VSA_STREAM_DESIGN.md` (fine-stage
-kernel design and its measured ceiling), `VSA_PLAN.md` (VSA journal). Measurement log:
+> Provenance: the block- and step-level captures this file was first built from were taken on an
+> earlier build whose attention ran a since-removed sparse path. Measurements that were specific to
+> that path have been dropped rather than relabelled; what remains are the pipeline-general findings
+> (the fused-collective matmuls, the AdaLN gathers, the VAE and audio decode stages, yuv420, tracing,
+> caching, the watcher constraint). Re-capture the block breakdown on the dense path before ranking
+> the in-block levers against each other again.
+
+Companion doc: `models/MiniMaxH3.md` (component perf). Measurement log:
 `~/.tt-buddy/notes/h3-fasth3-optimization-gaps.md`.
 
 ## Where the time goes
 
-Job 841, 4x8 BH Galaxy, `tt-metal@fcdcae065c0`, 1344x768 / **15 s** / 362 frames, FastH3 LoRA
-`vsa-synthetic-step1900`, VSA sparsity 0.9, `MINIMAX_H3_AUDIO_T_FACTOR=8`,
-`vae_output_type="yuv420"`, warm:
+Job 841, 4x8 BH Galaxy, `tt-metal@fcdcae065c0`, 1344x768 / **15 s** / 362 frames, FastH3 distillation
+adapter, `MINIMAX_H3_AUDIO_T_FACTOR=8`, `vae_output_type="yuv420"`, warm:
 
 | stage | now (yuv420) | before (float) | base 49-fwd | share |
 |---|---|---|---|---|
@@ -31,114 +35,30 @@ established by a single run.
 
 ## The step is the block stack, and nothing else
 
-Job 842 Tracy capture, `test_minimax_h3_vsa_block_perf -k 15s_768p`, signpost window, 32 devices
-merged — **one VSA block**:
-
-| | |
-|---|---|
-| device FW | **63.25 ms** |
-| op-to-op gap | **4.53 ms** (6.7% of window wall) |
-| window | **67.78 ms** |
-
-`50 blocks x 67.78 ms = 3389 ms` against a measured `3387 ms/step`. The block stack is the step to
-within 0.06%, and 63.25 ms independently matches `VSA_PLAN.md`'s 63.7 ms.
-
-Per block, and scaled by `x50 blocks x4 forwards` to a share of the 20.1 s run. The `post` column is
-job 885 on `68615f7c206`, same test / signpost window / 32-device merge, after the VSA op was brought
-up to `cglagovich/fast_h3_vsa@2b72da0e1ae`:
-
-| component | ms/block | post | % block (post) | share of run |
-|---|---|---|---|---|
-| `VsaSdpaOperation` (fine stage) | 19.81 | 21.52 | 35.6% | **4.30 s / 21.4%** |
-| `AllGatherMinimalMatmulAsyncOp` x4 | 14.78 | 14.79 | 24.4% | **2.96 s / 14.7%** |
-| `AllGatherAsyncDeviceOperation` (VSA K/V + pooled AG) | 8.09 (x2) | 8.40 (x4) | 13.9% | 1.68 s / 8.4% |
-| TM/layout ops + their dispatch bubbles | ~10.0 | ~4.4 | ~7% | ~0.9 s / 4.4% |
-| `EmbeddingsDeviceOperation` x6 (AdaLN gathers) | 5.32 | 5.32 | 8.8% | 1.06 s / 5.3% |
-| `MinimalMatmulStridedReduceScatterAsync` | 2.66 | 2.65 | 4.4% | 0.53 s / 2.6% |
-| `MatmulDeviceOperation` x6 | 2.42 | 1.65 | 2.7% | 0.33 s / 1.6% |
-| `DitFusedDistributedRmsnorm` x4 | 1.62 | 1.62 | 2.7% | 0.32 s / 1.6% |
-| `TopkLargeIndices` | 0.19 | 0.21 | 0.3% | — |
-| **block device FW** | **63.25** | **60.54** | | |
-
-Collectives and collective-fused matmuls together are **38.3% of the block** — larger than the SDPA
-that dominates any single row.
-
-Reading the port: device-side index assembly and the two coarse-stage `program_config`s took the
-TM/layout bucket from ~10.0 to ~4.4 ms (`Concat` 0.95 -> 0, sub-20 us layout ops 47 -> 31) and the six
-small matmuls from 2.42 to 1.65 ms; padded pooled gathers turned the composite pooled gather into two
-aligned ring all-gathers (`AllGatherAsync` 2 ops -> 4, +0.31 ms, replacing a broadcast+concat chain
-counted in the TM bucket before). Against that the v19 exact-numerics kernel costs **+1.71 ms**, not
-the +26% (+5.2 ms) its standalone bench predicts — the deeper stream ring it enables and the
-dense-row dealing absorb most of it. Net **-2.71 ms/block (-4.3%)**.
-
-The block delta does **not** show up end to end. Job 886 on `02d862e71c4`, same shape / LoRA / knobs
-as job 841, warm: Encoder 0.3 | Denoise **13.4** | VAE 4.8 | Audio 1.4 | **Total 19.9 s** against
-20.1 s. The -2.71 ms/block predicts denoise 13.0 s; 13.4 s is what the pipeline reports, and a 0.2 s
-run delta is far under the ~1.6 s single-run resolution this file's +-8% variance band implies.
-
-**Treat the port as end-to-end flat.** What it bought is the exactness (dense-list rows at the bf16
-floor instead of a 70%-off running sum), not latency. The block-level -4.3% is real in a more precise
-instrument but is ~0.55 s of a 20 s run — below the noise floor of a single generation. Settling the
-sign would take a repeated-run A/B, which is not worth the device time at this size.
+`50 blocks x 67.78 ms = 3389 ms` against a measured `3387 ms/step`: the block stack is the step to
+within 0.06%. Nothing outside the block stack — the packing path, `proj_in`, `mesh_partition`, the
+per-step index uploads and the host scheduler round trip — is measurable against it (see S1).
 
 ## Open levers, ranked by measured size
 
-### O1 — `program_config` + L1 input on the four fused-collective matmuls
+### O1 — `program_config` + L1 input on the fused-collective matmuls
 
-**2.96 s of the run (14.7%). Firmest evidence, no algorithmic change.**
+**Firm evidence, no algorithmic change.**
 
-All four are flagged `SLOW` with the identical advisory — *input 0 in `DEV_0_DRAM_INTERLEAVED`, no
-`program_config` specified*:
+The block's fused-collective (all-gather) matmuls are flagged `SLOW` with the identical advisory —
+*input 0 in `DEV_0_DRAM_INTERLEAVED`, no `program_config` specified*:
 
-| shape | ms | % block | DRAM % | FLOPs % | what it is |
-|---|---|---|---|---|---|
-| 14400 x 1344 x 7168 | 5.89 | 8.7% | **9.0%** | 15.2% | `to_gate_compress` (5376->7168), the VSA gate |
-| 14400 x 1344 x 5376 | 3.81 | 5.6% | 12.9% | 17.6% | |
-| 14400 x 1792 x 1344 | 2.85 | 4.2% | 19.0% | 7.9% | |
-| 14400 x 1344 x 1792 | 2.22 | 3.3% | 18.7% | 10.1% | |
+| shape | ms | % block | DRAM % | FLOPs % |
+|---|---|---|---|---|
+| 14400 x 1344 x 5376 | 3.81 | 5.6% | 12.9% | 17.6% |
+| 14400 x 1792 x 1344 | 2.85 | 4.2% | 19.0% | 7.9% |
+| 14400 x 1344 x 1792 | 2.22 | 3.3% | 18.7% | 10.1% |
 
 9-19% DRAM utilization on 112 cores. This is the same untuned-matmul diagnosis `MiniMaxH3.md`
-records for the VAE decoder (O3), in a stage with a **3x larger denominator**. Start with the
-14400 x 1344 x 7168 gate projection: 8.7% of every block at 9.0% DRAM is the worst offender.
+records for the VAE decoder (O4), in the denoise stage with a larger denominator.
 
 Leave `MinimalMatmulStridedReduceScatterAsync 14400 x 3584 x 5376` alone — 125.8% FLOPs at HiFi4,
 reported "Optimized".
-
-### O2 — The VSA fine-stage SDPA
-
-**3.96 s of the run (19.7%). Biggest single row, hardest to move.**
-
-`VsaSdpaOperation`, 21.52 ms/block on 120 cores, running the v19 leader/worker streaming program
-factory (`ttnn/cpp/.../device/vsa_sdpa_stream_program_factory.cpp`). No easy config lever; this is
-kernel work.
-
-**The "is the sparsity actually exploited" question is answered, and the answer is that this row is
-near its structural floor.** `VSA_STREAM_DESIGN.md` section 4 measures the kernel at 23-25% of HiFi2
-peak on the listed math with a per-TRISC busy of PACK 93% / MATH 89% / UNPACK 87%, and localizes the
-floor: at head dim 128 a 64-key visit's ~1024 FPU cycles are matched by ~1.1k cycles of SFPU exp plus
-~0.9k of max/corr/rescale/sum that dense pays once per 512 keys. A row lists ~1 block in 9, so a
-12-slot window averages ~1.3-2.4 selected blocks and the bookkeeping cannot amortise. Practical
-ceiling of the design is ~26-28%, ~30% with every remaining pack/unpack trim. The levers already
-measured and closed there: rows-for-depth, MOP PV, conditional rescale, q-tile pairing, selective K/V
-gather, fp32 DEST, and the v18 distributed-window kernel (2x slower, NoC-bound).
-
-What remains is a *granularity* change, not a tuning one: a 256-token VSA block would amortise every
-per-visit cost 4x, but it changes the model's selection granularity and needs a quality gate.
-
-### O3 — Layout thrash inside the block
-
-**Largely closed by the port: TM/layout device time ~10.0 -> ~4.4 ms, sub-20 us ops 47 -> 31.**
-
-The original finding was that 86% of the block's 4.53 ms op-to-op gap (3.91 ms) sat behind 47 ops with
-under 20 us of device time — `UntilizeWithUnpadding` / `TilizeWithValPadding` / `Slice` at 1-5 us each
-with 140-190 us gaps — plus ~6.1 ms of TM device time. Moving the coarse stage's index assembly onto
-the device removed the concat / tilize / int32-blend / typecast / untilize chain outright (`Concat`
-0.95 -> 0 ms).
-
-What is left is **9 `Transpose` at 1.20 ms and `NlpCreateHeads` 0.61 / `Ternary` 0.53 /
-`NLPConcatHeads` 0.32**, and 31 sub-20 us ops still paying full dispatch latency. `VSA_README.md`
-names the transposes as foldable into the pooling layout (~3 ms of the coarse stage at 15 s, of which
-0.9 ms is the DRAM-bound transposes). Right-sized as the next cleanup, not a perf project.
 
 ### O4 — Tune the VAE decoder's linears
 
@@ -162,21 +82,13 @@ path, and callers must branch on `MiniMaxH3Output.video_format`. **The open item
 the knob** — until a pixel-comparing gate runs against yuv420, the 24% is only available to callers
 who know to ask.
 
-### O6 — Overlap the VSA K/V all-gather: blocked by sub-device ownership
+### O6 — Second-command-queue overlap: blocked by sub-device ownership
 
-**1.68 s of the run (8.4%). Tuning is settled — it is link-bound; only overlap is left.**
-
-`AllGatherAsyncDeviceOperation`, 8.40 ms/block. `VSA_STREAM_DESIGN.md` section 5a swept every
-`all_gather_async` configuration (Ring/Linear, persistent vs barrier semaphores, chunks_per_sync,
-workers_per_link, buffers, and the generic `ttnn.all_gather`): a device receives 7 x 51.8 MB = 363 MB
-per gather and the best configuration moves it at **87-93 GB/s, ~90% of 2 x 50 GB/s**. Ring is 1.9x
-Linear; nothing else moves it, and the axis has only 2 ethernet channels so `--num-links 4` is not
-available. The serial time cannot be tuned away.
-
-The second-command-queue overlap **does not work**, and the reason is the dispatch model, not the
-fabric. Job 908: a 4x8 ring-fabric mesh opens fine with `num_command_queues=2` on Blackhole (the
-`ACTIVE_ETH` worry was unfounded), and `all_gather` alone measures 4.53 ms against 12.54 ms of filler
-matmuls. But issuing the gather on CQ1 and compute on CQ0 aborts:
+The general obstacle to hiding any block-level collective behind compute on a second command queue is
+the dispatch model, not the fabric. Job 908: a 4x8 ring-fabric mesh opens fine with
+`num_command_queues=2` on Blackhole (the `ACTIVE_ETH` worry was unfounded), and `all_gather` alone
+measures 4.53 ms against 12.54 ms of filler matmuls. But issuing the gather on CQ1 and compute on CQ0
+aborts:
 
     TT_FATAL: Sub device id 0 currently in use by cq 1. Can't enqueue program from cq 0.
               Finish or wait for an event to transfer ownership.
@@ -189,14 +101,8 @@ serialization, which is the opposite of the goal.
 
 Unblocking it needs **disjoint sub-devices**: CCL cores in one, compute cores in another, so the two
 queues own separate sub-devices. `CCLManager._init_subdevice` and the AGMM grid's reserved CCL core
-column mean the spatial split is half-built already. Sizing first, though: the hideable window is not
-the full 8.40 ms. The gather's result is needed by `vsa_sdpa`, and between them sit the coarse stage
-(~3.9 ms, of which ~0.5 ms is itself collective) and the independent gate branch (2.93 ms) — so ~6.3
-ms, about 1.0-1.3 s of the run. A model-wide sub-device partition for 5-6% is a poor trade until
-something else needs the same infrastructure.
-
-The other structural option is unchanged: stream remote blocks inside the kernel over the fabric.
-Selective gather stays dropped — a device needs 79% of the sequence on average.
+column mean the spatial split is half-built already. A model-wide sub-device partition is a large
+change; size the hideable window against a specific collective before committing to it.
 
 ### O7 — The six AdaLN table gathers
 
@@ -230,7 +136,7 @@ variance band at this working point.
 
 ### O11 — Hoist the token refiner out of the step loop
 
-`transformer_minimax_h3.py:509` runs `token_refiner(context_embedder(prompt))` every step; it is
+`transformer_minimax_h3.py` runs `token_refiner(context_embedder(prompt))` every step; it is
 step-invariant (no AdaLN, no rotary, no mask). 2 blocks over ~48 rows against 50 blocks over 14400
 rows/device. Free to hoist, ~0.4%.
 
@@ -238,38 +144,14 @@ rows/device. Free to hoist, ~0.4%.
 
 ### S1 — The ROW_MAJOR packing path is not where the time is
 
-`transformer_minimax_h3.py:498-550` converts every stream to ROW_MAJOR, concats, pads and tilizes the
+`transformer_minimax_h3.py` converts every stream to ROW_MAJOR, concats, pads and tilizes the
 assembled sequence at full width **before** `mesh_partition`, on every forward. It looked like a free
 8x. It is not worth anything: `50 x 67.78 ms = 3389 ms` against a measured `3387 ms/step` leaves
-nothing outside the block stack. The packing path, `_vsa_gather_rows`, `proj_in`, `mesh_partition`,
-the per-step index uploads and the host scheduler round trip are **collectively inside the noise**.
+nothing outside the block stack. The packing path, `proj_in`, `mesh_partition`, the per-step index
+uploads and the host scheduler round trip are **collectively inside the noise**.
 
 Do not build a full-forward profiled target for this. (A full forward is ~5000 ops and would blow
 Tracy's 1000-op-per-device drop limit anyway.)
-
-### S1b — The VSA gate's matmul blocking: no headroom
-
-`to_gate_compress` (`14400 x 1344 x 1792`, 5.89 ms, the largest of O1's four rows) was the only AGMM
-shape whose `(K, N)` entry came from the divisibility constraints rather than a sweep. Job 905 swept
-it at M=4768, 302 combos, 9m37s:
-
-| combo | us | note |
-|---|---|---|
-| `(8, 7, 7)` sb `(4, 1)` | 746.6 | global best; `default_block_size` forces sb `(2, 2)`, so unreachable |
-| `(8, 7, 10)` sb `(2, 2)` | 752.5 | best reachable |
-| **`(8, 7, 8)` — shipped** | **755.5** | **0.4% off the reachable optimum** |
-| median of 302 | 1157.7 | +55% |
-| worst | 3126.1 | +319% |
-
-Blocking matters enormously for this shape — only 9 of 302 combos land within 2% of best — and the
-by-construction entry is already one of the 9. **There is nothing to win here**; do not re-sweep it.
-
-What remains of O1 is therefore (a) the M=14400 re-sweep for the other three shapes, which is a
-different question (does the optimum move with M?) and needs a top-N re-timing rather than a full
-sweep — one shape at M=14400 extrapolates to ~29 min against the ~1506 s job cap — and (b) getting
-input 0 out of `DEV_0_DRAM_INTERLEAVED`. Note also that an AGMM's device time includes its
-all-gather (~116 MB/device over 2 links), so a meaningful part of these four rows is link-bound
-communication that no blocking change can touch.
 
 ### S1c — Cross-request pipelining: there is no host tail to recover
 
@@ -360,22 +242,18 @@ perf tool.
 
 ## Recommended order
 
-1. **O1** — `program_config` + L1 input 0 on the four fused-collective matmuls, gate projection
-   first. 2.96 s, firm diagnosis, no algorithmic risk. Now 24.4% of the block and the single largest
-   lever by a wide margin; O2 is bigger on paper but is at its structural floor.
-2. **O6's overlap** — the K/V all-gather on a second command queue behind the coarse stage. Tuning is
-   settled (link-bound at ~90% of line rate), so overlap is the only move: ~8 ms/block, 1.68 s.
-3. **O5** — pixel-comparing gate on yuv420 so the 24% becomes the default.
-4. **O4 / O7** — few hundred ms, 1.06 s.
-5. **O3's remainder** — fold the coarse stage's 9 transposes into the pooling layout, ~1 ms/block.
-6. **O8** — free, do it now.
-7. Everything else is at or below the ±8% variance band.
+1. **O1** — `program_config` + L1 input 0 on the fused-collective matmuls. Firm diagnosis, no
+   algorithmic risk.
+2. **O5** — pixel-comparing gate on yuv420 so the 24% becomes the default.
+3. **O4 / O7** — few hundred ms, 1.06 s.
+4. **O8** — free, do it now.
+5. Everything else is at or below the ±8% variance band.
 
 ## Profiling recipe
 
 ```bash
 scripts/run_safe_pytest.sh --profile \
-  models/tt_dit/tests/models/minimax_h3/test_vsa_performance_minimax_h3.py -k 15s_768p
+  models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py -k 15s_768p
 python_env/bin/tt-perf-report <csv> --start-signpost start --end-signpost stop
 ```
 

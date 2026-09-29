@@ -225,7 +225,7 @@ grid, and interval `(t, r)` conditioning with a blend gate. Then the step count 
 weights rather than a request parameter: `num_inference_steps` is refused unless it equals the grid's,
 and every step is conditioned on the interval it integrates instead of on the point it starts from.
 Because `time_embedder` is host-side under `precomputed_adaln`, that is entirely a change to the table
-build -- no device-side model change and no effect on tracing or VSA. See
+build -- no device-side model change and no effect on tracing. See
 `pipelines/minimax_h3/hyperflow_minimax_h3.py` for the header format.
 
 ```bash

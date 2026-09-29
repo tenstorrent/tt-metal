@@ -166,22 +166,12 @@ SHAPES = [
     (4768, 5376, 5376, 12, 9, True, "qkv"),
     (4768, 7168, 1344, 12, 9, True, "plain"),
     (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
-    #   to_gate_compress  K_tiles_per_device = 42, chunks=1, no fused activation. At the M the other
-    # three were swept at: the (K, N) table takes this entry from the divisibility constraints alone,
-    # so it is the only shape in the group whose blocking has never met a sweep. Swept here rather
-    # than only at M=14400 because per-combo compile and device time both grow with M, and the table
-    # is (K, N)-keyed so an optimum found at any M applies at every duration.
-    (4768, 5376, 1792, 12, 9, True, "plain"),
-    # The same three at M=14400, the per-device length of a 15s VSA request (1800 tiles), plus
-    # to_gate_compress, which VSA adds and which no sweep has ever covered. Both halves of the
-    # (K, N)-only keying above are assumptions worth checking here: that M does not move the best
-    # block shape (these rows are 3x the M the entries were chosen at), and that a shape picked
-    # from the divisibility constraints alone is near the sweep optimum (the gate).
-    #   to_gate_compress  K_tiles_per_device = 42, chunks=1, no fused activation
+    # The same three at M=14400, the per-device length of a 15s request (1800 tiles). The (K, N)-only
+    # keying above is an assumption worth checking here: that M does not move the best block shape
+    # (these rows are 3x the M the entries were chosen at).
     (14400, 5376, 5376, 12, 9, True, "qkv"),
     (14400, 7168, 1344, 12, 9, True, "plain"),
     (14400, 5376, 7168, 12, 9, True, "ff1_swiglu"),
-    (14400, 5376, 1792, 12, 9, True, "plain"),
     # MiniMax-H3 *visual VAE* decoder: a 36-layer ViT, dim 2048, one 256 px tile per device. Its
     # forward runs no CCL, so these are plain single-device matmuls on the 11x10 grid
     # `get_matmul_core_grid` clamps a BH Galaxy to. M = 1824 is fixed by the architecture, not the

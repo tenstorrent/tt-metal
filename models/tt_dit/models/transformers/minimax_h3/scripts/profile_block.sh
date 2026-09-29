@@ -1,20 +1,18 @@
 #!/bin/bash
-# Tracy device-time profile of one MiniMax-H3 transformer block, dense vs VSA, at 5/10/15 s 768p on a
-# 4x8 Blackhole Galaxy. One profiled pytest per (mode, duration): a multi-param profiled run only keeps
-# the first param's ops.
+# Tracy device-time profile of one MiniMax-H3 transformer block at 5/10/15 s 768p on a 4x8 Blackhole
+# Galaxy. One profiled pytest per duration: a multi-param profiled run only keeps the first param's ops.
 #
-#   MODES="dense vsa" DURS="5 10 15" OUT=/path/to/dir models/tt_dit/models/transformers/minimax_h3/scripts/profile_block.sh
+#   DURS="5 10 15" OUT=/path/to/dir models/tt_dit/models/transformers/minimax_h3/scripts/profile_block.sh
 #
-# Writes <OUT>/<mode>_<dur>s.csv (tt-perf-report input) and <OUT>/<mode>_<dur>s.report.txt.
-# Note the block-level numbers are for a single warm block; sustained runs power-throttle the dense
-# block (see VSA_STREAM_DESIGN.md 8), so compare dense vs VSA end to end as well.
+# Writes <OUT>/dense_<dur>s.csv (tt-perf-report input) and <OUT>/dense_<dur>s.report.txt.
+# Note the block-level numbers are for a single warm block; sustained runs power-throttle the block.
 set -uo pipefail
 REPO=$(cd "$(dirname "$0")/../../../../../.." && pwd)
 cd "$REPO"
 export TT_METAL_HOME="$REPO"
 export PYTHONPATH="$REPO"
 export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$REPO/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto}"
-OUT="${OUT:-$REPO/generated/vsa_block_perf}"
+OUT="${OUT:-$REPO/generated/block_perf}"
 mkdir -p "$OUT"
 REPORTS="$REPO/generated/profiler/reports"
 run_one() {
@@ -36,14 +34,7 @@ run_one() {
     tail -5 "$OUT/$label.report.txt"
 }
 DENSE=models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf
-VSA=models/tt_dit/tests/models/minimax_h3/test_vsa_performance_minimax_h3.py::test_minimax_h3_vsa_block_perf
 for dur in ${DURS:-5 10 15}; do
-    for mode in ${MODES:-dense vsa}; do
-        if [[ "$mode" == dense ]]; then
-            run_one "dense_${dur}s" "$DENSE[blackhole-sp_sim1-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
-        else
-            run_one "vsa_${dur}s" "$VSA[blackhole-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
-        fi
-    done
+    run_one "dense_${dur}s" "$DENSE[blackhole-sp_sim1-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
 done
 echo "PERF_SWEEP_DONE"

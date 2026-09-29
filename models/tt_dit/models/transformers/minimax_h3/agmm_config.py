@@ -101,11 +101,6 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 10): (10, 8, 6),
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
-    # (5376, 1792) attention to_gate_compress (VSA) is deliberately absent. Its sweep at M = 4768
-    # put the global best at (8, 7, 7) with subblock (4, 1) -- 746.6 us against 755.5 us for the
-    # best combo at subblock (2, 2), which is all a `default_block_size` can be (it forces (2, 2),
-    # and 7 is not divisible by subblock_w = 2). The v3 rules emit an explicit subblock, so leaving
-    # this shape to them lands the sweep's actual winner instead of the expressible runner-up.
 }
 
 
