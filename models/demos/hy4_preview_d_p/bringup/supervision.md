@@ -18,3 +18,18 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   MTP block after the layer subset). Removed checkpoint.trim_drop from the spec; R.4 now keeps layers 0-5, every
   non-layer tensor and model.mtp_layers.* (~20 GB). The spec edit voided the intake approval; re-approved on the
   owner's word.
+- 2026-09-29 01:45: full BF16 download complete (131/131 shards, 1.5 TB; 588 GB free). run1 launched (orchestrator in
+  the background, log /localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/orchestrator.log). R.1 PASS 1ba084cc58f.
+- 2026-09-29 02:30-02:57 R.2 attempt 1: HF sanity first gave smoke "Paris" but text_top1_acc 0.237 (MiMo 0.955). Owner:
+  if no bug is found, lower the floor to 0.2. The agent found one: the transformers 5.17 hy_v4 port uses rotate-half
+  RoPE, but SGLang serves Hy4 with interleaved RoPE (configs/hy_v4.py hardcodes rope_interleave = True and
+  indexer_rope_interleave = True; checked by the overseer). With the fix in its HF copy, accuracy 0.965. Floor left
+  at 0.4; no spec change.
+- 2026-09-29 03:40 owner delegated approvals and board resets: "can you just take over resetting the board, approving
+  the spec etc". Overseer now approves the plan, the perf picks and op requests, and resets the board (only with no
+  other device job running). Still asked: pushes and launching op-gen.
+- 03:51 R.2 PASS 0f409282718 (attempt 1): acc 0.965, smoke ok, parity PCC 1.0 on L0-5 and logits. Reviewed: the
+  reference (hy4_ref.py) is standalone (weights read directly, no HF import); the RoPE fix is in both the vendored
+  oracle (marked) and the reference, with a finding (R2-hf-rope-interleaved). Accepted.
+- R.4 PASS 704c7d08b3e: checkpoint trimmed 1.5 TB -> 116 GB (1436 GB freed, 188 tensors kept incl. 27 MTP, 0 verify
+  errors). R.3 PASS 6eb263e888b on the precheck (chunked == one-shot, graph replay exact). Dashboards republished.
