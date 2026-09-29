@@ -11,8 +11,9 @@
     -> send-back over the dispatch axis (2 rows: exchange through high_bw_all_gather + add; else reduce_scatter)
     -> all-reduce over the mesh columns (high_bw_all_gather + add) -> [1, 1, chunk_size_per_chip, H] replicated.
 
-Kernels: tt/kernels/moe_ag/ (generic_op; one program for the whole mesh, per-device data through small per-device
-tensors: the local-slot map and the chip's row).
+Device programs: the ttnn.experimental.deepseek_prefill.moe_ag_* ops (C++, ttnn/cpp/ttnn/operations/experimental/
+deepseek_prefill/moe_ag; one program for the whole mesh, per-device data through small per-device tensors: the local-slot
+map and the chip's row).
 """
 
 import torch
@@ -20,22 +21,8 @@ import torch
 import ttnn
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
-KDIR = "models/demos/mimo_v2_d_p/tt/kernels/moe_ag"
 NONE = 0xFFFFFFFF
-
-
-def _crs(cores):
-    from models.demos.mimo_v2_d_p.tt.flat_expert import crs_rects
-
-    return crs_rects(cores)
-
-
-def grid_cores(mesh_device, n):
-    """The first n logical worker cores, row major (y outer)."""
-    g = mesh_device.compute_with_storage_grid_size()
-    cores = [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)]
-    assert n <= len(cores), (n, len(cores))
-    return cores[:n]
+_ops = ttnn.experimental.deepseek_prefill
 
 
 def _dram(mesh_device, shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT):
@@ -55,14 +42,6 @@ def _per_device(mesh_device, per_dev, dtype):
     )
 
 
-def _cb(i, size, crs, page=None):
-    return ttnn.CBDescriptor(
-        total_size=size,
-        core_ranges=crs,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.uint32, page_size=page or size)],
-    )
-
-
 def _up(v, a):
     return -(-v // a) * a
 
@@ -71,12 +50,9 @@ class RoutePlan:
     """Gathered top-k indices [T, K] uint16 -> counts / regions [1, NG], token_index [1, rows], y_slot [1, T * K]
     (uint32, DRAM, persistent). gids[d]: device d's (row-major mesh order) local experts' global ids, local order."""
 
-    def __init__(self, mesh_device, *, tokens, k, n_global, gids, rows, num_cores=64):
-        self.dev = mesh_device
+    def __init__(self, mesh_device, *, tokens, k, n_global, gids, rows):
         self.T, self.K, self.NG, self.rows = tokens, k, n_global, rows
         self.EPC = len(gids[0])
-        self.R = num_cores  # an 8 x 8 rectangle: the histogram table is multicast over it
-        assert self.EPC <= self.R == 64
         mr, mc = tuple(mesh_device.shape)
         lmap = torch.full((mr * mc, n_global), NONE, dtype=torch.int64)
         for d, gl in enumerate(gids):
@@ -87,51 +63,12 @@ class RoutePlan:
         self.regions = _dram(mesh_device, [1, n_global], ttnn.uint32)
         self.token_index = _dram(mesh_device, [1, rows], ttnn.uint32)
         self.y_slot = _dram(mesh_device, [1, tokens * k], ttnn.uint32)
-        self._prog = {}
-
-    def _program(self, idx):
-        R, EPC, NG, K, T = self.R, self.EPC, self.NG, self.K, self.T
-        cores = [ttnn.CoreCoord(x, y) for y in range(8) for x in range(8)]
-        crs = _crs(cores)
-        npr = _up(-(-T // R), 2)  # tokens per range (even: 64 B aligned y_slot blocks)
-        IDX_STRIDE = 64
-        phys = [self.dev.worker_core_from_logical_core(c) for c in cores]
-        xy = [(p.x << 16) | p.y for p in phys]
-        addrs = [
-            idx.buffer_address(),
-            self.lmap.buffer_address(),
-            self.counts.buffer_address(),
-            self.regions.buffer_address(),
-            self.token_index.buffer_address(),
-            self.y_slot.buffer_address(),
-        ]
-        cbs = [
-            _cb(0, max(64, npr * IDX_STRIDE), crs),
-            _cb(1, NG * 4, crs),
-            _cb(2, _up(R * 4, 64), crs),
-            _cb(3, _up(3 * EPC * 4, 64), crs),
-            _cb(4, max(64, _up(npr * K * 4, 64)), crs),
-            _cb(5, _up(T, 32) * 4, crs),
-            _cb(6, 2 * NG * 4, crs),
-            _cb(7, _up(EPC * 4 + 16, 64), crs),
-        ]
-        kernel = ttnn.KernelDescriptor(
-            kernel_source=f"{KDIR}/route_plan.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=crs,
-            compile_time_args=[R, EPC, NG, K, IDX_STRIDE, phys[0].x, phys[0].y, phys[-1].x, phys[-1].y],
-            common_runtime_args=addrs + [T, npr, 0] + xy,  # core r (= y * 8 + x) takes tokens [r npr, r npr + npr)
-            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-        )
-        sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in range(6)]
-        return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=sems, cbs=cbs)
 
     def __call__(self, idx):
         """idx: gathered top-k [.., T, K] uint16 row major DRAM. Returns (counts, regions, token_index, y_slot)."""
-        key = idx.buffer_address()
-        if key not in self._prog:
-            self._prog[key] = self._program(idx)
-        ttnn.generic_op([idx, self.lmap, self.counts, self.regions, self.token_index, self.y_slot], self._prog[key])
+        _ops.moe_ag_route_plan(
+            idx, self.lmap, self.EPC, self.rows, outputs=[self.counts, self.regions, self.token_index, self.y_slot]
+        )
         return self.counts, self.regions, self.token_index, self.y_slot
 
     @staticmethod
@@ -172,64 +109,14 @@ def chip_info(mesh_device, chunk_size_per_chip):
     return _per_device(mesh_device, t, ttnn.uint32)
 
 
-def _dm(proc, noc):
-    return ttnn.DataMovementConfigDescriptor(
-        processor=ttnn.DataMovementProcessor.RISCV_0 if proc == 0 else ttnn.DataMovementProcessor.RISCV_1,
-        noc=ttnn.NOC.NOC_0 if noc == 0 else ttnn.NOC.NOC_1,
-    )
-
-
-def _kd(src, crs, ct, common, config, defines=()):
-    """No per-core runtime args: generic_op re-applies every per-core arg on each program-cache hit (~2-4 us per core
-    and kernel on the host); the kernels derive their core index / range from ``common`` (kernels/core_range.hpp)."""
-    return ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/{src}",
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=crs,
-        compile_time_args=ct,
-        common_runtime_args=list(common),
-        defines=list(defines),
-        config=config,
-    )
-
-
-def _tcb(i, tiles, crs, fmt=ttnn.bfloat16, page=2048):
-    return ttnn.CBDescriptor(
-        total_size=tiles * page,
-        core_ranges=crs,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page)],
-    )
-
-
-def _per(total, parts, align=2):
-    """Items per core when ``total`` is split over ``parts`` cores in ``align`` multiples: core i takes
-    [i per, i per + per) clipped to total (kernels/core_range.hpp core_range)."""
-    return _up(-(-total // parts), align)
-
-
-def _grid(mesh_device):
-    """The logical worker grid's cores, row major (core index = y * grid x + x), and grid x."""
-    g = mesh_device.compute_with_storage_grid_size()
-    return [ttnn.CoreCoord(x, y) for y in range(g.y) for x in range(g.x)], g.x
-
-
 class LocalReduce:
     """partial[g] = sum over this chip's local experts of w[g, k] * y[y_slot[g, k]] for the column's T tokens.
-    y: row-major bf16 [rows, H]. split (2 mesh rows): own [S, H] (this chip's row) and other [S, H] (the peer's)."""
+    y: row-major bf16 [rows, H]. split (2 mesh rows): own [S, H] (this chip's row) and other [S, H] (the peer's);
+    tiled (not split): the [T, H] partials as bf16 tiles (the > 2-row reduce-scatter input). Persistent outputs."""
 
-    def __init__(self, mesh_device, *, tokens, k, hidden, chunk_size_per_chip, split, info, pairs_depth=4, tiled=False):
-        self.dev, self.T, self.K, self.H, self.S, self.split, self.info = (
-            mesh_device,
-            tokens,
-            k,
-            hidden,
-            chunk_size_per_chip,
-            split,
-            info,
-        )
-        self.tiled = tiled and not split  # the [T, H] partials as bf16 tiles (the > 2-row reduce-scatter input)
-        self.D = pairs_depth
-        self.cores, self.gx = _grid(mesh_device)
+    def __init__(self, mesh_device, *, tokens, k, hidden, chunk_size_per_chip, split, info, tiled=False):
+        self.T, self.K, self.H, self.S, self.split, self.info = tokens, k, hidden, chunk_size_per_chip, split, info
+        self.tiled = tiled and not split
         rows_out = chunk_size_per_chip if split else tokens
         self.own = _dram(
             mesh_device,
@@ -238,165 +125,34 @@ class LocalReduce:
             ttnn.TILE_LAYOUT if self.tiled else ttnn.ROW_MAJOR_LAYOUT,
         )
         self.other = _dram(mesh_device, [1, 1, rows_out, hidden], ttnn.bfloat16) if split else None
-        self._prog = {}
-
-    def _program(self, y, y_slot, w):
-        T, K, H = self.T, self.K, self.H
-        RB, TILES = H * 2, H // 1024
-        crs = _crs(self.cores)
-        per = _per(T, len(self.cores), 32 if self.tiled else 2)
-        npr = min(per, T)
-        rng = [T, per, self.gx]
-        rrt = [y.buffer_address(), y_slot.buffer_address(), w.buffer_address()] + rng
-        crt = rng
-        wrt = (
-            [self.own.buffer_address()] + rng
-            if self.tiled
-            else [
-                self.own.buffer_address(),
-                self.other.buffer_address() if self.split else 0,
-                self.info.buffer_address(),
-            ]
-            + rng
-        )
-        cbs = [
-            _tcb(0, self.D * TILES, crs),
-            _tcb(1, self.D, crs),
-            _cb(2, 128, crs, page=64),
-            _cb(4, _up(npr * K * 4, 64), crs),
-            _cb(5, _up(npr * 64, 64), crs),
-            _cb(6, RB, crs),
-            _cb(7, 64, crs),
-            _tcb(16, 32 * TILES if self.tiled else 2 * TILES, crs),
-        ] + ([_tcb(24, 32 * TILES, crs)] if self.tiled else [])
-        cc = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
-        kernels = [
-            _kd("reduce_reader.cpp", crs, [K, RB, TILES, 64], rrt, _dm(1, 1)),
-            _kd("reduce_compute_t.cpp" if self.tiled else "reduce_compute.cpp", crs, [TILES], crt, cc),
-            (
-                _kd("reduce_writer_t.cpp", crs, [H // 32], wrt, _dm(0, 0))
-                if self.tiled
-                else _kd("reduce_writer.cpp", crs, [RB, TILES, self.S, int(self.split)], wrt, _dm(0, 0))
-            ),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-
-    def _program2(self, y, y_slot, w, phase, peer):
-        K, H, S = self.K, self.H, self.S
-        RB, TILES = H * 2, H // 1024
-        crs = _crs(self.cores)
-        per = _per(S, len(self.cores))
-        npr = min(per, S)
-        out = self.other if phase == 1 else self.own
-        rrt = [
-            y.buffer_address(),
-            y_slot.buffer_address(),
-            w.buffer_address(),
-            S,
-            per,
-            self.info.buffer_address(),
-            peer.buffer_address() if peer is not None else 0,
-            self.gx,
-        ]
-        crt = [S, per, self.gx]
-        wrt = [out.buffer_address(), 0, 0, S, per, self.gx]
-        cbs = [
-            _tcb(0, self.D * TILES, crs),
-            _tcb(1, self.D, crs),
-            _cb(2, 128, crs, page=64),
-            _cb(4, _up(npr * K * 4, 64), crs),
-            _cb(5, _up(npr * 64, 64), crs),
-            _cb(6, RB, crs),
-            _cb(7, 64, crs),
-            _tcb(16, 2 * TILES, crs),
-        ]
-        kernels = [
-            _kd("reduce2_reader.cpp", crs, [K, RB, TILES, 64, phase], rrt, _dm(1, 1)),
-            _kd(
-                "reduce_compute.cpp",
-                crs,
-                [TILES],
-                crt,
-                ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
-            ),
-            _kd("reduce_writer.cpp", crs, [RB, TILES, 1, 0], wrt, _dm(0, 0)),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
     def phase(self, y, y_slot, w, phase, peer=None):
         """Two mesh rows, fused send-back: phase 1 reduces the other row's tokens into ``other``; phase 2 this row's
         tokens plus the peer's gathered phase-1 partial (``peer`` [2 S, H]) into ``own``."""
         assert self.split
-        key = (
-            phase,
-            y.buffer_address(),
-            y_slot.buffer_address(),
-            w.buffer_address(),
-            peer.buffer_address() if peer is not None else 0,
-        )
-        if key not in self._prog:
-            if len(self._prog) > 16:
-                self._prog.clear()
-            self._prog[key] = self._program2(y, y_slot, w, phase, peer)
-        io = [y, y_slot, w, self.info] + ([peer] if peer is not None else []) + [self.other if phase == 1 else self.own]
-        ttnn.generic_op(io, self._prog[key])
-        return self.other if phase == 1 else self.own
+        out = self.other if phase == 1 else self.own
+        _ops.moe_ag_local_reduce(y, y_slot, w, self.info, self.S, phase=phase, peer=peer, outputs=[out])
+        return out
 
     def __call__(self, y, y_slot, w):
         """y row-major bf16 [.., rows, H], y_slot [1, T K] uint32, w gathered weights [.., T, K] bf16 row major."""
-        key = (y.buffer_address(), y_slot.buffer_address(), w.buffer_address())
-        if key not in self._prog:
-            if len(self._prog) > 16:
-                self._prog.clear()
-            self._prog[key] = self._program(y, y_slot, w)
-        ttnn.generic_op([y, y_slot, w, self.info, self.own] + ([self.other] if self.split else []), self._prog[key])
+        outs = [self.own, self.other] if self.split else [self.own]
+        _ops.moe_ag_local_reduce(y, y_slot, w, self.info, self.S, split=self.split, tiled=self.tiled, outputs=outs)
         return (self.own, self.other) if self.split else self.own
 
 
 class AddRows:
-    """out[i] = a[a_off + i] + b[b_off + i] for i < n rows (row-major bf16, width H); b_off per device from the chip
-    info (word 1) when info_offset, else a constant."""
+    """out[i] = a[a_off + i] + b[b_off + i] for i < n rows (row-major bf16, width H) into a persistent row-major
+    [1, 1, n, H]; b_off per device from the chip info (word 1) when info_offset, else a constant."""
 
-    def __init__(self, mesh_device, *, n_rows, hidden, info, batch=2):
-        self.dev, self.n, self.H, self.info, self.B = mesh_device, n_rows, hidden, info, batch
-        self.cores, self.gx = _grid(mesh_device)
+    def __init__(self, mesh_device, *, n_rows, hidden, info):
+        self.n, self.info = n_rows, info
         self.out = _dram(mesh_device, [1, 1, n_rows, hidden], ttnn.bfloat16)
-        self._prog = {}
-
-    def _program(self, a, b, a_off, b_off, info_offset):
-        RB, TILES = self.H * 2, self.H // 1024
-        crs = _crs(self.cores)
-        rng = [self.n, _per(self.n, len(self.cores), 1)]
-        rrt = [a.buffer_address(), b.buffer_address(), self.info.buffer_address()] + rng + [b_off, a_off, self.gx]
-        crt = rng + [self.gx]
-        wrt = [self.out.buffer_address(), 0, 0] + rng + [self.gx]
-        cbs = [
-            _tcb(0, 2 * self.B * TILES, crs),
-            _tcb(1, 2 * self.B * TILES, crs),
-            _cb(7, 64, crs),
-            _tcb(16, 2 * TILES, crs),
-        ]
-        kernels = [
-            _kd("add_reader.cpp", crs, [RB, TILES, int(info_offset), self.B], rrt, _dm(1, 1)),
-            _kd(
-                "add_compute.cpp",
-                crs,
-                [TILES],
-                crt,
-                ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
-            ),
-            _kd("reduce_writer.cpp", crs, [RB, TILES, 1, 0], wrt, _dm(0, 0)),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
     def __call__(self, a, b, *, a_off=0, b_off=0, info_offset=False):
-        key = (a.buffer_address(), b.buffer_address(), a_off, b_off, info_offset)
-        if key not in self._prog:
-            if len(self._prog) > 16:
-                self._prog.clear()
-            self._prog[key] = self._program(a, b, a_off, b_off, info_offset)
-        ttnn.generic_op([a, b, self.info, self.out], self._prog[key])
-        return self.out
+        return _ops.moe_ag_add_rows(
+            a, b, self.info, self.n, a_offset=a_off, b_offset=b_off, info_offset=info_offset, output=self.out
+        )
 
 
 _BLOCKS = {}
@@ -430,7 +186,6 @@ class MoeAgBlock:
         # expert reads it with x_pages_per_row = 4). Default 1: one 8 KB page per token row.
         self.xppr = options.moe_ag_x_pages_per_row
         assert self.xppr in (1, H // 1024), self.xppr
-        self.untilize_x = UntilizeX(mesh_device, rows=S, hidden=H) if self.xppr > 1 else None
         if rows > 1:
             self.gx = _dram(mesh_device, [1, 1, T * self.xppr, H // self.xppr])
             self.gidx = _dram(mesh_device, [1, 1, T, k], ttnn.uint16)
@@ -458,11 +213,6 @@ class MoeAgBlock:
             self.ex = AddRows(mesh_device, n_rows=S, hidden=H, info=self.info)
         if cols > 1 and self.tp_mode == "hbw":
             self.g_tp = _dram(mesh_device, [1, 1, cols * S, H])
-            self.tp = (
-                AddRowsTiled(mesh_device, n_rows=S, hidden=H)
-                if cols == 2
-                else SumBlocksTiled(mesh_device, n_rows=S, hidden=H, n_blocks=cols)
-            )
         # y_row_major (default): the flat expert writes y as row-major bf16 itself (pack-untilized on its down cores),
         # so no untilize pass and no [rows, H] untilized copy; False: bfp8 tiles + UntilizeActive
         self.y_rm = options.moe_ag_y_row_major
@@ -476,6 +226,12 @@ class MoeAgBlock:
             W=options.untilize_width,
         )
 
+    def tp(self, g_tp):
+        """The gathered column partials [cols S, H] -> their sum as a fresh bf16 TILE [1, 1, S, H]."""
+        if self.cols == 2:
+            return add_rows_tiled(g_tp, n_rows=self.S, b_off=self.S)
+        return sum_blocks_tiled(g_tp, n_rows=self.S, n_blocks=self.cols)
+
     def _ag(self, x, out, axis):
         return ttnn.experimental.high_bw_all_gather(
             x, dim=2, output_tensor=out, cluster_axis=axis, num_links=self.links
@@ -483,7 +239,7 @@ class MoeAgBlock:
 
     def to_rm(self, x):
         """x [1, 1, S, H] bf16 TILE -> the row-major layout the gather takes ([1, 1, S xppr, H / xppr])."""
-        return self.untilize_x(x) if self.untilize_x is not None else ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        return untilize_x(x) if self.xppr > 1 else ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def gather(self, x_rm, idx, w):
         """x_rm (``to_rm``), idx [1, 1, S, K] uint16 RM, w [1, 1, S, K] bf16 RM -> the column's T tokens."""
@@ -564,182 +320,34 @@ class MoeAgBlock:
             ttnn.deallocate(col)
             col = rm
         self._ag(col, self.g_tp, 1)
-        return self.tp(self.g_tp, self.g_tp, b_off=self.S) if self.cols == 2 else self.tp(self.g_tp)
+        return self.tp(self.g_tp)
 
 
 class UntilizeActive:
-    """y bfp8 TILE [rows, H] -> y_rm bf16 RM [rows, H], only the tile rows that hold tokens (each local expert's
-    ceil(count / 32) tile rows at its region; counts / regions read on device)."""
+    """y bfp8 TILE [rows, H] -> y_rm bf16 RM [rows, H] (persistent), only the tile rows that hold tokens (each local
+    expert's ceil(count / 32) tile rows at its region; counts / regions read on device)."""
 
     def __init__(self, mesh_device, *, rows, hidden, n_global, epc, lmap, W=32):
-        self.dev, self.rows, self.H, self.NG, self.EPC, self.lmap, self.W = (
-            mesh_device,
-            rows,
-            hidden,
-            n_global,
-            epc,
-            lmap,
-            W,
-        )
-        self.cores, self.gx = _grid(mesh_device)
+        self.lmap, self.EPC, self.W = lmap, epc, W
         self.out = _dram(mesh_device, [rows, hidden])
-        self._prog = {}
-
-    def _program(self, y, counts, regions):
-        P, W, NCH = len(self.cores), self.W, self.H // (32 * self.W)
-        crs = _crs(self.cores)
-        common = [counts.buffer_address(), regions.buffer_address(), self.lmap.buffer_address(), self.gx]
-        rrt = [y.buffer_address()] + common
-        wrt = [self.out.buffer_address()] + common
-        cbs = [
-            _tcb(0, 2 * W, crs, ttnn.bfloat8_b, 1088),
-            _cb(2, 64, crs),
-            _cb(4, 3 * self.NG * 4, crs),
-            _cb(5, 3 * self.NG * 4, crs),
-            _tcb(16, 2 * W, crs),
-        ]
-        kernels = [
-            _kd("untilize_reader.cpp", crs, [self.NG, self.EPC, 1088, W, NCH, P], rrt, _dm(1, 1)),
-            _kd("untilize_compute.cpp", crs, [W], [], ttnn.ComputeConfigDescriptor()),
-            _kd("untilize_writer.cpp", crs, [self.NG, self.EPC, W, NCH, P], wrt, _dm(0, 0)),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
     def __call__(self, y, counts, regions):
-        key = (y.buffer_address(), counts.buffer_address(), regions.buffer_address())
-        if key not in self._prog:
-            if len(self._prog) > 16:
-                self._prog.clear()
-            self._prog[key] = self._program(y, counts, regions)
-        ttnn.generic_op([y, counts, regions, self.lmap, self.out], self._prog[key])
-        return self.out
-
-
-class AddRowsTiled:
-    """out[r] = a[a_off + r] + b[b_off + r] for r < n rows (row-major bf16 inputs, width H) -> a fresh bf16 TILE
-    [1, 1, n, H] tensor (the add and the tilize in one pass)."""
-
-    def __init__(self, mesh_device, *, n_rows, hidden):
-        assert n_rows % 32 == 0 and hidden % 1024 == 0
-        self.dev, self.n, self.H = mesh_device, n_rows, hidden
-        self.cores, self.gx = _grid(mesh_device)
-        self._prog = {}
-
-    def _program(self, a, b, out, a_off, b_off):
-        P, NCH = len(self.cores), self.H // 1024
-        blocks = self.n // 32 * NCH
-        crs = _crs(self.cores)
-        rrt = [a.buffer_address(), b.buffer_address(), a_off, b_off, blocks, self.gx]
-        crt = [blocks, P, self.gx]
-        wrt = [out.buffer_address(), blocks, self.gx]
-        cbs = [_tcb(0, 64, crs), _tcb(1, 64, crs), _tcb(24, 32, crs), _tcb(16, 64, crs)]
-        kernels = [
-            _kd("addt_reader.cpp", crs, [self.H * 2, NCH, P], rrt, _dm(1, 1)),
-            _kd(
-                "addt_compute.cpp",
-                crs,
-                [],
-                crt,
-                ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
-            ),
-            _kd("addt_writer.cpp", crs, [NCH, P, self.H // 32], wrt, _dm(0, 0)),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-
-    def __call__(self, a, b, *, a_off=0, b_off=0):
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, self.n, self.H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.dev, ttnn.DRAM_MEMORY_CONFIG
+        return _ops.moe_ag_untilize_active(
+            y, counts, regions, self.lmap, self.EPC, tiles_per_block=self.W, output=self.out
         )
-        key = (a.buffer_address(), b.buffer_address(), out.buffer_address(), a_off, b_off)
-        if key not in self._prog:
-            if len(self._prog) > 32:
-                self._prog.clear()
-            self._prog[key] = self._program(a, b, out, a_off, b_off)
-        ttnn.generic_op([a, b, out], self._prog[key])
-        return out
 
 
-class UntilizeX:
-    """x bf16 TILE [1, 1, S, H] -> row-major [1, 1, S * H / 1024, 1024] (2 KB pages: token row g = pages
-    NCH g .. NCH g + NCH - 1), the gathered-x page layout (spreads a token's reads over NCH DRAM banks)."""
-
-    def __init__(self, mesh_device, *, rows, hidden):
-        self.dev, self.rows, self.H = mesh_device, rows, hidden
-        self.NCH = hidden // 1024
-        self.cores, self.gx = _grid(mesh_device)
-        self._prog = {}
-
-    def _program(self, x, out):
-        P, NCH = len(self.cores), self.NCH
-        blocks = self.rows // 32 * NCH
-        crs = _crs(self.cores)
-        rrt = [x.buffer_address(), blocks, self.gx]
-        wrt = [out.buffer_address(), blocks, self.gx]
-        cbs = [_tcb(0, 64, crs), _cb(2, 64, crs), _tcb(16, 64, crs)]
-        kernels = [
-            _kd("untilize_x_reader.cpp", crs, [2048, NCH, P], rrt, _dm(1, 1)),
-            _kd("untilize_compute.cpp", crs, [32], [], ttnn.ComputeConfigDescriptor()),
-            _kd("untilize_x_writer.cpp", crs, [NCH, P], wrt, _dm(0, 0)),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-
-    def __call__(self, x):
-        assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16 and x.shape[-2] == self.rows, x
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, self.rows * self.NCH, 1024]),
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.dev,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-        key = (x.buffer_address(), out.buffer_address())
-        if key not in self._prog:
-            if len(self._prog) > 32:
-                self._prog.clear()
-            self._prog[key] = self._program(x, out)
-        ttnn.generic_op([x, out], self._prog[key])
-        return out
+def add_rows_tiled(src, *, n_rows, b_off):
+    """out[r] = src[r] + src[b_off + r] for r < n_rows -> a fresh bf16 TILE [1, 1, n_rows, H] (add + tilize)."""
+    return _ops.moe_ag_sum_rows_tiled(src, n_rows, 2, b_off)
 
 
-class SumBlocksTiled:
-    """out[r] = sum_{i < N} src[i * S + r] for r < S (row-major bf16 src [N * S, H], e.g. a gather over N chips) ->
-    a fresh bf16 TILE [1, 1, S, H] tensor (the sum and the tilize in one pass)."""
+def sum_blocks_tiled(src, *, n_rows, n_blocks):
+    """out[r] = sum_{i < n_blocks} src[i n_rows + r] (e.g. a gather over n_blocks chips) -> a fresh bf16 TILE."""
+    return _ops.moe_ag_sum_rows_tiled(src, n_rows, n_blocks, n_rows)
 
-    def __init__(self, mesh_device, *, n_rows, hidden, n_blocks):
-        assert n_rows % 32 == 0 and hidden % 1024 == 0
-        self.dev, self.n, self.H, self.N = mesh_device, n_rows, hidden, n_blocks
-        self.cores, self.gx = _grid(mesh_device)
-        self._prog = {}
 
-    def _program(self, src, out):
-        P, NCH = len(self.cores), self.H // 1024
-        blocks = self.n // 32 * NCH
-        crs = _crs(self.cores)
-        rrt = [src.buffer_address(), self.n, blocks, self.gx]
-        crt = [blocks, P, self.gx]
-        wrt = [out.buffer_address(), blocks, self.gx]
-        cbs = [_tcb(0, 64, crs), _tcb(24, 32, crs), _tcb(16, 64, crs)]
-        kernels = [
-            _kd("addn_reader.cpp", crs, [self.H * 2, NCH, P, self.N], rrt, _dm(1, 1)),
-            _kd(
-                "addn_compute.cpp",
-                crs,
-                [self.N],
-                crt,
-                ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
-            ),
-            _kd("addt_writer.cpp", crs, [NCH, P, self.H // 32], wrt, _dm(0, 0)),
-        ]
-        return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-
-    def __call__(self, src):
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, self.n, self.H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.dev, ttnn.DRAM_MEMORY_CONFIG
-        )
-        key = (src.buffer_address(), out.buffer_address())
-        if key not in self._prog:
-            if len(self._prog) > 32:
-                self._prog.clear()
-            self._prog[key] = self._program(src, out)
-        ttnn.generic_op([src, out], self._prog[key])
-        return out
+def untilize_x(x):
+    """x bf16 TILE [1, 1, S, H] -> row-major [1, 1, S * H / 1024, 1024] (2 KB pages: token row g = pages NCH g ..
+    NCH g + NCH - 1), the gathered-x page layout (spreads a token's reads over NCH DRAM banks)."""
+    return _ops.moe_ag_untilize_x(x)

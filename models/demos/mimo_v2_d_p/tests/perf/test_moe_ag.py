@@ -109,7 +109,7 @@ def _pcc(a, b):
 def test_reduce_sendback(mesh_device, device_params):
     """route plan -> y (random rows; bfp8 TILE untilized on device) -> LocalReduce -> exchange (high_bw_all_gather
     over the rows + AddRows) -> TP all-reduce (high_bw_all_gather over the cols + AddRows), vs host sums."""
-    from models.demos.mimo_v2_d_p.tt.moe_ag import AddRows, AddRowsTiled, LocalReduce, UntilizeActive, chip_info
+    from models.demos.mimo_v2_d_p.tt.moe_ag import AddRows, LocalReduce, UntilizeActive, add_rows_tiled, chip_info
 
     rows, cols = tuple(mesh_device.shape)
     assert rows == 2
@@ -208,9 +208,9 @@ def test_reduce_sendback(mesh_device, device_params):
                 f" max abs diff {(own2[d] - ex_out[d]).abs().max():.3e}"
             )
             assert _pcc(own2[d], ex_out[d]) > 0.99999
-        tpt = AddRowsTiled(mesh_device, n_rows=S, hidden=H)
-        _timed(mesh_device, f"tp_add_tiled_S{S}", lambda: ttnn.deallocate(tpt(g_tp, g_tp, b_off=S)))
-        fin_t = tpt(g_tp, g_tp, b_off=S)
+        tpt = lambda: add_rows_tiled(g_tp, n_rows=S, b_off=S)
+        _timed(mesh_device, f"tp_add_tiled_S{S}", lambda: ttnn.deallocate(tpt()))
+        fin_t = tpt()
         _timed(mesh_device, f"tilize_S{S}", lambda: ttnn.deallocate(ttnn.to_layout(tp.out, ttnn.TILE_LAYOUT)))
 
         # host reference
@@ -238,9 +238,9 @@ def test_reduce_sendback(mesh_device, device_params):
 
 @MESH_PARAMS
 def test_x_pages(mesh_device, device_params):
-    """x TILE -> 2 KB-page row-major (UntilizeX) -> high_bw_all_gather of the [S * 4, 1024] view, vs to_layout +
+    """x TILE -> 2 KB-page row-major (untilize_x) -> high_bw_all_gather of the [S * 4, 1024] view, vs to_layout +
     the 8 KB-page gather."""
-    from models.demos.mimo_v2_d_p.tt.moe_ag import UntilizeX
+    from models.demos.mimo_v2_d_p.tt.moe_ag import untilize_x as ux
 
     rows, cols = tuple(mesh_device.shape)
     links = int(os.environ.get("MIMO_HBW_LINKS", "4"))
@@ -254,7 +254,6 @@ def test_x_pages(mesh_device, device_params):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(0, None)),
         )
-        ux = UntilizeX(mesh_device, rows=S, hidden=H)
         _timed(mesh_device, f"untilize_x_pages_S{S}", lambda: ttnn.deallocate(ux(x)))
         _timed(mesh_device, f"to_layout_x_S{S}", lambda: ttnn.deallocate(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)))
         xr = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)

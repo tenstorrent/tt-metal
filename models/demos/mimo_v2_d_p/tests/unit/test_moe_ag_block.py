@@ -185,10 +185,13 @@ def test_moe_ag_programs_perf(mesh_device, device_params, S):
     blk.reduce(y).deallocate(True)  # every program compiled; g_sp / g_tp hold real partials
     lr, ys = blk.lreduce, blk.plan_op.y_slot
     runs = {
-        "route_plan": ("/moe_ag/route_plan.cpp", lambda: blk.plan()),
-        "reduce_phase1": ("/moe_ag/reduce2_reader.cpp", lambda: lr.phase(y, ys, blk.gw, 1)),
-        "reduce_phase2": ("/moe_ag/reduce2_reader.cpp", lambda: lr.phase(y, ys, blk.gw, 2, peer=blk.g_sp)),
-        "tp_add_tilize": ("/moe_ag/addt_reader.cpp", lambda: blk.tp(blk.g_tp, blk.g_tp, b_off=S).deallocate(True)),
+        "route_plan": ("/moe_ag/device/kernels/route_plan.cpp", lambda: blk.plan()),
+        "reduce_phase1": ("/moe_ag/device/kernels/reduce2_reader.cpp", lambda: lr.phase(y, ys, blk.gw, 1)),
+        "reduce_phase2": (
+            "/moe_ag/device/kernels/reduce2_reader.cpp",
+            lambda: lr.phase(y, ys, blk.gw, 2, peer=blk.g_sp),
+        ),
+        "tp_add_tilize": ("/moe_ag/device/kernels/addt_reader.cpp", lambda: blk.tp(blk.g_tp).deallocate(True)),
     }
     missing = []
     for name, (path, fn) in runs.items():
