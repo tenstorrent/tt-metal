@@ -73,6 +73,7 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.quant_config import apply_env_quant_config
+from ...models.transformers.minimax_h3.step_reuse import StepReusePlan
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -2407,6 +2408,11 @@ class MiniMaxH3Pipeline:
 
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+        # Opt-in cross-step reuse (MINIMAX_H3_STEP_SKIP / MINIMAX_H3_ATTN_CACHE): a fresh cache per request.
+        reuse_plan = StepReusePlan.from_env(len(timesteps))
+        transformer.clear_step_cache()
+        if reuse_plan.active:
+            self._log(f"step reuse ({'ignored: traced' if traced else 'eager'}): {reuse_plan.describe(len(timesteps))}")
         if _is_host_rank():
             _tqdm_spacer()
         for i, t in enumerate(
@@ -2447,6 +2453,7 @@ class MiniMaxH3Pipeline:
                 pad_to=rung,
                 traced=traced,
                 timestep_key=None if traced else tuple(float(v) for v in levels.reshape(-1).tolist()),
+                **({} if traced else reuse_plan.kwargs(i)),
             )
 
             ttnn.synchronize_device(self.mesh_device)

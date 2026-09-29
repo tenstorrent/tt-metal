@@ -430,6 +430,13 @@ described in the next paragraph.
 | `MINIMAX_H3_SDPA_KV_DTYPE=bfloat8_b`, `MINIMAX_H3_SDPA_DST_FULL_SYNC=1`, `MINIMAX_H3_SEQ_ALIGN_TILES=2` | measured and rejected (slower, or the wider padding breaks the ring mask's single partial tail chunk); kept for experiments |
 | `trace_denoise=True, bucket_denoise=False` (create_pipeline) | trace the step at the exact 256-aligned length instead of the bucket ladder (no gain on the 4x8: the step is device-bound) |
 
+Cross-step reuse (`step_reuse.py`) is a different kind of knob: it changes the output. It is off unless set, eager path
+only, and meant for measurement: `MINIMAX_H3_STEP_SKIP=first-last/N[,...]` skips the whole block stack on the listed
+forwards and adds the previous computed forward's stack delta instead; `MINIMAX_H3_ATTN_CACHE=a-b:N[:first-last]` reuses
+the attention-branch delta of blocks a..b on the forwards of the window whose offset is not a multiple of N, still
+running the FFN. Neither can pass the 2-step gate by construction (a reused forward is one step stale); judge them on
+the decoded clip against the plain schedule and against the same time spent on fewer steps.
+
 Numerics gate: the 50-step clip's PSNR against a reference run only distinguishes bit-identical from broken, because
 any bf16-level difference diverges chaotically over the sampling trajectory. A 2-step run (`H3_PERF_STEPS=2`) compared
 against a 2-step reference measures per-forward error; a pure accumulation-order change lands a few dB below the

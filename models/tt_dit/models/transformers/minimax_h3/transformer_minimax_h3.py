@@ -208,6 +208,10 @@ class MiniMaxH3Transformer3DModel(Module):
         # path only), so a fixed schedule projects each block's adaLN once instead of once per step.
         self._adaln_cache_enabled = os.environ.get("MINIMAX_H3_ADALN_CACHE") == "1"
         self._modulation_cache: dict[tuple, list[list[ttnn.Tensor]]] = {}
+        # MINIMAX_H3_STEP_SKIP (see step_reuse.py): keep the block stack's delta of the last computed forward so a
+        # skipped forward can add it instead of running the blocks. Eager path only, off by default.
+        self._stack_delta_enabled = bool(os.environ.get("MINIMAX_H3_STEP_SKIP"))
+        self._stack_delta: ttnn.Tensor | None = None
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -362,6 +366,8 @@ class MiniMaxH3Transformer3DModel(Module):
         pad_to: int,
         traced: bool = False,
         timestep_key: tuple | None = None,
+        reuse_stack: bool = False,
+        reuse_attn_blocks: frozenset[int] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -378,6 +384,8 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
+        reuse_stack / reuse_attn_blocks: cross-step reuse for this forward (step_reuse.py); eager path only, and
+            only once a computed forward has filled the caches.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -418,17 +426,27 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_idx = ts_state.value
 
         tables = self.modulation_tables(temb, timestep_key) if (not traced and timestep_key is not None) else None
-        hidden = self.run_blocks(
-            hidden,
-            logical_n,
-            temb,
-            adaln_idx,
-            rope_cos,
-            rope_sin,
-            tables,
-            traced=traced,
-            tracer_trace_key=pad_to,
-        )
+        if reuse_stack and not traced and self._stack_delta is not None:
+            hidden = ttnn.add(hidden, self._stack_delta)
+        else:
+            hidden_in = hidden
+            hidden = self.run_blocks(
+                hidden,
+                logical_n,
+                temb,
+                adaln_idx,
+                rope_cos,
+                rope_sin,
+                tables,
+                traced=traced,
+                tracer_trace_key=pad_to,
+                **({} if traced or reuse_attn_blocks is None else {"reuse_attn_blocks": reuse_attn_blocks}),
+            )
+            if self._stack_delta_enabled and not traced:
+                delta = ttnn.subtract(hidden, hidden_in)
+                if self._stack_delta is not None:
+                    ttnn.deallocate(self._stack_delta)
+                self._stack_delta = delta
 
         hidden = self.norm_out(
             hidden,
@@ -464,6 +482,7 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         tables: list[list[ttnn.Tensor]] | None = None,
+        reuse_attn_blocks: frozenset[int] | None = None,
     ) -> ttnn.Tensor:
         # The one-hot gather matrix depends only on the row tags: build it once per forward, not once per block.
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2])
@@ -477,10 +496,19 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_sin=rope_sin,
                 tables=tables[i] if tables is not None else None,
                 onehot=onehot,
+                reuse_attn=reuse_attn_blocks is not None and i in reuse_attn_blocks,
             )
         if onehot is not None:
             ttnn.deallocate(onehot)
         return hidden
+
+    def clear_step_cache(self) -> None:
+        """Drop the cross-step reuse caches (call at the start of every request)."""
+        if self._stack_delta is not None:
+            ttnn.deallocate(self._stack_delta)
+            self._stack_delta = None
+        for block in self.transformer_blocks:
+            block.clear_attn_cache()
 
     def _set_fixed_softmax_blocks(self, spec: str | None) -> None:
         """`spec`: "all", a block-range list ("0-35,39,41,42"), or "auto[:threshold]" which reads the checkpoint's q/k

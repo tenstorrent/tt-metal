@@ -151,6 +151,10 @@ class MiniMaxH3TransformerBlock(Module):
         # weight (two full-sequence multiplies fewer per block); MINIMAX_H3_FOLD_NORM_WEIGHT=0 restores the old order.
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
+        # MINIMAX_H3_ATTN_CACHE (step_reuse.py): keep this block's attention-branch delta so a later forward can add
+        # it instead of running the attention. Eager path only, off by default.
+        self._attn_cache_enabled = bool(os.environ.get("MINIMAX_H3_ATTN_CACHE"))
+        self._attn_delta: ttnn.Tensor | None = None
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
@@ -256,6 +260,11 @@ class MiniMaxH3TransformerBlock(Module):
             return None
         return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM)
 
+    def clear_attn_cache(self) -> None:
+        if self._attn_delta is not None:
+            ttnn.deallocate(self._attn_delta)
+            self._attn_delta = None
+
     # ------------------------------------------------------------------ forward
 
     def forward(
@@ -268,6 +277,7 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         tables: list[ttnn.Tensor] | None = None,
         onehot: ttnn.Tensor | None = None,
+        reuse_attn: bool = False,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -279,6 +289,7 @@ class MiniMaxH3TransformerBlock(Module):
         tables: the six modulation tables for this step, if the caller cached them (see
             `MiniMaxH3Transformer3DModel.modulation_tables`); otherwise projected from `temb` here.
         onehot: the gather matrix from `onehot_table`, shared by all blocks of a forward; built here if absent.
+        reuse_attn: add the cached attention-branch delta instead of running norm1 + attention (step_reuse.py).
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
@@ -297,22 +308,29 @@ class MiniMaxH3TransformerBlock(Module):
         # block following it with a separate multiply and add. The gated residual is one addcmul
         # (residual + gate * branch) rather than a multiply and an add.
         residual = spatial_1BND
-        normed = self.norm1(
-            spatial_1BND,
-            dynamic_weight=modulation(_SCALE_MSA),
-            dynamic_bias=modulation(_SHIFT_MSA),
-            dynamic_weight_includes_static=self._fold_norm_weight,
-        )
-        # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
-        # `residual + attn_out * gate` directly rather than the block adding it afterwards.
-        spatial_1BND = self.attn(
-            normed,
-            logical_n=logical_n,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            addcmul_residual=residual,
-            addcmul_gate=modulation(_GATE_MSA),
-        )
+        if reuse_attn and self._attn_delta is not None:
+            spatial_1BND = ttnn.add(residual, self._attn_delta)
+        else:
+            normed = self.norm1(
+                spatial_1BND,
+                dynamic_weight=modulation(_SCALE_MSA),
+                dynamic_bias=modulation(_SHIFT_MSA),
+                dynamic_weight_includes_static=self._fold_norm_weight,
+            )
+            # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
+            # `residual + attn_out * gate` directly rather than the block adding it afterwards.
+            spatial_1BND = self.attn(
+                normed,
+                logical_n=logical_n,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                addcmul_residual=residual,
+                addcmul_gate=modulation(_GATE_MSA),
+            )
+            if self._attn_cache_enabled:
+                delta = ttnn.subtract(spatial_1BND, residual)
+                self.clear_attn_cache()
+                self._attn_delta = delta
 
         # 2. Modulated feed-forward.
         residual = spatial_1BND
