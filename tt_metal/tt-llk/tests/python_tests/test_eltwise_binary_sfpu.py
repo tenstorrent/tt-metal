@@ -741,6 +741,33 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc):
     )
 
 
+# Every dividend class over both signed zeros. The random sweep never draws an exact zero
+# divisor, and the nightly edge sweep drives only +0 against +/-1, +/-2 and +0, so neither
+# reaches -0 / +0 (NaN), NaN / +0 (NaN) or a subnormal dividend over -0 (an infinity).
+_DIV_BY_SIGNED_ZERO_PAIRS = [
+    (a, b)
+    for a in (0.0, -0.0, 1.5, -1.5, 1e-40, -1e-40, math.inf, -math.inf, math.nan)
+    for b in (0.0, -0.0)
+]
+
+
+# Float32 with a 32-bit Dest is the pipeline that delivers -0.0 and subnormal operands to the
+# SFPU intact.
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_div_by_signed_zero(formats, dest_acc):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwdiv,
+        src_A_override=_build_paired_tile_override(
+            _DIV_BY_SIGNED_ZERO_PAIRS, torch.float32
+        ),
+    )
+
+
 @parametrize(
     formats=input_output_formats(
         [
