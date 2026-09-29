@@ -109,7 +109,13 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::TensorBinding{GATE, "gate"},
                 m2::TensorBinding{WEIGHT, "weight"},
             },
-        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}, {"epsilon_bits", eps_bits}},
+        .compile_time_args =
+            {{"Vt", Vt},
+             {"H", attrs.num_heads},
+             {"Mt", Mt},
+             {"epsilon_bits", eps_bits},
+             {"gate_row_tiles", static_cast<uint32_t>(in.gate.padded_shape()[-1]) / TILE_WIDTH},
+             {"gate_offset_tiles", attrs.gate_column_offset / TILE_WIDTH}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
