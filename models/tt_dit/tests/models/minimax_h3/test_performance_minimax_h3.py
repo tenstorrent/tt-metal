@@ -16,6 +16,7 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
@@ -133,14 +134,22 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
 
 # --------------------------------------------------------------------- ref2va perf
 
-# Single ref2va working point; no sweep, since ref2va padded lengths run 1.2-3.0x t2va's.
 REF2VA_ASPECT_RATIO = (16, 9)
-REF2VA_DURATION_S = 5
+REF2VA_DURATIONS_S = [5, 10, 15]
+REF2VA_DURATION_S = REF2VA_DURATIONS_S[0]  # the REPL's default duration
 
-# The ref2va reference set -- EDIT these to point at your own media (at least one is required).
-REF2VA_USE_IMAGE = True
-REF2VA_VIDEO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.mp4"
-REF2VA_AUDIO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.wav"
+
+# Wormhole runs untraced and unbucketed.
+# - The Wormhole preset is non-coresident, so the pipeline drops tracing anyway.
+# - Bucketing binds the whole ladder up front; the largest bucket OOMs on Wormhole's 12 GB chips. TODO: Fix
+REF2VA_SERVING_FLAGS = dict(trace_denoise=True, bucket_denoise=True) if is_blackhole() else {}
+REF2VA_REFERENCE_SETS = ["image", "video_with_sound", "mixed"]
+
+# Unclear where this file exists, so we have a fallback. This should probably be deleted.
+REF2VA_VIDEO_FILE = os.environ.get(
+    "REF2VA_VIDEO_FILE", "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.mp4"
+)
+REF2VA_FALLBACK_VIDEO_FILE = os.path.expanduser("~/h3_fl2va_artifacts/fl2va_first.mp4")
 
 # ref2va's taps=3 video encoder clashes with the default L1 pool, so it runs a smaller L1_SMALL.
 _REF2VA_L1_SMALL = 16384
@@ -151,19 +160,27 @@ REF2VA_MESHES = [
 ]
 
 
-def ref2va_references() -> list[MiniMaxH3Reference]:
-    """The image / video / audio references the ref2va perf run packs. A placeholder set to edit."""
-    references: list[MiniMaxH3Reference] = []
-    if REF2VA_USE_IMAGE:
-        references.append(MiniMaxH3Reference(image=create_fractal_image(512, 512)))
-    if False:  # os.path.isfile(REF2VA_VIDEO_FILE):
-        references.append(reference_from_video_file(REF2VA_VIDEO_FILE))
-    if False:  # os.path.isfile(REF2VA_AUDIO_FILE):
-        waveform, sample_rate = decode_reference_audio(REF2VA_AUDIO_FILE)
-        references.append(MiniMaxH3Reference(audio=waveform, sample_rate=sample_rate))
-    if not references:
-        pytest.skip("no ref2va references: enable REF2VA_USE_IMAGE or place a video/audio file")
-    return references
+def _reference_video_path() -> str:
+    for path in (REF2VA_VIDEO_FILE, REF2VA_FALLBACK_VIDEO_FILE):
+        if os.path.isfile(path):
+            return path
+    pytest.skip(f"no reference clip at {REF2VA_VIDEO_FILE} or {REF2VA_FALLBACK_VIDEO_FILE}")
+
+
+def ref2va_references(ref_set: str = "image") -> list[MiniMaxH3Reference]:
+    """The references the ref2va perf run packs, per `REF2VA_REFERENCE_SETS` entry."""
+    if ref_set == "image":
+        return [MiniMaxH3Reference(image=create_fractal_image(512, 512))]
+    if ref_set == "video_with_sound":
+        return [reference_from_video_file(_reference_video_path())]
+    if ref_set == "mixed":
+        sounded = reference_from_video_file(_reference_video_path())
+        return [
+            MiniMaxH3Reference(image=create_fractal_image(512, 512)),
+            reference_from_video_file(_reference_video_path(), with_audio=False),
+            MiniMaxH3Reference(audio=sounded.audio, sample_rate=sounded.sample_rate),
+        ]
+    raise ValueError(ref_set)
 
 
 def read_user_input() -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], float, int] | None:
@@ -192,13 +209,14 @@ def read_user_input() -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], f
 
 
 @pytest.mark.timeout(10800)
+@pytest.mark.parametrize("ref_set", REF2VA_REFERENCE_SETS, ids=REF2VA_REFERENCE_SETS)
+@pytest.mark.parametrize("duration_s", REF2VA_DURATIONS_S, ids=[f"{s}s" for s in REF2VA_DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESHES, indirect=["mesh_device", "device_params"])
-def test_ref2va_performance(mesh_device, reset_seeds):
+def test_ref2va_performance(mesh_device, reset_seeds, duration_s, ref_set):
     pretest_user_repl()
     weights = weights_dir("transformer_ref", "text_encoder", "vae", "audio_vae")
     prompt = PROMPT
     aspect_ratio = REF2VA_ASPECT_RATIO
-    duration_s = REF2VA_DURATION_S
 
     HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
     NUM_FRAMES = get_num_frames(duration_s)
@@ -220,6 +238,7 @@ def test_ref2va_performance(mesh_device, reset_seeds):
         task="ref2va",
         dit_fsdp=True,
         vae_output_type="yuv420",
+        **REF2VA_SERVING_FLAGS,
     )
 
     benchmark_profiler = BenchmarkProfiler()
@@ -256,7 +275,7 @@ def test_ref2va_performance(mesh_device, reset_seeds):
         ttnn.distributed_context_barrier()
     if is_host():
         artifacts = artifact_dir("h3_ref2va_perf_artifacts")
-        stem = f"ref2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+        stem = f"ref2va_{ref_set}_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
         frames = frames_for_export(output)
         write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
 
