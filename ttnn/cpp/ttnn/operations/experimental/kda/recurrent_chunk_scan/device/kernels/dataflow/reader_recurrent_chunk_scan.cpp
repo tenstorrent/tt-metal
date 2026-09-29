@@ -19,22 +19,6 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <typename Accessor>
-FORCE_INLINE void read_and_publish_contiguous_tiles(
-    const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t base, uint32_t count) {
-    buffer.reserve_back(count);
-    const uint32_t entry_size = buffer.get_entry_size();
-    uint32_t tile = 0;
-    for (const auto& page : accessor.pages(base, base + count)) {
-        noc.async_read(accessor, buffer, entry_size, {.page_id = page.page_id()}, {.offset_bytes = tile * entry_size});
-        ++tile;
-    }
-    noc.async_read_barrier();
-    // push_back publishes this DFB to compute. Complete its reads first; delaying publication to coalesce across
-    // buffers would prevent compute from overlapping the next buffer's NOC reads.
-    buffer.push_back(count);
-}
-
 template <uint32_t Vt, uint32_t VtFull, typename Accessor>
 FORCE_INLINE void read_and_publish_value_slice(
     const Accessor& accessor,
@@ -99,10 +83,11 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
 }
 
 // Chunk inputs that do not depend on the value columns are identical for every value block of a head.
-// With mcast_shared, value block 0 reads them from DRAM once and multicasts them into its siblings' buffers
-// (identical buffer addresses on every core of the program), so DRAM serves each shared tile once per head.
-// Handshake: receivers reserve their slots, reset valid and raise ready; the sender stages its reads, waits
-// for every receiver, multicasts the data then the valid flag, and flushes before publishing its own copy.
+// With mcast_shared, value block 0 reads them from DRAM once and multicasts them into its siblings' buffers.
+// The slot addresses match on every core because every block makes the same reserve/push sequence on
+// identically specified buffers. Handshake: receivers reserve their slots, reset valid and raise ready; the
+// sender stages its reads, waits for every receiver, multicasts the data, flushes, then multicasts the valid
+// flag before publishing its own copy.
 struct SharedInput {
     DataflowBuffer* buffer;
     uint32_t tiles;
@@ -147,8 +132,8 @@ FORCE_INLINE void multicast_shared(
             {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = input.slot},
             /*linked=*/true);
     }
-    // The flush orders the flag after the data on Blackhole and proves the source slots were read before
-    // compute may pop them.
+    // The flag multicast issues from a different command buffer than the data, so only this flush orders the data
+    // before the flag. It also proves the source slots were read before this core's compute may pop them.
     noc.async_writes_flushed();
     valid.set_multicast(noc, x0, y0, x1, y1, receivers);
     for (auto& input : inputs) {
@@ -248,7 +233,6 @@ TT_KERNEL void reader(
     }
     const uint32_t valid_chunks = topology.valid_chunks(head % groups_per_head, groups_per_head);
     if (valid_chunks == 0) {
-        valid.set(0);  // restore the initial value for the next launch
         return;
     }
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
@@ -292,86 +276,32 @@ TT_KERNEL void reader(
         }
         read_and_publish_value_slice<Vt, Vt_full>(
             v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
+        // Value-independent inputs, in the order compute consumes them.
+        const auto for_each_shared_input = [&](auto&& input) {
+            input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
+            input(t_inv_accessor, t_inv, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            if constexpr (!summary) {
+                input(TensorAccessor(tensor::q_decay), q_decay, head_chunk * chunk_key_tiles, chunk_key_tiles);
+                input(TensorAccessor(tensor::intra), intra, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            }
+            input(k_decay_transposed_accessor, k_decay_transposed, head_chunk * key_chunk_tiles, key_chunk_tiles);
+            input(final_decay_accessor, final_decay, head_chunk * Kt, Kt);
+        };
         if constexpr (!mcast_shared) {
-            if constexpr (summary) {
-                read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                read_and_publish_contiguous_tiles(
-                    t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-                read_and_publish_contiguous_tiles(
-                    k_decay_transposed_accessor,
-                    k_decay_transposed,
-                    noc,
-                    head_chunk * key_chunk_tiles,
-                    key_chunk_tiles);
-                read_and_publish_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
-            } else {
-                read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                const auto q_decay_accessor = TensorAccessor(tensor::q_decay);
-                const auto intra_accessor = TensorAccessor(tensor::intra);
-                read_and_publish_contiguous_tiles(
-                    q_decay_accessor, q_decay, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                read_and_publish_contiguous_tiles(
-                    intra_accessor, intra, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-                read_and_publish_contiguous_tiles(
-                    k_decay_transposed_accessor,
-                    k_decay_transposed,
-                    noc,
-                    head_chunk * key_chunk_tiles,
-                    key_chunk_tiles);
-                read_and_publish_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
-                read_and_publish_contiguous_tiles(
-                    t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-            }
-        } else if constexpr (summary) {
-            SharedInput inputs[] = {
-                {&kd, chunk_key_tiles, 0},
-                {&t_inv, chunk_chunk_tiles, 0},
-                {&k_decay_transposed, key_chunk_tiles, 0},
-                {&final_decay, Kt, 0},
-            };
-            if (value_block == 0) {
-                inputs[0].slot =
-                    stage_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                inputs[1].slot = stage_contiguous_tiles(
-                    t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-                inputs[2].slot = stage_contiguous_tiles(
-                    k_decay_transposed_accessor,
-                    k_decay_transposed,
-                    noc,
-                    head_chunk * key_chunk_tiles,
-                    key_chunk_tiles);
-                inputs[3].slot = stage_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
-                multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
-            } else {
-                receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
-            }
+            // Publish each buffer once its reads land so compute overlaps the next buffer's reads.
+            for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                stage_contiguous_tiles(accessor, buffer, noc, base, tiles);
+                noc.async_read_barrier();
+                buffer.push_back(tiles);
+            });
         } else {
-            const auto q_decay_accessor = TensorAccessor(tensor::q_decay);
-            const auto intra_accessor = TensorAccessor(tensor::intra);
-            SharedInput inputs[] = {
-                {&kd, chunk_key_tiles, 0},
-                {&q_decay, chunk_key_tiles, 0},
-                {&intra, chunk_chunk_tiles, 0},
-                {&k_decay_transposed, key_chunk_tiles, 0},
-                {&final_decay, Kt, 0},
-                {&t_inv, chunk_chunk_tiles, 0},
-            };
+            SharedInput inputs[summary ? 4 : 6];
+            uint32_t count = 0;
+            for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                const uint32_t slot = value_block == 0 ? stage_contiguous_tiles(accessor, buffer, noc, base, tiles) : 0;
+                inputs[count++] = {&buffer, tiles, slot};
+            });
             if (value_block == 0) {
-                inputs[0].slot =
-                    stage_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                inputs[1].slot = stage_contiguous_tiles(
-                    q_decay_accessor, q_decay, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                inputs[2].slot = stage_contiguous_tiles(
-                    intra_accessor, intra, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-                inputs[3].slot = stage_contiguous_tiles(
-                    k_decay_transposed_accessor,
-                    k_decay_transposed,
-                    noc,
-                    head_chunk * key_chunk_tiles,
-                    key_chunk_tiles);
-                inputs[4].slot = stage_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
-                inputs[5].slot = stage_contiguous_tiles(
-                    t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
                 multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
             } else {
                 receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
@@ -379,12 +309,12 @@ TT_KERNEL void reader(
         }
     }
     if constexpr (mcast_shared) {
+        // Retire the multicast writes and ready increments before exit; dispatch re-initializes both semaphores on
+        // every launch.
         if (value_block == 0) {
-            // set_multicast reads the local valid word asynchronously; drain before restoring it.
             noc.async_write_barrier();
         } else {
             noc.async_atomic_barrier();
         }
-        valid.set(0);
     }
 }

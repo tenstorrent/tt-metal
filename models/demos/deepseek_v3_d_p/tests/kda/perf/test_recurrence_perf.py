@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Single-device unit test for the Kimi-K3 KDA recurrence ops at Galaxy SP8xTP4 shape.
+"""Single-device perf test for the Kimi-K3 KDA recurrence ops at Galaxy SP8xTP4 shape.
 
 Per device: 24 TP-local heads, 640 local tokens (20 chunks of 32), key and value dimension 128,
 with the layer's compute configs (HiFi4 preparation and summary, HiFi2 scan, FP32 accumulation)
@@ -39,9 +39,9 @@ _CHUNKS = 20
 _DIM = 128
 _BF16 = frozenset({"kd", "q_decay", "final_decay"})
 _REPLAYS = 20
-# Galaxy single-device traced wall time, 2026-09-28: summary 242 us before splitting value columns
-# across cores, 229 us (227 us sharded) after; scan 299 us.
-_MAX_US = {"prepare": 1000.0, "summary": 240.0, "summary_sharded": 240.0, "scan": 1000.0}
+# Galaxy single-device traced wall time, 2026-09-29, with value blocks multicasting the shared chunk inputs:
+# prepare 239 us, summary 127-131 us (132-136 us sharded), scan 125-129 us. The bounds allow about 15%.
+_MAX_US = {"prepare": 275.0, "summary": 150.0, "summary_sharded": 155.0, "scan": 145.0}
 
 
 def _compute_config(device, fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4) -> ttnn.DeviceComputeKernelConfig:
@@ -98,7 +98,7 @@ def _check_golden(name: str, outputs: list[torch.Tensor]) -> None:
         return
     path = Path(f"{prefix}.{name}.pt")
     if path.exists():
-        for index, (expected, output) in enumerate(zip(torch.load(path), outputs)):
+        for index, (expected, output) in enumerate(zip(torch.load(path), outputs, strict=True)):
             assert torch.equal(expected, output), f"{name} output {index} differs from saved outputs"
         logger.info(f"{name} outputs bit-identical to {path}")
     else:
@@ -127,7 +127,7 @@ def test_kda_recurrence_perf(device, op_name) -> None:
             )
 
     elif op_name.startswith("summary"):
-        # The layer height-shards summaries one head per core in L1.
+        # The layer height-shards the summary outputs in L1, one head per shard.
         memory_config = group_summary_height_sharded(device, _HEADS, _DIM) if op_name == "summary_sharded" else None
 
         def op():
