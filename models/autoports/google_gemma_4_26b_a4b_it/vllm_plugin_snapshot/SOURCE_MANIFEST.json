@@ -13,7 +13,7 @@
     "src/vllm_tt_plugin/engine.py": "df04b0729686d560640ba25aeb75fb2f7fc99d2f71a2d08e8df7a62a13a1c48b",
     "src/vllm_tt_plugin/entrypoints.py": "6b05176e589326ad79413ffe05410f842109e7ae55e22c10133981f55084f0ad",
     "src/vllm_tt_plugin/gemma4_reasoning_parser.py": "3ecc735a7088cffa6b1cf1bc4d57117e06f33f562558e600e877a63947cf728e",
-    "src/vllm_tt_plugin/gemma4_tool_parser.py": "01318563be5c980d8e883d2a20b3fbecd5b7c534dbd5c970f4c2ab167d91623e",
+    "src/vllm_tt_plugin/gemma4_tool_parser.py": "03f14e24134ca06d08b468d52c6ad079f88e6cf50dff3006e7856dd1418b74b8",
     "src/vllm_tt_plugin/input_batch.py": "cabf894e18883d5732d3f5a2b6d978f012782576f86248c3062449f9c2067d4a",
     "src/vllm_tt_plugin/lane_scheduler.py": "5d8235f12a2e4856889e2d1d83ccdb7c5e97541ff5197bfa71fedafdba4570e4",
     "src/vllm_tt_plugin/launcher.py": "8c2d03ae27982e85a1242fc2078e9c4ed5e959b43c1ebd68b89b3fec2bd8c0a0",
