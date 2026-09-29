@@ -37,17 +37,17 @@ def main():
 
     env = dict(
         os.environ,
-        FAG_LINKS=args.links,
-        FAG_SHAPE=args.shape,
-        FAG_DTYPE=args.dtype,
-        FAG_DIM=args.dim,
-        FAG_PAYLOAD=str(args.payload),
-        FAG_TRIALS=str(args.trials),
+        AG_LINKS=args.links,
+        AG_SHAPE=args.shape,
+        AG_DTYPE=args.dtype,
+        AG_DIM=args.dim,
+        AG_PAYLOAD=str(args.payload),
+        AG_TRIALS=str(args.trials),
     )
     if args.fabric:
-        env["FAG_FABRICS"] = args.fabric
+        env["AG_FABRICS"] = args.fabric
     if args.topology:
-        env["FAG_TOPOS"] = args.topology
+        env["AG_TOPOS"] = args.topology
     cmd = ["scripts/run_safe_pytest.sh", "--run-all", _TEST, "-s"]
     print(f"[fabric_all_gather] {' '.join(cmd)}")
     return subprocess.call(cmd, env=env)

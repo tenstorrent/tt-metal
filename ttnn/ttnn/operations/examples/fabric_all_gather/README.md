@@ -60,9 +60,13 @@ python -m ttnn.operations.examples.fabric_all_gather [options]
 | `--payload` | int (bytes) | `14336` | router max payload |
 | `--trials` | int | `3` | measured launches per case (median) |
 
-Test environment variables (`test_fabric_all_gather.py`): `FAG_FABRICS`, `FAG_TOPOS`, `FAG_LINKS`, `FAG_VARIANTS`
-(`base`, `b` balanced, `d` desync, `bd`), `FAG_SHAPE`, `FAG_DTYPE` (`bf16`, `bfp8`, `fp32`, `fp8`), `FAG_LAYOUT` (`tile`, `rm`), `FAG_DIM`, `FAG_PAYLOAD`, `FAG_TRIALS`,
-`FAG_PROFILER` (`device` or `rt`), `FAG_STRICT` (1 = an unroutable topology fails), `FAG_REUSE_CALLS`.
+Test environment variables (`test_fabric_all_gather.py`): `AG_FABRICS`, `AG_TOPOS`, `AG_LINKS`, `AG_VARIANTS`
+(`base`, `b` balanced, `d` desync, `bd`), `AG_SHAPE` (`H,W` or a list `H,W;H,W;...`, one row per size), `AG_DTYPE` (`bf16`, `bfp8`, `fp32`, `fp8`), `AG_LAYOUT` (`tile`, `rm`), `AG_DIM`, `AG_PAYLOAD`, `AG_TRIALS`,
+`AG_PROFILER` (`device` or `rt`), `AG_STRICT` (1 = an unroutable topology fails), `AG_REUSE_CALLS`, `AG_LINK_GBPS` (one link direction's rate for the utilization column: 48.5 GB/s by default,
+half that on a 32-chip Galaxy, whose links are about half as fast).
+
+Each result row: time, effective receive GB/s per chip (shard bytes × (G − 1) / time), and the busiest hop's rate per
+link as a % of that peak. On the QuietBox a 1-link line reaches 98–99 % at 16–64 MiB, a 2-link ring ~80 %.
 
 A topology the fabric cannot route (no direct link for a hop, or fewer links than requested) is reported as
 unsupported instead of failing.
@@ -177,7 +181,7 @@ Running it under tt-emule: build tt-metal with `-DTT_METAL_USE_EMULE=ON -DTT_EMU
 (clang-20 toolchain, into its own build tree) at the tt-metal commit the emulator pins, link `libtt-umd.so*` and the
 `_ttnn*.so` files the way a normal build does, then run the test with `TT_METAL_EMULE_MODE=1
 TT_METAL_SLOW_DISPATCH_MODE=1 EMULE_FABRIC8=1 TT_METAL_MOCK_CLUSTER_DESC_PATH=<umd>/tests/cluster_descriptor_examples/blackhole_galaxy.yaml`
-and `FAG_TOPOS=4x8_axis0_ring,4x8_axis1_ring,4x8_snake_ring,4x8_dual_cycles FAG_FABRICS=2d_torus_xy FAG_TRIALS=0`.
+and `AG_TOPOS=4x8_axis0_ring,4x8_axis1_ring,4x8_snake_ring,4x8_dual_cycles AG_FABRICS=2d_torus_xy AG_TRIALS=0`.
 
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash

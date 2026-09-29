@@ -11,7 +11,7 @@
 #           not "GLM"; "Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". A job covering every
 #           gate model says so: "(all prefill gate models)".
 #         * Op-level jobs with no model take NO leading parenthesis and name the op instead
-#           -> "high_bw_all_gather CCL perf + accuracy"
+#           -> "fabric_all_gather CCL perf + accuracy"
 #         * Tag what is being gated: "accuracy" (PCC/golden compare), "perf", or "determinism".
 #         * Chunked tests state total ISL and chunk size as <isl>@<chunk>, e.g. "code_debug 55k@5k".
 #         * Nothing else goes in parentheses -- the leading "(...)" is the model list and only that,
@@ -1788,32 +1788,27 @@
   sp_config: sc1
 
 
-- name: "high_bw_all_gather CCL perf + accuracy"
-  # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. Runs the 8-rank axis ring at
-  # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
-  # perf at matched per-device and matched global volume.
-  #
-  # The traced gate measures the 8-rank axis-ring shapes again through a captured ttnn trace, with the
-  # cache slot and active gather extent read from metadata tensors on-device rather than from host
-  # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
-  # host runtime-arg patch the scalar form depends on. It shares this job because the fabric bring-up
-  # dominates the step, so a separate job would roughly double the cost of the same coverage.
+- name: "fabric_all_gather CCL perf + accuracy"
+  # Repurposed from the high_bw_all_gather gate (same 8x4 Blackhole-Galaxy Fabric2D XY torus): the fabric_all_gather
+  # perf example (ttnn/ttnn/operations/examples/fabric_all_gather) measured in isolation. Per case: bit-exact output
+  # on every chip, time (realtime profiler, slowest chip, median), effective receive GB/s per chip, and the busiest
+  # link's rate as a % of one Galaxy link direction (AG_LINK_GBPS, 24.25 by default on 32 chips). Reported, not
+  # gated. Axis rings at 16384 and 65536 rows per device (the 8-rank gate's 512K global rows is 65536), the whole mesh
+  # (snake ring; two edge-disjoint Hamiltonian cycles using all four neighbours) at 2048 and 16384 (the 32-rank gate's
+  # 512K is 16384); bf16 x 576, TILE; balanced rings, 1 and 2 links. Then output reuse (the fence) and a sub-device run.
   fabric_profile: torus_xy
   cmd: |
-    export MESH_DEVICE=TG
-    export TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      export AG_PROFILER=rt AG_STRICT=1 AG_FABRICS=2d_torus_xy AG_LINKS=1,2 AG_VARIANTS=b AG_PAYLOAD=14336
+      T=tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather.py
       rc=0
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      AG_SHAPE="16384,576;65536,576" AG_TOPOS=8x4_axis0_ring,8x4_axis1_ring python3 -m pytest "$T::test_fabric_all_gather" -s -q || rc=1
+      AG_SHAPE="2048,576;16384,576" AG_TOPOS=8x4_snake_ring,8x4_dual_cycles python3 -m pytest "$T::test_fabric_all_gather" -s -q || rc=1
+      AG_LINKS=2 AG_TOPOS=8x4_axis0_ring,8x4_snake_ring python3 -m pytest "$T" -k "reuse or subdevice" -s -q || rc=1
       exit $rc
     '
-  test_type: high_bw_all_gather_perf
+  test_type: fabric_all_gather_perf
   test_tags: [ccl]
   test_group: sdpa_perf
   skus:

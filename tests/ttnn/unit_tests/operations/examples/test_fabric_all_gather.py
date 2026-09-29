@@ -16,7 +16,7 @@ import os
 EMULE = bool(os.environ.get("TT_METAL_EMULE_MODE"))
 # "device" = device profiler kernel duration of the slowest chip (needs a profiler build); "rt" = realtime profiler
 # program duration of the slowest chip (any build; what CI uses).
-PROFILER = os.environ.get("FAG_PROFILER", "device")
+PROFILER = os.environ.get("AG_PROFILER", "device")
 if not EMULE and PROFILER == "device":
     os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
     os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
@@ -36,17 +36,21 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 from ttnn.operations.examples.fabric_all_gather import build_groups, fabric_all_gather, link_load, plan
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-SHAPE = tuple(int(x) for x in os.environ.get("FAG_SHAPE", "2048,4096").split(","))  # per-chip shard (H, W), bf16
-TRIALS = int(os.environ.get("FAG_TRIALS", "3"))
-PAYLOAD = int(os.environ.get("FAG_PAYLOAD", "14336"))
+# per-chip shard sizes (H, W), one row of results per size: "H,W" or "H,W;H,W;..."
+SHAPES = [tuple(int(x) for x in s.split(",")) for s in os.environ.get("AG_SHAPE", "2048,4096").split(";") if s]
+# one link direction's rate (GB/s) that link utilization is measured against: 48.5 = the bare one-hop stream measured
+# on a QuietBox (fabric_link_ceiling); a Galaxy's links are about half as fast, so it defaults to half of that there.
+_LINK_GBPS_ENV = os.environ.get("AG_LINK_GBPS")
+TRIALS = int(os.environ.get("AG_TRIALS", "3"))
+PAYLOAD = int(os.environ.get("AG_PAYLOAD", "14336"))
 _DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "fp32": ttnn.float32, "fp8": ttnn.fp8_e4m3}
-DTYPE_NAME = os.environ.get("FAG_DTYPE", "bf16")
+DTYPE_NAME = os.environ.get("AG_DTYPE", "bf16")
 _LAYOUTS = {"tile": ttnn.TILE_LAYOUT, "rm": ttnn.ROW_MAJOR_LAYOUT}
-LAYOUT_NAME = os.environ.get("FAG_LAYOUT", "tile")  # rm = ROW_MAJOR (a page is one row)
-DIM = int(os.environ.get("FAG_DIM", "0"))  # 0, or 2 (= dim -2 of the [1, 1, H, W] shard)
-LINKS = tuple(int(x) for x in os.environ.get("FAG_LINKS", "1,2").split(","))
+LAYOUT_NAME = os.environ.get("AG_LAYOUT", "tile")  # rm = ROW_MAJOR (a page is one row)
+DIM = int(os.environ.get("AG_DIM", "0"))  # 0, or 2 (= dim -2 of the [1, 1, H, W] shard)
+LINKS = tuple(int(x) for x in os.environ.get("AG_LINKS", "1,2").split(","))
 # schedule variants: "b" = balanced ring (far shard split between directions), "d" = desynchronized bank walks
-VARIANTS = tuple(os.environ.get("FAG_VARIANTS", "base").split(","))
+VARIANTS = tuple(os.environ.get("AG_VARIANTS", "base").split(","))
 _FABRICS = {
     "1d": "FABRIC_1D",
     "1d_ring": "FABRIC_1D_RING",
@@ -56,7 +60,7 @@ _FABRICS = {
     "2d_torus_y": "FABRIC_2D_TORUS_Y",
     "2d_torus_xy": "FABRIC_2D_TORUS_XY",
 }
-FABRICS = tuple(os.environ.get("FAG_FABRICS", ",".join(_FABRICS)).split(","))
+FABRICS = tuple(os.environ.get("AG_FABRICS", ",".join(_FABRICS)).split(","))
 # (mesh shape, cluster_axis, topology[, scheme]); cluster_axis None = one group over the whole mesh
 _TOPOS = {
     "2x2_axis0_line": ((2, 2), 0, "Linear"),
@@ -84,9 +88,9 @@ _TOPOS = {
     "2x4_snake_ring": ((2, 4), None, "Ring"),
 }
 # 1 = a topology the fabric cannot route fails the test instead of being reported as unsupported (CI)
-STRICT = os.environ.get("FAG_STRICT", "0") == "1"
+STRICT = os.environ.get("AG_STRICT", "0") == "1"
 _QB_TOPOS = [t for t, v in _TOPOS.items() if v[0][0] * v[0][1] == 4]
-TOPOS = tuple(os.environ.get("FAG_TOPOS", ",".join(_QB_TOPOS)).split(","))
+TOPOS = tuple(os.environ.get("AG_TOPOS", ",".join(_QB_TOPOS)).split(","))
 MESH_SHAPES = sorted({_TOPOS[t][0] for t in TOPOS})
 _REPORT = []
 
@@ -150,8 +154,23 @@ def _router(payload):
 )
 @pytest.mark.parametrize("mesh_device", MESH_SHAPES, ids=lambda s: f"mesh{s[0]}x{s[1]}", indirect=True)
 def test_fabric_all_gather(mesh_device):
+    """Every (size, topology, links, variant): bit-exact output on every chip, then the median of TRIALS timed calls
+    into the same output. Reported per case: time, effective receive bandwidth per chip = shard bytes x (G - 1) / time,
+    and link utilization = the busiest hop's bytes / (links x time) as a fraction of one link direction's rate."""
     rows, cols = tuple(mesh_device.shape)
-    H, W = SHAPE
+    link_gbps = float(_LINK_GBPS_ENV) if _LINK_GBPS_ENV else (48.5 / 2 if rows * cols == 32 else 48.5)
+    fabric = str(ttnn.get_fabric_config()).split(".")[-1]
+    if not _REPORT:
+        _REPORT.append(
+            f"\n=== fabric_all_gather  box={socket.gethostname()}  arch={mesh_device.arch()}  payload={PAYLOAD}B  "
+            f"{DTYPE_NAME} {LAYOUT_NAME} dim={DIM}  trials={TRIALS} (median)  link peak {link_gbps:.1f} GB/s ==="
+        )
+    for H, W in SHAPES:
+        _gather_one_size(mesh_device, H, W, fabric, link_gbps)
+
+
+def _gather_one_size(mesh_device, H, W, fabric, link_gbps):
+    rows, cols = tuple(mesh_device.shape)
     torch.manual_seed(0)
     dtype = _DTYPES[DTYPE_NAME]
     host = torch.randn((rows, cols, H, W), dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
@@ -169,7 +188,7 @@ def test_fabric_all_gather(mesh_device):
         host = torch.stack([_to_host(t) for t in ttnn.get_device_tensors(inp)]).reshape(rows, cols, H, W)
     pages = (H // 32) * (W // 32) if LAYOUT_NAME == "tile" else H
     shard_bytes = pages * int(inp.buffer_aligned_page_size())
-    fabric = str(ttnn.get_fabric_config()).split(".")[-1]
+    size = f"{H}x{W} ({shard_bytes / 2**20:.1f} MiB)"
     for topo_name in TOPOS:
         shape, cluster_axis, topo = _TOPOS[topo_name][:3]
         scheme = _TOPOS[topo_name][3] if len(_TOPOS[topo_name]) > 3 else "ring"
@@ -182,7 +201,7 @@ def test_fabric_all_gather(mesh_device):
         for num_links, variant in [(l, v) for l in LINKS for v in VARIANTS]:
             balance, desync = "b" in variant and variant != "base", "d" in variant and variant != "base"
             kw = dict(balance=balance, desync=desync)
-            tag = f"    {fabric:<27} {topo_name:<15} G={G} links={num_links} {variant:<5}"
+            tag = f"    {fabric:<27} {topo_name:<15} {size:<22} G={G:<2} links={num_links} {variant:<4}"
             try:
                 out = fabric_all_gather(
                     inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM, scheme=scheme, **kw
@@ -201,7 +220,7 @@ def test_fabric_all_gather(mesh_device):
                     got = _to_host(dev[r * cols + c])
                     assert torch.equal(
                         got.reshape(expected.shape).to(expected.dtype), expected
-                    ), f"{fabric}/{topo_name}/links={num_links}: chip ({r},{c}) output != gathered shards"
+                    ), f"{fabric}/{topo_name}/{size}/links={num_links}: chip ({r},{c}) output != gathered shards"
                     del got
             chips, _ = plan(
                 mesh_device,
@@ -214,7 +233,7 @@ def test_fabric_all_gather(mesh_device):
             load = link_load(chips)
             nbrs = max(len({p for (a, p) in load if a == coord}) for coord in chips)
             busiest = max(load.values())
-            geo = f"busiest hop carries {busiest:.1f} shards, {nbrs} neighbours used per chip"
+            geo = f"busiest hop {busiest:.1f} shards, {nbrs} neighbours/chip"
             if EMULE or TRIALS == 0:
                 _REPORT.append(f"{tag}  bit-exact on all {rows * cols} chips  ✓  {geo}  (no timing)")
                 continue
@@ -237,20 +256,18 @@ def test_fabric_all_gather(mesh_device):
                     run()
                     samples.append(_slowest_chip_ns(mesh_device))
             ns = statistics.median(samples)
+            per_link = busiest * shard_bytes / (num_links * ns)  # GB/s on each link of the busiest hop
             _REPORT.append(
-                f"{tag}  {ns:>10.0f} ns  effective receive {shard_bytes * (G - 1) / ns:6.2f} GB/s per chip  ✓  {geo}"
+                f"{tag}  {ns / 1e3:>9.1f} us  receive {shard_bytes * (G - 1) / ns:6.1f} GB/s/chip  "
+                f"busiest link {per_link:5.1f} GB/s = {100 * per_link / link_gbps:3.0f}% of peak  ✓  {geo}"
             )
-    _REPORT.insert(
-        0,
-        f"\n=== fabric_all_gather  box={socket.gethostname()}  arch={mesh_device.arch()}  payload={PAYLOAD}B  "
-        f"shard={H}x{W} {DTYPE_NAME} {LAYOUT_NAME} dim={DIM} ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median) ===",
-    ) if not _REPORT or not _REPORT[0].startswith("\n===") else None
+            del out
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Reusing one preallocated output, calls back to back (the fence), and running inside a sub-device
 # ----------------------------------------------------------------------------------------------------------------------
-REUSE_CALLS = int(os.environ.get("FAG_REUSE_CALLS", "8"))
+REUSE_CALLS = int(os.environ.get("AG_REUSE_CALLS", "8"))
 REUSE_SHAPE = (256, 1024)  # small shards: calls are short, so a missing fence would show up as a race
 
 
