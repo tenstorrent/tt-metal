@@ -29,6 +29,7 @@ selection greps the test roots for each batch file's stem, or for its module pat
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -247,7 +248,7 @@ elif argv[0] == "run":
                     g = spawn.run(
                         "grep",
                         [
-                            "-rlw",
+                            "-rlwZ",
                             "--include=*.py",
                             "--include=*.cpp",
                             pat,
@@ -256,14 +257,15 @@ elif argv[0] == "run":
                         cwd=tree,
                         capture_output=True,
                         text=True,
-                    ).stdout.split()
-                    wanted |= set(g)
+                    ).stdout.split("\0")
+                    wanted |= {x for x in g if x}  # -Z: a path may hold spaces
             chosen = sorted(wanted)[: tc.get("max_per_batch", 8)]
             if not chosen:
                 continue
             if ex.get("reset_cmd"):
                 run_cmd(f"reset-before-{b}", ex["reset_cmd"], tree, 600)
-            test_cmd = tc["cmd"].replace("{tests}", " ".join(chosen))
+            # test paths are repository content: quote each one before it reaches the shell
+            test_cmd = tc["cmd"].replace("{tests}", " ".join(map(shlex.quote, chosen)))
             rc, text, secs = run_cmd(f"tests-{b}", test_cmd, tree, ex["timeout"])
             if rc == "timeout" and ex.get("reset_cmd"):
                 run_cmd(

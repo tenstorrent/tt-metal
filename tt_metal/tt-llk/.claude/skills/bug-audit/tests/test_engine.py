@@ -831,13 +831,13 @@ def test_init_run_keeps_non_ascii_paths_in_scope(tmp_path):
     assert files == {"a.c", "café.c"}, files
 
 
-def _git_tree(tmp_path, names):
+def _git_tree(tmp_path, names, contents=None):
     import subprocess as sp
 
     tree = tmp_path / "tree"
     for name in names:
         (tree / name).parent.mkdir(parents=True, exist_ok=True)
-        (tree / name).write_text("int x;\n")
+        (tree / name).write_text((contents or {}).get(name, "int x;\n"))
     git = lambda *a: sp.run(["git", *a], cwd=tree, check=True)  # noqa: E731
     git("init", "-q")
     git("add", ".")
@@ -986,6 +986,51 @@ def test_init_run_refuses_a_pack_without_hot_areas(tmp_path):
     p.write_text("# pack\n\n## Classes, by weight\n")
     code, out, _, _ = _init_prio(tmp_path, "--pack", p)
     assert code != 0 and "Hot areas" in out, out
+
+
+def _exec_run(tmp_path, test_files, batch_files, *configure):
+    """An audit run over a tiny git tree, with the execution tier configured; returns (code, output, run dir, tree).
+    test_files maps each test path to its contents."""
+    tree = _git_tree(tmp_path, [*batch_files, *test_files], test_files)
+    out = tmp_path / "run"
+    code, o, e = run(
+        os.path.join(ENGINE, "init_run.py"),
+        "--root",
+        tree,
+        "--out",
+        out,
+        "--repo",
+        "o/r",
+        "--include",
+        ",".join(batch_files),
+        "--ext",
+        ".c,.py",
+    )
+    assert code == 0, o + e
+    code, o, e = run(
+        os.path.join(ENGINE, "exec_tier.py"), "--run", out, "configure", *configure
+    )
+    assert code == 0, o + e
+    code, o, e = run(
+        os.path.join(ENGINE, "exec_tier.py"), "--run", out, "run", "--steps", "tests"
+    )
+    return code, o + e, out, tree
+
+
+def test_exec_tier_quotes_test_paths_for_the_shell(tmp_path):
+    odd = "tests/t e;st_widget.py"
+    code, out, _, tree = _exec_run(
+        tmp_path,
+        {odd: "import widget\n"},
+        ["src/widget.c"],
+        "--test-cmd",
+        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "--test-root",
+        "tests",
+    )
+    assert code == 0, out
+    picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
+    assert picked == [odd], picked
 
 
 def test_every_spawn_user_imports_it_before_first_use():
