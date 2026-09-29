@@ -3136,3 +3136,34 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
+
+## C.moe_shared.moe_combine test (attempt 1)
+
+What
+- Replaced the rendered 20-line test with the reviewed test_c_moe_full_moe_combine.py, set for layer 2 (LAYER = 2).
+  All checks and limits are the same: gated pcc_moe_combine_L02 >= 0.99; not a CPU bridge; vs golden rel L2 <= 0.004,
+  row ratio [0.995, 1.005], worst row <= 0.01; per addend |coef - 1| <= 0.002, add rel <= 0.008 (shared) / 0.005
+  (experts), add row <= 0.03; probes (experts, -shared) and (experts, 0) vs exact sums (rel 0.004, row 0.005).
+- Re-ran the layer-1 CPU study on the layer-2 golden (/tmp/hy4_mc2/study.py and mut.py, outside the repo). The table
+  is in the test docstring.
+
+Decisions
+- Kept the layer-1 limits. At layer 2 the addends are balanced (||experts|| 1769, ||shared|| 1669, ||mlp_out|| 2646;
+  layer 1: 6479 / 3630). A bf16 output scores rel 0.00276, add rel 0.0028 / 0.0026, add row 0.013 / 0.019 (the
+  tightest margin, 0.019 of 0.03).
+- The blind spot shrinks: 0.997 x shared now fails the experts add-row check (0.033). 1.005 / 0.995 x experts, 1.01 x
+  shared, the zeroed row / columns and 2x fail rel L2. A cached output and a + golden shared fail the probe. The stub
+  fails PCC.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.002252, probes 0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): already PASS. device_component returns the layer-1 TtMoeCombine for any layer: pcc 0.999997, rel
+  0.002252, row ratio [0.99982, 1.00015], worst row 0.0024, addend coefs 1.000000, probes 0.
+  The implement step still has to add moe_combine to DEVICE_STEPS["moe_shared"] (the hybrid).
+- The first "FAIL pcc_moe_combine_L02: pcc=0.000000" line is the precompile collect pass. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
