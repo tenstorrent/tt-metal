@@ -30,6 +30,7 @@ import torch
 import ttnn
 from models.common.sampling.generator import SamplingParams
 from models.demos.gpt_oss_120b_qb2.tt.model import HF_CONTEXT_LENGTH, MODEL_LAYERS, PAGE_SIZE, Model, build_model
+from models.demos.gpt_oss_120b_qb2.tt.sliding_ring import PREFILL_CHUNK_ALIGN
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import Generator as _TTGenerator
 
@@ -128,6 +129,12 @@ class Generator:
             mesh_device=self.mesh_device,
             tokenizer=self.tokenizer,
         )
+        # Resumes must satisfy both SDPA chunks and the sliding ring's retained
+        # history. Keep this instance's contract separate from shared defaults.
+        self._inner.model_capabilities = {
+            **self._inner.model_capabilities,
+            "resumed_prefill_token_alignment": PREFILL_CHUNK_ALIGN,
+        }
         # A standalone generator owns fixed per-slot cache ranges.  vLLM owns
         # one shared block pool and supplies the scheduler's current table on
         # every call, so creating a private full-context table here would be a

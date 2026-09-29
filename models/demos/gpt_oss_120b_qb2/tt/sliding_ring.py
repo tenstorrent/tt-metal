@@ -17,6 +17,7 @@ positions behind the last one written, rounded up to whole K chunks (768).
 import os
 
 PAGE_SIZE = 64
+PREFILL_CHUNK_ALIGN = 512
 DECODE_K_CHUNK = 128
 ENV_SLIDING_RING = "GPT_OSS_120B_SLIDING_RING"
 ENV_SLIDING_RING_TOKENS = "GPT_OSS_120B_SLIDING_RING_TOKENS"

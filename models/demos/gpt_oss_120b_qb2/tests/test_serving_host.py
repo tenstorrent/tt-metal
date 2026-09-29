@@ -99,6 +99,20 @@ def test_selected_buckets_exclude_historically_corrupt_sixteen_row_trace():
         assert next(width for width in decode_trace_buckets(32) if width >= active) == 32
 
 
+def test_shared_generator_resumes_at_model_alignment_without_changing_other_models():
+    from models.tt_transformers.tt.generator import Generator as SharedGenerator
+
+    defaults = dict(SharedGenerator.model_capabilities)
+    model = SimpleNamespace(mesh_device=None, kv_cache=[])
+    generator = Generator(model, SimpleNamespace(tokenizer=None), cache_owner="vllm")
+    cached = [0, 64, 511, 512, 8191, 8192]
+    cache_tensor = SimpleNamespace(shape=(4640, 2, 64, 64))
+    cache = [[[cache_tensor, cache_tensor]]]
+    aligned = generator._inner._align_resume_offsets(cached, [position + 513 for position in cached], cache)
+    assert aligned == [0, 0, 0, 512, 7680, 8192]
+    assert SharedGenerator.model_capabilities == defaults
+
+
 def test_host_prefill_trims_each_layer_table_using_its_cache_block_axis():
     generator = object.__new__(Generator)
     generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)

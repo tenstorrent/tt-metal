@@ -45,6 +45,7 @@ from models.demos.gpt_oss_120b_qb2.tt.model import (
 from models.demos.gpt_oss_120b_qb2.tt.precision import dtype_name
 from models.demos.gpt_oss_120b_qb2.tt.sliding_ring import (
     PAGE_SIZE,
+    PREFILL_CHUNK_ALIGN,
     SLIDING_RING_BLOCKS,
     SLIDING_RING_TOKENS,
     sliding_ring_enabled,
@@ -54,7 +55,6 @@ from models.tt_transformers.tt.common import get_padded_prefill_len
 MAX_CONCURRENT_SEQS = 32
 FULL_CONTEXT_BLOCKS = math.ceil(HF_CONTEXT_LENGTH / PAGE_SIZE)
 KV_POOL_BLOCKS_DEFAULT = 4640
-PREFILL_CHUNK_ALIGN = 512
 ENV_KV_POOL_BLOCKS = "GPT_OSS_120B_KV_POOL_BLOCKS"
 ENV_CHUNK_WARMUP = "GPT_OSS_120B_CHUNK_WARMUP"
 ENV_PREFIX_CACHING = "GPT_OSS_120B_PREFIX_CACHING"
