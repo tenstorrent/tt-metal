@@ -685,6 +685,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 19: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
         static_cast<uint32_t>(is_windowed),            // arg 21: windowed block-diagonal mask generation
+        static_cast<uint32_t>(operation_attributes.output_concat_heads),  // arg 22: concat-heads output layout
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
