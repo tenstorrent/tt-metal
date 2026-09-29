@@ -1537,3 +1537,26 @@ Results:
 - In the log, the first `FAIL pcc_swap_out pcc=0` lines come from the precompile collect pass, not from the real pass.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_14_moe_add.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.ffn_residual test (attempt 1)
+Reviewed the rendered component test for `out = post * mlp_out + comb^T @ h_mid` at layer 3 ([S * 4, H], token-major;
+inputs h_mid, ffn_hc, mlp_out). I rewrote it from the dsa_moe attn_residual test: the gated PCC, checks vs golden,
+checks vs the fp32 CPU step on the same golden inputs, and each term on its own. No second-layer run: at layer 3 the
+streams already differ (comb not transposed: per-stream 0.997, identity comb: rel 0.033).
+- Differs from attn_residual: the ffn post is not saturated (up to 0.40) and mlp_out is large (row norm 59.7), so the
+  post term is 0.70 of the output (out 2.10). The attn_residual post limits (coefficient [0.99, 1.01], rel 0.08) would
+  pass post x1.01, so both terms get tight limits here.
+- Limits (every one written `not x <= lim`, so NaN fails):
+  - vs golden: rel <= 0.006, ratio [0.993, 1.007], worst row <= 0.01, per-stream <= 0.006.
+  - vs the CPU of the same inputs: rel <= 0.0035, ratio [0.997, 1.003], worst row <= 0.006, per-stream <= 0.005.
+  - Terms: post coefficient [0.998, 1.002] / rel <= 0.007; comb coefficient [0.998, 1.002] / rel <= 0.009.
+- Sensitivity: CPU host scripts /tmp/dsaffnres/sens.py and /tmp/dsaffnres/mut.py (the second runs the test's own
+  `_checks` on mutated outputs; not kept). Noise that passes: bf16 RNE out, all-bf16 mix, 0.3% noise. Caught: post
+  x1.005, comb x1.005, a truncating bf16 output, last row zeroed or x1.01, the first half x1.003, one column half
+  x1.005, and every coarser bug. Not caught: post or comb x1.002 (bf16-noise size).
+- Results: reference passes (PCC 0.999997, vs golden 0.0025). Stub fails (PCC 0). Device passes already, because
+  `_device_step` serves every `_RESIDUAL_STEPS` step with tt/residual.py. It scores PCC 0.999996; vs CPU 0.00166 /
+  [0.9998, 1.0004], term coefficients 0.99999. That matches a CPU model of an RNE bf16 output exactly.
+- Next step: implement only needs to add ffn_residual to `DEVICE_STEPS["dsa_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
