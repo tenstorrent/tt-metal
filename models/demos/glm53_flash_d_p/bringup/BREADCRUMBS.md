@@ -2196,3 +2196,35 @@ Results:
 Next: the device moe_add (`tt/moe_add.py`) already works in this swap.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_12_moe_add.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.ffn_residual test (attempt 1)
+Reviewed the rendered component test for `out = post * mlp_out + comb^T @ h_mid` at layer 4 ([S * 4, H],
+token-major; inputs h_mid, ffn_hc, mlp_out). The rendered file was the bare `run_component_test`. I rebuilt it from
+the frozen `test_c_dsa_moe_ffn_residual.py`, with the same checks: vs the golden, vs the fp32 CPU step on the same
+golden inputs, and each term on its own. The gated metric pcc_ffn_residual_L04 (PCC >= 0.99) is unchanged.
+- Layer 4 differs from layer 3: the post term is 0.148 of the output (layer 3: 0.70), and the comb term dominates.
+  - Post column means are 0.10 / 0.0024 / 0.032 / 3e-7, so stream 3 gets almost no mlp_out.
+  - The streams differ: comb not transposed scores rel 0.049.
+- Two limits changed. Everything else carries over from layer 3.
+  - Post-term rel: <= 0.025 (was 0.007). An RNE bf16 output alone scores 0.0112, so the old limit would fail the
+    device.
+  - Comb-term rel: <= 0.004 (was 0.009). The old limit passed comb x1.005 (0.0053).
+- Sensitivity: /tmp/kmoeffnres/sens.py and mut.py, the layer-3 scripts with L = 4 plus stream, half and token
+  mutations. mut.py runs the test's own `_checks`. Both run on the host only and are not kept.
+  - Pass: bf16 RNE output, all-bf16 mix, 0.3% noise.
+  - Caught: post or comb x1.003, a truncating bf16 output, each single stream x1.01, one half of the rows x1.003 or
+    x1.005, the last row zeroed or x1.01, the last token x1.05, and post on stream 0 alone x1.01.
+  - Not caught: post or comb x1.002 (the size of bf16 noise).
+Results:
+- Reference passes: PCC 0.999997, vs golden 0.00262.
+- Stub fails (PCC 0).
+- Device (the gate) passes already through tt/residual.py: PCC 0.999995.
+  - Vs golden: 0.00308 / [0.9966, 1.0030].
+  - Vs CPU: 0.00166 / [0.9996, 1.0005].
+  - Term coefficients 0.99999 / 1.00000; post rel 0.0112, comb rel 0.0017.
+  - That is exactly an RNE bf16 output of the exact step.
+  - About 15 s.
+- The first `FAIL pcc=0` line in each log comes from the precompile collect pass.
+Next (implement): no module change is needed. Add ffn_residual to `DEVICE_STEPS["kda_moe"]` if it is not there yet.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
