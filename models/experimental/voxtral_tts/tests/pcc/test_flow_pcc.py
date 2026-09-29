@@ -41,7 +41,7 @@ from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: 
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import TtVoxtralFlow  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
-PCC_VELOCITY = 0.999    # see VOXTRAL_TTS_FLOW.md [flow-50]
+PCC_VELOCITY = 0.999  # see VOXTRAL_TTS_FLOW.md [flow-50]
 
 
 @pytest.fixture(scope="module")
@@ -76,10 +76,12 @@ def test_semantic_code_is_exact(rig):
     gen, w, h, _ = rig
     exp, got = fref.semantic_code(h, w), gen.semantic_code(h)
     print(f"\n  [semantic] ref {exp.flatten().tolist()}  dev {got.flatten().tolist()}")
-    assert bool((exp == got).all()), f"semantic code mismatch: ref {exp.flatten().tolist()} dev {got.flatten().tolist()}"
+    assert bool(
+        (exp == got).all()
+    ), f"semantic code mismatch: ref {exp.flatten().tolist()} dev {got.flatten().tolist()}"
 
 
-MAX_FRAME_CODES_DIFF = 4    # see VOXTRAL_TTS_FLOW.md [flow-50]
+MAX_FRAME_CODES_DIFF = 4  # see VOXTRAL_TTS_FLOW.md [flow-50]
 
 
 def test_full_frame_codes_close_to_reference(rig):
@@ -94,8 +96,9 @@ def test_full_frame_codes_close_to_reference(rig):
     if n_diff:
         print(f"      ref  {exp[0, :10].tolist()}")
         print(f"      got  {got[0, :10].tolist()}")
-    assert n_diff <= MAX_FRAME_CODES_DIFF, (
-        f"{n_diff} of {exp.numel()} codes differ (shipped level is 2); flow-model regression")
+    assert (
+        n_diff <= MAX_FRAME_CODES_DIFF
+    ), f"{n_diff} of {exp.numel()} codes differ (shipped level is 2); flow-model regression"
     assert worst <= 1, f"a code is off by {worst} FSQ levels, not one -- that is not rounding"
 
 
@@ -114,7 +117,7 @@ def wb():
 
 def _real_hidden(wb, ci):
     embeds, case = fixture_embeds(ci, wb)
-    h = bref.reference_forward(embeds, wb, n_layers=N_LAYERS)[:, -1]   # [1, 3072]
+    h = bref.reference_forward(embeds, wb, n_layers=N_LAYERS)[:, -1]  # [1, 3072]
     return h, case
 
 
@@ -126,14 +129,15 @@ def test_velocity_pcc_on_real_hidden_states(rig, wb, ci):
     t_emb = fref.time_embedding(torch.tensor(0.375).view(1, 1), w["time_embedding.inv_freq"])
     worst = 1.0
     for seed in X0_SEEDS:
-        x_0 = torch.randn(1, fref.N_ACOUSTIC_CODEBOOK,
-                          generator=torch.Generator().manual_seed(seed))
+        x_0 = torch.randn(1, fref.N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(seed))
         exp = fref.predict_velocity(x_0, h, t_emb, w)
         got = gen._predict_velocity(x_0, h, t_emb)
         m = compare_hidden(got, exp)
         worst = min(worst, m["pcc"])
-        print(f"\n  case {ci} ({case['voice']}) x0 seed {seed}: velocity PCC {m['pcc']:.8f}  "
-              f"worst-sample {m['worst_pct']:.2f}%")
+        print(
+            f"\n  case {ci} ({case['voice']}) x0 seed {seed}: velocity PCC {m['pcc']:.8f}  "
+            f"worst-sample {m['worst_pct']:.2f}%"
+        )
     assert worst > PCC_VELOCITY, f"case {ci} velocity PCC {worst:.8f} on a real hidden state"
 
 
@@ -144,17 +148,19 @@ def test_frame_codes_on_real_hidden_states(rig, wb, ci):
     gen, w, _, _ = rig
     h, case = _real_hidden(wb, ci)
     for seed in X0_SEEDS:
-        x_0 = torch.randn(1, fref.N_ACOUSTIC_CODEBOOK,
-                          generator=torch.Generator().manual_seed(seed))
+        x_0 = torch.randn(1, fref.N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(seed))
         exp = fref.reference_frame(h, w, x_0=x_0)
         got = gen(h, x_0=x_0)
         d = (exp.long() - got.long()).abs()
         n_diff, mx = int((d != 0).sum()), int(d.max()) if d.numel() else 0
-        print(f"\n  case {ci} ({case['voice']}) x0 seed {seed}: {n_diff} of {exp.numel()} codes "
-              f"differ, max |delta| {mx}")
+        print(
+            f"\n  case {ci} ({case['voice']}) x0 seed {seed}: {n_diff} of {exp.numel()} codes "
+            f"differ, max |delta| {mx}"
+        )
         assert int(exp[0, 0]) == int(got[0, 0]), (
             f"case {ci} seed {seed}: SEMANTIC code differs ({int(exp[0,0])} vs {int(got[0,0])}) -- "
-            f"a wrong semantic code changes the audio outright")
+            f"a wrong semantic code changes the audio outright"
+        )
         assert n_diff <= MAX_FRAME_CODES_DIFF, f"case {ci} seed {seed}: {n_diff} codes differ"
         assert mx <= 1, f"case {ci} seed {seed}: a code is off by {mx} FSQ levels, not one"
 
@@ -173,16 +179,21 @@ def _three_token_sequence(gen, w, x_t, t_emb, llm_h):
     Both sides assemble the same three projections; the device folds the batch into rows.
     """
     B = x_t.shape[0]
-    ps = [ttnn.linear(gen._up(t), gen.proj[name])
-          for t, name in ((x_t, "input_projection"), (t_emb, "time_projection"),
-                          (llm_h, "llm_projection"))]
-    dev = ttnn.reshape(ttnn.concat([ttnn.reshape(p, [B, 1, FM_INPUT_DIM]) for p in ps], dim=1),
-                       [1, B * 3, FM_INPUT_DIM])
-    ref = torch.cat([
-        torch.nn.functional.linear(x_t, w["input_projection.weight"]).unsqueeze(1),
-        torch.nn.functional.linear(t_emb, w["time_projection.weight"]).unsqueeze(1),
-        torch.nn.functional.linear(llm_h, w["llm_projection.weight"]).unsqueeze(1),
-    ], dim=1)
+    ps = [
+        ttnn.linear(gen._up(t), gen.proj[name])
+        for t, name in ((x_t, "input_projection"), (t_emb, "time_projection"), (llm_h, "llm_projection"))
+    ]
+    dev = ttnn.reshape(
+        ttnn.concat([ttnn.reshape(p, [B, 1, FM_INPUT_DIM]) for p in ps], dim=1), [1, B * 3, FM_INPUT_DIM]
+    )
+    ref = torch.cat(
+        [
+            torch.nn.functional.linear(x_t, w["input_projection.weight"]).unsqueeze(1),
+            torch.nn.functional.linear(t_emb, w["time_projection.weight"]).unsqueeze(1),
+            torch.nn.functional.linear(llm_h, w["llm_projection.weight"]).unsqueeze(1),
+        ],
+        dim=1,
+    )
     return dev, ref
 
 
@@ -223,11 +234,9 @@ def test_velocity_matches_along_the_real_trajectory(rig, wb):
     worst = 1.0
     for i, t in enumerate(ts):
         t_emb = fref.time_embedding(t.view(1, 1).repeat(BATCH, 1), w["time_embedding.inv_freq"])
-        m = compare_hidden(gen._predict_velocity(states[i], h, t_emb),
-                           fref.predict_velocity(states[i], h, t_emb, w))
+        m = compare_hidden(gen._predict_velocity(states[i], h, t_emb), fref.predict_velocity(states[i], h, t_emb, w))
         worst = min(worst, m["pcc"])
-        print(f"\n  step {i} t={float(t):.4f}: velocity PCC {m['pcc']:.8f}  "
-              f"worst {m['worst_pct']:.2f}%")
+        print(f"\n  step {i} t={float(t):.4f}: velocity PCC {m['pcc']:.8f}  worst {m['worst_pct']:.2f}%")
     assert worst > PCC_VELOCITY, f"velocity diverged at some step: worst PCC {worst:.8f}"
 
 
@@ -245,10 +254,19 @@ def test_the_solve_accumulates_correctly(rig, wb):
     _, trace = fref.decode_frame(sem, h, w, x_0=x_0, return_trace=True)
     exp = trace[-1]
     h_host = gen._cfg_input(BATCH, h)
-    got = ttnn.to_torch(gen._solve(
-        gen._up(x_0.reshape(BATCH, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32),
-        gen._up(h_host), BATCH, N_DECODING_STEPS, CFG_ALPHA)).float().reshape(
-            BATCH, N_ACOUSTIC_CODEBOOK)
+    got = (
+        ttnn.to_torch(
+            gen._solve(
+                gen._up(x_0.reshape(BATCH, 1, N_ACOUSTIC_CODEBOOK), ttnn.float32),
+                gen._up(h_host),
+                BATCH,
+                N_DECODING_STEPS,
+                CFG_ALPHA,
+            )
+        )
+        .float()
+        .reshape(BATCH, N_ACOUSTIC_CODEBOOK)
+    )
     m = compare_hidden(got, exp)
     print(f"\n  after {N_DECODING_STEPS} steps: PCC {m['pcc']:.8f}  worst {m['worst_pct']:.2f}%")
     assert m["pcc"] > PCC_VELOCITY, f"the integrated result diverged: PCC {m['pcc']:.8f}"
@@ -281,7 +299,8 @@ def test_schedule_matches_reference(rig):
     for i, tok in enumerate(tokens):
         exp = torch.nn.functional.linear(
             fref.time_embedding(ts[i].view(1, 1).repeat(BATCH, 1), w["time_embedding.inv_freq"]),
-            w["time_projection.weight"]).reshape(BATCH, 1, FM_INPUT_DIM)
+            w["time_projection.weight"],
+        ).reshape(BATCH, 1, FM_INPUT_DIM)
         worst = min(worst, compare_hidden(ttnn.to_torch(tok).float(), exp)["pcc"])
     print(f"\n  {N_DECODING_STEPS} time tokens: worst PCC {worst:.8f}")
     assert worst > PCC_VELOCITY, f"a time-conditioning token diverged: worst PCC {worst:.8f}"
@@ -300,8 +319,9 @@ def test_memoised_schedules_and_buffers_do_not_go_stale(rig, wb):
     for n in (3, 5, N_DECODING_STEPS, 2):
         gen(h, x_0=x_0, n_steps=n)
     again = gen(h, x_0=x_0)
-    assert torch.equal(first, again), (
-        "codes changed after other step counts ran, so a cached schedule or buffer went stale")
+    assert torch.equal(
+        first, again
+    ), "codes changed after other step counts ran, so a cached schedule or buffer went stale"
     print(f"\n  {tuple(sorted(gen._sched))} schedules cached; first result reproduced exactly")
 
 
@@ -330,8 +350,7 @@ def test_an_end_audio_frame_is_not_decoded(rig, wb):
     expected_slot = EMPTY_AUDIO_ID + N_AUDIO_SPECIAL
     print(f"\n  [END_AUDIO] frame -> device {got[0, :4].tolist()}, reference {exp[0, :4].tolist()}")
     assert torch.equal(got, exp), "device and reference disagree on an [END_AUDIO] frame"
-    assert bool((got == expected_slot).all()), (
-        f"acoustic slots are {got[0, :4].tolist()}, expected all {expected_slot}")
+    assert bool((got == expected_slot).all()), f"acoustic slots are {got[0, :4].tolist()}, expected all {expected_slot}"
 
 
 @pytest.mark.slow
@@ -341,8 +360,11 @@ def test_frame_codes_at_other_cfg_alphas(rig, wb, cfg_alpha):
     gen, w, _, _ = rig
     h, _ = _real_hidden(wb, REAL_CASES[0])
     x_0 = torch.randn(BATCH, N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(0))
-    _same_codes(gen(h, x_0=x_0, cfg_alpha=cfg_alpha),
-                fref.reference_frame(h, w, x_0=x_0, cfg_alpha=cfg_alpha), f"cfg_alpha {cfg_alpha}")
+    _same_codes(
+        gen(h, x_0=x_0, cfg_alpha=cfg_alpha),
+        fref.reference_frame(h, w, x_0=x_0, cfg_alpha=cfg_alpha),
+        f"cfg_alpha {cfg_alpha}",
+    )
 
 
 @pytest.mark.slow
@@ -352,5 +374,6 @@ def test_frame_codes_at_other_step_counts(rig, wb, n_steps):
     gen, w, _, _ = rig
     h, _ = _real_hidden(wb, REAL_CASES[0])
     x_0 = torch.randn(BATCH, N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(0))
-    _same_codes(gen(h, x_0=x_0, n_steps=n_steps),
-                fref.reference_frame(h, w, x_0=x_0, n_steps=n_steps), f"n_steps {n_steps}")
+    _same_codes(
+        gen(h, x_0=x_0, n_steps=n_steps), fref.reference_frame(h, w, x_0=x_0, n_steps=n_steps), f"n_steps {n_steps}"
+    )

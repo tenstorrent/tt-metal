@@ -65,8 +65,7 @@ def test_prefill_stays_correct_across_lengths_in_one_session(gen, w):
     worst = None
     for ci in SEQUENCE:
         P, voice, m = _prefill_pcc(gen, w, ci)
-        print(f"\n  case {ci} ({voice}, P={P}): last-position PCC {m['pcc']:.6f}  "
-              f"worst-sample {m['worst_pct']:.2f}%")
+        print(f"\n  case {ci} ({voice}, P={P}): last-position PCC {m['pcc']:.6f}  worst-sample {m['worst_pct']:.2f}%")
         assert m["pcc"] > PCC_GATE, f"case {ci} (P={P}) degraded to {m['pcc']:.6f} mid-sequence"
         worst = m["pcc"] if worst is None else min(worst, m["pcc"])
     print(f"  worst across the sequence: {worst:.6f}")
@@ -74,21 +73,26 @@ def test_prefill_stays_correct_across_lengths_in_one_session(gen, w):
 
 def test_short_prompt_after_a_long_one(gen, w):
     """A shorter prompt after a longer one must not reach the previous request's cache tail."""
-    long_ci, short_ci = 2, 0          # P=312 then P=200
+    long_ci, short_ci = 2, 0  # P=312 then P=200
     P_long, _, _ = _prefill_pcc(gen, w, long_ci)
     P_short, voice, m = _prefill_pcc(gen, w, short_ci)
     assert P_short < P_long, "pick a genuinely shorter second case or this test is vacuous"
     print(f"\n  P={P_long} then P={P_short} ({voice}): PCC {m['pcc']:.6f}")
     assert m["pcc"] > PCC_GATE, (
         f"a P={P_short} prompt after a P={P_long} one scored {m['pcc']:.6f} -- the previous "
-        f"request's cache tail is reachable")
+        f"request's cache tail is reachable"
+    )
 
 
 def test_decode_position_accounting(gen, w):
     """pos after prefill plus k steps must be P+k on both sides, or later RoPE angles are wrong."""
-    frames = torch.load(__import__("os").path.join(
-        __import__("os").path.dirname(__import__("os").path.dirname(
-            __import__("os").path.abspath(__file__))), "tests", "real_frames_fixture.pt")).long()
+    frames = torch.load(
+        __import__("os").path.join(
+            __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__))),
+            "tests",
+            "real_frames_fixture.pt",
+        )
+    ).long()
     embeds, _ = fixture_embeds(0, w)
     P = embeds.shape[1]
     inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)

@@ -66,10 +66,10 @@ def test_reset_makes_requests_independent(pipe):
     _run(pipe, CASE_B)
     pipe.backbone.reset()
     after = _run(pipe, CASE_A)
-    print(f"\n  case {CASE_A} alone: {alone.shape[0]} frames | after case {CASE_B} + reset: "
-          f"{after.shape[0]} frames")
-    assert alone.shape == after.shape, (
-        f"frame count depends on history even across reset(): {alone.shape[0]} vs {after.shape[0]}")
+    print(f"\n  case {CASE_A} alone: {alone.shape[0]} frames | after case {CASE_B} + reset: {after.shape[0]} frames")
+    assert (
+        alone.shape == after.shape
+    ), f"frame count depends on history even across reset(): {alone.shape[0]} vs {after.shape[0]}"
     assert torch.equal(alone, after), "codes depend on history even across reset()"
 
 
@@ -83,11 +83,11 @@ def test_history_does_not_leak_without_reset(pipe):
     alone = _run(pipe, CASE_A)
     pipe.backbone.reset()
     _run(pipe, CASE_B)
-    after = _run(pipe, CASE_A)          # no reset, deliberately
-    print(f"\n  case {CASE_A} alone: {alone.shape[0]} frames | after case {CASE_B}, NO reset: "
-          f"{after.shape[0]} frames")
-    assert torch.equal(alone, after), (
-        f"history leaked: {alone.shape[0]} vs {after.shape[0]} frames without an intervening reset")
+    after = _run(pipe, CASE_A)  # no reset, deliberately
+    print(f"\n  case {CASE_A} alone: {alone.shape[0]} frames | after case {CASE_B}, NO reset: {after.shape[0]} frames")
+    assert torch.equal(
+        alone, after
+    ), f"history leaked: {alone.shape[0]} vs {after.shape[0]} frames without an intervening reset"
 
 
 @pytest.mark.slow
@@ -98,14 +98,12 @@ def test_fifteen_case_sequential_run_does_not_change_a_length(pipe):
     """
     lengths = {}
     for ci in case_ids():
-        frames = _run(pipe, ci)          # no reset between cases: this is the point
+        frames = _run(pipe, ci)  # no reset between cases: this is the point
         lengths[ci] = frames.shape[0]
     natural = {ci: n for ci, n in lengths.items() if n < MAX_FRAMES}
-    print(f"\n  sequential run, {len(lengths)} cases: " +
-          " ".join(f"{ci}:{n}" for ci, n in sorted(lengths.items())))
+    print(f"\n  sequential run, {len(lengths)} cases: " + " ".join(f"{ci}:{n}" for ci, n in sorted(lengths.items())))
     print(f"  stopped naturally (comparable): {sorted(natural)}")
-    assert natural, ("no case stopped before the cap, so this run cannot detect a length change -- "
-                     "raise MAX_FRAMES")
+    assert natural, "no case stopped before the cap, so this run cannot detect a length change -- raise MAX_FRAMES"
 
     mismatched = []
     for ci in sorted(natural):
@@ -113,8 +111,10 @@ def test_fifteen_case_sequential_run_does_not_change_a_length(pipe):
         alone = _run(pipe, ci).shape[0]
         if alone != natural[ci]:
             mismatched.append((ci, natural[ci], alone))
-        print(f"    case {ci}: in-sequence {natural[ci]} vs alone {alone}"
-              f"{'   <- DIFFERS' if alone != natural[ci] else ''}")
-    assert not mismatched, (
-        "frame count depends on what ran before: " +
-        ", ".join(f"case {c} {a} in sequence vs {b} alone" for c, a, b in mismatched))
+        print(
+            f"    case {ci}: in-sequence {natural[ci]} vs alone {alone}"
+            f"{'   <- DIFFERS' if alone != natural[ci] else ''}"
+        )
+    assert not mismatched, "frame count depends on what ran before: " + ", ".join(
+        f"case {c} {a} in sequence vs {b} alone" for c, a, b in mismatched
+    )

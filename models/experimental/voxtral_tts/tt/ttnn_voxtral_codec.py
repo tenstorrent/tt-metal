@@ -97,27 +97,28 @@ class TtVoxtralCodecDecoder:
         self.semantic_host = w["semantic_embedding"].float()  # host gather; see _quantizer_host
         # Per-tap weights for the output projection, which runs as matmuls (see _graph).
         # torch stores the conv as [out, in, k]; ttnn.linear wants [in, out].
-        self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t())
-                          for j in range(PATCH_PROJ_KERNEL)]
+        self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t()) for j in range(PATCH_PROJ_KERNEL)]
         # Gather index that builds the projection's reflected prefix (x6..x1 in the last 6 rows).
         # see VOXTRAL_TTS_CODEC.md [codec-08]
         idx = torch.zeros(1, 1, OUT_PREFIX, CODEC_DIM, dtype=torch.int32)
         for m in range(PATCH_PROJ_KERNEL - 1):
             idx[0, 0, OUT_PREFIX - (PATCH_PROJ_KERNEL - 1) + m, :] = (PATCH_PROJ_KERNEL - 1) - m
         self._out_prefix_idx = ttnn.from_torch(
-            idx.contiguous(), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+            idx.contiguous(), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
         # --- convs ---
         # Weights stay on host; `_prepared` prepares and deduplicates them on first use.
         # see VOXTRAL_TTS_CODEC.md [codec-09]
         self.conv_host = {
-            "in": host(w["decoder_blocks.0.conv.weight"].unsqueeze(2)),      # [1024,292,1,3]
-            "out": host(w["output_proj.conv.weight"].unsqueeze(2)),          # [240,1024,1,7]
-            **{f"up{i}": host(w[f"decoder_blocks.{i}.conv.weight"].unsqueeze(2))
-               for i in DEC_CONV_BLOCKS[1:]},                               # [1024,1024,1,4]
+            "in": host(w["decoder_blocks.0.conv.weight"].unsqueeze(2)),  # [1024,292,1,3]
+            "out": host(w["output_proj.conv.weight"].unsqueeze(2)),  # [240,1024,1,7]
+            **{
+                f"up{i}": host(w[f"decoder_blocks.{i}.conv.weight"].unsqueeze(2)) for i in DEC_CONV_BLOCKS[1:]
+            },  # [1024,1024,1,4]
         }
-        self._prep_cache = {}   # (conv, length) -> prepared tensor (possibly SHARED)
-        self._layouts = {}      # (conv, content hash) -> the one tensor of that layout
+        self._prep_cache = {}  # (conv, length) -> prepared tensor (possibly SHARED)
+        self._layouts = {}  # (conv, content hash) -> the one tensor of that layout
 
         # --- transformer layers ---
         self.layers = {}
@@ -179,12 +180,24 @@ class TtVoxtralCodecDecoder:
         `input_dtype` is the ACTIVATION dtype. see VOXTRAL_TTS_CODEC.md [codec-11]"""
         fn = ttnn.prepare_conv_transpose2d_weights if transpose else ttnn.prepare_conv_weights
         return fn(
-            weight_tensor=w_host, input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.TILE_LAYOUT, weights_format="IOHW" if transpose else "OIHW",
-            in_channels=in_c, out_channels=out_c, batch_size=1,
-            input_height=1, input_width=L, kernel_size=(1, kernel),
-            stride=(1, stride), padding=(0, 0), dilation=(1, 1), has_bias=False, groups=1,
-            device=self.device, input_dtype=DTYPE, compute_config=COMPUTE_CONFIG,
+            weight_tensor=w_host,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.TILE_LAYOUT,
+            weights_format="IOHW" if transpose else "OIHW",
+            in_channels=in_c,
+            out_channels=out_c,
+            batch_size=1,
+            input_height=1,
+            input_width=L,
+            kernel_size=(1, kernel),
+            stride=(1, stride),
+            padding=(0, 0),
+            dilation=(1, 1),
+            has_bias=False,
+            groups=1,
+            device=self.device,
+            input_dtype=DTYPE,
+            compute_config=COMPUTE_CONFIG,
             conv_config=self.convt_cfg if transpose else self.conv_cfg,
         )
 
@@ -232,11 +245,20 @@ class TtVoxtralCodecDecoder:
         x = self._pad_causal(x, pad_total, pad_mode)
         L = x.shape[2]
         out = ttnn.conv1d(
-            input_tensor=x, weight_tensor=self._prepared(name, in_c, out_c, kernel, stride, L, False),
+            input_tensor=x,
+            weight_tensor=self._prepared(name, in_c, out_c, kernel, stride, L, False),
             device=self.device,
-            in_channels=in_c, out_channels=out_c, batch_size=1, input_length=L,
-            kernel_size=kernel, stride=stride, padding=0, dilation=1, groups=1,
-            compute_config=COMPUTE_CONFIG, conv_config=self.conv_cfg,
+            in_channels=in_c,
+            out_channels=out_c,
+            batch_size=1,
+            input_length=L,
+            kernel_size=kernel,
+            stride=stride,
+            padding=0,
+            dilation=1,
+            groups=1,
+            compute_config=COMPUTE_CONFIG,
+            conv_config=self.conv_cfg,
         )
         out = out[0] if isinstance(out, (tuple, list)) else out
         return ttnn.reshape(out, [1, 1, -1, out_c])
@@ -249,10 +271,19 @@ class TtVoxtralCodecDecoder:
             input_tensor=x,
             weight_tensor=self._prepared(name, channels, channels, kernel, stride, L, True),
             device=self.device,
-            in_channels=channels, out_channels=channels, batch_size=1,
-            input_height=1, input_width=L, kernel_size=(1, kernel), stride=(1, stride),
-            padding=(0, 0), output_padding=(0, 0), dilation=(1, 1), groups=1,
-            compute_config=COMPUTE_CONFIG, conv_config=self.convt_cfg,
+            in_channels=channels,
+            out_channels=channels,
+            batch_size=1,
+            input_height=1,
+            input_width=L,
+            kernel_size=(1, kernel),
+            stride=(1, stride),
+            padding=(0, 0),
+            output_padding=(0, 0),
+            dilation=(1, 1),
+            groups=1,
+            compute_config=COMPUTE_CONFIG,
+            conv_config=self.convt_cfg,
         )
         out = out[0] if isinstance(out, (tuple, list)) else out
         out = ttnn.reshape(out, [1, 1, -1, channels])
@@ -320,8 +351,10 @@ class TtVoxtralCodecDecoder:
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.reshape(q, [1, 1, L, CODEC_DIM]),
             ttnn.reshape(kv, [1, 1, L, 2 * CODEC_DIM]),
-            num_heads=CODEC_N_HEADS, num_kv_heads=CODEC_N_HEADS,
-            transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_heads=CODEC_N_HEADS,
+            num_kv_heads=CODEC_N_HEADS,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attn = self._attention(qh, kh, vh, window)
         attn = ttnn.transformer.concatenate_heads(attn)  # [1,H,L,d] -> [1,L,H*d]
@@ -347,16 +380,14 @@ class TtVoxtralCodecDecoder:
 
     def quantizer_decode(self, codes):
         """Host quantizer + upload, as one step (the eager path and the tests use this)."""
-        return ttnn.from_torch(self._quantizer_host(codes), dtype=DTYPE,
-                               layout=ttnn.TILE_LAYOUT, device=self.device)
+        return ttnn.from_torch(self._quantizer_host(codes), dtype=DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
 
     # ----------------------------------------------------------------------------------
     # The device-only op sequence
     # ----------------------------------------------------------------------------------
     def _graph(self, x, stages=None):
         """latents [1,1,T,292] on device -> [1,1,T',240] on device."""
-        x = self._conv1d(x, "in", LATENT_DIM, CODEC_DIM,
-                         DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
+        x = self._conv1d(x, "in", LATENT_DIM, CODEC_DIM, DEC_CONV_KERNELS[0], DEC_CONV_STRIDES[0], "replicate")
         if stages is not None:
             stages["after_input_conv"] = self._chw(x)
         for stage, (tf_i, n_layers) in enumerate(zip(DEC_TF_BLOCKS, DEC_TF_LENGTHS)):
@@ -369,8 +400,9 @@ class TtVoxtralCodecDecoder:
                 stages[f"after_tf{tf_i}"] = self._chw(x)
             if stage < len(DEC_CONV_BLOCKS) - 1:
                 ci = DEC_CONV_BLOCKS[stage + 1]
-                x = self._conv_transpose(x, f"up{ci}", CODEC_DIM,
-                                         DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1])
+                x = self._conv_transpose(
+                    x, f"up{ci}", CODEC_DIM, DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1]
+                )
                 if stages is not None:
                     stages[f"after_up{ci}"] = self._chw(x)
         # Output projection as 7 tap matmuls over a gathered prefix, not ttnn.conv1d (halo hang).
@@ -382,10 +414,10 @@ class TtVoxtralCodecDecoder:
         xp = ttnn.concat([ttnn.gather(head, dim=2, index=self._out_prefix_idx), x], dim=2)
         acc = None
         for j in range(PATCH_PROJ_KERNEL):
-            y = ttnn.linear(xp, self._out_taps[j], compute_kernel_config=COMPUTE_CONFIG,
-                            memory_config=ttnn.L1_MEMORY_CONFIG)
-            sl = ttnn.slice(y, [0, 0, off + j, 0], [1, 1, off + j + L, PATCH_SIZE],
-                            memory_config=ttnn.L1_MEMORY_CONFIG)
+            y = ttnn.linear(
+                xp, self._out_taps[j], compute_kernel_config=COMPUTE_CONFIG, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            sl = ttnn.slice(y, [0, 0, off + j, 0], [1, 1, off + j + L, PATCH_SIZE], memory_config=ttnn.L1_MEMORY_CONFIG)
             acc = sl if acc is None else ttnn.add(acc, sl, memory_config=ttnn.L1_MEMORY_CONFIG)
         return acc
 

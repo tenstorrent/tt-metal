@@ -30,11 +30,11 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     END_AUDIO_ID,
     FRAME_RATE,
     N_DECODING_STEPS,
+    MODEL_DIR,
     SAMPLING_RATE,
-    WEIGHTS_DIR,
 )
 
-VOICE_DIR = os.path.join(WEIGHTS_DIR, "voice_embedding")
+VOICE_DIR = os.path.join(MODEL_DIR, "voice_embedding")
 OUT_WAV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "generated", "voxtral_ref.wav")
 AUDIO_TOKEN_ID = 24  # from tekken.json special_ids.audio; asserted against the prompt dump
 SAMPLES_PER_FRAME = 1920  # 240-sample patch x 8 upsample
@@ -110,8 +110,7 @@ def generate(ids, voice, wb, wf, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, ve
         h = dec.step(backbone.embed_frame(wb, codes[0]))
         if verbose and (i + 1) % 10 == 0:
             el = time.perf_counter() - t0
-            print(f"[pipeline]   {i + 1} frames ({(i + 1) / FRAME_RATE:.1f}s audio) "
-                  f"| {el / (i + 1):.2f}s/frame")
+            print(f"[pipeline]   {i + 1} frames ({(i + 1) / FRAME_RATE:.1f}s audio) | {el / (i + 1):.2f}s/frame")
     else:
         if verbose:
             print(f"[pipeline] hit max_frames={max_frames} without [END_AUDIO]")
@@ -155,17 +154,18 @@ def main():
         ids, text, dump_voice = load_prompt(args.prompt_ids)
         voice_name = dump_voice or args.voice
     print(f"[pipeline] text: {text!r}")
-    print(f"[pipeline] prompt {len(ids)} ids, {int((ids == AUDIO_TOKEN_ID).sum())} audio placeholders "
-          f"| voice {voice_name!r} | {N_DECODING_STEPS} Euler steps, cfg {args.cfg_alpha} "
-          f"| threads {torch.get_num_threads()}")
+    print(
+        f"[pipeline] prompt {len(ids)} ids, {int((ids == AUDIO_TOKEN_ID).sum())} audio placeholders "
+        f"| voice {voice_name!r} | {N_DECODING_STEPS} Euler steps, cfg {args.cfg_alpha} "
+        f"| threads {torch.get_num_threads()}"
+    )
 
     voice = load_voice(voice_name)
     t0 = time.perf_counter()
     wb = backbone.load_backbone_state(args.ckpt)
     wf = flow.load_flow_state(args.ckpt)
     wc = codec.load_codec_state(args.ckpt)
-    print(f"[pipeline] loaded 3 blocks in {time.perf_counter() - t0:.1f}s "
-          f"(voice {tuple(voice.shape)})")
+    print(f"[pipeline] loaded 3 blocks in {time.perf_counter() - t0:.1f}s (voice {tuple(voice.shape)})")
 
     frames, t_prefill, t_gen = generate(ids, voice, wb, wf, args.max_frames, args.cfg_alpha, args.seed)
     del wb, wf  # free the backbone and flow model before the codec runs
@@ -179,8 +179,10 @@ def main():
     path = save_wav(wav, args.out)
     assert wav.shape[-1] == frames.shape[0] * SAMPLES_PER_FRAME
     print(f"\n[pipeline] {frames.shape[0]} frames -> {tuple(wav.shape)} = {secs:.2f}s @ {SAMPLING_RATE} Hz")
-    print(f"[pipeline] peak |x| {wav.abs().max():.3f} | prefill {t_prefill:.1f}s | "
-          f"generate {t_gen:.1f}s ({t_gen / frames.shape[0]:.2f}s/frame) | codec {t_codec:.1f}s")
+    print(
+        f"[pipeline] peak |x| {wav.abs().max():.3f} | prefill {t_prefill:.1f}s | "
+        f"generate {t_gen:.1f}s ({t_gen / frames.shape[0]:.2f}s/frame) | codec {t_codec:.1f}s"
+    )
     print(f"[pipeline] -> {path}")
 
 

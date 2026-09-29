@@ -183,8 +183,7 @@ def codec_block(x, w, p, bias):
     r = F.linear(attn, w[p + "attention.wo.weight"])
     x = x + w[p + "attention_scale"] * r  # LayerScale
     h = rms_norm(x, w[p + "ffn_norm.weight"], CODEC_NORM_EPS)
-    r = swiglu(h, w[p + "feed_forward.w1.weight"], w[p + "feed_forward.w2.weight"],
-               w[p + "feed_forward.w3.weight"])
+    r = swiglu(h, w[p + "feed_forward.w1.weight"], w[p + "feed_forward.w2.weight"], w[p + "feed_forward.w3.weight"])
     return x + w[p + "ffn_scale"] * r
 
 
@@ -212,8 +211,9 @@ def reference_decode(codes, w):
         # decoder blocks 2, 4, 6: one upsample after each of the first three stages
         if stage < len(DEC_CONV_BLOCKS) - 1:
             ci = DEC_CONV_BLOCKS[stage + 1]
-            x = causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"],
-                                        DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1])
+            x = causal_conv_transpose1d(
+                x, w[f"decoder_blocks.{ci}.conv.weight"], DEC_CONV_KERNELS[stage + 1], DEC_CONV_STRIDES[stage + 1]
+            )
     x = causal_conv1d(x, w["output_proj.conv.weight"], PATCH_PROJ_KERNEL, 1, "reflect")  # [B, 240, T']
     B, _, T = x.shape
     return x.permute(0, 2, 1).reshape(B, 1, T * PATCH_SIZE)  # unpatch: "b (c h) t -> b c (t h)"
@@ -247,19 +247,25 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     print(f"[codec] loading decoder from {args.ckpt}")
     w = load_codec_state(args.ckpt)
-    print(f"[codec] {len(w)} tensors (weight_norm folded); windows {decoder_window_sizes()}, "
-          f"norm_eps {CODEC_NORM_EPS}, layer_scale init {CODEC_LAYER_SCALE_INIT}")
+    print(
+        f"[codec] {len(w)} tensors (weight_norm folded); windows {decoder_window_sizes()}, "
+        f"norm_eps {CODEC_NORM_EPS}, layer_scale init {CODEC_LAYER_SCALE_INIT}"
+    )
 
     codes = make_synthetic_codes(args.n_frames)
     latents = quantizer_decode(codes, w)
-    print(f"[codec] codes {tuple(codes.shape)} -> latents {tuple(latents.shape)} "
-          f"(semantic |x| {latents[:, :SEMANTIC_DIM].abs().mean():.4f}, "
-          f"acoustic |x| {latents[:, SEMANTIC_DIM:].abs().mean():.4f})")
+    print(
+        f"[codec] codes {tuple(codes.shape)} -> latents {tuple(latents.shape)} "
+        f"(semantic |x| {latents[:, :SEMANTIC_DIM].abs().mean():.4f}, "
+        f"acoustic |x| {latents[:, SEMANTIC_DIM:].abs().mean():.4f})"
+    )
 
     wav = reference_decode(codes, w)
     secs = wav.shape[-1] / 24000
-    print(f"[codec] waveform {tuple(wav.shape)} = {secs:.3f}s @ 24 kHz "
-          f"(peak {wav.abs().max():.4f}); upsample {wav.shape[-1] // args.n_frames}x per frame")
+    print(
+        f"[codec] waveform {tuple(wav.shape)} = {secs:.3f}s @ 24 kHz "
+        f"(peak {wav.abs().max():.4f}); upsample {wav.shape[-1] // args.n_frames}x per frame"
+    )
     assert wav.shape[-1] == args.n_frames * PATCH_SIZE * 8, "expected 240*8 = 1920 samples/frame"
 
     # FSQ round-trip: quantizer_decode must invert the flow model's quantization exactly.
@@ -287,9 +293,18 @@ def main():
     torch.save(latents, os.path.join(args.out, "latents.pt"))
     torch.save(wav, os.path.join(args.out, "waveform.pt"))
     torch.save(stages, os.path.join(args.out, "stages.pt"))
-    torch.save({"n_frames": args.n_frames, "patch": PATCH_SIZE, "upsample": PATCH_SIZE * 8,
-                "latent_dim": LATENT_DIM, "dim": CODEC_DIM, "windows": decoder_window_sizes(),
-                "sampling_rate": 24000}, os.path.join(args.out, "meta.pt"))
+    torch.save(
+        {
+            "n_frames": args.n_frames,
+            "patch": PATCH_SIZE,
+            "upsample": PATCH_SIZE * 8,
+            "latent_dim": LATENT_DIM,
+            "dim": CODEC_DIM,
+            "windows": decoder_window_sizes(),
+            "sampling_rate": 24000,
+        },
+        os.path.join(args.out, "meta.pt"),
+    )
     print(f"[codec] wrote goldens to {args.out}")
 
 

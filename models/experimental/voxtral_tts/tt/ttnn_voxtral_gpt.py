@@ -26,13 +26,15 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
 )
 
 SCALE = HEAD_DIM**-0.5
-Q_WIDTH = N_HEADS * HEAD_DIM          # 4096, deliberately != DIM
+Q_WIDTH = N_HEADS * HEAD_DIM  # 4096, deliberately != DIM
 TILE = 32
 
 # Prefill pads its sequence to a multiple of this. see VOXTRAL_TTS_BACKBONE.md [gpt-02]
 PREFILL_MULTIPLE = 128
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
 DTYPE = ttnn.bfloat16
@@ -42,48 +44,61 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 
 # Memory configs for ttnn's decode-native head layout, [1, batch, heads, head_dim].
 # see VOXTRAL_TTS_BACKBONE.md [gpt-05]
-_QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
+_QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM  # 6144, one fused projection
 # Sets both the shard width and the grid, so the two cannot disagree.
 # see VOXTRAL_TTS_STATUS.md §6.44
 _QKV_GRID_X = 1
 _QKV_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, _QKV_WIDTH // _QKV_GRID_X), core_grid=ttnn.CoreGrid(y=1, x=_QKV_GRID_X),
-    strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True)
+    (TILE, _QKV_WIDTH // _QKV_GRID_X),
+    core_grid=ttnn.CoreGrid(y=1, x=_QKV_GRID_X),
+    strategy=ttnn.ShardStrategy.WIDTH,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
 # rotary_embedding_hf's decode mode requires cos/sin sharded as well as the input
 # ("Cos must be sharded in decode mode"), one tile row on one core at batch 1.
 _ROPE_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
+    (TILE, HEAD_DIM),
+    core_grid=ttnn.CoreGrid(y=1, x=1),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
 # sdpa_decode program config; a config ships only if exact at every position.
 # see VOXTRAL_TTS_BACKBONE.md [gpt-21]
 _SDPA_PRG = ttnn.SDPAProgramConfig(
-    q_chunk_size=TILE, k_chunk_size=512,
-    compute_with_storage_grid_size=ttnn.CoreCoord(8, 2))
+    q_chunk_size=TILE, k_chunk_size=512, compute_with_storage_grid_size=ttnn.CoreCoord(8, 2)
+)
 
 # Decode matmul program configs. DECODE ONLY: per_core_M=1 and fuse_batch=True assume one tile of
 # rows, so _mlp takes them as an argument. SiLU fuses via fused_activation, not activation="silu".
 # see VOXTRAL_TTS_BACKBONE.md [gpt-26]
-_MM_GRID = (11, 7)                    # fits 11x10 and 13x10. see VOXTRAL_TTS_BACKBONE.md [gpt-29]
+_MM_GRID = (11, 7)  # fits 11x10 and 13x10. see VOXTRAL_TTS_BACKBONE.md [gpt-29]
 
 
 def _mm1d(in0_block_w, per_core_n, activation=None):
     """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=_MM_GRID, in0_block_w=in0_block_w, out_subblock_h=1,
+        compute_with_storage_grid_size=_MM_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
         # largest legal width: osh*osw <= 4 and per_core_N % osw == 0, both TT_FATAL.
         # see VOXTRAL_TTS_STATUS.md §6.61
         out_subblock_w=next(s for s in (4, 3, 2, 1) if per_core_n % s == 0),
-        per_core_M=1, per_core_N=per_core_n, fuse_batch=True,
-        fused_activation=activation, mcast_in0=True)
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=activation,
+        mcast_in0=True,
+    )
 
 
 #                       in0_block_w   per_core_N = ceil(N_tiles / 72) -- 12x6's split, kept on 11x7
-_PRG_QKV = _mm1d(2, 3)              # K=3072  N=6144   Nt=192
-_PRG_WO = _mm1d(4, 2)               # K=4096  N=3072   Nt= 96
-_PRG_W1 = _mm1d(2, 4, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))   # K=3072 N=9216 Nt=288
-_PRG_W3 = _mm1d(2, 4)               # same shape as w1, no activation
-_PRG_W2 = _mm1d(4, 2)               # K=9216  N=3072   Nt= 96 -- the deepest reduction in the model
+_PRG_QKV = _mm1d(2, 3)  # K=3072  N=6144   Nt=192
+_PRG_WO = _mm1d(4, 2)  # K=4096  N=3072   Nt= 96
+_PRG_W1 = _mm1d(2, 4, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))  # K=3072 N=9216 Nt=288
+_PRG_W3 = _mm1d(2, 4)  # same shape as w1, no activation
+_PRG_W2 = _mm1d(4, 2)  # K=9216  N=3072   Nt= 96 -- the deepest reduction in the model
 DECODE_PRG = {"wqkv": _PRG_QKV, "wo": _PRG_WO, "w1": _PRG_W1, "w3": _PRG_W3, "w2": _PRG_W2}
 
 
@@ -91,46 +106,62 @@ def _pc(prg, key):
     """program_config kwarg for `key`, or nothing at all when prg is empty (the prefill path)."""
     return {"program_config": prg[key]} if prg else {}
 
+
 # Width-sharded decode RMSNorm. DECODE ONLY: the shard spec fixes the height at one tile.
 # see VOXTRAL_TTS_BACKBONE.md [gpt-28]
-_NORM_GRID = (8, 4)                   # 32 cores x block_w 3 == 96 tiles
+_NORM_GRID = (8, 4)  # 32 cores x block_w 3 == 96 tiles
 _NORM_SHARD = ttnn.create_sharded_memory_config(
     (TILE, DIM // (_NORM_GRID[0] * _NORM_GRID[1])),
     core_grid=ttnn.CoreGrid(y=_NORM_GRID[1], x=_NORM_GRID[0]),
-    strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True)
+    strategy=ttnn.ShardStrategy.WIDTH,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
 _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=_NORM_GRID, subblock_w=1, block_h=1,
-    block_w=DIM // TILE // (_NORM_GRID[0] * _NORM_GRID[1]), inplace=False)
+    compute_with_storage_grid_size=_NORM_GRID,
+    subblock_w=1,
+    block_h=1,
+    block_w=DIM // TILE // (_NORM_GRID[0] * _NORM_GRID[1]),
+    inplace=False,
+)
 
 
 def check_device_grid(device):
     """Raise, naming the constant, if any hardcoded core grid does not fit this device.
     see VOXTRAL_TTS_BACKBONE.md [gpt-29]"""
     g = device.compute_with_storage_grid_size()
-    need = {"_MM_GRID": _MM_GRID, "_NORM_GRID": _NORM_GRID,
-            "_SDPA_PRG": (_SDPA_PRG.compute_with_storage_grid_size.x,
-                          _SDPA_PRG.compute_with_storage_grid_size.y)}
+    need = {
+        "_MM_GRID": _MM_GRID,
+        "_NORM_GRID": _NORM_GRID,
+        "_SDPA_PRG": (_SDPA_PRG.compute_with_storage_grid_size.x, _SDPA_PRG.compute_with_storage_grid_size.y),
+    }
     bad = {k: v for k, v in need.items() if v[0] > g.x or v[1] > g.y}
     if bad:
-        raise RuntimeError(f"device compute grid is {g.x}x{g.y}; these do not fit: {bad}. "
-                           f"Check `tt-smi -s` ENABLED_TENSIX_COL (0x3fff = all 14 columns).")
+        raise RuntimeError(
+            f"device compute grid is {g.x}x{g.y}; these do not fit: {bad}. "
+            f"Check `tt-smi -s` ENABLED_TENSIX_COL (0x3fff = all 14 columns)."
+        )
 
 
 def sharded_norm(x, gamma, eps, mc):
     """Width-sharded RMSNorm for ONE tile of rows; falls back to interleaved for prefill."""
     if x.shape[-2] > TILE:
         return ttnn.rms_norm(x, weight=gamma, epsilon=eps, compute_kernel_config=COMPUTE_CONFIG)
-    r = ttnn.rms_norm(ttnn.to_memory_config(x, _NORM_SHARD), weight=gamma, epsilon=eps,
-                      program_config=_NORM_PRG, memory_config=_NORM_SHARD,
-                      compute_kernel_config=COMPUTE_CONFIG)
+    r = ttnn.rms_norm(
+        ttnn.to_memory_config(x, _NORM_SHARD),
+        weight=gamma,
+        epsilon=eps,
+        program_config=_NORM_PRG,
+        memory_config=_NORM_SHARD,
+        compute_kernel_config=COMPUTE_CONFIG,
+    )
     return ttnn.to_memory_config(r, mc)
 
 
 # Weight precision decides accuracy as well as speed. see VOXTRAL_TTS_BACKBONE.md [gpt-06]
-WEIGHT_DTYPE = ttnn.bfloat16          # w2, kept bf16 for accuracy
-FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
-ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
+WEIGHT_DTYPE = ttnn.bfloat16  # w2, kept bf16 for accuracy
+FF_WEIGHT_DTYPE = ttnn.bfloat8_b  # FF1 and FF3
+ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b  # wqkv and wo
 
 
 def interleaved_to_halfsplit(t, n_heads):
@@ -149,16 +180,14 @@ def rope_tables(seq_len, offset=0, head_dim=HEAD_DIM, theta=ROPE_THETA):
     """
     inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float64) / head_dim))
     ang = torch.outer(torch.arange(offset, offset + seq_len, dtype=torch.float64), inv)
-    return (torch.cat([ang.cos(), ang.cos()], dim=-1).float(),
-            torch.cat([ang.sin(), ang.sin()], dim=-1).float())
+    return (torch.cat([ang.cos(), ang.cos()], dim=-1).float(), torch.cat([ang.sin(), ang.sin()], dim=-1).float())
 
 
 class TtVoxtralGPT:
     """The backbone on device. prefill(embeds) -> hidden; step(embed) -> hidden, sharing a KV
     cache."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, n_layers=N_LAYERS, state=None,
-                 max_seq_len=2048):
+    def __init__(self, device, ckpt_path=DEFAULT_CKPT, n_layers=N_LAYERS, state=None, max_seq_len=2048):
         """`state` takes an already-loaded `load_backbone_state` dict so the fp32 weights load once;
         `max_seq_len=0` skips the KV cache. see VOXTRAL_TTS_BACKBONE.md [gpt-09]"""
         check_device_grid(device)
@@ -171,11 +200,10 @@ class TtVoxtralGPT:
         attnd = ATTN_WEIGHT_DTYPE
         w = state if state is not None else load_backbone_state(ckpt_path)
 
-        up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
-                                         device=device)
-        ffd = FF_WEIGHT_DTYPE or wd                         # FF1_FF3 may differ; see WEIGHT_DTYPE
-        vec = lambda t: up(t.reshape(1, 1, -1), DTYPE)      # norm gammas: no bandwidth, keep bf16
-        lin = lambda t, d=None: up(t.t(), d or wd)          # torch [out,in] -> ttnn wants [in,out]
+        up = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+        ffd = FF_WEIGHT_DTYPE or wd  # FF1_FF3 may differ; see WEIGHT_DTYPE
+        vec = lambda t: up(t.reshape(1, 1, -1), DTYPE)  # norm gammas: no bandwidth, keep bf16
+        lin = lambda t, d=None: up(t.t(), d or wd)  # torch [out,in] -> ttnn wants [in,out]
 
         self.norm = vec(w["norm"])
         self.layers = []
@@ -183,16 +211,18 @@ class TtVoxtralGPT:
             p = f"layers.{i}."
             wq = interleaved_to_halfsplit(w[p + "attention.wq"], N_HEADS)
             wk = interleaved_to_halfsplit(w[p + "attention.wk"], N_KV_HEADS)  # n_kv, not n_heads
-            self.layers.append({
-                "an": vec(w[p + "attention_norm"]),
-                "fn": vec(w[p + "ffn_norm"]),
-                # q, k and v fused into one weight. see VOXTRAL_TTS_BACKBONE.md [gpt-10]
-                "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0), attnd),
-                "wo": lin(w[p + "attention.wo"], attnd),
-                "w1": lin(w[p + "feed_forward.w1"], ffd),
-                "w2": lin(w[p + "feed_forward.w2"]),
-                "w3": lin(w[p + "feed_forward.w3"], ffd),
-            })
+            self.layers.append(
+                {
+                    "an": vec(w[p + "attention_norm"]),
+                    "fn": vec(w[p + "ffn_norm"]),
+                    # q, k and v fused into one weight. see VOXTRAL_TTS_BACKBONE.md [gpt-10]
+                    "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0), attnd),
+                    "wo": lin(w[p + "attention.wo"], attnd),
+                    "w1": lin(w[p + "feed_forward.w1"], ffd),
+                    "w2": lin(w[p + "feed_forward.w2"]),
+                    "w3": lin(w[p + "feed_forward.w3"], ffd),
+                }
+            )
         self._assert_shapes()
         # Allocated once and written in place, so a generation never reallocates. Zero-init is not
         # relied on for correctness -- `step` masks everything above self.pos.
@@ -206,8 +236,13 @@ class TtVoxtralGPT:
 
     def _assert_shapes(self):
         """Cheap guard against a silently wrong load: non-square wq/wo are what bite here."""
-        exp = {"wqkv": (DIM, _QKV_WIDTH), "wo": (Q_WIDTH, DIM),
-               "w1": (DIM, HIDDEN_DIM), "w3": (DIM, HIDDEN_DIM), "w2": (HIDDEN_DIM, DIM)}
+        exp = {
+            "wqkv": (DIM, _QKV_WIDTH),
+            "wo": (Q_WIDTH, DIM),
+            "w1": (DIM, HIDDEN_DIM),
+            "w3": (DIM, HIDDEN_DIM),
+            "w2": (HIDDEN_DIM, DIM),
+        }
         for i, L in enumerate(self.layers):
             for k, e in exp.items():
                 got = tuple(L[k].shape)[-2:]
@@ -221,8 +256,9 @@ class TtVoxtralGPT:
 
         See VOXTRAL_TTS_BACKBONE.md [gpt-11].
         """
-        return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False,
-                                                     compute_kernel_config=COMPUTE_CONFIG)
+        return ttnn.experimental.rotary_embedding_hf(
+            x, cos, sin, is_decode_mode=False, compute_kernel_config=COMPUTE_CONFIG
+        )
 
     def _norm(self, x, gamma):
         """RMSNorm.
@@ -240,10 +276,13 @@ class TtVoxtralGPT:
         h = self._norm(x, w["an"])
         qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.reshape(qkv, [1, 1, S, _QKV_WIDTH]), num_heads=N_HEADS,
-            num_kv_heads=N_KV_HEADS, transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return self._rope(qh, cos, sin), self._rope(kh, cos, sin), vh   # v carries no RoPE
+            ttnn.reshape(qkv, [1, 1, S, _QKV_WIDTH]),
+            num_heads=N_HEADS,
+            num_kv_heads=N_KV_HEADS,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return self._rope(qh, cos, sin), self._rope(kh, cos, sin), vh  # v carries no RoPE
 
     def _attend(self, qh, kh, vh, S, mask):
         """PREFILL attention: [1,32,S,128] x [1,8,S,128] -> merged [1,S,4096], `mask` additive.
@@ -266,21 +305,29 @@ class TtVoxtralGPT:
         # w1 and w3 stay separate matmuls. see VOXTRAL_TTS_BACKBONE.md [gpt-22]
         # silu rides in the program config, not activation="silu", which is not fused. With no
         # config (prefill) fall back to the kwarg. see VOXTRAL_TTS_BACKBONE.md [gpt-26]
-        g = (ttnn.linear(h, w["w1"], program_config=prg["w1"],
-                         compute_kernel_config=COMPUTE_CONFIG, memory_config=mc) if prg else
-             ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
-                         memory_config=mc))
+        g = (
+            ttnn.linear(h, w["w1"], program_config=prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=mc)
+            if prg
+            else ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG, memory_config=mc)
+        )
         # In place: g and x are both dead immediately after. see VOXTRAL_TTS_BACKBONE.md [gpt-25]
-        u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
-                                          memory_config=mc, **_pc(prg, "w3")))
+        u = ttnn.multiply_(
+            g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG, memory_config=mc, **_pc(prg, "w3"))
+        )
         # Residual as the matmul bias on decode (one row) only; a bias broadcasts over rows, so
         # prefill keeps the add. see VOXTRAL_TTS_BACKBONE.md [gpt-27]
         if prg:
-            return ttnn.linear(u, w["w2"], bias=ttnn.reshape(x, [1, DIM]),
-                               program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG,
-                               memory_config=mc)
-        return ttnn.add_(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
-                                        memory_config=mc, **_pc(prg, "w2")))
+            return ttnn.linear(
+                u,
+                w["w2"],
+                bias=ttnn.reshape(x, [1, DIM]),
+                program_config=prg["w2"],
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=mc,
+            )
+        return ttnn.add_(
+            x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG, memory_config=mc, **_pc(prg, "w2"))
+        )
 
     def _layer(self, x, w, S, cos, sin, mask, cache=None):
         """x [1,S,3072] -> same. Pre-norm GQA with RoPE + causal mask, then SwiGLU.
@@ -289,7 +336,7 @@ class TtVoxtralGPT:
         """
         qh, kh, vh = self._qkv(x, w, S, cos, sin)
         if cache is not None:
-            ttnn.fill_cache(cache[0], kh, 0)     # update_idx 0, so the tile-alignment rule is moot
+            ttnn.fill_cache(cache[0], kh, 0)  # update_idx 0, so the tile-alignment rule is moot
             ttnn.fill_cache(cache[1], vh, 0)
         a = self._attend(qh, kh, vh, S, mask)
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
@@ -303,30 +350,44 @@ class TtVoxtralGPT:
 
         See VOXTRAL_TTS_BACKBONE.md [gpt-16].
         """
-        qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"], program_config=DECODE_PRG["wqkv"],
-                          compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(
+            self._norm(x, w["an"]), w["wqkv"], program_config=DECODE_PRG["wqkv"], compute_kernel_config=COMPUTE_CONFIG
+        )
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
-        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
-            qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
-        qh = ttnn.experimental.rotary_embedding_hf(qh, cos, sin, is_decode_mode=True,
-                                                   compute_kernel_config=COMPUTE_CONFIG)
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
+        qh = ttnn.experimental.rotary_embedding_hf(
+            qh, cos, sin, is_decode_mode=True, compute_kernel_config=COMPUTE_CONFIG
+        )
         # Two calls, not the fused q+k rope, which uses the interleaved convention.
         # see VOXTRAL_TTS_BACKBONE.md [gpt-23]
-        kh = ttnn.experimental.rotary_embedding_hf(kh, cos, sin, is_decode_mode=True,
-                                                   compute_kernel_config=COMPUTE_CONFIG)
+        kh = ttnn.experimental.rotary_embedding_hf(
+            kh, cos, sin, is_decode_mode=True, compute_kernel_config=COMPUTE_CONFIG
+        )
         # Two plain cache writes, not the fused one. see VOXTRAL_TTS_BACKBONE.md [gpt-19]
         ttnn.experimental.paged_update_cache(cache[0], kh, update_idxs_tensor=pos_t)
         ttnn.experimental.paged_update_cache(cache[1], vh, update_idxs_tensor=pos_t)
         o = ttnn.transformer.scaled_dot_product_attention_decode(
-            qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
-            compute_kernel_config=COMPUTE_CONFIG, program_config=_SDPA_PRG)
+            qh,
+            cache[0],
+            cache[1],
+            cur_pos_tensor=pos_t,
+            scale=SCALE,
+            compute_kernel_config=COMPUTE_CONFIG,
+            program_config=_SDPA_PRG,
+        )
         # No memory_config move: sdpa already emits the layout wo reads.
         # see VOXTRAL_TTS_BACKBONE.md [gpt-03b]
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
         # Residual as bias: decode is M=1, so the residual is a row vector.
         # see VOXTRAL_TTS_BACKBONE.md [gpt-27]
-        x = ttnn.linear(a, w["wo"], bias=ttnn.reshape(x, [1, DIM]), program_config=DECODE_PRG["wo"],
-                        compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
+        x = ttnn.linear(
+            a,
+            w["wo"],
+            bias=ttnn.reshape(x, [1, DIM]),
+            program_config=DECODE_PRG["wo"],
+            compute_kernel_config=COMPUTE_CONFIG,
+            memory_config=_L1,
+        )
         return self._mlp(x, self._norm(x, w["fn"]), w, _L1, DECODE_PRG)
 
     @torch.no_grad()
@@ -342,8 +403,9 @@ class TtVoxtralGPT:
         if Sp != S:
             embeds = torch.cat([embeds, embeds.new_zeros(1, Sp - S, DIM)], dim=1)
         cosb, sinb = rope_tables(Sp)
-        up = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
-                                              layout=ttnn.TILE_LAYOUT, device=self.device)
+        up = lambda t, d=None: ttnn.from_torch(
+            t.contiguous(), dtype=d or self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
         cos = up(cosb.reshape(1, 1, Sp, HEAD_DIM))
         sin = up(sinb.reshape(1, 1, Sp, HEAD_DIM))
         m = torch.full((Sp, Sp), float("-inf")).triu(1).reshape(1, 1, Sp, Sp)
@@ -357,8 +419,7 @@ class TtVoxtralGPT:
         if last_only:
             x = ttnn.slice(x, [0, S - 1, 0], [1, S, DIM])
         if apply_final_norm:
-            x = ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS,
-                              compute_kernel_config=COMPUTE_CONFIG)
+            x = ttnn.rms_norm(x, weight=self.norm, epsilon=NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
         if last_only:
             return ttnn.to_torch(x).float().reshape(1, 1, DIM)
         return ttnn.to_torch(x).float().reshape(1, Sp, DIM)[:, :S]
@@ -380,8 +441,9 @@ class TtVoxtralGPT:
             raise ValueError(f"KV cache full at {self.max_seq_len} positions")
         pos = self.pos
         cosb, sinb = rope_tables(1, offset=pos)
-        up = lambda t, d=None: ttnn.from_torch(t.contiguous(), dtype=d or self.dtype,
-                                              layout=ttnn.TILE_LAYOUT, device=self.device)
+        up = lambda t, d=None: ttnn.from_torch(
+            t.contiguous(), dtype=d or self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
         # cos/sin sharded: rotary_embedding_hf's decode mode requires it. pos on device: both
         # paged_update_cache and sdpa_decode take the position as a tensor.
         cos = ttnn.to_memory_config(up(cosb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD)

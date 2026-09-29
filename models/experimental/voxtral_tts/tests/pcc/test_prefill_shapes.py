@@ -35,14 +35,14 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # 
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
 MAX_SEQ = 2048
-SHAPES = tuple(range(gpt.PREFILL_MULTIPLE, MAX_SEQ + 1, gpt.PREFILL_MULTIPLE))   # 128 .. 2048
+SHAPES = tuple(range(gpt.PREFILL_MULTIPLE, MAX_SEQ + 1, gpt.PREFILL_MULTIPLE))  # 128 .. 2048
 TILE = 32
 
 # Gates are on PCC pooled over all S positions; single positions are reported, not gated.
 # Measured bands and rationale: see VOXTRAL_TTS_BACKBONE.md [gpt-52]
-SHAPE_PCC_FLOOR = 0.99      # collapse floor, not an accuracy gate
-SHAPE_SPREAD = 0.008        # no shape may compute unlike its neighbours
-SHAPE_WORST_SAMPLE_PCT = 15.0   # PCC alone hides a single far-off element
+SHAPE_PCC_FLOOR = 0.99  # collapse floor, not an accuracy gate
+SHAPE_SPREAD = 0.008  # no shape may compute unlike its neighbours
+SHAPE_WORST_SAMPLE_PCT = 15.0  # PCC alone hides a single far-off element
 
 
 @pytest.fixture(scope="module")
@@ -73,13 +73,13 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
 
     K needs the head-dim permutation; V does not, being unrotated.
     """
-    S = sp - 5                                          # reach the shape WITH padding
+    S = sp - 5  # reach the shape WITH padding
     embeds, repeated = long_prompt_embeds(S, w)
     gate = SHAPE_PCC_FLOOR
 
-    exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)       # all positions
+    exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)  # all positions
     inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
-    inc.prefill(embeds)                                             # populates the reference cache
+    inc.prefill(embeds)  # populates the reference cache
     big.reset()
     out = big.prefill(embeds, last_only=False)
     assert torch.isfinite(out).all(), f"Sp={sp}: non-finite output"
@@ -96,8 +96,7 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
         k_dev = ttnn.to_torch(big.caches[li][0]).float()[:, :, :S, :]
         v_dev = ttnn.to_torch(big.caches[li][1]).float()[:, :, :S, :]
         k_ref, v_ref = inc.cache[f"layers.{li}."]
-        for side, got, ref in (("K", k_dev, as_device_k_layout(k_ref.float())),
-                               ("V", v_dev, v_ref.float())):
+        for side, got, ref in (("K", k_dev, as_device_k_layout(k_ref.float())), ("V", v_dev, v_ref.float())):
             c = compare_hidden(got, ref)
             if c["pcc"] <= gate:
                 weak.append((li, side, round(c["pcc"], 6)))
@@ -106,19 +105,23 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
                 if float(k_dev[0, h, TILE * t : TILE * (t + 1), :].abs().max()) == 0.0:
                     unwritten.append((li, h, t))
 
-    print(f"\n  Sp={sp:>4} S={S:>4} blocks={N_KV_HEADS * (sp // TILE):>4} "
-          f"{'repeated' if repeated else 'joined':>8} text  pooled {m['pcc']:.6f}  "
-          f"last {m_last['pcc']:.6f}  worst {m['worst_pct']:.2f}%  cache weak {len(weak)}/52  "
-          f"unwritten {len(unwritten)}")
+    print(
+        f"\n  Sp={sp:>4} S={S:>4} blocks={N_KV_HEADS * (sp // TILE):>4} "
+        f"{'repeated' if repeated else 'joined':>8} text  pooled {m['pcc']:.6f}  "
+        f"last {m_last['pcc']:.6f}  worst {m['worst_pct']:.2f}%  cache weak {len(weak)}/52  "
+        f"unwritten {len(unwritten)}"
+    )
     assert not unwritten, (
         f"Sp={sp}: {len(unwritten)} (layer, head, tile) blocks are ALL ZERO -- prefill never wrote "
-        f"them. First few: {unwritten[:6]}.")
+        f"them. First few: {unwritten[:6]}."
+    )
     assert not weak, f"Sp={sp}: cache entries below {gate}: {weak[:8]}"
-    assert m["pcc"] > gate, (
-        f"Sp={sp}: pooled PCC {m['pcc']:.6f} over all {S} positions -- below the collapse floor "
-        f"{gate}")
-    assert m["worst_pct"] < SHAPE_WORST_SAMPLE_PCT, (
-        f"Sp={sp}: pooled worst sample {m['worst_pct']:.2f}% even though pooled PCC is {m['pcc']:.6f}")
+    assert (
+        m["pcc"] > gate
+    ), f"Sp={sp}: pooled PCC {m['pcc']:.6f} over all {S} positions -- below the collapse floor {gate}"
+    assert (
+        m["worst_pct"] < SHAPE_WORST_SAMPLE_PCT
+    ), f"Sp={sp}: pooled worst sample {m['worst_pct']:.2f}% even though pooled PCC is {m['pcc']:.6f}"
 
 
 def test_no_shape_computes_differently_from_its_neighbours():
@@ -126,11 +129,11 @@ def test_no_shape_computes_differently_from_its_neighbours():
     if len(_POOLED) < len(SHAPES):
         pytest.skip(f"needs all {len(SHAPES)} shapes; have {len(_POOLED)}")
     lo, hi = min(_POOLED.values()), max(_POOLED.values())
-    print(f"\n  pooled PCC across {len(_POOLED)} shapes: {lo:.6f} .. {hi:.6f} "
-          f"(spread {hi - lo:.6f})")
+    print(f"\n  pooled PCC across {len(_POOLED)} shapes: {lo:.6f} .. {hi:.6f} (spread {hi - lo:.6f})")
     assert hi - lo < SHAPE_SPREAD, (
         f"pooled PCC varies by {hi - lo:.6f} across shapes -- one shape computes differently from "
-        f"its neighbours: {sorted((k, round(v, 6)) for k, v in _POOLED.items())}")
+        f"its neighbours: {sorted((k, round(v, 6)) for k, v in _POOLED.items())}"
+    )
 
 
 def test_padding_costs_no_accuracy(big, w):
@@ -143,8 +146,7 @@ def test_padding_costs_no_accuracy(big, w):
 
     rows = []
     for extra in (0, gpt.PREFILL_MULTIPLE, 2 * gpt.PREFILL_MULTIPLE):
-        embeds = base if not extra else torch.cat(
-            [base, base.new_zeros(1, extra, base.shape[-1])], dim=1)
+        embeds = base if not extra else torch.cat([base, base.new_zeros(1, extra, base.shape[-1])], dim=1)
         S = embeds.shape[1]
         sp = (S + gpt.PREFILL_MULTIPLE - 1) // gpt.PREFILL_MULTIPLE * gpt.PREFILL_MULTIPLE
         big.reset()
@@ -165,13 +167,14 @@ def test_padding_costs_no_accuracy(big, w):
     monotonic_penalty = pccs[0] > pccs[1] > pccs[2]
     assert not (monotonic_penalty and spread > 0.001), (
         f"accuracy falls monotonically as padding grows ({[round(p, 6) for p in pccs]}) -- that is "
-        f"a mask leak, not rounding")
+        f"a mask leak, not rounding"
+    )
 
 
-def test_prefill_refuses_a_prompt_longer_than_the_cache(big, w):
+def test_prefill_refuses_a_prompt_longer_than_the_cache(big, w, expect_error):
     """A prompt that pads beyond `max_seq_len` must raise, not overflow the cache."""
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM
 
     too_long = big.max_seq_len + 1
-    with pytest.raises(ValueError, match="pads to"):
+    with expect_error(ValueError, "pads to"):
         big.prefill(torch.zeros(1, too_long, DIM), last_only=True)

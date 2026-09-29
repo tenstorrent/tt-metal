@@ -52,15 +52,29 @@ def test_reference_uses_every_checkpoint_tensor():
     man = {k for k in load_manifest() if k.startswith(PREFIX)}
     expect = {
         PREFIX + n
-        for n in ["input_projection.weight", "time_projection.weight", "llm_projection.weight",
-                  "semantic_codebook_output.weight", "acoustic_codebook_output.weight", "norm.weight"]
+        for n in [
+            "input_projection.weight",
+            "time_projection.weight",
+            "llm_projection.weight",
+            "semantic_codebook_output.weight",
+            "acoustic_codebook_output.weight",
+            "norm.weight",
+        ]
     }
     for i in range(FM_N_LAYERS):
         expect |= {
             f"{PREFIX}layers.{i}.{k}"
-            for k in ("attention.wq.weight", "attention.wk.weight", "attention.wv.weight",
-                      "attention.wo.weight", "attention_norm.weight", "ffn_norm.weight",
-                      "feed_forward.w1.weight", "feed_forward.w2.weight", "feed_forward.w3.weight")
+            for k in (
+                "attention.wq.weight",
+                "attention.wk.weight",
+                "attention.wv.weight",
+                "attention.wo.weight",
+                "attention_norm.weight",
+                "ffn_norm.weight",
+                "feed_forward.w1.weight",
+                "feed_forward.w2.weight",
+                "feed_forward.w3.weight",
+            )
         }
     assert expect == man, f"missing {expect - man}; unused {man - expect}"
     assert len(man) == 33
@@ -107,16 +121,20 @@ def test_frame_is_37_codes_in_valid_ranges(w):
     frame = ref.reference_frame(h, w, x_0=x_0)
     assert frame.shape == (3, 1 + N_ACOUSTIC_CODEBOOK)
     ac = frame[:, 1:]
-    assert (ac >= N_AUDIO_SPECIAL).all() and (ac < N_AUDIO_SPECIAL + ACOUSTIC_CODEBOOK_SIZE).all(), \
-        "acoustic codes outside [offset, offset+levels)"
+    assert (ac >= N_AUDIO_SPECIAL).all() and (
+        ac < N_AUDIO_SPECIAL + ACOUSTIC_CODEBOOK_SIZE
+    ).all(), "acoustic codes outside [offset, offset+levels)"
 
 
 def test_euler_takes_the_configured_number_of_steps(w):
     h, x_0 = ref.make_synthetic_inputs(batch=1)
     sem = ref.semantic_code(h, w)
     _, trace = ref.decode_frame(sem, h, w, x_0=x_0, return_trace=True)
-    assert trace.shape == (N_DECODING_STEPS, 1, N_ACOUSTIC_CODEBOOK), \
-        f"expected {N_DECODING_STEPS} Euler steps (params.json omits n_decoding_steps; upstream defaults to 7)"
+    assert trace.shape == (
+        N_DECODING_STEPS,
+        1,
+        N_ACOUSTIC_CODEBOOK,
+    ), f"expected {N_DECODING_STEPS} Euler steps (params.json omits n_decoding_steps; upstream defaults to 7)"
 
 
 def test_end_audio_frames_are_not_decoded(w):
@@ -164,8 +182,13 @@ def test_fsq_quantize_endpoints():
     """clamp+rescale+round must map -1 -> 0 and +1 -> levels-1, and saturate beyond."""
     x = torch.tensor([[-2.0, -1.0, 0.0, 1.0, 2.0] + [0.0] * (N_ACOUSTIC_CODEBOOK - 5)])
     q = ref._fsq_quantize(x)[0, :5]
-    assert q.tolist() == [0, 0, (ACOUSTIC_CODEBOOK_SIZE - 1) // 2, ACOUSTIC_CODEBOOK_SIZE - 1,
-                          ACOUSTIC_CODEBOOK_SIZE - 1]
+    assert q.tolist() == [
+        0,
+        0,
+        (ACOUSTIC_CODEBOOK_SIZE - 1) // 2,
+        ACOUSTIC_CODEBOOK_SIZE - 1,
+        ACOUSTIC_CODEBOOK_SIZE - 1,
+    ]
 
 
 @needs_ckpt

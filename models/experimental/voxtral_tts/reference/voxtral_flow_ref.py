@@ -82,8 +82,9 @@ def _block(x, w, p):
     attn = merge_heads(gqa_attention(q, k, v, bias=None))  # [B, 3, 4096]
     x = x + F.linear(attn, w[p + "attention.wo.weight"])
     h = rms_norm(x, w[p + "ffn_norm.weight"], FM_NORM_EPS)
-    return x + swiglu(h, w[p + "feed_forward.w1.weight"], w[p + "feed_forward.w2.weight"],
-                      w[p + "feed_forward.w3.weight"])
+    return x + swiglu(
+        h, w[p + "feed_forward.w1.weight"], w[p + "feed_forward.w2.weight"], w[p + "feed_forward.w3.weight"]
+    )
 
 
 @torch.no_grad()
@@ -118,8 +119,16 @@ def semantic_code(llm_hidden, w):
 
 
 @torch.no_grad()
-def decode_frame(sem_code, llm_hidden, w, cfg_alpha=CFG_ALPHA, n_steps=N_DECODING_STEPS,
-                 x_0=None, noise_scale=1.0, return_trace=False):
+def decode_frame(
+    sem_code,
+    llm_hidden,
+    w,
+    cfg_alpha=CFG_ALPHA,
+    n_steps=N_DECODING_STEPS,
+    x_0=None,
+    noise_scale=1.0,
+    return_trace=False,
+):
     """Euler-integrate the velocity field to acoustic codes. [B,1], [B,3072] -> [B,36] ints.
 
     `x_0=None` draws fresh noise; pass x_0 to be deterministic. [END_AUDIO] frames come back as
@@ -129,8 +138,11 @@ def decode_frame(sem_code, llm_hidden, w, cfg_alpha=CFG_ALPHA, n_steps=N_DECODIN
     x = (torch.randn(B, N_ACOUSTIC_CODEBOOK) if x_0 is None else x_0.clone()) * noise_scale
     timesteps = torch.linspace(0, 1, n_steps + 1)
     zero_h = torch.zeros_like(llm_hidden)
-    alpha = torch.as_tensor(cfg_alpha).reshape(-1, 1).expand(B, 1) if not torch.is_tensor(cfg_alpha) \
-        or cfg_alpha.ndim == 0 else cfg_alpha.reshape(B, 1)
+    alpha = (
+        torch.as_tensor(cfg_alpha).reshape(-1, 1).expand(B, 1)
+        if not torch.is_tensor(cfg_alpha) or cfg_alpha.ndim == 0
+        else cfg_alpha.reshape(B, 1)
+    )
     trace = []
     for i in range(n_steps):
         t, dt = timesteps[i], timesteps[i + 1] - timesteps[i]
@@ -185,22 +197,30 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     print(f"[flow] loading acoustic_transformer ({FM_N_LAYERS} layers) from {args.ckpt}")
     w = load_flow_state(args.ckpt)
-    print(f"[flow] {len(w)} tensors; {N_DECODING_STEPS} Euler steps, cfg_alpha {CFG_ALPHA}, "
-          f"3-token sequence, dim {FM_DIM}")
+    print(
+        f"[flow] {len(w)} tensors; {N_DECODING_STEPS} Euler steps, cfg_alpha {CFG_ALPHA}, "
+        f"3-token sequence, dim {FM_DIM}"
+    )
 
     h, x_0 = make_synthetic_inputs(args.batch)
     sem = semantic_code(h, w)
     codes, trace = decode_frame(sem, h, w, x_0=x_0, return_trace=True)
     frame = torch.cat([sem, codes], dim=1)
-    print(f"[flow] semantic {sem.reshape(-1).tolist()} | acoustic range "
-          f"[{int(codes.min())}, {int(codes.max())}] | frame {tuple(frame.shape)}")
-    print(f"[flow] ODE trace {tuple(trace.shape)}: |x| step0 {trace[0].abs().mean():.4f} "
-          f"-> step{N_DECODING_STEPS - 1} {trace[-1].abs().mean():.4f}")
+    print(
+        f"[flow] semantic {sem.reshape(-1).tolist()} | acoustic range "
+        f"[{int(codes.min())}, {int(codes.max())}] | frame {tuple(frame.shape)}"
+    )
+    print(
+        f"[flow] ODE trace {tuple(trace.shape)}: |x| step0 {trace[0].abs().mean():.4f} "
+        f"-> step{N_DECODING_STEPS - 1} {trace[-1].abs().mean():.4f}"
+    )
 
     # cfg_alpha=1 must equal the purely conditional field (a cheap check that CFG is wired right).
     only_cond = decode_frame(sem, h, w, cfg_alpha=1.0, x_0=x_0, return_trace=True)[1][-1]
-    print(f"[flow] cfg_alpha 1.2 vs 1.0 final-x PCC {pcc(trace[-1], only_cond):.6f} "
-          f"(should be < 1.0 — guidance is doing something)")
+    print(
+        f"[flow] cfg_alpha 1.2 vs 1.0 final-x PCC {pcc(trace[-1], only_cond):.6f} "
+        f"(should be < 1.0 — guidance is doing something)"
+    )
 
     # one velocity evaluation, saved as its own golden
     t_emb = time_embedding(torch.zeros(args.batch, 1), w["time_embedding.inv_freq"])
@@ -213,10 +233,19 @@ def main():
     torch.save(v0, os.path.join(args.out, "velocity.pt"))
     torch.save(trace, os.path.join(args.out, "ode_trace.pt"))
     torch.save(frame, os.path.join(args.out, "audio_codes.pt"))
-    torch.save({"batch": args.batch, "n_steps": N_DECODING_STEPS, "cfg_alpha": CFG_ALPHA,
-                "dim": FM_DIM, "n_layers": FM_N_LAYERS, "seq_len": 3,
-                "n_acoustic": N_ACOUSTIC_CODEBOOK, "levels": ACOUSTIC_CODEBOOK_SIZE},
-               os.path.join(args.out, "meta.pt"))
+    torch.save(
+        {
+            "batch": args.batch,
+            "n_steps": N_DECODING_STEPS,
+            "cfg_alpha": CFG_ALPHA,
+            "dim": FM_DIM,
+            "n_layers": FM_N_LAYERS,
+            "seq_len": 3,
+            "n_acoustic": N_ACOUSTIC_CODEBOOK,
+            "levels": ACOUSTIC_CODEBOOK_SIZE,
+        },
+        os.path.join(args.out, "meta.pt"),
+    )
     print(f"[flow] wrote goldens to {args.out}")
 
 

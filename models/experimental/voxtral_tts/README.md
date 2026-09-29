@@ -55,22 +55,29 @@ export PYTHONPATH=$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME
 
 ### Checkpoint
 
-Point `$VOXTRAL_CKPT` at a local `consolidated.safetensors`, or let the default path resolve under
-the model's weights dir:
+> **License note:** the Voxtral-4B-TTS *weights*, including the 20 voice presets, are released under
+> **CC BY-NC 4.0 — non-commercial use only**. By downloading the checkpoint you accept that license.
+> The code in this directory is Apache-2.0.
+
+The model directory holds `consolidated.safetensors`, `params.json`, `tekken.json` and
+`voice_embedding/*.pt`. It is resolved as: an explicit `ckpt_path` / `--ckpt`, then
+`$VOXTRAL_CKPT` (the directory, or its `consolidated.safetensors`), then a download of
+`mistralai/Voxtral-4B-TTS-2603` into the local Hugging Face cache. To fetch it yourself:
 
 ```bash
-hf download mistralai/Voxtral-4B-TTS-2603 \
-    consolidated.safetensors params.json tekken.json --local-dir voxtral_ref
-export VOXTRAL_CKPT=$(pwd)/voxtral_ref/consolidated.safetensors
+hf download mistralai/Voxtral-4B-TTS-2603 consolidated.safetensors params.json tekken.json \
+    "voice_embedding/*" --local-dir voxtral_model
+export VOXTRAL_CKPT=$(pwd)/voxtral_model
 ```
 
 The structural and reference tests run **without** the 8 GB download — they build random weights at
-the real checkpoint shapes. Only the device PCC, WER and perf tests need the real checkpoint.
+the real checkpoint shapes. The tests that need the real checkpoint find it through
+`$VOXTRAL_CKPT` or an existing Hugging Face download, and skip otherwise; they never download.
 
 ## Quick Start
 
 ```bash
-# Speak a sentence in one of the 20 shipped voices
+# Speak a sentence in one of the 20 shipped voices (--ckpt DIR to point at a model directory)
 python -m models.experimental.voxtral_tts.demo.demo "Hello from Tenstorrent." \
     --voice neutral_male --out hello.wav --seed 0
 python -m models.experimental.voxtral_tts.demo.demo --list-voices
@@ -88,22 +95,26 @@ run against this checkout through `TT_METAL_HOME` (see its README).
 ### Integration API
 
 `TtVoxtralPipeline` (`tt/ttnn_voxtral_pipeline.py`) is the serving surface — one persistent object,
-many requests:
+many requests, in the shape tt-inference-server drives (the same as xtts_v2's):
 
 ```python
-import ttnn
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import TtVoxtralPipeline, open_device
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import TtVoxtralPipeline
 
-device = open_device()
-pipe = TtVoxtralPipeline(device)
-frames, t_prefill, t_decode = pipe.generate(embeds, max_frames=150, seed=0)
-wav = pipe.decode(frames)          # [1, 1, T*1920] @ 24 kHz
+tts = TtVoxtralPipeline()      # opens its own one-chip mesh device; or (mesh_device=..., ckpt_path=...)
+tts.warmup()                   # once: compiles every prefill shape and codec bucket, captures the trace
+wav = tts.synthesize("Hello from Tenstorrent.", "neutral_male", seed=0)   # [1, 1, N] @ 24 kHz
+tts.close()                    # releases the trace, and the device if the pipeline opened it
 ```
+
+`synthesize` chains the text front end, `generate` (prompt embeddings -> codes) and `decode`
+(codes -> waveform); those two halves stay public for callers that need the codes.
+`tts.last_timings` holds the last request's per-stage times. Progress goes through loguru.
 
 ## Tests
 
 The suite is self-contained: references are computed live in-process (no golden files), and the
-structural half needs neither a device nor the checkpoint.
+structural half needs neither a device nor the checkpoint. Tests that need the checkpoint find it via
+`$VOXTRAL_CKPT` (or an existing Hugging Face download) and skip without it.
 
 ```bash
 # Run all tests
@@ -122,6 +133,9 @@ pytest models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py
 pytest models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
 pytest models/experimental/voxtral_tts/tests/test_codec_request_path.py
 pytest models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
+
+# The serving contract: TtVoxtralPipeline() owning its device, synthesize(), close()
+pytest models/experimental/voxtral_tts/tests/test_serving_contract.py
 
 # The traced frame loop -- the path that actually ships. Traced vs eager over FULL utterances:
 # all 15 prompts x 3 seeds to their natural [END_AUDIO], asserting the sweep crossed sdpa's
@@ -144,6 +158,7 @@ pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
 
 # Per-stage timings and RTF, gated against per-stage ceilings
 pytest models/experimental/voxtral_tts/tests/perf/test_perf.py
+pytest models/experimental/voxtral_tts/tests/perf/test_warmup.py   # its own module: opens a fresh device
 
 # The recogniser itself, on known audio, before it gates anything: fp32-reference speech in
 # English, Hindi and Arabic must score within a word of their measured WER; silence, noise and
@@ -162,7 +177,7 @@ pytest models/experimental/voxtral_tts/tests/test_wer_languages.py -k hindi   # 
 pytest models/experimental/voxtral_tts/tests/test_mos.py
 
 # All on-device tests are marked `slow`, at module level. `-m "not slow"` is the
-# host-only subset: ~140 tests, ~50 s, no device and no checkpoint needed.
+# host-only subset: ~140 tests, 1-2 min, no device and no checkpoint needed.
 ```
 
 **Gate on real prompts, never random activations.** Random embeddings are off-manifold and read
@@ -180,21 +195,23 @@ case 0 excluded because it pays one-time program-cache compilation:
 | Backbone decode | ~15.9 ms/frame | traced |
 | Flow model | ~14.2 ms/frame | traced, 7 Euler steps |
 | Codec decoder | ~3.5 ms/utterance | once per utterance, not per frame |
-| **whole frame** | **27.7 ms/frame** | vs 80 ms real time → **RTF 0.375** |
+| **whole frame** | **26–27 ms/frame** | vs 80 ms real time → **~3x faster than real time** |
 
-| utterance | codes | prefill | decode | decode/frame | codec + overhead | total | vs real time |
-|---|---|---|---|---|---|---|---|
-| short (3.3 s) | 42 | 0.07 s | 1.25 s | 30.93 ms | 0.02 s | 1.34 s | 2.50x |
-| medium (13.0 s) | 163 | 0.14 s | 4.52 s | 27.88 ms | 0.24 s | 4.91 s | 2.65x |
-| long (37.3 s) | 466 | 0.68 s | 12.77 s | 27.42 ms | 0.74 s | 14.18 s | 2.63x |
+Per request, as `tests/perf/test_perf.py` measures it (best of 2, warm; decode includes the one-time
+trace capture; 11x10 p150b, 2026-09-28):
 
-Quality at the same build: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**.
+| utterance | frames | audio | prefill | decode | ms/frame | codec | total | vs real time |
+|---|---|---|---|---|---|---|---|---|
+| short | 31 | 2.5 s | 0.05 s | 0.93 s | 29.86 | 0.02 s | 1.00 s | 2.49x |
+| long | 451 | 36.1 s | 0.07 s | 11.79 s | 26.15 | 0.05 s | 11.92 s | 3.03x |
+
+Quality: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**.
 
 One-time `warmup()` takes **~74 s** with a hot kernel cache — 16 prefill shapes (32.8 s), the flow model
 (6.0 s), 5 codec buckets (32.6 s) and one trace capture (2.6 s) — and longer on a first-ever run
 when kernels build from scratch. It compiles **every** prefill shape and **every** codec bucket, so
 no request pays a compile at request time. `TtVoxtralPipeline.warmed` records what was compiled;
-`test_perf.py::test_warmup_compiles_every_prefill_shape_and_codec_bucket` asserts it.
+`tests/perf/test_warmup.py` asserts it.
 
 > **Quote ms/frame, not RTF, when comparing builds.** ms/frame is repeatable to 0.390 ms; RTF also
 > carries prefill, the codec and trace capture, which amortise differently as frame counts change —

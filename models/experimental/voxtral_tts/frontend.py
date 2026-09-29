@@ -3,31 +3,43 @@
 
 """Host-side front end: text + a voice name in, prompt embeddings out.
 
-The serving path's (`demo/`) single import for everything before the device. A façade over
-`reference/`'s tokenizer and prompt assembly, not a copy: see VOXTRAL_TTS_BRINGUP.md [ref-02].
+The serving path's single import for everything before the device. A façade over `reference/`'s
+tokenizer and prompt assembly, not a copy: see VOXTRAL_TTS_BRINGUP.md [ref-02]. Every function takes
+an optional `model_dir`; without one it uses the locally available model (see reference/voxtral_paths).
 """
 
 from __future__ import annotations
 
+import functools
+import os
+
 import torch
 
 from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as _pref
+from models.experimental.voxtral_tts.reference.voxtral_paths import MODEL_DIR
 from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
 
 
-def voices():
+@functools.lru_cache(maxsize=4)
+def _tokenizer(model_dir):
+    return TekkenTokenizer(os.path.join(model_dir, "tekken.json"))
+
+
+def voices(model_dir=None):
     """-> every voice preset the checkpoint ships, sorted."""
-    return sorted(TekkenTokenizer().voices)
+    return sorted(_tokenizer(model_dir or MODEL_DIR).voices)
 
 
-def prompt_ids(text: str, voice: str):
+def prompt_ids(text: str, voice: str, model_dir=None):
     """-> the prompt token ids, bit-exact against `mistral_common` (pinned by test_tokenizer_ref)."""
-    return TekkenTokenizer().build_prompt(text, voice)
+    return _tokenizer(model_dir or MODEL_DIR).build_prompt(text, voice)
 
 
-def build_prompt_embeds(text: str, voice: str, backbone_state):
+def build_prompt_embeds(text: str, voice: str, backbone_state, model_dir=None):
     """text + voice -> inputs_embeds [1, P, 3072] for `TtVoxtralPipeline.generate`. Pass the
     pipeline's `wb` as `backbone_state` to avoid a second copy. see VOXTRAL_TTS_BRINGUP.md [pipe-03]
     """
-    ids = torch.tensor(prompt_ids(text, voice), dtype=torch.long)
-    return _pref.build_inputs_embeds(ids, _pref.load_voice(voice), backbone_state)
+    model_dir = model_dir or MODEL_DIR
+    ids = torch.tensor(prompt_ids(text, voice, model_dir), dtype=torch.long)
+    voice_dir = os.path.join(model_dir, "voice_embedding")
+    return _pref.build_inputs_embeds(ids, _pref.load_voice(voice, voice_dir), backbone_state)

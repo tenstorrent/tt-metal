@@ -44,16 +44,17 @@ for r in rows:
     v = score(os.path.join(d, r["file"]))
     by_lang.setdefault(r["lang"], []).append(v)
     clips.append({**r, "mos": v})
-    print(f"  {r['lang']:>5} {r['voice']:<16} {r['sentence']:>2} {r['words']:>5} "
-          f"{r['seconds']:>6.1f} {v:>6.3f}", flush=True)
+    print(
+        f"  {r['lang']:>5} {r['voice']:<16} {r['sentence']:>2} {r['words']:>5} {r['seconds']:>6.1f} {v:>6.3f}",
+        flush=True,
+    )
 
 print()
 means = {}
 for lang in sorted(by_lang):
     vals = by_lang[lang]
     means[lang] = float(np.mean(vals))
-    print(f"MOS_LANG_{lang} {means[lang]:.4f}   n={len(vals)} min={min(vals):.3f} "
-          f"max={max(vals):.3f}")
+    print(f"MOS_LANG_{lang} {means[lang]:.4f}   n={len(vals)} min={min(vals):.3f} max={max(vals):.3f}")
 print(f"MOS_LANG_MIN {min(means.values()):.4f}")
 print(f"MOS_LANG_SPREAD {max(means.values()) - min(means.values()):.4f}")
 print("MOS_JSON: " + json.dumps({"means": means, "clips": clips}))

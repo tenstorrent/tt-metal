@@ -125,8 +125,8 @@ def test_placeholder_counts_match_preset_row_counts(tok):
     assert checked >= 1, "no presets found to check"
 
 
-def test_unknown_voice_raises(tok):
-    with pytest.raises(KeyError, match="unknown voice"):
+def test_unknown_voice_raises(tok, expect_error):
+    with expect_error(KeyError, "unknown voice"):
         tok.build_prompt("hi", "no_such_voice")
 
 
@@ -135,9 +135,19 @@ def test_unknown_voice_raises(tok):
 # ---------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "text",
-    ["It took me quite a long time.", "Café déjà vu", "1234567890", "!@#$%^&*()",
-     "emoji 🎤🔊 test", "  leading and   inner spaces", "Tab\tand\nnewline", "नमस्ते", "مرحبا",
-     "CAPS lower MiXeD", ""],
+    [
+        "It took me quite a long time.",
+        "Café déjà vu",
+        "1234567890",
+        "!@#$%^&*()",
+        "emoji 🎤🔊 test",
+        "  leading and   inner spaces",
+        "Tab\tand\nnewline",
+        "नमस्ते",
+        "مرحبا",
+        "CAPS lower MiXeD",
+        "",
+    ],
 )
 def test_encode_decode_round_trip(tok, text):
     """Byte-level BPE must be lossless, including for multi-byte codepoints."""

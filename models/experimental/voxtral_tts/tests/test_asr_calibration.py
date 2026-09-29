@@ -34,9 +34,9 @@ SAMPLES_PER_FRAME = 1920
 
 # Known-good bounds: each clip's measured score plus one word; see VOXTRAL_TTS_GATES.md [asr-02]
 GOOD_MAX = {"en_medium": 0.05, "en_long": 0.02, "ar": 0.10, "hi": 0.15}
-CUT_KEEP = 0.5               # keep this fraction of the audio for the cut-tail clips
-CUT_MIN = 0.25               # half the audio gone must cost at least a quarter of the words
-TAIL_WORDS = 3               # the last words of a sentence: present when whole, absent when cut
+CUT_KEEP = 0.5  # keep this fraction of the audio for the cut-tail clips
+CUT_MIN = 0.25  # half the audio gone must cost at least a quarter of the words
+TAIL_WORDS = 3  # the last words of a sentence: present when whole, absent when cut
 SCRIPT_RANGES = {"hi": ("ऀ", "ॿ"), "ar": ("؀", "ۿ")}
 
 pytestmark = [
@@ -71,7 +71,7 @@ def asr():
 def _tail_present(text, hyp, n=TAIL_WORDS):
     """How many of the reference's last `n` words appear in the transcript's last 2n words."""
     ref, h = _words(text), _words(hyp)
-    return sum(1 for w in ref[-n:] if w in h[-2 * n:])
+    return sum(1 for w in ref[-n:] if w in h[-2 * n :])
 
 
 def _noise(seconds, rms, seed=0):
@@ -80,6 +80,7 @@ def _noise(seconds, rms, seed=0):
 
 
 # ------------------------------------------------------------------------------ the fixture itself
+
 
 @pytest.mark.parametrize("key", ["en_medium", "en_long", "hi", "ar"])
 def test_fixture_has_the_clips_calibration_needs(key):
@@ -94,6 +95,7 @@ def test_fixture_has_the_clips_calibration_needs(key):
 
 
 # ------------------------------------------------------------------------------ known good
+
 
 @pytest.mark.parametrize("key", ["en_medium", "hi", "ar"])
 def test_known_good_scores_near_zero(clips, asr, key):
@@ -116,11 +118,13 @@ def test_non_latin_transcript_survives_the_cleaner(clips, asr, key):
     in_script = sum(1 for ch in letters if lo <= ch <= hi)
     print(f"\n  {key}: {len(words)} words after cleaning, {in_script}/{len(letters)} letters in script")
     assert len(words) >= len(_words(c["text"])) // 2, f"{key}: cleaner left {len(words)} words: {words}"
-    assert letters and in_script / len(letters) > 0.9, (
-        f"{key}: transcript is not in the expected script ({in_script}/{len(letters)}): {hyp!r}")
+    assert (
+        letters and in_script / len(letters) > 0.9
+    ), f"{key}: transcript is not in the expected script ({in_script}/{len(letters)}): {hyp!r}"
 
 
 # ------------------------------------------------------------------------------ known bad
+
 
 def test_silence_reads_as_collapse(asr):
     w = wer(_load_fixture()["en_medium"]["text"], hyp := asr(torch.zeros(8 * OUTPUT_SR), "en"))
@@ -152,13 +156,16 @@ def test_cut_tail_shows_the_missing_words(clips, asr, key):
 
 # ------------------------------------------------------------------------------ long form (BUG-13)
 
+
 def test_long_clip_transcribes_to_the_end(clips, asr):
     c, wav = clips["en_long"]
     seconds = wav.shape[0] / OUTPUT_SR
     hyp = asr(wav, "en")
     w = wer(c["text"], hyp)
-    print(f"\n  en_long ({seconds:.1f} s, {len(_words(c['text']))} words): WER {w:.4f}, "
-          f"last {TAIL_WORDS} words present {_tail_present(c['text'], hyp)}")
+    print(
+        f"\n  en_long ({seconds:.1f} s, {len(_words(c['text']))} words): WER {w:.4f}, "
+        f"last {TAIL_WORDS} words present {_tail_present(c['text'], hyp)}"
+    )
     assert seconds > 30
     assert w <= GOOD_MAX["en_long"], f"long known-good clip scored {w:.4f} > {GOOD_MAX['en_long']}"
     assert _tail_present(c["text"], hyp) == TAIL_WORDS, f"the transcript stops short: ...{hyp[-120:]!r}"

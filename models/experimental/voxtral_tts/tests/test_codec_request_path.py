@@ -13,7 +13,6 @@ Skips cleanly without ttnn, a device, or the checkpoint.
 import os
 
 import pytest
-import torch
 
 from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, pcc
@@ -22,8 +21,7 @@ ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
 # Every test here opens a device, so it is `slow`: `-m "not slow"` is the host-only subset.
 pytestmark = [
     pytest.mark.slow,
-    pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT),
-                       reason=f"no checkpoint at {DEFAULT_CKPT}"),
+    pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}"),
 ]
 
 WAVE_PCC = 0.999  # same gate as tests/pcc/test_codec_pcc.py; see VOXTRAL_TTS_CODEC.md [codec-51]
@@ -114,5 +112,3 @@ def test_slab_is_tile_aligned():
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import SLAB
 
     assert SLAB % 32 == 0, f"slab {SLAB} is not tile-aligned"
-
-

@@ -16,8 +16,9 @@ import base64
 import json
 import os
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_TEKKEN = os.environ.get("VOXTRAL_TEKKEN", os.path.join(_HERE, "weights", "tekken.json"))
+from models.experimental.voxtral_tts.reference.voxtral_paths import DOWNLOAD_HINT, MODEL_DIR
+
+DEFAULT_TEKKEN = os.path.join(MODEL_DIR, "tekken.json")
 
 # Special ids, resolved by NAME from tekken.json rather than hard-coded (asserted in __init__).
 BOS = "<s>"
@@ -59,11 +60,7 @@ class TekkenTokenizer:
         import regex  # only dependency beyond stdlib. see VOXTRAL_TTS_TOKENIZER.md [tok-01]
 
         if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"tekken.json not found: {path}\n"
-                "hf download mistralai/Voxtral-4B-TTS-2603 tekken.json --local-dir "
-                "models/experimental/voxtral_tts/reference/weights"
-            )
+            raise FileNotFoundError(f"tekken.json not found: {path}\n{DOWNLOAD_HINT}")
         with open(path) as f:
             d = json.load(f)
         cfg = d["config"]
@@ -129,8 +126,10 @@ class TekkenTokenizer:
 def main():
     tok = TekkenTokenizer()
     print(f"[tok] vocab {tok.vocab_size} ({tok.n_special} special) | {len(tok.voices)} voices")
-    print(f"[tok] audio_token_id={tok.audio_token_id} "
-          f"| frames: min {min(tok.voice_frames.values())} max {max(tok.voice_frames.values())}")
+    print(
+        f"[tok] audio_token_id={tok.audio_token_id} "
+        f"| frames: min {min(tok.voice_frames.values())} max {max(tok.voice_frames.values())}"
+    )
 
     text = "It took me quite a long time to develop a voice, and now that I have it I am not going to be silent."
     for voice in ("neutral_male", "cheerful_female"):

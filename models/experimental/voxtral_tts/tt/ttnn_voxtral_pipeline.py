@@ -1,24 +1,32 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Voxtral-TTS on device: prompt embeds + voice preset -> 24 kHz waveform.
+"""End-to-end Voxtral-TTS on device: text + voice preset -> 24 kHz waveform.
 
-The backbone, flow model and codec on TTNN, with the per-frame loop traced; mirrors
-reference/voxtral_pipeline_ref.py.
-What stays on the host and why: see VOXTRAL_TTS_BRINGUP.md [pipe-01].
+    tts = TtVoxtralPipeline()              # or (mesh_device=..., ckpt_path=...)
+    tts.warmup()                           # once: compile every shape, capture the frame loop
+    wav = tts.synthesize("Hello.", "neutral_male", seed=0)   # [1,1,N] @ 24 kHz; repeatable
+    tts.close()
+
+The backbone, flow model and codec on TTNN, with the per-frame loop traced; `generate` (prompt
+embeds -> codes) and `decode` (codes -> waveform) are the two halves `synthesize` chains. What stays
+on the host and why: see VOXTRAL_TTS_BRINGUP.md [pipe-01].
 """
 
+import math
+import os
 import time
 
 import torch
 import ttnn
+from loguru import logger
 
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as backbone
-from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, END_AUDIO_ID
+from models.experimental.voxtral_tts.reference.voxtral_common_ref import END_AUDIO_ID
+from models.experimental.voxtral_tts.reference.voxtral_paths import CKPT_NAME, resolve_model_dir
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import (
-    CFG_ALPHA, N_DECODING_STEPS, TtVoxtralFlow)
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, N_DECODING_STEPS, TtVoxtralFlow
 
 FRAME_RATE = 12.5
 
@@ -30,30 +38,49 @@ TRACE_REGION_SIZE = 250 * 1024 * 1024
 
 def open_device(device_id=0, trace_region_size=TRACE_REGION_SIZE):
     """Open a device with the L1 scratch and trace region every entry point here needs."""
-    return ttnn.open_device(device_id=device_id, l1_small_size=L1_SMALL_SIZE,
-                            trace_region_size=trace_region_size)
+    return ttnn.open_device(device_id=device_id, l1_small_size=L1_SMALL_SIZE, trace_region_size=trace_region_size)
+
+
+def frame_budget(text):
+    """A frame cap for `text`: ~18 chars/s at 12.5 frames/s, x2.2 margin, floor 320. A cap, not a
+    cost: generation stops on [END_AUDIO]."""
+    return max(320, int(math.ceil(len(text) / 18.0 * FRAME_RATE * 2.2)))
 
 
 # The halo_gather hang that shaped the shipped config: see VOXTRAL_TTS_BRINGUP.md [pipe-02]
 
 
 class TtVoxtralPipeline:
-    """All three blocks on device. generate(embeds) -> frames; decode(frames) -> waveform."""
+    """All three stages on device, one persistent object for many requests (module docstring)."""
 
-    def __init__(self, device, ckpt_path=DEFAULT_CKPT, max_seq_len=2048):
-        """`max_seq_len` caps prompt + generated frames together; it is the only utterance-length
-        cap. see VOXTRAL_TTS_STATUS.md §6.69"""
-        self.device = device
-        # Loaded once and shared with the backbone. see VOXTRAL_TTS_BRINGUP.md [pipe-03]
-        self.wb = backbone.load_backbone_state(ckpt_path)
-        self.backbone = TtVoxtralGPT(device, state=self.wb, max_seq_len=max_seq_len)
-        self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
-        self.codec = TtVoxtralCodecDecoder(device, ckpt_path=ckpt_path)
-        self._tr = None            # (trace_id, input buffers, output tensors), built per generate()
+    def __init__(self, mesh_device=None, ckpt_path=None, max_seq_len=2048):
+        """Opens (and owns) a one-chip mesh device if none is given; `ckpt_path` is the model
+        directory; `max_seq_len` caps prompt + frames together. see VOXTRAL_TTS_BRINGUP.md [pipe-07]"""
+        t0 = time.perf_counter()
+        self.model_dir = resolve_model_dir(ckpt_path)
+        ckpt = os.path.join(self.model_dir, CKPT_NAME)
+        self._owns_device = mesh_device is None
+        if self._owns_device:
+            mesh_device = ttnn.open_mesh_device(
+                ttnn.MeshShape(1, 1), l1_small_size=L1_SMALL_SIZE, trace_region_size=TRACE_REGION_SIZE
+            )
+        self.mesh_device = self.device = mesh_device
+        try:
+            # Loaded once and shared with the backbone. see VOXTRAL_TTS_BRINGUP.md [pipe-03]
+            self.wb = backbone.load_backbone_state(ckpt)
+            self.backbone = TtVoxtralGPT(mesh_device, state=self.wb, max_seq_len=max_seq_len)
+            self.flow = TtVoxtralFlow(mesh_device, ckpt_path=ckpt)
+            self.codec = TtVoxtralCodecDecoder(mesh_device, ckpt_path=ckpt)
+        except Exception:
+            if self._owns_device:
+                ttnn.close_mesh_device(mesh_device)
+            raise
+        self._tr = None  # (trace_id, input buffers, output tensors), built per generate()
         # Per-stage wall times from the last request, including the codec.
         self.last_timings = {}
         # What warmup() actually compiled, so callers (and tests) can check rather than assume.
         self.warmed = {}
+        logger.info(f"[TtVoxtralPipeline] built (model={self.model_dir}) in {time.perf_counter() - t0:.1f}s")
 
     # ------------------------------------------------------------------
     # TRACED FRAME LOOP -- see VOXTRAL_TTS_BRINGUP.md [pipe-05]
@@ -66,8 +93,7 @@ class TtVoxtralPipeline:
 
         bb, fl, dev = self.backbone, self.flow, self.device
         B = 1
-        dv = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT,
-                                          device=dev)
+        dv = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT, device=dev)
         buf = {
             "xin": dv(torch.zeros(1, 1, DIM), bb.dtype),
             "cos": dv(torch.zeros(1, 1, 1, HEAD_DIM), bb.dtype),
@@ -84,26 +110,25 @@ class TtVoxtralPipeline:
             for i, w in enumerate(bb.layers):
                 x = bb._layer_step(x, w, cos, sin, bb.caches[i], buf["pos"])
             h = bb._norm(x, bb.norm)
-            lg = ttnn.linear(ttnn.typecast(h, flow.SEMANTIC_DTYPE), fl.semantic_dev,
-                             compute_kernel_config=flow.COMPUTE_CONFIG)
+            lg = ttnn.linear(
+                ttnn.typecast(h, flow.SEMANTIC_DTYPE), fl.semantic_dev, compute_kernel_config=flow.COMPUTE_CONFIG
+            )
             hh = ttnn.typecast(h, fl.dtype)
-            pair = ttnn.reshape(ttnn.concat([hh, ttnn.zeros_like(hh)], dim=1),
-                                [2 * B, 1, flow.FM_INPUT_DIM])
+            pair = ttnn.reshape(ttnn.concat([hh, ttnn.zeros_like(hh)], dim=1), [2 * B, 1, flow.FM_INPUT_DIM])
             return lg, fl._solve(buf["x0"], pair, B, n_steps, cfg_alpha)
 
         pos0 = bb.pos
         # Aim the capture's K/V writes at pos0; at 0 they corrupt the prompt.
         # see VOXTRAL_TTS_BRINGUP.md [pipe-05]
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(torch.tensor([pos0], dtype=torch.int32)), buf["pos"])
-        graph()                                   # populate the program cache before capturing
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([pos0], dtype=torch.int32)), buf["pos"])
+        graph()  # populate the program cache before capturing
         ttnn.synchronize_device(dev)
         bb.pos = pos0
         tid = ttnn.begin_trace_capture(dev, cq_id=0)
         try:
             lg, xr = graph()
         finally:
-            ttnn.end_trace_capture(dev, tid, cq_id=0)   # never leave a capture open -- [pipe-05]
+            ttnn.end_trace_capture(dev, tid, cq_id=0)  # never leave a capture open -- [pipe-05]
         # registered immediately so a failure past this point still has something to release
         self._tr = (tid, buf, lg, xr)
         ttnn.synchronize_device(dev)
@@ -127,20 +152,19 @@ class TtVoxtralPipeline:
         cb, sb = gpt.rope_tables(1, offset=pos)
         host = lambda t, d: ttnn.from_torch(t.contiguous(), dtype=d, layout=ttnn.TILE_LAYOUT)
         ttnn.copy_host_to_device_tensor(
-            host(backbone.embed_frame(self.wb, codes).reshape(1, 1, DIM), bb.dtype), buf["xin"])
+            host(backbone.embed_frame(self.wb, codes).reshape(1, 1, DIM), bb.dtype), buf["xin"]
+        )
         ttnn.copy_host_to_device_tensor(host(cb.reshape(1, 1, 1, HEAD_DIM), bb.dtype), buf["cos"])
         ttnn.copy_host_to_device_tensor(host(sb.reshape(1, 1, 1, HEAD_DIM), bb.dtype), buf["sin"])
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), buf["pos"])
-        ttnn.copy_host_to_device_tensor(
-            host(torch.randn(1, 1, flow.N_ACOUSTIC_CODEBOOK), ttnn.float32), buf["x0"])
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), buf["pos"])
+        ttnn.copy_host_to_device_tensor(host(torch.randn(1, 1, flow.N_ACOUSTIC_CODEBOOK), ttnn.float32), buf["x0"])
         ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
-        sem = ((ttnn.to_torch(lg).float().reshape(1, -1) + fl.semantic_mask_host)
-               .argmax(-1).reshape(1, 1).long())
+        sem = (ttnn.to_torch(lg).float().reshape(1, -1) + fl.semantic_mask_host).argmax(-1).reshape(1, 1).long()
         bb.pos = pos + 1
         if int(sem[0, 0]) == END_AUDIO_ID:
-            return torch.cat([sem, torch.full((1, flow.N_ACOUSTIC_CODEBOOK), flow.EMPTY_AUDIO_ID,
-                                              dtype=torch.long)], dim=1)
+            return torch.cat(
+                [sem, torch.full((1, flow.N_ACOUSTIC_CODEBOOK), flow.EMPTY_AUDIO_ID, dtype=torch.long)], dim=1
+            )
         ac = flow._fsq_quantize(ttnn.to_torch(xr).float().reshape(1, flow.N_ACOUSTIC_CODEBOOK))
         return torch.cat([sem, ac + flow.N_AUDIO_SPECIAL], dim=1)
 
@@ -154,7 +178,8 @@ class TtVoxtralPipeline:
         from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as _gpt
 
         t_all = _time.perf_counter()
-        log = (lambda m: print(f"[warmup] {m}", flush=True)) if verbose else (lambda m: None)
+        emit = logger.info if verbose else logger.debug
+        log = lambda m: emit(f"[TtVoxtralPipeline] warmup: {m}")
 
         # 1) Prefill, at every padded shape this cache can hold. The expensive part.
         t0 = _time.perf_counter()
@@ -164,13 +189,12 @@ class TtVoxtralPipeline:
             self.backbone.reset()
             self.backbone.prefill(torch.zeros(1, sp, DIM), last_only=True)
         self.backbone.reset()
-        log(f"prefill: {len(shapes)} shapes ({shapes[0]}..{shapes[-1]}) in "
-            f"{_time.perf_counter() - t0:.1f}s")
+        log(f"prefill: {len(shapes)} shapes ({shapes[0]}..{shapes[-1]}) in {_time.perf_counter() - t0:.1f}s")
 
         # 2) the flow model once -- one shape, it is per-frame and length-independent.
         t0 = _time.perf_counter()
         h = self.backbone.prefill_last(torch.zeros(1, step, DIM))
-        codes = self.flow(h[:, 0])
+        self.flow(h[:, 0])
         self.backbone.reset()
         log(f"Flow model: 1 shape in {_time.perf_counter() - t0:.1f}s")
 
@@ -182,8 +206,7 @@ class TtVoxtralPipeline:
         buckets = list(range(bucket, max(max_frames, bucket) + 1, bucket))
         for n in buckets:
             self.codec(_cref.make_synthetic_codes(n))
-        log(f"codec: {len(buckets)} buckets ({buckets[0]}..{buckets[-1]}) in "
-            f"{_time.perf_counter() - t0:.1f}s")
+        log(f"codec: {len(buckets)} buckets ({buckets[0]}..{buckets[-1]}) in {_time.perf_counter() - t0:.1f}s")
 
         # 4) The frame-loop trace, LAST, after every compile above.
         traced = False
@@ -211,10 +234,31 @@ class TtVoxtralPipeline:
         return self
 
     def close(self):
-        """Release the trace and drop per-request state. Does not close the device: the caller owns it."""
-        self._trace_release()
+        """Release the trace, and the device if this instance opened it. Safe to call twice."""
+        if self.mesh_device is not None:
+            self._trace_release()
         self.last_timings = {}
         self.warmed = {}
+        if self._owns_device and self.mesh_device is not None:
+            ttnn.close_mesh_device(self.mesh_device)
+            self.mesh_device = self.device = None
+
+    @torch.no_grad()
+    def synthesize(self, text, voice="neutral_male", seed=0, max_frames=None, cfg_alpha=CFG_ALPHA):
+        """text + voice preset name -> waveform torch [1,1,N] float @ 24 kHz: the front end,
+        `generate` and `decode` in one call. `max_frames` defaults to `frame_budget(text)`."""
+        from models.experimental.voxtral_tts import frontend
+
+        embeds = frontend.build_prompt_embeds(text, voice, self.wb, model_dir=self.model_dir)
+        room = self.backbone.max_seq_len - embeds.shape[1]
+        if room < 1:
+            raise ValueError(
+                f"a {embeds.shape[1]}-token prompt leaves no room for audio in max_seq_len={self.backbone.max_seq_len}"
+            )
+        cap = min(frame_budget(text) if max_frames is None else max_frames, room)
+        self.backbone.reset()
+        frames, _, _ = self.generate(embeds, max_frames=cap, cfg_alpha=cfg_alpha, seed=seed, verbose=False)
+        return self.decode(frames)
 
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
@@ -223,10 +267,10 @@ class TtVoxtralPipeline:
             torch.manual_seed(seed)
         t0 = time.perf_counter()
         # Only the last position conditions the first frame. see VOXTRAL_TTS_BRINGUP.md [pipe-04]
-        h = self.backbone.prefill_last(embeds)   # [1,1,3072]
+        h = self.backbone.prefill_last(embeds)  # [1,1,3072]
         t_prefill = time.perf_counter() - t0
-        if verbose:
-            print(f"[pipeline] prefill P={embeds.shape[1]} in {t_prefill:.2f}s")
+        log = logger.info if verbose else logger.debug
+        log(f"[TtVoxtralPipeline] prefill P={embeds.shape[1]} in {t_prefill:.2f}s")
 
         frames, t0 = [], time.perf_counter()
         stopped = False
@@ -241,32 +285,31 @@ class TtVoxtralPipeline:
                 traced = True
             except Exception as exc:
                 self._trace_release()
-                if verbose:
-                    print(f"[pipeline] trace capture failed ({type(exc).__name__}), running eager")
+                logger.warning(f"[TtVoxtralPipeline] trace capture failed ({type(exc).__name__}), running eager")
         try:
             for i in range(max_frames):
                 if int(codes[0, 0]) == END_AUDIO_ID:
-                    if verbose:
-                        print(f"[pipeline] [END_AUDIO] at frame {i} -- natural stop")
+                    log(f"[TtVoxtralPipeline] [END_AUDIO] at frame {i} -- natural stop")
                     stopped = True
                     break
                 frames.append(codes)
                 if i + 1 == max_frames:
-                    break                       # the next frame could never be appended
+                    break  # the next frame could never be appended
                 if traced:
                     codes = self._traced_frame(codes[0])
                 else:
-                    h = self.backbone.step(
-                        backbone.embed_frame(self.wb, codes[0])).reshape(1, 1, -1)
+                    h = self.backbone.step(backbone.embed_frame(self.wb, codes[0])).reshape(1, 1, -1)
                     codes = self.flow(h[:, 0], cfg_alpha=cfg_alpha)
-                if verbose and (i + 1) % 10 == 0:
+                if (i + 1) % 10 == 0:
                     el = time.perf_counter() - t0
-                    print(f"[pipeline]   {i+1} frames ({(i+1)/FRAME_RATE:.1f}s audio) "
-                          f"| {el/(i+1):.2f}s/frame")
+                    log(
+                        f"[TtVoxtralPipeline]   {i+1} frames ({(i+1)/FRAME_RATE:.1f}s audio) "
+                        f"| {el/(i+1):.2f}s/frame"
+                    )
         finally:
-            self._trace_release()      # the next generate() prefills, which allocates -- [pipe-05]
-        if verbose and not stopped:
-            print(f"[pipeline] hit max_frames={max_frames} without [END_AUDIO]")
+            self._trace_release()  # the next generate() prefills, which allocates -- [pipe-05]
+        if not stopped:
+            logger.warning(f"[TtVoxtralPipeline] hit max_frames={max_frames} without [END_AUDIO]")
         if not frames:
             raise RuntimeError("model emitted [END_AUDIO] on the first frame -- nothing to decode")
         t_decode = time.perf_counter() - t0

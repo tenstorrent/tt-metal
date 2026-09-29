@@ -109,9 +109,7 @@ def test_weight_norm_fold_reproduces_direction_and_magnitude():
     """Folding g,v at dim=0 must give per-output-channel norm == g."""
     v = torch.randn(8, 4, 3)
     g = torch.rand(8, 1, 1) + 0.5
-    folded = fold_weight_norm(
-        {"c.parametrizations.weight.original0": g, "c.parametrizations.weight.original1": v}, "c"
-    )
+    folded = fold_weight_norm({"c.parametrizations.weight.original0": g, "c.parametrizations.weight.original1": v}, "c")
     assert folded.shape == v.shape
     assert torch.allclose(folded.flatten(1).norm(dim=1), g.flatten(), atol=1e-5)
 
@@ -216,8 +214,9 @@ def test_stage_shapes_upsample_by_two_each(w):
     assert x.shape == (1, CODEC_DIM, 8)
     expect = [16, 32, 64]
     for stage, ci in enumerate((2, 4, 6)):
-        x = ref.codec_transformer(x.permute(0, 2, 1), w, DEC_TF_BLOCKS[stage], 2,
-                                  ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
+        x = ref.codec_transformer(
+            x.permute(0, 2, 1), w, DEC_TF_BLOCKS[stage], 2, ref.decoder_window_sizes()[stage]
+        ).permute(0, 2, 1)
         x = ref.causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"], 4, 2)
         assert x.shape == (1, CODEC_DIM, expect[stage]), f"stage {stage} length wrong"
 

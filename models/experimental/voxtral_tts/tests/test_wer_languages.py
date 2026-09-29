@@ -82,19 +82,27 @@ MAX_DEGENERATE = 2  # runs per cell at or past COLLAPSE; see VOXTRAL_TTS_GATES.m
 # runs that hit the frame cap without [END_AUDIO]; WER cannot hear a missing tail
 MAX_NON_TERMINATING = 2
 
-LANG_NAMES = {"en": "english", "de": "german", "fr": "french", "es": "spanish", "it": "italian",
-              "pt": "portuguese", "nl": "dutch", "hi": "hindi", "ar": "arabic"}
+LANG_NAMES = {
+    "en": "english",
+    "de": "german",
+    "fr": "french",
+    "es": "spanish",
+    "it": "italian",
+    "pt": "portuguese",
+    "nl": "dutch",
+    "hi": "hindi",
+    "ar": "arabic",
+}
 
-pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT),
-                                reason=f"no checkpoint at {DEFAULT_CKPT}")
+pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
 
 # --------------------------------------------------------------------------------------- metric
 
 # Optional orthography, dropped or folded so two legal spellings score alike; each rule is scoped
 # to one script. See VOXTRAL_TTS_GATES.md [wer-11]
 _DROP_MARKS = {
-    "़",                                  # Devanagari nukta: तेज़ and तेज are one word
-    *(chr(c) for c in range(0x64B, 0x656)),    # Arabic harakat, madda, hamza -- omitted in prose
+    "़",  # Devanagari nukta: तेज़ and तेज are one word
+    *(chr(c) for c in range(0x64B, 0x656)),  # Arabic harakat, madda, hamza -- omitted in prose
 }
 _FOLD_CHARS = str.maketrans({"ँ": "ं", "ة": "ه", "ى": "ي"})
 #                            chandrabindu->anusvara, ta marbuta->ha, alef maqsura->ya
@@ -106,7 +114,7 @@ def _words(s):
     Keeps combining marks, so non-Latin text survives; see VOXTRAL_TTS_GATES.md [wer-11]
     """
     flat = s.casefold().replace("’", "'").replace("ʼ", "'")  # ASR emits curly apostrophes
-    flat = unicodedata.normalize("NFD", flat)                          # expose precomposed marks
+    flat = unicodedata.normalize("NFD", flat)  # expose precomposed marks
     flat = "".join(c for c in flat if c not in _DROP_MARKS).translate(_FOLD_CHARS)
     flat = unicodedata.normalize("NFC", flat)
     keep = lambda c: c.isalnum() or c.isspace() or c == "'" or unicodedata.category(c) in ("Mn", "Mc")
@@ -123,27 +131,29 @@ def wer(reference, hypothesis):
         d[0][j] = j
     for i in range(1, len(ref) + 1):
         for j in range(1, len(hyp) + 1):
-            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1,
-                          d[i - 1][j - 1] + (ref[i - 1] != hyp[j - 1]))
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (ref[i - 1] != hyp[j - 1]))
     return d[-1][-1] / max(len(ref), 1)
 
 
-@pytest.mark.parametrize("ref,hyp,exp", [
-    ("the cat sat down", "the cat sat down", 0.0),
-    ("the cat sat down", "the dog sat down", 0.25),          # substitution
-    ("the cat sat down", "the cat down", 0.25),              # deletion
-    ("the cat sat down", "the cat sat right down", 0.25),    # insertion
-    ("the cat sat down", "", 1.0),                           # nothing transcribed
-    ("The cat, sat down!", "the cat sat down", 0.0),         # punctuation and case ignored
-    # non-Latin scripts must survive normalisation rather than emptying to a free zero
-    ("नमस्ते दुनिया", "नमस्ते दुनिया", 0.0),
-    ("नमस्ते दुनिया", "नमस्ते चाँद", 0.5),
-    ("मुझे यह किताब बहुत पसंद है", "मुझे यह किताब बहुत अच्छी है", 1 / 6),
-    ("سوق الشتاء مبكرا اليوم", "سوق الصيف مبكرا اليوم", 0.25),
-    # optional orthography folds: the same words spelled two legal ways score 0
-    ("तेज़ हवा चली", "तेज हवा चली", 0.0),
-    ("مرحبا كيف حالك", "مَرْحَبا كيف حالك", 0.0),
-])
+@pytest.mark.parametrize(
+    "ref,hyp,exp",
+    [
+        ("the cat sat down", "the cat sat down", 0.0),
+        ("the cat sat down", "the dog sat down", 0.25),  # substitution
+        ("the cat sat down", "the cat down", 0.25),  # deletion
+        ("the cat sat down", "the cat sat right down", 0.25),  # insertion
+        ("the cat sat down", "", 1.0),  # nothing transcribed
+        ("The cat, sat down!", "the cat sat down", 0.0),  # punctuation and case ignored
+        # non-Latin scripts must survive normalisation rather than emptying to a free zero
+        ("नमस्ते दुनिया", "नमस्ते दुनिया", 0.0),
+        ("नमस्ते दुनिया", "नमस्ते चाँद", 0.5),
+        ("मुझे यह किताब बहुत पसंद है", "मुझे यह किताब बहुत अच्छी है", 1 / 6),
+        ("سوق الشتاء مبكرا اليوم", "سوق الصيف مبكرا اليوم", 0.25),
+        # optional orthography folds: the same words spelled two legal ways score 0
+        ("तेज़ हवा चली", "तेज हवा चली", 0.0),
+        ("مرحبا كيف حالك", "مَرْحَبا كيف حالك", 0.0),
+    ],
+)
 def test_wer_metric(ref, hyp, exp):
     """The metric, before it is used to judge anything."""
     assert wer(ref, hyp) == pytest.approx(exp, abs=1e-9)
@@ -167,6 +177,7 @@ def test_every_language_band_is_gated():
 
 # ---------------------------------------------------------------------------------------- the run
 
+
 def frame_budget(text):
     """Frame cap: ~18 chars/s at 12.5 frames/s, x2.2 margin, floor 320.
     see VOXTRAL_TTS_GATES.md [wer-12]"""
@@ -181,20 +192,19 @@ class Asr:
 
         self.proc = WhisperProcessor.from_pretrained(ASR_MODEL)
         # the large checkpoints ship fp16, which cannot run against fp32 features on CPU
-        self.model = WhisperForConditionalGeneration.from_pretrained(
-            ASR_MODEL, torch_dtype=torch.float32).eval()
+        self.model = WhisperForConditionalGeneration.from_pretrained(ASR_MODEL, torch_dtype=torch.float32).eval()
 
     def __call__(self, wav, lang, long_form=None):
         """`long_form` None decides by duration (the gate); False forces the truncating path for the
         calibration control. See VOXTRAL_TTS_GATES.md [wer-03]"""
         audio = wav.reshape(1, -1)
         n = int(audio.shape[1] * ASR_SR / OUTPUT_SR)
-        audio = torch.nn.functional.interpolate(audio.unsqueeze(0), size=n, mode="linear",
-                                                align_corners=False).squeeze(0)
+        audio = torch.nn.functional.interpolate(audio.unsqueeze(0), size=n, mode="linear", align_corners=False).squeeze(
+            0
+        )
         # Whisper truncates past 30 s unless asked for long form; see VOXTRAL_TTS_BUGS.md BUG-13
         long_form = n > 30 * ASR_SR if long_form is None else long_form
-        kw =({"truncation": False, "padding": "longest", "return_attention_mask": True}
-              if long_form else {})
+        kw = {"truncation": False, "padding": "longest", "return_attention_mask": True} if long_form else {}
         inp = self.proc(audio[0].numpy(), sampling_rate=ASR_SR, return_tensors="pt", **kw)
         gen = {"language": lang, "task": "transcribe", "do_sample": False, "num_beams": 1}
         if long_form:
@@ -210,8 +220,17 @@ def voices_for(lang, all_voices):
     return tuple(v for v in all_voices if lang_of(v) == lang)
 
 
-def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None,
-                 collapse=COLLAPSE, seeds_override=None, verbose=True):
+def run_language(
+    lang,
+    asr,
+    pipe,
+    band="medium",
+    voices=None,
+    max_sentences=None,
+    collapse=COLLAPSE,
+    seeds_override=None,
+    verbose=True,
+):
     """One (language, band) voice x sentence x seed matrix -> stats dict.
 
     No assertions, so the measurement probe and the gate share one code path.
@@ -219,7 +238,7 @@ def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None
     from models.experimental.voxtral_tts.tests.reference_helpers import all_voices, corpus_embeds
 
     voices = voices if voices is not None else voices_for(lang, all_voices())
-    texts = wer_band(lang, band)[:max_sentences]   # a wide voice sweep pays breadth, not depth
+    texts = wer_band(lang, band)[:max_sentences]  # a wide voice sweep pays breadth, not depth
     seeds = seeds_override or SEEDS.get((lang, band), DEFAULT_SEEDS)
     scores, non_terminating = {}, []
     for voice in voices:
@@ -234,16 +253,24 @@ def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None
                 scores[(voice, si, sd)] = wer(text, asr(pipe.decode(frames), lang))
         if verbose:
             row = [scores[(voice, i, sd)] for i in range(len(texts)) for sd in seeds]
-            print(f"  {lang}/{band:<6} {voice:18s} " + " ".join(f"{w:.3f}" for w in row)
-                  + f"   mean {sum(row) / len(row):.4f}", flush=True)
+            print(
+                f"  {lang}/{band:<6} {voice:18s} "
+                + " ".join(f"{w:.3f}" for w in row)
+                + f"   mean {sum(row) / len(row):.4f}",
+                flush=True,
+            )
     vals = list(scores.values())
     return {
-        "lang": lang, "band": band, "n_voices": len(voices), "n_runs": len(vals),
-        "mean": sum(vals) / len(vals), "worst": max(vals),
+        "lang": lang,
+        "band": band,
+        "n_voices": len(voices),
+        "n_runs": len(vals),
+        "mean": sum(vals) / len(vals),
+        "worst": max(vals),
         "perfect": sum(1 for w in vals if w == 0),
-        "degenerate": [f"{v}/s{i}/seed{sd}" for (v, i, sd), w in scores.items()
-                       if w >= collapse],
-        "non_terminating": non_terminating, "collapse": collapse,
+        "degenerate": [f"{v}/s{i}/seed{sd}" for (v, i, sd), w in scores.items() if w >= collapse],
+        "non_terminating": non_terminating,
+        "collapse": collapse,
     }
 
 
@@ -273,18 +300,24 @@ def test_wer_per_language_band(rig, lang, band):
     ceiling = CEILINGS[(lang, band)]
     n_seeds = len(SEEDS.get((lang, band), DEFAULT_SEEDS))
     per = s["n_runs"] // s["n_voices"] // n_seeds
-    print(f"\n  {lang}/{band}: {s['n_voices']} voices x {per} sentences x {n_seeds} seed(s), "
-          f"WER {s['mean']:.4f} (worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
-          f"degenerate {len(s['degenerate'])}, non-terminating {len(s['non_terminating'])}) "
-          f"ceiling {ceiling}", flush=True)
-    assert s["mean"] <= ceiling, (
-        f"{lang}/{band}: mean WER {s['mean']:.4f} over {s['n_runs']} runs above ceiling {ceiling}")
+    print(
+        f"\n  {lang}/{band}: {s['n_voices']} voices x {per} sentences x {n_seeds} seed(s), "
+        f"WER {s['mean']:.4f} (worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
+        f"degenerate {len(s['degenerate'])}, non-terminating {len(s['non_terminating'])}) "
+        f"ceiling {ceiling}",
+        flush=True,
+    )
+    assert (
+        s["mean"] <= ceiling
+    ), f"{lang}/{band}: mean WER {s['mean']:.4f} over {s['n_runs']} runs above ceiling {ceiling}"
     assert len(s["degenerate"]) <= MAX_DEGENERATE, (
         f"{lang}/{band}: {len(s['degenerate'])} runs at or above WER {COLLAPSE} "
-        f"(limit {MAX_DEGENERATE}): {s['degenerate']}")
+        f"(limit {MAX_DEGENERATE}): {s['degenerate']}"
+    )
     assert len(s["non_terminating"]) <= MAX_NON_TERMINATING, (
         f"{lang}/{band}: {len(s['non_terminating'])} runs hit the frame cap without [END_AUDIO] "
-        f"(limit {MAX_NON_TERMINATING}): {s['non_terminating']}")
+        f"(limit {MAX_NON_TERMINATING}): {s['non_terminating']}"
+    )
 
 
 # Every voice, on English only; see VOXTRAL_TTS_GATES.md [wer-10]
@@ -296,16 +329,19 @@ def test_wer_every_voice_english(rig):
 
     asr, pipe = rig
     voices = tuple(all_voices())
-    s = run_language(VOICE_SWEEP_LANG, asr, pipe, band="medium", voices=voices,
-                     max_sentences=VOICE_SWEEP_SENTENCES)
+    s = run_language(VOICE_SWEEP_LANG, asr, pipe, band="medium", voices=voices, max_sentences=VOICE_SWEEP_SENTENCES)
     # one ceiling for the whole sweep; see VOXTRAL_TTS_GATES.md [wer-05]
     ceiling = CEILINGS[("en", "voice_sweep")]
-    print(f"\n  en/voice_sweep: {len(voices)} voices, WER {s['mean']:.4f} "
-          f"(worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
-          f"degenerate {len(s['degenerate'])}) ceiling {ceiling}", flush=True)
-    assert s["mean"] <= ceiling, (
-        f"en/voice_sweep: mean WER {s['mean']:.4f} over {s['n_runs']} runs above {ceiling}")
-    assert len(s["degenerate"]) <= MAX_DEGENERATE, (
-        f"en/voice_sweep: {len(s['degenerate'])} collapsed runs: {s['degenerate']}")
-    assert len(s["non_terminating"]) <= MAX_NON_TERMINATING, (
-        f"en/voice_sweep: {len(s['non_terminating'])} hit the frame cap: {s['non_terminating']}")
+    print(
+        f"\n  en/voice_sweep: {len(voices)} voices, WER {s['mean']:.4f} "
+        f"(worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
+        f"degenerate {len(s['degenerate'])}) ceiling {ceiling}",
+        flush=True,
+    )
+    assert s["mean"] <= ceiling, f"en/voice_sweep: mean WER {s['mean']:.4f} over {s['n_runs']} runs above {ceiling}"
+    assert (
+        len(s["degenerate"]) <= MAX_DEGENERATE
+    ), f"en/voice_sweep: {len(s['degenerate'])} collapsed runs: {s['degenerate']}"
+    assert (
+        len(s["non_terminating"]) <= MAX_NON_TERMINATING
+    ), f"en/voice_sweep: {len(s['non_terminating'])} hit the frame cap: {s['non_terminating']}"

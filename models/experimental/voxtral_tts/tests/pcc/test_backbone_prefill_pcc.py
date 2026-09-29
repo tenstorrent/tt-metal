@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The backbone prefill on device against the fp32 reference: one-layer wiring, all 15 fixture
-prompts
-(pooled and last position, each with a worst-sample bound), and every KV-cache entry.
+prompts (pooled and last position, each with a worst-sample bound), and every KV-cache entry.
 Decode is test_backbone_decode_pcc.py; every padded shape is test_prefill_shapes.py.
 see VOXTRAL_TTS_BACKBONE.md [gpt-50]
 
@@ -25,7 +24,6 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # no
     DIM,
     HEAD_DIM,
     N_KV_HEADS,
-    HEAD_DIM,
     N_LAYERS,
     ROPE_THETA,
     causal_bias,
@@ -38,18 +36,17 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
     backbone_state,
     case_ids,
     fixture_embeds,
-    real_frames,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
 # Gate constants; their measured bands: see VOXTRAL_TTS_BACKBONE.md [gpt-50]
 PCC_PREFILL = 0.999
-CACHE_CASES = (0, 2, 3, 12)         # P = 100..357
+CACHE_CASES = (0, 2, 3, 12)  # P = 100..357
 CACHE_PCC = 0.998
 # The per-position minimum is printed, not asserted; the last position's worst sample is gated.
 MAX_WORST_SAMPLE_PCT = 5.0
-MAX_POOLED_WORST_SAMPLE_PCT = 8.0   # largest single-element error over all positions
+MAX_POOLED_WORST_SAMPLE_PCT = 8.0  # largest single-element error over all positions
 
 
 @pytest.fixture(scope="module")
@@ -115,11 +112,13 @@ def test_prefill_pcc(gen, w, ci):
     assert ws < MAX_WORST_SAMPLE_PCT, f"case {ci} last-position worst sample {ws:.2f}% of reference scale"
     assert m_all["worst_pct"] < MAX_POOLED_WORST_SAMPLE_PCT, (
         f"case {ci} pooled worst sample {m_all['worst_pct']:.2f}% over all {P} positions -- one "
-        f"element is far off even though pooled PCC is {all_pcc:.6f}")
+        f"element is far off even though pooled PCC is {all_pcc:.6f}"
+    )
     assert torch.equal(shipped, got[:, -1]), (
         f"case {ci}: prefill_last (the call the pipeline makes) differs from prefill(last_only="
         f"False)[:, -1] by max {(shipped - got[:, -1]).abs().max():.3e} -- the two paths have "
-        f"diverged, and only the last_only=False one is covered by the gates above")
+        f"diverged, and only the last_only=False one is covered by the gates above"
+    )
 
 
 def _reference_cache(w, embeds):
@@ -152,9 +151,10 @@ def test_prefill_kv_cache_matches_reference(gen, w, ci):
         for side, j in (("K", 0), ("V", 1)):
             exp, got = ref_cache[i][j].float(), dev_cache[i][j]
             if side == "K":
-                exp = as_device_k_layout(exp)       # reference_helpers explains why
-            assert exp.shape == got.shape, (
-                f"layer {i} {side}: reference {tuple(exp.shape)} vs device {tuple(got.shape)}")
+                exp = as_device_k_layout(exp)  # reference_helpers explains why
+            assert (
+                exp.shape == got.shape
+            ), f"layer {i} {side}: reference {tuple(exp.shape)} vs device {tuple(got.shape)}"
             m = compare_hidden(got, exp)
             # worst position, so a failure names one instead of a whole layer
             per_pos = (got - exp).abs().amax(dim=(0, 1, 3))
@@ -162,13 +162,12 @@ def test_prefill_kv_cache_matches_reference(gen, w, ci):
 
     worst_pcc = min(r[2] for r in rows)
     worst_ws = max(r[3] for r in rows)
-    print(f"\n  case {ci} ({case['voice']}), P={P}, {N_LAYERS} layers x (K,V), "
-          f"cache [{1}, {N_KV_HEADS}, {P}, {HEAD_DIM}]")
+    print(
+        f"\n  case {ci} ({case['voice']}), P={P}, {N_LAYERS} layers x (K,V), "
+        f"cache [{1}, {N_KV_HEADS}, {P}, {HEAD_DIM}]"
+    )
     for i, side, pc, ws, pos in sorted(rows, key=lambda r: r[2])[:5]:
         print(f"    weakest: layer {i:>2} {side}  PCC {pc:.6f}  worst-sample {ws:.2f}%  @pos {pos}")
-    print(f"  worst PCC {worst_pcc:.6f}, worst-sample {worst_ws:.2f}% across all "
-          f"{len(rows)} (layer, side) pairs")
+    print(f"  worst PCC {worst_pcc:.6f}, worst-sample {worst_ws:.2f}% across all {len(rows)} (layer, side) pairs")
     bad = [(i, s, pc) for i, s, pc, _, _ in rows if pc <= CACHE_PCC]
-    assert not bad, "cache entries below the gate: " + ", ".join(
-        f"layer {i} {s} PCC {pc:.6f}" for i, s, pc in bad)
-
+    assert not bad, "cache entries below the gate: " + ", ".join(f"layer {i} {s} PCC {pc:.6f}" for i, s, pc in bad)

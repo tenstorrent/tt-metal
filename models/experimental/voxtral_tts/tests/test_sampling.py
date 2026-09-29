@@ -49,8 +49,9 @@ def test_a_different_seed_changes_the_draw(pipe):
     embeds, _ = fixture_embeds(CASE, pipe.wb)
     a = _gen(pipe, embeds, seed=0)
     b = _gen(pipe, embeds, seed=12345)
-    assert a.shape == b.shape, "different seeds changed the frame count, which is fine, but then "\
-                               "compare lengths instead"
+    assert (
+        a.shape == b.shape
+    ), "different seeds changed the frame count, which is fine, but then compare lengths instead"
     assert not torch.equal(a, b), "two different seeds produced identical codes -- seed is ignored"
     print(f"\n  seed 0 vs 12345: {int((a != b).sum())} of {a.numel()} codes differ")
 
@@ -70,8 +71,7 @@ def test_end_audio_is_not_returned_as_a_frame(pipe):
     """[END_AUDIO] must not be returned as a frame; the codec would decode it as audio."""
     embeds, _ = fixture_embeds(CASE, pipe.wb)
     frames = _gen(pipe, embeds, seed=0)
-    assert not bool((frames[:, 0] == END_AUDIO_ID).any()), \
-        "an [END_AUDIO] semantic code reached the returned frames"
+    assert not bool((frames[:, 0] == END_AUDIO_ID).any()), "an [END_AUDIO] semantic code reached the returned frames"
 
 
 @pytest.mark.slow
@@ -80,6 +80,7 @@ def test_cfg_alpha_reaches_the_model(pipe):
     embeds, _ = fixture_embeds(CASE, pipe.wb)
     a = _gen(pipe, embeds, seed=0, cfg_alpha=CFG_ALPHA)
     b = _gen(pipe, embeds, seed=0, cfg_alpha=1.0)  # conditional only
-    assert not torch.equal(a, b), \
-        f"cfg_alpha={CFG_ALPHA} and cfg_alpha=1.0 produced identical codes -- CFG is not plumbed"
+    assert not torch.equal(
+        a, b
+    ), f"cfg_alpha={CFG_ALPHA} and cfg_alpha=1.0 produced identical codes -- CFG is not plumbed"
     print(f"\n  cfg {CFG_ALPHA} vs 1.0: {int((a != b).sum())} of {a.numel()} codes differ")

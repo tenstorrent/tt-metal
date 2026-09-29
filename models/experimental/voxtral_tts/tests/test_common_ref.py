@@ -42,8 +42,7 @@ def _write_safetensors(path, tensors):
         raw = t.view(torch.uint8).reshape(-1).numpy().tobytes() if t.dtype == torch.bfloat16 else None
         if raw is None:
             raw = t.flatten().numpy().tobytes()
-        header[name] = {"dtype": _ST_NAMES[t.dtype], "shape": list(t.shape),
-                        "data_offsets": [off, off + len(raw)]}
+        header[name] = {"dtype": _ST_NAMES[t.dtype], "shape": list(t.shape), "data_offsets": [off, off + len(raw)]}
         blobs.append(raw)
         off += len(raw)
     blob = json.dumps(header).encode()
@@ -94,8 +93,8 @@ def test_prefixed_strips_and_filters(tmp_path):
     assert sorted(st.prefixed("enc.", strip=False).keys()) == ["enc.a", "enc.b"]
 
 
-def test_missing_checkpoint_raises_with_download_hint():
-    with pytest.raises(FileNotFoundError, match="hf download"):
+def test_missing_checkpoint_raises_with_download_hint(expect_error):
+    with expect_error(FileNotFoundError, "hf download"):
         SafeTensors("/nonexistent/consolidated.safetensors")
 
 
@@ -163,8 +162,10 @@ def test_codebook_sizes_and_offsets():
 
 
 def test_codebook_sizes_without_specials():
-    assert codebook_sizes(include_special=False) == [SEMANTIC_CODEBOOK_SIZE] + \
-        [ACOUSTIC_CODEBOOK_SIZE] * N_ACOUSTIC_CODEBOOK
+    assert (
+        codebook_sizes(include_special=False)
+        == [SEMANTIC_CODEBOOK_SIZE] + [ACOUSTIC_CODEBOOK_SIZE] * N_ACOUSTIC_CODEBOOK
+    )
 
 
 def test_pcc_edges():

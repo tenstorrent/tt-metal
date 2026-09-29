@@ -21,7 +21,6 @@ pytestmark = pytest.mark.slow
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # noqa: E402
     DIM,
-    N_KV_HEADS,
     N_LAYERS,
 )
 from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: E402
@@ -39,11 +38,11 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 # Every teacher-forced comparison uses the prompt's OWN recorded trajectory.
 # Gate constants and why the breadth floor is lower: see VOXTRAL_TTS_BACKBONE.md [gpt-51]
 PCC_DECODE = 0.999
-PCC_DECODE_HORIZON = 0.997         # a minimum over every frame of all 15 prompts
+PCC_DECODE_HORIZON = 0.997  # a minimum over every frame of all 15 prompts
 CACHE_PCC = 0.998
 TILE = 32
 MAX_SEQ = 1024
-HORIZON = 64                       # frames per prompt in the breadth sweep
+HORIZON = 64  # frames per prompt in the breadth sweep
 DEPTHS = (1, 6, 13, 20, N_LAYERS)
 # sdpa_decode requires the cache length to be a multiple of its k_chunk_size (512): cache sizes
 # a caller may and may not ask for, other than the 1024 and 2048 the suite otherwise uses.
@@ -101,11 +100,12 @@ def test_decode_pcc_over_the_horizon(gen, w, ci):
     inc, P = _prefill_both(gen, w, ci)
     pcs, wss = _steps(gen, inc, w, frames.shape[0], frames=frames)
     q = max(1, len(pcs) // 4)
-    print(f"\n  case {ci} P={P}, {len(pcs)} frames: min PCC {min(pcs):.6f}  "
-          f"first-quarter mean {sum(pcs[:q])/q:.6f}  last-quarter mean {sum(pcs[-q:])/q:.6f}  "
-          f"worst-sample max {max(wss):.2f}%")
-    assert min(pcs) > PCC_DECODE_HORIZON, (
-        f"case {ci} decode min PCC {min(pcs):.6f} over {len(pcs)} frames")
+    print(
+        f"\n  case {ci} P={P}, {len(pcs)} frames: min PCC {min(pcs):.6f}  "
+        f"first-quarter mean {sum(pcs[:q])/q:.6f}  last-quarter mean {sum(pcs[-q:])/q:.6f}  "
+        f"worst-sample max {max(wss):.2f}%"
+    )
+    assert min(pcs) > PCC_DECODE_HORIZON, f"case {ci} decode min PCC {min(pcs):.6f} over {len(pcs)} frames"
 
 
 def test_decode_is_bit_deterministic(gen, w):
@@ -138,8 +138,7 @@ def test_decode_writes_the_cache_correctly(gen, w):
             m = compare_hidden(dev_t[:, :, P : P + n, :], ref_t[:, :, P : P + n, :])
             if m["pcc"] <= CACHE_PCC:
                 weak.append((li, side, round(m["pcc"], 6)))
-    print(f"\n  {N_LAYERS} layers x (K,V) at decode positions [{P}, {P + n}): "
-          f"{len(weak)} below {CACHE_PCC}")
+    print(f"\n  {N_LAYERS} layers x (K,V) at decode positions [{P}, {P + n}): {len(weak)} below {CACHE_PCC}")
     assert not weak, f"decode wrote cache entries below {CACHE_PCC}: {weak[:8]}"
 
 
@@ -147,8 +146,7 @@ def test_decode_does_not_disturb_the_prompt_cache(gen, w):
     """Decode must leave the prompt's positions exactly as prefill wrote them."""
     n = 4
     inc, P = _prefill_both(gen, w, CACHE_CASE)
-    before = [(ttnn.to_torch(k).float()[:, :, :P, :], ttnn.to_torch(v).float()[:, :, :P, :])
-              for k, v in gen.caches]
+    before = [(ttnn.to_torch(k).float()[:, :, :P, :], ttnn.to_torch(v).float()[:, :, :P, :]) for k, v in gen.caches]
     _steps(gen, inc, w, n)
     moved = []
     for li, (k, v) in enumerate(gen.caches):
@@ -166,11 +164,16 @@ def test_decode_across_a_cache_tile_boundary(gen, w):
     crossings = [t for t in range(n) if (P + t) % TILE == 0]
     pcs, _ = _steps(gen, inc, w, n)
     at_crossing = [pcs[t] for t in crossings if t < len(pcs)]
-    print(f"\n  P={P}, {len(pcs)} steps, crossings at {crossings}: "
-          f"min overall {min(pcs):.6f}, min at a crossing "
-          f"{min(at_crossing) if at_crossing else float('nan'):.6f}")
+    print(
+        f"\n  P={P}, {len(pcs)} steps, crossings at {crossings}: "
+        f"min overall {min(pcs):.6f}, min at a crossing "
+        f"{min(at_crossing) if at_crossing else float('nan'):.6f}"
+    )
     assert crossings, f"P={P} with {n} steps crosses no tile boundary; pick a different case"
-    assert min(pcs) > PCC_DECODE, f"decode min PCC {min(pcs):.6f} across a tile boundary"
+    assert min(at_crossing) > PCC_DECODE, f"decode min PCC {min(at_crossing):.6f} at a tile crossing"
+    # The steps between crossings walk case 0's own frames, which include its bf16 hard frame.
+    # see VOXTRAL_TTS_BACKBONE.md [gpt-51]
+    assert min(pcs) > PCC_DECODE_HORIZON, f"decode min PCC {min(pcs):.6f} across a tile boundary"
 
 
 @pytest.mark.parametrize("max_seq", VALID_MAX_SEQ, ids=lambda n: f"maxseq{n}")
@@ -184,13 +187,13 @@ def test_decode_at_other_valid_cache_lengths(dev, w, max_seq):
 
 
 @pytest.mark.parametrize("max_seq", REJECTED_MAX_SEQ, ids=lambda n: f"maxseq{n}")
-def test_a_cache_length_sdpa_cannot_serve_fails_loudly(dev, w, max_seq):
+def test_a_cache_length_sdpa_cannot_serve_fails_loudly(dev, w, max_seq, expect_error):
     """A cache length that is not a multiple of sdpa's k_chunk_size must raise on first use rather
     than return something wrong (the op enforces it, not the constructor)."""
     g = TtVoxtralGPT(dev, n_layers=N_LAYERS, state=w, max_seq_len=max_seq)
     embeds, _ = fixture_embeds(CACHE_CASE, w)
     g.reset()
-    with pytest.raises(Exception):
+    with expect_error(Exception, "must be multiple of chunk size"):
         g.prefill(embeds, last_only=True)
         g.step(bref.embed_frame(w, real_frames_long(CACHE_CASE)[0]))
 
@@ -211,20 +214,19 @@ def test_decode_matches_reference_at_each_depth(dev, w, depth):
     assert min(pcs) > PCC_DECODE, f"depth {depth} decode min PCC {min(pcs):.6f}"
 
 
-def test_step_refuses_a_full_cache(dev, w):
+def test_step_refuses_a_full_cache(dev, w, expect_error):
     """Stepping past max_seq_len must raise, not wrap or overwrite."""
-    small = 512                                   # the smallest cache sdpa_decode will serve
+    small = 512  # the smallest cache sdpa_decode will serve
     g = TtVoxtralGPT(dev, n_layers=1, state=w, max_seq_len=small)
     g.reset()
     g.prefill(torch.zeros(1, small, DIM), last_only=True)
     assert g.pos == small
-    with pytest.raises(ValueError, match="cache full"):
+    with expect_error(ValueError, "cache full"):
         g.step(torch.zeros(1, DIM))
 
 
 # The two longest utterances only; a full solve for every prompt is too slow for the suite.
-LONG_CASES = tuple(sorted(long_frame_cases(),
-                          key=lambda c: -real_frames_long(c).shape[0])[:2])
+LONG_CASES = tuple(sorted(long_frame_cases(), key=lambda c: -real_frames_long(c).shape[0])[:2])
 
 
 @pytest.mark.timeout(2400)
@@ -233,20 +235,22 @@ def test_decode_pcc_over_a_full_utterance(gen, w, ci):
     """A whole utterance, teacher-forced on its own frames, with the trend reported by decile,
     so drift over a real request's length has somewhere to show.
     see VOXTRAL_TTS_BACKBONE.md [gpt-51]"""
-    frames = real_frames_long(ci)          # this prompt's own trajectory
+    frames = real_frames_long(ci)  # this prompt's own trajectory
     inc, P = _prefill_both(gen, w, ci)
     pcs, wss = _steps(gen, inc, w, frames.shape[0], frames=frames)
     d = max(1, len(pcs) // 10)
-    deciles = [sum(pcs[k * d : (k + 1) * d]) / len(pcs[k * d : (k + 1) * d])
-               for k in range(10) if pcs[k * d : (k + 1) * d]]
-    print(f"\n  case {ci} P={P}, {len(pcs)} frames ({len(pcs) / 12.5:.1f}s audio): "
-          f"min PCC {min(pcs):.6f}  worst-sample max {max(wss):.2f}%")
+    deciles = [
+        sum(pcs[k * d : (k + 1) * d]) / len(pcs[k * d : (k + 1) * d]) for k in range(10) if pcs[k * d : (k + 1) * d]
+    ]
+    print(
+        f"\n  case {ci} P={P}, {len(pcs)} frames ({len(pcs) / 12.5:.1f}s audio): "
+        f"min PCC {min(pcs):.6f}  worst-sample max {max(wss):.2f}%"
+    )
     print("    mean PCC by decile: " + " ".join(f"{v:.6f}" for v in deciles))
-    assert min(pcs) > PCC_DECODE, (
-        f"case {ci} decode min PCC {min(pcs):.6f} over {len(pcs)} frames")
-    assert deciles[-1] > deciles[0] - 0.0005, (
-        f"decode degrades across the utterance: first decile {deciles[0]:.6f}, "
-        f"last {deciles[-1]:.6f}")
+    assert min(pcs) > PCC_DECODE, f"case {ci} decode min PCC {min(pcs):.6f} over {len(pcs)} frames"
+    assert (
+        deciles[-1] > deciles[0] - 0.0005
+    ), f"decode degrades across the utterance: first decile {deciles[0]:.6f}, last {deciles[-1]:.6f}"
 
 
 def test_a_mismatched_trajectory_does_not_break_decode(gen, w):
@@ -259,7 +263,7 @@ def test_a_mismatched_trajectory_does_not_break_decode(gen, w):
         h_ref = inc.step(emb)
         h_dev = gen.step(emb)
         assert torch.isfinite(h_dev).all(), f"step {t} produced non-finite values"
-        assert h_dev.abs().max() < h_ref.abs().max() * 10, (
-            f"step {t} magnitude {h_dev.abs().max():.1f} against reference "
-            f"{h_ref.abs().max():.1f}")
+        assert (
+            h_dev.abs().max() < h_ref.abs().max() * 10
+        ), f"step {t} magnitude {h_dev.abs().max():.1f} against reference {h_ref.abs().max():.1f}"
     print(f"\n  {other.shape[0]} off-trajectory steps: finite and bounded")

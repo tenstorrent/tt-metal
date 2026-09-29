@@ -22,8 +22,7 @@ ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
 # Every test here opens a device, so it is `slow`: `-m "not slow"` is the host-only subset.
 pytestmark = [
     pytest.mark.slow,
-    pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT),
-                       reason=f"no checkpoint at {DEFAULT_CKPT}"),
+    pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}"),
 ]
 
 # Gate derivations and measured bands: see VOXTRAL_TTS_CODEC.md [codec-51]
@@ -78,8 +77,7 @@ def test_every_stage_matches(pair):
     x = ref.causal_conv1d(lat, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
     assert pcc(stages["after_input_conv"], x) > 0.9999
     for stage, tf_i in enumerate(ref.DEC_TF_BLOCKS):
-        x = ref.codec_transformer(x.permute(0, 2, 1), w, tf_i, 2,
-                                  ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
+        x = ref.codec_transformer(x.permute(0, 2, 1), w, tf_i, 2, ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
         p = pcc(stages[f"after_tf{tf_i}"], x)
         assert p > STAGE_PCC, f"after_tf{tf_i} PCC {p:.6f}"
         if stage < 3:
@@ -103,8 +101,12 @@ def test_final_stage_is_not_itself_lossy(pair):
     exp = ref.codec_transformer(x.permute(0, 2, 1), w, 7, 2, 16)
 
     L = x.shape[2]
-    xd = ttnn.from_torch(x.permute(0, 2, 1).reshape(1, L, 1024).contiguous(),
-                         dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=gen.device)
+    xd = ttnn.from_torch(
+        x.permute(0, 2, 1).reshape(1, L, 1024).contiguous(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=gen.device,
+    )
     seq = xd
     for li in range(2):
         seq = gen._block(seq, gen.layers[(7, li)], 16)  # _block takes the WINDOW; it builds/chunks itself

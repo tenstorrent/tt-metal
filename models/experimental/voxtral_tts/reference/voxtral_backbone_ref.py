@@ -58,8 +58,17 @@ def load_backbone_state(ckpt_path=DEFAULT_CKPT, dtype=torch.float32):
     w = {"norm": st.get("norm.weight", dtype)}
     for i in range(N_LAYERS):
         p = f"layers.{i}."
-        for k in ("attention.wq", "attention.wk", "attention.wv", "attention.wo",
-                  "attention_norm", "ffn_norm", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"):
+        for k in (
+            "attention.wq",
+            "attention.wk",
+            "attention.wv",
+            "attention.wo",
+            "attention_norm",
+            "ffn_norm",
+            "feed_forward.w1",
+            "feed_forward.w2",
+            "feed_forward.w3",
+        ):
             w[p + k] = st.get(p + k + ".weight", dtype)
     w["tok_embeddings"] = st.get("mm_audio_embeddings.tok_embeddings.weight", dtype)
     w["audio_embeddings"] = st.get("mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight", dtype)
@@ -221,29 +230,42 @@ def main():
     print(f"[backbone] inputs_embeds {tuple(embeds.shape)} ({args.n_text} text + {args.n_frames} frames)")
 
     hidden = reference_forward(embeds, w)
-    print(f"[backbone] prefill hidden {tuple(hidden.shape)} "
-          f"(mean {hidden.mean():+.4f}, std {hidden.std():.4f})")
+    print(f"[backbone] prefill hidden {tuple(hidden.shape)} (mean {hidden.mean():+.4f}, std {hidden.std():.4f})")
 
     # Incremental path must reproduce prefill exactly, and gives the per-step goldens.
     P = embeds.shape[1] - args.n_steps
     pre, steps = reference_prefill_then_step(embeds[:, :P], w, embeds[:, P:])
-    print(f"[backbone] cache path: prefill PCC {pcc(pre, hidden[:, :P]):.6f}, "
-          f"steps PCC {pcc(steps, hidden[:, P:]):.6f} ({args.n_steps} steps)")
+    print(
+        f"[backbone] cache path: prefill PCC {pcc(pre, hidden[:, :P]):.6f}, "
+        f"steps PCC {pcc(steps, hidden[:, P:]):.6f} ({args.n_steps} steps)"
+    )
 
     # Single-frame embedding must equal the batched one (the decode loop uses the single form).
     one = embed_frame(w, frames[0])
-    print(f"[backbone] embed_frame vs embed_frames: max abs diff "
-          f"{(one - embed_frames(w, frames[:1])).abs().max():.3e}")
+    print(
+        f"[backbone] embed_frame vs embed_frames: max abs diff "
+        f"{(one - embed_frames(w, frames[:1])).abs().max():.3e}"
+    )
 
     torch.save(embeds, os.path.join(args.out, "inputs_embeds.pt"))
     torch.save(hidden, os.path.join(args.out, "hidden_states.pt"))
     torch.save(steps, os.path.join(args.out, "step_hidden.pt"))
     torch.save(text_ids, os.path.join(args.out, "text_ids.pt"))
     torch.save(frames, os.path.join(args.out, "frames.pt"))
-    torch.save({"n_text": args.n_text, "n_frames": args.n_frames, "prefill_len": P,
-                "n_steps": args.n_steps, "dim": DIM, "n_layers": N_LAYERS,
-                "attn_dim": ATTN_DIM, "kv_dim": KV_DIM, "hidden_dim": HIDDEN_DIM},
-               os.path.join(args.out, "meta.pt"))
+    torch.save(
+        {
+            "n_text": args.n_text,
+            "n_frames": args.n_frames,
+            "prefill_len": P,
+            "n_steps": args.n_steps,
+            "dim": DIM,
+            "n_layers": N_LAYERS,
+            "attn_dim": ATTN_DIM,
+            "kv_dim": KV_DIM,
+            "hidden_dim": HIDDEN_DIM,
+        },
+        os.path.join(args.out, "meta.pt"),
+    )
     print(f"[backbone] wrote goldens to {args.out}")
 
 

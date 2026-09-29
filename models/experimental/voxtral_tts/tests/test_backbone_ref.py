@@ -44,8 +44,17 @@ def _layer_keys(n):
     for i in range(n):
         out += [
             f"layers.{i}.{k}.weight"
-            for k in ("attention.wq", "attention.wk", "attention.wv", "attention.wo",
-                      "attention_norm", "ffn_norm", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3")
+            for k in (
+                "attention.wq",
+                "attention.wk",
+                "attention.wv",
+                "attention.wo",
+                "attention_norm",
+                "ffn_norm",
+                "feed_forward.w1",
+                "feed_forward.w2",
+                "feed_forward.w3",
+            )
         ]
     return out
 
@@ -148,11 +157,15 @@ def test_frame_embedding_offsets_are_disjoint_and_in_range():
 
 def test_single_and_batched_frame_embedding_agree():
     man = load_manifest()
-    w = {"audio_embeddings": random_state_from_manifest(
-        keys=["mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight"]
-    )["mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight"]}
-    assert w["audio_embeddings"].shape[0] == man[
-        "mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight"]["shape"][0]
+    w = {
+        "audio_embeddings": random_state_from_manifest(
+            keys=["mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight"]
+        )["mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight"]
+    }
+    assert (
+        w["audio_embeddings"].shape[0]
+        == man["mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight"]["shape"][0]
+    )
     _, frames = ref.make_synthetic_inputs(n_text=1, n_frames=3)
     one = ref.embed_frame(w, frames[0])
     many = ref.embed_frames(w, frames)

@@ -20,10 +20,11 @@ import struct
 import torch
 import torch.nn.functional as F
 
+from models.experimental.voxtral_tts.reference.voxtral_paths import CKPT_NAME, DOWNLOAD_HINT, MODEL_DIR
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
-WEIGHTS_DIR = os.path.join(_HERE, "weights")
-DEFAULT_CKPT = os.environ.get("VOXTRAL_CKPT", os.path.join(WEIGHTS_DIR, "consolidated.safetensors"))
-DEFAULT_PARAMS = os.environ.get("VOXTRAL_PARAMS", os.path.join(WEIGHTS_DIR, "params.json"))
+DEFAULT_CKPT = os.path.join(MODEL_DIR, CKPT_NAME)
+DEFAULT_PARAMS = os.path.join(MODEL_DIR, "params.json")
 MANIFEST = os.path.join(_HERE, "CKPT_MANIFEST.json")  # name -> {dtype, shape}; lets tests run weight-free
 GOLDEN_ROOT = os.path.join(_HERE, "..", "golden")
 
@@ -104,9 +105,16 @@ DEC_WINDOWS = (2, 4, 8, 16)
 # Format: u64 little-endian header length | JSON header | raw tensor bytes. Each header entry
 # is {"dtype", "shape", "data_offsets": [start, end]} with offsets relative to the data start.
 _ST_DTYPES = {
-    "F64": torch.float64, "F32": torch.float32, "F16": torch.float16, "BF16": torch.bfloat16,
-    "I64": torch.int64, "I32": torch.int32, "I16": torch.int16, "I8": torch.int8,
-    "U8": torch.uint8, "BOOL": torch.bool,
+    "F64": torch.float64,
+    "F32": torch.float32,
+    "F16": torch.float16,
+    "BF16": torch.bfloat16,
+    "I64": torch.int64,
+    "I32": torch.int32,
+    "I16": torch.int16,
+    "I8": torch.int8,
+    "U8": torch.uint8,
+    "BOOL": torch.bool,
 }
 
 
@@ -145,13 +153,7 @@ class SafeTensors:
 
     def prefixed(self, prefix, dtype=torch.float32, strip=True):
         """All tensors under `prefix` as a dict (key relative to the prefix if strip)."""
-        return {(k[len(prefix):] if strip else k): self.get(k, dtype) for k in self.header if k.startswith(prefix)}
-
-
-DOWNLOAD_HINT = """Fetch the (CC BY-NC 4.0, non-commercial) checkpoint into reference/weights/:
-    hf download mistralai/Voxtral-4B-TTS-2603 consolidated.safetensors params.json tekken.json \\
-        --local-dir models/experimental/voxtral_tts/reference/weights
-See the bringup repo's VOXTRAL_TTS_PROVENANCE.md."""
+        return {(k[len(prefix) :] if strip else k): self.get(k, dtype) for k in self.header if k.startswith(prefix)}
 
 
 def load_params(path=DEFAULT_PARAMS):
@@ -184,7 +186,7 @@ def random_state_from_manifest(prefix="", seed=0, scale=0.02, keys=None, dtype=t
             t = torch.full(shape, CODEC_LAYER_SCALE_INIT, dtype=dtype)
         else:
             t = torch.randn(shape, generator=g, dtype=dtype) * scale
-        out[k[len(prefix):] if prefix else k] = t
+        out[k[len(prefix) :] if prefix else k] = t
     return out
 
 
@@ -314,8 +316,10 @@ def main():
         ("audio_tokenizer.quantizer.semantic_codebook.embedding_sum", (SEMANTIC_CODEBOOK_SIZE, SEMANTIC_DIM)),
         ("audio_tokenizer.decoder_blocks.0.conv.parametrizations.weight.original1", (CODEC_DIM, LATENT_DIM, 3)),
         ("audio_tokenizer.decoder_blocks.6.conv.parametrizations.weight.original1", (CODEC_DIM, CODEC_DIM, 4)),
-        ("audio_tokenizer.output_proj.conv.parametrizations.weight.original1",
-         (PATCH_SIZE, CODEC_DIM, PATCH_PROJ_KERNEL)),
+        (
+            "audio_tokenizer.output_proj.conv.parametrizations.weight.original1",
+            (PATCH_SIZE, CODEC_DIM, PATCH_PROJ_KERNEL),
+        ),
         ("audio_tokenizer.decoder_blocks.7.layers.1.attention.q_norm.weight", (CODEC_DIM,)),
         ("audio_tokenizer.decoder_blocks.7.layers.1.ffn_scale", (CODEC_DIM,)),
     ]
@@ -325,12 +329,16 @@ def main():
     print(f"[common] config vs checkpoint: {len(checks) - len(bad)}/{len(checks)} OK")
 
     enc = [k for k in man if k.startswith(("audio_tokenizer.input_proj", "audio_tokenizer.encoder_blocks"))]
-    print(f"[common] codec ENCODER tensors in checkpoint: {len(enc)} "
-          f"({'present' if enc else 'ABSENT -> reference-audio voice cloning impossible; preset voices only'})")
+    print(
+        f"[common] codec ENCODER tensors in checkpoint: {len(enc)} "
+        f"({'present' if enc else 'ABSENT -> reference-audio voice cloning impossible; preset voices only'})"
+    )
     n_layers = len({k.split(".")[1] for k in man if k.startswith("layers.")})
     print(f"[common] backbone layers in checkpoint: {n_layers} (cfg {N_LAYERS})")
-    print(f"[common] frame rate {FRAME_RATE} Hz x {NUM_CODEBOOKS} tokens/frame; "
-          f"{N_DECODING_STEPS} Euler steps, cfg_alpha {CFG_ALPHA}")
+    print(
+        f"[common] frame rate {FRAME_RATE} Hz x {NUM_CODEBOOKS} tokens/frame; "
+        f"{N_DECODING_STEPS} Euler steps, cfg_alpha {CFG_ALPHA}"
+    )
     return 0 if not bad else 1
 
 

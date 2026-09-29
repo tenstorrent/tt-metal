@@ -9,36 +9,33 @@ Commands: `\\voice NAME` switches preset, `\\voices` lists them, `\\seed N` fixe
 `\\out PATH` sets the next output path, `\\quit` exits. Anything else is spoken.
 
 Warm-up and the checkpoint load are paid once, so the second request onward is what the
-Performance table in the README describes.
+Performance table in the README describes. `--ckpt` > $VOXTRAL_CKPT > HF hub download.
 """
 
 import argparse
 import sys
 
-import ttnn
-
 from models.experimental.voxtral_tts import frontend
 from models.experimental.voxtral_tts.demo.demo import write_wav
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
-    FRAME_RATE,
-    TtVoxtralPipeline,
-    open_device,
-)
+from models.experimental.voxtral_tts.reference.voxtral_paths import resolve_model_dir
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import FRAME_RATE, TtVoxtralPipeline
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--voice", default="neutral_male")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--max-frames", type=int, default=600)
+    ap.add_argument("--max-frames", type=int, default=None)
+    ap.add_argument("--ckpt", default=None, help="model directory (default: $VOXTRAL_CKPT, else HF hub)")
     a = ap.parse_args(argv)
 
-    device = open_device()
+    model_dir = resolve_model_dir(a.ckpt)
+    presets = frontend.voices(model_dir)
+    if a.voice not in presets:
+        ap.error(f"unknown voice {a.voice!r}; one of: {', '.join(presets)}")
+    pipe = TtVoxtralPipeline(ckpt_path=model_dir)
     try:
-        pipe = TtVoxtralPipeline(device)
-        print("warming up: every prefill shape, every codec bucket, one trace "
-              "capture (~74 s) ...", flush=True)
+        print("warming up: every prefill shape, every codec bucket, one trace capture ...", flush=True)
         pipe.warmup(verbose=True)
         voice, seed, out, n = a.voice, a.seed, "out.wav", 0
         print(f"ready. voice={voice} seed={seed}. \\quit to exit.", flush=True)
@@ -53,11 +50,11 @@ def main(argv=None):
             if line in (r"\quit", r"\q"):
                 break
             if line == r"\voices":
-                print(", ".join(frontend.voices()))
+                print(", ".join(presets))
                 continue
             if line.startswith(r"\voice "):
                 cand = line.split(None, 1)[1].strip()
-                if cand not in frontend.voices():
+                if cand not in presets:
                     print(f"unknown voice {cand!r}")
                 else:
                     voice = cand
@@ -72,23 +69,16 @@ def main(argv=None):
                 print(f"out={out}")
                 continue
 
-            # Reset so the previous utterance's KV cache cannot influence this one
-            # (tests/test_request_path_repeatability.py).
-            pipe.backbone.reset()
-            embeds = frontend.build_prompt_embeds(line, voice, pipe.wb)
-            frames, _, _ = pipe.generate(embeds, max_frames=a.max_frames, seed=seed, verbose=False)
-            wav = pipe.decode(frames)
+            wav = pipe.synthesize(line, voice, seed=seed, max_frames=a.max_frames)
             path = out if n == 0 else out.replace(".wav", f"_{n}.wav")
             write_wav(path, wav)
             t = pipe.last_timings
-            audio_s = frames.shape[0] / FRAME_RATE
+            audio_s = t["frames"] / FRAME_RATE
             total = t["prefill_s"] + t["decode_s"] + t.get("codec_s", 0.0)
-            print(f"  {path}  {audio_s:.1f}s in {total:.2f}s "
-                  f"({audio_s / max(total, 1e-9):.2f}x real time)")
+            print(f"  {path}  {audio_s:.1f}s in {total:.2f}s ({audio_s / max(total, 1e-9):.2f}x real time)")
             n += 1
-        pipe.close()
     finally:
-        ttnn.close_device(device)
+        pipe.close()
     return 0
 
 

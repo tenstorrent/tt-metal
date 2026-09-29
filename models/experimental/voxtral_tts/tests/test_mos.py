@@ -29,12 +29,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(MODEL)))
 MOSVENV = "/tmp/mosvenv/bin/python"
 SCORE = os.path.join(HERE, "mos_score.py")
 SEED = 0
-MIN_WORDS = 19          # the shortest medium-band sentence; see VOXTRAL_TTS_GATES.md [mos-01]
+MIN_WORDS = 19  # the shortest medium-band sentence; see VOXTRAL_TTS_GATES.md [mos-01]
 
 # Floor on each language's MEAN MOS, and on any single clip. Rule and the three-seed table:
 # see VOXTRAL_TTS_GATES.md [mos-03] (and VOXTRAL_TTS_STATUS.md §6.78).
-MOS_FLOOR = {"ar": 4.61, "de": 4.66, "en": 4.64, "es": 4.67, "fr": 4.63, "hi": 4.49, "it": 4.62,
-             "nl": 4.70, "pt": 4.62}
+MOS_FLOOR = {"ar": 4.61, "de": 4.66, "en": 4.64, "es": 4.67, "fr": 4.63, "hi": 4.49, "it": 4.62, "nl": 4.70, "pt": 4.62}
 CLIP_FLOOR = 3.97
 
 # The predictor's own calibration bounds; see VOXTRAL_TTS_GATES.md [mos-04]
@@ -58,20 +57,22 @@ def _env():
 
 def _need_mosvenv():
     if not os.path.exists(MOSVENV):
-        pytest.fail(f"{MOSVENV} is missing, so MOS cannot be scored. Run "
-                    f"models/experimental/voxtral_tts/tests/mos_setup.sh once. This fails "
-                    f"rather than skipping on purpose: a skipped naturalness gate reads as a pass.")
+        pytest.fail(
+            f"{MOSVENV} is missing, so MOS cannot be scored. Run "
+            f"models/experimental/voxtral_tts/tests/mos_setup.sh once. This fails "
+            f"rather than skipping on purpose: a skipped naturalness gate reads as a pass."
+        )
 
 
 def _score(clip_dir):
     """-> {"means": {lang: mean}, "clips": [manifest row + "mos"]}, scored in the MOS venv."""
-    r = subprocess.run([MOSVENV, SCORE, clip_dir], cwd=REPO, env=_env(), capture_output=True,
-                       text=True, timeout=3600)
+    r = subprocess.run([MOSVENV, SCORE, clip_dir], cwd=REPO, env=_env(), capture_output=True, text=True, timeout=3600)
     for line in r.stdout.splitlines():
         if line.startswith("MOS_JSON: "):
-            return json.loads(line[len("MOS_JSON: "):])
-    raise AssertionError(f"the MOS scorer printed no MOS_JSON line (exit {r.returncode}):\n"
-                         f"{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
+            return json.loads(line[len("MOS_JSON: ") :])
+    raise AssertionError(
+        f"the MOS scorer printed no MOS_JSON line (exit {r.returncode}):\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}"
+    )
 
 
 def _frame_budget(text):
@@ -103,13 +104,22 @@ def write_language_set(pipe, out, seed=SEED, langs=None, verbose=False):
         for voice in [v for v in all_voices() if lang_of(v) == lang]:
             for i, text in enumerate(texts):
                 pipe.backbone.reset()
-                frames, _, _ = pipe.generate(corpus_embeds(text, voice, pipe.wb),
-                                             max_frames=_frame_budget(text), seed=seed, verbose=False)
+                frames, _, _ = pipe.generate(
+                    corpus_embeds(text, voice, pipe.wb), max_frames=_frame_budget(text), seed=seed, verbose=False
+                )
                 name = f"{lang}_{voice}_s{i}.wav"
                 _save_wav(pipe.decode(frames), os.path.join(out, name))
-                rows.append({"file": name, "lang": lang, "voice": voice, "sentence": i,
-                             "words": len(text.split()), "frames": int(frames.shape[0]),
-                             "seconds": round(frames.shape[0] / 12.5, 2)})
+                rows.append(
+                    {
+                        "file": name,
+                        "lang": lang,
+                        "voice": voice,
+                        "sentence": i,
+                        "words": len(text.split()),
+                        "frames": int(frames.shape[0]),
+                        "seconds": round(frames.shape[0] / 12.5, 2),
+                    }
+                )
                 if verbose:
                     print(f"  {lang}/{voice} s{i}: {frames.shape[0]} frames -> {name}", flush=True)
     json.dump(rows, open(os.path.join(out, "manifest.json"), "w"), indent=1)
@@ -162,8 +172,9 @@ def test_mos_per_language(scored, lang):
 def test_no_clip_collapses(scored):
     worst = sorted(scored["clips"], key=lambda c: c["mos"])[:3]
     print("\n  worst clips: " + ", ".join(f"{c['file']} {c['mos']:.3f}" for c in worst))
-    assert worst[0]["mos"] >= CLIP_FLOOR, (
-        f"{worst[0]['file']} scored MOS {worst[0]['mos']:.3f}, below the per-clip floor {CLIP_FLOOR}")
+    assert (
+        worst[0]["mos"] >= CLIP_FLOOR
+    ), f"{worst[0]['file']} scored MOS {worst[0]['mos']:.3f}, below the per-clip floor {CLIP_FLOOR}"
 
 
 @pytest.mark.slow
@@ -189,8 +200,16 @@ def test_predictor_separates_speech_from_noise(tmp_path):
             f.setsampwidth(2)
             f.setframerate(24000)
             f.writeframes(x.tobytes())
-        rows.append({"file": name, "lang": name.split(".")[0], "voice": "-", "sentence": 0,
-                     "words": 0, "seconds": round(wav.numel() / 24000, 2)})
+        rows.append(
+            {
+                "file": name,
+                "lang": name.split(".")[0],
+                "voice": "-",
+                "sentence": 0,
+                "words": 0,
+                "seconds": round(wav.numel() / 24000, 2),
+            }
+        )
 
     speech = cref.reference_decode(cref.strip_offset_and_trim(clips["en_medium"]["frames"].long()), w)
     save("speech.wav", speech)

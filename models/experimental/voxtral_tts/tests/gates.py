@@ -30,8 +30,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import END_AUD
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, TtVoxtralFlow
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (
-    FRAME_RATE, TtVoxtralPipeline, open_device)
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import FRAME_RATE, TtVoxtralPipeline, open_device
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -79,20 +78,17 @@ def fixture_embeds(case_idx, w):
 
 def gate_wiring(dev, ref):
     """ONE the backbone layer against the reference. A RoPE convention error shows up here."""
-    from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
-        causal_bias, pcc, rope_cis)
+    from models.experimental.voxtral_tts.reference.voxtral_common_ref import causal_bias, rope_cis
 
     S = 128
     gen = TtVoxtralGPT(dev, n_layers=1)
     w = ref.load_backbone_state()
     torch.manual_seed(0)
     x = torch.randn(1, S, DIM) * 0.02
-    exp = ref._layer(x, w, "layers.0.", rope_cis(S, HEAD_DIM, ROPE_THETA),
-                     causal_bias(S, torch.float32))
+    exp = ref._layer(x, w, "layers.0.", rope_cis(S, HEAD_DIM, ROPE_THETA), causal_bias(S, torch.float32))
     got = gen.prefill(x, apply_final_norm=False)
     m = compare_hidden(got, exp)
-    print(f"  [1 layer prefill] PCC {m['pcc']:.8f}  "
-          f"maxabs {(got - exp).abs().max():.3e}")
+    print(f"  [1 layer prefill] PCC {m['pcc']:.8f}  maxabs {(got - exp).abs().max():.3e}")
     print("  NOTE: random inputs are a pessimistic proxy (trap #12) -- this gate is for WIRING")
     print("  and the RoPE convention. Judge accuracy on real prompts at 26 layers.")
     return {"wiring_pcc": m["pcc"]}
@@ -108,8 +104,10 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
     w = ref.load_backbone_state()
     gen = TtVoxtralGPT(dev, n_layers=n_layers, state=w)
     print(f"  {n_layers} layers on device\n")
-    print(f"  {'case':>4} {'voice':>16} {'P':>5} {'PCC all':>12} {'PCC last':>12} "
-          f"{'worst last':>11} {'worst pos (which)':>20} {'device':>9}")
+    print(
+        f"  {'case':>4} {'voice':>16} {'P':>5} {'PCC all':>12} {'PCC last':>12} "
+        f"{'worst last':>11} {'worst pos (which)':>20} {'device':>9}"
+    )
     last_pccs = []
     for ci in cases:
         embeds, case = fixture_embeds(ci, w)
@@ -125,13 +123,14 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
         # Per position: a pooled PCC is dominated by the largest-magnitude positions.
         per = [pcc(got[:, i], exp[:, i]) for i in range(P)]
         wi = min(range(P), key=lambda i: per[i])
-        print(f"  {ci:>4} {case['voice']:>16} {P:>5} {pcc(got, exp):>12.6f} "
-              f"{pcc(el, xl):>12.6f} {worst:>10.2f}% {per[wi]:>13.6f} (@{wi:>4}) {dt:>8.2f}s")
+        print(
+            f"  {ci:>4} {case['voice']:>16} {P:>5} {pcc(got, exp):>12.6f} "
+            f"{pcc(el, xl):>12.6f} {worst:>10.2f}% {per[wi]:>13.6f} (@{wi:>4}) {dt:>8.2f}s"
+        )
     print("\n  reference for comparison, same metric on the LAST position (STATUS.md, backbone):")
     print("    tt_transformers, FF1_FF3 BFP8: 0.999564 at P=200, 0.999579 at P=312")
     # the MIN across cases, matching what the quality report has always recorded
-    return {"prefill_pcc_last": min(last_pccs) if last_pccs else None,
-            "prefill_n_cases": len(last_pccs) or None}
+    return {"prefill_pcc_last": min(last_pccs) if last_pccs else None, "prefill_n_cases": len(last_pccs) or None}
 
 
 def _p90(v):
@@ -155,8 +154,7 @@ def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS, verbose=False):
     for ci in cases:
         embeds, case = fixture_embeds(ci, w)
         P = embeds.shape[1]
-        print(f"\n  case {ci} ({case['voice']}, P={P}), {n_steps} real frames teacher-forced",
-              flush=True)
+        print(f"\n  case {ci} ({case['voice']}, P={P}), {n_steps} real frames teacher-forced", flush=True)
         if verbose:
             print(f"  {'step':>6} {'pos':>5} {'PCC':>11} {'worst':>8} {'ms':>8}")
         inc = ref.IncrementalBackbone(w, n_layers=n_layers)
@@ -177,41 +175,56 @@ def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS, verbose=False):
             dt = (time.perf_counter() - t0) * 1e3
             _m = compare_hidden(h_dev, h_ref)
             worst = _m["worst_pct"]
-            ws.append(worst); pc.append(_m["pcc"]); ms.append(dt)
+            ws.append(worst)
+            pc.append(_m["pcc"])
+            ms.append(dt)
             if verbose:
                 print(f"  {t:>6} {gen.pos - 1:>5} {pc[-1]:>11.6f} {worst:>7.2f}% {dt:>7.1f}")
-        per_case[ci] = dict(voice=case["voice"], P=P, ws=ws, pcc=pc,
-                            pre_ws=pre_ws, pre_pcc=pre_pcc)
-        pooled_ws += ws; pooled_pcc += pc; pooled_ms += ms
-        print(f"    mean {sum(ws)/len(ws):.2f}%  p90 {_p90(ws):.2f}%  max {max(ws):.2f}%  "
-              f"min PCC {min(pc):.6f}   (prefill {pre_ws:.2f}%, PCC {pre_pcc:.6f})", flush=True)
+        per_case[ci] = dict(voice=case["voice"], P=P, ws=ws, pcc=pc, pre_ws=pre_ws, pre_pcc=pre_pcc)
+        pooled_ws += ws
+        pooled_pcc += pc
+        pooled_ms += ms
+        print(
+            f"    mean {sum(ws)/len(ws):.2f}%  p90 {_p90(ws):.2f}%  max {max(ws):.2f}%  "
+            f"min PCC {min(pc):.6f}   (prefill {pre_ws:.2f}%, PCC {pre_pcc:.6f})",
+            flush=True,
+        )
 
     n = len(pooled_ws)
     means = [sum(d["ws"]) / len(d["ws"]) for d in per_case.values()]
     p90s = [_p90(d["ws"]) for d in per_case.values()]
     print(f"\n  {'=' * 78}")
-    print(f"  DECODE SUMMARY -- cases {','.join(str(c) for c in cases)}  "
-          f"({len(cases)} prompts x {n // max(len(cases), 1)} frames = {n} frames)")
+    print(
+        f"  DECODE SUMMARY -- cases {','.join(str(c) for c in cases)}  "
+        f"({len(cases)} prompts x {n // max(len(cases), 1)} frames = {n} frames)"
+    )
     print(f"  {'=' * 78}")
-    print(f"  {'pooled over all frames':<34} mean {sum(pooled_ws)/n:5.2f}%   "
-          f"p90 {_p90(pooled_ws):5.2f}%   max {max(pooled_ws):5.2f}%   min PCC {min(pooled_pcc):.6f}")
-    print(f"  {'per-case mean, min..max':<34} {min(means):5.2f}% .. {max(means):5.2f}%   "
-          f"(spread {max(means)-min(means):.2f} pp)")
-    print(f"  {'per-case p90,  min..max':<34} {min(p90s):5.2f}% .. {max(p90s):5.2f}%   "
-          f"(spread {max(p90s)-min(p90s):.2f} pp)")
-    print(f"  {'prefill worst-sample, min..max':<34} "
-          f"{min(d['pre_ws'] for d in per_case.values()):5.2f}% .. "
-          f"{max(d['pre_ws'] for d in per_case.values()):5.2f}%")
-    print(f"\n  QUOTE THIS ONLY WITH THE CASE LIST ABOVE. The spread lines are why: on the full 15")
-    print(f"  the per-case mean ranges ~0.45 pp, so an aggregate over a DIFFERENT prompt set is not")
-    print(f"  comparable. Valid use is a paired A/B -- same cases, same session, one change.")
-    print(f"  Deterministic: a repeat of the same config reproduces these bit-identically.")
+    print(
+        f"  {'pooled over all frames':<34} mean {sum(pooled_ws)/n:5.2f}%   "
+        f"p90 {_p90(pooled_ws):5.2f}%   max {max(pooled_ws):5.2f}%   min PCC {min(pooled_pcc):.6f}"
+    )
+    print(
+        f"  {'per-case mean, min..max':<34} {min(means):5.2f}% .. {max(means):5.2f}%   "
+        f"(spread {max(means)-min(means):.2f} pp)"
+    )
+    print(
+        f"  {'per-case p90,  min..max':<34} {min(p90s):5.2f}% .. {max(p90s):5.2f}%   "
+        f"(spread {max(p90s)-min(p90s):.2f} pp)"
+    )
+    print(
+        f"  {'prefill worst-sample, min..max':<34} "
+        f"{min(d['pre_ws'] for d in per_case.values()):5.2f}% .. "
+        f"{max(d['pre_ws'] for d in per_case.values()):5.2f}%"
+    )
+    print("\n  QUOTE THIS ONLY WITH THE CASE LIST ABOVE. The spread lines are why: on the full 15")
+    print("  the per-case mean ranges ~0.45 pp, so an aggregate over a DIFFERENT prompt set is not")
+    print("  comparable. Valid use is a paired A/B -- same cases, same session, one change.")
+    print("  Deterministic: a repeat of the same config reproduces these bit-identically.")
     print(f"  IGNORE THE ms COLUMN. It ran {sum(pooled_ms)/n:.1f} ms/step here against ~23 ms in the")
-    print(f"  real pipeline, because a 3.4B fp32 CPU reference step runs between device steps and")
-    print(f"  starves host dispatch. It has read BFP8 as SLOWER than bf16. Use the pipeline for perf.")
-    print(f"  tt_transformers, for comparison: decode PCC 0.981.")
-    return {"decode_mean_pp": sum(pooled_ws) / n, "decode_p90_pp": _p90(pooled_ws),
-            "decode_min_pcc": min(pooled_pcc)}
+    print("  real pipeline, because a 3.4B fp32 CPU reference step runs between device steps and")
+    print("  starves host dispatch. It has read BFP8 as SLOWER than bf16. Use the pipeline for perf.")
+    print("  tt_transformers, for comparison: decode PCC 0.981.")
+    return {"decode_mean_pp": sum(pooled_ws) / n, "decode_p90_pp": _p90(pooled_ws), "decode_min_pcc": min(pooled_pcc)}
 
 
 def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
@@ -228,16 +241,17 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
     h_dev = pipe.backbone.prefill_last(embeds)
 
     from collections import Counter
+
     sem_bad = ac_bad = total_ac = 0
     deltas = Counter()
     print(f"  {'frame':>6} {'sem ref/dev':>14} {'acoustic diffs':>15} {'max |delta|':>12}")
     for i in range(n_frames):
-        torch.manual_seed(1000 + i)          # same noise draw for both, so only the model differs
+        torch.manual_seed(1000 + i)  # same noise draw for both, so only the model differs
         c_ref = fref.reference_frame(h_ref[:, 0], wf, cfg_alpha=cfg_alpha)
         torch.manual_seed(1000 + i)
         c_dev = pipe.flow(h_dev[:, 0], cfg_alpha=cfg_alpha)
         s_ref, s_dev = int(c_ref[0, 0]), int(c_dev[0, 0])
-        d = (c_ref[0, 1:] != c_dev[0, 1:])
+        d = c_ref[0, 1:] != c_dev[0, 1:]
         n_d = int(d.sum())
         mx = int((c_ref[0, 1:] - c_dev[0, 1:]).abs().max())
         for _v in (c_ref[0, 1:] - c_dev[0, 1:]).abs().tolist():
@@ -255,14 +269,16 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         emb = bref.embed_frame(pipe.wb, c_ref[0])
         h_ref = ref_dec.step(emb)
         h_dev = pipe.backbone.step(emb).reshape(1, 1, -1)
-    print(f"  => semantic mismatches {sem_bad}, acoustic {ac_bad}/{total_ac} "
-          f"({ac_bad/max(total_ac,1)*100:.1f}%)")
+    print(f"  => semantic mismatches {sem_bad}, acoustic {ac_bad}/{total_ac} ({ac_bad/max(total_ac,1)*100:.1f}%)")
     # The count alone gets misread; print the |delta| distribution. see VOXTRAL_TTS_STATUS.md §6.54
     if deltas:
         off1 = deltas.get(1, 0)
-        print(f"     |delta| histogram { {k: deltas[k] for k in sorted(deltas)} }   "
-              f"off-by-one {off1}/{ac_bad} ({off1/max(ac_bad,1)*100:.0f}%)")
+        print(
+            f"     |delta| histogram { {k: deltas[k] for k in sorted(deltas)} }   "
+            f"off-by-one {off1}/{ac_bad} ({off1/max(ac_bad,1)*100:.0f}%)"
+        )
     return sem_bad, ac_bad, total_ac
+
 
 def gate_codes():
     dev = open_device()
@@ -298,13 +314,17 @@ def gate_codes():
         frames, t_pre, t_gen = pipe.generate(embeds, max_frames=12, verbose=True)
         wav = pipe.decode(frames)
         audio_s = frames.shape[0] / FRAME_RATE
-        print(f"  frames {tuple(frames.shape)} -> waveform {tuple(wav.shape)} "
-              f"({audio_s:.1f}s audio)")
-        print(f"  prefill {t_pre:.2f}s | generate {t_gen:.2f}s "
-              f"({t_gen/max(frames.shape[0],1):.2f}s/frame) | RTF {(t_pre+t_gen)/audio_s:.2f}")
-        return {"codes_real_n": tot_b, "codes_real_total": tot_n,
-                "codes_real_pct": tot_b / max(tot_n, 1) * 100,
-                "codes_synth_n": _synth_bad}
+        print(f"  frames {tuple(frames.shape)} -> waveform {tuple(wav.shape)} ({audio_s:.1f}s audio)")
+        print(
+            f"  prefill {t_pre:.2f}s | generate {t_gen:.2f}s "
+            f"({t_gen/max(frames.shape[0],1):.2f}s/frame) | RTF {(t_pre+t_gen)/audio_s:.2f}"
+        )
+        return {
+            "codes_real_n": tot_b,
+            "codes_real_total": tot_n,
+            "codes_real_pct": tot_b / max(tot_n, 1) * 100,
+            "codes_synth_n": _synth_bad,
+        }
     finally:
         ttnn.close_device(dev)
 
@@ -312,7 +332,6 @@ def gate_codes():
 def gate_flow():
     """Compare against the CPU reference. The output is INTEGER codes, so equality is exact."""
     from models.experimental.voxtral_tts.reference import voxtral_flow_ref as ref
-    from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
     dev = open_device()
     try:
@@ -321,8 +340,7 @@ def gate_flow():
         h, x_0 = ref.make_synthetic_inputs(batch=2, seed=0)
 
         # 1) one velocity evaluation -- the unit a trace would capture
-        t_emb = ref.time_embedding(torch.tensor(0.375).view(1, 1).repeat(2, 1),
-                                   w["time_embedding.inv_freq"])
+        t_emb = ref.time_embedding(torch.tensor(0.375).view(1, 1).repeat(2, 1), w["time_embedding.inv_freq"])
         exp_v = ref.predict_velocity(x_0, h, t_emb, w)
         got_v = gen._predict_velocity(x_0, h, t_emb)
         _mv = compare_hidden(got_v, exp_v)
@@ -340,15 +358,16 @@ def gate_flow():
         if n_diff:
             print(f"      ref  {exp_f[0, :10].tolist()}")
             print(f"      got  {got_f[0, :10].tolist()}")
-        return {"flow_velocity_pcc": _mv["pcc"],
-                "flow_semantic_exact": bool((exp_s == got_s).all()),
-                "flow_codes_74": n_diff}
+        return {
+            "flow_velocity_pcc": _mv["pcc"],
+            "flow_semantic_exact": bool((exp_s == got_s).all()),
+            "flow_codes_74": n_diff,
+        }
     finally:
         ttnn.close_device(dev)
 
 
 def gate_codec():
-
     from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
@@ -369,8 +388,9 @@ def gate_codec():
             x = ref.causal_conv1d(exp_lat, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
             print(f"{tag} {'after_input_conv':22s} PCC {pcc(stages['after_input_conv'], x):.6f}")
             for stage, tf_i in enumerate(ref.DEC_TF_BLOCKS):
-                x = ref.codec_transformer(x.permute(0, 2, 1), w, tf_i, 2,
-                                          ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
+                x = ref.codec_transformer(x.permute(0, 2, 1), w, tf_i, 2, ref.decoder_window_sizes()[stage]).permute(
+                    0, 2, 1
+                )
                 name = f"after_tf{tf_i} (win {ref.decoder_window_sizes()[stage]})"
                 print(f"{tag} {name:22s} PCC {pcc(stages[f'after_tf{tf_i}'], x):.6f}")
                 if stage < 3:
@@ -380,12 +400,13 @@ def gate_codec():
             _wav_pcc = pcc(got_wav, exp_wav)
             if n_frames == 24:
                 out["codec_pcc_t24"] = _wav_pcc
-            print(f"{tag} {'WAVEFORM':22s} PCC {_wav_pcc:.6f}  "
-                  f"shapes {tuple(got_wav.shape)} vs {tuple(exp_wav.shape)}")
+            print(
+                f"{tag} {'WAVEFORM':22s} PCC {_wav_pcc:.6f}  "
+                f"shapes {tuple(got_wav.shape)} vs {tuple(exp_wav.shape)}"
+            )
             # return_stages=True bypasses bucketing, so also run the default bucketed path.
             plain = gen(codes)
-            print(f"{tag} {'bucketed (default path)':22s} PCC {pcc(plain, exp_wav):.6f}  "
-                  f"shape {tuple(plain.shape)}")
+            print(f"{tag} {'bucketed (default path)':22s} PCC {pcc(plain, exp_wav):.6f}  shape {tuple(plain.shape)}")
             t0 = time.perf_counter()
             gen(codes)
             print(f"{tag} warm {(time.perf_counter() - t0) * 1000:.1f} ms")
@@ -395,25 +416,26 @@ def gate_codec():
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--gate", required=True,
-                    choices=("wiring", "prefill26", "decode", "flow", "codec", "codes"),
-                    help="wiring = one backbone layer (fast, catches a RoPE convention error); "
-                         "prefill26 = 26 layers on real prompts (~13 GB host RAM); "
-                         "decode = KV cache + steps vs IncrementalBackbone; "
-                         "flow = Flow model vs its reference; codec = Codec vs its reference; "
-                         "codes = Backbone and flow model end to end, integer-code agreement")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument(
+        "--gate",
+        required=True,
+        choices=("wiring", "prefill26", "decode", "flow", "codec", "codes"),
+        help="wiring = one backbone layer (fast, catches a RoPE convention error); "
+        "prefill26 = 26 layers on real prompts (~13 GB host RAM); "
+        "decode = KV cache + steps vs IncrementalBackbone; "
+        "flow = Flow model vs its reference; codec = Codec vs its reference; "
+        "codes = Backbone and flow model end to end, integer-code agreement",
+    )
     # All 15 by default; narrow only to debug, never to record. see VOXTRAL_TTS_BRINGUP.md [gate-01]
-    ap.add_argument("--cases", default="all",
-                    help='"all" (default) or prompt_fixture.json indices, e.g. "0,2"')
+    ap.add_argument("--cases", default="all", help='"all" (default) or prompt_fixture.json indices, e.g. "0,2"')
     ap.add_argument("--layers", type=int, default=N_LAYERS)
     ap.add_argument("--steps", type=int, default=22, help="decode steps per case for --gate decode")
-    ap.add_argument("--verbose", action="store_true",
-                    help="per-step rows as well as the per-case and pooled summary")
+    ap.add_argument("--verbose", action="store_true", help="per-step rows as well as the per-case and pooled summary")
     # The machine contract quality_report.py reads. see VOXTRAL_TTS_BRINGUP.md [gate-03]
-    ap.add_argument("--json", action="store_true",
-                    help="also emit the gate's metrics as one JSON line prefixed GATE_JSON:")
+    ap.add_argument(
+        "--json", action="store_true", help="also emit the gate's metrics as one JSON line prefixed GATE_JSON:"
+    )
     args = ap.parse_args()
     if args.cases == "all":
         with open(os.path.join(HERE, "tests", "prompt_fixture.json")) as f:

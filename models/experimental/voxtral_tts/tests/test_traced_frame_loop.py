@@ -25,10 +25,10 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
 SEEDS = (0, 1, 2)
 # A cap, not a budget: generation stops on [END_AUDIO], and hitting the cap is reported.
 MAX_FRAMES = 1024
-WAVEFORM_CASE = 3            # runs long, so the codec sees a full-length input
+WAVEFORM_CASE = 3  # runs long, so the codec sees a full-length input
 
 # What the sweep must reach to mean anything -- asserted, not assumed.
-SDPA_CHUNK = gpt._SDPA_PRG.k_chunk_size       # 512: sdpa_decode walks the cache in these chunks
+SDPA_CHUNK = gpt._SDPA_PRG.k_chunk_size  # 512: sdpa_decode walks the cache in these chunks
 MIN_LONG_FRAMES = 400
 MIN_LONG_UTTERANCES = 2
 
@@ -59,8 +59,10 @@ def _diff(eager, traced):
     if not n:
         return ""
     first = int((eager != traced).any(dim=1).nonzero()[0])
-    return (f"{n} of {eager.numel()} codes differ, first at frame {first} "
-            f"(semantic {int((eager[:, 0] != traced[:, 0]).sum())})")
+    return (
+        f"{n} of {eager.numel()} codes differ, first at frame {first} "
+        f"(semantic {int((eager[:, 0] != traced[:, 0]).sum())})"
+    )
 
 
 @pytest.mark.slow
@@ -82,27 +84,35 @@ def test_traced_matches_eager_over_full_utterances(pipe, monkeypatch):
             max_pos = max(max_pos, P + n)
             if n >= MAX_FRAMES:
                 capped.append(f"case{ci}/seed{sd}")
-            print(f"  case {ci:2d} seed {sd} ({case['voice']:<16}) P={P:3d}  {n:3d} frames  "
-                  f"-> pos {P + n:4d}  {'IDENTICAL' if not d else d}", flush=True)
+            print(
+                f"  case {ci:2d} seed {sd} ({case['voice']:<16}) P={P:3d}  {n:3d} frames  "
+                f"-> pos {P + n:4d}  {'IDENTICAL' if not d else d}",
+                flush=True,
+            )
             if d:
                 failures.append(f"case{ci}/seed{sd}: {d}")
 
     n_long = sum(1 for n in lengths if n >= MIN_LONG_FRAMES)
-    print(f"\n  {len(lengths)} utterances, {sum(lengths)} frames, longest {max(lengths)}, "
-          f"{n_long} >= {MIN_LONG_FRAMES} frames, deepest cache position {max_pos}, "
-          f"capped {len(capped)}", flush=True)
+    print(
+        f"\n  {len(lengths)} utterances, {sum(lengths)} frames, longest {max(lengths)}, "
+        f"{n_long} >= {MIN_LONG_FRAMES} frames, deepest cache position {max_pos}, "
+        f"capped {len(capped)}",
+        flush=True,
+    )
 
     assert not failures, (
         f"{len(failures)} of {len(lengths)} utterances differ between the traced and eager loops on "
-        f"identical inputs and seed -- the trace is not replaying the same computation:\n  "
-        + "\n  ".join(failures))
+        f"identical inputs and seed -- the trace is not replaying the same computation:\n  " + "\n  ".join(failures)
+    )
     # Coverage: a sweep that silently stopped short would pass everything above.
     assert n_long >= MIN_LONG_UTTERANCES, (
         f"only {n_long} utterances reached {MIN_LONG_FRAMES} frames -- the sweep never exercised the "
-        f"late-utterance replays it exists for")
+        f"late-utterance replays it exists for"
+    )
     assert max_pos > SDPA_CHUNK, (
         f"deepest cache position {max_pos} never crossed sdpa's {SDPA_CHUNK}-position chunk "
-        f"boundary, so a chunk-dependent trace fault could not have shown")
+        f"boundary, so a chunk-dependent trace fault could not have shown"
+    )
     assert len(capped) <= 1, f"{len(capped)} utterances hit the frame cap: {capped}"
 
 
@@ -116,8 +126,9 @@ def test_traced_waveform_matches_eager(pipe, monkeypatch):
     wav_e = pipe.decode(eager)
     traced, _ = _run(pipe, embeds, 0, traced=True, monkeypatch=monkeypatch)
     wav_t = pipe.decode(traced)
-    assert eager.shape[0] >= MIN_LONG_FRAMES, (
-        f"case {WAVEFORM_CASE} produced only {eager.shape[0]} frames; pick a case that runs long")
+    assert (
+        eager.shape[0] >= MIN_LONG_FRAMES
+    ), f"case {WAVEFORM_CASE} produced only {eager.shape[0]} frames; pick a case that runs long"
     assert wav_e.shape == wav_t.shape, f"waveform length differs: {wav_e.shape} vs {wav_t.shape}"
     delta = (wav_e - wav_t).abs().max().item()
     print(f"\n  {eager.shape[0]} frames, waveform max |delta| {delta:.3e} over {wav_e.shape[-1]} samples")
