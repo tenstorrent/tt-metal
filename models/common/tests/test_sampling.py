@@ -908,7 +908,7 @@ def test_deferred_sampling_uses_owned_state_once(
     )
     grammar = torch.full((SEED_TEST_BATCH, 2), -1, dtype=torch.int32)
 
-    sampled = generator.sample_decode_on_device(
+    sampled = generator.sample_deferred_decode(
         deferred,
         sampling_params=params,
         grammar_bitmask=grammar,
@@ -920,13 +920,20 @@ def test_deferred_sampling_uses_owned_state_once(
     assert sample_kwargs["enable_trace"] is True
     assert sample_kwargs["skip_precompile"] is True
     assert generator._pending_deferred_decode_sampling is None
+    assert generator._deferred_decode_sampling_failed is False
 
     with expect_error(RuntimeError, "stale or was already consumed"):
-        generator.sample_decode_on_device(
+        generator.sample_deferred_decode(
             deferred,
             sampling_params=params,
             grammar_bitmask=grammar,
         )
+    assert generator._deferred_decode_sampling_failed is False
+
+    sample_count = len(sampling.sample_calls)
+    with expect_error(TypeError, "sample_deferred_decode"):
+        generator.sample_decode_on_device(deferred, sampling_params=params)
+    assert len(sampling.sample_calls) == sample_count
     generator.model = []
 
 
@@ -995,7 +1002,7 @@ def test_deferred_sampling_remaps_before_seeding():
         seed=[None] * SEED_TEST_BATCH,
     )
 
-    generator.sample_decode_on_device(
+    generator.sample_deferred_decode(
         deferred,
         sampling_params=params,
         grammar_bitmask=torch.full(
@@ -1091,7 +1098,7 @@ def test_slot_remap_is_local_per_model():
         seed=[None] * total_batch,
     )
 
-    generator.sample_decode_on_device(
+    generator.sample_deferred_decode(
         deferred,
         sampling_params=params,
         grammar_bitmask=torch.full((total_batch, 2), -1, dtype=torch.int32),
@@ -1143,12 +1150,17 @@ def test_host_decode_remaps_device_seeds():
 
 
 @pytest.mark.parametrize(
-    "failure_stage",
-    ["validation", "sampling"],
-    ids=["invalid-mask", "sampling-error"],
+    ("failure_stage", "error_type", "message"),
+    [
+        pytest.param("mask-type", TypeError, "must be a torch.Tensor", id="mask-type"),
+        pytest.param("validation", ValueError, "bad grammar", id="invalid-mask"),
+        pytest.param("sampling", RuntimeError, "sampling failed", id="sampling-error"),
+    ],
 )
 def test_deferred_failure_stops_future_work(
     failure_stage,
+    error_type,
+    message,
     expect_error,
 ):
     """A failed deferred step consumes its payload and blocks later work."""
@@ -1167,7 +1179,10 @@ def test_deferred_failure_stops_future_work(
         reload_inputs=True,
     )
     generator._pending_deferred_decode_sampling = deferred
-    if failure_stage == "validation":
+    grammar = torch.full((SEED_TEST_BATCH, 2), -1, dtype=torch.int32)
+    if failure_stage == "mask-type":
+        grammar = grammar.tolist()
+    elif failure_stage == "validation":
         sampling.validate_grammar_bitmask = lambda _mask: (_ for _ in ()).throw(ValueError("bad grammar"))
     else:
         sampling.sample = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("sampling failed"))
@@ -1178,16 +1193,11 @@ def test_deferred_failure_stops_future_work(
         seed=[None] * SEED_TEST_BATCH,
     )
 
-    error_type = ValueError if failure_stage == "validation" else RuntimeError
-    with expect_error(error_type, "bad grammar|sampling failed"):
-        generator.sample_decode_on_device(
+    with expect_error(error_type, message):
+        generator.sample_deferred_decode(
             deferred,
             sampling_params=params,
-            grammar_bitmask=torch.full(
-                (SEED_TEST_BATCH, 2),
-                -1,
-                dtype=torch.int32,
-            ),
+            grammar_bitmask=grammar,
         )
 
     assert generator._pending_deferred_decode_sampling is None

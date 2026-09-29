@@ -55,7 +55,7 @@ class DeferredDecodeSampling:
     ``decode_forward(..., defer_device_sampling=True)`` owns the position,
     reset, token-history, remap, trace, and reload values in this payload.
     Sampling parameters and an optional grammar mask arrive later through
-    ``sample_decode_on_device`` and cannot override the captured state.
+    ``sample_deferred_decode`` and cannot override the captured state.
     """
 
     tt_logits: object
@@ -214,11 +214,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     model_capabilities = {
         "supports_prefix_caching": False,
     }
-
-    def poison_deferred_device_sampling(self) -> None:
-        """Make every later decode fail after a deferred step becomes unsafe."""
-        self._pending_deferred_decode_sampling = None
-        self._deferred_decode_sampling_failed = True
 
     def enable_device_grammar(self) -> bool:
         """Allocate grammar state only after the serving runtime selects it."""
@@ -1991,8 +1986,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # either side asserting authority is enough.
         if kwargs.get("reload_inputs"):
             reload_inputs = True
-        # Deferred sampling calls sample_decode_on_device() out of band; stash the
-        # flag so that call need not thread it.
+        # Callers that sample raw logits out of band get this via
+        # `sample_decode_on_device(reload_inputs=None)`.
         self._decode_reload_inputs = reload_inputs
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
@@ -2504,52 +2499,99 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         reload_inputs=None,
         grammar_bitmask: torch.Tensor | None = None,
     ):
-        """Sample immediate logits or consume one deferred decode payload.
+        """Sample logits that the caller owns, e.g., from an immediate decode.
 
         ``reload_inputs``: host inputs are authoritative, so ``start_pos`` may
         re-anchor the seed counters. ``None`` takes the last decode_forward's
-        value. A ``DeferredDecodeSampling`` supplies all lifecycle arguments
-        itself and is accepted exactly once. Stale-payload and caller-override
-        checks happen before consumption; grammar validation and all later
-        failures are terminal because the submitted decode can no longer fall
-        back safely.
+        value. Payloads from ``decode_forward(defer_device_sampling=True)`` go
+        through ``sample_deferred_decode`` instead.
         """
+        self._raise_if_deferred_sampling_failed()
+
+        if isinstance(tt_logits, DeferredDecodeSampling):
+            raise TypeError("deferred decode payloads are sampled with sample_deferred_decode()")
+
+        if self._pending_deferred_decode_sampling is not None:
+            raise RuntimeError(
+                "a deferred decode sampling payload is pending and must be consumed before direct device sampling"
+            )
+
+        if reload_inputs is None:
+            reload_inputs = getattr(self, "_decode_reload_inputs", True)
+        return self._sample_decode(
+            tt_logits,
+            sampling_params,
+            start_pos=start_pos,
+            reset_batch=reset_batch,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
+            enable_trace=enable_trace,
+            skip_precompile=skip_precompile,
+            reload_inputs=reload_inputs,
+            grammar_bitmask=grammar_bitmask,
+        )
+
+    def sample_deferred_decode(
+        self,
+        payload: DeferredDecodeSampling,
+        sampling_params,
+        *,
+        grammar_bitmask: torch.Tensor | None = None,
+    ):
+        """Sample the pending ``decode_forward(defer_device_sampling=True)`` payload exactly once.
+
+        A stale payload is rejected and leaves the pending one intact. Any
+        later failure blocks all further decoding, because the submitted decode
+        can no longer fall back safely.
+        """
+        self._raise_if_deferred_sampling_failed()
+
+        if self._pending_deferred_decode_sampling is not payload:
+            raise RuntimeError("deferred decode sampling payload is stale or was already consumed")
+
+        self._pending_deferred_decode_sampling = None
+        try:
+            return self._sample_decode(
+                payload.tt_logits,
+                sampling_params,
+                start_pos=payload.start_pos,
+                reset_batch=payload.reset_batch,
+                prompt_tokens=payload.prompt_tokens,
+                output_tokens=payload.output_tokens,
+                slot_remap=payload.slot_remap,
+                enable_trace=payload.enable_trace,
+                skip_precompile=payload.skip_precompile,
+                reload_inputs=payload.reload_inputs,
+                grammar_bitmask=grammar_bitmask,
+            )
+        except BaseException:
+            # Sampler state may be partly advanced for an already-submitted decode.
+            self._deferred_decode_sampling_failed = True
+            raise
+
+    def _raise_if_deferred_sampling_failed(self) -> None:
         if self._deferred_decode_sampling_failed:
             raise RuntimeError(
                 "a prior deferred device-sampling step failed after decode "
                 "submission; restart the model runner before sampling again"
             )
-        deferred = tt_logits if isinstance(tt_logits, DeferredDecodeSampling) else None
-        if self._pending_deferred_decode_sampling is not None and deferred is None:
-            raise RuntimeError(
-                "a deferred decode sampling payload is pending and must be " "consumed before direct device sampling"
-            )
-        if deferred is not None:
-            if self._pending_deferred_decode_sampling is not deferred:
-                raise RuntimeError("deferred decode sampling payload is stale or was already consumed")
-            if (
-                start_pos is not None
-                or reset_batch
-                or prompt_tokens is not None
-                or output_tokens is not None
-                or slot_remap is not None
-                or reload_inputs is not None
-            ):
-                raise ValueError(
-                    "deferred decode sampling owns start_pos, reset, token, "
-                    "slot-remap, and reload state; callers must not override it"
-                )
-            tt_logits = deferred.tt_logits
-            start_pos = deferred.start_pos
-            reset_batch = deferred.reset_batch
-            prompt_tokens = deferred.prompt_tokens
-            output_tokens = deferred.output_tokens
-            slot_remap = deferred.slot_remap
-            enable_trace = deferred.enable_trace
-            skip_precompile = deferred.skip_precompile
-            reload_inputs = deferred.reload_inputs
-        elif reload_inputs is None:
-            reload_inputs = getattr(self, "_decode_reload_inputs", True)
+
+    def _sample_decode(
+        self,
+        tt_logits,
+        sampling_params,
+        *,
+        start_pos,
+        reset_batch,
+        prompt_tokens,
+        output_tokens,
+        slot_remap,
+        enable_trace,
+        skip_precompile,
+        reload_inputs,
+        grammar_bitmask,
+    ):
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
         # 32 users independently, so sampling params must be chunked by the
@@ -2595,11 +2637,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     grammar_chunks.append(grammar_bitmask[offset : offset + batch_size])
                     offset += batch_size
 
-        if deferred is not None:
-            # Seed, remap, and device state can mutate below. Consume this
-            # payload terminally and leave the runner fail-stopped on error.
-            self._pending_deferred_decode_sampling = None
-            self._deferred_decode_sampling_failed = True
         if grammar_bitmask is not None:
             for i, grammar_chunk in enumerate(grammar_chunks):
                 sampling_module = getattr(self.model[i], "sampling", None)
@@ -2719,8 +2756,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     grammar_bitmask=grammar_chunks[i],
                 )
             )
-        if deferred is not None:
-            self._deferred_decode_sampling_failed = False
         return sampled_outputs
 
     def _apply_sampling_slot_remap(self, slot_remap) -> None:
