@@ -85,6 +85,23 @@ def rundir(tmp_path):
 # ---- consolidate: merging, severity escalation, dispositions ----------------------------------------------------
 
 
+def test_consolidate_summary_survives_a_hunt_record_with_classes(rundir):
+    write(
+        str(rundir / "verdicts" / "A-0000.json"),
+        {"findings": [finding("a/k.cpp", 3, "low")]},
+    )
+    write(
+        str(rundir / "findings" / "A-0000.json"),
+        {
+            "batch": "A-0000",
+            "files_read": [{"path": "a/k.cpp"}],
+            "classes_checked": ["index-math"],
+        },
+    )
+    code, out, err = run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)
+    assert code == 0 and "'low': 1" in out, err
+
+
 def test_arch_copies_merge_into_one_entry_at_the_worst_severity(rundir):
     wh, bh = "a/wormhole/k.h", "a/blackhole/k.h"
     write(

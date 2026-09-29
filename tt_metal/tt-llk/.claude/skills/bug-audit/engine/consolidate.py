@@ -303,8 +303,8 @@ ledger = collections.Counter()
 for fn in os.listdir(os.path.join(out, "findings")):
     if fn.endswith(".json") and not fn.endswith(".history.jsonl"):
         h = load(os.path.join(out, "findings", fn), {})
-        for c in set(h.get("classes_checked", [])):
-            checked[c] += len(h.get("files_read", []))
+        for class_id in set(h.get("classes_checked", [])):
+            checked[class_id] += len(h.get("files_read", []))
         ledger["entries"] += len(h.get("boundaries", []))
         ledger["invalid"] += len(h.get("ledger_invalid", []))
         ledger["invalid_batches"] += bool(h.get("ledger_invalid"))
