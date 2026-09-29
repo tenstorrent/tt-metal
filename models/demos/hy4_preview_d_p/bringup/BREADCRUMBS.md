@@ -186,3 +186,58 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_01_attn_hc.py
+
+## C.dense_full.attn_hc_pre test (attempt 1)
+
+What was done
+- Reviewed the rendered component test (attn_x = sum_j pre_j x stream_j, layer 0, s4096 chunk 1, golden bf16).
+  Kept the gated pcc_attn_hc_pre_L00 (0.99) and added asserted checks vs the golden: finite, element count, rel L2
+  <= 0.004, per-row norm ratio in [0.995, 1.005], worst row rel L2 <= 0.01. Metrics rel_l2_*, worst_row_rel_l2_*,
+  syn_rel_l2_* recorded (informational).
+- Added a second call of the module on synthetic distinct streams (golden stream rows rolled by 7 j per stream, pre
+  gates rotated by row mod 4), compared with the CPU hc_pre on the same inputs: rel L2 <= 0.008, worst row <= 0.02.
+- Mutation table in the test docstring (CPU, on the golden).
+
+Decisions and why
+- Layer-0 streams are identical, so the golden check only sees sum_j pre_j per row; PCC passes no-gating, row-shift,
+  zeroed row, x1.02. The synthetic call is the only layer-0 check that sees stream / gate order.
+- Limits sit between bf16 accumulation (0.0013 rel, ratio [0.998, 1.004], row 0.005) and the smallest bug
+  (pre x 1.01: 0.0099, ratio 1.008).
+
+Gotchas
+- The implement step's module must accept arbitrary [S, 4H] streams and [S, 8] gates of the golden shape (it is
+  called twice, the second time on the synthetic inputs).
+- Device gate currently fails with NotImplementedError (no device module for attn_hc_pre in hooks._HC_STEPS yet).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 1.000000, rel 0.000947, ratio [0.99805, 1.00167], row 0.00258; synthetic exact).
+- BRINGUP_IMPL=stub: FAIL (pcc 0.0).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc_pre.py
+
+## C.dense_full.attn_hc_pre implement (attempt 1)
+
+What was done
+- `tt/ihc.py:TtHcPre`: per chip, 4 `ttnn.slice` of the streams (local column blocks j*3072, stream-major) and 4
+  `ttnn.slice` of gate columns 0-3 ([S/2, 1]), then `ttnn.multiply` + 3 x `ttnn.addcmul` (column broadcast), fp32
+  throughout (deepseek_v3_d_p/tt/mhc/tt_mhc.py:_streams / _cols / _mix). Output [1, 1, S/2, 3072] fp32 per chip =
+  this chip's hidden columns (rows split over axis 0, columns over axis 1). No collective, no weights, no host work.
+  Optional `dtype=` typecasts at the end (default fp32; the device keeps fp32).
+- `tt/layout.py`: `row_split_to_device` (host [S, W] -> rows over axis 0, replicated over axis 1) and
+  `col_split_to_host` (rows over axis 0, columns over axis 1 -> host [S, W]). Harness boundary only.
+- `bringup/hooks.py`: `_HC_PRE_STEPS = {"attn_hc_pre"}`, `_hc_pre_host_fn` (streams + gates host -> device ->
+  attn_x host), `_device_step_fn` dispatches both iHC step kinds; `device_component` and `HybridDeviceModel` use it
+  (the hybrid asserts every DEVICE_STEPS entry has a module). `DEVICE_STEPS["dense_full"] = {"attn_hc", "attn_hc_pre"}`.
+
+Decisions
+- Kept fp32 output (no bf16 cast) since the device residual is fp32; the test compares against fp32/bf16 golden fine.
+- ffn_hc_pre is the same module (inputs h_mid, ffn_hc); add "ffn_hc_pre" to `_HC_PRE_STEPS` in its own task.
+
+Results
+- Gate: PASS. pcc_attn_hc_pre_L00 1.000000, rel L2 0.000947, row ratio [0.99805, 1.00167], worst row 0.00258
+  (same as the fp32 CPU reference); synthetic distinct streams rel L2 0.000000.
+- The "FAIL pcc ... 0.000000" line at the top of the log is the precompile collect pass (stubbed), not the real run.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc_pre.py
