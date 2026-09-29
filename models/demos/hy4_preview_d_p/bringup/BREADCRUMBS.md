@@ -2372,3 +2372,38 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
+
+## S.moe_shared.02 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_shared layer 2, attn_hc + attn_hc_pre on device, rest CPU). It is the
+  layer-1 reviewed swap test (test_swap_moe_full_02_attn_hc_pre.py) with BLOCK_TYPE = moe_shared and the two layer-2
+  changes from swap 01: `ctx.extra["shared_topk"]` = the golden's L1.topk in both contexts, and a per-stream h_mid rel
+  L2 limit (<= 0.005).
+- Kept the layer-1 checks and limits: gates (rel 0.01, per column 0.01, post row 0.015); attn_x vs golden (rel 0.005,
+  row ratio [0.996, 1.004], row 0.01); attn_x vs the CPU hc_pre on the device gates (0.003 / 0.006); the module again
+  with pre gates rotated by row mod 4 vs the CPU step (0.004 / 0.01); h_mid (0.005 / row 0.02 / stream 0.005); router
+  overlap 0.98; out rel 0.01.
+- CPU mutation study: /tmp/hy4_ss2/study.py (outside the repo; the layer-1 /tmp/hy4_sm2 script with L = 2, the shared
+  topk, a per-stream h_mid column, and extra layer-2 mutations). The table is in the test docstring.
+
+Decisions
+- Kept the layer-1 limits. bf16 accumulation fits (ratio min 0.9967, CPU row 0.0039, rot row 0.0054), and pre x 1.005
+  fails (ratio 1.0048, rel 0.0055).
+- Stream 0 (pre gate ~hc_eps) is invisible on the golden. Only the rotated-gates run sees it dropped (rel 0.19).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999995, rel 0.0030; attn_x 0.00225; h_mid stream max 0.0029; router 0.9973).
+- BRINGUP_IMPL=stub: FAIL on every check (out PCC 0.94).
+- Gate (device TtHcGates + TtHcPre): PASS. pcc_swap_out 0.999994; gates rel 0.00136, col max 0.0045 (col 0); attn_x
+  0.00226 / ratio [0.99957, 1.00024] / row 0.0025; vs CPU 0 / 0; rotated 0 / 0; h_mid 0.00089 / row 0.0038 / stream
+  max 0.00295; router 0.9966; out rel 0.00345.
+
+Gotchas
+- Not caught: pre + 3e-4 (attn_x vs CPU worst row 0.0052 against 0.006), which is below the bf16 rounding of gate 1.
+- The first block of output in each run is the precompile collect pass (stubbed), not the real run.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
