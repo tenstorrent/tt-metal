@@ -77,7 +77,7 @@ DEVICE_STEPS = {
         "mlp",
         "ffn_residual",
     },
-    "moe_full": {"router", "experts", "shared_expert"},
+    "moe_full": {"router", "experts", "shared_expert", "moe_combine"},
     "moe_shared": set(),
 }
 
@@ -108,6 +108,9 @@ _ROUTER_STEPS = {"router"}
 # Routed experts (tt/experts.py:TtHy4Experts): DeepSeek 2D EP (dispatch over axis 0 within each column, 64 experts per
 # chip, bfp8), fused ClampedSiluGlu experts at HiFi4, combine, reduce_scatter over axis 1.
 _EXPERTS_STEPS = {"experts"}
+# MoE combine (tt/mlp.py:TtMoeCombine): mlp_out = experts_out + shared_out, fp32 ttnn.add on the column split
+# [S/2, H/2] per chip (both inputs already reduce-scattered over axis 1); no collective.
+_MOE_COMBINE_STEPS = {"moe_combine"}
 
 
 def _loader(spec):
@@ -580,6 +583,24 @@ def _experts_host_fn(mesh, module):
     return fn
 
 
+def _col_split2_host_fn(mesh, module):
+    """fn(ctx, a_host [S, W], b_host [S, W]) -> host [S, W] fp32 for a module on two column-split [1, 1, S/2, W/2]
+    fp32 tensors (harness boundary)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_device, col_split_to_host
+
+    def fn(ctx, a, b):
+        ad = col_split_to_device(mesh, a)
+        bd = col_split_to_device(mesh, b)
+        yd = module(ad, bd)
+        y = col_split_to_host(mesh, yd).float()
+        for t in (ad, bd, yd):
+            ttnn.deallocate(t)
+        return y
+
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
     if step in _NORM_STEPS:
         return _col_split_host_fn(mesh, _norm_module(mesh, spec, layer, step, loader, cfg))
@@ -601,6 +622,10 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _router_host_fn(mesh, _router_module(mesh, spec, layer, loader, cfg))
     if step in _EXPERTS_STEPS:
         return _experts_host_fn(mesh, _experts_module(mesh, spec, layer, loader, cfg))
+    if step in _MOE_COMBINE_STEPS:
+        from models.demos.hy4_preview_d_p.tt.mlp import TtMoeCombine
+
+        return _col_split2_host_fn(mesh, TtMoeCombine(mesh))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -628,6 +653,7 @@ def device_component(mesh, spec, layer, step):
             _SHARED_STEPS,
             _ROUTER_STEPS,
             _EXPERTS_STEPS,
+            _MOE_COMBINE_STEPS,
         )
     ):
         loader = _loader(spec)
