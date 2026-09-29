@@ -129,18 +129,20 @@ UnifiedMatmulPlan size_dfbs(
     plan.C_partials_format = plan.packer_l1_acc_en
                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
-    plan.C_entry_bytes = tt::tile_size(plan.C_format);
-    plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
-
-    // C_slice and C_partials hold the subblocks padded to a multiple of the compute threads, so every thread
-    // owns the same number of entries, equal to what it packs per K chunk (the packer's L1 accumulation needs
-    // the same addresses every K chunk).
+    // A thread's share of the C slice (its subblocks back to back) is one C_slice / C_partials entry when there
+    // are several threads: Quasar addresses tiles from the thread's tile-counter cursor, which a single entry
+    // keeps at one address, so block packs and unpacks see a contiguous buffer and the packer's L1 accumulation
+    // lands on the same addresses every K chunk. With one thread an entry is a tile, as a Gen1 CB page is.
     const uint32_t num_subblocks =
         (plan.C_slice_M_padded_tiles / plan.subblock_M_tiles) * (plan.C_slice_N_padded_tiles / plan.subblock_N_tiles);
-    const uint32_t C_slice_tiles =
-        tt::round_up(num_subblocks, plan.num_compute_threads) * plan.subblock_M_tiles * plan.subblock_N_tiles;
-    plan.C_slice_entries = C_slice_tiles;
-    plan.C_partials_entries = C_slice_tiles;
+    const uint32_t share_tiles =
+        tt::div_up(num_subblocks, plan.num_compute_threads) * plan.subblock_M_tiles * plan.subblock_N_tiles;
+    plan.C_entries_per_thread = plan.num_compute_threads > 1 ? 1 : share_tiles;
+    const uint32_t entry_tiles = share_tiles / plan.C_entries_per_thread;
+    plan.C_entry_bytes = entry_tiles * tt::tile_size(plan.C_format);
+    plan.C_partials_entry_bytes = entry_tiles * tt::tile_size(plan.C_partials_format);
+    plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads;
+    plan.C_partials_entries = plan.C_entries_per_thread * plan.num_compute_threads;
 
     // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
     // resident shard itself. A is borrowable only when one K chunk covers K.
@@ -714,6 +716,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
                 {"num_compute_threads", plan.num_compute_threads},
+                {"C_entries_per_thread", plan.C_entries_per_thread},
                 {"C_borrowed", plan.borrow_C ? 1u : 0u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
@@ -779,6 +782,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
                 {"num_compute_threads", plan.num_compute_threads},
+                {"C_entries_per_thread", plan.C_entries_per_thread},
                 {"packer_l1_acc", plan.packer_l1_acc_en ? 1u : 0u},
                 {"partials_format_differs", plan.C_partials_format != plan.C_format ? 1u : 0u},
             },

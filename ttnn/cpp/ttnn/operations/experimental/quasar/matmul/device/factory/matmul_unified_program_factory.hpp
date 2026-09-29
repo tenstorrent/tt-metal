@@ -46,10 +46,12 @@ struct UnifiedMatmulPlan {
     uint32_t C_slice_N_padded_tiles = 0;
 
     // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are dealt
-    // round-robin to the threads, which all see the whole A and B slices; the subblock count is padded to a
-    // multiple of the threads with credit-only subblocks so every thread pushes and pops the same number of
-    // C_slice / C_partials entries.
+    // round-robin to the threads, which all see the whole A and B slices. A thread's share of the C slice
+    // (ceil(subblocks / threads) subblocks, back to back) is C_entries_per_thread entries of C_slice and
+    // C_partials, the credits it moves per K chunk: one entry with several threads (the thread's tile
+    // counter then stays at one address, which block packs and unpacks need), one entry per tile with one.
     uint32_t num_compute_threads = 1;
+    uint32_t C_entries_per_thread = 0;
 
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).
@@ -65,8 +67,8 @@ struct UnifiedMatmulPlan {
     bool borrow_B = false;
     bool borrow_C = false;
 
-    // DFB sizing. An entry holds one tile; entry sizes are in bytes. C_slice and C_partials hold the C
-    // slice's subblocks padded to a multiple of num_compute_threads.
+    // DFB sizing; entry sizes are in bytes. An A_slice / B_slice entry holds one tile; C_slice / C_partials
+    // hold C_entries_per_thread entries per thread (see above).
     bool packer_l1_acc_en = false;
     tt::DataFormat A_format{};
     tt::DataFormat B_format{};

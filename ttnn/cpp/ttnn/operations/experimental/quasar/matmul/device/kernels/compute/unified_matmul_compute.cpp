@@ -9,10 +9,10 @@
 //
 // Compute threads (Quasar NEOs; one thread elsewhere): the subblocks are dealt round-robin in walk
 // order, thread t taking subblocks t, t + T, ... Every thread sees the whole A and B slices (one
-// resident copy). In C_slice and C_partials each thread owns every N-th entry, and the pack / unpack
-// tile indices are dense, so a thread addresses them one entry per credit. The C slice is padded to
-// whole rounds of subblocks, so every thread pushes the same number of entries (the writer's
-// round-robin over the threads' tile counters and the packer's L1 accumulation both need that).
+// resident copy). A thread's share of C_slice and C_partials holds its subblocks back to back and is
+// C_entries_per_thread entries (one with several threads, one per tile with one), so a thread
+// reserves / waits for its share once per K chunk and packs / reloads subblocks into it with block
+// calls at running tile offsets.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <cstdint>
@@ -36,6 +36,7 @@ template <
     uint32_t subblock_M_tiles,
     uint32_t subblock_N_tiles,
     uint32_t num_compute_threads,
+    uint32_t C_entries_per_thread,  // C_slice / C_partials entries in one thread's share of the C slice
     uint32_t packer_l1_acc,
     uint32_t partials_format_differs>            // C_partials and C_slice hold different formats
 TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C slices, per batch
@@ -45,12 +46,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
     constexpr uint32_t num_subblocks =
         (C_slice_M_padded_tiles / subblock_M_tiles) * (C_slice_N_padded_tiles / subblock_N_tiles);
-    // Subblocks (in walk order) are dealt round-robin: thread t takes t, t + num_compute_threads, ... The C
-    // slice is padded to whole rounds, so a thread without a subblock in the last round moves credits for one.
-    constexpr uint32_t subblock_rounds = (num_subblocks + num_compute_threads - 1) / num_compute_threads;
-    constexpr uint32_t last_round_subblocks = num_subblocks % num_compute_threads;  // 0: the last round is full
     const uint32_t thread = get_my_thread_id();
-    const bool pads_last_round = last_round_subblocks != 0 && thread >= last_round_subblocks;
+    // A thread past the last subblock still moves every credit; dummy_unpack / dummy_pack order its pops
+    // and pushes after the waits on Quasar (no-ops elsewhere).
+    const bool has_subblocks = thread < num_subblocks;
 
     DataflowBuffer A_slice(dfb::A_slice);
     DataflowBuffer B_slice(dfb::B_slice);
@@ -58,6 +57,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
     DataflowBuffer C_partials(dfb::C_partials);
 
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
+
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
@@ -90,8 +90,23 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_init(pack_target_id);
 #endif
 
-                // (m_tile, n_tile) is the subblock's first tile within the C slice.
+                // The previous K chunk left this thread's partials in its C_partials share. A K chunk that packs
+                // partials again frees the share first so the reserve below gets it back (this NEO is its only
+                // writer, and each subblock is reloaded before it is overwritten); the last K chunk keeps it until
+                // the reloads are done.
+                if (K_chunk > 0) {
+                    C_partials.wait_front(C_entries_per_thread);
+                    if (!last_K_chunk) {
+                        dummy_unpack(dfb::C_partials);
+                        C_partials.pop_front(C_entries_per_thread);
+                    }
+                }
+                pack_target.reserve_back(C_entries_per_thread);
+
+                // (m_tile, n_tile) is the subblock's first tile within the C slice; entry_tile is where this
+                // thread's next subblock sits in its share of C_slice / C_partials.
                 uint32_t subblock = 0;
+                uint32_t entry_tile = 0;
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
                     const uint32_t A_subblock_first_tile = m_tile * K_chunk_tiles;  // A slice tile (m_tile, 0)
                     for (uint32_t n_tile = 0; n_tile < C_slice_N_padded_tiles; n_tile += subblock_N_tiles) {
@@ -101,15 +116,15 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                         const uint32_t B_subblock_first_tile = n_tile;  // B slice tile (0, n_tile)
                         tile_regs_acquire();
                         if (reload_partials) {
-                            // Reload this subblock's partials into DST, one entry per pop; the matmul MOP
-                            // must be re-initialised after any copy_init.
+                            // Reload this subblock's partials into DST; the matmul MOP must be re-initialised
+                            // after any copy_init.
                             reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
                             copy_init(dfb::C_partials);
-                            C_partials.wait_front(subblock_tiles);
-                            for (uint32_t tile = 0; tile < subblock_tiles; ++tile) {
-                                copy_tile(dfb::C_partials, /*in_tile_index=*/0, /*dst_tile_index=*/tile);
-                                C_partials.pop_front(1);
-                            }
+                            copy_block(
+                                dfb::C_partials,
+                                /*start_in_tile_index=*/entry_tile,
+                                /*start_dst_tile_index=*/0,
+                                subblock_tiles);
                             reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
                             matmul_block_init(
                                 dfb::A_slice,
@@ -140,48 +155,25 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                         }
                         tile_regs_commit();
 
-                        // Pack the subblock one entry per push.
-                        pack_target.reserve_back(subblock_tiles);
+                        // Packs continue where the previous subblock's pack left off in the share.
                         tile_regs_wait();
-                        for (uint32_t tile = 0; tile < subblock_tiles; ++tile) {
-                            pack_tile(tile, pack_target_id);
-                            pack_target.push_back(1);
-                        }
+                        pack_block(/*ifrom_dst=*/0, pack_target_id, subblock_tiles);
                         tile_regs_release();
+                        entry_tile += subblock_tiles;
                     }
                 }
-                if (pads_last_round) {
-                    // Padding subblock: move this thread's partials and output credits like a real one
-                    // (dummy_unpack / dummy_pack order the pop / push after the wait on Quasar; no-ops elsewhere).
-                    if (reload_partials) {
-                        C_partials.wait_front(subblock_tiles);
-                        dummy_unpack(dfb::C_partials);
-                        C_partials.pop_front(subblock_tiles);
-                    }
-                    pack_target.reserve_back(subblock_tiles);
+
+                if (!has_subblocks) {
                     dummy_pack(pack_target_id);
-                    pack_target.push_back(subblock_tiles);
                 }
-
-                if constexpr (packer_l1_acc) {
-                    // The entries pushed this K chunk are only credits (the sums live in L1): pop them so the next
-                    // K chunk lands on the same addresses. Two exceptions: the last K chunk pushed nothing here, and
-                    // the second-to-last K chunk's entries are what the last K chunk reloads.
-                    const bool second_to_last_K_chunk = K_chunk + 2 == num_K_chunks;
-                    if (!last_K_chunk && !second_to_last_K_chunk) {
-                        // Pop without reading: dummy_unpack orders the pop after the wait on Quasar (a no-op
-                        // elsewhere).
-                        for (uint32_t round = 0; round < subblock_rounds; ++round) {
-                            C_partials.wait_front(subblock_tiles);
-                            dummy_unpack(dfb::C_partials);
-                            C_partials.pop_front(subblock_tiles);
-                        }
+                pack_target.push_back(C_entries_per_thread);
+                if (last_K_chunk && K_chunk > 0) {
+                    if (!has_subblocks) {
+                        dummy_unpack(dfb::C_partials);
                     }
+                    C_partials.pop_front(C_entries_per_thread);
                 }
-
-                if (thread >= num_subblocks) {
-                    // A thread with no subblock at all issued no unpack this K chunk: order the pops after the
-                    // waits (Quasar TEN-4746; no-ops elsewhere).
+                if (!has_subblocks) {
                     dummy_unpack(dfb::A_slice);
                     dummy_unpack(dfb::B_slice);
                 }
