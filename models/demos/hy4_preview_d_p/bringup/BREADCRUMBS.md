@@ -1264,3 +1264,32 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
+
+## C.moe_full.attn_norm test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line component test (moe_full layer 1, attn_norm) with the reviewed dense_full attn_norm
+  test at LAYER = 1, with the same limits: gated pcc_attn_norm_L01 (0.99); not a CPU bridge; finite output, element
+  count; vs golden rel L2 <= 0.008, row norm ratio in [0.993, 1.007], worst row <= 0.015; module run again on
+  golden x 0.1 (bf16) vs the CPU step, rel <= 0.01, worst row <= 0.02. The layer-1 mutation tables are in the docstring.
+- CPU mutation study in /tmp/hy4_an1/study.py (outside the repo).
+
+Decisions
+- Kept the layer-0 limits. The pessimistic bf16 estimate on layer 1 is rel 0.0038 / ratio [0.9953, 1.0046] / row
+  0.0058, so there is still about 1.5-2x margin. Every mutation that passes PCC fails at least one added check.
+- Kept the x 0.1 run, although it is not needed here: on layer 1 eps is already visible on the golden (row rms from
+  0.0045, the smallest mean(x^2) is 2.1x eps; eps 1e-6 scores rel 0.068 / worst row 0.19).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999999, rel 0.00235, ratio [0.99987, 1.00013], row 0.0025; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): already PASS, because the dense_full attn_norm module also serves layer 1. pcc 0.999996, rel
+  0.00287, ratio [0.99906, 1.00092], row 0.00315; scaled rel 0.00183, row 0.00252.
+
+Gotchas
+- The first "FAIL pcc_attn_norm_L01: pcc=0.0" line comes from the precompile collect pass. The real run follows it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
