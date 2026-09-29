@@ -56,8 +56,6 @@ using namespace std;
 
 namespace tt::tt_metal {
 
-void emit_llk_metadata(std::ostream& os, const LLKMetadata& metadata);
-
 namespace {
 
 string get_kernel_source_to_include(const KernelSource& kernel_src) {
