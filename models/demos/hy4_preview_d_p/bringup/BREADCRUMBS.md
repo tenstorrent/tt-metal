@@ -1293,3 +1293,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
+
+## S.moe_full.03 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_full layer 1, attn_hc + attn_hc_pre + attn_norm on device, rest CPU).
+  It keeps the gated pcc_swap_out (0.98) and the trail. It combines the swap 02 checks (gates, attn_x vs golden, vs
+  CPU, rotated pre gates, h_mid, block out rel <= 0.01) with the dense_full swap 03 attn_norm checks at the component
+  limits: attn_norm vs golden (rel 0.008, ratio [0.993, 1.007], worst row 0.015), vs the CPU attn_norm on the device
+  attn_x (same limits), the module again on attn_x x 0.1 vs CPU (0.01 / 0.02). It also checks the downstream steps:
+  q_resid rel <= 0.01, indexer top-k set overlap >= 0.995, attn_out rel <= 0.01 / worst row <= 0.05, and router
+  top-8 overlap >= 0.99.
+- CPU block-level mutation study in /tmp/hy4_sm3/study.py (outside the repo, 9 s per variant). The table is in the
+  test docstring. 12 of 17 attn_norm mutations pass the 0.98 out gate, including eps 1e-6 / 0 / 2e-5, x 1.02, the
+  RMS subset, LayerNorm, a zeroed row and TP-swapped weight halves. The attn_norm checks catch every one of them.
+
+Decisions
+- Router overlap raised from 0.98 (swaps 01 / 02) to 0.99. The fp32 reference gives 0.9987, bf16 0.9981 and the
+  device 0.9979; x 1.02 gives 0.9898. The attn_norm checks still carry the load.
+- h_mid limits stay at the swap 02 values (0.005 / 0.02); the device run gives 0.0022 / 0.0037.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999997, attn_norm 0.00235, topk 0.99909, router 0.99866, out rel 0.00242).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98, and every extra check fails).
+- Gate (device TtHcGates + TtHcPre + the attn_norm module): PASS. pcc_swap_out 0.999996. attn_norm 0.00298, ratio
+  [0.99826, 1.00003], worst row 0.00346. vs CPU 0.00196. x0.1 0.00183. q_resid 0.00195. topk 0.99908. attn_out
+  0.00190. h_mid 0.00222 / 0.0037. router 0.99786. out rel 0.00296.
+
+Gotchas
+- The smallest margin is still post column 4 of the gates (0.0054 vs 0.01), carried over from swap 01.
+- The first block of printed metrics (a stub-like FAIL trail) comes from the precompile collect pass. The second
+  block is the real run.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
