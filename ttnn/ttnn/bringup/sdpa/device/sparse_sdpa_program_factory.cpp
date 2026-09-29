@@ -155,17 +155,21 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_qk_im, tile_bytes, Sqt * Skt, bf);
     cb(cb_max_a, tile_bytes, Sqt, bf);
     cb(cb_max_b, tile_bytes, Sqt, bf);
-    cb(cb_sum_a, tile_bytes, Sqt, bf);
-    cb(cb_sum_b, tile_bytes, Sqt, bf);
-    cb(cb_out_a, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
+    // high_precision (fork option): the L1-accumulated running output / row-sum in Float32 (default bf16); the
+    // SPARSE_SDPA_HIGH_PRECISION define also switches the softmax exp to the exact one.
+    const tt::DataFormat state_df = attrs.high_precision ? fp32 : bf;
+    const uint32_t state_tile_bytes = tt::tile_size(state_df);
+    cb(cb_sum_a, state_tile_bytes, Sqt, state_df);
+    cb(cb_sum_b, state_tile_bytes, Sqt, state_df);
+    cb(cb_out_a, state_tile_bytes, Sqt * vDHt, state_df);
+    cb(cb_out_b, state_tile_bytes, Sqt * vDHt, state_df);
     cb(cb_corr, tile_bytes, Sqt, bf);
     cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
     cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
     cb(cb_idx, topk * idx_elem_bytes, 1, bf);
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_col_identity, tile_bytes, 1, bf);
-    cb(cb_recip_scratch, tile_bytes, 1, bf);
+    cb(cb_recip_scratch, state_tile_bytes, 1, state_df);  // 1/sum: Float32 under high_precision
     cb(cb_kreq, ::sparse_sdpa::gather_request::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     if (scaled_kv) {
@@ -318,6 +322,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_ct;
+    if (attrs.high_precision) {
+        compute_desc.defines.emplace_back("SPARSE_SDPA_HIGH_PRECISION", "1");
+    }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);

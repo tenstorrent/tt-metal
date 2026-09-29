@@ -520,9 +520,19 @@ void sub_exp_block_bcast_cols(
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+        // Exact exp with the scale as a bf16 immediate (rounded to nearest; exact for a power of two).
+        constexpr uint16_t scale_bf16_rne =
+            static_cast<uint16_t>((scale_fp32 + 0x7FFFu + ((scale_fp32 >> 16) & 1u)) >> 16);
+#endif
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                exp_packthread_tile<false, true, InputClamping::None, iterations>(
+                    dst_index++, vector_mode_exp, scale_bf16_rne);
+#else
                 exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+#endif
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -540,6 +550,7 @@ void sub_exp_block_bcast_cols(
         } else {
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
+#ifndef SPARSE_SDPA_HIGH_PRECISION  // high precision: the caller sums the packed (bf16) probs
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
@@ -559,6 +570,7 @@ void sub_exp_block_bcast_cols(
                 }
             }
         }
+#endif
     }
 
     tile_regs_release();
@@ -732,6 +744,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
             // when scratch and normalized output formats match, and reconfigures after rows that packed output.
             sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+            reconfig_data_format(col_identity_cb, cur_sum_cb);  // srcA identity (bf16), srcB Float32 sum
+#endif
 
             CircularBuffer(col_identity_cb).wait_front(N);
             CircularBuffer(cur_sum_cb).wait_front(1);
@@ -783,6 +798,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+            reconfig_data_format(cur_out_cb, scratch_cb);  // srcA Float32 out, srcB bf16 1/sum
+#endif
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
             CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
@@ -815,6 +833,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     // format (e.g. Bfp8 output dtype), the format register stays Bfp8 and the next
     // pack to a F16b CB writes garbage that's later mis-decoded by F16b unpacks.
     sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+    // scratch and the running state are Float32 here: go back to the bf16 unpack / pack state (identity is bf16)
+    reconfig_data_format(col_identity_cb, col_identity_cb);
+    pack_reconfig_data_format(col_identity_cb);
+#endif
 }
 
 // ===================== Streaming SDPA Core Functions =====================
