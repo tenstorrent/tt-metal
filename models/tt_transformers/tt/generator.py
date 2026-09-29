@@ -2600,6 +2600,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert (
             len(set(sampling_dp_values)) == 1
         ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+
         # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
         # (one is always 1). If a future model needs both DP>1 and row-sharded
         # sampling, this should become data_parallel * sampling_dp_values[0].
@@ -2609,6 +2610,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "device grammar sampling does not support row-sharded sampling: "
                 f"data_parallel={self.data_parallel}, sampling_dp={sampling_dp}"
             )
+
+        if grammar_bitmask is not None and self._sampling_params_enable_logprobs(sampling_params):
+            raise ValueError("device grammar sampling does not support logprobs; sample these requests on host")
+
         sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
         prompt_chunks = (
             torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
