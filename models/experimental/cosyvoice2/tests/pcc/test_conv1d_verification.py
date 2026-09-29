@@ -93,6 +93,46 @@ def test_conv1d_resolver_rejects_a_corrupted_prepared_weight(device):
     assert rel < 0.01, rel
 
 
+# Real HiFT geometries where, on this build, the weight prepared for the TILE input is wrong and the one prepared for a
+# ROW_MAJOR input is right (tenstorrent/tt-metal#36487). Standalone on 2026-09-29, relative error vs float64 (TILE /
+# ROW_MAJOR / raw): 3.78 / 0.0040 / 0.0040 and 1.23 / 0.0040 / 0.0040.
+BROKEN_TILE_PREPARED = [
+    (128, 128, 11, 1, 5, 1, 5120),  # a resblock conv at the 128-frame length
+    (18, 256, 30, 15, 7, 1, 76801),  # source_downs[0] at 640 frames
+]
+
+
+@needs_l1_small
+@pytest.mark.parametrize("in_ch,out_ch,k,stride,pad,dil,length", BROKEN_TILE_PREPARED)
+def test_conv1d_resolver_keeps_a_prepared_weight_where_the_tile_one_is_wrong(
+    device, in_ch, out_ch, k, stride, pad, dil, length
+):
+    """#36487 at a real geometry, nothing simulated: the input sits in DRAM, as in the pipeline, and conv1d slices it.
+    The resolver must end on an accurate output and on a prepared weight, not the raw one. While the bug stands that is
+    the ROW_MAJOR-prepared candidate; on a build that fixes it, the fast path agrees and keeps the TILE one."""
+    import ttnn
+    from models.experimental.cosyvoice2.tt.hifigan.conv import TtConv1d
+
+    g = torch.Generator().manual_seed(0)
+    w = torch.randn(out_ch, in_ch, k, generator=g) / (in_ch * k) ** 0.5
+    b = torch.randn(out_ch, generator=g) * 0.1
+    x = torch.randn(1, length, in_ch, generator=g) * 0.5
+    want = torch.nn.functional.conv1d(
+        x.transpose(1, 2).double(), w.double(), b.double(), stride=stride, padding=pad, dilation=dil
+    ).transpose(1, 2)
+
+    conv = TtConv1d(device, w, b, stride=stride, padding=pad, dilation=dil, dtype=ttnn.float32)
+    x_dev = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)  # DRAM interleaved
+    out, out_len = conv(x_dev, length, 1)
+    got = ttnn.to_torch(out).float().reshape(1, out_len, out_ch).double()
+
+    rel = float((got - want).norm() / want.norm())
+    resolved = conv._verified_config[(length, 1)][0]
+    print(f"\n  Conv1d({in_ch}->{out_ch}, k={k}, s={stride}, d={dil}) L={length}: resolved rel err vs fp64 {rel:.4f}")
+    assert rel < 0.01, rel
+    assert resolved is not conv.weight, "the resolver fell back to the raw weight"
+
+
 # (in_ch, out_ch, kernel, stride, padding, length): the vocoder's three upsample stages at the
 # 464-frame test utterance (padding = (k - stride) // 2, as `TorchHiFTDecodeRef` builds them).
 UPSAMPLE_GEOMETRIES = [

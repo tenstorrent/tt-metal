@@ -157,6 +157,9 @@ COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests
   - Every new conv geometry is checked once against a raw-weight, safe-config reference, and a float64 host conv
     arbitrates any disagreement. A wrong fast path never reaches the output
     ([`tt/hifigan/conv.py`](tt/hifigan/conv.py)).
+  - Where the weight prepared for the activation's TILE layout is wrong, one prepared declaring a ROW_MAJOR input
+    is usually right. The checks then keep that one, so the conv stays on a prepared (traceable) weight
+    (`docs/VALIDATION.md`, "Prepared conv weights").
   - The checks rerun in every process: 21.5 s of the warm start.
 - **Cached kernels are reused only when a process allocates identically.**
   - With conv config tensors in DRAM, the conv and halo reader kernels take those tensors' DRAM addresses as

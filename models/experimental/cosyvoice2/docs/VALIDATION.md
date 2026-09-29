@@ -443,13 +443,15 @@ Pipeline construction took 17 s and 13 s before that. Per bucket, first process 
 
     **What it is: tenstorrent/tt-metal#36487's bug.** `prepare_conv_weights` is wrong when the conv runs DRAM-sliced;
     all three convs here see DRAM inputs, which conv1d auto-slices. Checked on 2026-09-28:
-    - **It is not our call.** Passing the conv's own compute config to `prepare_conv_weights` makes the k=11 case far
-      worse (1e28–1e29), and passing a matching slice config changes nothing.
+    - **It is not the configs we pass.** Passing the conv's own compute config to `prepare_conv_weights` makes the
+      k=11 case far worse (1e28–1e29), and passing a matching slice config changes nothing. The input layout we
+      *declare* does matter: "Prepared conv weights: the declared input layout" below.
     - **It reproduces standalone** with random weights. With the same slice config given to prepare and to the conv,
       prepared weights are wrong under explicit DRAM slicing at every geometry tried, including ones that auto
       slicing gets right. The same conv with its input in L1, no slicing, is right. `act_block_h_override=1024`
       (#35852's workaround) doesn't help.
-    - **#36487's own reproducer fails on this build too:** prepared PCC 0.00035, raw 0.999912.
+    - **#36487's own reproducer fails on this build too:** prepared PCC 0.000768 (2026-09-29, a second board; 0.00035
+      on 2026-09-28), raw 0.999912.
 
     A comment for #36487 with these geometries is drafted (notes branch), not posted. Chunked HiFT runs only the
     256- and 512-frame geometries, where the prepared weights verified correct.
@@ -480,6 +482,64 @@ the warm-up would not need to be deterministic. The same warm-up ran with `conv_
   reserved), that leaves at most 465 KiB for L1_SMALL.
 - **So config tensors stay in DRAM,** and the deterministic warm-up is the design. In DRAM they add almost nothing:
   after the 768-frame bucket, DRAM stood at 199.6 MiB per bank with them in DRAM, 198.9 MiB with them in L1.
+
+## Prepared conv weights: the declared input layout (#36487, 2026-09-29)
+
+`TtConv1d` prepares each geometry's weight with `ttnn.prepare_conv_weights`, declaring the activation's layout
+(TILE). Where `conv1d` slices its input through DRAM, that weight is wrong (#36487, above). Declaring ROW_MAJOR
+instead gives a correct weight there, and a wrong one wherever the TILE declaration was right.
+
+**Standalone**, relative error against a float64 torch conv:
+- random weights and inputs;
+- the pipeline's dtypes and configs, input TILE in DRAM;
+- script: notes branch, `scripts/2026-09-29/r1_prepare_layout.py`.
+
+| conv | length | TILE declared | ROW_MAJOR declared | raw weight |
+|---|---|---|---|---|
+| `Conv1d(128->128, k=11, d=1/3/5)`, HiFT resblocks | 4,320, 5,120, 8,320 (108, 128, 208 frames) | 1.36–3.78 | 0.0039–0.0055 | = ROW_MAJOR |
+| the same, d=1 | 10,240 (256 frames) | 0.0040 | 1.37 | = TILE |
+| `Conv1d(18->256, k=30, s=15)`, the first source downsampling | 640 … 2,048 frames (8 lengths) | 1.23 | 0.0040 | = ROW_MAJOR |
+| the same | 108 … 512 frames (5 lengths) | 0.0019 | 1.13–1.17 | = TILE |
+| `Conv1d(18->128, k=6, s=3)`, the second | 896 … 2,048 frames (6 lengths) | 1.15 | 0.0039 | = ROW_MAJOR |
+| the same | 108 … 512 frames (5 lengths) | 0.0018 | 1.07 | = TILE |
+| `Conv1d(320->256, k=3)`, the flow's CFM (bf16, batch 2) | 5,120 (the 2,560-token bucket) | 1.26 | 1.36 | 0.0036 |
+| `Conv1d(256->256, k=3)`, the same place | 5,120 | 0.0032 | 0.0032 | 0.0032 |
+
+- **Over these 36 geometries, one declaration is wrong wherever the other is right.** The right one gives exactly
+  the raw weight's error.
+- **The flow's `Conv1d(320->256, k=3)` is the exception:** wrong both ways.
+- **#36487's own reproducer on this board:**
+  - declaring TILE (as written): PCC 0.000768, with inf in the output;
+  - declaring ROW_MAJOR: 0.999912;
+  - the raw weight: 0.999912.
+- **The code suggests why, for `conv1d`:**
+  - `conv1d` routes DRAM inputs through DRAM width slicing (`conv1d.cpp:82-88`).
+  - A sliced op, or a ROW_MAJOR input, gets a smaller input-channel alignment (`get_input_channels_alignment`,
+    `conv2d_utils.cpp:92-99`).
+  - But `prepare_conv_weights` never takes the DRAM path for a 1-D conv (`prepare_conv2d_weights.cpp:1313`). So
+    given TILE, it pads the weight's channels for an unsliced TILE conv.
+
+**The resolver's fourth candidate** (`TtConv1d._verify_and_resolve`):
+- On a disagreement, a ROW_MAJOR-prepared weight joins the float64 arbitration, after the TILE-prepared weight and
+  before the raw weights.
+- On a tie a prepared, traceable weight wins.
+- `test_conv1d_verification.py::test_conv1d_resolver_keeps_a_prepared_weight_where_the_tile_one_is_wrong` runs it at
+  two real broken geometries. The ROW_MAJOR candidate wins at both, tied with the raw weight at 0.0039:
+  - a resblock conv at 5,120 (TILE: inf);
+  - the first source downsampling at 76,801 (TILE: 1.21).
+
+**In the pipeline:** the Stage 1 demo after the change, on the kernel cache the baseline left.
+- **898 binaries recompiled.** Where the checks fire, the extra candidate shifts the allocation sequence. The
+  warm-up took 533.9 s.
+- **Five geometries disagreed in the warm-up, and none changed hands.**
+  - The flow CFM's `Conv1d(320->256, k=3)` at the 2,560-token bucket: TILE 2.126, ROW_MAJOR 2.267, raw 0.00265. It
+    stays on the raw weight, as before.
+  - Four HiFT resblock geometries (`128->128` at 10,240 and 20,480, `64->64` at 30,721 and 61,441): the safe
+    reference's own error (0.055–0.099). The TILE-prepared weight is kept.
+- **The six utterances:** the same tokens and bit-identical audio as the baseline before the change, at RTF
+  0.432–0.630 (aggregate 0.474).
+
+The candidate matters for streaming: HiFT at 108 and 208 frames puts every k=11 resblock conv where TILE is wrong.
 
 ## Chunked HiFT (2026-09-28)
 
@@ -581,5 +641,6 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
 - **Start-up is 3.2 minutes with the kernels on disk, 30.5 without** (chunked HiFT, above). The flow is now 81 %
   of the warm start (157 s). Persisting the conv safety checks' verdicts (21.5 s now) is deferred.
 - **tenstorrent/tt-metal#36487** (prepared conv weights wrong under DRAM slicing) is worked around by the per-geometry
-  checks. A comment with our geometries is drafted, not posted.
+  checks. Where the TILE-prepared weight is wrong, a ROW_MAJOR-prepared one usually isn't, and the checks keep it.
+  A comment with our geometries is drafted, not posted.
 - **Streaming (Stages 2 and 3)** is not built. Chunked HiFT is the vocoder half of it.

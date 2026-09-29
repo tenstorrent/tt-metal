@@ -133,6 +133,9 @@ def safe_compute_config(device):
 # reference computed to decide who is right (see `pick_most_accurate`).
 AGREEMENT_TOLERANCE = 0.05
 
+# The resolver's second candidate (`TtConv1d._verify_and_resolve`): a weight prepared declaring a ROW_MAJOR input.
+ROW_MAJOR_PREPARED = "ROW_MAJOR-prepared weight + accurate config"
+
 
 def relative_error(got, want) -> float:
     """||got - want|| / ||want|| in float64; NaN/inf (or an all-zero `want`) count as +inf."""
@@ -269,6 +272,25 @@ class TtConv1d:
         cached = self._prep_cache.get(key)
         if cached is not None:
             return cached
+        try:
+            w, b = self._prepare(x, input_length, batch_size, x.layout)
+        except Exception as e:  # noqa: BLE001
+            if not TtConv1d._warned:
+                TtConv1d._warned = True
+                logger.warning(f"prepare_conv_weights unavailable, convs stay untraceable: {str(e)[:200]}")
+            w, b = self.weight, self.bias
+        # Only tensors genuinely prepared FOR THIS GEOMETRY are this cache slot's to free --
+        # the fallback (w, b) = (self.weight, self.bias) are the conv's own permanent raw
+        # weights, shared across every geometry, and must never be deallocated by a
+        # per-geometry eviction.
+        owned = [t for t in (w, b) if t is not None and t is not self.weight and t is not self.bias]
+        self._prep_cache.put(key, owned, (w, b))
+        return w, b
+
+    def _prepare(self, x, input_length: int, batch_size: int, input_layout):
+        """`prepare_conv_weights` / `prepare_conv_bias` for this geometry, declaring `input_layout` as the
+        activation's layout. Uncached; raises if the build can't prepare. `_prepared` declares the activation's
+        real layout (TILE). `_verify_and_resolve` also tries ROW_MAJOR (tenstorrent/tt-metal#36487)."""
         # `prepare_conv_weights`/`prepare_conv_bias` are conv2d-level ops, so unlike `ttnn.conv1d` itself
         # (which accepts a conv1d-shaped `int` or `(pad_left, pad_right)` and does this translation
         # internally -- see `conv1d.cpp`) they need the conv2d padding spelled out: `(pad_height, pad_width)`
@@ -277,7 +299,7 @@ class TtConv1d:
         pad2d = (0, self.padding) if isinstance(self.padding, int) else (0, 0, *self.padding)
         kw = dict(
             input_memory_config=x.memory_config(),
-            input_layout=x.layout,
+            input_layout=input_layout,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             batch_size=batch_size,
@@ -292,22 +314,10 @@ class TtConv1d:
             input_dtype=self.dtype,
             conv_config=self.conv_config,
         )
-        try:
-            w = ttnn.prepare_conv_weights(
-                weight_tensor=self._weight_4d, weights_format="OIHW", has_bias=self.bias is not None, **kw
-            )
-            b = ttnn.prepare_conv_bias(bias_tensor=self.bias, **kw) if self.bias is not None else None
-        except Exception as e:  # noqa: BLE001
-            if not TtConv1d._warned:
-                TtConv1d._warned = True
-                logger.warning(f"prepare_conv_weights unavailable, convs stay untraceable: {str(e)[:200]}")
-            w, b = self.weight, self.bias
-        # Only tensors genuinely prepared FOR THIS GEOMETRY are this cache slot's to free --
-        # the fallback (w, b) = (self.weight, self.bias) are the conv's own permanent raw
-        # weights, shared across every geometry, and must never be deallocated by a
-        # per-geometry eviction.
-        owned = [t for t in (w, b) if t is not None and t is not self.weight and t is not self.bias]
-        self._prep_cache.put(key, owned, (w, b))
+        w = ttnn.prepare_conv_weights(
+            weight_tensor=self._weight_4d, weights_format="OIHW", has_bias=self.bias is not None, **kw
+        )
+        b = ttnn.prepare_conv_bias(bias_tensor=self.bias, **kw) if self.bias is not None else None
         return w, b
 
     def _conv(self, x, weight, bias, input_length: int, batch_size: int, compute_config):
@@ -399,9 +409,23 @@ class TtConv1d:
         weights were bit-identical), and switching to it on the old `max|out|`
         within-2% check degraded accuracy on three resblock convs of the real
         464-frame utterance. So on a disagreement a float64 host conv arbitrates
-        between three candidates -- prepared+accurate, raw+safe, raw+accurate (the
-        right answer when only the prepared weight is at fault) -- and the closest
-        to it wins.
+        between four candidates, and the closest to it wins (ties go to the earlier
+        one, so a correct prepared weight is kept over the raw one):
+
+        1. the prepared weight + accurate config (the fast path);
+        2. a weight prepared declaring a ROW_MAJOR input + accurate config.
+           tenstorrent/tt-metal#36487: at the geometries where `conv1d` slices its
+           input through DRAM, the weight prepared for the activation's real
+           layout (TILE) is wrong -- relative error ~1 up to inf -- while the one
+           prepared for ROW_MAJOR is right, as right as the raw weight. At other
+           geometries it is the other way round, so neither declared layout can
+           replace the other; this candidate keeps such a conv on a prepared
+           (traceable) weight. Where the op rejects that weight outright (the
+           F0 predictor's width-sharded `Conv1d(80->512, k=3)` at a few frames:
+           a shape check at validation, before any device work), it is skipped;
+        3. the raw weight + safe config;
+        4. the raw weight + accurate config (the right answer when only the
+           prepared weights are at fault).
 
         Caches whichever `(weight, bias, compute_config)` triple won in
         `_verified_config[key]`, so every later call at this geometry goes
@@ -418,17 +442,27 @@ class TtConv1d:
             self._resolve(key, (weight, bias, self.compute_config))
             return out
 
+        # Insertion order is the preference order on a tie (see `pick_most_accurate`).
+        candidates = {"prepared weight + accurate config": (out, (weight, bias, self.compute_config))}
+        host = {"prepared weight + accurate config": fast_host}
+        row_major_owned = []  # the ROW_MAJOR-prepared weight and bias: freed below unless they win
+        rm_out = None
+        try:
+            rm_weight, rm_bias = self._prepare(x, input_length, batch_size, ttnn.ROW_MAJOR_LAYOUT)
+            row_major_owned = [t for t in (rm_weight, rm_bias) if t is not None]
+            rm_out, _ = self._conv(x, rm_weight, rm_bias, input_length, batch_size, self.compute_config)
+            host[ROW_MAJOR_PREPARED] = self._to_host(rm_out, batch_size, out_length)
+            candidates[ROW_MAJOR_PREPARED] = (rm_out, (rm_weight, rm_bias, self.compute_config))
+        except Exception as e:  # noqa: BLE001  (the raw weights still compete)
+            logger.warning(f"ROW_MAJOR-prepared candidate unavailable: {str(e)[:200]}")
+            host.pop(ROW_MAJOR_PREPARED, None)
+            if rm_out is not None:
+                ttnn.deallocate(rm_out)
         raw_accurate, _ = self._conv(x, self.weight, self.bias, input_length, batch_size, self.compute_config)
-        candidates = {
-            "prepared weight + accurate config": (out, (weight, bias, self.compute_config)),
-            "raw weight + safe config": (ref, (self.weight, self.bias, self._safe_compute_config)),
-            "raw weight + accurate config": (raw_accurate, (self.weight, self.bias, self.compute_config)),
-        }
-        host = {
-            "prepared weight + accurate config": fast_host,
-            "raw weight + safe config": ref_host,
-            "raw weight + accurate config": self._to_host(raw_accurate, batch_size, out_length),
-        }
+        candidates["raw weight + safe config"] = (ref, (self.weight, self.bias, self._safe_compute_config))
+        candidates["raw weight + accurate config"] = (raw_accurate, (self.weight, self.bias, self.compute_config))
+        host["raw weight + safe config"] = ref_host
+        host["raw weight + accurate config"] = self._to_host(raw_accurate, batch_size, out_length)
         best, errors = pick_most_accurate(host, self._host_reference(x, input_length, batch_size))
         logger.warning(
             f"fast conv path disagrees with the raw-weight/safe-config reference at "
@@ -441,6 +475,9 @@ class TtConv1d:
         self._resolve(key, resolved)
         for name, (t, _) in candidates.items():
             if name != best:
+                ttnn.deallocate(t)
+        if best != ROW_MAJOR_PREPARED:
+            for t in row_major_owned:
                 ttnn.deallocate(t)
         return chosen_tensor
 
