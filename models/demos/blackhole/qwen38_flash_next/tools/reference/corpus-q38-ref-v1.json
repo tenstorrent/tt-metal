@@ -1,0 +1,742 @@
+{
+ "clear_margin_logits": 0.125,
+ "continuation_tokens": 256,
+ "corpus_id": "Q38-REF-v1",
+ "items": [
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-json",
+   "part": "acceptance",
+   "positions": 340,
+   "prompt_tokens": 85,
+   "scored_positions": 340,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-json-greedy.json",
+    "record_sha256": "d654ad69974a0053f2723923bc4b499c5227c4a9a410ce71be86e8425504b8d6"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "7f77316fa6754a791cf0274272d7433d772241a72ccb742e754acbd45c21012f",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-chat",
+   "part": "acceptance",
+   "positions": 432,
+   "prompt_tokens": 177,
+   "scored_positions": 432,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-chat-greedy.json",
+    "record_sha256": "9aa93f6c9f4b7c73fd9fa9e4f93336979bfa3a6b61899b0e611a451558ada382"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "64547411f2d2d71bf5969f056d16224f22d8ceb7b94cb2d875463c5f84525746",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-code",
+   "part": "acceptance",
+   "positions": 301,
+   "prompt_tokens": 46,
+   "scored_positions": 301,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-code-greedy.json",
+    "record_sha256": "2232af24711b12091a57fa7db5d1cd8d7093ac9e3d4344065f651ec137e13876"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "0930829d825605ea468db7bd83ca14383d094ca9243e9e1663d39fd9d8d00197",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-fact",
+   "part": "acceptance",
+   "positions": 301,
+   "prompt_tokens": 46,
+   "scored_positions": 301,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-fact-greedy.json",
+    "record_sha256": "46524141d672041824e33a3ae0796d190e3b50846574cbe8dda8679e094524e9"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "8d9f36f3be76ff262361773ac4e625c4be80ad02aba4a60cf3de9d4e48e6a734",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-list",
+   "part": "acceptance",
+   "positions": 302,
+   "prompt_tokens": 47,
+   "scored_positions": 302,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-list-greedy.json",
+    "record_sha256": "c4a09203c950f1d87d04a2b67db8b95394e1a44931d72b7d30f12657cb7947d1"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "ad8505cbf8aa91f0d8a8b980deb038e691a7c14d19e533f7c67d09ed42e41397",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-math",
+   "part": "acceptance",
+   "positions": 354,
+   "prompt_tokens": 99,
+   "scored_positions": 354,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-math-greedy.json",
+    "record_sha256": "1c3107a0015229a1d728b664809abe866e6cbee22e13885d5588967853cdb3fc"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "0a8f7a7d1ec13ea2f2a4aaf616a02900f3e1a8dfbaf6daa8afecf4414cb0ddd5",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-multilingual",
+   "part": "acceptance",
+   "positions": 298,
+   "prompt_tokens": 43,
+   "scored_positions": 298,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-multilingual-greedy.json",
+    "record_sha256": "080af312ee903ce39f2d725af6710434711eddb310fe825aeb02018c7fd46746"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "e10b7803dd855ca402dc4cbd4e963f1cb2c721a1ea205df9e2c442fb821dbf2d",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-prose",
+   "part": "acceptance",
+   "positions": 313,
+   "prompt_tokens": 58,
+   "scored_positions": 313,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-prose-greedy.json",
+    "record_sha256": "8e82bfbb2ab211c08c6a052a08a90df878f8efd832a2ca29b6629f4324e9758f"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "50473ecf8978b3b2454e8dad2d082461cad917e51f035a15b7a7134744581428",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-refactor",
+   "part": "acceptance",
+   "positions": 689,
+   "prompt_tokens": 434,
+   "scored_positions": 689,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-refactor-greedy.json",
+    "record_sha256": "4db94c1e795f4305108ac163352c8a0bff666c1414cf3f87f8305c90dc5fa7f6"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "bb5a3d853b5260197e85f2993072f384a01704226570c7c80af2a874945eb2f1",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-sky",
+   "part": "acceptance",
+   "positions": 292,
+   "prompt_tokens": 37,
+   "scored_positions": 292,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-sky-greedy.json",
+    "record_sha256": "20e1152ea93ac1424895206461032d09a6904c81cf24c2332bb09183ff69344c"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "4f40216881e897f308789ff0596edff7255a512f70e8e2736ce0411cab4089d6",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-story",
+   "part": "acceptance",
+   "positions": 299,
+   "prompt_tokens": 44,
+   "scored_positions": 299,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-story-greedy.json",
+    "record_sha256": "27eade1e02a98837b78630157325dd188d07782c0213ec6fa93e3c07dc10c036"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "bd797c3a9c12d0dfa5c80acc72d7fe3a58654d35f6530111a139735efe0370c1",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "acceptance-summary",
+   "part": "acceptance",
+   "positions": 476,
+   "prompt_tokens": 221,
+   "scored_positions": 476,
+   "source": {
+    "enable_thinking": false,
+    "reasoning_effort": "low",
+    "record": "prompt-summary-greedy.json",
+    "record_sha256": "0dd85626df34ddd051e8bdb73b988804bfe5eb289466ec5a87e90349338a50b0"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "2bc2b724d52739623b505bdec589674cdccfa84de91bd14c6e50fa6cdda0e3aa",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-json",
+   "part": "served",
+   "positions": 338,
+   "prompt_tokens": 83,
+   "scored_positions": 338,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-json-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "439124291c45bb413430061e411bd0812bf38743eeee9760448eaddf74999298",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-chat",
+   "part": "served",
+   "positions": 430,
+   "prompt_tokens": 175,
+   "scored_positions": 430,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-chat-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "2748017d7f0dc6821f8a3227e5fd8f72b9a0a40f763f1fe9dfe5479cad228318",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-code",
+   "part": "served",
+   "positions": 299,
+   "prompt_tokens": 44,
+   "scored_positions": 299,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-code-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "5d463504bead5129aaddf958ebcc2f25587200c80b6a1fbcc95fe93ed84c9873",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-fact",
+   "part": "served",
+   "positions": 299,
+   "prompt_tokens": 44,
+   "scored_positions": 299,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-fact-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "f254908ba0397ecc8bf115490c0d26536694ba4117b068b9011ca7c96af8310d",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-list",
+   "part": "served",
+   "positions": 300,
+   "prompt_tokens": 45,
+   "scored_positions": 300,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-list-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "46aeb5558ffbbb67ecad1f96ae7a5fc3f8e620cea3e205618ca38a2006828aa7",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-math",
+   "part": "served",
+   "positions": 352,
+   "prompt_tokens": 97,
+   "scored_positions": 352,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-math-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "8e41eb67df7a2e87fb3d1e4285955d41951725fbc244b70c6c3b39bc967fd043",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-multilingual",
+   "part": "served",
+   "positions": 296,
+   "prompt_tokens": 41,
+   "scored_positions": 296,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-multilingual-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "886f6261cbfbf588c5621bbbfc56fcb99abab42802457a2f37a7d7d54f0e7ce2",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-prose",
+   "part": "served",
+   "positions": 311,
+   "prompt_tokens": 56,
+   "scored_positions": 311,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-prose-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "7dd48cf4a0b35e096e720ee9634228cfb1addf4a1646a7a95e07cdff1e4de366",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-refactor",
+   "part": "served",
+   "positions": 687,
+   "prompt_tokens": 432,
+   "scored_positions": 687,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-refactor-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "47bda4823417d9cfc9878a4dd2943a564a892478e7d7414a7d5e9754b40c7ad7",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-sky",
+   "part": "served",
+   "positions": 290,
+   "prompt_tokens": 35,
+   "scored_positions": 290,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-sky-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "0c516760252f85a7a9a0d8b693416695ad42751d5ab7a3d1595fec18376ee490",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-story",
+   "part": "served",
+   "positions": 297,
+   "prompt_tokens": 42,
+   "scored_positions": 297,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-story-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "4df8a459cefd7baf332e438800963f77e5fcb737c3b8484b312fb8025aed88e3",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-summary",
+   "part": "served",
+   "positions": 474,
+   "prompt_tokens": 219,
+   "scored_positions": 474,
+   "source": {
+    "enable_thinking": true,
+    "reasoning_effort": "medium",
+    "record": "prompt-summary-greedy.json"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "51ce1ae3dd399341607ab43dd3b60446bc27fe2b07457877265993687a59ca56",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-tools-1",
+   "part": "served",
+   "positions": 562,
+   "prompt_tokens": 307,
+   "scored_positions": 562,
+   "source": {
+    "enable_thinking": true,
+    "messages": [
+     {
+      "content": "You are a helpful assistant.",
+      "role": "system"
+     },
+     {
+      "content": "Write a Python function that returns the n-th Fibonacci number using iteration, with a docstring and a short example.",
+      "role": "user"
+     }
+    ],
+    "reasoning_effort": "medium",
+    "tools": [
+     "run_python"
+    ]
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "5bbdc5f64ddcf7574ddd5e75fcdb77ab8cee2014788d0339080c2cd0d8a6e8c3",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-tools-3",
+   "part": "served",
+   "positions": 725,
+   "prompt_tokens": 470,
+   "scored_positions": 725,
+   "source": {
+    "enable_thinking": true,
+    "messages": [
+     {
+      "content": "You are a helpful assistant.",
+      "role": "system"
+     },
+     {
+      "content": "What is the capital of Australia, and why was it chosen over Sydney and Melbourne? Answer in a few sentences.",
+      "role": "user"
+     }
+    ],
+    "reasoning_effort": "medium",
+    "tools": [
+     "search_web",
+     "get_weather",
+     "run_python"
+    ]
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "0878e2ed2368e48b085aeced12ce20bf472c4f96a15934935a78f3fb69fe9c28",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-tool-result",
+   "part": "served",
+   "positions": 635,
+   "prompt_tokens": 380,
+   "scored_positions": 635,
+   "source": {
+    "enable_thinking": true,
+    "messages": [
+     {
+      "content": "What's the weather in Kyoto right now?  One sentence.",
+      "role": "user"
+     },
+     {
+      "content": "",
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "function": {
+         "arguments": {
+          "city": "Kyoto"
+         },
+         "name": "get_weather"
+        },
+        "type": "function"
+       }
+      ]
+     },
+     {
+      "content": "{\"city\": \"Kyoto\", \"temperature_c\": 17, \"condition\": \"light rain\"}",
+      "role": "tool"
+     }
+    ],
+    "reasoning_effort": "medium",
+    "tools": [
+     "get_weather"
+    ]
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "b0f779542fc1cc8c0a5516d77478036bd8220af227b46d7e93676c16bf235c03",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "served-hermes",
+   "part": "served",
+   "positions": 681,
+   "prompt_tokens": 426,
+   "scored_positions": 681,
+   "source": {
+    "enable_thinking": true,
+    "messages": [
+     {
+      "content": "You are Hermes, an autonomous coding agent working in a terminal.  You have tools; call one whenever a step needs it, read the result, and continue until the task is done.  Keep replies short and factual.  Never invent file contents: read them.  When the task is finished, summarise what changed in three lines or fewer.",
+      "role": "system"
+     },
+     {
+      "content": "Summarise the README in the current directory.",
+      "role": "user"
+     }
+    ],
+    "reasoning_effort": "medium",
+    "tools": [
+     "read_file",
+     "bash"
+    ]
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "ad968d0606dc7863eb9799fdb7444a546998604664b2a35efcea0421bdfa2803",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 0,
+   "item_id": "book-tale-of-two-cities",
+   "part": "book",
+   "positions": 1023,
+   "prompt_tokens": 1024,
+   "scored_positions": 1023,
+   "source": {
+    "add_special_tokens": false,
+    "file": "tale-of-two-cities.txt.bz2",
+    "file_sha256": "25d33cc39a17a4a576712e29056053cd8f818f1288e7b2a8abd668225e630e1e"
+   },
+   "teacher": "text",
+   "token_ids_sha256": "67d729daa6dba75cd3056b05b79fb57e7411fcd3e32300a16b6213fb6aa769f4",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 0,
+   "item_id": "book-moby-dick",
+   "part": "book",
+   "positions": 1023,
+   "prompt_tokens": 1024,
+   "scored_positions": 1023,
+   "source": {
+    "add_special_tokens": false,
+    "body_sha256": "809ede1ef2210d4339c33d9165a8931ceda92d0cfb83b06817ca9cfc4598cb68",
+    "end_marker": "*** END OF THE PROJECT GUTENBERG EBOOK",
+    "file": "pg2701.txt",
+    "file_sha256": "9a6844ac0703853720010787c7b6c70b0020f1ab1862dcd74452fa46474d1215",
+    "start_marker": "CHAPTER 1. Loomings.",
+    "start_occurrence": 2
+   },
+   "teacher": "text",
+   "token_ids_sha256": "477cf1519eca82410c9434b065475c368f1239af794c1fc96e9531216d3d7a62",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "eval-gsm8k-0",
+   "part": "eval",
+   "positions": 354,
+   "prompt_tokens": 99,
+   "scored_positions": 354,
+   "source": {
+    "enable_thinking": false,
+    "item_id": "0",
+    "line_sha256": "bef8e4d61bbc70b6280f519f16de2fffb6eeee4025d5845f45edda19b6176fcc",
+    "reasoning_effort": "low",
+    "set": "gsm8k"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "165c2e97ac0d06b2360fa4302081091dd112758cfdc69a18ecaee888fd67af68",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "eval-gsm8k-8",
+   "part": "eval",
+   "positions": 394,
+   "prompt_tokens": 139,
+   "scored_positions": 394,
+   "source": {
+    "enable_thinking": false,
+    "item_id": "8",
+    "line_sha256": "50df566ea8d015a9bc39caacce9251d614bc09d9dc2f06cced16f64e4d2f010d",
+    "reasoning_effort": "low",
+    "set": "gsm8k"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "778792648b7080448b81f2840f69f0e6644ebff26648d223d02958cce204d055",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "eval-humaneval-HumanEval-0",
+   "part": "eval",
+   "positions": 422,
+   "prompt_tokens": 167,
+   "scored_positions": 422,
+   "source": {
+    "enable_thinking": false,
+    "item_id": "HumanEval/0",
+    "line_sha256": "461b912dc7dfd9f348ef52a2fec0b017dad8d547c7aab63cf295e1ea0bd4f47b",
+    "reasoning_effort": "low",
+    "set": "humaneval"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "0ce08c30970f8ec036300d3aacb0a229241ae0ea7fc567730f01c85c277a757c",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 256,
+   "item_id": "eval-humaneval-HumanEval-1",
+   "part": "eval",
+   "positions": 414,
+   "prompt_tokens": 159,
+   "scored_positions": 414,
+   "source": {
+    "enable_thinking": false,
+    "item_id": "HumanEval/1",
+    "line_sha256": "9cd65f19d5f38a6f128d67667365b8294ea7afea306cafbe89a7c686953e7fab",
+    "reasoning_effort": "low",
+    "set": "humaneval"
+   },
+   "teacher": "hf-argmax",
+   "token_ids_sha256": "a4979491a951ffc97436ff4021232435c4edac126d371a0ce9a0b137bae0eb4e",
+   "windows": []
+  },
+  {
+   "continuation_tokens": 0,
+   "item_id": "long-moby-dick-8192",
+   "part": "long",
+   "positions": 8191,
+   "prompt_tokens": 8192,
+   "scored_positions": 64,
+   "source": {
+    "add_special_tokens": false,
+    "body_sha256": "809ede1ef2210d4339c33d9165a8931ceda92d0cfb83b06817ca9cfc4598cb68",
+    "end_marker": "*** END OF THE PROJECT GUTENBERG EBOOK",
+    "file": "pg2701.txt",
+    "file_sha256": "9a6844ac0703853720010787c7b6c70b0020f1ab1862dcd74452fa46474d1215",
+    "start_marker": "CHAPTER 1. Loomings.",
+    "start_occurrence": 2
+   },
+   "teacher": "text",
+   "token_ids_sha256": "cc0f5b6ecaa102a349550b8d1b0a6236d57de5ddbe65bb294a5be1516b4b7f73",
+   "windows": [
+    [
+     1984,
+     2016
+    ],
+    [
+     8128,
+     8160
+    ]
+   ]
+  },
+  {
+   "continuation_tokens": 0,
+   "item_id": "long-moby-dick-32704",
+   "part": "long",
+   "positions": 32703,
+   "prompt_tokens": 32704,
+   "scored_positions": 96,
+   "source": {
+    "add_special_tokens": false,
+    "body_sha256": "809ede1ef2210d4339c33d9165a8931ceda92d0cfb83b06817ca9cfc4598cb68",
+    "end_marker": "*** END OF THE PROJECT GUTENBERG EBOOK",
+    "file": "pg2701.txt",
+    "file_sha256": "9a6844ac0703853720010787c7b6c70b0020f1ab1862dcd74452fa46474d1215",
+    "start_marker": "CHAPTER 1. Loomings.",
+    "start_occurrence": 2
+   },
+   "teacher": "text",
+   "token_ids_sha256": "420a44d82f0be406bb6da4061319cda755f2e299d5ee32120f7a4f1a16e034fd",
+   "windows": [
+    [
+     1984,
+     2016
+    ],
+    [
+     8128,
+     8160
+    ],
+    [
+     32640,
+     32672
+    ]
+   ]
+  }
+ ],
+ "items_file": "corpus-q38-ref-v1.jsonl",
+ "items_sha256": "1cc657e5bc4a70b4d593f83f8ddcc6b0465013da4316cf95f2fb723d41adb5cf",
+ "parts": {
+  "acceptance": 12,
+  "book": 2,
+  "eval": 4,
+  "long": 2,
+  "served": 16
+ },
+ "positions": 55897,
+ "provenance": {
+  "acceptance_records": {
+   "chat": "9aa93f6c9f4b7c73fd9fa9e4f93336979bfa3a6b61899b0e611a451558ada382",
+   "code": "2232af24711b12091a57fa7db5d1cd8d7093ac9e3d4344065f651ec137e13876",
+   "fact": "46524141d672041824e33a3ae0796d190e3b50846574cbe8dda8679e094524e9",
+   "json": "d654ad69974a0053f2723923bc4b499c5227c4a9a410ce71be86e8425504b8d6",
+   "list": "c4a09203c950f1d87d04a2b67db8b95394e1a44931d72b7d30f12657cb7947d1",
+   "math": "1c3107a0015229a1d728b664809abe866e6cbee22e13885d5588967853cdb3fc",
+   "multilingual": "080af312ee903ce39f2d725af6710434711eddb310fe825aeb02018c7fd46746",
+   "prose": "8e82bfbb2ab211c08c6a052a08a90df878f8efd832a2ca29b6629f4324e9758f",
+   "refactor": "4db94c1e795f4305108ac163352c8a0bff666c1414cf3f87f8305c90dc5fa7f6",
+   "sky": "20e1152ea93ac1424895206461032d09a6904c81cf24c2332bb09183ff69344c",
+   "story": "27eade1e02a98837b78630157325dd188d07782c0213ec6fa93e3c07dc10c036",
+   "summary": "0dd85626df34ddd051e8bdb73b988804bfe5eb289466ec5a87e90349338a50b0"
+  },
+  "eval_templates": {
+   "gsm8k": "Q: {question}\nA: Let's think step by step.",
+   "humaneval": "Write a solution to the following problem and make sure that it passes the tests:\n```python\n{prompt}\n```\n"
+  },
+  "long_windows": "the 32 positions before the bridge at depths 2048 and 8192 and at the item's end",
+  "system_prompt": "You are a helpful assistant.",
+  "tokenizer": {
+   "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+   "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+  }
+ },
+ "schema": "qwen38-reference-corpus/v1",
+ "scored_positions": 15163,
+ "top_k": 32
+}

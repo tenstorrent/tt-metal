@@ -1,0 +1,25 @@
+{
+ "expected": {
+  "chat": 25,
+  "code": null,
+  "fact": 15,
+  "json": null,
+  "list": 56,
+  "math": 61,
+  "multilingual": 43,
+  "prose": 13,
+  "refactor": 24,
+  "sky": 19,
+  "story": 6,
+  "summary": 75
+ },
+ "pin": "A3/forced-32k/divergence_index",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-06",
+  "evidence": "chat server startup replay, teacher-forced prefill (--prefill-mode teacher_forced), one lane of a 4x p150 host, 2026-09-06: the GDN decay gate computed with ttnn.softplus and the fused weighted reduce fixed; against the 2026-09-04 table chat 10 -> 25, code 44 -> 96/96, list 46 -> 56, summary 61 -> 75 later, math 63 -> 61, multilingual 45 -> 43, story 19 -> 6 earlier; fact, prose, refactor, sky unchanged",
+  "head": "b98fc47541d192c16d32912111901fc188195e8a",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}
