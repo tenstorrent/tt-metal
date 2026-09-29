@@ -2030,3 +2030,35 @@ bf16 case gives [0.9978, 1.0020]). The swap for the experts is next. Its router 
 experts, so it needs its own design.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_09_router.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.experts test (attempt 1)
+Reviewed the rendered experts component test for kda_moe layer 4. The rendered file was the bare `run_component_test`.
+I rebuilt it from the frozen `test_c_dsa_moe_experts.py`: same checks on chunk 1 and chunk 0, plus the clamp probe.
+The gated metric pcc_experts_L04 (PCC >= 0.99, chunk 1) is unchanged.
+- Sensitivity: /tmp/kmexp/sens.py and sens3.py. These are CPU only and not kept; they are /tmp/glm_exp_test/sens*.py
+  with L = 4. The numbers are in the test docstring.
+- Re-measured limits (layer 3 in brackets):
+  - rel L2 <= 0.015 (0.012). The device-like floor is 0.0103 here (0.0070 there). bfp8 x + h (0.0187) still fails, so
+    the module still needs high_precision.
+  - Ratio [0.988, 1.012] (0.985..1.015).
+  - Worst row <= 0.02 (0.025). Dropping one token's smallest pair now fails (0.035..0.128); at layer 3 that was a known
+    gap.
+  - 128-row block coefficient [0.996, 1.004] (0.995..1.005).
+  - Probe scale 16 * x (8 * x). The clamps never engage on the layer-4 golden (max gate 3.45), and 8 * x engages them
+    on only 0.03%, where limit 9.9 / 10.1 pass the coefficient. At 16 * x they fail it (0.99306 / 1.00677).
+  - Kept: coefficient [0.997, 1.003]; probe rel 0.015, ratio [0.985, 1.015]; probe worst row now 0.02.
+- The hottest expert gets 974 of 2048 tokens (chunk 0: 967). `tt/experts.py` sets the per-expert cap to the full chunk,
+  so this is fine. A cap of 512 would score PCC 0.94.
+Results:
+- Device (default mode) already passes through `tt/experts.py:TtExperts` with layer 4 weights, although kda_moe's
+  DEVICE_STEPS is still empty:
+  - Chunk 1: PCC 0.999942, rel 0.0107, ratio [0.9950, 1.0049], worst row 0.0134, coefficient 1.00005, blocks
+    [0.99966, 1.00028].
+  - Chunk 0: PCC 0.999942, rel 0.0108.
+  - Probe: rel 0.0115, coefficient 1.00033.
+  - About 69 s in total.
+- Reference passes (0.0029 / worst row 0.0041; probe exact). Stub fails (PCC 0).
+- The first `FAIL pcc ... 0.000000` line in each run comes from the precompile collect pass.
+Next (implement): no module change is needed. Add experts to `DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_experts.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
