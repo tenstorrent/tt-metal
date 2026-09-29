@@ -33,6 +33,18 @@ TRIALS = int(os.environ.get("FGP_TRIALS", "3"))
 # record per program). For "rt" run with TT_METAL_DEVICE_PROFILER=0.
 PROFILER = os.environ.get("FGP_PROFILER", "device")
 PAYLOAD = int(os.environ.get("FGP_PAYLOAD", "14336"))
+_FABRICS = {
+    "1d": "FABRIC_1D",
+    "1d_ring": "FABRIC_1D_RING",
+    "1d_neighbor_exchange": "FABRIC_1D_NEIGHBOR_EXCHANGE",
+    "2d": "FABRIC_2D",
+    "2d_torus_x": "FABRIC_2D_TORUS_X",
+    "2d_torus_y": "FABRIC_2D_TORUS_Y",
+    "2d_torus_xy": "FABRIC_2D_TORUS_XY",
+}
+FABRICS = tuple(os.environ.get("FGP_FABRICS", "1d").split(","))
+_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "fp32": ttnn.float32}
+DTYPES = tuple(os.environ.get("FGP_DTYPES", "bf16").split(","))
 RUN_VARIANTS = tuple(os.environ.get("FGP_VARIANTS", ",".join(VARIANTS)).split(","))
 # Diagnostic ablations, "|"-separated sets of "+"-joined names (dram_read, local_copy, fabric); "" = full op.
 # NoC for the local copy: "same" (the sender's NoC1) or "noc0" (its own outbound port).
@@ -99,38 +111,45 @@ def _router(payload):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": _router(PAYLOAD),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        }
+        pytest.param(
+            {
+                "fabric_config": getattr(ttnn.FabricConfig, _FABRICS[f]),
+                "fabric_router_config": _router(PAYLOAD),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            id=f"fabric_{f}_payload{PAYLOAD}",
+        )
+        for f in FABRICS
     ],
-    ids=[f"fabric_1d_payload{PAYLOAD}"],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
-def test_fabric_gather_pair(mesh_device):
+@pytest.mark.parametrize("dtype_name", DTYPES)
+def test_fabric_gather_pair(mesh_device, dtype_name):
     rows, cols = tuple(mesh_device.shape)
     H, W = SHAPE
     torch.manual_seed(0)
-    host = torch.randn((rows, cols, H, W), dtype=torch.bfloat16)
+    dtype = _DTYPES[dtype_name]
+    host = torch.randn((rows, cols, H, W), dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
     inp = ttnn.from_torch(
         host,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
     )
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 2 * H, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, 2 * H, W]), dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
     )
-    shard_bytes = H * W * 2
+    if dtype == ttnn.bfloat8_b:  # lossy: compare against what the device holds for the input
+        host = torch.stack([ttnn.to_torch(t) for t in ttnn.get_device_tensors(inp)]).reshape(rows, cols, H, W)
+    shard_bytes = (H // 32) * (W // 32) * int(inp.buffer_aligned_page_size())
 
     lines = [
         f"\n=== fabric_gather_pair  box={socket.gethostname()}  arch={mesh_device.arch()}  "
         f"fabric={ttnn.get_fabric_config()}  payload={ttnn.get_tt_fabric_max_payload_size_bytes()}B  "
-        f"shard={H}x{W} bf16 ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median)  profiler={PROFILER} ===",
+        f"shard={H}x{W} {dtype_name} ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median)  profiler={PROFILER} ===",
         f"    {'placement':<16} {'NoC coords':<15} {'variant':<26} {'kernel ns':>11} {'GB/s per link-dir':>18} "
         f"{'GB/s per chip':>14}",
     ]
@@ -159,7 +178,7 @@ def test_fabric_gather_pair(mesh_device):
                 for c in range(cols):
                     expected = torch.cat([host[0, c], host[1, c]], dim=-2)
                     assert ablate or torch.equal(
-                        got[r * cols + c].reshape(expected.shape), expected
+                        got[r * cols + c].reshape(expected.shape).to(expected.dtype), expected
                     ), f"{name}/{variant}: chip ({r},{c}) output != [row-0 shard ; row-1 shard]"
             samples = []
             for _ in range(TRIALS):
