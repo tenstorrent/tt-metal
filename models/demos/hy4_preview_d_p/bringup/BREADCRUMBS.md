@@ -3209,3 +3209,22 @@ Re-run
   Blind spot: uniform post / mlp_out scale <= ~1.004.
 - reference: pass; stub: fail (PCC); gate on device: pass, pcc 0.999997, rel 0.0023, addend excess 0 (fp32 output).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_residual.py`
+
+## S.moe_shared.15.test.1 (swap 15 test review, ffn_residual last, layer 2)
+- Rendered test replaced by: the reviewed swap-14 file (every check at its limits) + "ffn_residual" in SWAPPED + the
+  ffn_residual block and its 5 constants from the layer-1 test_swap_moe_full_15_ffn_residual.py (limits unchanged).
+  Checks added: out vs the CPU ffn_residual on the block's own h_mid / ffn_hc / mlp_out (rel <= 5e-4, row <= 1e-3),
+  per-stream addend (layer-2 ADD_* limits, 0.005), rotated-post-gate re-run (same limits + stream ratio
+  [0.995, 1.005]), out per-stream norm ratio vs golden split by routing ([0.98, 1.02] matched / [0.95, 1.05] flipped).
+- CPU study (golden layer-2 inputs, /tmp/hy4_ms15/study.py, outside the repo): the mutations that pass the gate and
+  every swap-14 check (1.002 / 1.005 / 0.995 x mlp_out, 0.999 x h_mid, ignored rotated gates, cached golden out) all
+  fail a new check. Known gap: uniform mlp_out / post scale error below ~0.1 %. A bf16 output would fail the 5e-4 c
+  check (0.0017), as at layer 1; the device TtHcPost is fp32 and bit-identical.
+- reference: PASS (out 0.999995); stub: FAIL (every check); gate on device: PASS, pcc_swap_out 0.999974, out vs CPU
+  ffn_residual 0, addend coefs 1, rotated 0; out stream ratio vs golden 1939 matched [0.99739, 1.00380], 109 flipped
+  [0.98956, 1.03257]; out rel 0.00717 (swap 14: 0.00717).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
