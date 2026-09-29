@@ -90,12 +90,10 @@ def test_head_groups_match_the_ungrouped_norm(
     torch.manual_seed(7)
     norm.load_torch_state_dict({"weight": torch.randn(inner_dim) * 0.1 + 1.0})
 
-    x = bf16_tensor(
-        torch.randn(1, 1, seq, inner_dim // tp_factor),
-        device=mesh_device,
-        mesh_axis=tp_axis,
-        shard_dim=-1 if tp_factor > 1 else None,
-    )
+    # bf16_tensor requires mesh_axis and shard_dim to be given together or not at all; at TP=1 the
+    # row is already whole, so neither applies.
+    shard = {"mesh_axis": tp_axis, "shard_dim": -1} if tp_factor > 1 else {}
+    x = bf16_tensor(torch.randn(1, 1, seq, inner_dim // tp_factor), device=mesh_device, **shard)
     kwargs = dict(num_heads_per_device=heads_per_device, per_head_norm=True)
     plain = ttnn.to_torch(ttnn.get_device_tensors(norm(x, **kwargs))[0]).to(torch.float32)
 

@@ -24,6 +24,7 @@ from ....utils.test import (
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
 )
+from ....utils.test import skip_if_unsupported_num_links as _skip_if_unsupported_num_links
 
 # Fixed VAE work units: encoder (17, 256, 256) tiles, decoder (7, 16, 16) latent chunks.
 TILE = 256
@@ -166,6 +167,23 @@ _line = {**line_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _single = {"require_exact_physical_num_devices": True, "l1_small_size": _L1_SMALL}
 
 MESH_1X1_LINE = pytest.param((1, 1), _single, id="1x1", marks=_BH_ONLY)
+
+
+def skip_if_unsupported_num_links(mesh_device, num_links):
+    """H3's link guard. A one-device mesh traverses no link, so a link count cannot disqualify it.
+
+    `models/tt_dit/utils/test.py`'s version skips any row that asks for a link on a 1x1 mesh,
+    because `get_num_links` reports 0 there -- its own docstring flags this as a TODO ("Some tests
+    requested a 1x1 device mesh with nl=1. They will be erroneously skipped"). On a real p150 that
+    is not a curiosity: it silently skipped every 1x1 row, so the whole single-chip profile looked
+    green while nothing had run. The exemption is kept here rather than in the shared helper so no
+    other model's parametrizations change.
+    """
+    if mesh_device.get_num_devices() == 1:
+        return
+    _skip_if_unsupported_num_links(mesh_device, num_links)
+
+
 MESH_1X4_LINE = pytest.param((1, 4), _line, id="1x4", marks=_BH_ONLY)
 
 SMALL_MESHES = [MESH_1X1_LINE, MESH_1X4_LINE]

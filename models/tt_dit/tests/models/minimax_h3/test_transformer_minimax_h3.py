@@ -27,6 +27,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
+from ....models.transformers.minimax_h3.quant_config import resolve_quant_profile
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -44,7 +45,6 @@ from ....pipelines.minimax_h3.packing import (
 )
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
-from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
     H3_MESH_PARALLEL,
@@ -57,6 +57,7 @@ from .common import (
     TT_BLOCK_CONFIG,
     packed_layout,
     randomize_norm_weights,
+    skip_if_unsupported_num_links,
     upload_rope,
 )
 from .common_av import CALIBRATED_FOX_PROMPT_NUM_TOKENS
@@ -404,6 +405,10 @@ def _prepare_tt_inputs(
         ),  # 37296 == 16 mod 32: ROW_MAJOR assembly
         # skipped unless MINIMAX_H3_MODEL_PATH is set
         pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", id="prod_768p_5s_real_weights"),
+        # The p150 dtype policy on the same real weights: bf8 to_qkv/ff1/ff2, bf16 to_out. The
+        # profile is what makes the 50-block stack fit 32 GB at all (38.5 GB -> 22.3 GB), so what it
+        # costs in accuracy has to be measured rather than assumed.
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint_bf8", id="prod_768p_5s_real_weights_bf8"),
         pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", id="prod_768p_5s_fl2va"),
         pytest.param(
             512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), "random", id="prod_768p_5s_fl2va_first_last"
@@ -435,7 +440,11 @@ def test_minimax_h3_transformer(
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
-    MIN_PCC = 0.9995  # worst measured plausible bug 0.9967; real impl measured 0.999974
+    # worst measured plausible bug 0.9967; the bf16 port measured 0.999974. A quantized row is a
+    # different question: bf8 weights are a deliberate loss of precision, and the bar it has to
+    # clear is the model's (video 0.99 / audio 0.95), not the bf16 port's.
+    quant_config = resolve_quant_profile("bf8_weights" if weights.endswith("_bf8") else None)
+    MIN_PCC = 0.99 if quant_config is not None else 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
 
@@ -469,7 +478,7 @@ def test_minimax_h3_transformer(
     )
 
     checkpoint_state = None
-    if weights == "checkpoint":
+    if weights.startswith("checkpoint"):
         directory = _checkpoint_dir()
         start = time.time()
         checkpoint_state = _truncated_depth_state_dict(directory, NUM_LAYERS)
@@ -535,6 +544,7 @@ def test_minimax_h3_transformer(
         ccl_manager=inputs.ccl_manager,
         parallel_config=inputs.parallel_config,
         is_fsdp=is_fsdp,
+        quant_config=quant_config,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 

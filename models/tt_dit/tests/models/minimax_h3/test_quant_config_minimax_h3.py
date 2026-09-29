@@ -18,6 +18,11 @@ from models.tt_dit.models.transformers.minimax_h3.quant_config import (
     MiniMaxH3QuantProfile,
     resolve_quant_profile,
 )
+from models.tt_dit.models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+
+from .common import SMALL_LINE_PARALLEL
 
 # The released MiniMax-H3 DiT geometry, from the checkpoint config.
 HIDDEN = 5376
@@ -134,3 +139,48 @@ def test_block_stack_fits_a_p150_only_once_quantized():
     # Pinning a block back to bf16 costs one block's worth of the difference, not more.
     pinned = MiniMaxH3QuantProfile.bf8_weights(bf16_blocks=(-1,)).stack_bytes(**geom) / GIB
     assert 0 < pinned - bf8 < (bf16 - bf8) / LAYERS + 1e-6
+
+
+@SMALL_LINE_PARALLEL
+def test_the_profile_reaches_the_parameters(mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp):
+    """The profile must change the Parameter dtypes, not just the cache tag.
+
+    Worth a test of its own because an inert profile fails silently in the worst direction: the
+    cache tag still says bf8, so the quantized directory fills with bf16 tensorbins, and the only
+    symptom is that the stack no longer fits -- 22 GB of "it worked yesterday" turning into 38.5 GB.
+    The block here is a toy; what is being checked is the wiring from profile to Parameter.
+    """
+    del device_params
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+        cfg_parallel=None,
+    )
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+    kwargs = dict(
+        hidden_size=128 * tp_factor,
+        num_heads=4 * tp_factor,
+        head_dim=32,
+        ffn_dim=256 * tp_factor,
+        time_embed_dim=32,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        precomputed_adaln=True,
+    )
+
+    plain = MiniMaxH3TransformerBlock(**kwargs)
+    assert plain.attn.to_qkv.weight.dtype == ttnn.bfloat16
+    assert plain.ff.ff1.weight.dtype == ttnn.bfloat16
+
+    quantized = MiniMaxH3TransformerBlock(**kwargs, quant_config=MiniMaxH3QuantProfile.bf8_weights())
+    assert quantized.attn.to_qkv.weight.dtype == ttnn.bfloat8_b
+    assert quantized.ff.ff1.weight.dtype == ttnn.bfloat8_b
+    assert quantized.ff.ff2.weight.dtype == ttnn.bfloat8_b
+    # ... and the carve-out is a carve-out, not an oversight.
+    assert quantized.attn.to_out.weight.dtype == ttnn.bfloat16
+
+    bf8_out = MiniMaxH3TransformerBlock(**kwargs, quant_config=MiniMaxH3QuantProfile.bf8_weights_bf8_out())
+    assert bf8_out.attn.to_out.weight.dtype == ttnn.bfloat8_b
