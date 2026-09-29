@@ -1101,3 +1101,26 @@ Gotchas
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_residual.py
+
+## S.dense_full.12 test (attempt 1)
+
+What was done
+- Replaced the rendered 33-line swap test with swap 11's test (every earlier check kept) plus ffn_residual in
+  SWAPPED and the ffn_residual checks: out per-token per-stream norm ratio vs golden [0.98, 1.02]; out vs the CPU
+  ffn_residual on the same device h_mid / ffn_hc / mlp_out (rel <= 5e-4, worst row <= 1e-3); addend per stream
+  (out_j - h_mid_j vs post_j * mlp_out) coef [0.97, 1.03], rel <= 0.03, worst row <= 0.05 (the component's limits).
+- CPU mutation study (/tmp/hy4_s12/study.py, outside the repo); table in the test docstring. 9 of 23 mutations pass
+  the 0.98 out gate (1.01-1.1 x mlp_out, last row / last 32 columns zeroed, post gates 1 / 2 swapped 0.985, h_mid
+  streams 0 / 1 swapped 0.984, 2 x the output at PCC 0.999999); all fail the vs-CPU check.
+
+Decisions
+- No distinct-stream probe (swap 07 needed one because layer-0 input streams are identical); at h_mid the streams
+  and the post gates already differ, so stream / gate-order bugs show on the block's own inputs.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out rel 0.0017, vs CPU 0). BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999984, out rel 0.00561, stream ratio [0.9956, 1.0059], out vs CPU
+  ffn_residual 0 / 0 (fp32 addcmul, bit-identical), addend coef 1.0 / rel 0, out vs CPU tail 0.0024 / row 0.0041.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py
