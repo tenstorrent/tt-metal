@@ -333,6 +333,39 @@ def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None
     return out
 
 
+def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None):
+    """All-gather the row (batch/seq) dim across lanes (slice-3 choreography).
+
+    Before a weight-fractured matmul, each lane holds only its own rows;
+    gathering along the non-tp axis gives every chip all rows so its weight
+    chunk sees the full batch. Sync path (perf CCLs with the ring pass).
+    """
+    if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    gathered = ttnn.all_gather(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    return gathered
+
+
+def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None):
+    """Complete a fractured matmul under lane sharding.
+
+    The down/output projection leaves every chip with a partial over its
+    weight K-chunk for ALL rows. reduce_scatter along the lane axis sums the
+    cross-lane chunks AND re-shards rows back to the owning lane; the tp-axis
+    all-reduce then sums the within-column chunks.
+    """
+    if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    scattered = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    reduced = ttnn.all_reduce(scattered, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+    scattered.deallocate(True)
+    return reduced
+
+
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     """All-gather across TP devices."""
     if mesh_config is None or mesh_config.tp <= 1:

@@ -19,7 +19,12 @@ import os
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.ccl import ccl_allreduce, ccl_allreduce_fractured
+from models.demos.gemma4.tt.ccl import (
+    ccl_allreduce,
+    ccl_allreduce_fractured,
+    ccl_lane_gather_rows,
+    ccl_lane_scatter_rows,
+)
 from models.demos.gemma4.tt.compute_config import gelu_variant
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -240,6 +245,11 @@ class SharedMLP:
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
+        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        if lane_sharded:
+            # Slice-3 choreography: rows are lane-local but the weights are
+            # fractured across lanes, so gather all lanes' rows first ...
+            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
         gate_up = self.gate_up_proj(hidden_states)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
@@ -259,7 +269,11 @@ class SharedMLP:
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
-        if self._fractured:
+        if lane_sharded:
+            # ... and reduce_scatter re-shards rows to their lanes while
+            # summing the cross-lane K-chunks (plus the tp-axis all-reduce).
+            output = ccl_lane_scatter_rows(output, self.mesh_config)
+        elif self._fractured:
             output = ccl_allreduce_fractured(output, self.mesh_config, self.ccl_manager)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
