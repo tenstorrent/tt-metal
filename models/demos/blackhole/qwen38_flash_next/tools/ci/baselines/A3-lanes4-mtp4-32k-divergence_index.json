@@ -1,0 +1,28 @@
+{
+ "expected": {
+  "chat": 56,
+  "code": null,
+  "fact": 15,
+  "json": null,
+  "list": 56,
+  "math": 61,
+  "multilingual": 9,
+  "prose": 13,
+  "refactor": 24,
+  "sky": 19,
+  "story": 6,
+  "summary": 75
+ },
+ "pin": "A3/lanes4-mtp4-32k/divergence_index",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "configuration": "lanes4-mtp4-32k",
+  "context": 32768,
+  "head": "b038c2f5740f4c26def06d16e09b2c9a9d1ec4c3",
+  "hold": "lanes-served-final7",
+  "line": "1x4 p150 line, partition-B mesh of the line host",
+  "replay": "the lanes server's startup replay (acceptance-lanes.json), fold on, the served default set",
+  "utc": "2026-09-28T23:13:18.692178Z"
+ },
+ "status": "proposal"
+}

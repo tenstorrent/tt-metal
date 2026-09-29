@@ -1,0 +1,26 @@
+{
+ "expected": {
+  "chat": 56,
+  "code": null,
+  "document": 33,
+  "fact": 15,
+  "json": null,
+  "list": 56,
+  "math": 61,
+  "multilingual": 9,
+  "prose": 13,
+  "refactor": 24,
+  "sky": 19,
+  "story": 6,
+  "summary": 75
+ },
+ "pin": "A3/slab2048-mtp4-32k/divergence_index",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-28",
+  "evidence": "chat server startup replay with --prefill-slab 2048 --mtp 4 (the 128-row MTP chunk extension's slab form: the slab's MTP rows as 16 x 128-row slices inside the slab body) on the served default set -- the verify-rows fold (gdn_rows_scan), the MoE rows on two rings (rings2) and the gated-residual read's re-associated norm (gr_recip_last) -- one idle run on a 1x4 p150 line, 2026-09-28, hold sb-case2-49b8a0f; the twelve study records are 37-434 prompt tokens (prefill_slabs 0 on each), so their rows equal the same head's --mtp 4 table (A3-mtp4-32k) by construction (measured equal here); the slab record 'document' (2228 prompt tokens, prefill_slabs 1) is the only pin exercising a slab body under MTP: its MTP stream after the slab prefill is tolerance-class against the chunked forms (docs/NUMERICS.md), pinned here as measured; every value of this table is this replay's",
+  "head": "49b8a0f2ea3cd4193e14a2c237109d2e0fd942b7",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

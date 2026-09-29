@@ -1,0 +1,910 @@
+{
+ "acceptance_reference": {
+  "configuration": "chunked-32k",
+  "decided": {
+   "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+   "runs": [
+    "2026-09-06/213006Z-a-e99497fe4a77",
+    "2026-09-06/214823Z-a-e99497fe4a77"
+   ],
+   "utc": "2026-09-06T23:09:43Z"
+  },
+  "prefill_mode": "chunked",
+  "rule": "A1's first run: the prefill mode with the higher clear-margin top-1 against the HF reference is the S2 acceptance reference; both baselines are kept per mode"
+ },
+ "configurations": {
+  "chunked-32k": {
+   "description": "the served default: chunked prefill through the chunk trace, sampling on, MTP off, 32768 context",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": null,
+    "prefill_mode": "chunked",
+    "sampling": true
+   }
+  },
+  "forced-32k": {
+   "description": "teacher-forced prefill through the decode traces (--prefill-mode teacher_forced), 32768 context",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": null,
+    "prefill_mode": "teacher_forced",
+    "sampling": true
+   }
+  },
+  "greedy-nothink": {
+   "description": "eval rows at greedy decoding with thinking off (enable_thinking=false, reasoning_effort=low), max_tokens 512",
+   "request": {
+    "enable_thinking": false,
+    "max_tokens": 512,
+    "reasoning_effort": "low",
+    "temperature": 0
+   }
+  },
+  "lanes4-mtp4-32k": {
+   "description": "the served lanes mode: four concurrent greedy requests through the MTP lane chain (--lanes 4 --mtp 4, no sampling; the verify-rows fold off for the process), chunked prefill, 32768 context; the pins read the lanes' startup replay (acceptance-lanes.json)",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": 4,
+    "lanes": 4,
+    "prefill_mode": "chunked",
+    "sampling": false
+   }
+  },
+  "mtp4-32k": {
+   "description": "chunked prefill with MTP drafting k=4 (--mtp 4), 32768 context",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": 4,
+    "prefill_mode": "chunked",
+    "sampling": true
+   }
+  },
+  "oracle-bf16": {
+   "description": "the tt/ CPU oracle with bf16 experts as the column under test (A2), the HF reference as a"
+  },
+  "oracle-bf4": {
+   "description": "the tt/ CPU oracle with BF4-rounded experts (the device's expert precision) as the column under test"
+  },
+  "slab2048-32k": {
+   "description": "the served default with the 2048-row prefill slab (--prefill-slab 2048; the slab's routed experts in one moe_compute call per layer, QWEN38_MOE_SLAB_ONE_CALL and QWEN38_MOE_SLAB_RINGS unset): chunked prefill through the chunk trace for the remainder, sampling on, MTP off, 32768 context",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": null,
+    "prefill_mode": "chunked",
+    "prefill_slab": 2048,
+    "sampling": true
+   }
+  },
+  "slab2048-mtp4-32k": {
+   "description": "chunked prefill with the 2048-row prefill slab and MTP drafting k=4 (--prefill-slab 2048 --mtp 4: the 128-row MTP chunk extension's slab form runs the slab's MTP rows inside the slab body), 32768 context",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": 4,
+    "prefill_mode": "chunked",
+    "prefill_slab": 2048,
+    "sampling": true
+   }
+  },
+  "thinking-medium": {
+   "description": "eval rows at the shipped request defaults (thinking on, reasoning_effort=medium), greedy, max_tokens 1536",
+   "request": {
+    "enable_thinking": true,
+    "max_tokens": 1536,
+    "reasoning_effort": "medium",
+    "temperature": 0
+   }
+  },
+  "vision-chunked-32k": {
+   "description": "image prompts on the served default chain with the device vision tower's features: chunked prefill through the 32-row chunk trace (the 128-row form is bitwise on these streams), sampling on, MTP off, 32768 context; the fixtures are tests/fixtures/vision_fixture.py's grid32 (512x512, 256 image tokens), grid24x40 (384x640, 240), grid64 (1024x1024, 1024) and models/sample_data/demo.jpeg (2048x1365, 2752), each asked to describe the image in one sentence with thinking off, 32 greedy tokens against the CPU reference (Qwen4ExpForConditionalGeneration bf16)",
+   "server": {
+    "allocated_context": 32768,
+    "mtp": null,
+    "prefill_mode": "chunked",
+    "sampling": true,
+    "vision": true
+   }
+  }
+ },
+ "default_tolerance": 0.15,
+ "idle_loadavg_1min": 16,
+ "pins": {
+  "A1/chunked-32k/corpus_clear_top1": {
+   "note": "clear-margin top-1 (HF top-2 margin above 0.125 logits) of the first run 0.9607 less half a point; the plan's 0.99 is not reachable with BF4 experts (the BF4-emulated oracle itself sits near 0.96)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.0,
+   "status": "todo",
+   "target": 0.9557
+  },
+  "A1/chunked-32k/corpus_kl_mean": {
+   "note": "truncated KL over the shared candidate support of the first run (2026-09-06/213006Z-a-e99497fe4a77); ceiling x1.10, warn x1.05",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "ceiling",
+   "status": "todo",
+   "target": 0.0543,
+   "tolerance": 0.1,
+   "warn_tolerance": 0.05
+  },
+  "A1/chunked-32k/corpus_top1": {
+   "note": "corpus top-1 of the first run (2026-09-06/213006Z-a-e99497fe4a77); floor with the 1-point slack",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.01,
+   "status": "todo",
+   "target": 0.9518
+  },
+  "A1/chunked-32k/corpus_top5": {
+   "note": "corpus top-5 of the first run (2026-09-06/213006Z-a-e99497fe4a77)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.01,
+   "status": "todo",
+   "target": 0.9992
+  },
+  "A1/chunked-32k/first_divergence": {
+   "baseline": true,
+   "rule": "not_earlier",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A1/chunked-32k/top1": {
+   "baseline": true,
+   "note": "per item top-1 not more than 2 points under the seeded value",
+   "rule": "floor",
+   "slack": 0.02,
+   "status": "todo"
+  },
+  "A1/forced-32k/corpus_clear_top1": {
+   "note": "clear-margin top-1 (HF top-2 margin above 0.125 logits) of the first run 0.9444 less half a point; the plan's 0.99 is not reachable with BF4 experts (the BF4-emulated oracle itself sits near 0.96)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.0,
+   "status": "todo",
+   "target": 0.9394
+  },
+  "A1/forced-32k/corpus_kl_mean": {
+   "note": "truncated KL over the shared candidate support of the first run (2026-09-06/214823Z-a-e99497fe4a77); ceiling x1.10, warn x1.05",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "ceiling",
+   "status": "todo",
+   "target": 0.0982,
+   "tolerance": 0.1,
+   "warn_tolerance": 0.05
+  },
+  "A1/forced-32k/corpus_top1": {
+   "note": "corpus top-1 of the first run (2026-09-06/214823Z-a-e99497fe4a77); floor with the 1-point slack",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.01,
+   "status": "todo",
+   "target": 0.9342
+  },
+  "A1/forced-32k/corpus_top5": {
+   "note": "corpus top-5 of the first run (2026-09-06/214823Z-a-e99497fe4a77)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.01,
+   "status": "todo",
+   "target": 0.9934
+  },
+  "A1/forced-32k/first_divergence": {
+   "baseline": true,
+   "rule": "not_earlier",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A1/forced-32k/top1": {
+   "baseline": true,
+   "note": "per item top-1 not more than 2 points under the seeded value",
+   "rule": "floor",
+   "slack": 0.02,
+   "status": "todo"
+  },
+  "A1/mtp4-32k/corpus_clear_top1": {
+   "note": "clear-margin top-1 (HF top-2 margin above 0.125 logits); a proposal until the first run",
+   "rule": "floor",
+   "slack": 0.0,
+   "status": "todo",
+   "target": 0.99
+  },
+  "A1/mtp4-32k/corpus_top1": {
+   "note": "corpus top-1 agreement not more than 1 point under the seeded value",
+   "rule": "floor",
+   "slack": 0.01,
+   "status": "todo"
+  },
+  "A1/mtp4-32k/first_divergence": {
+   "baseline": true,
+   "rule": "not_earlier",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A1/mtp4-32k/top1": {
+   "baseline": true,
+   "note": "per item top-1 not more than 2 points under the seeded value",
+   "rule": "floor",
+   "slack": 0.02,
+   "status": "todo"
+  },
+  "A2/oracle-bf16/corpus_clear_top1": {
+   "note": "the first oracle-vs-HF run of 2026-09-06 (36 items, 15163 positions): 0.9846 less half a point; the plan's 0.999 is not met: the disagreements are top-2 swaps at margins 0.13-1.0 logits",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.0,
+   "status": "todo",
+   "target": 0.9796
+  },
+  "A2/oracle-bf16/corpus_kl_mean": {
+   "note": "truncated KL of the first run (36 items, 15163 positions)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "ceiling",
+   "status": "todo",
+   "target": 0.0183,
+   "tolerance": 0.1
+  },
+  "A2/oracle-bf16/corpus_top1": {
+   "note": "corpus top-1 of the first run (36 items, 15163 positions)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.005,
+   "status": "todo",
+   "target": 0.9763
+  },
+  "A2/oracle-bf4/corpus_clear_top1": {
+   "note": "the first oracle-vs-HF run of 2026-09-06 (36 items, 15163 positions): 0.9588 less half a point; the plan's 0.99 is not met: the BF4 expert rounding flips about 3.5% of clear positions",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.0,
+   "status": "todo",
+   "target": 0.9538
+  },
+  "A2/oracle-bf4/corpus_kl_mean": {
+   "note": "truncated KL of the first run (36 items, 15163 positions)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "ceiling",
+   "status": "todo",
+   "target": 0.0705,
+   "tolerance": 0.1
+  },
+  "A2/oracle-bf4/corpus_top1": {
+   "note": "corpus top-1 of the first run (36 items, 15163 positions)",
+   "proposal": {
+    "head": "e99497fe4a7712cd437a935d5e5712e992193d2f",
+    "utc": "2026-09-06T23:09:43Z"
+   },
+   "rule": "floor",
+   "slack": 0.005,
+   "status": "todo",
+   "target": 0.9493
+  },
+  "A3/chunked-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/chunked-32k/divergence_index": {
+   "baseline": true,
+   "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/chunked-32k/echo_verbatim": {
+   "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/chunked-32k/gate_compared_tokens": {
+   "rule": "exact",
+   "status": "active",
+   "target": 96
+  },
+  "A3/chunked-32k/gate_pass": {
+   "note": "the json record replays 96/96 CPU greedy tokens (--require-json-96)",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/chunked-32k/requests_incomplete": {
+   "note": "every probe request finishes with stop or length",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "A3/forced-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/forced-32k/divergence_index": {
+   "baseline": true,
+   "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/forced-32k/echo_verbatim": {
+   "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/forced-32k/gate_compared_tokens": {
+   "rule": "exact",
+   "status": "active",
+   "target": 96
+  },
+  "A3/forced-32k/gate_pass": {
+   "note": "the json record replays 96/96 CPU greedy tokens (--require-json-96)",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/forced-32k/requests_incomplete": {
+   "note": "every probe request finishes with stop or length",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "A3/lanes4-mtp4-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "the lane streams' sha256 per record (the single stream's fold-off streams: the lanes run the wrap); a differing stream without an earlier index is a numerics-class change",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/lanes4-mtp4-32k/divergence_index": {
+   "baseline": true,
+   "note": "per record the first index where a lane's stream leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/lanes4-mtp4-32k/equals_single_stream": {
+   "note": "every lane stream equals the single-stream replay of the same process (the same chain form): the lanes' exactness gate",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/lanes4-mtp4-32k/gate_compared_tokens": {
+   "rule": "exact",
+   "status": "active",
+   "target": 96
+  },
+  "A3/lanes4-mtp4-32k/gate_pass": {
+   "note": "the json record replays 96/96 CPU greedy tokens through a lane (--require-json-96)",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/mtp4-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/mtp4-32k/divergence_index": {
+   "baseline": true,
+   "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/mtp4-32k/echo_verbatim": {
+   "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/mtp4-32k/gate_compared_tokens": {
+   "rule": "exact",
+   "status": "active",
+   "target": 96
+  },
+  "A3/mtp4-32k/gate_pass": {
+   "note": "the json record replays 96/96 CPU greedy tokens (--require-json-96)",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/mtp4-32k/handoff_pass": {
+   "note": "the split hand-off gate: MTP then 1-row and 1-row then MTP both reproduce the json stream",
+   "optional": true,
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/mtp4-32k/requests_incomplete": {
+   "note": "every probe request finishes with stop or length",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "A3/slab2048-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/slab2048-32k/divergence_index": {
+   "baseline": true,
+   "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/slab2048-32k/echo_verbatim": {
+   "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/slab2048-32k/gate_compared_tokens": {
+   "rule": "exact",
+   "status": "active",
+   "target": 96
+  },
+  "A3/slab2048-32k/gate_pass": {
+   "note": "the json record replays 96/96 CPU greedy tokens (--require-json-96)",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/slab2048-32k/requests_incomplete": {
+   "note": "every probe request finishes with stop or length",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "A3/slab2048-mtp4-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/slab2048-mtp4-32k/divergence_index": {
+   "baseline": true,
+   "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/slab2048-mtp4-32k/echo_verbatim": {
+   "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/slab2048-mtp4-32k/gate_compared_tokens": {
+   "rule": "exact",
+   "status": "active",
+   "target": 96
+  },
+  "A3/slab2048-mtp4-32k/gate_pass": {
+   "note": "the json record replays 96/96 CPU greedy tokens (--require-json-96)",
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/slab2048-mtp4-32k/handoff_pass": {
+   "note": "the split hand-off gate: MTP then 1-row and 1-row then MTP both reproduce the json stream",
+   "optional": true,
+   "rule": "exact",
+   "status": "active",
+   "target": true
+  },
+  "A3/slab2048-mtp4-32k/requests_incomplete": {
+   "note": "every probe request finishes with stop or length",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "A3/vision-chunked-32k/device_token_ids_sha256": {
+   "baseline": true,
+   "note": "a differing image stream without an earlier index is a change inside the image class: scored before merge",
+   "rule": "exact",
+   "severity": "info",
+   "status": "todo"
+  },
+  "A3/vision-chunked-32k/divergence_index": {
+   "baseline": true,
+   "note": "per image fixture the first index where the device stream leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
+   "rule": "not_earlier",
+   "status": "todo"
+  },
+  "A3/vision-chunked-32k/score_in_top5": {
+   "note": "the image class bound, first half: every device token inside the CPU top-5 under teacher forcing (the scoring pass of the CPU reference tool)",
+   "rule": "exact",
+   "status": "active",
+   "target": {
+    "grid32": true,
+    "grid24x40": true,
+    "grid64": true,
+    "demo": true
+   }
+  },
+  "A3/vision-chunked-32k/score_max_gap": {
+   "note": "the image class bound, second half: the largest CPU log-prob gap of a device token at most 2.0 nats (the CPU argmax's log-prob minus the device token's)",
+   "rule": "at_most",
+   "status": "active",
+   "target": {
+    "grid32": 2.0,
+    "grid24x40": 2.0,
+    "grid64": 2.0,
+    "demo": 2.0
+   }
+  },
+  "C1/thinking-medium/item_pass": {
+   "baseline": true,
+   "max_flips": 3,
+   "note": "the 30-item canary (20 GSM8K + 10 HumanEval) at the shipped defaults; the baseline lists the items",
+   "rule": "flips",
+   "status": "todo"
+  },
+  "C2/greedy-nothink/accuracy": {
+   "note": "lm-eval task accuracies of the 2026-09-04 run (250 items); a proposal",
+   "rule": "floor",
+   "slack": 0.03,
+   "status": "todo",
+   "target": {
+    "qwen38_gsm8k": 0.9,
+    "qwen38_humaneval": 0.92,
+    "qwen38_ifeval": 0.72
+   }
+  },
+  "C2/greedy-nothink/item_pass": {
+   "baseline": true,
+   "max_flips": 2,
+   "note": "per task at most 2 items that the baseline passes and the run fails (the device is deterministic: one near-tie flips one item)",
+   "rule": "flips",
+   "status": "todo"
+  },
+  "C2/thinking-medium/accuracy": {
+   "rule": "floor",
+   "slack": 0.03,
+   "status": "todo"
+  },
+  "C2/thinking-medium/item_pass": {
+   "baseline": true,
+   "max_flips": 2,
+   "rule": "flips",
+   "status": "todo"
+  },
+  "D1/chunked-32k/capture_ms": {
+   "better": "lower",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.15,
+   "unit": "ms"
+  },
+  "D1/chunked-32k/decode_ms_per_token": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.15,
+   "note": "the timing runner's 32-token median after warm-up; 27.77 ms median over 200 traced steps on 4x p150 on 2026-09-25 (dsp-timing-a-tree-f2933ef2-20260925T070237Z; 35.90 on the base 30cc1a5e5d in the same hold, dsp-timing-a-tree-30cc1a5e-20260925T065824Z) with bf8 dense weights, the fused GDN step and moe_compute's compact expert layout on by default; was 35.82 ms median over 200 traced steps on 4x p150 on 2026-09-25 (dsp-timing-a-tree-7c6f7c9f-20260925T003535Z; 36.91 before it in the same hold, -003133Z) with the gated-residual read as two programs with its gathers inside them (gr_fold) on by default; was 36.92 ms on 2026-09-18 with the router tail's top-k on one core per token group (its lane form) on by default; was 38.67 ms on 2026-09-16 with the fused decode kernels (gr_read, gr_write, greedy_tail, moe_post, ple, position_derive, qsa_block, router_tail, shared_expert) and two DRAM readers per bank for the GDN/QSA/LM-head decode linears on by default; was 42.14 ms on 2026-09-15 and 50.00 / 50.01 ms on both lanes on 2026-09-04 (a proposal: seed it)",
+   "rule": "band",
+   "status": "todo",
+   "target": 27.8,
+   "tolerance": 0.02,
+   "unit": "ms"
+  },
+  "D1/chunked-32k/decode_tokens_per_second": {
+   "better": "higher",
+   "idle_only": true,
+   "loaded_tolerance": 0.15,
+   "note": "the ledger's median tokens/s over requests of 32+ tokens; 36.01 = 1000 / 27.77 ms from the traced-step pair of 2026-09-25 (27.86 on the base 30cc1a5e5d; the sampled client measured 33.2 tokens/s per stream on a shared-broker host)",
+   "rule": "band",
+   "status": "todo",
+   "target": 36.0,
+   "tolerance": 0.05
+  },
+  "D1/chunked-32k/free_bytes_per_bank": {
+   "note": "DRAM headroom per bank after the captures",
+   "rule": "floor",
+   "slack_relative": 0.01,
+   "status": "todo"
+  },
+  "D1/chunked-32k/prefill_ms_per_prompt_token": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.2,
+   "note": "the ledger's median over fresh requests of 64+ prompt tokens",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "ms"
+  },
+  "D1/chunked-32k/program_cache_after_capture": {
+   "note": "the timing runner's program cache entries after the captures",
+   "rule": "exact",
+   "status": "todo"
+  },
+  "D1/chunked-32k/program_cache_delta": {
+   "note": "no program-cache miss over the replays",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "D1/chunked-32k/program_cache_entries_at_ready": {
+   "note": "/health at READY, before any request",
+   "rule": "exact",
+   "status": "todo"
+  },
+  "D1/chunked-32k/startup_seconds": {
+   "better": "lower",
+   "note": "READY's startup_seconds with warm JIT caches",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.2,
+   "unit": "s"
+  },
+  "D1/chunked-32k/ttft_seconds/1024": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 1024-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/chunked-32k/ttft_seconds/128": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 128-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/chunked-32k/ttft_seconds/4096": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 4096-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/forced-32k/capture_ms": {
+   "better": "lower",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.15,
+   "unit": "ms"
+  },
+  "D1/forced-32k/decode_ms_per_token": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.15,
+   "note": "the timing runner's 32-token median after warm-up; 27.77 ms median over 200 traced steps on 4x p150 on 2026-09-25 (dsp-timing-a-tree-f2933ef2-20260925T070237Z; 35.90 on the base 30cc1a5e5d in the same hold, dsp-timing-a-tree-30cc1a5e-20260925T065824Z) with bf8 dense weights, the fused GDN step and moe_compute's compact expert layout on by default; was 35.82 ms median over 200 traced steps on 4x p150 on 2026-09-25 (dsp-timing-a-tree-7c6f7c9f-20260925T003535Z; 36.91 before it in the same hold, -003133Z) with the gated-residual read as two programs with its gathers inside them (gr_fold) on by default; was 36.92 ms on 2026-09-18 with the router tail's top-k on one core per token group (its lane form) on by default; was 38.67 ms on 2026-09-16 with the fused decode kernels (gr_read, gr_write, greedy_tail, moe_post, ple, position_derive, qsa_block, router_tail, shared_expert) and two DRAM readers per bank for the GDN/QSA/LM-head decode linears on by default; was 42.14 ms on 2026-09-15 and 50.00 / 50.01 ms on both lanes on 2026-09-04 (a proposal: seed it)",
+   "rule": "band",
+   "status": "todo",
+   "target": 27.8,
+   "tolerance": 0.02,
+   "unit": "ms"
+  },
+  "D1/forced-32k/decode_tokens_per_second": {
+   "better": "higher",
+   "idle_only": true,
+   "loaded_tolerance": 0.15,
+   "note": "the ledger's median tokens/s over requests of 32+ tokens; 36.01 = 1000 / 27.77 ms from the traced-step pair of 2026-09-25 (27.86 on the base 30cc1a5e5d; the sampled client measured 33.2 tokens/s per stream on a shared-broker host)",
+   "rule": "band",
+   "status": "todo",
+   "target": 36.0,
+   "tolerance": 0.05
+  },
+  "D1/forced-32k/free_bytes_per_bank": {
+   "note": "DRAM headroom per bank after the captures",
+   "rule": "floor",
+   "slack_relative": 0.01,
+   "status": "todo"
+  },
+  "D1/forced-32k/prefill_ms_per_prompt_token": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.2,
+   "note": "the ledger's median over fresh requests of 64+ prompt tokens",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "ms"
+  },
+  "D1/forced-32k/program_cache_after_capture": {
+   "note": "the timing runner's program cache entries after the captures",
+   "rule": "exact",
+   "status": "todo"
+  },
+  "D1/forced-32k/program_cache_delta": {
+   "note": "no program-cache miss over the replays",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "D1/forced-32k/program_cache_entries_at_ready": {
+   "note": "/health at READY, before any request",
+   "rule": "exact",
+   "status": "todo"
+  },
+  "D1/forced-32k/startup_seconds": {
+   "better": "lower",
+   "note": "READY's startup_seconds with warm JIT caches",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.2,
+   "unit": "s"
+  },
+  "D1/forced-32k/ttft_seconds/1024": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 1024-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/forced-32k/ttft_seconds/128": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 128-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/forced-32k/ttft_seconds/4096": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 4096-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/slab2048-32k/capture_ms": {
+   "better": "lower",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.15,
+   "unit": "ms"
+  },
+  "D1/slab2048-32k/decode_ms_per_token": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.15,
+   "note": "the timing runner's 32-token median after warm-up under --prefill-slab 2048 (decode is the same trace as chunked-32k's); seed from three idle runs",
+   "rule": "band",
+   "status": "todo",
+   "target": 35.8,
+   "tolerance": 0.02,
+   "unit": "ms"
+  },
+  "D1/slab2048-32k/decode_tokens_per_second": {
+   "better": "higher",
+   "idle_only": true,
+   "loaded_tolerance": 0.15,
+   "note": "the ledger's median tokens/s over requests of 32+ tokens",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.05
+  },
+  "D1/slab2048-32k/free_bytes_per_bank": {
+   "note": "DRAM headroom per bank after the captures",
+   "rule": "floor",
+   "slack_relative": 0.01,
+   "status": "todo"
+  },
+  "D1/slab2048-32k/prefill_ms_per_prompt_token": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.2,
+   "note": "the ledger's median over fresh requests of 64+ prompt tokens",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "ms"
+  },
+  "D1/slab2048-32k/program_cache_after_capture": {
+   "note": "the timing runner's program cache entries after the captures",
+   "rule": "exact",
+   "status": "todo"
+  },
+  "D1/slab2048-32k/program_cache_delta": {
+   "note": "no program-cache miss over the replays",
+   "rule": "exact",
+   "status": "active",
+   "target": 0
+  },
+  "D1/slab2048-32k/program_cache_entries_at_ready": {
+   "note": "/health at READY, before any request",
+   "rule": "exact",
+   "status": "todo"
+  },
+  "D1/slab2048-32k/startup_seconds": {
+   "better": "lower",
+   "note": "READY's startup_seconds with warm JIT caches",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.2,
+   "unit": "s"
+  },
+  "D1/slab2048-32k/ttft_seconds/1024": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 1024-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/slab2048-32k/ttft_seconds/128": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 128-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  },
+  "D1/slab2048-32k/ttft_seconds/4096": {
+   "better": "lower",
+   "idle_only": true,
+   "loaded_tolerance": 0.25,
+   "note": "one-token reply to a 4096-token prompt, thinking off, host-timed by the runner",
+   "rule": "band",
+   "status": "todo",
+   "tolerance": 0.1,
+   "unit": "s"
+  }
+ },
+ "schema": "qwen38-ci-pins/v1",
+ "seed_runs": 3
+}
