@@ -20,7 +20,7 @@ _EXPERT_DTYPES = {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b}
 class MiMoRuntimeOptions:
     # Fabric links per CCL (ring SDPA, MoE dispatch / combine / reduce). 3 measured best on the BH QuietBox 2x2:
     # MoE dispatch 2.59 / 1.31 / 0.88 ms for 1 / 2 / 3 links at 640 tokens/chip; 4 does not fit the dispatch cores.
-    num_links: int = 3  # MIMO_NUM_LINKS
+    num_links: int | None = None  # MIMO_NUM_LINKS (None: ccl.resolve_num_links, 3 on the QuietBox, 2 on a BH Galaxy)
     # TP all-reduce links; None: op default (on 2x2, 2 links made the reduce-scatter ~1.8x slower).
     ar_links: int | None = None  # MIMO_AR_LINKS
     # Routed-expert weight dtype (ttnn.bfloat4_b | ttnn.bfloat8_b). bf4 (DeepSeek's production default) halves the

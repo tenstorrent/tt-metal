@@ -8,6 +8,7 @@
 #include <cmath>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <optional>
 #include <set>
 
@@ -262,9 +263,26 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (const auto& c : p.readers) {
         rcols.insert(c.x);
     }
+    // DRAM readers: a west column pair 0, 1 and an east pair E, E + 1 (Blackhole p150 11 x 10: E = 6; a Galaxy chip's
+    // 12 x 10, one column less harvested: E = 7). The layout is written for E = 6 and moved east by E - 6: the east
+    // gate/up rectangle, the east relays and the east reader set; a wider west block leaves its extra column to the
+    // down cores (as are all columns east of the east rectangle).
+    const uint32_t east = rcols.size() == 4 ? *std::next(rcols.begin(), 2) : 0;
     TT_FATAL(
-        rcols == std::set<uint32_t>({0, 1, 6, 7}) && grid.x == 11 && grid.y == 10,
-        "flat_routed_expert: laid out for the Blackhole 11 x 10 grid with DRAM readers in columns 0, 1, 6, 7");
+        rcols.size() == 4 && *rcols.begin() == 0 && *std::next(rcols.begin()) == 1 && east >= 6 &&
+            *rcols.rbegin() == east + 1 && grid.x >= 11 + (east - 6) && grid.y >= 10,
+        "flat_routed_expert: laid out for Blackhole grids with DRAM readers in columns 0, 1 and E, E + 1 (E >= 6) and "
+        "room for the east rectangle; got a {} x {} grid with readers in columns {}",
+        grid.x,
+        grid.y,
+        std::vector<uint32_t>(rcols.begin(), rcols.end()));
+    const uint32_t shift = east - 6;
+    for (auto& [x0, x1, y0, y1] : p.rects) {
+        if (x0 > 6) {  // the east rectangle
+            x0 += shift;
+            x1 += shift;
+        }
+    }
     std::vector<Core> gu_all;
     for (const auto& [x0, x1, y0, y1] : p.rects) {
         for (uint32_t y = y0; y <= y1; ++y) {
@@ -311,13 +329,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
             TT_THROW("flat_routed_expert: no free relay cell in column {}", x);
         };
-        p.relays = {first_free(1, {4, 5, 3, 6, 2, 7}), first_free(7, {3, 4, 2, 5, 1, 6})};
+        p.relays = {first_free(1, {4, 5, 3, 6, 2, 7}), first_free(east + 1, {3, 4, 2, 5, 1, 6})};
         for (const auto& c : p.relays) {
             taken.insert({c.x, c.y});
         }
         for (uint32_t j = 0; j < p.nh; ++j) {  // helpers: relay NR + NR j + k is rectangle k's j-th helper
             const Core a = first_free(1, {5, 3, 6, 2, 7, 1, 8, 0, 9});
-            const Core b = first_free(7, {4, 2, 5, 1, 6, 0, 7, 8, 9});
+            const Core b = first_free(east + 1, {4, 2, 5, 1, 6, 0, 7, 8, 9});
             p.relays.push_back(a);
             p.relays.push_back(b);
             taken.insert({a.x, a.y});
@@ -348,7 +366,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 }
             }
             for (const auto& c : p.readers) {
-                if (c.x == 6 || c.x == 7) {
+                if (c.x == east || c.x == east + 1) {
                     rd.push_back(c);
                 }
             }

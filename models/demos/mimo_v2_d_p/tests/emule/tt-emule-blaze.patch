@@ -1,5 +1,5 @@
 diff --git a/include/jit_hw/__emule_fabric_stubs.h b/include/jit_hw/__emule_fabric_stubs.h
-index 831759e..f467e33 100644
+index 831759e..b7c2618 100644
 --- a/include/jit_hw/__emule_fabric_stubs.h
 +++ b/include/jit_hw/__emule_fabric_stubs.h
 @@ -784,7 +784,7 @@ public:
@@ -20,7 +20,17 @@ index 831759e..f467e33 100644
          for (uint32_t i = 0; i < n; ++i) {
              mgr.slots_[i].dst_dev_id =
                  static_cast<uint16_t>(get_arg_val<uint32_t>(static_cast<int>(arg_idx++)));
-@@ -1498,13 +1498,30 @@ public:
+@@ -1417,6 +1417,9 @@ inline void populate_unicast_fused_atomic_inc_fields(
+ namespace mesh::experimental {}
+ 
+ }  // namespace tt::tt_fabric
++// Silicon #defines this at global scope (fabric_edm_packet_header.hpp); kernels use it unqualified
++// (deepseek_prefill dispatch_plan.hpp).
++using tt::tt_fabric::NOC_SPARSE_MCAST_WRITE_MAX_DESTS;
+ 
+ // --- PACKET_HEADER_TYPE + global FabricConnectionManager ---
+ // Silicon exposes PACKET_HEADER_TYPE at global scope; keep that. It is the header type the fabric
+@@ -1498,13 +1501,30 @@ public:
      tt::tt_fabric::WorkerToFabricEdmSender forward_fabric_sender;
      tt::tt_fabric::WorkerToFabricEdmSender backward_fabric_sender;
  
@@ -55,6 +65,41 @@ index 831759e..f467e33 100644
      void open() {}
      void open_start() {}
      void open_finish() {}
+diff --git a/include/jit_hw/api/cb_api.h b/include/jit_hw/api/cb_api.h
+index 0c732f0..cdc82a4 100644
+--- a/include/jit_hw/api/cb_api.h
++++ b/include/jit_hw/api/cb_api.h
+@@ -256,6 +256,30 @@ inline void cb_reserve_back(
+     __emule_fiber_wait(&cb, [&] { return __emule_reserve_free() >= n; });
+ }
+ 
++// Non-blocking twin of cb_reserve_back (silicon: the free-space check without the wait): true when n pages can be
++// reserved now; otherwise yields (the consumer is a peer fiber on this pool) and returns false.
++inline bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
++    const uint32_t cb_id = static_cast<uint32_t>(operand);
++    const uint32_t n = static_cast<uint32_t>(num_pages);
++    auto& cb = __emule_self->cbs[cb_id];
++    __emule_self->cb_self_produce_mask |= (1ull << cb_id);
++    tt_emule::cb_register_producer(cb, __emule_self);
++    uint32_t free_pages;
++    if (__emule_self->kind == ThreadCommonCtx::Kind::Compute) {
++        const uint32_t rc = cb.received_compute.load(std::memory_order_acquire);
++        const uint32_t ak = cb.acked.load(std::memory_order_acquire);
++        const uint32_t outstanding = (rc > ak) ? (rc - ak) : 0u;
++        free_pages = (cb.num_pages > outstanding) ? (cb.num_pages - outstanding) : 0u;
++    } else {
++        free_pages = cb.num_pages - cb.occupied.load(std::memory_order_acquire);
++    }
++    if (free_pages >= n) {
++        return true;
++    }
++    __emule_fiber_yield();
++    return false;
++}
++
+ inline void cb_push_back(uint32_t cb_id, uint32_t n) {
+     // ASAN: clear the dangling reserve + shrink the reserve window before the
+     // FIFO advance.
 diff --git a/include/jit_hw/api/compile_time_args.h b/include/jit_hw/api/compile_time_args.h
 index f506ba9..da65010 100644
 --- a/include/jit_hw/api/compile_time_args.h
@@ -108,6 +153,77 @@ index 9e1194d..b78a1c1 100644
  
  namespace ckernel {
  
+diff --git a/include/jit_hw/api/compute/tilize.h b/include/jit_hw/api/compute/tilize.h
+index 28d5b0a..f2c1435 100644
+--- a/include/jit_hw/api/compute/tilize.h
++++ b/include/jit_hw/api/compute/tilize.h
+@@ -57,8 +57,14 @@ inline void tilize_uninit_with_dt(uint32_t /*old_icb*/ = 0, uint32_t /*new_icb*/
+ // The input CB holds the block as one horizontal STRIP — 32 rows ×
+ // ntiles*TILE_WIDTH cols, row stride ntiles*TILE_WIDTH*elem_size — not as ntiles
+ // sequential tile blocks. At ntiles=1 the two layouts coincide.
+-inline void tilize_block(uint32_t icb, uint32_t ntiles, uint32_t ocb) {
++// itile_start: the first input column tile (the input CB holds 32 row-major rows); otile_start >= 0: the output tile
++// index (relative to the reserved back of ocb) the block starts at, as silicon's 5-argument form -- otherwise the
++// block goes where the previous pack left off.
++inline void tilize_block(uint32_t icb, uint32_t ntiles, uint32_t ocb, uint32_t itile_start, int64_t otile_start) {
+     constexpr uint32_t TILE_DIM = 32;
++    if (otile_start >= 0) {
++        __emule_compute_ctx().pack_offset[ocb] = static_cast<uint32_t>(otile_start);
++    }
+     const bool icb_is_32bit = __emule_compute::cb_is_32bit_format(icb);
+     const bool ocb_is_32bit = __emule_compute::cb_is_32bit_format(ocb);
+     // FP8 E4M3 input: 1 byte/element, decoded to f32.
+@@ -76,8 +82,8 @@ inline void tilize_block(uint32_t icb, uint32_t ntiles, uint32_t ocb) {
+     // Input row stride: silicon's tilize unpacker reads with a TILE_DIM (32) row
+     // stride per tile regardless of output tile geometry. Callers pad input to
+     // 32 rows even when the useful data is thinner.
+-    const uint32_t row_stride    = ntiles * TILE_DIM * in_elem_size;
+-    uint8_t* const in_base = __emule_compute::cb_read_ptr_at(icb, 0);
++    const uint32_t row_stride    = (itile_start + ntiles) * TILE_DIM * in_elem_size;
++    uint8_t* const in_base = __emule_compute::cb_read_ptr_at(icb, 0) + itile_start * TILE_DIM * in_elem_size;
+ 
+     // Output tile shape from the CB's own descriptor, not from its page size: a
+     // page-derived row count assumes a 32-wide tile and under-counts a narrow one.
+@@ -199,20 +205,16 @@ inline void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t o
+ inline void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+     tilize_init(icb, full_dim, ocb);
+ }
+-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
+-inline void fast_tilize_block(uint32_t icb, uint32_t ntiles, uint32_t ocb,
+-                              uint32_t /*block_c_index*/ = 0) {
+-    tilize_block(icb, ntiles, ocb);
++inline void fast_tilize_block(uint32_t icb, uint32_t ntiles, uint32_t ocb, uint32_t input_tile_index = 0,
++                              int64_t output_tile_index = -1) {
++    tilize_block(icb, ntiles, ocb, input_tile_index, output_tile_index);
+ }
+ inline void fast_tilize_uninit(uint32_t = 0, uint32_t = 0, uint32_t = 0) {
+     tilize_uninit();
+ }
+ 
+-// Block variant with explicit tile-index args (some op code uses 5-arg form).
+-inline void tilize_block(uint32_t icb, uint32_t num_tiles, uint32_t ocb,
+-                         uint32_t /*itile_start*/, uint32_t /*otile_start*/) {
+-    tilize_block(icb, num_tiles, ocb);
+-}
++// 3-argument form: the block starts at input column 0 and continues the previous pack.
++inline void tilize_block(uint32_t icb, uint32_t num_tiles, uint32_t ocb) { tilize_block(icb, num_tiles, ocb, 0, -1); }
+ 
+ // tilizeA_B: the pool / bilinear reduce's row-major unpack. Pack-neutral, as on
+ // silicon; the math half is reduce_tile_math. See docs/tilize-untilize-pack.md §tilizeA_B.
+diff --git a/include/jit_hw/api/dataflow/dataflow_api.h b/include/jit_hw/api/dataflow/dataflow_api.h
+index b38f235..229133b 100644
+--- a/include/jit_hw/api/dataflow/dataflow_api.h
++++ b/include/jit_hw/api/dataflow/dataflow_api.h
+@@ -590,6 +590,9 @@ inline void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_i
+ // rely on. Only the write-side counterpart is here.
+ inline void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {}
+ inline bool ncrisc_noc_read_with_transaction_id_flushed(uint32_t noc, uint32_t trid) { return true; }
++// NoC writes are synchronous memcpys in emule: every issued non-posted write has left and been acked.
++inline bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) { return true; }
++inline bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) { return true; }
+ inline bool ncrisc_noc_nonposted_write_with_transaction_id_sent(uint32_t noc, uint32_t trid) { return true; }
+ inline bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(uint32_t noc, uint32_t trid) { return true; }
+ inline void noc_async_atomic_barrier(uint8_t noc = noc_index) {}
 diff --git a/include/jit_hw/ckernel.h b/include/jit_hw/ckernel.h
 index 3638f20..590522c 100644
 --- a/include/jit_hw/ckernel.h
@@ -122,7 +238,7 @@ index 3638f20..590522c 100644
  enum class Transpose : uint8_t { Tile = 0, NoneT = 1, IntraFace = 2 };
  
 diff --git a/include/jit_hw/ckernel_sfpu_binary.h b/include/jit_hw/ckernel_sfpu_binary.h
-index f7eb6f6..6039db7 100644
+index f7eb6f6..fcc9b5d 100644
 --- a/include/jit_hw/ckernel_sfpu_binary.h
 +++ b/include/jit_hw/ckernel_sfpu_binary.h
 @@ -15,7 +15,14 @@
@@ -141,7 +257,7 @@ index f7eb6f6..6039db7 100644
  inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
      static_assert(
          BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV ||
-@@ -52,4 +59,11 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
+@@ -52,4 +59,15 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
      }
  }
  
@@ -151,6 +267,10 @@ index f7eb6f6..6039db7 100644
 +    calculate_sfpu_binary<APPROXIMATION_MODE, BinaryOp::MUL, ITERATIONS, is_fp32_dest_acc_en>(
 +        dst_index_in0, dst_index_in1, dst_index_out);
 +}
++
++// Silicon programs SFPU constants / addr mods for the binary op; emule's SFPU needs no state.
++template <bool APPROXIMATION_MODE, BinaryOp BINOP>
++inline void sfpu_binary_init() {}
 +
  }  // namespace ckernel::sfpu
 diff --git a/include/jit_hw/experimental/llk_sfpu/ckernel_sfpu_sdpa.h b/include/jit_hw/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
@@ -179,6 +299,21 @@ index 889806b..bbaa05d 100644
  template <
      bool SCALE_EN,
      int ITERATIONS,
+diff --git a/include/jit_hw/llk_math_eltwise_binary_sfpu_macros.h b/include/jit_hw/llk_math_eltwise_binary_sfpu_macros.h
+index e298f3c..d1da39a 100644
+--- a/include/jit_hw/llk_math_eltwise_binary_sfpu_macros.h
++++ b/include/jit_hw/llk_math_eltwise_binary_sfpu_macros.h
+@@ -67,6 +67,10 @@ inline void llk_math_eltwise_binary_sfpu_init(F&& init_func, ARGS&&... args) {
+     ::ckernel::_sfpu_binary_check_and_call_<DST_SYNC, DST_ACCUM>(                                 \
+         ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
+ 
++// Init with a templated callback (silicon: SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATE))).
++#define SFPU_BINARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
++    ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(::ckernel::INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>)
++
+ // Init with a non-templated callback.
+ #define SFPU_BINARY_INIT_FN_NO_ARGS(OP, INIT_FN) \
+     ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
 diff --git a/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h b/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h
 index d443d28..a1bd1ac 100644
 --- a/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h
