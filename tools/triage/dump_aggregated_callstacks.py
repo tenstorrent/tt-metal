@@ -73,7 +73,6 @@ def _frame_signature(
             frame.function_name,
             frame.file_info.file if frame.file_info is not None else None,
             frame.file_info.line if frame.file_info is not None else None,
-            frame.file_info.column if frame.file_info is not None else None,
         )
         for frame in callstack
     )
