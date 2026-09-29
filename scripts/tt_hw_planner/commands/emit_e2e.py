@@ -2996,6 +2996,11 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
     it returns: an audio tower over 1500 frames that projects down to 375 outputs retires 1500.
     A recurring step (one token, one denoise step) returns 1. Omit it ONLY if the stage genuinely
     retires one item.
+  <stage>_trace_split(): ZERO-ARG, OPTIONAL. Only for a stage whose items are SPLIT across
+    data-parallel chip groups that run at the same time (each group gets items/split, e.g. the batch
+    sharded over a DP mesh axis): return that number of groups. The compute ceiling is per chip, so
+    an unstated split prices the stage as if one group did the whole batch. Omit it for a stage that
+    runs whole on every group (replicated) or on a single group.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 

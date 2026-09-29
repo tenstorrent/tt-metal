@@ -116,6 +116,10 @@ KIND_STAGE_TOKENS = "stage_tokens"
 # change the divisor under a measurement.
 KIND_TP_DEGREE = "tp_degree"
 
+# HOW MANY DATA-PARALLEL GROUPS SHARE A STAGE'S ITEMS (trace_replay: the pipeline's <stage>_trace_split).
+# The compute ceiling divides a stage's FLOPs by TP x this; pinned per stage for the same reason TP is.
+KIND_STAGE_SPLIT = "stage_split"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 

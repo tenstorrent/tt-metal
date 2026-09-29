@@ -649,6 +649,11 @@ def measure_adapter(adapter, device) -> float:
         _n = int(getattr(st, "items", 0) or 0)
         if _n > 0:
             print("TRACE_STAGE_ITEMS[%s]=%d" % (st.name, _n), flush=True)
+        # AND HOW MANY DATA-PARALLEL GROUPS SHARE THEM (stage_seams.SPLIT), so the ceiling prices what
+        # one chip does. Printed only for a stage that is split: 1 is the reader's fallback.
+        _sp = int(getattr(st, "split", 0) or 0)
+        if _sp > 1:
+            print("TRACE_STAGE_SPLIT[%s]=%d" % (st.name, _sp), flush=True)
 
     # WHICH MODULES EACH STAGE RUNS, read from the pipeline's own code (stage_marks.stage_module_paths)
     # so perf_mcp can price each stage's compute from the weights it actually multiplies instead of

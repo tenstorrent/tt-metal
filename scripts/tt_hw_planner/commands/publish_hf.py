@@ -61,6 +61,28 @@ _BOX_TARGET = {
 }
 
 
+def _box_from_env(env: dict | None) -> str | None:
+    """The planner box the run's DETECTED hardware is (its manifest env: arch family + chip count), or
+    None when that matches no box or more than one -- never a guess."""
+    from ..hardware import HARDWARE
+
+    arch = str((env or {}).get("arch") or "").strip().lower()
+    try:
+        chips = int((env or {}).get("device_count") or 0)
+    except (TypeError, ValueError):
+        chips = 0
+    if not arch or chips <= 0:
+        return None
+    hits = [b.name for b in HARDWARE if b.arch.lower() == arch and b.chips == chips and b.name in _BOX_TARGET]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _serve_target(box: str | None, env: dict | None) -> tuple:
+    """(arch, hardware, mesh_device) for the serve block: the --box the operator named, else the box
+    the run detected, else (None, None, None) -- which the caller must fill with overrides."""
+    return _BOX_TARGET.get(box if box in _BOX_TARGET else (_box_from_env(env) or ""), (None, None, None))
+
+
 def _yaml_quote(s: str) -> str:
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -89,7 +111,7 @@ def _write_tt_model_yaml(
     """Emit a schema-5.1 tt-model.yaml describing how to build+serve this optimized model as a
     v5.1 container package. Fields the run can't provide (the vLLM adapter dir, plugin) are stated
     as sane defaults/overrides; `tt-model package --container` resolves and validates the rest."""
-    a, hw, mesh = _BOX_TARGET.get(box or "", ("blackhole", "p300x2", "P300x2"))
+    a, hw, mesh = _serve_target(box, state.get("env"))
     _batch = state.get("batch")
     serve_max = _batch or 32
     serve_maxlen = None
@@ -108,6 +130,11 @@ def _write_tt_model_yaml(
     arch = arch or a
     hardware = hardware or hw
     mesh_device = mesh_device or mesh
+    if not (arch and hardware and mesh_device):
+        raise ValueError(
+            "no serve target: the run's detected hardware (%s) is no single known box and no --box / "
+            "--arch / --hardware / --mesh was given" % (state.get("env") or {}).get("arch")
+        )
     thr = state.get("throughput") or {}
     sv = state.get("serving") or {}
     pt = sv.get("per_token") or {}
@@ -238,7 +265,11 @@ def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | 
         "  - tenstorrent",
         "  - tt-metal",
         "  - ttnn",
-        "  - blackhole",
+    ]
+    _arch_tag = str((state.get("env") or {}).get("arch") or "").strip().lower()
+    if _arch_tag:
+        L.append(f"  - {_arch_tag}")  # the hardware the run detected, not an assumed one
+    L += [
         "---",
         "",
         f"# {slug} — Tenstorrent-optimized",
@@ -911,7 +942,6 @@ def _capture_vllm_provenance(args) -> None:
         print(f"  [publish-hf] provenance capture skipped: {e}")
 
 
-
 def _ensure_tt_model_serving_fixes(tt_model_bin) -> None:
     """Make a source-built ({path}) matched-pair image build on ANY host by ensuring the local tt-model
     launcher (tt_kernel/launchers.py) handles a staged vLLM/plugin source that has no .git:
@@ -921,6 +951,7 @@ def _ensure_tt_model_serving_fixes(tt_model_bin) -> None:
     This removes the last external dependency: publishHF works end-to-end with no manual tt-model edit."""
     import subprocess
     from pathlib import Path as _P
+
     binp = _P(tt_model_bin)
     py = binp.parent / "python"
     if not py.is_file():
@@ -928,7 +959,9 @@ def _ensure_tt_model_serving_fixes(tt_model_bin) -> None:
     try:
         loc = subprocess.run(
             [str(py), "-c", "import tt_kernel, os; print(os.path.dirname(tt_kernel.__file__))"],
-            capture_output=True, text=True).stdout.strip()
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     except Exception:
         return
     lf = _P(loc) / "launchers.py" if loc else None
@@ -943,48 +976,54 @@ def _ensure_tt_model_serving_fixes(tt_model_bin) -> None:
     env = "SETUPTOOLS_SCM_PRETEND_VERSION=0.24.0 VCS_VERSIONING_PRETEND_VERSION=0.24.0 "
     orig_vllm = (
         '        if vllm.get("path"):\n'
-        '            return (\n'
-        '                [f\'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python" \'\n'
+        "            return (\n"
+        "                [f'VLLM_TARGET_DEVICE=empty uv pip install --python \"$VENV/bin/python\" '\n"
         '                 f"{VLLM_CTX_DIR} --extra-index-url {self.PYTORCH_CPU_INDEX} "\n'
         '                 f"--index-strategy unsafe-best-match"]\n'
-        '                + self._post_engine_lines(m, plugin)\n'
-        '            )'
+        "                + self._post_engine_lines(m, plugin)\n"
+        "            )"
     )
     new_vllm = (
         '        if vllm.get("path"):\n'
         '            constraint = "--constraint /ctx/requirements.lock " if rt.get("lock") else ""\n'
-        '            return ([\n'
-        '                \'' + env + '\'\n'
-        '                f\'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python" {constraint}\'\n'
+        "            return ([\n"
+        "                '" + env + "'\n"
+        "                f'VLLM_TARGET_DEVICE=empty uv pip install --python \"$VENV/bin/python\" {constraint}'\n"
         '                f"{VLLM_CTX_DIR} --extra-index-url {self.PYTORCH_CPU_INDEX} "\n'
         '                f"--index-strategy unsafe-best-match"\n'
-        '            ] + self._post_engine_lines(m, plugin))'
+        "            ] + self._post_engine_lines(m, plugin))"
     )
     orig_plugin = (
-        '            lines.append(\n'
-        '                f\'uv pip install --python "$VENV/bin/python" {PLUGIN_CTX_DIR}\'\n'
-        '            )'
+        "            lines.append(\n"
+        "                f'uv pip install --python \"$VENV/bin/python\" {PLUGIN_CTX_DIR}'\n"
+        "            )"
     )
     new_plugin = (
-        '            lines.append(\n'
-        '                f\'' + env + 'uv pip install --python "$VENV/bin/python" {PLUGIN_CTX_DIR}\'\n'
-        '            )'
+        "            lines.append(\n"
+        "                f'" + env + 'uv pip install --python "$VENV/bin/python" {PLUGIN_CTX_DIR}\'\n'
+        "            )"
     )
     n = 0
     if orig_vllm in src:
-        src = src.replace(orig_vllm, new_vllm, 1); n += 1
+        src = src.replace(orig_vllm, new_vllm, 1)
+        n += 1
     if orig_plugin in src:
-        src = src.replace(orig_plugin, new_plugin, 1); n += 1
+        src = src.replace(orig_plugin, new_plugin, 1)
+        n += 1
     if n:
         try:
             lf.write_text(src)
             print(f"  [publish-hf] self-healed tt-model source-build launcher ({n} sites): {lf}")
         except Exception as e:  # noqa: BLE001
-            print(f"  [publish-hf] could not patch tt-model launcher ({e}); apply the pretend-version + "
-                  "--constraint fix to tt_kernel/launchers.py manually")
+            print(
+                f"  [publish-hf] could not patch tt-model launcher ({e}); apply the pretend-version + "
+                "--constraint fix to tt_kernel/launchers.py manually"
+            )
     else:
-        print("  [publish-hf] tt-model launcher layout unrecognized; if a {path} build fails on "
-              "setuptools-scm/torch, upstream the pretend-version + --constraint fix to tt-model")
+        print(
+            "  [publish-hf] tt-model launcher layout unrecognized; if a {path} build fails on "
+            "setuptools-scm/torch, upstream the pretend-version + --constraint fix to tt-model"
+        )
 
 
 def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -> int:
@@ -1080,26 +1119,30 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     mesh_override = getattr(args, "mesh", None) or (f"({mesh_rc[0]}, {mesh_rc[1]})" if mesh_rc else None)
 
     yaml_path = Path(tempfile.mkdtemp(prefix="tt_ttmodel_")) / "tt-model.yaml"
-    _write_tt_model_yaml(
-        yaml_path,
-        state=state,
-        slug=slug,
-        repo_id=args.repo,
-        checkout=str(checkout),
-        weights=getattr(args, "weights", None),
-        box=getattr(args, "box", None),
-        arch=getattr(args, "arch", None),
-        hardware=getattr(args, "hardware", None),
-        mesh_device=mesh_override,
-        kind=getattr(args, "kind", None) or "vllm-plugin",
-        plugin_ref=getattr(args, "plugin_ref", None) or "main",
-        vllm_version=getattr(args, "vllm_version", None) or "0.24.0",
-        extra_models_dir=extra,
-        commit=commit,
-        lock=getattr(args, "lock", None),
-        vllm_path=getattr(args, "vllm_path", None),
-        plugin_path=getattr(args, "plugin_path", None),
-    )
+    try:
+        _write_tt_model_yaml(
+            yaml_path,
+            state=state,
+            slug=slug,
+            repo_id=args.repo,
+            checkout=str(checkout),
+            weights=getattr(args, "weights", None),
+            box=getattr(args, "box", None),
+            arch=getattr(args, "arch", None),
+            hardware=getattr(args, "hardware", None),
+            mesh_device=mesh_override,
+            kind=getattr(args, "kind", None) or "vllm-plugin",
+            plugin_ref=getattr(args, "plugin_ref", None) or "main",
+            vllm_version=getattr(args, "vllm_version", None) or "0.24.0",
+            extra_models_dir=extra,
+            commit=commit,
+            lock=getattr(args, "lock", None),
+            vllm_path=getattr(args, "vllm_path", None),
+            plugin_path=getattr(args, "plugin_path", None),
+        )
+    except ValueError as exc:
+        print(f"  [publish-hf] {exc}")
+        return 2
     print(f"  [publish-hf] tt-model.yaml -> {yaml_path}")
     print("  " + "-" * 60)
     for ln in yaml_path.read_text().splitlines():
@@ -1246,7 +1289,9 @@ def cmd_publish_hf(args) -> int:
             return 2
         slug = slug or run_slug(run_dir)
         state_root = repo_root_for_run(run_dir, repo_root)
-        state = collect_state(run_dir, state_dir_candidates(state_root, slug), slug, requested_batch=getattr(args, "batch", None))
+        state = collect_state(
+            run_dir, state_dir_candidates(state_root, slug), slug, requested_batch=getattr(args, "batch", None)
+        )
     if not slug:
         print("  [publish-hf] could not determine the model slug. Pass a target.")
         return 2

@@ -144,7 +144,11 @@ def test_the_parser_records_the_count_for_whatever_stage_stated_it():
     and the reader's {stage: items} map was a one-key map by construction."""
     src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
-    assert "stage_isl[_nm] = _nv" in code, "the count is still keyed by a hardcoded stage name"
+    # One parser for every per-stage count marker: the stated items land in stage_isl under the name
+    # the marker carries.
+    assert (
+        '("TRACE_STAGE_ITEMS[", stage_isl)' in code and "_into[_nm] = _nv" in code
+    ), "the count is still keyed by a hardcoded stage name"
     assert 'stage_isl["prefill"] = _iv' not in code, "the hardcoded writer is back"
     # BEHAVIOUR CHANGE: this used to REQUIRE the legacy marker to be filed under _LEGACY_PROMPT_KEY,
     # as the fallback for a stage stating no count of its own. That made a workload fact reachable

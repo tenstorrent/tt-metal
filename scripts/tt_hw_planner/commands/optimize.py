@@ -260,12 +260,18 @@ def _write_optimize_fallback(demo_dir, label, args, summ) -> None:
         pass
 
 
+def _mesh_dims(mesh_arg) -> list:
+    """The --mesh dimensions as the planner writes them anywhere else: '4x8' or '4,8' (cli._parse_mesh
+    takes both). This split on 'x' alone, so '4,8' -- 32 chips -- read as no mesh at all."""
+    return str(mesh_arg).lower().replace(",", "x").split("x")
+
+
 def _chip_count_from_mesh(mesh_arg) -> int:
     if not mesh_arg:
         return 0
     try:
         prod = 1
-        for tok in str(mesh_arg).lower().split("x"):
+        for tok in _mesh_dims(mesh_arg):
             prod *= int(tok)
         return max(prod, 0)
     except Exception:  # noqa: BLE001
@@ -335,7 +341,7 @@ def _derive_mesh_device_env(args) -> None:
     raw = getattr(args, "mesh", None)
     if raw:
         try:
-            r, c = str(raw).lower().split("x")
+            r, c = _mesh_dims(raw)
             shape = (int(r), int(c))
         except (ValueError, AttributeError):
             return
@@ -856,7 +862,12 @@ def cmd_optimize(args) -> int:
                         (rd / ".requested_batch").write_text(str(int(_rb)))  # persist so any served view shows batch
                     except Exception:
                         pass
-                return collect_state(rd, state_dir_candidates(run_root, _dash_slug), _dash_slug, requested_batch=getattr(args, "batch", None))
+                return collect_state(
+                    rd,
+                    state_dir_candidates(run_root, _dash_slug),
+                    _dash_slug,
+                    requested_batch=getattr(args, "batch", None),
+                )
 
             def _dash_decision(action):
                 rd = find_run_dir(run_root, slug=_dash_slug)

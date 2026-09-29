@@ -173,13 +173,13 @@ def test_the_marker_tp_and_each_stages_params_are_pinned(pm, tmp_path, monkeypat
     }
 
 
-def test_the_ceilings_divide_by_the_pinned_tp_unless_the_tool_exported_one(pm, monkeypatch):
+def test_the_ceilings_divide_by_the_tp_the_run_reported_before_the_exported_mesh(pm, monkeypatch):
     pm, led = pm
     assert pm._tp_degree() == 1, "nothing observed, nothing exported"
+    monkeypatch.setenv("TT_PERF_MESH_COLS", "32")
+    assert pm._tp_degree() == 32, "before any marker, the exported topology"
     led.anchor("tp_degree", 8.0, depth="pipeline")
-    assert pm._tp_degree() == 8
-    monkeypatch.setenv("TT_PERF_MESH_COLS", "2")
-    assert pm._tp_degree() == 2, "an exported topology still wins"
+    assert pm._tp_degree() == 8, "the pipeline's own split beats a 1xN mesh planned without it"
 
 
 def test_the_replay_reports_the_modules_and_the_pipelines_own_split():
@@ -228,3 +228,60 @@ def test_an_unknown_board_never_reads_full():
     assert tt.normalize_grid(64, None) == "partial"
     assert tt.normalize_grid(5, None) == "tiny"
     assert tt.normalize_grid(64, 64) == "full"
+
+
+# -- the data-parallel split -------------------------------------------------------------------------
+
+
+class _Split:
+    PIPELINE_STAGES = _STAGES
+
+    def alpha_trace_split(self):
+        return 4
+
+    def beta_trace_split(self):
+        raise RuntimeError("a split that cannot be read is not stated")
+
+
+def test_a_stage_states_its_split_and_an_unstated_one_is_zero():
+    from agent import perf_adapter as pa
+    from agent import stage_seams
+
+    assert stage_seams.SPLIT in stage_seams.OPTIONAL and stage_seams.SPLIT in stage_seams.ALL
+    assert [pa._stated_count(_Split(), s, stage_seams.SPLIT) for s in _STAGES] == [4, 0, 0]
+    assert pa._Stage("alpha", None, split=4).split == 4
+    assert pa._Stage("alpha", None).split == 0, "unstated stays unstated"
+
+
+def test_the_replay_prints_a_split_only_when_there_is_one():
+    src = (_PA / "agent" / "trace_replay.py").read_text()
+    assert 'print("TRACE_STAGE_SPLIT[%s]=%d" % (st.name, _sp)' in src and "if _sp > 1:" in src
+
+
+def test_the_split_is_parsed_and_pinned_beside_the_item_count():
+    src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    assert '("TRACE_STAGE_SPLIT[", stage_split)' in src
+    assert "_ledger().KIND_STAGE_SPLIT, stage_split" in src
+
+
+def _roofs(summary, monkeypatch, pinned):
+    monkeypatch.setattr(summary, "_model_facts", lambda: {})
+    monkeypatch.setattr(summary, "_pinned_peak_flops", lambda *a, **k: 64e12)
+    monkeypatch.setattr(summary, "_peak_for_stage", lambda *a, **k: (64e12, "hifi4"))
+
+    def _pin(kind, stage, model="", task=""):
+        return pinned.get((kind, stage))
+
+    monkeypatch.setattr(summary, "_pinned_ceiling_input", _pin)
+    base = {("matmul_params", "alpha"): 1e9, ("stage_tokens", "alpha"): 1000}
+    base.update(pinned)
+    pinned.clear()
+    pinned.update(base)
+    return summary._stage_roofs(10e9, 288.0, 8, "inference", None, {"alpha": 1.0}, model="m", task="t")
+
+
+def test_the_compute_roof_is_what_one_chip_does(summary, monkeypatch):
+    one = _roofs(summary, monkeypatch, {})
+    four = _roofs(summary, monkeypatch, {("stage_split", "alpha"): 4})
+    assert one["alpha"]["flops"] == pytest.approx(2 * 1e9 * 1000 / 8), "unsplit: TP alone, as before"
+    assert four["alpha"]["flops"] == pytest.approx(one["alpha"]["flops"] / 4), "split over 4 groups"

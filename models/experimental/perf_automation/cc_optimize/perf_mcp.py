@@ -3253,6 +3253,7 @@ def _run_full_pipeline_ms():
     stage_paths = {}
     stage_isl = {}
     stage_modules: dict = {}  # {stage: module paths it runs}, from TRACE_STAGE_MODULES
+    stage_split: dict = {}  # {stage: data-parallel groups sharing its items}, from TRACE_STAGE_SPLIT
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
     # the TOTAL a stage states for one call.
     stage_isl_per_request = {}
@@ -3438,14 +3439,15 @@ def _run_full_pipeline_ms():
                         stage_modules[_mn] = _mv
                 except Exception:  # noqa: BLE001
                     pass
-            if "TRACE_STAGE_ITEMS[" in line:
-                try:
-                    _nm = line.split("TRACE_STAGE_ITEMS[", 1)[1].split("]", 1)[0].strip()
-                    _nv = int(line.split("]=", 1)[1].split()[0])
-                    if _nm and _nv > 0:
-                        stage_isl[_nm] = _nv
-                except Exception:  # noqa: BLE001
-                    pass
+            for _marker, _into in (("TRACE_STAGE_ITEMS[", stage_isl), ("TRACE_STAGE_SPLIT[", stage_split)):
+                if _marker in line:
+                    try:
+                        _nm = line.split(_marker, 1)[1].split("]", 1)[0].strip()
+                        _nv = int(line.split("]=", 1)[1].split()[0])
+                        if _nm and _nv > 0:
+                            _into[_nm] = _nv
+                    except Exception:  # noqa: BLE001
+                        pass
             if "PERF_ISL_TOKENS=" in line:
                 try:
                     _iv = int(line.split("PERF_ISL_TOKENS=", 1)[1].split()[0])
@@ -3602,16 +3604,20 @@ def _run_full_pipeline_ms():
         # column must not move while the run works. Observed per run, so unpinned it would follow a
         # change in prefill chunking straight into the ceiling.
         try:
-            for _tn, _tv in (stage_isl or {}).items():
-                if _tn and int(_tv or 0) > 0:
-                    _ledger().anchor(
-                        _ledger().KIND_STAGE_TOKENS,
-                        float(int(_tv)),
-                        depth=str(_tn).strip().lower(),
-                        mode="items",
-                        source="trace_replay observed item count",
-                        model=_MODEL_ROOT.name if _MODEL_ROOT else "",
-                    )
+            for _kind, _vals, _mode, _src in (
+                (_ledger().KIND_STAGE_TOKENS, stage_isl, "items", "trace_replay observed item count"),
+                (_ledger().KIND_STAGE_SPLIT, stage_split, "count", "trace_replay stated data-parallel split"),
+            ):
+                for _tn, _tv in (_vals or {}).items():
+                    if _tn and int(_tv or 0) > 0:
+                        _ledger().anchor(
+                            _kind,
+                            float(int(_tv)),
+                            depth=str(_tn).strip().lower(),
+                            mode=_mode,
+                            source=_src,
+                            model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                        )
         except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
             pass
         _pin_stage_params_and_tp(stage_modules, tp)
@@ -7142,11 +7148,13 @@ def _pin_stage_params_and_tp(stage_modules: dict, tp) -> None:
 
 
 def _tp_degree() -> int:
-    """TP for the ceilings: the operator's topology when the tool exported one, else the degree the
-    run's own marker reported (pinned), else 1."""
-    env_tp = int(os.environ.get("TT_PERF_MESH_COLS", "0") or "0")
-    if env_tp > 0:
-        return env_tp
+    """TP for the ceilings: the degree the run's own marker reported (pinned), else the topology the
+    tool exported, else 1.
+
+    THE MARKER FIRST. It is read off the device the model actually opened and, when the pipeline states
+    its own split (stage_seams.TP_ATTR), off the pipeline -- so for a model that states nothing it
+    equals the exported columns anyway, and for one that does it is the only right answer: a 4,8
+    Galaxy exported as 1x32 when the model cannot be probed, while Qwen-Image-Edit runs TP=8."""
     try:
         led = _ledger()
         v = led.anchor_value(led.KIND_TP_DEGREE, depth="pipeline", model=_MODEL_ROOT.name if _MODEL_ROOT else "")
@@ -7154,7 +7162,8 @@ def _tp_degree() -> int:
             return int(v)
     except Exception:  # noqa: BLE001
         pass
-    return 1
+    env_tp = int(os.environ.get("TT_PERF_MESH_COLS", "0") or "0")
+    return env_tp if env_tp > 0 else 1
 
 
 def _select_perf_target(rep: dict):
