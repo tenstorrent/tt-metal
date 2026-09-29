@@ -696,3 +696,31 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_residual.py
+
+## S.dense_full.07 test (attempt 1)
+
+What was done
+- Rewrote the rendered swap test (steps 1-7 on device, last attn_residual) from swap 06: kept the gated pcc_swap_out
+  (0.98), the trail and every swap-06 check (gates, attn_x, attn_norm, q_resid, topk, attn_out five ways, block out
+  rel <= 0.01). Added for h_mid (the swapped step): per-token per-stream norm ratio vs golden [0.98, 1.02]; vs the
+  CPU attn_residual on the same device inputs (golden in, device attn_hc, device attn_out) rel <= 5e-4 / worst row
+  <= 1e-3, plus the component's per-stream addend checks (coef [0.97, 1.03], rel <= 0.03, worst row <= 0.1); and the
+  module on distinct input streams (golden h_mid as streams) vs the CPU step at the same tight limits.
+- CPU mutation study (/tmp/hy4_s07/study.py, outside the repo) in the docstring: 5 of 16 residual bugs pass the 0.98
+  out gate (bf16 output, 1.01 x / 1.1 x attn_out, last row zeroed, last 32 columns zeroed); every one fails an added
+  check.
+
+Decisions
+- vs-CPU limit 5e-4 (not the component's 0.01): the device step is fp32 in / fp32 out and bit-identical to the CPU
+  step, so a bf16 output (0.0017) or a 1 % scale (0.0087) is caught; the golden-side limits stay loose because
+  upstream device error (attn_out rel 0.0045) dominates h_mid vs golden.
+- Distinct-stream probe: layer 0's four input streams are identical, so an input-stream permutation or stream layout
+  bug is invisible on the block's own inputs.
+
+Results
+- BRINGUP_IMPL=reference: PASS (every vs-CPU check exact). BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999987 (rel 0.00514); h_mid vs golden 0.00417 / worst row 0.00785, stream ratio
+  [0.99842, 1.00514]; h_mid vs CPU 0 / 0; addend coef 1.0, rel 0; distinct-stream probe 0.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_07_attn_residual.py
