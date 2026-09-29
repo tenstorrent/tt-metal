@@ -45,6 +45,14 @@ struct UnifiedMatmulPlan {
     uint32_t C_slice_M_padded_tiles = 0;
     uint32_t C_slice_N_padded_tiles = 0;
 
+    // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are dealt
+    // round-robin to the threads, which all see the whole A and B slices. Every thread runs
+    // subblock_rounds rounds; a round past the last subblock only moves credits, so the lanes of the
+    // thread-striped C_slice / C_partials rings carry equal traffic.
+    uint32_t num_compute_threads = 1;
+    uint32_t num_subblocks = 0;    // per C slice: (C_slice_M_padded_tiles / subblock_M_tiles) * (N likewise)
+    uint32_t subblock_rounds = 0;  // ceil(num_subblocks / num_compute_threads)
+
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).
     uint32_t C_slices_per_batch = 0;
@@ -53,12 +61,14 @@ struct UnifiedMatmulPlan {
     uint32_t max_C_slices_per_core = 0;  // sizes the DFBs and gates partials aliasing
 
     // Borrowed operand: its L1 shard on each active core is bound as the DFB itself, no copy.
-    // Needs batch 1, one C slice per core, and a shard grid in assignment order.
+    // Needs batch 1, one C slice per core, and a shard grid in assignment order. C also needs one
+    // compute thread: several threads stripe the C_slice ring, which is not the shard's tile order.
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;
 
-    // DFB sizing. An entry holds one tile; entry sizes are in bytes.
+    // DFB sizing. An entry holds one tile; entry sizes are in bytes. C_slice and C_partials hold
+    // subblock_rounds * num_compute_threads subblocks (the C slice, padded to whole rounds).
     bool packer_l1_acc_en = false;
     tt::DataFormat A_format{};
     tt::DataFormat B_format{};
