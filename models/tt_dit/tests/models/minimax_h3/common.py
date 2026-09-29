@@ -158,7 +158,14 @@ GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
 # QB2 collects only `1x4` and a `TT_METAL_VISIBLE_DEVICES=0` run collects only `1x1`.
 _line = {**line_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 
-MESH_1X1_LINE = pytest.param((1, 1), _line, id="1x1", marks=_BH_ONLY)
+# A genuine one-chip mesh must open with no fabric at all. `FABRIC_1D` on it is a hard failure --
+# "Fabric config FABRIC_1D requires at least 2 participating chips, but the opened mesh has 1 local
+# device(s)" -- and until the p150 was presented as a real single chip (TT_VISIBLE_DEVICES plus the
+# p150 mesh graph descriptor) this row silently opened a 1-device *submesh* of the 4-chip cluster,
+# where the fabric request was legal and the row therefore looked fine.
+_single = {"require_exact_physical_num_devices": True, "l1_small_size": _L1_SMALL}
+
+MESH_1X1_LINE = pytest.param((1, 1), _single, id="1x1", marks=_BH_ONLY)
 MESH_1X4_LINE = pytest.param((1, 4), _line, id="1x4", marks=_BH_ONLY)
 
 SMALL_MESHES = [MESH_1X1_LINE, MESH_1X4_LINE]
@@ -212,12 +219,14 @@ _GALAXY_RING_ROWS = [
 # false and attention is plain SDPA -- the configuration the pad-row window exists for.
 #
 #   * 1x1: no parallelism at all. tp_axis 0 and sp_axis 1 are both size 1; the assignment matches
-#     `_PRESETS_BH[(1, 1)]` and is otherwise arbitrary. 1 link, because a 1-device mesh has no
-#     fabric to put links on.
+#     `_PRESETS_BH[(1, 1)]` and is otherwise arbitrary. 1 link and **no fabric config**, because a
+#     1-device mesh has no fabric to put links on and asking for one is fatal.
 #   * 1x4: TP takes the whole mesh on axis 1 (56 heads / 4 = 14, and 5376 % (32 * 4) == 0), SP is the
 #     size-1 axis 0. Same axes as Wan's `(1, 4)` preset, 2 links on the line.
 _SMALL_LINE_ROWS = [
-    pytest.param((1, 1), 1, 0, 1, _line, ttnn.Topology.Linear, False, id="1x1sp1tp0nl1_line_is_fsdp0", marks=_BH_ONLY),
+    pytest.param(
+        (1, 1), 1, 0, 1, _single, ttnn.Topology.Linear, False, id="1x1sp1tp0nl1_line_is_fsdp0", marks=_BH_ONLY
+    ),
     pytest.param((1, 4), 0, 1, 2, _line, ttnn.Topology.Linear, False, id="1x4sp0tp1nl2_line_is_fsdp0", marks=_BH_ONLY),
 ]
 
