@@ -1163,3 +1163,37 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
+
+## S.moe_full.01 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_full layer 1, attn_hc on device, rest CPU). It keeps the gated
+  pcc_swap_out (0.98) and the trail. It adds asserted checks (informational metrics): not a CPU bridge; the gates vs
+  golden with the component test's limits (8 columns, finite, rel L2 <= 0.01, per-column rel L2 <= 0.01, post worst
+  row <= 0.015); attn_x rel <= 0.005 / worst row <= 0.02; h_mid rel <= 0.005 / worst (row, stream) <= 0.02; router
+  top-8 selection overlap >= 0.98; block out finite and rel L2 <= 0.01.
+- CPU block-level mutation study in /tmp/hy4_sm1/study.py (outside the repo). The table is in the test docstring.
+  Every gate mutation except the zero stub and "post = 1 x sigmoid" passes the 0.98 out gate.
+
+Decisions
+- Per-column rel L2 instead of layer 0's per-column max abs. At layer 1 every column is well above hc_eps (see
+  C.moe_full.attn_hc).
+- The out worst (row, stream) rel L2 is recorded but not asserted: it is 0.056 on the fp32 reference, because a few
+  near-tie tokens switch experts in the CPU router. The router overlap check is only a gross check (reference 0.9987).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999997, rel 0.0024, gates col rel max 0.0019, router 0.9987).
+- BRINGUP_IMPL=stub: FAIL on every check (out PCC 0.860).
+- Gate (device TtHcGates): PASS. pcc_swap_out 0.999996, gates rel 0.00149, col rel max 0.00536 (post 4), post row
+  0.0065, attn_x 0.00223 / 0.0028, h_mid 0.00218 / 0.0037, router 0.9978, out rel 0.00277.
+
+Gotchas
+- The tightest margin is still post column 4 (0.0054 vs 0.01), the same as in the component test.
+- Not caught: dropping hc_eps, post x 1.005 (inside the bf16 golden noise).
+- The first block of printed metrics (and "UP_FRONT_COLLECT_RESULT: status=failed reason=incomplete") comes from the
+  precompile collect pass. The second block is the real run.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
