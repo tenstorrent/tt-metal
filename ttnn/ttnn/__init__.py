@@ -592,7 +592,14 @@ experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_p
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+from ttnn.operations.transformer import (
+    SDPAProgramConfig,
+    PagedCacheGeometryOverride,
+    SparseKVFormat,
+    ChunkGdnMonoProgramConfig,
+    ChunkGdnPhasedProgramConfig,
+    ChunkGdnFusedProgramConfig,
+)
 
 transformer.SparseKVFormat = SparseKVFormat
 
