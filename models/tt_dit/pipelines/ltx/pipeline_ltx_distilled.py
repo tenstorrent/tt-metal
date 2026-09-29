@@ -1528,6 +1528,11 @@ class LTXDistilledPipeline(LTXPipeline):
         for name, tensor in (("video", video), ("audio", audio)):
             if tensor is None:
                 continue
+            if not isinstance(tensor, torch.Tensor):
+                # Device-resident hand-off (a ttnn tensor): reading it back only to log would add the
+                # host round-trip the device path exists to remove, so no fingerprint here.
+                logger.debug(f"  latent[{label}/{name}]: device-resident, stats skipped")
+                continue
             s = self._latent_stats(tensor)
             logger.info(
                 f"  latent[{label}/{name}]: mean={s['mean']:+.3f} std={s['std']:.3f} "
