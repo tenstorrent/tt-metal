@@ -634,3 +634,25 @@ On layer 0 the same-input checks score 0 for the stub, because the CPU steps of 
 Watch: cpu_tail is at 0.0038 of 0.005 (0.0035 in swap 09); block out rel 0.0077 of 0.01.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_10_ffn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.attn_hc test (attempt 1)
+
+Reviewed the rendered component test for attn_hc at layer 3 (the same op as kda_dense attn_hc, with layer 3's weights).
+I rewrote it from the kda_dense attn_hc test: the gated PCC plus asserted part checks. The limits are re-measured on
+the layer-3 golden, because the layer-0 limits do not fit here:
+- At layer 3 the streams differ (rel ~1.0 from stream 0), so PCC catches stream-order bugs (0.60..0.64). Every
+  coefficient bug still scores PCC >= 0.9967, for example comb transposed 0.99926.
+- post is saturated near 0: every entry is <= 0.024, and column 6 is ~1e-8. So post max abs is ~1e-4, and the layer-0
+  limit of 0.2 means nothing here.
+- Limits: part rel L2 <= 0.01; max abs pre 0.02, post 5e-4, comb 0.02; worst single-column rel L2 <= 0.07 (new);
+  comb column sums within 0.01; range checks.
+Sensitivity (CPU host script /tmp/dsahc/sens.py, not kept; numbers in the test docstring). Caught: comb transposed,
+wrong softmax axis, 10/18/19 iterations, hc_eps 1e-5 and 0, comb base transposed, rms eps 1e-6, scales swapped,
+x1.02 on any scale or part, last row zeroed. Not caught: rms eps 1.2e-5, and 0.3% mix noise (device-like).
+Results: device mode already passes, because `_device_step` builds tt/mhc.py for any layer. It scores PCC 0.999998,
+part rel 0.0021 / 0.0030 / 0.0019, max abs 4.9e-3 / 1.4e-4 / 6.8e-3, worst column 0.034 (column 9, a comb entry
+<= 3e-4). Reference passes (0.0013 / 0.0017 / 0.0012, worst column 0.0035). Stub fails (PCC 0).
+Watch: the worst-column margin is about 2x (0.034 of 0.07). The next step, implement, only needs to add attn_hc to
+`DEVICE_STEPS["dsa_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
