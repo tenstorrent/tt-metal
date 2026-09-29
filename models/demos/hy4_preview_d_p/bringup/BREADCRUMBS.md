@@ -770,3 +770,36 @@ Re-run
 - Gotcha: the log's first `FAIL pcc_ffn_hc_L00: pcc=0.000000` line comes from the precompile collect pass, not the
   real run.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py`
+
+## S.dense_full.08 test (attempt 1)
+
+What was done
+- Rewrote the rendered swap test (steps 1-8 on device, last ffn_hc) from swap 07. It keeps the gated pcc_swap_out
+  (0.98) and every swap-07 check, and adds these ffn_hc checks:
+  - vs golden at the component's limits: rel <= 0.01, post column <= 0.006, post row <= 0.015. ffn_x vs golden:
+    rel <= 0.01, row <= 0.05.
+  - vs the CPU ffn_hc on the same device h_mid: rel <= 0.005, post column <= 0.004, post row <= 0.01. ffn_x from
+    device gates vs from CPU gates: <= 0.005 / row 0.02.
+  - block out vs the CPU tail (ffn_hc .. ffn_residual) run from the device h_mid: <= 0.005 / row 0.02.
+  - the module once more on h_mid x 0.1 (the rms_norm_eps check), with the same vs-CPU limits.
+- CPU mutation study in /tmp/hy4_s08/study{,2}.py (outside the repo); the table is in the docstring. 17 of 27
+  mutations pass the out gate. Every real bug among them fails an added check. bf16 output and a dropped hc_eps
+  pass (out change <= 0.0024).
+
+Decisions
+- The vs-CPU checks carry the tight limits. The golden-side limits stay at component level, because the device
+  h_mid is already rel 0.004 off the golden.
+- No synthetic distinct-stream probe: the streams at h_mid are already distinct, and stream-order mutations fail.
+- The out-vs-CPU-tail check isolates what the post gates do to out, with the upstream error removed.
+
+Results
+- BRINGUP_IMPL=reference: PASS (every vs-CPU check is exactly 0). BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS.
+  - pcc_swap_out 0.999985, out rel 0.00541.
+  - ffn_hc: vs golden 0.0023 / post column 0.0028 / post row 0.0067; vs CPU 0.00062 / 0.00076 / 0.0015.
+  - ffn_x: vs golden 0.0046 / row 0.0082; vs CPU 0.0022 / row 0.0030, row norm ratio [1.0005, 1.0029] (the device
+    pre gates run slightly high).
+  - out vs CPU tail 0.0023 / row 0.0047; scaled probe 0.00024 / ffn_x 0.0013.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_08_ffn_hc.py
