@@ -40,3 +40,9 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   indexer dims permuted on the host so the op's RoPE half matches; no host RoPE permutation in the MLA (R.2 finding).
   Gate numbers checked by the overseer: 20.60 of 27.20 GiB per chip, 0 unplaced tensors, 0 plan / component / ledger
   errors, no CPU or OPGEN step, tasks.yaml unchanged. Approved by the overseer (owner delegated 03:40); resumed.
+- 04:45-06:45 C/S dense_full attn_hc, attn_hc_pre, attn_norm, q_a, indexer and S.01-S.05 PASS, all first attempt.
+  Reviewed each: torch only at load time / at the test boundary. Indexer: set overlap 0.99708 (worst row 0.9907) via a
+  new fork `indexer_score` (opt-in fp32 DEST; original op untouched, CHANGELOG + source tests + baseline + INDEX row).
+- 06:30 framework gap: the gate commit staged only task paths, so the fork and 19 agent knowledge entries stayed
+  uncommitted. Committed them (5da28095718, 7e800161e3d); paused before C.dense_full.attention; F48 (720bb5b8881):
+  stage_paths adds changed files under ttnn/ttnn/bringup and the shared knowledge files; 199 selftests. Resumed.
