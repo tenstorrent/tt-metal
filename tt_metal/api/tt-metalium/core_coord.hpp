@@ -218,54 +218,6 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 
 }  // namespace tt::tt_metal
 
-// Deprecated function wrappers - use tt::tt_metal namespace versions instead
-// template to depriorize the wrappers in overloading to avoid ambiguous selection from compiler.
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::corerange_to_cores")]] inline std::vector<tt::tt_metal::CoreCoord> corerange_to_cores(
-    const tt::tt_metal::CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false) {
-    return tt::tt_metal::corerange_to_cores(crs, max_cores, row_wise);
-}
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores")]] inline std::vector<tt::tt_metal::CoreCoord> grid_to_cores(
-    uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false) {
-    return tt::tt_metal::grid_to_cores(num_cores, grid_size_x, grid_size_y, row_wise);
-}
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores")]] inline std::vector<tt::tt_metal::CoreCoord> grid_to_cores(
-    tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, bool row_wise = false) {
-    return tt::tt_metal::grid_to_cores(start, end, row_wise);
-}
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores_with_noop")]] inline std::vector<tt::tt_metal::CoreCoord>
-grid_to_cores_with_noop(
-    uint32_t bbox_x, uint32_t bbox_y, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false) {
-    return tt::tt_metal::grid_to_cores_with_noop(bbox_x, bbox_y, grid_size_x, grid_size_y, row_wise);
-}
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::grid_to_cores_with_noop")]] inline std::vector<tt::tt_metal::CoreCoord>
-grid_to_cores_with_noop(
-    const tt::tt_metal::CoreRangeSet& used_cores, const tt::tt_metal::CoreRangeSet& all_cores, bool row_wise = false) {
-    return tt::tt_metal::grid_to_cores_with_noop(used_cores, all_cores, row_wise);
-}
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated(
-    "Use tt::tt_metal::select_contiguous_range_from_corerangeset")]] inline std::optional<tt::tt_metal::CoreRange>
-select_contiguous_range_from_corerangeset(const tt::tt_metal::CoreRangeSet& crs, uint32_t x, uint32_t y) {
-    return tt::tt_metal::select_contiguous_range_from_corerangeset(crs, x, y);
-}
-
-template <bool _compiler_deprioritize_this = true>
-[[deprecated("Use tt::tt_metal::select_from_corerangeset")]] inline tt::tt_metal::CoreRangeSet select_from_corerangeset(
-    const tt::tt_metal::CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false) {
-    return tt::tt_metal::select_from_corerangeset(crs, start_index, end_index, row_wise);
-}
-
 template <>
 struct fmt::formatter<tt::tt_metal::CoreRangeSet> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
