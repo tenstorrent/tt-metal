@@ -214,6 +214,13 @@ inline void start_dm1_dfb_init() {
     *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
 }
 
+// Idle cores still receive the go signal and read the launch slot at launch_msg_rd_ptr, which was not
+// written for this program: enables is 0 but local_cb_mask/local_cb_offset are stale and point at L1 that
+// may have been reused. Such a slot describes no DFBs.
+inline uint32_t get_num_local_dfbs(const launch_msg_t* launch_msg) {
+    return launch_msg->kernel_config.enables ? launch_msg->kernel_config.local_cb_mask : 0;
+}
+
 inline void wait_subordinates() {
     WAYPOINT("NTW");
     // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
@@ -377,9 +384,11 @@ extern "C" uint32_t _start1() {
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
-                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                uint32_t num_local_dfbs = get_num_local_dfbs(launch_msg_address);
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
-                start_dm1_dfb_init();
+                if (num_local_dfbs != 0) {
+                    start_dm1_dfb_init();
+                }
                 WAYPOINT("R");
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
@@ -438,7 +447,7 @@ extern "C" uint32_t _start1() {
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
-        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        uint32_t num_local_dfbs = get_num_local_dfbs(launch_msg);
 
         if (hartid == 1) {
             setup_dfb_remapper(dfb_l1_base, num_local_dfbs);

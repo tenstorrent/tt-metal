@@ -717,7 +717,6 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         if (strided_dest)
         {
             TT_SETRWC(p_setrwc::CLR_NONE, 0, dst_rows_per_tile * (t + 1), p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::C_TO_CR_MODE, 0, p_setrwc::SET_D);
         }
     }
     _reset_counters_<p_setrwc::SET_ABD_F>();
