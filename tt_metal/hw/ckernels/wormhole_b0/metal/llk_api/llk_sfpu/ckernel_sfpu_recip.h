@@ -38,10 +38,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // For efficiency and handling of x = ±0 and x = ±inf, we set scale.Exp = 255-in.Exp = ~in.Exp.
     // This is efficiently computed with a single SFPNOT, followed by SFPSETMAN to clear the mantissa at the next
     // opportunity.
-    // SFPNOT also flips the sign; multiplying by -0.5 below restores it.
     // Not only is 255-in.Exp more efficient via SFPNOT, but it also ensures
     // that in.Exp == 0 results in ±inf, and in.Exp == 255 results in ±0.
-    // See the scale factor adjustment via scale*(-0.5) below for further details.
+    // See the scale factor adjustment via scale*0.5 below for further details.
     sfpi::vUInt scale_bits = ~sfpi::as<sfpi::vUInt>(in);
 
     // Continue with quadratic estimate.
@@ -53,11 +52,11 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // First iteration of Newton-Raphson: t = 1.0 - x*y.
     sfpi::vFloat t = 1.0f + negative_x * y;
 
-    // Scale factor adjustment: halve the magnitude and restore the input sign.
-    // If scale = ±inf, then scale*(-0.5) = ∓inf and scale.Exp=255.
-    // If scale = ±0, then scale*(-0.5) = 0 and scale.Exp=0.
+    // Scale factor adjustment: halve the magnitude.
+    // If scale = ±inf, then scale*0.5 = ±inf and scale.Exp=255.
+    // If scale = ±0, then scale*0.5 = 0 and scale.Exp=0.
     // Otherwise, scale.Exp = scale.Exp-1 = 255-in.Exp-1 = 254-in.Exp.
-    scale *= -0.5f;
+    scale *= 0.5f;
 
     // Continue Newton-Raphson: y = y + y*t.
     y = y + y * t;
