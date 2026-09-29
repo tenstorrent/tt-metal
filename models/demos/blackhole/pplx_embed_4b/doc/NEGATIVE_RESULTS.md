@@ -1288,3 +1288,25 @@ post-attention norm) gets the room without the trade: the lowest L1 buffer durin
 6,40,8 still misses by 4 KB. STS-B 0.8119 / 0.8147 / 0.8152 (bs8 / 16 / 32). sustained_run.sh, 3 alternating rounds per
 batch, chip 0, cold / sustained ms: bs8 82.5 / 102.0 → 78.5 / 99.5, bs16 157.1 / 201.7 → 148.8 / 196.1, bs32 322.8 /
 400.1 → 303.1 / 388.7.
+
+## 61. bs1 fused SwiGLU with K_block 40: the SwiGLU is not what is exposed at M=512 (2026-09-29)
+
+§60's K_block 40 hides the pack-thread SwiGLU at bs8 / 16 / 32, so bs1 (`QWEN_FUSE_SWIGLU_BS1=1`; §58: 214.4 µs, 15.7 →
+16.0 ms e2e) was retried against the legacy FF1 + FF3 + mul it replaces (69.7 + 69.7 + 52.3 ≈ 192 µs per layer in the
+7dbf479 device profile). `bench_ff13_sweep.py 1` over M 1 / 2 / 4, K 20 / 40 / 80, N 2 / 4 / 6 / 8 / 16, 1×W subblocks
+(99 configs, LoFi without fp32 dest as bs1's FF1 / FF3): best per K block 4,20,8 1×2 214.6 µs, 2,40,6 1×2 228.8,
+4,80,6 1×6 238.9 (12 K_block-80 configs clash with L1). Nothing reaches 192.
+
+`bench_ff13_fused_ablate.py 1` (µs) shows why:
+
+| blocks | full | no SFPU | SFPU ×2 | compute only | compute only, no SFPU, no add |
+|---|---|---|---|---|---|
+| 4,20,8 1×2 | 212.3 | 204.9 | 253.3 | 165.7 | 137.3 |
+| 2,40,6 1×2 | 223.6 | 221.1 | 232.9 | 158.6 | 144.9 |
+
+At K_block 20 the SwiGLU is 7 µs exposed (3%, against 15-17% batched): with 16 rows of tiles the per-core output is
+small and the SFPU pass already fits under the last K block's math. The gap is data movement (reads / writes cost 47 µs,
+22%); K_block 40 only halves the SwiGLU's 7 µs and loses more in the K loop. e2e, sustained_run.sh, 2 alternating
+rounds, chip 1, cold / sustained ms: default 15.6-15.7 / 15.8, fused 4,20,8 1×2 16.1 / 16.2, fused 2,20,8 1×2 16.1 /
+16.2-16.3. bs1 stays unfused. Note that `QWEN_FUSE_SWIGLU_BS1=1` alone is a no-op: the demo defaults
+`QWEN_FUSE_SWIGLU=0` at bs1, so the packed weight is never built; both must be set.
