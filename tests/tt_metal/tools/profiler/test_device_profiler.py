@@ -1217,9 +1217,12 @@ def test_noc_event_profiler():
         ), f"plain NOC tracing must not record barrier events, got: {event_types}"
         assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
 
-        # The kernel copies one 5-tile bfloat16 buffer (5 * 32 * 32 * 2 B) DRAM -> L1 -> DRAM on NOC 0, from a single
-        # core, reading and writing DRAM bank 0.
-        expected_num_bytes = 5 * 32 * 32 * 2
+        # Must match the buffer set up in test_noc_event_profiler.cpp (single_tile_size, num_tiles). The kernel copies
+        # it DRAM -> L1 -> DRAM on NOC 0 from a single core, using DRAM bank 0.
+        TILE_HEIGHT = TILE_WIDTH = 32
+        BFLOAT16_BYTES = 2
+        NUM_TILES = 5
+        expected_num_bytes = NUM_TILES * TILE_HEIGHT * TILE_WIDTH * BFLOAT16_BYTES
         noc_events = {event["type"]: event for event in noc_trace_data if "type" in event}
         read_event, write_event = noc_events["READ"], noc_events["WRITE_"]
         for event in (read_event, write_event):
