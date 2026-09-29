@@ -7,7 +7,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "hybrid_routed_expert_ffn_types.hpp"
-#include "combine/combine_fabric2d_types.hpp"
+#include "combine/combine_fabric2d_program_factory.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
