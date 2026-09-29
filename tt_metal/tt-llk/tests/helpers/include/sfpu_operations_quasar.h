@@ -67,6 +67,7 @@
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
+#include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
 #include "llk_sfpu/ckernel_sfpu_threshold.h"
 #include "llk_sfpu/ckernel_sfpu_tiled_prod.h"
@@ -91,6 +92,7 @@
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
 #include "llk_sfpu/ckernel_sfpu_add.h"              // calculate_add_int (int add)
+#include "llk_sfpu/ckernel_sfpu_add_top_row.h"      // calculate_add_top_row (top four rows of two tiles, Float32/Int32)
 #include "llk_sfpu/ckernel_sfpu_atan2.h"            // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
 #include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"   // calculate_sfpu_binary_bitwise (int32 and/or/xor)
@@ -109,7 +111,6 @@
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
-
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
 
@@ -430,6 +431,11 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::softcap)
     {
         softcap_init();
+    }
+    else if constexpr (OPERATION == SfpuType::tanh_derivative)
+    {
+        // tanh_derivative_tile's kernel: the accurate sech^2 form, whatever fast_and_approx says.
+        tanh_derivative_sech2_init<APPROX>();
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
@@ -1050,6 +1056,10 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             0x40A00000u /* beta = 5.0f */,
             0x3E4CCCCDu /* 1 / beta = 0.2f */);
     }
+    else if constexpr (OPERATION == SfpuType::tanh_derivative)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_derivative_sech2, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
     else
     {
         static_assert(unhandled_op<OPERATION>, "call_unary_sfpu_operation_quasar: unhandled Quasar unary SFPU operation");
@@ -1186,6 +1196,10 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     else if constexpr (OP == BinaryOp::SITU_GLU)
     {
         situ_glu_init();
+    }
+    else if constexpr (OP == BinaryOp::ADD_TOP_ROW)
+    {
+        init_add_top_row();
     }
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
 }
@@ -1515,6 +1529,20 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         // gate = src0, up = src1; the betas are the kernel's compile-time Kimi config.
         SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_situ_glu, (is_fp32_dest_acc_en, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::ADD_TOP_ROW)
+    {
+        // One call per tile (VectorMode::None, Blackhole's RC_custom): the kernel reaches the top
+        // four rows of faces 0 and 1 itself. The format is a template argument, so dispatch on it.
+        if (math_format == DataFormat::Int32)
+        {
+            SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add_top_row, (DataFormat::Int32), src0_tile, src1_tile, dst_tile, VectorMode::None);
+        }
+        else
+        {
+            LLK_ASSERT(math_format == DataFormat::Float32, "ADD_TOP_ROW supports Float32 and Int32");
+            SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add_top_row, (DataFormat::Float32), src0_tile, src1_tile, dst_tile, VectorMode::None);
+        }
     }
     else if constexpr (OP == BinaryOp::ISCLOSE)
     {

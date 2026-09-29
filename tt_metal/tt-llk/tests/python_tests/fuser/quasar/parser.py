@@ -362,6 +362,7 @@ UNARY_SFPU_OPS = {
     MathOperation.CastFp32ToFp16a,
     MathOperation.AltComplexRotate90,
     MathOperation.Softcap,
+    MathOperation.TanhDerivative,
 }
 
 BINARY_SFPU_OPS = {

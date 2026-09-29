@@ -190,6 +190,7 @@ enum class SfpuType : std::uint32_t
     cast_fp32_to_fp16a,
     alt_complex_rotate90,
     softcap,
+    tanh_derivative,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

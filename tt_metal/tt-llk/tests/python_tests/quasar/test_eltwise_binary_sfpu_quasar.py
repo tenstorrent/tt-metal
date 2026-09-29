@@ -496,6 +496,51 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
 
 
 # ===========================================================================
+# add_top_row — adds the top four rows of faces 0 and 1 (the tile's top four rows) of two
+# tiles; the rest of the result tile keeps what Dest held. Float32 and Int32, both with a
+# 32-bit Dest. The golden models the same Dest rows as on Blackhole.
+# ===========================================================================
+_ADD_TOP_ROW_FORMATS = [DataFormat.Float32, DataFormat.Int32]
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
+@pytest.mark.parametrize(
+    "data_format", _ADD_TOP_ROW_FORMATS, ids=[f.name for f in _ADD_TOP_ROW_FORMATS]
+)
+def test_eltwise_binary_sfpu_add_top_row_quasar(
+    data_format,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Binary SFPU add_top_row, Float32 and Int32."""
+    formats = InputOutputFormat(input_format=data_format, output_format=data_format)
+    if data_format == DataFormat.Int32:
+        prepare_stimuli = lambda f, dims, s0, s1, op: _prepare_int_stimuli(
+            f, dims, s0, s1, op, None
+        )
+    else:
+        prepare_stimuli = _prepare_float_stimuli
+    _run_sfpu_binary_llk_golden(
+        formats,
+        DestAccumulation.Yes,
+        ImpliedMathFormat.No,
+        tile_indices,
+        MathOperation.SfpuAddTopRow,
+        "ADD_TOP_ROW",
+        prepare_stimuli=prepare_stimuli,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+# ===========================================================================
 # Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.
 # Layout in0=Dest[0], in1=Dest[1], out=Dest[2]; dual unpack path; torch golden.
 # ===========================================================================

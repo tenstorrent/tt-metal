@@ -99,6 +99,7 @@ enum class BinaryOp : std::uint8_t
     SITU_GLU,
     REMAINDER_UINT32,
     LGAMMA_STIRLING_FP32,
+    ADD_TOP_ROW,
 };
 
 enum class ActivationType
