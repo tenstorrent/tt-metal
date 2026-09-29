@@ -294,10 +294,14 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
+        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
+            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
