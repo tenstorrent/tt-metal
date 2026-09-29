@@ -3,6 +3,8 @@
 
 """Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
+import os
+
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
@@ -13,6 +15,23 @@ from models.demos.gemma4_d_p.tt.matmul_config import (
 )
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
+
+
+def gate_gelu_activation():
+    """GELU fused into the MLP gate matmul, chosen by ``GEMMA4_GELU`` (default ``tanh``).
+
+    - ``tanh``: tanh GELU evaluated in FP32 with the accurate tanh (the reference path).
+    - ``tanh_fast``: the same tanh GELU as x / (1 + exp(-2u)), <= 1 BF16 ULP from it, and cheaper.
+    - ``lut``: the 6-segment LUT GELU, cheapest, but it lowers min per-head PCC by ~0.015.
+    """
+    kind = os.environ.get("GEMMA4_GELU", "tanh").strip().lower()
+    if kind == "tanh":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)
+    if kind == "tanh_fast":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)
+    if kind == "lut":
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
+    raise ValueError(f"GEMMA4_GELU must be tanh, tanh_fast or lut, got {kind!r}")
 
 
 class MLP:
@@ -114,7 +133,7 @@ class MLP:
     def _project(self, hidden_states, weight, memory_config, gelu=False):
         """hidden_states @ weight, on the explicit config when there is one and the core grid otherwise.
         With gelu, the GELU is fused either way."""
-        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if gelu else None
+        fused_activation = gate_gelu_activation() if gelu else None
         program_config, compute_kernel_config = self._matmul_configs(hidden_states, weight, fused_activation)
         return ttnn.linear(
             hidden_states,
