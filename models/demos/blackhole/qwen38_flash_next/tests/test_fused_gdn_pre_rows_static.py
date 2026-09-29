@@ -212,13 +212,11 @@ def test_the_two_norm_calls_are_written_with_the_ops_approx_true():
         COMPUTE_QKV,
     )
     assert scale, "the 1/W scale is not the APPROX = true binop_with_scalar call"
-    assert "MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */, false /* legacy_compat */)));" in (
-        COMPUTE_QKV
-    )
+    assert "MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */)));" in (COMPUTE_QKV)
     rsqrt = re.search(
         r"MATH\(SFPU_UNARY_CALL\(\s*DST_SYNC_MODE,\s*false /\* is_fp32_dest_acc_en \*/,\s*calculate_rsqrt,\s*"
         r"\(true /\* APPROX \*/,\s*8 /\* ITERATIONS \*/,\s*false /\* is_fp32_dest_acc_en \*/,\s*"
-        r"false /\* FAST_APPROX \*/,\s*false /\* legacy_compat \*/\),\s*dst0,\s*VectorMode::RC\)\);",
+        r"false /\* FAST_APPROX \*/\),\s*dst0,\s*VectorMode::RC\)\);",
         COMPUTE_QKV,
     )
     assert rsqrt, "the rsqrt is not the APPROX = true calculate_rsqrt call"

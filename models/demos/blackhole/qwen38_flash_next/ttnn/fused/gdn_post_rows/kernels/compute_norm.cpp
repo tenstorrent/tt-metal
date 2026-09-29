@@ -133,18 +133,14 @@ void kernel_main() {
             // APPROX = true written in place of the kernel's: rsqrt.h:18-20 and :37-43 pass APPROX into
             // sfpu::rsqrt_init and
             // sfpu::calculate_rsqrt through SFPU_UNARY_INIT_FN / SFPU_UNARY_CALL, so these two lines instantiate
-            // ckernel::sfpu::rsqrt_init<true, false> and ckernel::sfpu::calculate_rsqrt<true, 8, false, false, false>
+            // ckernel::sfpu::rsqrt_init<true> and ckernel::sfpu::calculate_rsqrt<true, 8, false, false>
             // (ckernel_sfpu_rsqrt.h:19-32) -- the 10-bit table the op's math_approx_mode = TRUE selects.
-            MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */, false /* legacy_compat */)));
+            MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */)));
             MATH(SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 false /* is_fp32_dest_acc_en */,
                 calculate_rsqrt,
-                (true /* APPROX */,
-                 8 /* ITERATIONS */,
-                 false /* is_fp32_dest_acc_en */,
-                 false /* FAST_APPROX */,
-                 false /* legacy_compat */),
+                (true /* APPROX */, 8 /* ITERATIONS */, false /* is_fp32_dest_acc_en */, false /* FAST_APPROX */),
                 dst0,
                 VectorMode::RC));
             tile_regs_commit();
