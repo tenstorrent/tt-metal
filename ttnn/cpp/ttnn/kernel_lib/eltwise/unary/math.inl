@@ -13,7 +13,9 @@
 #ifndef ARCH_QUASAR  // cbrt.h hard-includes ckernel_sfpu_cbrt.h under TRISC_MATH; Quasar has no such SFPU LLK
 #include "api/compute/eltwise_unary/cbrt.h"
 #endif
+#ifndef ARCH_QUASAR  // log1p.h's log1p_tile_init references SfpuType::log1p, absent from Quasar's SfpuType enum
 #include "api/compute/eltwise_unary/log1p.h"
+#endif
 #ifndef ARCH_QUASAR  // rpow.h hard-includes ckernel_sfpu_rpow.h under TRISC_MATH; Quasar has no such SFPU LLK
 #include "api/compute/eltwise_unary/rpow.h"
 #endif
@@ -77,11 +79,15 @@ struct Cbrt : UnaryOp<Cbrt<Slot>, Slot> {
 #endif
 
 // ---- Log1p — fast (approximate) vs exact mode selected by template ----
+// SfpuType::log1p is absent from Quasar's SfpuType enum (log1p.h fails to compile there); guard the struct out
+// to match the guarded include above.
+#ifndef ARCH_QUASAR
 template <Approx fast, Dst Slot>
 struct Log1p : UnaryOp<Log1p<fast, Slot>, Slot> {
     static ALWI void init() { log1p_tile_init<fast == Approx::Fast>(); }
     static ALWI void exec_impl(uint32_t slot_offset) { log1p_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
+#endif
 
 // ---- Power — runtime exponent. ----
 // power_tile / power_tile_init are WH/BH-only (not declared in Quasar's compute_kernel_api.h); guard out
