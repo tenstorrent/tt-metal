@@ -20,6 +20,9 @@
 namespace ckernel::sfpu
 {
 
+// NOTE on NaN: the zero default is the answer for every lane neither strict
+// predicate claims, so a NaN lane leaves as 0.0 rather than torch's NaN.  NaN
+// is outside the swept domain (sfpu_domains.py SPECIALS_READY_OPS is empty).
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_softshrink_fresh_cpp(const std::uint32_t param0)
 {

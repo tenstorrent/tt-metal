@@ -22,6 +22,13 @@
 namespace ckernel::sfpu
 {
 
+// NOTE on the domain: |x| < 1 is REQUIRED, not merely where the fit is
+// accurate.  At |x| >= 1 the argument (1-x)(1+x) is <= 0, and
+// fresh_ln_positive (fresh_cpp/digamma.h) is stated only for positive normal
+// arguments, so those lanes carry an undefined value rather than torch's
+// erfinv(+-1) = +-inf / erfinv(|x|>1) = NaN.  The sweep keeps every lane
+// strictly inside (sfpu_domains.py: uniform(-0.99, 0.99), with the +-1
+// endpoints probed from the interior side only).
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_erfinv_fresh_cpp()
 {

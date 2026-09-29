@@ -20,6 +20,13 @@
 namespace ckernel::sfpu
 {
 
+// NOTE on NaN: this body keeps the kernel contract's `v <= t -> value`
+// direction, so a lane the predicate REJECTS passes through unchanged, while
+// the torch definition (x if x > t else value) hands a NaN lane `value`.  The
+// sibling fitted arm spells the strict `x > t` form for exactly that reason
+// (fresh_cpp/threshold_fitted.h BOUNDARY OWNERSHIP).  The two agree on every
+// finite lane, and NaN is outside the swept domain (sfpu_domains.py
+// SPECIALS_READY_OPS is empty), so no node distinguishes them.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_threshold_fresh_cpp(const float threshold, const float value)
 {

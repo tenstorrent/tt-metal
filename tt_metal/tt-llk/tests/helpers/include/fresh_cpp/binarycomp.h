@@ -12,6 +12,11 @@
 namespace ckernel::sfpu
 {
 
+// NOTE on non-finite lanes: the a - b == 0 form equals float(a == b) only for
+// FINITE operands.  Equal infinities give inf - inf = NaN, which fails the
+// zero test, so those lanes answer 0.0 where the golden float(t1 == t2)
+// answers 1.0.  IEEE specials are outside every swept domain today
+// (sfpu_domains.py SPECIALS_READY_OPS is empty), so no node observes it.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_binary_comp_eq_fresh_cpp()
 {

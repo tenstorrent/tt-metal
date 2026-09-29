@@ -19,6 +19,10 @@ namespace ckernel::sfpu
 // golden_generators._heaviside).  Both legs must always receive the same value.
 constexpr float FRESH_HEAVISIDE_VALUE = 0.5f;
 
+// NOTE on NaN: the three regions partition the FINITE line only — torch
+// returns NaN for NaN, which no branch here produces.  NaN is outside the
+// swept domain (sfpu_domains.py SPECIALS_READY_OPS is empty); the `v > 0.0f`
+// lowering's own NaN answer is the one fresh_cpp/comp.h records as GH-F1.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_heaviside_fresh_cpp(const float value)
 {

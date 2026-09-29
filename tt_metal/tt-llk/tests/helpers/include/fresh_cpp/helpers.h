@@ -36,6 +36,14 @@ sfpi_inline sfpi::vFloat fresh_round_nearest(const sfpi::vFloat z, sfpi::vInt& k
 // magnitude (exact for every finite input; pass-through for |v| >= 2^23,
 // inf, NaN — the same contract as the production kernels' exponent-shift
 // truncation).
+// NOTE on the argument's sign: the fixup below only takes back a round-UP
+// (`r > v`), so this statement is truncate-toward-zero only for NON-NEGATIVE
+// v — the "magnitude" in the name.  For a negative non-integer the
+// round-to-nearest may land BELOW v (-1.5 -> -2) and nothing puts it back, so
+// the result would be floor, not trunc.  Every call site passes a magnitude
+// (roundingops.h trunc/frac wrap it in sfpi::abs; fresh_fmod_core below feeds
+// it |v|*|1/s|), which is the domain on which the "exact for every finite
+// input" claim above holds; it is not a full-domain claim.
 sfpi_inline sfpi::vFloat fresh_trunc_magnitude(const sfpi::vFloat v)
 {
     constexpr float MANTISSA_SHIFT = 8388608.0f; // 2^23
