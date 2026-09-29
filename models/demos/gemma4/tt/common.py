@@ -48,7 +48,8 @@ def _gemma4_is_host_weight(key):
 
 
 def _weights_source_digest():
-    """A short digest of the gemma4 model source (every .py under tt/), part of the cache identity.
+    """A short digest of the gemma4 model source (every .py of the package but tests/ and demo/), part of
+    the cache identity.
 
     The weight dtypes, layouts and cache file names are chosen by this code, so a cache seeded by
     one version of it does not describe the files another version needs. None when the source
@@ -58,11 +59,18 @@ def _weights_source_digest():
     import hashlib
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent
+    # The whole gemma4 package, not only tt/: config.py (MeshConfig/ModeConfig) also decides sharding
+    # and cache file names. Its tests/ and demo/ build no weights and are left out, so an edit to a
+    # harness does not force a cold load.
+    root = Path(__file__).resolve().parent.parent
+    skipped = {"tests", "demo"}
     digest = hashlib.sha1()
     try:
         for path in sorted(root.rglob("*.py")):
-            digest.update(str(path.relative_to(root)).encode())
+            relative = path.relative_to(root)
+            if relative.parts and relative.parts[0] in skipped:
+                continue
+            digest.update(str(relative).encode())
             digest.update(path.read_bytes())
     except OSError as exc:
         logger.warning(f"gemma4 source unreadable for the weight-cache identity: {exc}")

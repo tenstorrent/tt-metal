@@ -303,7 +303,13 @@ def test_optimizer_gemma4_pcc(monkeypatch):
         if worst_pcc < BROKEN_PCC:
             failures.append(f"worst position PCC {worst_pcc:.6f} < {BROKEN_PCC} (step {worst_step})")
         if low_positions > MAX_LOW_POSITIONS:
-            failures.append(f"{low_positions} positions have PCC < {LOW_PCC}, more than {MAX_LOW_POSITIONS}")
+            # Worded without "PCC" before the threshold: an optimizer reads "pcc ... <number>" in the
+            # failure as the failing correlation, and 0.50 would read as a model that no longer
+            # correlates at all (a broken build) instead of an accuracy loss.
+            failures.append(
+                f"{low_positions} positions correlate with the reference below {LOW_PCC}, "
+                f"more than the {MAX_LOW_POSITIONS} allowed"
+            )
         if pin and failures:
             # Never pin a broken model as the baseline every later change is held to.
             pin = False
