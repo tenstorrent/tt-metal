@@ -1,5 +1,10 @@
 # Prefill: the chunk bodies and the opt-in slab
 
+> Historical source notes from Samuel Jett (sjettTT, sjett@tenstorrent.com), frozen at
+> `cd9a11771107ea2c27da3303a0556ff7343e4af5`. Measurements and implementation details below
+> describe that source snapshot. Use the [port README](../README.md) for current commands and
+> [PROVENANCE.md](../PROVENANCE.md) for dependencies and the separation of source and port evidence.
+
 The server prefills a prompt through traced chunk bodies on the same device state the decode traces use: 128-row
 chunks where the prompt allows and 32-row chunks for the remainder (the served default since 2026-09-29; `--long-chunks`
 is accepted and changes nothing, `--prefill-mode teacher_forced` has no chunks), and, with `--prefill-slab ROWS`, slabs
