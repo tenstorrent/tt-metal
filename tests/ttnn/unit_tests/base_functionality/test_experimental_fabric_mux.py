@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ def test_fabric_mux_exports_are_experimental_only():
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device):
     fabric_mux = ttnn.experimental.fabric_mux
     logical_core = ttnn.CoreCoord(0, 0)
@@ -146,3 +146,95 @@ def test_fabric_mux_argument_builders_preserve_runtime_abi(mesh_device):
     assert reused_semaphore_ids == list(range(9)), (
         "reusing the termination semaphore must add 4 semaphores, not 5; " f"got ids {reused_semaphore_ids}"
     )
+
+
+NUM_FULL_SIZE_BUFFERS = 2
+NUM_HEADER_ONLY_BUFFERS = 3
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "channel_type_name, expected_num_buffers, full_size_buffers_before_channel",
+    [
+        ("FULL_SIZE", NUM_FULL_SIZE_BUFFERS, 0),
+        ("HEADER_ONLY", NUM_HEADER_ONLY_BUFFERS, NUM_FULL_SIZE_BUFFERS),
+    ],
+)
+def test_fabric_mux_channel_type_selects_channel_region(
+    mesh_device, channel_type_name, expected_num_buffers, full_size_buffers_before_channel
+):
+    fabric_mux = ttnn.experimental.fabric_mux
+    channel_type = getattr(fabric_mux.ChannelType, channel_type_name)
+    logical_core = ttnn.CoreCoord(0, 0)
+    virtual_core = mesh_device.worker_core_from_logical_core(logical_core)
+    full_size_buffer_size_bytes = fabric_mux.channel_buffer_size_bytes()
+    mux_config = fabric_mux.Config(
+        num_full_size_channels=1,
+        num_header_only_channels=1,
+        num_buffers_per_full_size_channel=NUM_FULL_SIZE_BUFFERS,
+        num_buffers_per_header_only_channel=NUM_HEADER_ONLY_BUFFERS,
+        full_size_channel_buffer_size_bytes=full_size_buffer_size_bytes,
+        base_l1_address=ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1),
+    )
+    full_size_region_address = mux_config.kernel_compile_time_args()[10]
+    expected_channel_base_address = (
+        full_size_region_address + full_size_buffers_before_channel * full_size_buffer_size_bytes
+    )
+
+    assert (
+        mux_config.num_channels(channel_type) == 1
+    ), f"{channel_type_name} channel count: expected 1, got {mux_config.num_channels(channel_type)}"
+    assert (
+        mux_config.num_buffers(channel_type) == expected_num_buffers
+    ), f"{channel_type_name} buffer count: expected {expected_num_buffers}, got {mux_config.num_buffers(channel_type)}"
+    compile_time_args = fabric_mux.client_compile_time_args(num_clients=1, channel_type=channel_type, config=mux_config)
+    assert (
+        compile_time_args[0] == expected_num_buffers
+    ), f"{channel_type_name} client CT arg 0 (num_buffers): expected {expected_num_buffers}, got {compile_time_args[0]}"
+    runtime_args = fabric_mux.client_runtime_args(
+        connection_valid=True,
+        is_termination_master=True,
+        channel_type=channel_type,
+        mux_virtual_core=virtual_core,
+        client_index=0,
+        client_logical_core=logical_core,
+        config=mux_config,
+        program_descriptor=ttnn.ProgramDescriptor(),
+        termination_master_virtual_core=virtual_core,
+    )
+    assert runtime_args[4] == expected_channel_base_address, (
+        f"{channel_type_name} client RT arg 4 (channel base address): "
+        f"expected {expected_channel_base_address}, got {runtime_args[4]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_fabric_mux_config_enforces_usable_l1_end_address(mesh_device, expect_error):
+    fabric_mux = ttnn.experimental.fabric_mux
+    config_args = dict(
+        num_full_size_channels=1,
+        num_header_only_channels=0,
+        num_buffers_per_full_size_channel=2,
+        num_buffers_per_header_only_channel=0,
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(),
+        base_l1_address=ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1),
+    )
+    memory_map_end_address = fabric_mux.Config(**config_args).memory_map_end_address()
+
+    bounded_config = fabric_mux.Config(**config_args, usable_l1_end_address=memory_map_end_address)
+    assert bounded_config.memory_map_end_address() == memory_map_end_address, (
+        f"a ceiling equal to the memory map end must not change the map: expected {memory_map_end_address}, "
+        f"got {bounded_config.memory_map_end_address()}"
+    )
+    with expect_error(RuntimeError, "is greater than L1 end address"):
+        fabric_mux.Config(**config_args, usable_l1_end_address=memory_map_end_address - 1)
