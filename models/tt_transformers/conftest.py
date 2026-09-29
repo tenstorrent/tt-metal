@@ -15,15 +15,19 @@ def device_params(request, galaxy_type):
     # to trace_region_size using the logical submesh SKU.
     params = getattr(request, "param", {}).copy()
 
-    mesh_device = {
-        "N150": (1, 1),
-        "N300": (1, 2),
-        "N150x4": (1, 4),
-        "T3K": (1, 8),
-        "T3K_2x4": (2, 4),
-        "TG": (8, 4),
-        "P150x8": (1, 8),
-    }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    # Decide fabric from the mesh this test actually opens, so the two never disagree.
+    callspec = getattr(request.node, "callspec", None)
+    mesh_device = callspec.params.get("mesh_device") if callspec else None
+    if mesh_device is None:
+        mesh_device = {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "T3K_2x4": (2, 4),
+            "TG": (8, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     is_single_device = (mesh_device == (1, 1)) if isinstance(mesh_device, tuple) else (mesh_device == 1)
 
     if "fabric_config" in params:

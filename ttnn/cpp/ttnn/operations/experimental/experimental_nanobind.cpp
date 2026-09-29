@@ -82,6 +82,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/hybrid_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
@@ -190,8 +191,11 @@ void py_module(nb::module_& mod) {
     reshape::detail::bind_view(mod);
 
     test::bind_test_hang_device_operation(mod);
-    test::bind_test_dram_prefetcher_consumer(mod);
+    // Before the consumer bench: bind_tensor_prefetcher registers the PrefetcherPipe class the
+    // consumer's and validator's signatures name, so binding it first is what makes those
+    // signatures print the Python type rather than a mangled C++ one.
     bind_tensor_prefetcher(mod);
+    test::bind_test_dram_prefetcher_consumer(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
@@ -220,6 +224,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_unified_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_moe_fused_swiglu(mod);
+    deepseek_prefill::detail::bind_hybrid_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_extract(mod);
     deepseek_prefill::detail::bind_insert(mod);
     deepseek_prefill::detail::bind_update_padded_kv_cache(mod);

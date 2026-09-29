@@ -12,6 +12,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "api/debug/assert.h"
+#include "api/kernel_thread_globals.h"
 
 #ifdef ARCH_QUASAR
 extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
