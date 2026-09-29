@@ -112,3 +112,11 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   the 6 residual component tests + ladder `last` + profile with attn/ffn_residual < 60 ms each and total < 500 ms.
   Perf approved 21:38. Also started a read-only agent on KDA state handover prefill -> decode (the engine migrates
   only the KV table; GLM keeps KDA state in the model per slot; decode on another machine would get no KDA state).
+- KDA state handover research: not supported today; tt-metal PR #56443 (open, closes #57403) adds recurrent+conv state as extra table entries + 2 adapter hooks (mocked migration only); #57184 conflicts; tt-blaze draft #3265 / branch bklockiewicz/k3-cache-migration unmerged. GLM would need a decode consumer, migratable state buffers + hooks per #56443, and acks for KDA layers (layer 44 is KDA). Report scratchpad/kda_state_handover.md.
+- P.1 PASS (5b4b7ba214e) attempt 1: attn/ffn_residual 82.9 -> 31.5 ms each, chunk 528 -> 428 ms (-19%); residual PCCs 0.99999, layers >= 0.99994, state min 0.9984; per-32-token-tile matmul, HiFi4 fp32 DEST, coefficients read as tf32 (noted); old path GLM_RESIDUAL_MIX=addcmul. Owner: go with (2) if (1) works -> pausing after X.3 (already running) to add P.2 and rerun X.3 after it.
+- 22:3x X.3 FAIL only timeline_ok (profiler dropped programs: 1281 vs 1319 per chip); all accuracy passed; full prefill
+  0->55k 4501 ms; state min 0.98247. Fix agent 1 confirmed PROGRAM_SUPPORT_COUNT=3000 fixes it (timeline 423.7 ms,
+  gaps 0.7 ms). Classified FRAMEWORK: killed fix attempt 2, F52 38574604693 (PROFILE_ENV adds
+  TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000; GLM profile gates X.1/P.1/X.3 patched; selftests 217 -> 218).
+- Added P.2 (owner's pick 2, after P.1 worked): mHC residual split by sequence across the 4 chips, deps P.1, X.3 now
+  depends on P.2; gate = the 24 mHC component tests + ladder s4096 + last + profile total < 400 ms. Rerun from X.3.
