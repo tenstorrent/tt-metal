@@ -55,6 +55,7 @@ below makes those reads fewer, cheaper or local.
 | E13 | Reader cycle counters: time the barrier wait, the scatter, `reserve_back`, the `x0`/`y0` wait and the rest of the loop separately, without NoC tracing | Read the core's clock around each step of the reader loop and print the totals once per core. It shows where each reader actually spends its time. | diagnosis | — | done | **Done, 2026-09-28.** Scatter 1935 us (60%), read issue 697 us (22%, 84 cycles per read), barrier 209 us (6%); everything else ≤ 5% each (§3). Removing the scatter cannot give more than E10's 408 us |
 | E14 | Cheap scatter (plain, unrolled L1 copies instead of volatile) + `value` in L1 interleaved | Make the tile copy cheaper, and move the feature map to L1 without moving any work. Tests both limits at once, with no work redistribution. | scatter + DRAM | measured: −28% | small reader change + `to_memory_config` | **Done, 2026-09-28.** Base 3472 → 2498 us (L1), 3250 us (DRAM); tiny 323 → 254 / 283 us. Scatter only 30% cheaper (~10 cycles per word), still 55% of the reader (§3). Kernel change passes all fused-MSDA suites |
 | E15 | Tilize on the unpacker instead of a RISC scatter | For D = 32, 32 staged sticks of 64 B are exactly one row-major 32x32 tile. The reader lands a point's four corners side by side as one row-major block and compute tilizes it on the unpacker; the reader copies nothing and only zeroes skipped slots. | scatter 55% | measured: 3.3x with `value` in L1 | reader + compute change | **Done, 2026-09-28.** Base 3472 → **1055 us** (L1) / 3172 us (DRAM); tiny 323 → **132** / 212 us. All fused-MSDA suites pass (677). D % 32 != 0 keeps the scatter path |
+| E16 | Cheaper read issue: split the reads across both data-movement RISCs (E5), or a hand-rolled NoC issue path | After E15 the reader spends 57% of its time issuing 64 B reads at 68 cycles each; compute never makes it wait. BRISC is nearly idle and has its own command buffer, so splitting the reads can halve the issue time. The stateful API (`noc_async_read_one_packet_set_state` / `_with_state`) does not fit as is: it fixes the target core's coordinates, and nearly every read here goes to a different bank. A hand-rolled path that sets length and MID once still writes 4 of the 6 registers per read. | read issue 57% | E5: up to ~−30% of the op; hand-rolled path: a few %, unless the address math (`page % 110` banks, bank table lookup) is also cheaper | E5: split corners or rows between two kernels, sync barriers; hand-rolled: reader only | **Next**, after measuring how the 68 cycles split into address math, command-buffer wait and register writes (§3). Worth ~2 ms per layer at most |
 | E6 | Reduction on FPU: DEST accumulate / diagonal-weight matmul / batch inits | The weighted sum of corners runs as many small tile operations. Accumulate them in the destination register instead of packing to L1 each time. At most 17% of the op. | ≤17% slice | ≤17% | medium | After gather. Split the 17% first |
 | E7 | Pack several sampling points across tile columns in SFPU geometry | The corner-position math uses only 32 of 1024 lanes in a tile. Pack more points into one tile. At most 17% of the op. | ≤17% slice | ≤17% | medium; weight must return to col 0 for `mul_tiles_bcast<COL>` | After gather |
 | P2 | Full-model A/B: old composition vs fused op | The old (unfused) path was deleted when the fused op landed, so nobody has measured the whole-model gain. | reporting | — | restore old path from git | The old path was replaced outright, so this A/B has never run. Do it or drop it explicitly |
@@ -65,6 +66,11 @@ below makes those reads fewer, cheaper or local.
 Scatter (12%) has no separate candidate. An L1→L1 NoC copy adds transactions,
 which is the wrong direction. With E3 the source is local L1 at 16 B alignment,
 so the scatter can copy directly into tile faces.
+
+Status 2026-09-29: `value` is in L1 in the model (TSA MSDA 3395 → 1015 us,
+SCA 16162 → 6035 us). The fused op is now 28.6% of a layer; data-movement ops
+(untilize, slice, permute, reshape, tilize, concat) are ~49%. Past E16, the
+larger win is outside this op.
 
 Order (toward E3: `value` in L1 first, then decide whether work must move to
 the data):
@@ -168,6 +174,7 @@ noted. "Scatter skipped" builds give wrong results and right timings.
 | E11c | Scatter skipped: reader on NoC1; `value` in L1 | NoC1: gradient moves to columns; L1: busiest core 3093 → **1152 us**, no gradient | The DRAM endpoints are the second limit |
 | E14 | Plain unrolled scatter; `value` in DRAM and in L1 interleaved | DRAM 3250 us, **L1 2498 us** (base); tiny 283 / 254 us. Per core with L1: scatter 1354 (55%), issue 639, barrier 76 us | L1 pays once the scatter is cheaper; the scatter is still the limit |
 | E15 | Row-major staging + tilize on the unpacker; `value` in DRAM and in L1 interleaved | DRAM 3172 us, **L1 1055 us** (base); tiny 212 / **132 us**; 677 tests pass | Scatter gone; DRAM is the only big limit left |
+| E13b | E13 counters on the E15 kernel, `value` in L1 | read issue 568 us (57%, 68 cycles per read), decode 145, geometry push 122, zeroing 68, staging 56 us; barrier, `reserve_back`, `x0`/`y0` wait ≤ 1% each (of 1004 mean, 1074 busiest) | Reader-bound on read issue; compute is not the limit, so E6/E7 would buy nothing now |
 
 The two scatter-skipped builds that settle the stacking (core totals, us):
 
