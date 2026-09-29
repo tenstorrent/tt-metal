@@ -20,6 +20,7 @@ from models.common.sampling.tt_log_probs import LogProbsCalculator, LogProbsResu
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
     build_tail_invalid_vocab_mask,
+    get_vocab_num_shards,
     get_vocab_shard_dims,
 )
 
@@ -470,6 +471,13 @@ class TTSampling(LightweightModule):
                 f"device grammar sampling does not support row-sharded sampling: " f"`sampling_dp={self._sampling_dp}`"
             )
 
+        num_vocab_shards = get_vocab_num_shards(self.cluster_shape, self.sampling_all_gather_axis)
+        if self.padded_vocab_size % (32 * num_vocab_shards) != 0:
+            raise ValueError(
+                "device grammar sampling requires every vocab shard to hold whole 32-token mask words: "
+                f"`padded_vocab_size={self.padded_vocab_size}`, `num_vocab_shards={num_vocab_shards}`"
+            )
+
         if self.grammar_bitmask_tensor is not None:
             return
 
@@ -546,9 +554,13 @@ class TTSampling(LightweightModule):
         if self.grammar_bitmask_tensor is None or self.grammar_bitmask_arange is None:
             raise RuntimeError("device grammar buffers were not enabled before sampling")
 
+        # Mesh tensor shapes are per device, i.e., local to this vocab shard.
+        local_packed_width = self.grammar_bitmask_tensor.shape[-1]
+        local_vocab_width = local_packed_width * 32
+
         packed = ttnn.reshape(
             self.grammar_bitmask_tensor,
-            (self.max_batch_size, self.padded_vocab_size // 32, 1),
+            (self.max_batch_size, local_packed_width, 1),
             sub_core_grids=self.sub_core_grids,
         )
         shifted = ttnn.bitwise_right_shift(
@@ -565,7 +577,7 @@ class TTSampling(LightweightModule):
 
         unpacked = ttnn.reshape(
             allowed_bits,
-            (1, 1, self.max_batch_size, self.padded_vocab_size),
+            (1, 1, self.max_batch_size, local_vocab_width),
             sub_core_grids=self.sub_core_grids,
         )
         allowed_tiled = ttnn.to_layout(

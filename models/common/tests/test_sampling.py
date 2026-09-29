@@ -659,6 +659,51 @@ def test_invalid_grammar_masks_are_rejected(grammar, error, expect_error):
         )
 
 
+def test_grammar_unpack_uses_local_vocab_shard(monkeypatch):
+    """A vocab-sharded mask unpacks to the per-device logits width, not the global vocab."""
+    sampling = TTSampling.__new__(TTSampling)
+    sampling.max_batch_size = 32
+    sampling.padded_vocab_size = 32768
+    sampling.sub_core_grids = None
+    # One of eight vocab shards: 1024 packed words globally, 128 per device.
+    sampling.grammar_bitmask_tensor = SimpleNamespace(shape=(32, 128))
+    sampling.grammar_bitmask_arange = object()
+
+    reshapes = []
+    monkeypatch.setattr(ttnn, "reshape", lambda tensor, shape, **_: reshapes.append(shape) or tensor)
+    for op in ("bitwise_right_shift", "bitwise_and", "to_layout", "typecast", "where"):
+        monkeypatch.setattr(ttnn, op, lambda tensor, *_, **__: tensor)
+    monkeypatch.setattr(ttnn, "add_", lambda *_, **__: None)
+    monkeypatch.setattr(ttnn, "deallocate", lambda *_: None)
+
+    sampling._apply_grammar_bitmask(SimpleNamespace(shape=(1, 1, 32, 4096)))
+    assert reshapes == [(32, 128, 1), (1, 1, 32, 4096)]
+
+
+@pytest.mark.parametrize(
+    ("cluster_shape", "sampling_all_gather_axis", "padded_vocab_size"),
+    [
+        # 3216 tokens per device = 100.5 mask words.
+        pytest.param((1, 8), 1, 25728, id="1x8"),
+        # 328 tokens per device = 10.25 mask words.
+        pytest.param((4, 8), 0, 1312, id="4x8-rows"),
+    ],
+)
+def test_grammar_requires_word_aligned_vocab_shards(
+    cluster_shape, sampling_all_gather_axis, padded_vocab_size, expect_error
+):
+    """A mask word straddling two vocab shards is rejected before any device allocation."""
+    sampling = TTSampling.__new__(TTSampling)
+    sampling._sampling_dp = 1
+    sampling.cluster_shape = cluster_shape
+    sampling.sampling_all_gather_axis = sampling_all_gather_axis
+    sampling.padded_vocab_size = padded_vocab_size
+    sampling.grammar_bitmask_tensor = None
+
+    with expect_error(ValueError, "whole 32-token mask words"):
+        sampling.enable_device_grammar()
+
+
 # ---------------------------------------------------------------------------
 # Seeded decode reproducibility under async scheduling (#51981).
 # Host-only: the generator is built with __new__ and driven with stub modules.
