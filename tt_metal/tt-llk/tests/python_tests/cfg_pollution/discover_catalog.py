@@ -68,20 +68,145 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..",
-        "..",
-        "..",
-        ".claude",
-        "scripts",
-    ),
-)
-import cfg_catalog as C  # noqa: E402
-
 PASS, FAIL, ENVERR = "PASS", "FAIL", "ENVERR"
+
+# Restore-plan construction, ported from .claude/scripts/cfg_catalog.py's build_restore_entries /
+# build_addrmod_restore_entries (only the two functions and constants this pipeline actually calls
+# -- the rest of that file is a standalone single-kernel field-bisection CLI, unrelated to
+# discovery/pair-sweep, so importing the whole module bought nothing but extra diff surface).
+_CFG_STATE_SIZE = {"blackhole": 56, "wormhole": 47}
+_ADDR_MOD_ADDR32 = {
+    "blackhole": sorted(
+        set(range(12, 20))
+        | set(range(28, 36))
+        | set(range(37, 41))
+        | set(range(47, 55))
+    ),
+}
+_BOOT_OWNED = {"blackhole": set(), "wormhole": {158, 159, 160, 161}}
+# addr32 0 bit 0 = CFG_STATE_ID (thread-private, preserved); addr32 2 bits 22-31 = firmware
+# DISABLE_RISC_BP (over-reach). Both are skipped by restore so we never write firmware-owned bits.
+_RESTORE_MASK_OVERRIDE = {2: 0x003FFFFF}
+# Reachable write surface (written bits per addr32) -- mirror of cfg_pollution._LIVE_MASK (BH),
+# used only to exclude non-write-surface addresses from the dedup signature below.
+_WRITE_MASK = {
+    "blackhole": {
+        0: 0x0000FFFF,
+        1: 0xFFFFFFFF,
+        2: 0xFFFFFFFF,
+        5: 0x0000FFFF,
+        7: 0x0000FFFF,
+        12: 0xFFFFFFFF,
+        13: 0xFFFFFFFF,
+        14: 0xFFFFFFFF,
+        15: 0xFFFFFFFF,
+        16: 0x0000FFFF,
+        17: 0xFFFFFFFF,
+        18: 0xFFFFFFFF,
+        19: 0x0000FFFF,
+        20: 0xFFFFFFFF,
+        21: 0xFFFFFFFF,
+        24: 0xFFFFFFFF,
+        25: 0xFFFFFFFF,
+        28: 0x0000FFFF,
+        29: 0x0000FFFF,
+        30: 0x0000FFFF,
+        31: 0x0000FFFF,
+        32: 0x0000FFFF,
+        33: 0x0000FFFF,
+        34: 0x0000FFFF,
+        35: 0x0000FFFF,
+        37: 0x0000FFFF,
+        38: 0x0000FFFF,
+        39: 0x0000FFFF,
+        40: 0x0000FFFF,
+        41: 0x0000FFFF,
+        47: 0x0000FFFF,
+        48: 0x0000FFFF,
+        49: 0x0000FFFF,
+        50: 0xFFFFFFFF,
+        51: 0x0000FFFF,
+        52: 0x0000FFFF,
+        53: 0x0000FFFF,
+        54: 0x0000FFFF,
+        55: 0x0000FFFF,
+        56: 0xFFFFFFFF,
+        57: 0xFFFFFFFF,
+        59: 0xFFFFFFFF,
+        64: 0xFFFF000F,
+        65: 0xFFFFFFFF,
+        68: 0xFFFFFFFF,
+        69: 0xFFFFFFFF,
+        70: 0xFFFFFFFF,
+        71: 0xFFC80000,
+        72: 0xFFFFFFFF,
+        73: 0x00000030,
+        76: 0xFFFFFFFF,
+        77: 0xFFFFFFFF,
+        84: 0xFFFFFFFF,
+        86: 0xFFFFFFFF,
+        92: 0xFFFFFFFF,
+        93: 0xFFFFFFFF,
+        112: 0xFFFF000F,
+        113: 0xFFFF0000,
+        119: 0x00400000,
+        120: 0x0000000F,
+        124: 0xFFFFFFFF,
+        125: 0xFFFFFFFF,
+        140: 0xFFFFFFFF,
+        141: 0xFFFFFFFF,
+        180: 0xFFFFFFFF,
+        181: 0xFFFFFFFF,
+        182: 0xFFFFFFFF,
+        183: 0xFFFFFFFF,
+        186: 0xFFFFFFFF,
+        209: 0xFFFFFFFF,
+        211: 0xFFFFFFFF,
+        220: 0x0000000B,
+    },
+}
+
+
+def build_restore_entries(arch, pristine_path):
+    """Restore plan from a captured pristine snapshot (host snapshot_cfg JSON: [[state,addr32,val]..]).
+
+    State-0 cfg-bus words -> port-0 full-word writes (re-establish the shared banked baseline).
+    addr-mod words -> port-1 SETC16 zero writes (reset-default). NOTE: snapshot_cfg()'s addr32
+    numbering (Config[state][addr32], the shared double-buffered CFG bus) and _ADDR_MOD_ADDR32's
+    numbering (ThreadConfig[thread][idx], a separate per-thread-banked array entirely -- see
+    BackendConfiguration.md) are DIFFERENT address spaces that happen to share small integers.
+    cfg_read()/cfg_write() (ckernel.h) can only reach Config, never ThreadConfig, and RISCV store
+    instructions can't write ThreadConfig at all (SETC16 only) -- so there is no capture of the
+    real addr-mod value here to replay; 0 is a guess, not a captured value. Verified empirically:
+    replaying the Config-space value that happens to share the addr-mod address's number (via
+    either cfg_write or SETC16) breaks far more victims than this reset-default-0 guess does.
+    """
+    with open(pristine_path) as f:
+        snap = json.load(f)
+    n = _CFG_STATE_SIZE[arch] * 4
+    entries = []
+    for state, addr32, val in snap:
+        if state != 0 or addr32 >= n or addr32 in _BOOT_OWNED[arch]:
+            continue
+        entries.append([addr32, val, 0, _RESTORE_MASK_OVERRIDE.get(addr32, 0xFFFFFFFF)])
+    for a in _ADDR_MOD_ADDR32.get(arch, []):
+        entries.append([a, 0, 1, 0xFFFF])  # thread-private addr-mod -> reset-default 0
+    return entries
+
+
+def build_addrmod_restore_entries(addrmod_path):
+    """Per-thread addr-mod restore plan from a captured snapshot (host snapshot_addr_mod JSON:
+    [[thread, addr32, val], ...]). Groups by addr32 into [addr32, v_thread0, v_thread1, v_thread2]
+    quads for write_inkernel_addrmod_restore(); a thread with no captured entry for an address
+    defaults to 0 (reset-default), matching build_restore_entries' fallback for the same address.
+    """
+    with open(addrmod_path) as f:
+        snap = json.load(f)
+    by_addr = {}
+    for thread, addr32, val in snap:
+        by_addr.setdefault(addr32, [0, 0, 0])[thread] = val
+    return [[addr32, *by_addr[addr32]] for addr32 in sorted(by_addr)]
+
 
 # Embedded verbatim (not imported) so this script is the only new file a reviewer needs to read:
 # both plugins are single-purpose to this script's discovery/gate rounds and small enough that a
@@ -591,7 +716,7 @@ def main():
         args.timeout,
         pristine_snap_path,
     )
-    restore_entries = C.build_restore_entries(args.arch, pristine_snap_path)
+    restore_entries = build_restore_entries(args.arch, pristine_snap_path)
     with open(pristine_restore_path, "w") as f:
         json.dump({"entries": restore_entries}, f)
     print(f"[discover] pristine captured -> {pristine_restore_path}", file=sys.stderr)
@@ -642,8 +767,8 @@ def main():
 
     with open(pristine_snap_path) as f:
         pristine = {addr32: val for state, addr32, val in json.load(f) if state == 0}
-    live = C._WRITE_MASK[args.arch]
-    addrmod = set(C._ADDR_MOD_ADDR32.get(args.arch, []))
+    live = _WRITE_MASK[args.arch]
+    addrmod = set(_ADDR_MOD_ADDR32.get(args.arch, []))
 
     discovered = []
     for nid in sampled:
@@ -736,14 +861,14 @@ def main():
     gate_nodeids = [r["test_id"] for r in representatives]
     plan_map = {}
     for r in representatives:
-        entries = C.build_restore_entries(args.arch, r["snapshot_path"])
+        entries = build_restore_entries(args.arch, r["snapshot_path"])
         restore_path = r["snapshot_path"].replace(".snapshot.json", ".restore.json")
         with open(restore_path, "w") as f:
             json.dump({"entries": entries}, f)
         r["restore_path"] = restore_path
 
         addrmod_path = r["snapshot_path"].replace(".snapshot.json", ".addrmod.json")
-        addrmod_entries = C.build_addrmod_restore_entries(addrmod_path)
+        addrmod_entries = build_addrmod_restore_entries(addrmod_path)
         ch1x_path = addrmod_path.replace(".addrmod.json", ".adc_ch1x.json")
         ch1x = None
         if os.path.exists(ch1x_path):
