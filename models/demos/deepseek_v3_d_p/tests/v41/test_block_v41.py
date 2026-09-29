@@ -32,7 +32,8 @@ from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_d
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
-LAYERS = (2, 3, 20, 21, 24)
+# every sharing role (2->3, 20->21->24) and the sliding-window-only type (layer 0; layer 1 needs Engram, F5)
+SCHEDULES = {"stack": (2, 3, 20, 21, 24), "swa": (0,)}
 SEQ = 2048
 BLOCK_PCC = {"small": 0.99, "synthetic": 0.99, "real": 0.98}
 SMALL_SEQ = 512
@@ -55,6 +56,7 @@ def _pcc(a, b):
 
 
 @pytest.mark.timeout(5400)
+@pytest.mark.parametrize("schedule", ["stack", "swa"])
 @pytest.mark.parametrize("chunks", [1, 2], ids=["single_chunk", "two_chunks"])
 @pytest.mark.parametrize("weights", ["small", "synthetic", "real"])
 @pytest.mark.parametrize(
@@ -69,7 +71,8 @@ def _pcc(a, b):
     ],
     indirect=True,
 )
-def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks):
+def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule):
+    LAYERS = SCHEDULES[schedule]
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")

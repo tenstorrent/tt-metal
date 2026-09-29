@@ -200,10 +200,13 @@ def _digest(*parts) -> str:
     return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:20]
 
 
-def _reference_digest() -> str:
+def _reference_digest(synthetic: bool = True) -> str:
+    """Digest of the reference sources a result depends on. ``testing.py`` only builds synthetic weights, so
+    results from checkpoint weights exclude it (a synthetic-init change must not invalidate real results)."""
     h = hashlib.sha256()
     for name in _REFERENCE_SOURCES:
-        h.update((_HERE / name).read_bytes())
+        if synthetic or name != "testing.py":
+            h.update((_HERE / name).read_bytes())
     return h.hexdigest()[:16]
 
 
@@ -538,7 +541,7 @@ def cache_path(spec: OracleSpec, tokens: torch.Tensor) -> Path:
         _source_ids(spec),
         hashlib.sha256(tokens.to(torch.int64).contiguous().numpy().tobytes()).hexdigest(),
         list(tokens.shape),
-        _reference_digest(),
+        _reference_digest(synthetic=spec.checkpoint is None),
         torch.__version__,
         PACKAGE_VERSION,
     )

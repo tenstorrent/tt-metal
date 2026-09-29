@@ -25,6 +25,41 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 
 EMBED_STD = 0.12  # RMS of the released V4.1 embedding (measured on the checkpoint, layer-0 input)
 
+# Synthetic weights follow the released checkpoint's statistics (measured on layers 0, 2, 20; user decision
+# 2026-09-29): with unit norm weights and fan-in-scaled projections the MoE output swamps a small residual
+# and the first block of a synthetic stack becomes far more sensitive to tiny errors than the real model.
+# Norm weight means by owner (std 10% of the mean); projection std as a multiple of fan_in^-0.5 by name.
+NORM_MEAN = {
+    "attn_norm": 0.025,
+    "ffn_norm": 0.2,
+    "q_norm": 0.97,
+    "kv_norm": 0.4,
+    "compressor.norm": 0.6,
+    "k_norm": 0.5,
+}
+PROJECTION_GAIN = {
+    "wq_a": 1.6,
+    "wq_b": 0.95,
+    "wkv": 1.8,
+    "wo_a": 1.6,
+    "wo_b": 1.9,
+    "gate": 2.9,
+    "w1": 1.5,
+    "w3": 1.5,
+    "w2": 1.05,
+}
+
+
+def _norm_mean(owner_name: str) -> float:
+    for key, mean in NORM_MEAN.items():
+        if owner_name == key or owner_name.endswith("." + key):
+            return mean
+    return 1.0
+
+
+def _gain(owner_name: str) -> float:
+    return PROJECTION_GAIN.get(owner_name.rsplit(".", 1)[-1], 1.0)
+
 
 class SmallScheduleConfig(DeepSeekV41FlashConfig):
     """The V4.1 layer-role rules on a 6-layer schedule: one layer of each block type, in the order
@@ -165,7 +200,7 @@ def init_weights(model: torch.nn.Module, seed: int = 0) -> None:
             if isinstance(owner, v41.ParallelEngramEmbedding):
                 q, s = quantize_fp8_rows(w, owner.block_size)
             else:
-                q, s = quantize_fp8_blocks(w * p.size(1) ** -0.5)
+                q, s = quantize_fp8_blocks(w * p.size(1) ** -0.5 * _gain(owner_name))
             p.copy_(q)
             owner.scale.copy_(s)
         elif p.dtype == torch.float4_e2m1fn_x2:
@@ -175,17 +210,18 @@ def init_weights(model: torch.nn.Module, seed: int = 0) -> None:
             fan_in = 2 * p.size(1)
             codes = torch.randint(0, 256, p.shape, generator=gen, dtype=torch.int32).to(torch.uint8)
             p.view(torch.uint8).copy_(codes)
-            exp = round(math.log2(fan_in**-0.5 / 3.2))
+            exp = round(math.log2(fan_in**-0.5 * _gain(owner_name) / 3.2))
             jitter = torch.randint(-1, 2, owner.scale.shape, generator=gen, dtype=torch.int32)
             owner.scale.copy_(torch.pow(2.0, (exp + jitter).float()).to(torch.float8_e8m0fnu))
         elif leaf == "weight" and "norm" in owner_name.rsplit(".", 1)[-1]:
-            p.copy_(1 + 0.1 * randn(*p.shape))
+            mean = _norm_mean(owner_name)
+            p.copy_(mean * (1 + 0.1 * randn(*p.shape)))
         elif isinstance(owner, v41.ParallelEmbedding):
             # the released embedding has RMS ~0.12 (real layer-0 input); fan-in scaling would give ~0.014 and
             # make the first block of a synthetic stack far more sensitive than the real model
             p.copy_(randn(*p.shape) * EMBED_STD)
         elif p.dim() >= 2:
-            p.copy_(randn(*p.shape) * p.size(-1) ** -0.5)
+            p.copy_(randn(*p.shape) * p.size(-1) ** -0.5 * _gain(owner_name))
         else:
             p.copy_(0.5 * randn(*p.shape))
 
