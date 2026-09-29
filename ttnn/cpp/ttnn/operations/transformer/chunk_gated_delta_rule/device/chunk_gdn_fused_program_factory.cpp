@@ -149,13 +149,31 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         rcv_crs.insert(CoreRange{c, c});
         union_crs.insert(CoreRange{c, c});
     }
-    for (const auto& c : prod_cores) {
-        prod_crs.insert(CoreRange{c, c});
+    // Split placement: the lower heads' producers run their writer on NOC_0 (and the reader on NOC_1), so they are a
+    // separate producer core set with their own dataflow kernel descriptors.
+    std::set<CoreRange> prod_dn_crs;
+    bool any_dn = false;
+    for (uint32_t pi = 0; pi < prod_cores.size(); pi++) {
+        const auto& c = prod_cores[pi];
+        if (fused_head_writer_on_noc0(attrs.placement, BH, pi / NP)) {
+            prod_dn_crs.insert(CoreRange{c, c});
+            any_dn = true;
+        } else {
+            prod_crs.insert(CoreRange{c, c});
+        }
         union_crs.insert(CoreRange{c, c});
     }
-    const CoreRangeSet rcv_set{rcv_crs};
-    const CoreRangeSet prod_set{prod_crs};
-    const CoreRangeSet union_set{union_crs};
+    // The single-core ranges are merged into rectangles: the same cores and CBs, but far fewer CB / semaphore config
+    // sub-commands at dispatch (80 unmerged single-core ranges cost ~3.7 us of dispatcher CB/semaphore writes,
+    // serialized behind the previous program). Dispatch-only: the kernels and their results are unchanged.
+    const CoreRangeSet rcv_set = CoreRangeSet{rcv_crs}.merge_ranges();
+    // prod_set: every producer (CBs / compute); prod_up_set / prod_dn_set: the dataflow kernels' core sets.
+    std::set<CoreRange> prod_all_crs(prod_crs.begin(), prod_crs.end());
+    prod_all_crs.insert(prod_dn_crs.begin(), prod_dn_crs.end());
+    const CoreRangeSet prod_set = CoreRangeSet{prod_all_crs}.merge_ranges();
+    const CoreRangeSet prod_up_set = !any_dn ? prod_set : CoreRangeSet{prod_crs}.merge_ranges();
+    const CoreRangeSet prod_dn_set = any_dn ? CoreRangeSet{prod_dn_crs}.merge_ranges() : CoreRangeSet{};
+    const CoreRangeSet union_set = CoreRangeSet{union_crs}.merge_ranges();
 
     ProgramDescriptor desc;
     auto add_cb = [&](const CoreRangeSet& on,
@@ -201,8 +219,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // prefetching item i+1's ~32KB while compute works item i directly shortens the per-chunk
     // critical path. (The phased prep keeps nbuf=1 — there this prefetch measured harmful in the
     // write-bound regime; here the producer is math/latency-bound.) +32KB L1 on producer cores.
-    add_cb(prod_set, fcb::q, ck, 2, df_qkv);
-    add_cb(prod_set, fcb::k, ck, 2, df_qkv);
+    if (attrs.qk_fp32) {
+        // Prenormalized fp32 q/k. Default: single-buffered, so the CB bytes equal the bf16 double-buffered layout (the
+        // CB region must not grow under trace). ChunkGdnFusedProgramConfig::qk_fp32_double_buffer double-buffers.
+        const uint32_t qk_nbuf = attrs.qk_fp32_nbuf;
+        add_cb(prod_set, fcb::q, ck, qk_nbuf, tt::DataFormat::Float32);
+        add_cb(prod_set, fcb::k, ck, qk_nbuf, tt::DataFormat::Float32);
+    } else {
+        add_cb(prod_set, fcb::q, ck, 2, df_qkv);
+        add_cb(prod_set, fcb::k, ck, 2, df_qkv);
+    }
     add_cb(prod_set, fcb::v, cv, 2, df_qkv);
     add_cb(prod_set, fcb::g, Ct, 2);
     add_cb(prod_set, fcb::beta, Ct, 2);
@@ -365,9 +391,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     KernelDescriptor prep_reader;
     prep_reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_prep.cpp";
     prep_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    prep_reader.core_ranges = prod_set;
+    prep_reader.core_ranges = prod_up_set;
     prep_reader.compile_time_args = prep_reader_ct;
     prep_reader.config = ReaderConfigDescriptor{};
+    if (Ct == 1) {
+        // Chunk 32: the producers build eye/tril/ones/masks in L1 instead of all reading the same 1-tile DRAM
+        // tensors at kernel start (same constants, bit-exact; the phased prep still reads the tensors).
+        prep_reader.defines = {{"GDN_CONST_GEN", "1"}};
+    }
     prep_reader.runtime_args.reserve(P);
 
     KernelDescriptor prep_compute;
@@ -381,6 +412,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     if (attrs.tinv == static_cast<uint32_t>(GdnTinv::SFPU_FP32)) {
         prep_compute.defines.emplace_back("GDN_TINV_SFPU", "1");
     }
+    if (attrs.qk_fp32) {
+        prep_reader.defines.emplace_back("GDN_QK_FP32", "1");  // fp32 q/k tiles (qk_prenormed)
+    }
+    if (attrs.decay_sfpu) {
+        prep_compute.defines.emplace_back("GDN_DECAY_SFPU", "1");  // the fp32 SFPU decay chain (Ct == 1)
+    }
     prep_compute.runtime_args.reserve(P);
 
     // The fused writer runs on the WriterConfigDescriptor's RISC/NoC (BRISC / NOC_1 on Blackhole).
@@ -393,10 +430,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     KernelDescriptor fused_writer;
     fused_writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp";
     fused_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    fused_writer.core_ranges = prod_set;
+    fused_writer.core_ranges = prod_up_set;
     fused_writer.compile_time_args = fused_writer_ct;
     fused_writer.config = WriterConfigDescriptor{};
     fused_writer.runtime_args.reserve(P);
+    // Split placement: copies of the producer reader / writer for the lower heads, NoCs swapped.
+    KernelDescriptor prep_reader_dn = prep_reader;
+    KernelDescriptor fused_writer_dn = fused_writer;
+    if (any_dn) {
+        prep_reader_dn.core_ranges = prod_dn_set;
+        prep_reader_dn.config =
+            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        fused_writer_dn.core_ranges = prod_dn_set;
+        fused_writer_dn.config =
+            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+    }
 
     KernelDescriptor receiver_reader;
     receiver_reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp";
@@ -464,8 +512,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             NV);
         const CoreCoord m_tl = device->worker_core_from_logical_core(l_tl);
         const CoreCoord m_br = device->worker_core_from_logical_core(l_br);
-        const CoreCoord& m_start = writer_on_noc1 ? m_br : m_tl;  // NOC_1: bottom-right -> top-left
-        const CoreCoord& m_end = writer_on_noc1 ? m_tl : m_br;
+        const bool head_dn = fused_head_writer_on_noc0(attrs.placement, BH, h);
+        const bool head_noc1 = head_dn ? false : writer_on_noc1;
+        const CoreCoord& m_start = head_noc1 ? m_br : m_tl;  // NOC_1: bottom-right -> top-left
+        const CoreCoord& m_end = head_noc1 ? m_tl : m_br;
+        KernelDescriptor& h_reader = head_dn ? prep_reader_dn : prep_reader;
+        KernelDescriptor& h_writer = head_dn ? fused_writer_dn : fused_writer;
 
         // Producer j of head h owns the interleaved chunks c = j, j+NP, ... — as flat work-items
         // wi = h*NC + c that is start h*NC + j with stride NP (trailing reader arg). The op host
@@ -473,7 +525,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         for (uint32_t j = 0; j < NP; j++) {
             const CoreCoord& pc = prod_cores[h * NP + j];
             const uint32_t cnt = (NC - j + NP - 1) / NP;
-            prep_reader.emplace_runtime_args(
+            h_reader.emplace_runtime_args(
                 pc,
                 {h * NC + j,
                  cnt,
@@ -506,7 +558,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
                 w_args.push_back(static_cast<uint32_t>(rv[v].x));
                 w_args.push_back(static_cast<uint32_t>(rv[v].y));
             }
-            fused_writer.emplace_runtime_args(pc, w_args);
+            h_writer.emplace_runtime_args(pc, w_args);
         }
 
         // Receiver (h, v): its V-slice index, s0 from DRAM, then NP and N_INIT (= NP: every producer
@@ -530,6 +582,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(receiver_reader));
     desc.kernels.push_back(std::move(scan_compute));
     desc.kernels.push_back(std::move(scan_writer));
+    if (any_dn) {
+        desc.kernels.push_back(std::move(prep_reader_dn));
+        desc.kernels.push_back(std::move(fused_writer_dn));
+    }
     return desc;
 }
 

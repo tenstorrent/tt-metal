@@ -53,7 +53,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks,
-    const std::optional<ttnn::Tensor>& sel) {
+    const std::optional<ttnn::Tensor>& sel,
+    bool qk_prenormed,
+    bool decay_sfpu) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -74,7 +76,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         tril,
         ones,
         masks,
-        sel);
+        sel,
+        qk_prenormed,
+        decay_sfpu);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -251,32 +255,54 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             unicast (bool): default True. Per-receiver unicast writes; False sends the linked
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
-                in-order delivery; requires unicast.)doc")
+                in-order delivery; requires unicast.
+            split_layout (bool): default False. The SPLIT core map: the first BH/2 heads put their
+                receivers at the top of their own column with the producers below, the other half is
+                mirrored at the bottom of the grid (those producers write on NOC_0), so the two halves'
+                hand-off traffic uses disjoint column links. Used whenever it fits the grid (BH even,
+                2*NV < grid.y, ...); otherwise row_local decides. Bit-exact with every other core map.
+            qk_fp32_double_buffer (bool): default False. Double-buffer the producers' fp32 q/k CBs
+                (qk_prenormed with FLOAT32 q/k only; no effect otherwise): +32 KB of producer CB region
+                at K = 128, hides the fp32 q/k read on producer-bound geometries. Bit-exact.)doc")
         .def(
-            nb::init<std::optional<uint32_t>, std::optional<uint32_t>, std::optional<bool>, uint32_t, bool, bool>(),
+            nb::init<
+                std::optional<uint32_t>,
+                std::optional<uint32_t>,
+                std::optional<bool>,
+                uint32_t,
+                bool,
+                bool,
+                bool,
+                bool>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
             nb::arg("row_local") = nb::none(),
             nb::arg("handoff_depth") = 2,
             nb::arg("unicast") = true,
-            nb::arg("posted") = false)
+            nb::arg("posted") = false,
+            nb::arg("split_layout") = false,
+            nb::arg("qk_fp32_double_buffer") = false)
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
         .def_rw("handoff_depth", &ChunkGdnFusedProgramConfig::handoff_depth)
         .def_rw("unicast", &ChunkGdnFusedProgramConfig::unicast)
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
+        .def_rw("split_layout", &ChunkGdnFusedProgramConfig::split_layout)
+        .def_rw("qk_fp32_double_buffer", &ChunkGdnFusedProgramConfig::qk_fp32_double_buffer)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={})",
+                "unicast={}, posted={}, split_layout={}, qk_fp32_double_buffer={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
                 c.handoff_depth,
                 py_bool(c.unicast),
-                py_bool(c.posted));
+                py_bool(c.posted),
+                py_bool(c.split_layout),
+                py_bool(c.qk_fp32_double_buffer));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -381,6 +407,14 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 with a ChunkGdnFusedProgramConfig or with None when the cost model picks fused;
                 phased/mono reject it). Omit it to keep the head-split g/beta path. Build it once
                 on the model/layer (device-resident before trace capture, same as eye/tril/ones/masks).
+            qk_prenormed (bool): default False. q/k arrive already L2-normalized per head over K (q also
+                multiplied by scale; k / sqrt(sum k^2 + 1e-6), the in-kernel norm's formula) as flat
+                [B, T, H*K] BFLOAT16 or FLOAT32 TILE tensors: the in-kernel norm is skipped and FLOAT32 q/k
+                are read as fp32 (no bf16 cast). Flat q/k, chunk_size 32 and the fused path only.
+            decay_sfpu (bool): default False. Compute each chunk's decay chain (cumulative decay, its
+                exponentials, the decay mask and dl*I) in two fp32 SFPU passes instead of ~13 single-tile
+                FPU ops: faster and more accurate (fp32 instead of tf32 operands), so it changes bits.
+                Fused path and chunk_size 32 only.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -412,7 +446,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none(),
-        nb::arg("sel") = nb::none());
+        nb::arg("sel") = nb::none(),
+        nb::arg("qk_prenormed") = false,
+        nb::arg("decay_sfpu") = false);
 
     const auto* prep_doc =
         R"doc(

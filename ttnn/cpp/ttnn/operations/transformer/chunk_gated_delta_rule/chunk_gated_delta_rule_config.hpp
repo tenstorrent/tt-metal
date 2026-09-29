@@ -45,6 +45,16 @@ struct ChunkGdnFusedProgramConfig {
     uint32_t handoff_depth = 2;  // hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead
     bool unicast = true;         // per-receiver unicast writes; false = the linked multicast chain
     bool posted = false;         // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // Core map override: the SPLIT layout. The first BH/2 heads put their NV receivers at the top of their own
+    // column with the producers below them; the other half is mirrored at the bottom of the grid, with those
+    // producers' writers on NOC_0, so the two halves' hand-off traffic runs on disjoint column links. Used whenever
+    // it fits the grid (BH even, 2*NV < grid.y, ...); otherwise row_local decides as usual. Pays with the producers
+    // unloaded (pre-normalized q/k, qk_prenormed) at NV = 2, e.g. nv2np4 with handoff_depth 3 on an 11x10 grid.
+    bool split_layout = false;
+    // Double-buffer the producers' fp32 q/k CBs (qk_prenormed with FLOAT32 q/k only; no effect otherwise). Off: one
+    // buffer, the byte size of the double-buffered bf16 q/k CBs; on: +2*Ct*Kt fp32 tiles (+32 KB at K = 128) of
+    // producer CB region, which hides the fp32 q/k read on producer-bound geometries (SPLIT).
+    bool qk_fp32_double_buffer = false;
 };
 
 using ChunkGdnProgramConfig =

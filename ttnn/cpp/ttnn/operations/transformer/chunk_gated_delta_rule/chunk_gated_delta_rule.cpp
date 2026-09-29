@@ -166,7 +166,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks,
-    const std::optional<ttnn::Tensor>& sel) {
+    const std::optional<ttnn::Tensor>& sel,
+    bool qk_prenormed,
+    bool decay_sfpu) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
 
     // gb_flat (Option B): enabled iff the caller passes `sel` (the one-hot head selector). g/beta
@@ -210,8 +212,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     auto as_bf16 = [&](const ttnn::Tensor& t) {
         return t.dtype() != DataType::BFLOAT16 ? ttnn::typecast(t, DataType::BFLOAT16) : t;
     };
-    ttnn::Tensor q = flat_qk ? as_bf16(q_in) : head_split_tile(q_in, B, T, H, K);
-    ttnn::Tensor k = flat_qk ? as_bf16(k_in) : head_split_tile(k_in, B, T, H, K);
+    // qk_prenormed: fp32 prenormalized q/k go in as fp32 (no cast); bf16 stays bf16.
+    const bool keep_qk_dtype =
+        qk_prenormed && flat_qk && q_in.dtype() == DataType::FLOAT32 && k_in.dtype() == DataType::FLOAT32;
+    ttnn::Tensor q = flat_qk ? (keep_qk_dtype ? q_in : as_bf16(q_in)) : head_split_tile(q_in, B, T, H, K);
+    ttnn::Tensor k = flat_qk ? (keep_qk_dtype ? k_in : as_bf16(k_in)) : head_split_tile(k_in, B, T, H, K);
     // OPT-A: flat v stays token-major [B,T,HV*V] (just bf16-cast); the prep reader addresses it.
     // Otherwise head-split to [BH,T,V] as usual.
     ttnn::Tensor v = flat_v ? (v_in.dtype() != DataType::BFLOAT16 ? ttnn::typecast(v_in, DataType::BFLOAT16) : v_in)
@@ -239,6 +244,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // in flat" (Ct==1 only; the in-kernel norm uses cb_supd/cb_stmp, free only at chunk_size==32). When
     // NOT flat, q/k are already host-normalized, so we fold scale into q here as before.
     const bool qk_norm = flat_qk && (C == 32);
+    TT_FATAL(!qk_prenormed || qk_norm, "chunk_gated_delta_rule: qk_prenormed needs flat q/k and chunk_size 32");
+    TT_FATAL(!decay_sfpu || C == 32, "chunk_gated_delta_rule: decay_sfpu needs chunk_size 32 (got {})", C);
     if (!qk_norm) {
         q = ttnn::multiply(q, scale);
     }
@@ -359,6 +366,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         !gb_flat || std::holds_alternative<ChunkGdnFusedProgramConfig>(cfg),
         "gb_flat (sel passed) needs the fused path (ChunkGdnFusedProgramConfig); phased/mono are not supported");
     TT_FATAL(!gb_flat || pad == 0, "gb_flat requires T ({}) to be a multiple of chunk_size ({})", T, C);
+    TT_FATAL(
+        !(qk_prenormed || decay_sfpu) || std::holds_alternative<ChunkGdnFusedProgramConfig>(cfg),
+        "chunk_gated_delta_rule: qk_prenormed / decay_sfpu need the fused path (ChunkGdnFusedProgramConfig, or None "
+        "when "
+        "the cost model picks fused)");
     if (const auto* fused_cfg = std::get_if<ChunkGdnFusedProgramConfig>(&cfg)) {
         // Same preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS
         // provides — zeros built above when the caller passed none), same outputs scan produces;
@@ -387,7 +399,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             flat_qk,
             H,
             gb_flat,
-            sel_c);
+            sel_c,
+            qk_prenormed,
+            decay_sfpu);
         o_c = fused[0];
         final_state = fused[1];
     } else if (const auto* phased_cfg = std::get_if<ChunkGdnPhasedProgramConfig>(&cfg)) {

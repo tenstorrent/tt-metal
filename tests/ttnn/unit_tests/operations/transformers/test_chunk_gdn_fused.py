@@ -204,6 +204,9 @@ def test_program_config_defaults():
     f = ttnn.ChunkGdnFusedProgramConfig()
     assert (f.num_producers, f.num_receivers, f.row_local) == (None, None, None)
     assert (f.handoff_depth, f.unicast, f.posted) == (2, True, False)
+    assert (f.split_layout, f.qk_fp32_double_buffer) == (False, False)
+    f = ttnn.ChunkGdnFusedProgramConfig(split_layout=True, qk_fp32_double_buffer=True)
+    assert "split_layout=True" in repr(f) and "qk_fp32_double_buffer=True" in repr(f)
     f = ttnn.ChunkGdnFusedProgramConfig(num_receivers=4, num_producers=5, row_local=False, handoff_depth=3)
     assert (f.num_receivers, f.num_producers, f.row_local, f.handoff_depth) == (4, 5, False, 3)
     assert "num_receivers=4" in repr(f) and "row_local=False" in repr(f)
@@ -947,3 +950,125 @@ def test_fused_tinv_chunk64(device, expect_error):
     assert torch.equal(o_def, o_h) and torch.equal(fs_def, fs_h), "chunk 64: AUTO is not the Horner inverse"
     with expect_error(RuntimeError, "needs chunk_size == 32"):
         run(SFPU)
+
+
+# ---------------------------------------------------------------------------
+# split_layout / qk_fp32_double_buffer (program config) and qk_prenormed / decay_sfpu (op kwargs).
+# Flat token-major q/k/v [1, T, H*128] (the model's layout) at BH = 16, nv2np4 with a 3-deep hand-off ring.
+
+
+def _flat_inputs(device, T, H, seed):
+    torch.manual_seed(seed)
+    q = F.silu(torch.randn(1, T, H, KDIM)).to(torch.bfloat16).float()
+    k = F.silu(torch.randn(1, T, H, KDIM)).to(torch.bfloat16).float()
+    v = F.silu(torch.randn(1, T, H, VDIM)).to(torch.bfloat16).float()
+    beta = torch.sigmoid(torch.randn(1, T, H))
+    g = -torch.exp(torch.linspace(-6.0, 2.3, H)) * F.softplus(0.5 * torch.randn(1, T, H))
+    s0 = 0.05 * torch.randn(1, H, KDIM, VDIM)
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    flat = lambda t: t.reshape(1, T, H * KDIM)  # noqa: E731
+    qn = F.normalize(q.double(), dim=-1) / KDIM**0.5  # the prenormalized contract (q also * K^-0.5)
+    kn = F.normalize(k.double(), dim=-1)
+    return {
+        "raw": (dev(flat(q), ttnn.bfloat16), dev(flat(k), ttnn.bfloat16)),
+        "pn32": (dev(flat(qn).float(), ttnn.float32), dev(flat(kn).float(), ttnn.float32)),
+        "v": dev(flat(v), ttnn.bfloat16),
+        "g": dev(g, ttnn.float32),
+        "beta": dev(beta, ttnn.float32),
+        "s0": dev(s0, ttnn.float32),
+        "torch": (F.normalize(q, dim=-1), F.normalize(k, dim=-1), v, g, beta, s0),
+    }
+
+
+def _run_flat(device, x, qk, cfg, **kw):
+    eye, tril, ones, masks = _const_tiles(device)
+    o, fs = ttnn.transformer.chunk_gated_delta_rule(
+        *x[qk],
+        x["v"],
+        x["g"],
+        x["beta"],
+        initial_state=x["s0"],
+        output_final_state=True,
+        chunk_size=CHUNK,
+        output_head_major=True,
+        program_config=cfg,
+        eye=eye,
+        tril=tril,
+        ones=ones,
+        masks=masks,
+        **kw,
+    )
+    o_t, fs_t = ttnn.to_torch(o), ttnn.to_torch(fs)
+    ttnn.deallocate(o)
+    ttnn.deallocate(fs)
+    return o_t, fs_t
+
+
+def _skip_unless_split_fits(device, bh, nv, np_producers):
+    grid = device.compute_with_storage_grid_size()
+    from ttnn._ttnn.operations import transformer as _t
+
+    try:
+        _t.chunk_gdn_fused_placement(grid.x, grid.y, bh, nv, np_producers, 4)
+    except RuntimeError:
+        pytest.skip(f"the SPLIT layout does not fit BH={bh} NV={nv} NP={np_producers} on {grid.x}x{grid.y}")
+
+
+def test_fused_split_layout_bit_exact(device):
+    """split_layout only moves cores (its lower half also swaps the producers' NoCs): bit-exact with the row-major
+    core map of the same geometry, hashed (a new program), and a cache hit on revisit."""
+    H, nv, np_producers = 16, 2, 4
+    _skip_unless_split_fits(device, H, nv, np_producers)
+    x = _flat_inputs(device, T_SMALL, H, seed=20260930)
+    base = dict(num_receivers=nv, num_producers=np_producers, row_local=False, handoff_depth=3)
+    o_rm, fs_rm = _run_flat(device, x, "raw", ttnn.ChunkGdnFusedProgramConfig(**base))
+    n = device.num_program_cache_entries()
+    o_sp, fs_sp = _run_flat(device, x, "raw", ttnn.ChunkGdnFusedProgramConfig(**base, split_layout=True))
+    assert device.num_program_cache_entries() - n == 1, "split_layout must be hashed (one new program)"
+    assert torch.equal(o_sp, o_rm) and torch.equal(fs_sp, fs_rm), "split_layout is not bit-exact"
+    _run_flat(device, x, "raw", ttnn.ChunkGdnFusedProgramConfig(**base, split_layout=True))
+    assert device.num_program_cache_entries() - n == 1, "split_layout revisit compiled a new program"
+
+
+def test_fused_qk_prenormed_fp32_double_buffer(device):
+    """FLOAT32 prenormalized q/k (qk_prenormed): close to the in-kernel norm of the same q/k; qk_fp32_double_buffer
+    is bit-exact with the single-buffered fp32 CBs and hashed."""
+    H, nv, np_producers = 16, 2, 4
+    _skip_unless_split_fits(device, H, nv, np_producers)
+    x = _flat_inputs(device, T_SMALL, H, seed=20261001)
+    cfg = lambda **kw: ttnn.ChunkGdnFusedProgramConfig(  # noqa: E731
+        num_receivers=nv, num_producers=np_producers, handoff_depth=3, split_layout=True, **kw
+    )
+    o_in, fs_in = _run_flat(device, x, "raw", cfg())
+    o_1, fs_1 = _run_flat(device, x, "pn32", cfg(), qk_prenormed=True)
+    n = device.num_program_cache_entries()
+    o_2, fs_2 = _run_flat(device, x, "pn32", cfg(qk_fp32_double_buffer=True), qk_prenormed=True)
+    assert device.num_program_cache_entries() - n == 1, "qk_fp32_double_buffer must be hashed (one new program)"
+    assert torch.equal(o_2, o_1) and torch.equal(fs_2, fs_1), "qk_fp32_double_buffer is not bit-exact"
+    assert _pcc(o_in, o_1) > 0.99995 and _pcc(fs_in, fs_1) > 0.99995, "fp32 prenormalized q/k vs in-kernel norm"
+
+
+def test_fused_decay_sfpu(device, expect_error):
+    """decay_sfpu (fp32 SFPU decay chain): hashed, and at least as close to the fp32 torch golden as the default FPU
+    chain (it changes bits, so no bit-exactness); refused where it cannot run (the phased path)."""
+    H = 16
+    x = _flat_inputs(device, T_SMALL, H, seed=20261002)
+    cfg = ttnn.ChunkGdnFusedProgramConfig(num_receivers=1, num_producers=4, row_local=True)
+    o_d, fs_d = _run_flat(device, x, "raw", cfg)
+    n = device.num_program_cache_entries()
+    o_s, fs_s = _run_flat(device, x, "raw", cfg, decay_sfpu=True)
+    assert device.num_program_cache_entries() - n == 1, "decay_sfpu must be hashed (one new program)"
+    q, k, v, g, beta, s0 = x["torch"]
+    o_ref, fs_ref = _golden_chunk_gdn(q, k, v, g, beta, KDIM**-0.5, s0, CHUNK)
+    o_ref = o_ref.permute(0, 2, 1, 3).reshape(H, T_SMALL, VDIM)
+    o_d, o_s = o_d.reshape(H, T_SMALL, VDIM), o_s.reshape(H, T_SMALL, VDIM)
+    fs_d, fs_s = fs_d.reshape(fs_ref.shape), fs_s.reshape(fs_ref.shape)
+    for name, ref, dflt, sfpu in (("o", o_ref, o_d, o_s), ("final_state", fs_ref, fs_d, fs_s)):
+        p_d, p_s = _pcc(ref, dflt), _pcc(ref, sfpu)
+        assert p_s > 0.9999, f"decay_sfpu {name} PCC {p_s}"
+        assert p_s >= p_d - 1e-5, f"decay_sfpu {name} PCC {p_s} is worse than the default chain's {p_d}"
+    with expect_error(RuntimeError, "need the fused path"):
+        _run_flat(device, x, "raw", _phased(), decay_sfpu=True)

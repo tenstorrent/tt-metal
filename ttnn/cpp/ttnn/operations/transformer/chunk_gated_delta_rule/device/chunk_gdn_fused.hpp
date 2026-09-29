@@ -75,6 +75,9 @@ struct ChunkGdnFusedParams {
     // the same row), heads beyond grid.y in the leftover columns as vertical blocks. NOC_1 routes -x
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
     // share NoC links. The config's row_local, or row-local whenever it is feasible.
+    // 4 = SPLIT (ChunkGdnFusedProgramConfig::split_layout, when it fits): the upper half of the heads has its
+    // receivers on row 0.. with the producers below, the lower half mirrored at the bottom rows with its producers'
+    // writers on NOC_0 (fused_head_writer_on_noc0), so the two halves use disjoint column links.
     uint32_t placement = 0;
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_phased.hpp): the op's
     // wy_inverse resolved by gdn_tinv_resolve at attrs construction (hashed), exactly as the phased prep prim.
@@ -83,6 +86,16 @@ struct ChunkGdnFusedParams {
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // decay_sfpu (op kwarg, chunk_size 32): the producer builds decay / decay_exp / decayfac / L_mask / dl*I in two
+    // fp32 SFPU DST passes (define GDN_DECAY_SFPU) instead of ~13 single-tile FPU ops. Changes the arithmetic.
+    bool decay_sfpu = false;
+    // qk_prenormed (op kwarg, flat q/k only): q/k arrive L2-normalized per head (q also pre-scaled); the in-kernel
+    // norm is skipped (qk_norm is false). qk_fp32: they arrive as FLOAT32 (fp32 q/k CBs, define GDN_QK_FP32).
+    bool qk_prenormed = false;
+    bool qk_fp32 = false;
+    // Buffers of the fp32 q/k CBs: 1 (the bf16 double-buffered byte size), or 2 with
+    // ChunkGdnFusedProgramConfig::qk_fp32_double_buffer (+32 KB producer CB region at K = 128).
+    uint32_t qk_fp32_nbuf = 1;
 };
 
 struct ChunkGdnFusedInputs {
@@ -154,6 +167,8 @@ struct FusedPlacement {
 };
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
+// True when head h's producers need a NOC_0 writer (split placement, lower half).
+bool fused_head_writer_on_noc0(uint32_t placement, uint32_t BH, uint32_t h);
 
 // Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
 // The geometry (NV receivers + NP producers per head, placement) comes from program_config, with the
@@ -184,6 +199,8 @@ std::vector<Tensor> chunk_gdn_fused(
     bool qk_flat = false,
     uint32_t Hk = 0,
     bool gb_flat = false,
-    const std::optional<Tensor>& sel = std::nullopt);
+    const std::optional<Tensor>& sel = std::nullopt,
+    bool qk_prenormed = false,
+    bool decay_sfpu = false);
 
 }  // namespace ttnn::prim

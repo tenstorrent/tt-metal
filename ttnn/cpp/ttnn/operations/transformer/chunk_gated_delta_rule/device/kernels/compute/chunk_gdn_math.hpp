@@ -22,6 +22,13 @@
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
+#if defined(GDN_DECAY_SFPU)
+// In-DST SFPU ops for the fused decay chain (GDN_DECAY_SFPU, set by the fused factory from the hashed decay_sfpu attr).
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/transpose_dest.h"
+#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/eltwise_unary/fill.h"
+#endif
 
 // GDN_HOIST_RECONFIG (a per-kernel define, set by the fused factory on the producer compute
 // kernel only): hoist the packer/unpacker format reconfigs out of the WY hot path (invert16 /
@@ -645,6 +652,94 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     POP(cb.v, cv);
 
     // ---- P2: decay = tril@g, decay_exp, decay_row ----
+#if defined(GDN_DECAY_SFPU)
+    // decay_sfpu (Ct == 1): the whole 1-tile decay chain in two DST round trips instead of ~13 single-tile ops that
+    // each pay an unpack->math->pack round trip, in fp32 SFPU arithmetic (more accurate than the tf32 FPU operands).
+    //   pass 1: decay = tril@G, gsum = ones@G (matmul); decayfac = exp(gsum - decay), decay_exp = exp(decay),
+    //           exp(gsum) (SFPU, fp32 in DST).
+    //   pass 2: L = tril(exp(tril(decay_i - decay_j))) with decay_j from an in-DST transpose, and dl*I.
+    static_assert(Ct == 1, "GDN_DECAY_SFPU: Ct == 1 only");
+    {
+        const uint32_t cb_eg = cb.scr2;  // exp(g_sum), consumed by pass 2
+        cb_reserve_back(cb.decay, 1);
+        cb_reserve_back(cb.decay_exp, 1);
+        cb_reserve_back(cb_eg, 1);
+        pack_reconfig_data_format(cb.decay);
+        reconfig_data_format(G, cb.tril);  // matmul_tiles(tril|ones, G): in0 -> srcB, G -> srcA
+        tile_regs_acquire();
+        matmul_init(cb.tril, G, 0);
+        matmul_tiles(cb.tril, G, 0, 0, 0);  // DST0 = decay (column form)
+        matmul_tiles(cb.tril, G, 0, 0, 2);  // DST2 = decay (second copy, becomes decay_exp)
+        matmul_init(cb.ones, G, 0);
+        matmul_tiles(cb.ones, G, 0, 0, 1);  // DST1 = g_sum (column form)
+        POP(G, Ct);
+        sub_binary_tile_init();
+        sub_binary_tile(1, 0, 3);  // DST3 = g_sum - decay
+        exp_tile_init();
+        // Column-form tiles: only column 0 is ever read (bcast_cols / dl at (0,0)), so exponentiate the left
+        // faces (0, 2) only. Faces 1 and 3 keep 0 instead of exp(0) = 1; nothing reads them.
+        exp_tile(3, VectorMode::C);  // decayfac
+        exp_tile(2, VectorMode::C);  // decay_exp
+        exp_tile(1, VectorMode::C);  // exp(g_sum)
+        tile_regs_commit();
+        cb_reserve_back(cb.decayfac, 1);  // gb_flat: G lived in this slot; popped above
+        tile_regs_wait();
+        pack_tile(0, cb.decay, 0);
+        pack_tile(2, cb.decay_exp, 0);
+        pack_tile(3, cb.decayfac, 0);
+        pack_tile(1, cb_eg, 0);
+        tile_regs_release();
+        cb_push_back(cb.decay, 1);
+        cb_push_back(cb.decay_exp, 1);
+        cb_push_back(cb.decayfac, 1);
+        cb_push_back(cb_eg, 1);
+    }
+    WAIT(cb.decay_exp, Ct);
+    WAIT(cb.decayfac, Ct);
+    {
+        WAIT(cb.decay, 1);
+        cb_reserve_back(cb.lmask, 1);
+        WAIT(cb.scr2, 1);
+        cb_reserve_back(cb.dl, 1);
+        pack_reconfig_data_format(cb.lmask);
+        reconfig_data_format_srca(cb.decay);
+        tile_regs_acquire();
+        copy_init(cb.decay);
+        copy_tile(cb.decay, 0, 0);  // DST0 = decay (column form)
+        copy_tile(cb.decay, 0, 1);
+        transpose_dest_init<true>(cb.decay);
+        transpose_dest<true>(1);  // DST1 = decay (row form)
+        fill_tile_init();
+        fill_tile(2, 0.0f);
+        sfpu_bcast_col_init();
+        sfpu_add_bcast_col(2, 0);  // DST2[i][j] = decay_i
+        sfpu_bcast_row_init();
+        sfpu_sub_bcast_row(2, 1);  // DST2[i][j] = decay_i - decay_j
+        copy_init(cb.tril);
+        copy_tile(cb.tril, 0, 3);  // DST3 = tril
+        mul_binary_tile_init();
+        mul_binary_tile(2, 3, 2);  // zero the upper triangle before exp (it holds sums of -g >= 0)
+        exp_tile_init();
+        exp_tile(2);
+        mul_binary_tile_init();
+        mul_binary_tile(2, 3, 2);  // L_mask
+        copy_init(cb.eye);
+        copy_tile(cb.eye, 0, 0);   // DST0 = I
+        copy_tile(cb.scr2, 0, 1);  // DST1 = exp(g_sum) (column form)
+        sfpu_bcast_col_init();
+        sfpu_mul_bcast_col(0, 1);  // dl*I
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(2, cb.lmask, 0);
+        pack_tile(0, cb.dl, 0);
+        tile_regs_release();
+        cb_push_back(cb.lmask, 1);
+        cb_push_back(cb.dl, 1);
+        POP(cb.scr2, 1);
+        POP(cb.decay, 1);
+    }
+    WAIT(cb.lmask, cc);
+#else
     mm(cb.tril, G, cb.decay, Ct, Ct, 1, false);
     WAIT(cb.decay, Ct);
     expc(cb.decay, cb.decay_exp, Ct);
@@ -682,6 +777,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     expc(cb.scr2, cb.decayfac, Ct);
     WAIT(cb.decayfac, Ct);
     POP(cb.scr2, Ct);
+#endif  // GDN_DECAY_SFPU
 
     // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
     // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each
@@ -820,6 +916,10 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // ---- dl*I: dl = exp(g_sum) = decayfac[i]*decay_exp[i] (the same value in every row of column 0),
     // broadcast down the identity -> one tile with dl on the diagonal. The scan decays the state as
     // the matmul (dl*I) @ S_tile so the update S <- dl*S + k_dec_t@v_new accumulates in one DST pass.
+#if defined(GDN_DECAY_SFPU)
+    POP(cb.decayfac, Ct);  // dl*I was produced by the SFPU decay chain
+    POP(cb.decay_exp, Ct);
+#else
     ew(cb.decayfac, cb.decay_exp, cb.scr1, 1, 2);
     WAIT(cb.scr1, 1);
     bcast_cols_mul(cb.eye, cb.scr1, cb.dl, 1, 1);
@@ -827,6 +927,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     POP(cb.scr1, 1);
     POP(cb.decayfac, Ct);
     POP(cb.decay_exp, Ct);
+#endif
     // u, w, k_dec_t, q_decay, intra, dl remain pushed in their CBs -> prep writer -> DRAM.
     // (They are NOT popped here; the writer drains them per chunk.)
 }

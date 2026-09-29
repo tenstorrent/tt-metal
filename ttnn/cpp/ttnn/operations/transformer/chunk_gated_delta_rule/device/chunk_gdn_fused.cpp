@@ -24,6 +24,64 @@ void check_fused(const Tensor& t, const char* name, DataType dt) {
 }
 }  // namespace
 
+namespace {
+// Placement 4 = SPLIT column layout (ChunkGdnFusedProgramConfig::split_layout). Heads h < BH/2 ("upper") have
+// their NV receivers stacked vertically at column h, rows 0..NV-1 and their producers BELOW them (rows NV..NV+per-1
+// of the same column, extras in the columns right of BH/2) -> producer->receiver traffic goes north (NOC_1: -x, -y).
+// Heads h >= BH/2 ("lower") mirror it: receivers at column (grid_x - BH/2) + (h - BH/2), rows grid_y-NV..grid_y-1,
+// producers ABOVE them (rows NV+per..NV+2per-1), extras in the LEFT columns -> traffic goes south-east, which is what
+// NOC_0 (+x, +y) routes without wrapping; the factory gives those producers a NOC_0 writer (and a NOC_1 reader).
+// The two halves use disjoint column links. Returns {receivers, producers} or empty when it does not fit.
+std::pair<std::vector<CoreCoord>, std::vector<CoreCoord>> gdn_split_layout(
+    uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP) {
+    std::pair<std::vector<CoreCoord>, std::vector<CoreCoord>> out;
+    if (NV == 0 || BH % 2 != 0 || 2 * NV >= grid_y) {
+        return out;
+    }
+    const uint32_t half = BH / 2;
+    const uint32_t per = (grid_y - 2 * NV) / 2;  // producer rows per half
+    const uint32_t per_col = std::min<uint32_t>(per, NP);
+    const uint32_t extra = NP - per_col;
+    if (half > grid_x || per_col == 0) {
+        return out;
+    }
+    const uint32_t xw = grid_x - half;  // extra columns per half (right of the upper heads, left of the lower heads)
+    if (extra > 0 && (xw == 0 || xw * per < half * extra)) {
+        return out;
+    }
+    std::vector<CoreCoord> rcv(BH * NV), prod;
+    prod.reserve(BH * NP);
+    for (uint32_t h = 0; h < BH; h++) {
+        const bool up = h < half;
+        const uint32_t i = up ? h : h - half;
+        const uint32_t x = up ? i : xw + i;
+        const uint32_t y_rcv0 = up ? 0 : grid_y - NV;
+        const uint32_t y_p0 = up ? NV : NV + per;
+        for (uint32_t v = 0; v < NV; v++) {
+            rcv[h * NV + v] = CoreCoord{x, y_rcv0 + v};
+        }
+        for (uint32_t j = 0; j < per_col; j++) {
+            // upper: the rows right below the receivers first; lower: the rows right above them first
+            prod.push_back(CoreCoord{x, up ? y_p0 + j : y_p0 + per - 1 - j});
+        }
+        for (uint32_t e = 0; e < extra; e++) {
+            const uint32_t k = i * extra + e;
+            const uint32_t ex = up ? half + k % xw : k % xw;
+            prod.push_back(CoreCoord{ex, y_p0 + k / xw});
+        }
+    }
+    out.first = std::move(rcv);
+    out.second = std::move(prod);
+    return out;
+}
+constexpr uint32_t kSplitTag = 4;
+bool is_split_placement(uint32_t placement) { return (placement & 0xF) == kSplitTag; }
+}  // namespace
+
+bool fused_head_writer_on_noc0(uint32_t placement, uint32_t BH, uint32_t h) {
+    return is_split_placement(placement) && h >= BH / 2;
+}
+
 ChunkGdnFusedOperation::program_factory_t ChunkGdnFusedOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return ChunkGdnFusedProgramFactory{};
@@ -34,8 +92,13 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     // Input-side checks: identical to the phased PREP prim (the fused producer runs the unchanged
     // prep reader/compute, so its input contract is prep's).
-    check_fused(in.q, "q", DataType::BFLOAT16);
-    check_fused(in.k, "k", DataType::BFLOAT16);
+    check_fused(in.q, "q", attrs.qk_fp32 ? DataType::FLOAT32 : DataType::BFLOAT16);
+    check_fused(in.k, "k", attrs.qk_fp32 ? DataType::FLOAT32 : DataType::BFLOAT16);
+    TT_FATAL(!attrs.qk_fp32 || attrs.qk_prenormed, "chunk_gdn_fused: fp32 q/k only with qk_prenormed");
+    TT_FATAL(
+        !attrs.decay_sfpu || attrs.chunk_size == TILE_HEIGHT,
+        "chunk_gdn_fused: decay_sfpu needs chunk_size 32 (got {})",
+        attrs.chunk_size);
     check_fused(in.v, "v", DataType::BFLOAT16);  // flat [B,T,HV*V] when attrs.v_flat; else [BH,NC,C,V]
     if (attrs.v_flat) {
         TT_FATAL(attrs.HV > 0, "v_flat requires HV > 0");
@@ -49,7 +112,9 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
         TT_FATAL(qsf.rank() == 3, "qk_flat expects a flat [B,T,Hk*K] q (got rank {})", qsf.rank());
         TT_FATAL(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
-        TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
+        TT_FATAL(
+            attrs.qk_norm || attrs.qk_prenormed,
+            "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
     check_fused(in.g, "g", DataType::FLOAT32);
     check_fused(in.beta, "beta", DataType::FLOAT32);
@@ -102,7 +167,11 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
         "chunk_gdn_fused: BH * nbuf ({} * {}) credit words exceed the 1024-word credit tile",
         attrs.BH,
         attrs.nbuf);
-    if (attrs.placement == 0) {
+    if (is_split_placement(attrs.placement)) {
+        TT_FATAL(
+            !gdn_split_layout(grid.x, grid.y, attrs.BH, attrs.nv, attrs.np).first.empty(),
+            "chunk_gdn_fused: split placement does not fit");
+    } else if (attrs.placement == 0) {
         const uint32_t hpr = grid.x / attrs.nv;
         TT_FATAL(
             attrs.BH <= hpr * grid.y,
@@ -245,7 +314,12 @@ FusedPlacement fused_placement(
     std::vector<CoreCoord> rcv_cores(R);  // index h*NV + v
     std::vector<CoreCoord> prod_cores;    // index p = h*NP + j
     prod_cores.reserve(P);
-    if (placement == 0) {
+    if (is_split_placement(placement)) {
+        auto cl = gdn_split_layout(grid_x, grid_y, BH, NV, NP);
+        TT_FATAL(!cl.first.empty(), "chunk_gdn_fused: split placement does not fit");
+        rcv_cores = std::move(cl.first);
+        prod_cores = std::move(cl.second);
+    } else if (placement == 0) {
         TT_FATAL(
             BH <= HPR * grid_y,
             "chunk_gdn_fused: BH={} 1x{} receiver rectangles do not fit a {}x{} grid ({} per row)",
@@ -406,7 +480,9 @@ std::vector<Tensor> chunk_gdn_fused(
     bool qk_flat,
     uint32_t Hk,
     bool gb_flat,
-    const std::optional<Tensor>& sel) {
+    const std::optional<Tensor>& sel,
+    bool qk_prenormed,
+    bool decay_sfpu) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (the fused op consumes prep's inputs).
@@ -454,10 +530,18 @@ std::vector<Tensor> chunk_gdn_fused(
     const bool unicast = program_config.unicast;
     const bool posted = program_config.posted;
     TT_FATAL(!posted || unicast, "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");
-    // Placement: the config's choice, else row-local whenever the (possibly pinned) geometry has a
-    // row-local layout.
+    // Placement: the SPLIT layout when the config asks for it and it fits this grid/geometry (a placement never
+    // changes bits, so the fallback is exact); else the config's row_local, else row-local whenever the (possibly
+    // pinned) geometry has a row-local layout.
     const bool row_local = program_config.row_local.value_or(fused_row_local_feasible(grid0.x, grid0.y, BH, nv, np));
-    const uint32_t placement = row_local ? 1u : 0u;
+    uint32_t placement = row_local ? 1u : 0u;
+    if (program_config.split_layout && !gdn_split_layout(grid0.x, grid0.y, BH, nv, np).first.empty()) {
+        placement = kSplitTag;
+    }
+    // qk_prenormed: the caller normalized q/k (and folded the scale into q), so the in-kernel norm is off. FLOAT32
+    // q/k get fp32 CBs, double-buffered on request.
+    const bool prenormed = qk_prenormed && qk_flat && qk_norm;
+    const bool qk_fp32 = prenormed && q.dtype() == DataType::FLOAT32;
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
         .num_chunks = num_chunks,
@@ -482,7 +566,14 @@ std::vector<Tensor> chunk_gdn_fused(
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
+        .decay_sfpu = decay_sfpu,
+        .qk_prenormed = prenormed,
+        .qk_fp32 = qk_fp32,
+        .qk_fp32_nbuf = (qk_fp32 && program_config.qk_fp32_double_buffer) ? 2u : 1u,
     };
+    if (prenormed) {
+        attrs.qk_norm = false;
+    }
     auto tensor_args = ChunkGdnFusedOperation::tensor_args_t{
         .q = q,
         .k = k,

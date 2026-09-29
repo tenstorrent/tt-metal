@@ -74,6 +74,15 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // headvec_split_tile permute+reshape. `sel` is the [1,1,32,32*HV] fp32 TILE one-hot head
     // selector (tile h picks head h's column). Fused path only. Build it once on the model/layer
     // (device-resident before trace capture, like eye/tril/ones/masks).
-    const std::optional<ttnn::Tensor>& sel = std::nullopt);
+    const std::optional<ttnn::Tensor>& sel = std::nullopt,
+    // qk_prenormed: q/k arrive already L2-normalized per head over K, q also multiplied by `scale`
+    // (k / sqrt(sum k^2 + 1e-6), the in-kernel norm's formula), as flat [B,T,H*K] BFLOAT16 or FLOAT32 TILE; the
+    // in-kernel norm is skipped, and FLOAT32 q/k are consumed as fp32 (no bf16 cast). Flat q/k, chunk_size 32, fused
+    // path only.
+    bool qk_prenormed = false,
+    // decay_sfpu: the producer's per-chunk decay chain (decay, exp(decay), exp(g_sum - decay), the decay mask L and
+    // dl*I) runs as two fp32 SFPU passes in DST instead of ~13 single-tile FPU ops: faster, and more accurate (fp32
+    // SFPU arithmetic instead of tf32 FPU operands), so it changes bits. Fused path and chunk_size 32 only.
+    bool decay_sfpu = false);
 
 }  // namespace ttnn::transformer
