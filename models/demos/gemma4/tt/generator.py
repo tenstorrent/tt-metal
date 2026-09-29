@@ -959,6 +959,83 @@ class ChunkedPrefillPageTableGuardMixin:
             del tt_out
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
 
+    def prefill_forward_lanes(self, tokens, page_tables, kv_cache, prompt_lens):
+        """Lane-parallel prefill: one user per lane column, one forward pass.
+
+        ``tokens`` is [lanes, S] (row i = lane i's user, right-padded to a
+        common S); ``page_tables`` is [lanes, 1, blocks] with each lane's own
+        single-user table; ``prompt_lens`` holds the true per-lane lengths.
+        Each column runs the proven batch_size=1 prefill on its OWN tokens and
+        KV (attention reduces over tp only; the lane MLP gather/scatter sums
+        fractured K-chunks across lanes for whatever rows the columns carry).
+
+        Single-chunk only (S <= max_prefill_chunk_size), and every lane's last
+        token must fall in the same 32-token tile because the tail slice is a
+        device-replicated scalar; callers bucket prompts by padded length so
+        both hold, and prefill serially otherwise.
+
+        Returns host logits [lanes, vocab], each row at its lane's last token.
+        """
+        model = self.model[0]
+        mesh_cfg = model.mesh_config
+        assert mesh_cfg is not None and getattr(mesh_cfg, "lane_sharded", False), "lanes gate is off"
+        lanes = mesh_cfg.lanes
+        assert tokens.dim() == 2 and tokens.shape[0] == lanes, f"tokens must be [lanes={lanes}, seq]"
+        seq_len = int(tokens.shape[-1])
+        assert seq_len <= self.model_args[0].max_prefill_chunk_size, "lane prefill is single-chunk"
+        last_idx = [int(p) - 1 for p in prompt_lens]
+        assert len(last_idx) == lanes and all(0 <= i < seq_len for i in last_idx)
+        tiles = {i // 32 for i in last_idx}
+        assert len(tiles) == 1, f"lane prefill needs a shared last tile, got {sorted(tiles)}"
+
+        # Callers pass the per-model kv_cache list (as prefill_forward_text
+        # takes); lanes always run the single model.
+        model_kv = kv_cache[0] if isinstance(kv_cache, (list, tuple)) else kv_cache
+
+        # Trim table width to this prefill's block grid (wider tables TT_FATAL
+        # the fill); vLLM null block 0 pads a narrower one.
+        block_size = self._effective_paged_block_size(model_kv)
+        needed_blocks = num_blocks_in_seq(seq_len, block_size)
+        if page_tables.shape[-1] > needed_blocks:
+            page_tables = page_tables[..., :needed_blocks]
+        elif page_tables.shape[-1] < needed_blocks:
+            pad = torch.zeros(
+                page_tables.shape[0],
+                page_tables.shape[1],
+                needed_blocks - page_tables.shape[-1],
+                dtype=page_tables.dtype,
+            )
+            page_tables = torch.cat([page_tables, pad], dim=-1)
+
+        inputs = model.prepare_inputs_prefill(
+            tokens,
+            page_table=page_tables,
+            batch_size=1,
+            user_id=0,
+            lane_parallel=True,
+        )
+        prefill_input, rot_mats_global, rot_mats_local, page_table_tt, *_ = inputs
+        tt_logits = model.ttnn_prefill_forward(
+            prefill_input,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            user_id=0,
+            page_table=page_table_tt,
+            get_last_token=self._prefill_get_last_token(max(last_idx)),
+            kv_cache=model_kv,
+            batch_size=1,
+        )
+        # Row-major device order over (rows, cols): row 0 holds one device per
+        # column, i.e. one full-vocab shard per lane (logits are tp-gathered
+        # inside the forward), in lane order.
+        shards = ttnn.get_device_tensors(tt_logits)
+        out = torch.zeros(lanes, model.vocab_size, dtype=torch.float32)
+        for lane in range(lanes):
+            host = ttnn.to_torch(shards[lane]).float()
+            out[lane] = host[0, 0, last_idx[lane] % 32, : model.vocab_size]
+        tt_logits.deallocate(True)
+        return out
+
     def _prefill_forward_single_user_text_eager(
         self,
         tokens,
