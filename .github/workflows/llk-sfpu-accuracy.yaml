@@ -63,8 +63,9 @@ permissions:
 
 concurrency:
   # One sweep per ref: it holds a card for the better part of an hour, and a queue
-  # of superseded runs helps nobody.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # of superseded runs helps nobody. On a protected ref the group is the run itself,
+  # so a manual dispatch does not cancel the nightly it shares `main` with.
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
