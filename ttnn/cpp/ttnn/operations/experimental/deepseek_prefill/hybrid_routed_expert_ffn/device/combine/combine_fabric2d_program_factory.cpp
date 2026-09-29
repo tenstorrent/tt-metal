@@ -530,9 +530,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
+            // The standalone op's kernel, unchanged: the untilize depends on nothing the overlap alters.
             untilize.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/kernels/"
-                "combine/compute/"
+                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
                 "untilize_combine_fabric2d.cpp";
             untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             untilize.core_ranges = core;
