@@ -2258,6 +2258,13 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 2
+  frozen:
+    at: '2026-09-29T19:18:59'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py: e9560a148a7d97e17add8b5d9b7a423768b9050b1e0e139735cd9e5cbe0d2f5b
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_shared.ffn_hc_pre
   title: moe_shared ffn_hc_pre (op) on device, layer 2
   step: implement
