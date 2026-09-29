@@ -350,3 +350,61 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_03_attn_norm.py
+
+## C.dense_full.q_a test (attempt 1)
+
+What was done
+- Reviewed the rendered component test (q_a = q_a_layernorm(q_a_proj(attn_norm)), eps 1e-6, plain w). Kept the
+  gated pcc_q_a_L00 (0.99) and added asserted checks vs the golden: no CPU bridge, element count, finite output,
+  rel L2 <= 0.008, row norm ratio in [0.994, 1.006], worst row rel L2 <= 0.015. Added a second run on the golden
+  input x 0.01 (bf16) vs the CPU step on the same input (rel <= 0.01, worst row <= 0.02) to catch a wrong eps.
+  Mutation tables (CPU, study script outside the repo) in the test docstring.
+
+Gotchas
+- Golden: pre-norm row rms 0.31-0.53, so eps is invisible on it (1e-5 and 0 score like the reference), and at x 0.1
+  eps 1e-5 is still only rel 0.0025; x 0.01 gives 0.17 (eps 0: 0.027, 2e-6: 0.025) vs a bf16 estimate of 0.0023.
+- Passing on PCC but caught by the extra checks: norm per K partial then sum (PCC 0.9996, rel 0.81), RMS over half
+  the output columns (0.9995, rel 0.032), x 1.01, zeroed last row / last tile row.
+- The test cannot see a bug in only one mesh column's copy of the replicated q_resid unless the host read-back uses
+  that copy; the swap tests and the indexer / attention components consume q_resid on device.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999998, rel 0.00181, ratio [0.99964, 1.00038], worst row 0.0021; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Device (gate command): fails with "no device module for q_a yet", as expected before the implement step.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_q_a.py
+
+## C.dense_full.q_a implement (attempt 1)
+
+What was done
+- `tt/q_a.py:TtQa`: q_a_proj^T [6144, 2048] bf16 K-split over mesh columns (chip column c holds rows
+  c*3072..), `ttnn.linear` HiFi4 + fp32 dest with fp32 partial output -> `ttnn.all_reduce(cluster_axis=1)` (fp32
+  [S/2, 2048]) -> `ttnn.bringup.rms_norm` (q_a_layernorm, eps 1e-6 = hy4_ref.LATENT_NORM_EPS, fp32 row-major weight)
+  -> typecast bf16. Output q_resid [1, 1, S/2, 2048] per chip, replicated over the 2 columns of a row. No host work in
+  `__call__`.
+- hooks.py: `_QA_STEPS`, `_qa_module`, `_qa_host_fn` (harness boundary: attn_norm host -> column split bf16, read
+  back column 0's copy with `row_split_to_host`); `device_component` serves q_a; "q_a" added to
+  `DEVICE_STEPS["dense_full"]`, so the hybrid device_model runs it.
+- `ttnn/ttnn/bringup/INDEX.md`: hy4_preview_d_p added to rms_norm_ttnn's "Used by" (fork unchanged).
+
+Decisions
+- all_reduce instead of ttMLA's reduce_scatter_minimal_async + high_bw_all_gather: no persistent buffers or
+  semaphores to own, the same pair on a 2-chip axis; the components entry allows it. A perf step can switch.
+- fp32 partials before the reduce (no bf16 rounding of the two K halves).
+- rms_norm fork over native: native scaled every row ~0.1% low (probe vs fp32 CPU, fp32 out: ratio mean 0.99898,
+  rel 0.00124; fork 0.99974 / 0.00062). `TtQa(norm_impl="native")` keeps the old op selectable.
+
+Results (gate command)
+- native (first run): PASS, pcc 0.999997, rel 0.002575, ratio [0.99798, 0.99984], worst row 0.00347; x0.01 rel 0.001996.
+- fork (final): PASS, pcc 0.999998, rel 0.001984, ratio [0.99861, 1.00067], worst row 0.00296; x0.01 rel 0.001740,
+  worst row 0.00210.
+
+Gotchas
+- tt-probe saves probes under tests/ttnn/unit_tests/operations/<name>/ (outside the allowed paths); deleted after.
+- The fork's model-case test (optests role) needs a q_a call: fp32 TILE [1, 1, S/2, 2048] in, fp32 ROW_MAJOR
+  [1, 1, 64, 32] weight, eps 1e-6, HiFi4 + fp32 dest.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_q_a.py
