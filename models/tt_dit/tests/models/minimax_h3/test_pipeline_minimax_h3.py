@@ -27,6 +27,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     MiniMaxH3Pipeline,
     _requested_audio_t_factor,
     _resolve_audio_t_shard,
+    prompt_pad_target,
 )
 from ..wan2_2.common import check_output_sanity
 from .common import H3_MESHES
@@ -99,6 +100,24 @@ SWEEP = [
 )
 def test_resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis, expected):
     assert _resolve_audio_t_shard(requested, mesh_shape, tp_axis, sp_axis) == expected
+
+
+@pytest.mark.parametrize("sp_factor", [1, 2, 4, 8, 32])
+@pytest.mark.parametrize("seq_len", [1, 13, 31, 32, 33, 1018, 1024, 5119])
+def test_prompt_pad_target_is_always_tile_aligned(seq_len, sp_factor):
+    """The prompt capacity must be a tile multiple on every mesh, SP=1 included.
+
+    `MiniMaxH3Transformer3DModel.prepare_static_sources` rejects a prompt stream whose capacity is
+    not a multiple of TILE. Padding used to be skipped entirely when `sp_factor == 1`, which is
+    every small mesh: on a Galaxy `sp_factor * TILE` is 256 and hid the requirement, but with SP=1
+    a raw presentation (1018 tokens for the fox prompt) went through unpadded and the generation
+    died in the transformer rather than anywhere near the encoder.
+    """
+    target = prompt_pad_target(seq_len, sp_factor)
+    assert target >= seq_len
+    assert target % ttnn.TILE_SIZE == 0
+    assert target % (sp_factor * ttnn.TILE_SIZE) == 0
+    assert target - seq_len < sp_factor * ttnn.TILE_SIZE
 
 
 def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):

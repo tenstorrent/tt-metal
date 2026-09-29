@@ -170,6 +170,19 @@ def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAUL
         raise ValueError(f"{_AUDIO_T_FACTOR_ENV}={raw!r} must be an integer T-shard factor") from None
 
 
+def prompt_pad_target(seq_len: int, sp_factor: int) -> int:
+    """The length a presentation is padded to before the conditioner runs.
+
+    `sp_factor * TILE`, and never less than `TILE`. The lower bound is the load-bearing part: the
+    transformer assembles its static sources from fixed-capacity streams and requires the prompt
+    capacity to be a tile multiple, which on a Galaxy `sp_factor * TILE` (256 at SP=8) satisfied
+    incidentally. With SP=1 the alignment is TILE itself, so the padding cannot be skipped -- a raw
+    token count is a tile multiple only by luck.
+    """
+    alignment = max(sp_factor, 1) * ttnn.TILE_SIZE
+    return ((seq_len + alignment - 1) // alignment) * alignment
+
+
 def _resolve_audio_t_shard(
     requested_factor: int, mesh_shape: tuple[int, ...], tp_axis: int, sp_axis: int
 ) -> tuple[int, int | None]:
@@ -1094,8 +1107,8 @@ class MiniMaxH3Pipeline:
                 input_ids = torch.nn.functional.pad(input_ids, (0, target - seq_len))
                 type_ids = torch.nn.functional.pad(type_ids, (0, target - seq_len))
                 seq_len = target
-        elif self.sp_factor > 1 and seq_len % sp_alignment:
-            seq_len = ((seq_len + sp_alignment - 1) // sp_alignment) * sp_alignment
+        elif seq_len % sp_alignment:
+            seq_len = prompt_pad_target(true_seq_len, self.sp_factor)
             input_ids = torch.nn.functional.pad(input_ids, (0, seq_len - true_seq_len))
             type_ids = torch.nn.functional.pad(type_ids, (0, seq_len - true_seq_len))
 
