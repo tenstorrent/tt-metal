@@ -90,7 +90,7 @@ constexpr uint32_t kReaderKernelIdx = 0;
 constexpr uint32_t kWriterKernelIdx = 1;
 
 template <typename Fn>
-void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, Fn&& fn) {
+void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, const Fn& fn) {
     for (const auto& tensor : tensors) {
         auto* buffer = tensor.buffer();
         TT_FATAL(buffer != nullptr, "weight buffer must be allocated on device");
@@ -100,7 +100,7 @@ void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, Fn&& fn) {
 
 // Reader common args: x, counts, index table, region offsets, gate/up/down weights, optional biases.
 template <typename Fn>
-void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, Fn&& fn) {
+void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, const Fn& fn) {
     auto* x_buffer = t.x.buffer();
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
@@ -126,7 +126,8 @@ void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fus
 
 // Writer common args: output, region offsets, up/down weights.
 template <typename Fn>
-void visit_writer_common_buffers(const UnifiedRoutedExpertFfnInputs& t, tt::tt_metal::Buffer* out_buffer, Fn&& fn) {
+void visit_writer_common_buffers(
+    const UnifiedRoutedExpertFfnInputs& t, tt::tt_metal::Buffer* out_buffer, const Fn& fn) {
     TT_FATAL(out_buffer != nullptr, "output buffer must be allocated on device");
     TT_FATAL(t.expert_region_offsets.has_value(), "expert_region_offsets is required");
     auto* start_buffer = t.expert_region_offsets->buffer();
@@ -138,7 +139,7 @@ void visit_writer_common_buffers(const UnifiedRoutedExpertFfnInputs& t, tt::tt_m
 }
 
 template <typename Visit>
-void patch_common_buffer_addresses(tt::tt_metal::RuntimeArgsData& args, Visit&& visit) {
+void patch_common_buffer_addresses(tt::tt_metal::RuntimeArgsData& args, const Visit& visit) {
     uint32_t slot = 0;
     visit([&](tt::tt_metal::Buffer* buffer) {
         TT_FATAL(slot < args.size(), "common runtime arg slot {} is past the cached program", slot);

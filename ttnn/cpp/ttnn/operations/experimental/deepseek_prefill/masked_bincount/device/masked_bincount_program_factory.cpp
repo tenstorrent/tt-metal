@@ -5,6 +5,7 @@
 #include "masked_bincount_program_factory.hpp"
 #include "masked_bincount_device_operation_types.hpp"
 
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -33,7 +34,8 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     const uint32_t tile_h = input.tensor_spec().page_config().get_tile().get_height();
     const uint32_t tokens = input.padded_shape()[0];
 
-    CoreRangeSet all_cores(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 7)));
+    tt::tt_metal::CoreRangeSet all_cores(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 7)));
     uint32_t num_cores = all_cores.num_cores();
     TT_FATAL(tokens % num_cores == 0, "Token count ({}) must be divisible by the {}-core grid", tokens, num_cores);
     uint32_t shard_height = tokens / num_cores;  // rows per core
