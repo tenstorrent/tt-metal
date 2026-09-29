@@ -72,6 +72,18 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 with_default_mesh = U.with_default_mesh
 from_tt = U.from_tt
 
+
+def _is_quasar(mesh_device=None):
+    """True when running on the Quasar architecture. Mirrors utility_functions.is_quasar()
+    (`"quasar" in ttnn.get_arch_name()`); the arch is process-global, so `mesh_device` is accepted only for
+    call-site symmetry. Used by the small-grid / emu tests to strict-xfail known Quasar-only op blockers while
+    still requiring WH/BH to pass."""
+    try:
+        return "quasar" in ttnn.get_arch_name()
+    except Exception:
+        return False
+
+
 # =============================================================================
 # Enum tables (capture string -> ttnn object)
 # =============================================================================
