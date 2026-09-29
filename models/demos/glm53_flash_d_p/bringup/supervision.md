@@ -105,3 +105,10 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   FRAMEWORK. Killed attempt 3 (it would fail the same way), fix F51 79a61144519 (contract step may change and commits
   hooks.py; selftests 216 -> 217). K.1 latent / index-key read-back via the engine already PCC 0.99997 / 0.99998.
   Rerun from K.1.
+- K.1 PASS (99ac5360ccc) attempt 1 after F51: contract checks 0 failed, acks_early 0, producer KV latent 0.99997 / index_key 0.99998, fixed state via contract_state_pcc: kda_recurrent 0.99920, kda_conv 0.99998 at the real end of the padded last chunk. kda_attention.py now passes actual_end (main's #57070 fix in use). Shared engine change: adapter flag acks_in_kv_slot_space (default False, other models unchanged) + runner maps slot->global layer; registry entry glm53_flash_d_p; docs updated. Accepted.
+- 21:4x X.1 PASS (3f7435ee52c): warm chunk 51200->56320 device 528 ms (mHC sections 277 ms = 52%). X.2 opportunities:
+  owner picked (1) the mHC residual mix (rows 1-2, attn_residual + ffn_residual 166 ms); (2) = split the 4-stream
+  residual by sequence across chips, only if (1) works. Added P.1 (deps X.2; X.3 now also depends on P.1): gate =
+  the 6 residual component tests + ladder `last` + profile with attn/ffn_residual < 60 ms each and total < 500 ms.
+  Perf approved 21:38. Also started a read-only agent on KDA state handover prefill -> decode (the engine migrates
+  only the KV table; GLM keeps KDA state in the model per slot; decode on another machine would get no KDA state).
