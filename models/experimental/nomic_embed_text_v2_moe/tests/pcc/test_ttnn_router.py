@@ -147,3 +147,19 @@ def test_weights_reach_the_gate_unrenormalized(device, config, tt_router, batch,
 
     row_sums = ttnn.to_torch(dense).float().reshape(batch * seqlen, config.num_experts).sum(-1)
     assert (row_sums < 1.0).all(), f"a routed row summed to {float(row_sums.max()):.4f}"
+
+
+def test_one_call_covers_the_largest_batches(device, config, reference, tt_router):
+    """The router takes a whole batch in one call, so its rows per core grow without bound.
+
+    The experts split the token axis into passes; the router does not. At 131,072 tokens, 256
+    texts of 512, each core holds 38 tile rows, and K blocks of 8 tiles raise at program build
+    because the circular buffers no longer fit L1. The program config takes blocks of 6 there.
+    """
+    x = hidden_states(256, 512, config.hidden_size)
+
+    logits = tt_router.logits(flat_input(x, device))
+
+    with torch.no_grad():
+        ref = reference.layer(x)
+    assert_with_pcc(ref.reshape(1, 1, -1, config.num_experts), logits, MODULE_PCC)
