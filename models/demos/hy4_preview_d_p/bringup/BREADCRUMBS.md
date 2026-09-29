@@ -105,3 +105,60 @@ Gotchas for the component steps
 
 Re-run
     PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan
+
+## C.dense_full.attn_hc test (attempt 1)
+
+What was done
+- Reviewed the rendered component test for attn_hc (iHC gates [S, 8] fp32, pre 4 | post 4, layer 0, s4096 chunk 1).
+  The golden is bf16. Kept the gated PCC and added checks against the golden: output finite, element count, rel L2
+  <= 0.01, and max abs error per column <= 0.015. Also asserts that device_component is not a CPU bridge.
+- Measured the mutations on the CPU (the table is in the test docstring). The fp32 reference scores PCC 1.000000,
+  rel 0.00052, max abs 0.0019 (bf16 rounding of the golden). post x1, a missing TP partial, RMS over one stream,
+  swapped pre/post fn or base rows: all pass PCC 0.99, and all fail rel L2 or per-column max abs.
+
+Gotchas
+- At layer 0 the four streams are identical and fn's four stream blocks are nearly equal, so a stream-order bug in
+  the fn permutation cannot be seen at layer 0, even with synthetic distinct streams (<= 1e-4). The chip-major vs
+  stream-major column order is caught (rel 0.11).
+- The device module must return 8 columns (reshapeable to [2048, 8]). A [S, 32] padded tile row fails the element
+  count check. Slice to 8 on the device before the read-back, or return the padded tensor through the hook's own
+  read-back.
+- Allowance: about 0.005 of sigmoid / rsqrt abs error on post, which 2 * sigmoid doubles. Use an accurate sigmoid.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 1.000000, rel 0.000518, max abs per column <= 0.00195).
+- BRINGUP_IMPL=stub: FAIL (pcc 0.0).
+- Gate (device): FAIL with NotImplementedError. No device module exists yet; that is the implement step.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py
+
+## C.dense_full.attn_hc implement (attempt 1)
+
+What was done
+- `tt/layout.py`: the 2x2 stream layout (chip (r, c): rows r-half, columns [3072c, 3072(c+1)) of each of the 4 streams,
+  packed stream-major, [1, 1, S/2, 12288] fp32). `streams_cols_to_chip_major` reorders HF (j, h) columns to (c, j, k)
+  so ShardTensor2dMesh dims=(2, 3) hands each chip its block. Host helpers are the harness boundary only.
+- `tt/ihc.py:TtHcGates`: matmul of the streams with this chip's fn^T [12288, 32] (fn permuted with the same helper,
+  padded 8 -> 32, sharded over axis 1, replicated over axis 0), plus multiply + sum for the partial sum of squares,
+  packed into column 8 via a [S/2, 1] x [1, 32] one-hot broadcast multiply. One `ttnn.all_reduce(cluster_axis=1)` of
+  [S/2, 32] fp32. Then slice column 8 -> rsqrt(ss / 24576 + 1e-5) -> multiply, scale / base / magnitude / eps as
+  [1, 32] fp32 row constants built at load, `ttnn.sigmoid` (default Accurate mode), slice to [S/2, 8] on the device.
+  HiFi4 + fp32 dest for the matmul and the sum. No host work in the forward.
+- `bringup/hooks.py`: `device_component` for `attn_hc` (`_hc_module` + `_hc_host_fn`: streams host -> device,
+  gates read back from column 0's copy); `DEVICE_STEPS = {"dense_full": {"attn_hc"}}`; `device_model` returns a
+  `HybridDeviceModel` (CPU reference, DEVICE_STEPS swapped in, embed repeats to 4 streams, final_norm = hc_head +
+  RMSNorm) until the assemble step.
+
+Decisions
+- Kept the 32-wide tile row through the elementwise chain and sliced to 8 once at the end (fewer unaligned ops).
+- `_HC_STEPS` maps only attn_hc -> hc_attn_layer; ffn_hc is the same module with `hc_mlp_layer` (add the entry in its
+  own task).
+
+Results
+- Gate: PASS. pcc_attn_hc_L00 1.000000, rel L2 0.000539 (CPU reference 0.00052), max abs per column <= 0.0023
+  (limit 0.015).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py
