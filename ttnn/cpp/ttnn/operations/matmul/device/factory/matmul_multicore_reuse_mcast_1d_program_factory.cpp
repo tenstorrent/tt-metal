@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
+#include <map>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -3181,6 +3182,57 @@ void override_program_parameters(
     }
 }
 
+// Output block i, which is weight shard i, is computed by workers[i], so the pipes have to deliver
+// shard i to workers[i]. Which receiver a shard reaches is set jointly by the pipes (the bank and
+// bank-local shard each receiver is sent) and by the weight's shard distribution (where shard i sits);
+// pairing banks with the workers in any other order still covers exactly the workers, and returns the
+// output blocks permuted.
+static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const MeshTensor& in1_tensor,
+    const std::vector<CoreCoord>& workers) {
+    using tt::tt_metal::ShardDistributionStrategy;
+    const auto& bds = in1_tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec();
+    TT_FATAL(
+        bds.has_value(),
+        "matmul mcast_in0 over prefetcher_pipes needs a receiver-contiguous weight, which carries a buffer "
+        "distribution spec");
+    const ShardDistributionStrategy strategy = bds->shard_distribution_strategy();
+    TT_FATAL(
+        strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
+        "matmul mcast_in0 over prefetcher_pipes needs a ROUND_ROBIN_1D or CONTIGUOUS_1D weight, but its shard "
+        "distribution strategy is {}",
+        static_cast<int>(strategy));
+
+    std::map<std::pair<uint32_t, uint32_t>, CoreCoord> receiver_of_shard;
+    for (const auto& delivery : tt::tt_metal::experimental::GetTensorPrefetcherReceiverShards(
+             ttnn::global_circular_buffer::prefetcher_pipe_refs(prefetcher_pipes))) {
+        receiver_of_shard.emplace(std::pair{delivery.bank, delivery.bank_local_shard}, delivery.receiver);
+    }
+
+    const std::vector<CoreCoord>& banks = bds->cores();
+    const bool contiguous = strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    // CONTIGUOUS_1D weights hold the same number of shards in every bank.
+    const size_t shards_per_bank = bds->num_shards() / banks.size();
+    for (size_t i = 0; i < workers.size(); ++i) {
+        const size_t bank_index = contiguous ? i / shards_per_bank : i % banks.size();
+        const auto bank_local_shard = static_cast<uint32_t>(contiguous ? i % shards_per_bank : i / banks.size());
+        const auto bank = static_cast<uint32_t>(banks[bank_index].x);
+        const auto it = receiver_of_shard.find({bank, bank_local_shard});
+        TT_FATAL(
+            it != receiver_of_shard.end() && it->second == workers[i],
+            "matmul mcast_in0 over prefetcher_pipes computes output block {} on worker {}. That block's weight shard "
+            "sits at bank-local shard {} of DRAM bank {} under the weight's {} distribution, but the pipes deliver "
+            "that shard to {}. Pair each bank with the workers whose shards it holds.",
+            i,
+            workers[i].str(),
+            bank_local_shard,
+            bank,
+            contiguous ? "CONTIGUOUS_1D" : "ROUND_ROBIN_1D",
+            it == receiver_of_shard.end() ? std::string("no receiver") : it->second.str());
+    }
+}
+
 static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const ttnn::Tensor& a,
     const tt_metal::distributed::MeshDevice& device,
@@ -3721,6 +3773,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             all_cores_with_work.num_cores(),
             all_cores_with_work.str(),
             pipe_receivers.str());
+        validate_prefetcher_pipes_deliver_each_worker_its_shard(
+            prefetcher_pipes, in1_tensor, corerange_to_cores(all_cores, num_cores_with_work, row_major));
         // Validation has checked the ring is a whole number of these K-blocks, and at least two.
         const uint32_t ring_size = prefetcher_pipes.front()->ring_size();
         for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {

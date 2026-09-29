@@ -1713,6 +1713,27 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_ring_without_lookahead(device
         )
 
 
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_bank_pairing_of_other_distribution(device, expect_error):
+    """Pipes paired for CONTIGUOUS_1D cover the same workers a ROUND_ROBIN_1D weight needs, but send
+    each worker another worker's shard, which would permute the output columns."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_strided")
+    contiguous_pairing = [
+        (b, _bank_receivers_contiguous(b, setup["recv_per_bank"], ring_cols=setup["ring_cols"]))
+        for b in range(setup["num_dram_banks"])
+    ]
+    _space, pipes = _make_mcast_in0_pipes(
+        device, {**setup, "bank_to_receivers": contiguous_pairing}, setup["entry_size"], 2
+    )
+    with expect_error(RuntimeError, "Pair each bank with the workers whose shards it holds"):
+        ttnn.linear(
+            setup["tt_act"],
+            setup["tt_weight"],
+            program_config=setup["program_config"],
+            memory_config=setup["output_mem_config"],
+            prefetcher_pipes=pipes,
+        )
+
+
 def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device):
     """Two matmuls with different in1 K-block sizes, back to back on one pipe set.
 
