@@ -75,9 +75,10 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
 
     // kernel_variant 0 = legacy seven-pass kernel; >= 1 = fused kernel (see sigmoid_gated_rms_norm_fused.cpp).
     const bool fused = attrs.kernel_variant != kSigmoidGatedRmsNormKernelVariantLegacy;
-    const uint32_t gate_impl = attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantFastSigmoid ? 2u
-                               : attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantFusedGate ? 1u
-                                                                                                    : 0u;
+    const uint32_t gate_impl = attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantP5Sigmoid     ? 3u
+                               : attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantFastSigmoid ? 2u
+                               : attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantFusedGate   ? 1u
+                                                                                                      : 0u;
     const uint32_t pack_sfpu = attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantPackSfpu ? 1u : 0u;
     // Fused path: the writer reads the gate this many units ahead (gate DFB = kFusedGateDepth units).
     constexpr uint32_t kFusedGateDepth = 3;

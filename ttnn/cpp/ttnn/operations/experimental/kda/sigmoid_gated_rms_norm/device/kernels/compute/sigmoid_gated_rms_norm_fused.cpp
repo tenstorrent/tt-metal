@@ -19,7 +19,8 @@
 //   gate_impl    0 = library silu_tile/sigmoid_tile, then mul_binary_tile,
 //                1 = one fused SFPU pass, same arithmetic as the library fp32 sigmoid/silu (bit-exact activation),
 //                    constants kept in LRegs,
-//                2 = one fused SFPU pass with the exp_21f exponential (about 3 fp32 ulp; not bit-exact).
+//                2 = one fused SFPU pass with the exp_21f exponential (about 3 fp32 ulp; not bit-exact),
+//                3 = the P5 sigmoid (degree-2 2^x, ARECIP + one Newton step), hand-pipelined TTI; PACK thread only.
 //   pack_sfpu    1 = all SFPU work runs on the PACK thread, so the MATH thread can run the FPU work of the next DEST
 //                half at the same time. 0 = all SFPU work on the MATH thread.
 //
@@ -162,6 +163,138 @@ inline void gate_init() {
     sfpi::vConstFloatPrgm2 = kExpP4;
 }
 
+// ---- gate_impl 3 (variant 5): the P5 sigmoid of plan_0928 P2_SILUPOLY ("CB e2 + NR"; bf16-DEST versions in
+// P4_SILUFAST ckernel_sfpu_silu.h and P7_SIGFAST ckernel_sfpu_sigmoid.h), here in fp32 DEST and fused with the
+// multiply by x*inv*w:
+//   xc = clamp(g, +-87.5); f = -xc*log2e + M (M = 1.5*2^23, rounds -xc*log2e to an integer k); r = -xc*log2e - k;
+//   2^r ~ 1 + e1*r + e2*r^2; E = 2^r * 2^k (integer add of f << 23); d = 1 + E; y = ARECIP(d); e = 1 - d*y;
+//   act = y + y*e (sigmoid) or g*y + g*y*e (silu); DEST[k] *= act. No bf16 rounding (fp32 DEST, the packer rounds).
+// Software pipelined by hand: the head of row i+1 (load .. d) runs in the latency slots of the tail of row i.
+// Registers: L1 = e2, L2 = e1, L4 = M, Prgm1 (L13) = log2(e), Prgm2 (L14) = 87.5 (SFPSWAP VC operand, read-only).
+// g < -87.5 gives 0 (as the exp_21f gate of variant 4); g > 87.5 gives sigmoid 1.
+namespace p5 {
+constexpr uint32_t L0 = 0, L1 = 1, L2 = 2, L3 = 3, L4 = 4, L5 = 5, L6 = 6, L7 = 7;
+constexpr uint32_t C0 = 9, C1 = 10, LOG2E = 13, CLAMP = 14;  // 0.0, 1.0, Prgm1, Prgm2
+constexpr uint32_t NEG_A = 1;                                // SFPMAD_MOD1_NEGATE_VA
+constexpr uint32_t SHFT_IMM_FROM_VC = 5;                     // SFPSHFT ARG_IMM | ARG_IMM_USE_VC: VD = VC << imm
+constexpr uint32_t IADD_CC_NONE = 4;                         // SFPIADD: VD = VC + VD, lane flags untouched
+constexpr float kClamp = 87.5f;
+
+inline void init() {
+    sfpi::vConstFloatPrgm1 = 1.4426950216293334961f;  // log2(e) = 1/ln2 (0x3FB8AA3B)
+    sfpi::vConstFloatPrgm2 = kClamp;
+}
+
+// Head of one row: g at Dest offset `go` -> d = 1 + 2^(-xc*log2e) in L5. `r` = the register that holds r.
+template <uint32_t go, uint32_t r>
+ALWI void head() {
+    TTI_SFPLOAD(L3, 0, ADDR_MOD_7, go);
+    TTI_SFPSETSGN(0, L3, L7, 1);                                // |g|
+    TTI_SFPSWAP(0, CLAMP, L7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // min(|g|, 87.5)
+    TTI_SFPSETSGN(0, L7, L3, 0);                                // xc = copysign(min(|g|, 87.5), g)
+    TTI_SFPMAD(L3, LOG2E, L4, L5, NEG_A);                       // f = -xc*log2e + M
+    TTI_SFPMAD(L5, C1, L4, L0, NEG_A);                          // km = M - f (exact)
+    TTI_SFPSHFT(23, L5, L5, SHFT_IMM_FROM_VC);                  // kk = f << 23
+    TTI_SFPMAD(L3, LOG2E, L0, r, NEG_A);                        // r = -xc*log2e + km
+    TTI_SFPMAD(r, L1, L2, L3, 0);                               // p = r*e2 + e1
+    TTI_SFPMAD(L3, r, C1, L3, 0);                               // p = p*r + 1
+    TTI_SFPIADD(0, L3, L5, IADD_CC_NONE);                       // E = p + kk
+    TTI_SFPADD(C1, L5, C1, L5, 0);                              // d = 1 + E
+}
+}  // namespace p5
+
+// One face (8 sfpi rows) of DEST[k] *= act(DEST[k + G]) with the P5 sigmoid.
+template <uint32_t G, uint32_t gate_silu>
+inline void gate_mul_face_p5() {
+    using namespace p5;
+    constexpr uint32_t GO = G * kSfpiTileRows * 2;  // SFPLOAD address of the gate row (2 per sfpi row)
+    constexpr int ITERATIONS = 8;
+    TTI_SFPLOADI(L1, sfpi::SFPLOADI_MOD0_USHORT, 0x9e22);  // e2 = 0.239861041f (0x3E759E22)
+    TTI_SFPLOADI(L1, sfpi::SFPLOADI_MOD0_UPPER, 0x3e75);
+    TTI_SFPLOADI(L2, sfpi::SFPLOADI_MOD0_USHORT, 0xf3c2);  // e1 = 0.702938199f (0x3F33F3C2)
+    TTI_SFPLOADI(L2, sfpi::SFPLOADI_MOD0_UPPER, 0x3f33);
+    TTI_SFPLOADI(L4, sfpi::SFPLOADI_MOD0_FLOATB, 0x4b40);  // M = 12582912.0f (0x4B400000)
+    if constexpr (gate_silu) {
+        // Per row: L0 = y then km then n, L3 = g' then xc then p, L5 = d then f then kk then E then d',
+        // L6 = e then r, L7 = |g'| then g then g*y then act then out.
+        head<GO, L6>();
+        constexpr int BODY = 21;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPARECIP(0, L5, L0, 0);                                // y = ~1/d (row i)
+        TTI_SFPLOAD(L3, 0, ADDR_MOD_7, GO + 2);                     // g' (row i+1)
+        TTI_SFPMAD(L5, L0, C1, L6, NEG_A);                          // e = 1 - d*y
+        TTI_SFPSETSGN(0, L3, L7, 1);                                // |g'|
+        TTI_SFPSWAP(0, CLAMP, L7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // min(|g'|, 87.5)
+        TTI_SFPSETSGN(0, L7, L3, 0);                                // xc'
+        TTI_SFPLOAD(L7, 0, ADDR_MOD_7, GO);                         // g (row i)
+        TTI_SFPMAD(L3, LOG2E, L4, L5, NEG_A);                       // f'
+        TTI_SFPMUL(L7, L0, C0, L7, 0);                              // g*y
+        TTI_SFPMAD(L5, C1, L4, L0, NEG_A);                          // km'
+        TTI_SFPMAD(L7, L6, L7, L7, 0);                              // act = g*y*e + g*y
+        TTI_SFPMAD(L3, LOG2E, L0, L6, NEG_A);                       // r'
+        TTI_SFPLOAD(L0, 0, ADDR_MOD_7, 0);                          // x*inv*w (row i)
+        TTI_SFPMAD(L6, L1, L2, L3, 0);                              // p' = r'*e2 + e1
+        TTI_SFPMUL(L0, L7, C0, L7, 0);                              // out = x*inv*w * act
+        TTI_SFPSHFT(23, L5, L5, SHFT_IMM_FROM_VC);                  // kk'
+        TTI_SFPMAD(L3, L6, C1, L3, 0);                              // p' = p'*r' + 1
+        TTI_SFPSTORE(L7, 0, ADDR_MOD_7, 0);                         // out (row i)
+        TTI_SFPIADD(0, L3, L5, IADD_CC_NONE);                       // E'
+        TTI_SFPADD(C1, L5, C1, L5, 0);                              // d'
+        TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+        // tail of the last row
+        TTI_SFPARECIP(0, L5, L0, 0);
+        TTI_SFPMAD(L5, L0, C1, L6, NEG_A);
+        TTI_SFPLOAD(L7, 0, ADDR_MOD_7, GO);
+        TTI_SFPMUL(L7, L0, C0, L7, 0);
+        TTI_SFPMAD(L7, L6, L7, L7, 0);
+        TTI_SFPLOAD(L0, 0, ADDR_MOD_7, 0);
+        TTI_SFPMUL(L0, L7, C0, L7, 0);
+        TTI_SFPSTORE(L7, 0, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    } else {
+        // Per row: L0 = y then km then n, L3 = g' then xc then p, L5 = d then f then kk then E then d',
+        // L6 = e then act then out, L7 = |g'| then r.
+        head<GO, L7>();
+        constexpr int BODY = 19;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPLOAD(L3, 0, ADDR_MOD_7, GO + 2);                     // g' (row i+1)
+        TTI_SFPARECIP(0, L5, L0, 0);                                // y = ~1/d (row i)
+        TTI_SFPMAD(L5, L0, C1, L6, NEG_A);                          // e = 1 - d*y
+        TTI_SFPSETSGN(0, L3, L7, 1);                                // |g'|
+        TTI_SFPSWAP(0, CLAMP, L7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // min(|g'|, 87.5)
+        TTI_SFPSETSGN(0, L7, L3, 0);                                // xc'
+        TTI_SFPMAD(L3, LOG2E, L4, L5, NEG_A);                       // f'
+        TTI_SFPMAD(L0, L6, L0, L6, 0);                              // act = y*e + y
+        TTI_SFPMAD(L5, C1, L4, L0, NEG_A);                          // km'
+        TTI_SFPSHFT(23, L5, L5, SHFT_IMM_FROM_VC);                  // kk'
+        TTI_SFPMAD(L3, LOG2E, L0, L7, NEG_A);                       // r'
+        TTI_SFPLOAD(L0, 0, ADDR_MOD_7, 0);                          // x*inv*w (row i)
+        TTI_SFPMAD(L7, L1, L2, L3, 0);                              // p' = r'*e2 + e1
+        TTI_SFPMUL(L0, L6, C0, L6, 0);                              // out = x*inv*w * act
+        TTI_SFPMAD(L3, L7, C1, L3, 0);                              // p' = p'*r' + 1
+        TTI_SFPSTORE(L6, 0, ADDR_MOD_7, 0);                         // out (row i)
+        TTI_SFPIADD(0, L3, L5, IADD_CC_NONE);                       // E'
+        TTI_SFPADD(C1, L5, C1, L5, 0);                              // d'
+        TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+        // tail of the last row
+        TTI_SFPARECIP(0, L5, L0, 0);
+        TTI_SFPMAD(L5, L0, C1, L6, NEG_A);
+        TTI_SFPMAD(L0, L6, L0, L6, 0);
+        TTI_SFPLOAD(L0, 0, ADDR_MOD_7, 0);
+        TTI_SFPMUL(L0, L6, C0, L6, 0);
+        TTI_SFPSTORE(L6, 0, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+}
+
 // One face (8 sfpi rows) of DEST[k] *= act(DEST[k + G]).
 template <uint32_t G, uint32_t gate_silu, uint32_t fast_exp>
 inline void gate_mul_face() {
@@ -269,6 +402,7 @@ ALWI void pass_b(DataflowBuffer& tmp, DataflowBuffer& inv) {
 // ---- pass C, one group of G columns: out_j = ((x_j * inv) * w_j) * act(g_j) -> out ------------------------------
 template <uint32_t G, uint32_t gate_silu, uint32_t gate_impl, uint32_t pack_sfpu, uint32_t XCB>
 ALWI void pass_c(uint32_t j0, DataflowBuffer& out) {
+    static_assert(gate_impl != 3 || pack_sfpu, "gate_impl 3 (P5 sigmoid) runs on the PACK thread only");
     constexpr uint32_t fast_exp = gate_impl == 2 ? 1u : 0u;
     out.reserve_back(G);
     pack_reconfig_data_format(dfb::out);
@@ -317,7 +451,11 @@ ALWI void pass_c(uint32_t j0, DataflowBuffer& out) {
     if constexpr (pack_sfpu) {
         pack_wait_for_math();
         for (uint32_t k = 0; k < G; k++) {
-            PACK((pack_sfpu_tile(gate_mul_face<G, gate_silu, fast_exp>, k, VectorMode::RC)));
+            if constexpr (gate_impl == 3) {
+                PACK((pack_sfpu_tile(gate_mul_face_p5<G, gate_silu>, k, VectorMode::RC)));
+            } else {
+                PACK((pack_sfpu_tile(gate_mul_face<G, gate_silu, fast_exp>, k, VectorMode::RC)));
+            }
         }
         pack_wait_for_sfpu();
     } else {
@@ -392,7 +530,11 @@ TT_KERNEL void compute(uint32_t wi_count) {
     if constexpr (pack_sfpu) {
         // The PACK thread's SFPU state (config, ADDR_MOD_7, Prgm0..2 = gate constants) is set once: nothing else
         // on this thread reprograms it (pass B's rsqrt keeps its constants in LRegs).
-        PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::silu>(sgrn::gate_init)));
+        if constexpr (gate_impl == 3) {
+            PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::silu>(sgrn::p5::init)));
+        } else {
+            PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::silu>(sgrn::gate_init)));
+        }
     }
     x0.wait_front(Vt);
     sgrn::pass_a<Vt, dfb::x0>(tmp);

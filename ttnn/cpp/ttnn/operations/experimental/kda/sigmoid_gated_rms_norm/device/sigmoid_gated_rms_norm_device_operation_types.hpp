@@ -29,17 +29,18 @@ struct SigmoidGatedRmsNormParams {
     // The op reads gate tile columns [gate_col_offset_tiles, gate_col_offset_tiles + H*V/32) of each tile row;
     // the tile-row stride is the gate's padded width in tiles, so the gate may be wider than H*V.
     uint32_t gate_col_offset_tiles = 0;
-    // Compute-kernel variant: 0 = legacy kernel, 1..4 = fused kernel (see kSigmoidGatedRmsNormKernelVariant*).
+    // Compute-kernel variant: 0 = legacy kernel, 1..5 = fused kernel (see kSigmoidGatedRmsNormKernelVariant*).
     uint32_t kernel_variant = 0;
 };
 
-// Kernel variants (see sigmoid_gated_rms_norm_fused.cpp). 1-3 give the same result; 4 changes the sigmoid's exp.
+// Kernel variants (see sigmoid_gated_rms_norm_fused.cpp). 1-3 give the same result; 4 and 5 change the sigmoid.
 inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantLegacy = 0;       // seven passes, one pack per pass
 inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantFused = 1;        // fused + pipelined, library SFPU gate
 inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantFusedGate = 2;    // + one fused SFPU pass for the gate
 inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantPackSfpu = 3;     // + SFPU work on the PACK thread
 inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantFastSigmoid = 4;  // + exp_21f sigmoid (not bit-exact)
-inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantMax = 4;
+inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantP5Sigmoid = 5;    // 3 with the P5 sigmoid (opt-in)
+inline constexpr uint32_t kSigmoidGatedRmsNormKernelVariantMax = 5;
 inline constexpr uint32_t kSigmoidGatedRmsNormDefaultKernelVariant = kSigmoidGatedRmsNormKernelVariantFastSigmoid;
 
 struct SigmoidGatedRmsNormInputs {

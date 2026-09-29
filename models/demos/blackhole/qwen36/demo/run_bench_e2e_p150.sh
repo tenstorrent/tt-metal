@@ -135,8 +135,9 @@
 # The SGRN item flag QWEN36_SGRN_VARIANT also survives the reset (tt/tp_common.py sgrn_kernel_variant();
 #   only takes effect with QWEN36_C2_SGRN=1): kernel_variant passed to sigmoid_gated_rms_norm. 0 = legacy
 #   7-pass kernel (bit-exact with the pre-P6_INT1C op); 1-3 = fused kernel (bit-exact with each other);
-#   4 = fused kernel with an exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact).
-#   Runner default 4 since P6_INT1C (code default unset -> the op's own default, also 4); A/B e.g.
+#   4 = fused kernel with an exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact);
+#   5 = fused gated RMSNorm compute kernel (P9_SGRN2; numerics differ slightly from 4).
+#   Runner default 5 since P9_INT1G (4 since P6_INT1C; code default unset -> the op's own default, 4); A/B e.g.
 #   QWEN36_SGRN_VARIANT=0 bash run_bench_e2e_p150.sh.
 # QWEN36_GDN_PCFG also survives the reset (PR #57440 port: program_config of the fused FLA prefill op,
 #   parsed in tt/gdn/gated_deltanet.py; it replaces the removed QWEN_GDN_NP/_NV/_PLACEMENT C++ knobs):
@@ -360,14 +361,14 @@ for item in $MM_ITEMS; do
   MM_VALS[$item]="$val"
 done
 SGRN_ITEMS="VARIANT"
-declare -A SGRN_DEFAULTS=([VARIANT]=4)  # runner default 4 since P6_INT1C (fused kernel, exp_21f sigmoid; code default unset -> op default 4)
+declare -A SGRN_DEFAULTS=([VARIANT]=5)  # runner default 5 since P9_INT1G (fused gated RMSNorm variant 5); 4 = P6_INT1C fused kernel with exp_21f sigmoid (op default)
 declare -A SGRN_VALS
 for item in $SGRN_ITEMS; do
   var="QWEN36_SGRN_$item"
   val="${!var:-${SGRN_DEFAULTS[$item]}}"
   case "$val" in
-    0|1|2|3|4) ;;
-    *) echo "ERROR: $var must be 0, 1, 2, 3 or 4 (got '$val')" >&2; exit 1 ;;
+    0|1|2|3|4|5) ;;
+    *) echo "ERROR: $var must be 0, 1, 2, 3, 4 or 5 (got '$val')" >&2; exit 1 ;;
   esac
   SGRN_VALS[$item]="$val"
 done

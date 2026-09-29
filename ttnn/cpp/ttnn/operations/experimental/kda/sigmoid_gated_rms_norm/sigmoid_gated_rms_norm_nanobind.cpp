@@ -63,8 +63,9 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
                 fused SFPU pass for the gate (same result as ``1``); ``3`` the SFPU
                 work on the PACK thread (same result as ``1``); ``4`` = ``3`` with an
                 ``exp_21f`` exponential in the sigmoid (not bit-exact with ``1``-``3``,
-                within 1 bf16 ulp of ``0`` for > 99.9% of values). Defaults to
-                ``None`` = ``4``.
+                within 1 bf16 ulp of ``0`` for > 99.9% of values); ``5`` = ``3`` with the
+                P5 sigmoid (degree-2 2^x, reciprocal + one Newton step; opt-in, not
+                bit-exact). Defaults to ``None`` = ``4``.
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.

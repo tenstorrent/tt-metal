@@ -388,10 +388,10 @@ ALL_QWEN_FLAG_DEFAULTS = {
     ),
     # SGRN item flag (tt/tp_common.py sgrn_kernel_variant(); only with QWEN36_C2_SGRN=1); unset = op default 4.
     "QWEN36_SGRN_VARIANT": (
-        "<unset>",
-        "P6_INT1C item 2: kernel_variant passed to sigmoid_gated_rms_norm. 0=legacy 7-pass kernel (bit-exact "
+        "5",
+        "P6_INT1C item 2 (runner default 5 since P9_INT1G): kernel_variant passed to sigmoid_gated_rms_norm. 0=legacy 7-pass kernel (bit-exact "
         "with the pre-P6_INT1C op); 1-3=fused kernel (bit-exact with each other); 4=fused kernel with an "
-        "exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact); unset=op default (4)",
+        "exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact); 5=fused gated RMSNorm compute kernel (P9_SGRN2); unset=op default (4)",
     ),
     # P7_INT1D item flags (merged into r3 2026-09-28).
     "QWEN36_GDN_GATE_FUSE": (
