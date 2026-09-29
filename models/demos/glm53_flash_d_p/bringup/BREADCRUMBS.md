@@ -1123,3 +1123,26 @@ Results:
 - Reference passes (exact). Stub fails.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_08_ffn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.ffn_collapse test (attempt 1)
+
+Reviewed the rendered component test for ffn_collapse at layer 3 (the weightless mHC collapse of h_mid with ffn_hc's
+pre). I rewrote it from the dsa_moe attn_collapse and kda_dense ffn_collapse tests and re-measured every limit on
+this layer's golden. The gated metric is unchanged: pcc_ffn_collapse_L03 (PCC >= 0.99).
+- The streams differ at layer 3 (rel ~1.0 from stream 0), so PCC catches stream order, pre order, stream-major rows,
+  a dropped stream and the wrong pre (0.03..0.95). No second layer is needed (layer 3 is the only dsa_moe layer in
+  0-4).
+- Extra checks, each written `not x <= lim` so NaN fails: rel L2 <= 0.008, worst row rel L2 <= 0.008, per-token norm
+  ratio [0.99, 1.01], and a new coefficient `<got, want> / <want, want>` in [0.996, 1.004]. The coefficient catches
+  output x1.005 (1.0053), which rel (0.0059) and ratio (1.0072) miss; noise is 1.0002..1.0003. All checks run on
+  chunk 1 and on chunk 0.
+- Sensitivity: CPU host script /tmp/dsaffnc/sens.py (not kept); the numbers are in the test docstring. Not caught:
+  pre col 2 x1.01 (that column is ~0, no effect).
+Results:
+- Device already passes, because `_device_step` builds the collapse for any layer. It scores PCC 0.999996, rel
+  0.00293, worst row 0.00398, ratio [0.9980, 1.0021], coefficient 1.00028 (chunk 0: 0.00297 / 0.00387). These equal
+  the fp32 collapse rounded to bf16. About 20 s.
+- Reference passes (0.00252 / 0.00364). Stub fails (PCC 0).
+The next step, implement, only needs to add ffn_collapse to `DEVICE_STEPS["dsa_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
