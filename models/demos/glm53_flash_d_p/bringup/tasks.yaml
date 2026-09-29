@@ -2004,6 +2004,13 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 4
+  frozen:
+    at: '2026-09-29T16:17:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_06_ffn_hc.py: af276b3a48faf9b27bf760efa91c5e202af8a7bfcb9ca03bbf72f3e9b4dd0163
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_moe.ffn_collapse
   title: kda_moe ffn_collapse (op) on device, layer 4
   step: implement
