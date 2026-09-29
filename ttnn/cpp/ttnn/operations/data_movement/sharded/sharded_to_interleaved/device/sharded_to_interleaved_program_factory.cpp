@@ -130,11 +130,11 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     }
 
     // Reader kernel (sharded input handed over through the borrowed input DFB). This binds the shared
-    // Metal 2.0 reader fork that already lives in typecast's tree, so its accessor and argument names
-    // are that kernel's interface, not this op's choice.
+    // eltwise/unary Metal 2.0 reader fork, so its accessor and argument names are that kernel's
+    // interface, not this op's choice.
     const KernelSpec reader{
         .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
+        .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
         .dfb_bindings =
             {DFBBinding{
                 .dfb_spec_name = IN_DFB,
