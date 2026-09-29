@@ -77,7 +77,7 @@ constexpr uint32_t pcd = get_compile_time_arg_val(8);
 constexpr uint32_t rt_d = get_compile_time_arg_val(9);
 constexpr uint32_t np = get_compile_time_arg_val(10);
 constexpr uint32_t gw = 2 * np;  // gate/up block width
-constexpr bool pipe = get_compile_time_arg_val(11) != 0;
+constexpr bool gu_pipe = get_compile_time_arg_val(11) != 0;
 constexpr uint32_t ring_ct = get_compile_time_arg_val(12);
 constexpr uint32_t nk_dd = kt_d / kblk_d;
 constexpr uint32_t bpe = nk_gu + nk_dd;             // weight blocks per expert
@@ -102,11 +102,11 @@ uint32_t consumed = 0;             // PIPE: blocks through their last use (in st
 
 // Stream position of expert e's gate/up block b and down block j.
 FORCE_INLINE uint32_t pos_gu(uint32_t e, uint32_t b) {
-    return pipe ? (e ? nk_gu + (e - 1) * bpe : 0) + b : e * bpe + b;
+    return gu_pipe ? (e ? nk_gu + (e - 1) * bpe : 0) + b : e * bpe + b;
 }
 FORCE_INLINE uint32_t pos_d(uint32_t e, uint32_t j) {
-    return pipe ? nk_gu + e * bpe + (e + 1 < num_experts ? nk_gu : 0) + j
-                : e * bpe + nk_gu + j;  // d(e) follows gu(e + 1)
+    return gu_pipe ? nk_gu + e * bpe + (e + 1 < num_experts ? nk_gu : 0) + j
+                   : e * bpe + nk_gu + j;  // d(e) follows gu(e + 1)
 }
 uint32_t cur_ct = gw, cur_rt = mt;
 
@@ -140,7 +140,7 @@ FORCE_INLINE uint32_t wblock_dyn(uint32_t p, uint32_t phys) {
 #endif
 
 FORCE_INLINE void pop_used() {
-    if constexpr (pipe) {
+    if constexpr (gu_pipe) {
         while (popped < consumed) {
             cb_pop_front(in1_cb, slot);
             ++popped;
