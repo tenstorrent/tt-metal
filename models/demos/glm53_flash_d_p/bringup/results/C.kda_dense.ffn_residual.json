@@ -1,0 +1,81 @@
+{
+ "metrics": {
+  "comb_term_coef_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.9999982118606567
+  },
+  "comb_term_coef_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.9999973177909851
+  },
+  "comb_term_rel_l2_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.0013961967779323459
+  },
+  "comb_term_rel_l2_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.001587451552040875
+  },
+  "norm_ratio_max_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 1.005216121673584
+  },
+  "norm_ratio_max_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 1.0029398202896118
+  },
+  "norm_ratio_min_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.9948546290397644
+  },
+  "norm_ratio_min_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.9971794486045837
+  },
+  "pcc_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.9999930724298195
+  },
+  "post_term_coef_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.999998927116394
+  },
+  "post_term_coef_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.9999989867210388
+  },
+  "post_term_rel_l2_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.002078693127259612
+  },
+  "post_term_rel_l2_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.0055167339742183685
+  },
+  "rel_l2_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.0037230700254440308
+  },
+  "rel_l2_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.0032117879018187523
+  },
+  "worst_row_rel_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.009568327106535435
+  },
+  "worst_row_rel_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.006672428920865059
+  },
+  "worst_stream_rel_ffn_residual_L00": {
+   "t": "2026-09-29T05:56:04",
+   "value": 0.004716556053608656
+  },
+  "worst_stream_rel_ffn_residual_L01": {
+   "t": "2026-09-29T05:56:05",
+   "value": 0.0034260277170687914
+  }
+ },
+ "task": "C.kda_dense.ffn_residual"
+}
