@@ -419,6 +419,13 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "of gab at T>1 prefill (M1 S4 gab branch, fused FLA path), replacing the 2 slices + sigmoid-mul + add-softplus "
         "+ mul (+ the FLA op's 2 typecasts); bit-identical to the chain. Runner default 1; 0=slice/eltwise chain",
     ),
+    "QWEN36_PRELUDE_TRACE": (
+        "1",
+        "P18_PRELUDE: the per-request GDN state reset (recurrent + conv state copies of every GDN layer; the "
+        "conv_hist copies are dropped, the repack overwrites conv_hist) and the chunk-0 RoPE slice/copy are "
+        "captured into one trace at prepare and replayed at request start (bit-exact). "
+        "run_bench_e2e_p150.sh pins it (runner default 1); 1=trace, 0=eager ops",
+    ),
     "QWEN36_ROPE_L1": (
         "0",
         "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
@@ -440,7 +447,7 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "1",
         "P10_ROPE: prefill partial RoPE (rotary 64 of head 256) as ONE in-place ttnn.experimental.rotary_embedding_hf "
         "call per tensor (rotary_dim=64) instead of slice+rope+slice+concat (bit-exact). run_bench_e2e_p150.sh pins "
-        "it (runner default 0); 1=in-place op",
+        "it (runner default 1); 1=in-place op",
     ),
     "QWEN36_GDN_STATE_INPLACE": (
         "0",
