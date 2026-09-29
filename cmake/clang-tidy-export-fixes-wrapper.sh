@@ -24,6 +24,18 @@ if [[ -z "$SOURCE_FILE" ]]; then
     exec clang-tidy-20 "$@"
 fi
 
+# Time-budget drain. When CLANG_TIDY_DEADLINE_EPOCH (unix seconds) has passed, fail
+# fast instead of analyzing. CMake skips the real compile when the tidy launcher
+# fails, so ninja (-k0) drains the remaining edges in seconds while in-flight TUs
+# finish and get written to ctcache. Without this, the CI step timeout kills the
+# build mid-flight and those TUs are lost. CLANG_TIDY_DEADLINE_MARKER, if set, is
+# touched so the workflow can tell "ran out of time" apart from real failures.
+if [[ -n "${CLANG_TIDY_DEADLINE_EPOCH:-}" ]] && (( $(printf '%(%s)T' -1) >= CLANG_TIDY_DEADLINE_EPOCH )); then
+    echo "clang-tidy: time budget exhausted, skipping ${SOURCE_FILE}" >&2
+    [[ -n "${CLANG_TIDY_DEADLINE_MARKER:-}" ]] && : > "$CLANG_TIDY_DEADLINE_MARKER"
+    exit 1
+fi
+
 # Unique, collision-free suffix from the path.
 # Uses one fork (md5sum); basename and hash trimming are bash builtins.
 BASENAME="${SOURCE_FILE##*/}"

@@ -296,11 +296,28 @@ jobs:
       - name: Build prerequisite targets (without analysis)
         if: ${{ inputs.prereq-targets != '' }}
         timeout-minutes: 30
+        env:
+          STEP_TIMEOUT_MIN: 30
+          DRAIN_MARGIN_MIN: 5
         run: |
+          # Stop analyzing shortly before the step timeout so in-flight TUs finish and
+          # land in ctcache (see cmake/clang-tidy-export-fixes-wrapper.sh); a rerun then
+          # resumes instead of starting cold. Only meaningful when ctcache is writable.
+          if [ "${CTCACHE_S3_OK:-0}" = "1" ]; then
+            export CLANG_TIDY_DEADLINE_EPOCH=$(( $(date +%s) + (STEP_TIMEOUT_MIN - DRAIN_MARGIN_MIN) * 60 ))
+            export CLANG_TIDY_DEADLINE_MARKER=/tmp/clang-tidy-deadline-hit
+          fi
           echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
           for target in ${{ inputs.prereq-targets }}; do
             echo "Building target: $target"
-            cmake --build --preset clang-tidy-fix-parallel --target "$target"
+            build_exit=0
+            cmake --build --preset clang-tidy-fix-parallel --target "$target" || build_exit=$?
+            if [ -n "${CLANG_TIDY_DEADLINE_MARKER:-}" ] && [ -e "$CLANG_TIDY_DEADLINE_MARKER" ]; then
+              echo "::error::clang-tidy prerequisite build ran out of time budget. Completed translation units are saved in ctcache; re-run this job to resume."
+              echo "### ⏱️ Clang Tidy prerequisite build hit its time budget" >> "$GITHUB_STEP_SUMMARY"
+              echo "Completed translation units are saved in ctcache. Re-run this job to resume from where it stopped." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            [ "$build_exit" -eq 0 ] || exit "$build_exit"
           done
 
       - name: 🔍 Analyze code with clang-tidy
@@ -309,7 +326,21 @@ jobs:
           ${{ github.event_name == 'pull_request' &&
               github.event.pull_request.head.repo.fork &&
               180 || 120 }}
+        env:
+          # Keep in sync with timeout-minutes above (the env context isn't available there).
+          STEP_TIMEOUT_MIN: >-
+            ${{ github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.fork &&
+                180 || 120 }}
+          DRAIN_MARGIN_MIN: 10
         run: |
+          # Stop analyzing DRAIN_MARGIN_MIN before the step timeout so in-flight TUs finish
+          # and land in ctcache (see cmake/clang-tidy-export-fixes-wrapper.sh); a rerun then
+          # resumes instead of starting cold. Only meaningful when ctcache is writable.
+          if [ "${CTCACHE_S3_OK:-0}" = "1" ]; then
+            export CLANG_TIDY_DEADLINE_EPOCH=$(( $(date +%s) + (STEP_TIMEOUT_MIN - DRAIN_MARGIN_MIN) * 60 ))
+            export CLANG_TIDY_DEADLINE_MARKER=/tmp/clang-tidy-deadline-hit
+          fi
           # Record the exit code rather than failing here: violations fail compile
           # edges but still export, so the gate below decides pass/fail from counts.
           targets=()
@@ -321,6 +352,11 @@ jobs:
           cmake --build --preset clang-tidy-fix-parallel "${targets[@]}" || build_exit=$?
           echo "cmake --build exited with code ${build_exit}"
           echo "CLANG_TIDY_BUILD_EXIT=${build_exit}" >> "$GITHUB_ENV"
+          if [ -n "${CLANG_TIDY_DEADLINE_MARKER:-}" ] && [ -e "$CLANG_TIDY_DEADLINE_MARKER" ]; then
+            echo "CLANG_TIDY_DEADLINE_HIT=1" >> "$GITHUB_ENV"
+            echo "### ⏱️ Clang Tidy hit its time budget" >> "$GITHUB_STEP_SUMMARY"
+            echo "Analysis stopped early; completed translation units are saved in ctcache. Re-run this job to resume from where it stopped." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Count clang-tidy violations
         run: |
@@ -378,6 +414,10 @@ jobs:
             # One ::error annotation per violation, so they show up on the PR diff /
             # checks tab, not just as a "there were N violations" summary line.
             python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
+            exit 1
+          fi
+          if [ "${CLANG_TIDY_DEADLINE_HIT:-0}" = "1" ]; then
+            echo "::error::clang-tidy ran out of time before analyzing every file. Completed files are saved in ctcache; re-run this job to resume (the rerun should be much faster)."
             exit 1
           fi
           # No violations but the build failed: a real compile/link error, not a diagnostic.
