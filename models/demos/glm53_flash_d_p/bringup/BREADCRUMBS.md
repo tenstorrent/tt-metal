@@ -2228,3 +2228,29 @@ Results:
 Next (implement): no module change is needed. Add ffn_residual to `DEVICE_STEPS["kda_moe"]` if it is not there yet.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.13 test (attempt 1)
+Reviewed the rendered swap 13 test (kda_moe layer 4, ffn_residual added: every step on the device). The rendered file
+was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 12 test (every check and limit kept) plus
+dsa_moe swap 15's ffn_residual additions:
+- a residual-share block (device outputs through moe_add fixed, CPU ffn_residual). The add share is now it vs the
+  add-share block; it reproduces swap 12's add share exactly (0.00026).
+- ffn_residual (block out) vs the fp32 CPU residual of the same device (h_mid, ffn_hc, mlp_out), with each term on its
+  own; also on chunk 0. `_res_checks` gained `step=` / `terms=` as in dsa_moe swap 15.
+- Limits are the layer-4 component test's (`test_c_kda_moe_ffn_residual.py`), not layer 3's: post-term rel <= 0.025
+  and comb-term rel <= 0.004 (layer 3: 0.007 / 0.009). The layer-3 post limit would fail the device (0.0112).
+The gated metric pcc_swap_out (>= 0.98) is unchanged. No new sensitivity run: the residual is linear and has no
+weights, so the component test's golden sensitivities carry over.
+Results:
+- Device passes on the first run: PCC 0.999989, rel 0.00486. Every swap 12 number is unchanged.
+  - ffn_residual vs the CPU residual of the same inputs: 0.00166 / [0.9998, 1.0013]; post coef 1.00000 rel 0.0112;
+    comb coef 1.00000 rel 0.0017 (chunk 0 the same). That is an RNE bf16 output of the exact step.
+  - Block out vs the all-CPU block, same routing: 0.00339 (limit 0.004, carried from swap 12). That is swap 12's
+    0.00296 plus the residual's 0.00166 in quadrature, so there is about 15% headroom. The device steps are
+    deterministic run to run.
+- Reference passes (PCC 0.999997, every share exact). Stub fails (PCC 0).
+- About 105 s for the real pass (200 s in total).
+Next (implement): the device ffn_residual (`tt/residual.py`) already works in this swap. Add ffn_residual to
+`DEVICE_STEPS["kda_moe"]` if it is not there yet.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_13_ffn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
