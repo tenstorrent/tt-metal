@@ -10,10 +10,11 @@ to the 50.6 tokens/s/user direct local baseline.
 
 ## Published source revisions
 
-- TT-Metal: `mvasiljevic/gemma4-ttft-opt` at
+- Durable TT-Metal code revision: `mvasiljevic/gemma4-ttft-opt` at
   `f3bfd3c03af2a64cf86fb853dc93c7fa6cfbb073` (the reusable image and
   performance runs remain pinned to `919c110d3d4331b7753c1db78618e879905ae46d`)
-- tt-inference-server: `mvasiljevic/gemma4-ttft-monorepo-compat` at
+- Durable tt-inference-server code revision:
+  `mvasiljevic/gemma4-ttft-monorepo-compat` at
   `bfc2ee9bd5bda291f7b58f2f8d978e151b70b3a4` (individual runs below remain
   pinned to their recorded revisions)
 - vLLM plugin transport base: `tenstorrent/vllm-tt-plugin` at
