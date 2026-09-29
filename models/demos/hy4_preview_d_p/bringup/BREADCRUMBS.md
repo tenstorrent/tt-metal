@@ -2346,3 +2346,29 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
+
+## C.moe_shared.attn_hc_pre.test.1 (test review, layer 2)
+
+What
+- Rewrote the rendered test as the layer-1 attn_hc_pre test (test_c_moe_full_attn_hc_pre.py) with LAYER = 2. It has
+  the same checks and limits: golden rel L2 <= 0.005, row norm ratio in [0.994, 1.006], worst row <= 0.01; vs the CPU
+  step on the same inputs, rel <= 0.003 and row <= 0.006; rotated pre gates (row mod 4) vs the CPU step, rel <= 0.004
+  and row <= 0.01. The docstring has the mutation tables measured on the layer-2 golden (CPU script, no device).
+
+Decisions
+- Kept the layer-1 limits. On the layer-2 golden, bf16 accumulation scores 0.00376 / [0.9964, 1.0023] / 0.0050
+  (vs CPU 0.00278 / 0.0032), and pre x 1.005 is caught (rel 0.00558, ratio max 1.0073).
+- Layer-2 pre gates: column means 1.7e-6, 0.96, 0.20, 0.032. Gate 0 sits at hc_eps, so stream 0 has no visible effect
+  on the golden ("stream 0 dropped" passes every golden check). The rotated-gates run catches it (rel 0.19).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.00253, ratio [0.99766, 1.00227], row 0.0035).
+- BRINGUP_IMPL=stub: FAIL (pcc 0).
+- Gate (device): PASS. device_component already routes attn_hc_pre to TtHcPre for every block type. pcc 0.999997; vs
+  CPU step rel 0.000000; rotated rel 0.000000. TtHcPre's fp32 result matches the CPU step to 6 decimals, as at layers 0
+  and 1.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
