@@ -11,15 +11,12 @@ the block returns the ``pre`` split before the FFN for the next block (``inferen
 ``Block.forward``).
 """
 
-from types import SimpleNamespace
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.mhc import TtV41HyperConnections
+from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 
 
 class TtV41Block(LightweightModule):
@@ -30,10 +27,10 @@ class TtV41Block(LightweightModule):
         layer: int,
         weights: dict,
         seq_len: int,
-        host,
         num_links: int = 1,
         topology=ttnn.Topology.Linear,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
+        weight_cache_path=None,
     ):
         """``weights``: ``attn`` (TtV41Attention weights), ``attn_norm``, ``ffn_norm``, ``hc_attn`` / ``hc_ffn``
         (fn, base, scale), and the MoE state-dict entries ``gate_weights``, ``routed_expert_weights``,
@@ -52,36 +49,31 @@ class TtV41Block(LightweightModule):
         self.attn_norm = norm(weights["attn_norm"])
         self.ffn_norm = norm(weights["ffn_norm"])
         self.residual = TtV41HyperConnections(mesh_device, config, weights["hc_attn"], weights["hc_ffn"], topology)
-        self.attn = TtV41Attention(mesh_device, config, layer, weights["attn"], seq_len, host, topology=topology)
-        self.ffn = TtPrefillBlock._build_moe(
-            mesh_device=mesh_device,
-            model_cfg=config,
-            config=SimpleNamespace(rms_norm_eps=config.RMS_NORM_EPS),
-            state_dict=weights,
-            seq_len=seq_len,
-            sp_axis=sp_axis,
-            emb_dim=config.EMB_SIZE,
+        self.attn = TtV41Attention(
+            mesh_device,
+            config,
+            layer,
+            weights["attn"] | {k: weights[k] for k in ("compressor", "indexer") if k in weights},
+            topology=topology,
+        )
+        self.ffn = TtV41Moe(
+            mesh_device,
+            config,
+            layer,
+            weights,
+            seq_len,
             num_links=num_links,
             topology=topology,
-            gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-            routed_expert_activations_dtype=ttnn.bfloat8_b,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
-            shared_expert_activations_dtype=ttnn.bfloat16,
-            shared_expert_weights_dtype=ttnn.bfloat8_b,
-            dispatch_buffer_capacity_factor=2,
-            layer_idx=layer,
+            weight_cache_path=weight_cache_path,
         )
 
-    def _moe(self, h):
-        # TtMoe works in 3D and the prototype uploads the sequence as a plain contiguous SP shard.
-        out, _ = self.ffn(ttnn.squeeze(h, dim=0), actual_isl=None, padding_side="right", actual_start=0)
-        return ttnn.unsqueeze(out, dim=0)
-
-    def forward(self, x, pre_mix):
-        """x [1, 1, S/sp, hc*hidden/tp] fp32, pre_mix [1, 1, S/sp, hc] fp32 -> (x, next pre_mix)."""
+    def forward(self, x, pre_mix, state, length: int):
+        """x [1, 1, S/sp, hc*hidden/tp] fp32, pre_mix [1, 1, S/sp, hc] fp32 for the chunk at ``state.start``
+        with ``length`` valid tokens -> (x, next pre_mix)."""
         return self.residual(
             x,
             pre_mix,
-            attention=lambda h: self.attn(self.attn_norm(h)),
-            ffn=lambda h: self._moe(self.ffn_norm(h)),
+            attention=lambda h: self.attn(self.attn_norm(h), state, length),
+            ffn=lambda h: self.ffn(self.ffn_norm(h)),
         )

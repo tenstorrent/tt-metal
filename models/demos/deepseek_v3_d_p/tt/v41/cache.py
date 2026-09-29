@@ -95,6 +95,10 @@ class V41PrefillState:
         self.index_k = {l: zeros(g.compressed_rows(config.compress_ratio(l)), idim) for l in sources}
         self.swa_scratch = zeros(g.kv_rows(0), d) if any(config.compress_ratio(l) == 0 for l in self.layers) else None
         self.window_carry = {l: zeros(WINDOW_SLOT, d) for l in self.layers}
+        # ratio-2 compressor carry: fp32 (kv, score) of a trailing incomplete group, None when groups are complete
+        self.compressor_carry = {l: None for l in sources if config.compress_ratio(l) > 1}
+        # chunk-transient sharing: the latest index source's top-k and the candidate source's blocks
+        self.selection = {}
         self._ccl = get_tt_ccl(mesh_device) if mesh_device.shape[0] > 1 else None
         self._num_links = 2 if is_blackhole() else 1
 
@@ -156,5 +160,21 @@ class V41PrefillState:
         carry = ttnn.slice(src, [0, 0, length, 0], [1, 1, length + WINDOW_SLOT, self.config.HEAD_DIM])
         self._write_rows(self.window_carry[layer], carry, 0)
 
+    def set_compressor_carry(self, source: int, carry, length: int):
+        """Keep the fp32 projections of a trailing incomplete ratio group (valid length not a multiple of the
+        ratio); ``carry`` is the compressor's (kv, score) ``[1, 1, S/sp, head_dim]`` per SP rank."""
+        ratio = self.config.compress_ratio(source)
+        if ratio == 1:
+            return
+        remainder = (self.start + length) % ratio
+        if remainder == 0:
+            self.compressor_carry[source] = None
+            return
+        first = length - remainder
+        self.compressor_carry[source] = tuple(
+            ttnn.slice(self._gather_sp(t), [0, 0, first, 0], [1, 1, length, self.config.HEAD_DIM]) for t in carry
+        )
+
     def advance(self, length: int):
         self.start += length
+        self.selection = {}

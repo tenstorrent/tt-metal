@@ -23,6 +23,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41.engram import EngramLay
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import FP8_MAX, fast_round_scale
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 
+EMBED_STD = 0.12  # RMS of the released V4.1 embedding (measured on the checkpoint, layer-0 input)
+
 
 class SmallScheduleConfig(DeepSeekV41FlashConfig):
     """The V4.1 layer-role rules on a 6-layer schedule: one layer of each block type, in the order
@@ -178,6 +180,10 @@ def init_weights(model: torch.nn.Module, seed: int = 0) -> None:
             owner.scale.copy_(torch.pow(2.0, (exp + jitter).float()).to(torch.float8_e8m0fnu))
         elif leaf == "weight" and "norm" in owner_name.rsplit(".", 1)[-1]:
             p.copy_(1 + 0.1 * randn(*p.shape))
+        elif isinstance(owner, v41.ParallelEmbedding):
+            # the released embedding has RMS ~0.12 (real layer-0 input); fan-in scaling would give ~0.014 and
+            # make the first block of a synthetic stack far more sensitive than the real model
+            p.copy_(randn(*p.shape) * EMBED_STD)
         elif p.dim() >= 2:
             p.copy_(randn(*p.shape) * p.size(-1) ** -0.5)
         else:

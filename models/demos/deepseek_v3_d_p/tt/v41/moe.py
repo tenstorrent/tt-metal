@@ -48,13 +48,15 @@ class TtV41Moe(LightweightModule):
         num_links: int = 1,
         topology=ttnn.Topology.Linear,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
+        weight_cache_path=None,
     ):
         """``weights``: the ``TtMoe`` state-dict entries ``gate_weights`` (weight, e_score_correction_bias),
         ``routed_expert_weights`` (one {gate_proj, up_proj, down_proj} per expert) and
         ``shared_expert_weights``, in checkpoint ``[out, in]`` orientation (``weights.load_layer``)."""
-        gate = weights["gate_weights"]
-        bias = gate["e_score_correction_bias"].float()
-        weights = {**weights, "gate_weights": {**gate, "e_score_correction_bias": bias - bias.mean()}}
+        gate = weights.get("gate_weights")  # absent when the device tensors come from weight_cache_path
+        if gate is not None:
+            bias = gate["e_score_correction_bias"].float()
+            weights = {**weights, "gate_weights": {**gate, "e_score_correction_bias": bias - bias.mean()}}
         self.moe = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
             model_cfg=config,
@@ -72,6 +74,7 @@ class TtV41Moe(LightweightModule):
             shared_expert_weights_dtype=ttnn.bfloat8_b,
             dispatch_buffer_capacity_factor=2,
             layer_idx=layer,
+            weight_cache_path=weight_cache_path,
         )
 
     def forward(self, x: ttnn.Tensor, return_intermediates: bool = False):

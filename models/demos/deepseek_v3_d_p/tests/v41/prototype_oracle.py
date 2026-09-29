@@ -200,7 +200,18 @@ def device_weights(model: v41.Transformer, layer: int) -> dict:
         {"gate_proj": _dequant(e.w1), "up_proj": _dequant(e.w3), "down_proj": _dequant(e.w2)} for e in ffn.experts
     ]
     se = ffn.shared_experts
-    return {
+    extra = {}
+    if attn.compressor is not None:
+        c = attn.compressor
+        extra["compressor"] = {"wkv": c.wkv.weight.detach(), "norm": c.norm.weight.detach()} | (
+            {"wgate": c.wgate.weight.detach()} if c.compress_ratio > 1 else {}
+        )
+    if attn.indexer is not None:
+        ind = attn.indexer
+        extra["indexer"] = {"wq_b": _dequant(ind.wq_b), "weights_proj": ind.weights_proj.weight.detach()} | (
+            {"wk": ind.wk.weight.detach(), "k_norm": ind.k_norm.weight.detach()} if ind.owns_k else {}
+        )
+    return extra | {
         "attn": {
             "wq_a": _dequant(attn.wq_a),
             "q_norm": attn.q_norm.weight.detach(),
