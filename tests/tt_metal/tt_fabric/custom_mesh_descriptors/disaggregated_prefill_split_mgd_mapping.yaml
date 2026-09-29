@@ -1,0 +1,5 @@
+# Multi-MGD (subcontext) mapping split from disaggregated_prefill_2x4_pipeline_decode_32x4_combined:
+#   subcontext 0 = 48-stage prefill LINE, subcontext 1 = 32x4 decode torus.
+subcontext_id_to_mesh_graph_descriptor:
+  0: tests/tt_metal/tt_fabric/custom_mesh_descriptors/disaggregated_prefill_48stage_line_only.textproto
+  1: tests/tt_metal/tt_fabric/custom_mesh_descriptors/disaggregated_decode_32x4_only.textproto

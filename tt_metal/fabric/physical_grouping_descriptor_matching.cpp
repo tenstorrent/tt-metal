@@ -2848,6 +2848,8 @@ bool build_sat_placement_constraints(
         std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
     std::map<std::string, const Candidate*> canon;
     std::map<const Candidate*, std::vector<uint32_t>> seat_to_asics;
+    // Per-mesh deduped seat set, consumed by the TT_METAL_SAT_LEX_SYM symmetry break below.
+    std::map<GlobalMeshId, std::set<const Candidate*>> mesh_seats;
     std::size_t mesh_index = 0;
     for (const auto& [mesh_id, pool] : pools) {
         std::set<const Candidate*> seats;
@@ -2880,6 +2882,40 @@ bool build_sat_placement_constraints(
             log_info(
                 tt::LogFabric, "DBGPIN mesh={} pinned_seats={} (pinned={})", *mesh_id, seats.size(), pinned != nullptr);
         }
+        if (seats.empty()) {
+            return false;
+        }
+        mesh_seats[mesh_id] = std::move(seats);  // already deduped via sat_footprint_canonical above
+    }
+    // TT_METAL_SAT_LEX_SYM=1: break rotational symmetry among interchangeable meshes (same deduped seat set).
+    // Confine only the lowest-id mesh of each class to seat indices [0, S-N] (S seats, N meshes, ASIC-id order)
+    // by trimming its already-deduped required-seat set directly. Any placement can be relabel-rotated so the
+    // min-used-seat mesh is mesh 0, so this rules out no valid placement. Anchoring one mesh (not a total order)
+    // keeps ring windings free -- a full lex order pins the whole ring at exact fit and goes UNSAT. Default-off.
+    if (std::getenv("TT_METAL_SAT_LEX_SYM") != nullptr) {
+        std::map<std::vector<const Candidate*>, std::vector<GlobalMeshId>> classes_by_seat_set;
+        for (const auto& [mesh_id, seats] : mesh_seats) {
+            classes_by_seat_set[std::vector<const Candidate*>(seats.begin(), seats.end())].push_back(mesh_id);
+        }
+        for (auto& [seat_set, class_meshes] : classes_by_seat_set) {
+            const std::size_t class_size = class_meshes.size();
+            const std::size_t seat_count = seat_set.size();
+            if (class_size < 2 || seat_count < class_size) {
+                continue;
+            }
+            std::vector<const Candidate*> ordered_seats = seat_set;
+            std::sort(ordered_seats.begin(), ordered_seats.end(), [&](const Candidate* a, const Candidate* b) {
+                return seat_to_asics.at(a) < seat_to_asics.at(b);
+            });
+            std::sort(class_meshes.begin(), class_meshes.end());
+            std::set<const Candidate*>& anchor_seats = mesh_seats[class_meshes.front()];
+            for (std::size_t i = seat_count - class_size + 1; i < seat_count; ++i) {
+                anchor_seats.erase(ordered_seats[i]);
+            }
+        }
+    }
+    // Apply each mesh's (possibly lex-trimmed) required-seat set.
+    for (const auto& [mesh_id, seats] : mesh_seats) {
         if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
             return false;
         }
