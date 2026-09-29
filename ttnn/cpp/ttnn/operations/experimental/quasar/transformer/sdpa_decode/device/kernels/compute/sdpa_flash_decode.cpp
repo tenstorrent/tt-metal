@@ -606,18 +606,24 @@ void kernel_main() {
             pack_reconfig_out(dfb_prev_max);
 
             // PREV_MAX <- CUR_MAX.
-            // Quasar: skip this carry on the TERMINAL chunk of a single-core reducer (no next reduce_c and
-            // no tree to consume prev_max). Filling the capacity-1 self-loop prev_max via a copy-through-DEST
-            // move_block and then never consuming it trips the Quasar tile-counter accounting at the finalize
-            // pop (:758) — posted=1/acked=2 underflow. The running max is left in cur_max (see the :709
-            // comment) and finalize pops cur_max instead. WH/BH keep the unconditional carry (byte-identical
-            // to mainline); with-children Quasar keeps it too (the tree consumes prev_max).
-            // ATTENTION-SINK builds also keep the unconditional carry: the sink finalization block below reads
-            // dfb_prev_max (via max_block, :737), so dropping the terminal carry would leave that DFB empty and
-            // the sink finalize would wait on it forever (single-core sink decode hang). The sink path's own
-            // Quasar guard handles the final pop, so keeping the carry here is safe.
+            // Quasar: skip this carry ONLY on the terminal chunk of a TRUE single-core reducer -- a worker that
+            // is its own root (no parent) AND has no children, so nothing downstream ever consumes prev_max.
+            // There the copy-through-DEST move_block into the capacity-1 self-loop prev_max trips the Quasar
+            // tile-counter accounting (posted=1/acked=2 underflow, observed on craq-sim -- a sim tile-counter
+            // bug tracked separately). The running max stays in cur_max, which the finalize path reads and
+            // leaves un-popped (a harmless occ=1 leak, like identity_scale/zero_in); prev_max itself is only
+            // popped when there are children (:784), so a childless worker never balances a carried prev_max.
+            // KEEP the carry for every other case:
+            //   - has_parent (tree leaf/intermediate): it forwards its local max to the parent via
+            //     move_block(dfb_prev_max, dfb_out_m, :815), so an empty prev_max hangs (single-chunk leaf) and
+            //     a stale one sends the wrong max (multi-chunk);
+            //   - num_active_children > 0 (reducer): the tree correction consumes prev_max;
+            //   - non-terminal chunks: the next chunk's reduce_c reads prev_max.
+            // WH/BH keep the unconditional carry (byte-identical to mainline). ATTENTION-SINK builds keep it too:
+            // the sink finalization reads dfb_prev_max (max_block, :737), so dropping the carry would leave that
+            // DFB empty and hang.
 #if defined(ARCH_QUASAR) && !defined(USE_ATTENTION_SINK)
-            const bool carry_prev_max = (k_chunk + 1 < k_chunk_end) || (num_active_children > 0);
+            const bool carry_prev_max = (k_chunk + 1 < k_chunk_end) || (num_active_children > 0) || has_parent;
 #else
             constexpr bool carry_prev_max = true;
 #endif
