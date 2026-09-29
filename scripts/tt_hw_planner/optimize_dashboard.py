@@ -259,6 +259,10 @@ def _parse_batch(run_dir: Path, requested: int | None = None) -> int | None:
         except Exception:
             continue
         served = parse_batch_report(txt)
+        if served is None:
+            import re as _re
+            _m = _re.findall(r"PERF_BATCH_[A-Z]+=(\d+)", txt)  # any batch-report token (STREAMS/ROWS/...)
+            served = int(_m[-1]) if _m else None
         if served is not None:
             return served
     # No harness batch report (e.g. a non-decode model that never prints one): fall back to the batch
