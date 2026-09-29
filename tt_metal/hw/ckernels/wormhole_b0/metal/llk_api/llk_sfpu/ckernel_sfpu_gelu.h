@@ -255,8 +255,8 @@ void gelu_init() {
         sfpi::vConstFloatPrgm0 = GELU_CDF_CORE_C9;
         sfpi::vConstFloatPrgm1 = GELU_CDF_CORE_C11;
         sfpi::vConstFloatPrgm2 = GELU_CDF_CORE_C13;
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_CDF_CORE_C5));
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_CDF_CORE_C7));
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::as<sfpi::vUInt>(sfpi::vFloat(GELU_CDF_CORE_C5));
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::as<sfpi::vUInt>(sfpi::vFloat(GELU_CDF_CORE_C7));
     }
 }
 
@@ -369,8 +369,8 @@ inline void calculate_gelu() {
         // BF16 saturation, so the ULP bound does not apply there: the true gelu is around
         // -8.3e-8 at the boundary and shrinks from there.
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
-        sfpi::vFloat k_c5 = sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg0]));
-        sfpi::vFloat k_c7 = sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg1]));
+        sfpi::vFloat k_c5 = sfpi::as<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg0]));
+        sfpi::vFloat k_c7 = sfpi::as<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg1]));
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
@@ -379,8 +379,8 @@ inline void calculate_gelu() {
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(k_c5);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::reinterpret<sfpi::vUInt>(k_c7);
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::as<sfpi::vUInt>(k_c5);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::as<sfpi::vUInt>(k_c7);
     }
 }
 
@@ -535,18 +535,18 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x, sfpi::
 // patterns are tiny |x|, so any intercept there dominates the bit-exact fraction.
 template <int ITERATIONS>
 inline void calculate_gelu_derivative_appx() {
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat r = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        sfpi::vFloat r = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
         r = half + sfpi::copysgn(r, in);
         // SFPSTORE truncates; the other gelu paths round, and without this the table's
         // accuracy is thrown away at the last step (3401 patterns measured).
@@ -554,12 +554,12 @@ inline void calculate_gelu_derivative_appx() {
         sfpi::dst_reg++;
     }
 
-    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
@@ -568,7 +568,7 @@ inline void calculate_gelu_derivative_polynomial() {
         calculate_gelu_derivative_appx<ITERATIONS>();
         return;
     }
-    sfpi::vFloat k_h6 = sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg0]));
+    sfpi::vFloat k_h6 = sfpi::as<sfpi::vFloat>(sfpi::vUInt(sfpi::l_reg[sfpi::LRegs::LReg0]));
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
@@ -579,7 +579,7 @@ inline void calculate_gelu_derivative_polynomial() {
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(k_h6);
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::as<sfpi::vUInt>(k_h6);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -597,19 +597,20 @@ inline void gelu_derivative_polynomial_init() {
         //
         // Packing: LReg0/1/2 hold slopes, LReg4/5/6 the matching intercepts, low half then
         // high half, two segments per register. Coefficients are Lut16ToFp32, where
-        // exponent 31 encodes zero -- hence 0x7C00, not 0x0000, for the two zeros.
+        // exponent 31 encodes zero -- vLut16ss / vLut16ii encode 0.0f as 0x7C00, not 0x0000.
+        // Every value below is an exact binary16 value, so the encoding is exact.
         //
         // The first intercept is zero because gelu'(0) = 0.5 exactly and the 0.5 is added
         // outside the table. That is not cosmetic: most bfloat16 patterns are tiny |x|, and
         // a free fit there drops the fraction of inputs matching the true gelu' bit for bit
         // from 96.7% to 49.4%.
         sfpi::vConstFloatPrgm0 = 0.5f;
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x36E83A01);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x313C7C00);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0xAD682DA7);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x3A0D3808);
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x7C00ACB1);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x380039CF);
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.75048828125f, 0.431640625f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.16357421875f);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.08831787109375f, -0.08447265625f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.50390625f, 0.75634765625f);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(-0.07330322265625f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.72607421875f, 0.5f);
         return;
     }
     if constexpr (!APPROXIMATION_MODE) {
@@ -634,7 +635,7 @@ inline void gelu_derivative_polynomial_init() {
     // vConstFloatPrgm0/1/2 with the Sollya coefficients of its 1/x estimate. Writing any of
     // them corrupts that tail. One LReg is also all the allocator can spare -- two fails
     // codegen with a register spill.
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_DERIV_H6));
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::as<sfpi::vUInt>(sfpi::vFloat(GELU_DERIV_H6));
 }
 
 }  // namespace ckernel::sfpu
