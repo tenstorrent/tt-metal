@@ -1799,3 +1799,27 @@ Results:
 Next step: implement only needs to add attn_residual to `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.05 test (attempt 1)
+Reviewed the rendered swap test for kda_moe layer 4 with attn_hc, attn_collapse, attn_norm, attention and
+attn_residual on the device. The rendered file was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe
+swap 04 test (every check and limit kept) and added the residual checks and share design from dsa_moe swap 07:
+- Residual-share block: the device outputs through attn_out fixed, the CPU residual. Block out vs it is the residual
+  share. The attention share is now that block vs the attention-share block, which reproduces swap 04's numbers.
+- h_mid vs golden: rel <= 0.006, ratio [0.985, 1.015], worst row <= 0.03, per-stream <= 0.008. The CPU residual of
+  the same device inputs is already at [0.9899, 1.0023] / row 0.0166, from the device attn_hc.
+- h_mid vs the fp32 CPU residual of the same inputs, with each term on its own: the component limits (post-term rel
+  <= 0.10, as at layer 4). The same check runs on chunk 0.
+- Residual share: flips <= 64, same-routing rel <= 0.0025, ratio [0.997, 1.003]. Layer 3's 0.0015 would fail an exact
+  bf16 residual here (floor 0.00166). Known issues Proposed has the entry.
+Limits come from a CPU perturbation study (/tmp/kmoe05/sens.py, device-free, not kept; the numbers are in the test
+docstring).
+Results:
+- Device passes: PCC 0.999992, rel 0.0042. Vs the all-CPU block 51 flips / 0.00217 (limit 0.003). h_mid vs CPU same
+  input 0.00166 / [0.9996, 1.0002]. Residual share 21 / 0.00166 / [0.9988, 1.0007], which is the bf16-output model
+  exactly. Every swap 04 number is unchanged. About 90 s for the real pass, 178 s total.
+- Reference passes (PCC 0.999998, every same-input and share check exact). Stub fails (PCC 0 and every check).
+Watch: the all-CPU-block rel margin is 1.4x (0.00217 of 0.003) and the flips are 51 of 96. Both grow as the MoE-side
+steps join (known issue). The worst-head state margin is still 0.048 of 0.05.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_05_attn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
