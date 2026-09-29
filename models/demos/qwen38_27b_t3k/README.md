@@ -37,7 +37,7 @@ Batch-1 performance on T3K, warmed, same shape:
 
 | Input / output tokens | Tokens/s/user | TTFT |
 | --- | ---: | ---: |
-| 128 / 128 | 13.8 | 247 ms |
+| 128 / 128 | 16.6 | 260 ms |
 
 T3K reaches roughly a third of the QB2 decode throughput. It has 64 worker cores
 against about 110, one usable ethernet link per chip pair against two, and one

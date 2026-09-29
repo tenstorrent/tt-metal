@@ -1,5 +1,5 @@
 {
-  "config_id": "head_bfp4_lofi",
+  "config_id": "head_bfp4_lofi_ccl_bfp8",
   "weight_groups": {
     "attention": "bfloat4_b",
     "output": "bfloat4_b",
@@ -23,7 +23,7 @@
     "mlp": "bfloat16"
   },
   "residual_dtype": "bfloat16",
-  "ccl_dtype": "bfloat16",
+  "ccl_dtype": "bfloat8_b",
   "kv_cache_dtype": "bfloat8_b",
   "logits_dtype": "bfloat16",
   "sampling_dtype": "bfloat16",
