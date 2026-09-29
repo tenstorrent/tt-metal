@@ -25,7 +25,9 @@ the 4-chip box can form.
   G/2 shards (p, p−1, …), toward p−1 the rest.
 - **Placement is found, not configured:** a one-time probe program builds each fabric connection on device and
   reports its router's (translated) coordinates; the host maps them to physical NoC columns with the chip's
-  Ethernet harvesting mask, and puts each port core directly below.
+  Ethernet harvesting mask, and puts each port core directly below. Worker coordinates are translated too, and with
+  Tensix harvesting the live columns are compacted (a column right of a harvested one has translated x ≠ physical x),
+  so candidate workers are mapped back to physical columns with the chip's Tensix harvesting mask before matching.
 - **Why it's kernel-level:** how often an increment rides on a packet, what the relay waits for, and which core
   serves each link are decisions of the kernel and program author.
 

@@ -396,8 +396,10 @@ def probe_ethernet_cores(mesh_device, connections):
 
 
 _ETH_MAP_CACHE = {}
-# Blackhole: with NoC translation on, Ethernet core i (i-th entry of the chip's non-harvested Ethernet list) has the
-# translated coordinate (20 + i, 25); Tensix translated coordinates are the physical NoC coordinates.
+# Blackhole, with NoC translation on:
+#   Ethernet: core i (i-th entry of the chip's non-harvested Ethernet list) has translated coordinate (20 + i, 25).
+#   Tensix:   columns are compacted - the k-th live column gets the k-th column's x; harvested columns move to the end.
+#             So a live column right of a harvested one has translated x != physical x.
 _BH_ETH_TRANSLATED_X0 = 20
 
 
@@ -415,12 +417,17 @@ def _eth_physical_lists(mesh_device):
     ]
     arch_eth = yaml.safe_load(open(os.path.join(root, "tt_metal", "soc_descriptors", arch_yaml)))["eth"]
     arch_eth = [tuple(int(v) for v in e.split("-")) for e in arch_eth]
+    soc = yaml.safe_load(open(os.path.join(root, "tt_metal", "soc_descriptors", arch_yaml)))
+    tensix_cols = sorted({int(w.split("-")[0]) for w in soc["functional_workers"]})
     lists = {}
     for chip, uid in desc.get("chip_unique_ids", {}).items():
         h = desc.get("harvesting", {}).get(chip, {})
         mask = int(h.get("eth_harvesting_mask", 0))
         translated = bool(h.get("noc_translation", False))
-        lists[int(uid)] = ([e for i, e in enumerate(arch_eth) if not (mask >> i) & 1], translated)
+        tmask = int(h.get("harvest_mask", 0))
+        live = [x for i, x in enumerate(tensix_cols) if not (tmask >> i) & 1]
+        t2p = {tensix_cols[k]: px for k, px in enumerate(live)} if translated else {}
+        lists[int(uid)] = ([e for i, e in enumerate(arch_eth) if not (mask >> i) & 1], translated, t2p)
     _ETH_MAP_CACHE[id(mesh_device)] = (mesh_device, lists)
     return lists
 
@@ -428,16 +435,22 @@ def _eth_physical_lists(mesh_device):
 def eth_noc_column(mesh_device, coord, xy):
     """Physical NoC column of the Ethernet core the probe reported (translated or physical coordinates)."""
     x, y = xy
-    node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
-    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
-    eth_list, translated = _eth_physical_lists(mesh_device).get(uid, (None, False))
+    eth_list, translated, _ = _chip_maps(mesh_device, coord)
     if translated and eth_list is not None and x >= _BH_ETH_TRANSLATED_X0:
         return eth_list[x - _BH_ETH_TRANSLATED_X0][0]
     return x
 
 
-def _worker_below(mesh_device, noc_x, taken, grid):
-    """Logical worker core in NoC column noc_x closest below the Ethernet row, not yet taken; else nearest column."""
+def _chip_maps(mesh_device, coord):
+    node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
+    return _eth_physical_lists(mesh_device).get(uid, (None, False, {}))
+
+
+def _worker_below(mesh_device, coord, noc_x, taken, grid):
+    """Logical worker core in physical NoC column noc_x closest below the Ethernet row, not yet taken; else the
+    nearest physical column. Worker coordinates are translated, so they are mapped back per chip."""
+    t2p = _chip_maps(mesh_device, coord)[2]
     best = None
     for x in range(grid.x):
         for y in range(grid.y):
@@ -445,7 +458,7 @@ def _worker_below(mesh_device, noc_x, taken, grid):
             if (x, y) in taken:
                 continue
             v = mesh_device.worker_core_from_logical_core(lc)
-            score = (abs(v.x - noc_x), v.y)
+            score = (abs(t2p.get(v.x, v.x) - noc_x), v.y)
             if best is None or score < best[0]:
                 best = (score, lc)
     return best[1]
@@ -494,7 +507,7 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto"):
             for l in range(num_links):
                 if eth is not None and ch[d] and peer is not None:
                     ex = eth_noc_column(mesh_device, coord, eth[(coord, peer, ch[f"{d}_links"][l])])
-                    core = _worker_below(mesh_device, ex, taken, grid)
+                    core = _worker_below(mesh_device, coord, ex, taken, grid)
                     ch.setdefault("eth_cols", {})[(d, l)] = ex
                 else:
                     core = placement[(d, l)] if isinstance(placement, dict) else None
@@ -504,7 +517,7 @@ def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto"):
         # receive-only ports (line ends): any free core
         for key, core in ports.items():
             if core is None:
-                ports[key] = _worker_below(mesh_device, 0, taken, grid)
+                ports[key] = _worker_below(mesh_device, coord, 0, taken, grid)
                 taken.add((ports[key].x, ports[key].y))
         copy = []
         for l in range(num_links):
