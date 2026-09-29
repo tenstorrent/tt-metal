@@ -1491,6 +1491,32 @@ targets:
               top5: 99
             owner_id: U08FBKRKTB8 # Kohei Yamaguchi
             team: models
+      # Measured on the wh_llmbox_perf CI runner (WH LoudBox, (1,4) N150x4 mesh), warm trace replay.
+      # traced_4k's prompt is 2,642 tokens.
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 363.5
+              decode_t/s: 26.56
+              decode_t/s/u: 26.56
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
+          - batch_size: 1
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 2940.6
+              decode_t/s: 26.12
+              decode_t/s/u: 26.12
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:

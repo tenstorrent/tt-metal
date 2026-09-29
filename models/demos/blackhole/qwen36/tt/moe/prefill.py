@@ -13,9 +13,10 @@ while down's M is the whole chunk_len; PREFILL_CHUNK_SIZE bounds down's grid/L1.
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
-from .decode import _build_sparse_matmul_config
+from .decode import _build_sparse_matmul_config, _pick_in0_block_w
 from .operations import apply_swiglu
 from .weights import ExpertWeights
 
@@ -51,11 +52,7 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
 
     group_size = chunk_len // TILE_SIZE
     hidden_grouped = ttnn.reshape(hidden_states, (1, group_size, TILE_SIZE, hidden_size))
-    # Per-tile sparsity for gate/up: compute an expert for a 32-token tile only if some token in
-    # the tile routes to it (max routing weight over the tile > 0). Real prefill routing is
-    # concentrated (~21 of 64 local experts hit per 32-tok tile), so this skips ~2/3 of the
-    # all-ones overcompute. nnz varies per tile -> infer (None); a static nnz would deadlock the
-    # sparse_matmul mcast receivers (same reason decode uses nnz=None).
+    # Per-tile sparsity: run an expert for a 32-token tile only if some token routes to it. nnz MUST stay None -- a static one deadlocks the mcast receivers.
     routing_tiled = ttnn.reshape(routing_weights, (1, group_size, TILE_SIZE, num_experts))
     tile_mask = ttnn.max(routing_tiled, dim=2, keepdim=True)  # [1, group, 1, E_local]
     tile_mask = ttnn.to_layout(tile_mask, ttnn.ROW_MAJOR_LAYOUT)
@@ -64,10 +61,7 @@ def _process_prefill_chunk(hidden_states, routing_weights, weights: ExpertWeight
 
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
-    # up/gate fused into ONE sparse_matmul: N = 2*full_intermediate ([up|gate] concatenated), so
-    # the N-gridded core count is 32 (vs 8 for the old intermediate-parallel N=256). M is one
-    # 32-row tile per group (group_size folded into the sparse batch dim), per_core_M stays 1.
-    # down: M is the full chunk_len, so its per_core_M reflects the real M (= chunk_len/32).
+    # up/gate fused into ONE sparse_matmul over the concatenated [up|gate], which widens N and so the N-gridded core count.
     gate_up_config = _build_sparse_matmul_config(TILE_SIZE, 2 * intermediate_size)
     down_config = _build_sparse_matmul_config(chunk_len, hidden_size)
 
@@ -123,6 +117,7 @@ def prefill_forward(
     tt_ccl=None,
     num_devices=1,
     topology=None,
+    reduce=True,
 ):
     """hidden_states [1,1,S,H] (S multiple of 32), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
     seq_len = hidden_states.shape[2]
@@ -144,7 +139,8 @@ def prefill_forward(
     chunked = len(hidden_chunks) > 1
     result_acc = None
     for h_chunk, r_chunk in zip(hidden_chunks, routing_chunks):
-        chunk_result = _process_prefill_chunk(h_chunk, r_chunk, weights, config, prefill_sparsity)
+        chunk_fn = _process_prefill_chunk if is_blackhole() else _process_prefill_chunk_wh
+        chunk_result = chunk_fn(h_chunk, r_chunk, weights, config, prefill_sparsity)
         if chunked:
             # split() produced fresh per-chunk copies (not the caller's x/routing that the shared
             # expert reuses on the single-chunk path), so free them as we go instead of holding
@@ -161,7 +157,7 @@ def prefill_forward(
 
     # Row-parallel down_proj partials -> reduce-scatter (fractured hidden), matching
     # Qwen36MLP._forward_tp.
-    if num_devices > 1:
+    if num_devices > 1 and reduce:
         result_acc = tt_all_reduce(
             result_acc,
             mesh_device,
@@ -173,3 +169,74 @@ def prefill_forward(
         )
 
     return result_acc
+
+
+def _process_prefill_chunk_wh(hidden_states, routing_weights, weights: ExpertWeights, config, prefill_sparsity):
+    """Wormhole variant of _process_prefill_chunk. Both expert matmuls run per (32-token tile, expert)
+    pair gated by the same tile mask, instead of down_proj computing every expert over the whole chunk.
+
+    Measured on n150x4 (35B-A3B, eager prefill T=2048, first 4 layers): 926 -> 234 ms. The steps:
+      * in0_block_w = K/2 and per_core_n = 2 (the decode-swept configs; the default in0_block_w=1 is
+        dominated by per-round mcast sync): 926 -> 375 ms. per_core_n 1 or 4 measured no better.
+      * down_proj on the tile mask (~2/3 of (tile, expert) pairs are empty): 375 -> 290 ms,
+        bit-identical, since the skipped pairs only ever contributed zeros.
+      * routing applied on the 512-wide intermediate before down_proj, not the 2048-wide output: -2%.
+      * bfloat8_b matmul outputs, which halve the swiglu / multiply / expert-sum traffic over the
+        zero-filled expanded tensors: -17%, for -0.00025 of MoE PCC (the decode path's same trade).
+    """
+    chunk_len = hidden_states.shape[2]
+    num_experts = prefill_sparsity.shape[-1]
+    hidden_size = config.hidden_size
+    intermediate_size = weights.intermediate_size_per_device
+    group_size = chunk_len // TILE_SIZE
+
+    hidden_grouped = ttnn.reshape(hidden_states, (1, group_size, TILE_SIZE, hidden_size))
+    routing_tiled = ttnn.reshape(routing_weights, (1, group_size, TILE_SIZE, num_experts))
+    tile_mask = ttnn.max(routing_tiled, dim=2, keepdim=True)  # [1, group, 1, E_local]
+    tile_mask = ttnn.to_layout(tile_mask, ttnn.ROW_MAJOR_LAYOUT)
+    sparsity = ttnn.reshape(tile_mask, (1, 1, group_size, num_experts))
+    output_tile = ttnn.Tile([32, 32])
+
+    up_gate = ttnn.sparse_matmul(
+        hidden_grouped,
+        weights.gate_up_proj,
+        sparsity=sparsity,
+        nnz=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=output_tile,
+        program_config=_build_sparse_matmul_config(
+            TILE_SIZE, 2 * intermediate_size, _pick_in0_block_w(hidden_size), per_core_n=2
+        ),
+        dtype=ttnn.bfloat8_b,
+    )
+    # [1, group, 1, E, 32, 2I] is group-major, so [group, E, 32, 2I] is a pure reshape.
+    up_gate = ttnn.reshape(up_gate, (group_size, num_experts, TILE_SIZE, 2 * intermediate_size))
+    down_input = apply_swiglu(up_gate)
+    up_gate.deallocate(True)
+    down_input = ttnn.reshape(down_input, (group_size, num_experts, TILE_SIZE, intermediate_size))
+
+    # down_proj is linear, so scale each expert's activations by its routing weight here, on the
+    # intermediate width: routing [1, group, 32, E] -> [group, E, 32, 1].
+    routing_per_expert = ttnn.permute(routing_tiled, (1, 3, 2, 0))
+    scaled = ttnn.mul(down_input, routing_per_expert)
+    down_input.deallocate(True)
+    routing_per_expert.deallocate(True)
+
+    down = ttnn.sparse_matmul(
+        scaled,
+        weights.down_proj,
+        sparsity=sparsity,
+        nnz=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=output_tile,
+        program_config=_build_sparse_matmul_config(
+            TILE_SIZE, hidden_size, _pick_in0_block_w(intermediate_size), per_core_n=2
+        ),
+        is_input_a_sparse=True,
+        is_input_b_sparse=False,
+        dtype=ttnn.bfloat8_b,
+    )
+    scaled.deallocate(True)
+    next_states = ttnn.experimental.fast_reduce_nc(down, dims=[1])  # [group, 1, 32, H]
+    down.deallocate(True)
+    return ttnn.reshape(next_states, (1, 1, chunk_len, hidden_size))

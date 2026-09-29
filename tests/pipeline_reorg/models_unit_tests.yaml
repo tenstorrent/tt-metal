@@ -233,9 +233,12 @@
   budget_type: unit
 
 - name: Qwen3.6-35B-A3B MoE unit tests
+  # One cmd for both arches: the watcher setup and MESH_DEVICE come from the per-SKU fields below
+  # (Wormhole = WH LoudBox, 4 of its 8 chips as a (1,4) N150x4 mesh). The tensor cache is already
+  # split per device name.
   cmd: |
-    export TT_METAL_WATCHER=30
-    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
+    {watcher_setup}
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE={mesh_device}
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_moe_tp.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/unit/test_moe.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
@@ -246,6 +249,18 @@
     bh_quietbox_2:
       timeout: 25
       tier: 1
+      watcher_setup: "export TT_METAL_WATCHER=30"
+      mesh_device: P150x4
+    wh_llmbox:
+      # Measured on a WH LoudBox without watcher: test_moe_tp 3.4 min, test_gdn_tp 7.4, test_attention_tp
+      # 3.2 (tests/unit/test_moe.py skips on Wormhole); headroom for watcher and a cold NAS load.
+      timeout: 30
+      tier: 2
+      # DISABLE_ETH is required: with the watcher on the ethernet cores the Wormhole fabric_erisc_router
+      # no longer links (.data overlaps .text), so open_mesh_device throws and no test runs. Worker
+      # cores stay watched.
+      watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
+      mesh_device: N150x4
   owner_id: U08FBKRKTB8 # Kohei Yamaguchi
   team: models
   budget_type: unit
