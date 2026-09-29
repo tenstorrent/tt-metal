@@ -289,6 +289,18 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // indexed mode: the token index address is the relay reader's last runtime arg (after dyn + subgrid)
         const bool indexed = t.token_index.has_value();
         const uint32_t idx_arg = 3 + static_cast<uint32_t>(dyn.v.size()) + static_cast<uint32_t>(sgx(0).size());
+        // the relay reads x in segments of sbt x 32 bf16 (one super-block row): a segment must not straddle two x
+        // pages (they sit in different banks), so the page is a multiple of the segment or divides it
+        const uint32_t x_page_bytes = t.x.logical_shape()[-1] * 2, seg_bytes = p.sbt * 64;
+        TT_FATAL(
+            x_page_bytes % seg_bytes == 0 || seg_bytes % x_page_bytes == 0,
+            "flat_routed_expert: x page of {} B (hidden {} / x_pages_per_row {}) must be a multiple or a divisor of "
+            "the "
+            "{} B read segment",
+            x_page_bytes,
+            p.H,
+            p.H / t.x.logical_shape()[-1],
+            seg_bytes);
         Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}});
         if (indexed) {
             xrd_def["XRD_INDEXED"] = "1";

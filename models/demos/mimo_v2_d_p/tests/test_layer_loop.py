@@ -18,6 +18,7 @@ relative L2 error / norm ratio of the K and V the step wrote to its cache (read 
 The HF chain is cached under the golden dir (loop_R{R}_S{seq}_{prompt}.pt).
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -201,6 +202,10 @@ def test_layer_loop(mesh_device, device_params):
         k_dev, v_dev = dev_kv[s - 1]
         ks = stats(k_dev, k_ref[..., rope_perm(spec.head_dim, spec.rope_dim)])
         vs = stats(v_dev, v_ref)
+        for name, t in (("hidden", a), ("K", k_dev), ("V", v_dev)):  # min() keeps the old value on NaN: check first
+            assert torch.isfinite(t).all(), f"step {s} L{i}: non-finite device {name}"
+        for name, m in (("hidden", h), ("K", ks), ("V", vs)):
+            assert all(math.isfinite(v) for v in m), f"step {s} L{i}: non-finite {name} metrics {m}"
         worst["hidden"], worst["K"], worst["V"] = (
             min(worst["hidden"], h[0]),
             min(worst["K"], ks[0]),

@@ -400,6 +400,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             !tensor_args.attention_sink.has_value(), "RingJointSDPA ring_k_split does not support attention sinks");
         TT_FATAL(!tensor_args.joint_q.has_value(), "RingJointSDPA ring_k_split does not support joint attention");
         TT_FATAL(!tensor_args.has_latent_v(), "RingJointSDPA ring_k_split does not support latent V");
+        TT_FATAL(
+            !ring_joint::uses_shared_k_batch_chain(
+                ring_joint::is_gqa_grouped_kv_head_mode(
+                    false,
+                    tensor_args.input_q.logical_shape()[1],
+                    tensor_args.gathered_k.logical_shape()[1],
+                    tensor_args.v_num_heads()),
+                tensor_args.gathered_k.logical_shape()[1]),
+            "RingJointSDPA ring_k_split does not support a single shared K head (one chain over all cores would mix "
+            "partitions); use a grouped GQA / MHA layout");
         TT_FATAL(!tensor_args.has_metadata(), "RingJointSDPA ring_k_split needs the host path (no metadata tensors)");
         TT_FATAL(
             !args.all_gather_operation_attributes.full_mesh,

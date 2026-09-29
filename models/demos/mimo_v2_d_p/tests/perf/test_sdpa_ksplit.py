@@ -33,8 +33,9 @@ SCALE = DK**-0.5
 class _Setup:
     """Q chunk + random bf8 KV cache (same on every chip, so every split reads the same data)."""
 
-    def __init__(self, mesh_device, device_params, chunk_local, ctx, seed=0):
+    def __init__(self, mesh_device, device_params, chunk_local, ctx, seed=0, nq=NQ, nkv=NKV):
         torch.manual_seed(seed)
+        self.nq = nq
         self.mesh = mesh_device
         self.sp, self.tp = tuple(mesh_device.shape)
         self.chunk_local, self.chunk = chunk_local, chunk_local * self.sp
@@ -42,7 +43,7 @@ class _Setup:
         self.ccl = CCLManager(mesh_device, num_links=MiMoRuntimeOptions().num_links, topology=sp_topo)
         max_seq = (ctx + self.chunk - 1) // self.chunk * self.chunk
         self.kv_actual = max_seq - self.chunk
-        self.nkv_l = NKV // self.tp
+        self.nkv_l = nkv // self.tp
         cache = lambda d: ttnn.from_torch(
             torch.randn(1, self.nkv_l, max_seq // self.sp, d),
             dtype=ttnn.bfloat8_b,
@@ -52,7 +53,7 @@ class _Setup:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         self.kv = MiMoKVCache(cache(DK), cache(DV), 1, 1, max_seq, self.sp, self.nkv_l, DK, DV)
-        self.q_host = torch.randn(1, NQ, self.chunk, DK)
+        self.q_host = torch.randn(1, nq, self.chunk, DK)
         self.q = ttnn.from_torch(
             self.q_host,
             dtype=ttnn.bfloat16,
@@ -95,7 +96,7 @@ class _Setup:
         v_all = ttnn.to_torch(ttnn.get_device_tensors(self.kv.v)[0]).float()[0]
         pos = torch.arange(self.kv_actual + self.chunk)
         rows = (pos // self.chunk) * self.chunk_local + pos % self.chunk_local
-        nq_l = NQ // self.tp
+        nq_l = self.nq // self.tp
         qh = self.q_host[0, :nq_l, : self.chunk_local].bfloat16().double()
         mask = pos[None, :] <= (self.kv_actual + torch.arange(self.chunk_local))[:, None]
         g = nq_l // self.nkv_l
@@ -165,6 +166,37 @@ def test_sdpa_two_level_accuracy(mesh_device, device_params, fold):
     assert p > 0.999 and rel <= rel1 * 1.15 and abs(nr - 1) < 5e-3, (p, rel, rel1, nr)
 
 
+@pytest.mark.timeout(1800)
+@MESH_PARAMS
+@pytest.mark.parametrize("chunk_local, split", [(640, 3), (2048, 2)], ids=["C640-s3", "C2048-s2"])
+def test_sdpa_ksplit_one_kv_head(mesh_device, device_params, chunk_local, split):
+    """Galaxy per-chip geometry (TP4 of 64 Q / 4 KV heads: 16 Q heads, 1 KV head per chip) on the 2x2 with 32 Q / 2 KV
+    heads. One local KV head is the case the GQA row-wide K/V multicast takes over (it must stay off under a split:
+    partitions read disjoint K chunks); accuracy vs the unsplit op and fp32, then on-device determinism."""
+    st = _Setup(mesh_device, device_params, chunk_local, 32768, nq=32, nkv=2)
+    assert st.nkv_l == 1
+    to_host = lambda t: torch.cat([ttnn.to_torch(x).float() for x in ttnn.get_device_tensors(t)])
+    base = to_host(st.run(1))
+    ref = st.reference_chip0()
+    _, rel0, _ = _stats(base[0], ref)
+    reference = st.run(split)
+    out = to_host(reference)
+    p, rel, nr = _stats(out[0], ref)
+    pu, _, _ = _stats(out, base)
+    logger.info(
+        f"1 KV head, split {split}: vs fp32 PCC {p:.6f} rel {rel:.2e} (unsplit {rel0:.2e}); vs split 1 PCC {pu:.6f}"
+    )
+    assert pu > 0.999 and rel <= rel0 * 1.1 + 1e-3 and abs(nr - 1) < 5e-3, (pu, rel, rel0, nr)
+    marker = None
+    for _ in range(9):
+        o = st.run(split)
+        m = _mismatch_marker(reference, o)
+        marker = m if marker is None else ttnn.maximum(marker, m)
+        o.deallocate(True)
+    host = ttnn.from_device(marker)
+    assert all(float(ttnn.to_torch(t).item()) == 0.0 for t in ttnn.get_device_tensors(host)), "not deterministic"
+
+
 def _mismatch_marker(reference, actual):
     """On-device exact compare (as tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py): one element per chip,
     non-zero iff any element differs; outputs never leave the device."""
@@ -197,6 +229,13 @@ _PERF_EXPECTED_NS = {  # 2026-09-29
     (2048, 131072, 2): (29_293_972, 184_332),
     (640, 32768, 1): (2_893_136, None),
     (640, 32768, 3): (2_591_908, 88_367),
+    # Galaxy per-chip heads (1 KV head): the unsplit op multicasts K / V per core row, the split cannot -> it loses
+    (2048, 32768, 1, 32, 2): (4_052_397, None),
+    (2048, 32768, 2, 32, 2): (4_066_176, 93_980),
+    (2048, 131072, 1, 32, 2): (15_937_565, None),
+    (2048, 131072, 2, 32, 2): (15_973_356, 92_849),
+    (640, 32768, 1, 32, 2): (1_404_651, None),
+    (640, 32768, 3, 32, 2): (1_603_647, 44_670),
 }
 _PERF_MARGIN = 0.03
 
@@ -208,12 +247,15 @@ _PERF_MARGIN = 0.03
     [(2048, 32768, 1), (2048, 32768, 2), (2048, 131072, 1), (2048, 131072, 2), (640, 32768, 1), (640, 32768, 3)],
     ids=lambda v: str(v),
 )
+# (64, 4): the QuietBox 2x2 per-chip heads (32 Q / 2 KV); (32, 2): Galaxy's per-chip heads (16 Q / 1 KV)
+@pytest.mark.parametrize("heads", [(NQ, NKV), (32, 2)], ids=["qb-heads", "glx-heads"])
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_sdpa_ksplit_perf(mesh_device, device_params, chunk_local, ctx, split):
+def test_sdpa_ksplit_perf(mesh_device, device_params, chunk_local, ctx, split, heads):
     require_realtime_profiler("ring SDPA k split perf checks")
-    st = _Setup(mesh_device, device_params, chunk_local, ctx)
-    key = (chunk_local, ctx, split)
+    nq, nkv = heads
+    st = _Setup(mesh_device, device_params, chunk_local, ctx, nq=nq, nkv=nkv)
+    key = (chunk_local, ctx, split) if heads == (NQ, NKV) else (chunk_local, ctx, split, nq, nkv)
     expected = _PERF_EXPECTED_NS.get(key)
     run = lambda: st.run(split).deallocate(True)
     parts = [("ring", "compute/ring_joint_sdpa.cpp")] + ([("merge", "compute/ksplit_merge.cpp")] if split > 1 else [])

@@ -62,18 +62,33 @@ def ring_program_config(
     )
 
 
-def default_k_split(window, chunk_local, kv_actual, sp, k_chunk=1024, forced=None):
+def default_k_split(window, chunk_local, kv_actual, sp, k_chunk=1024, forced=None, n_kv_local=None):
     """K split for GA (full-attention) layers: 2 at >= 2048 tokens per chip, 3 below (2048 tok/chip: 512 units ->
     1024 on 100 cores; 640: 160 -> 480), only when every partition gets K chunks from the prefix in every ring
-    iteration (the op requires a valid chunk per partition). ``forced`` = N (MiMoRuntimeOptions.sdpa_k_split) forces N
+    iteration (the op requires a valid chunk per partition), and not with one local KV head (see below). ``forced`` = N (MiMoRuntimeOptions.sdpa_k_split) forces N
     (still subject to that condition), 0 / 1 turns it off."""
     if window is not None:
+        return 1
+    if forced is None and n_kv_local == 1:
+        # one local KV head (Galaxy TP4): the unsplit op multicasts K / V over each core row, the split cannot (its
+        # partitions read disjoint K chunks) and loses: 640 tok/chip 1.40 -> 1.60 + 0.045 ms, 2048 4.05 -> 4.07 +
+        # 0.09 ms (32K context, test_sdpa_ksplit_perf glx-heads)
         return 1
     s = forced if forced is not None else (2 if chunk_local >= 2048 else 3)
     if s <= 1:
         return 1
     # every ring iteration's shard holds kv_actual / sp prefix tokens in whole chunk rounds: need s K chunks of them
     return s if kv_actual // sp >= s * k_chunk else 1
+
+
+def schedulable_k_split(k_split, n_heads_local, q_local, q_chunk, n_cores):
+    """The largest split <= ``k_split`` the op can schedule: every core needs >= 2 (head, Q chunk, partition) units
+    (heads x ceil(q_local / q_chunk) x split >= 2 x cores); 1 when no split > 1 qualifies."""
+    units = n_heads_local * -(-q_local // q_chunk)
+    for s in range(k_split, 1, -1):
+        if units * s // n_cores >= 2:
+            return s
+    return 1
 
 
 def compute_config(mesh_device, fidelity=ttnn.MathFidelity.HiFi2):
@@ -116,15 +131,20 @@ def ring_attention(
     partitions on separate cores (even work over the grid); the op merges them (ttnn.transformer.sdpa_k_split_merge)."""
     assert kv_cache.k.dtype == ttnn.bfloat8_b and kv_cache.v.dtype == ttnn.bfloat8_b
     sp = mesh_device.shape[sp_axis]
-    pc = program_config or ring_program_config(
+    cfg = lambda ks: ring_program_config(
         mesh_device,
         sliding=window is not None,
         q_local=tt_q.shape[2],
         kv_local=kv_cache.max_seq_len // sp,
-        k_split=k_split,
+        k_split=ks,
         two_level=two_level,
         two_level_fold=two_level_fold,
     )
+    if program_config is None:
+        base = cfg(1)
+        grid = base.compute_with_storage_grid_size
+        k_split = schedulable_k_split(k_split, tt_q.shape[1], tt_q.shape[2], base.q_chunk_size, grid.x * grid.y)
+    pc = program_config or cfg(k_split)
     ckc = compute_kernel_config or compute_config(mesh_device)
     tp = mesh_device.shape[1 - sp_axis]
     n_kv = kv_cache.n_kv_local * tp

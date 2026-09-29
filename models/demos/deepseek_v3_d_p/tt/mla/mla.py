@@ -1815,6 +1815,12 @@ class ttMLA:
 
         heads_local = self.num_heads // self.tp_factor
         if n_local not in self._expanded_gather_bufs:
+            # one live pair: every prefix length needs its own gather shape, so free the previous pair (the queue
+            # orders its last use before any reuse of the memory) instead of keeping one per length (quadratic growth)
+            for old_bufs in self._expanded_gather_bufs.values():
+                for t in old_bufs:
+                    ttnn.deallocate(t)
+            self._expanded_gather_bufs.clear()
             self._expanded_gather_bufs[n_local] = tuple(
                 ttnn.empty(
                     [1, heads_local, n_local * self.sp_factor, d],

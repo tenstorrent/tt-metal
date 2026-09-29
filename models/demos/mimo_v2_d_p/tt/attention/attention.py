@@ -225,7 +225,9 @@ class TtAttention:
             ccl_manager=self.ccl,
             sp_axis=self.sp_axis,
             scale=self.scale,
-            k_split=default_k_split(self.window, S_local, kv_actual, sp, forced=self.sdpa_k_split),
+            k_split=default_k_split(
+                self.window, S_local, kv_actual, sp, forced=self.sdpa_k_split, n_kv_local=kv_cache.n_kv_local
+            ),
             two_level=self.options.sdpa_two_level,
             two_level_fold=self.options.sdpa_two_level_fold,
         )

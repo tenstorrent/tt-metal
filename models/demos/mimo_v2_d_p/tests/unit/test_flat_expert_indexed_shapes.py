@@ -198,3 +198,24 @@ def test_flat_expert_indexed_perf(device, case):
             missing.append(mode)
     if missing:
         pytest.skip(f"no baseline for {tag} {missing}; add them to _PERF_EXPECTED_NS")
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_flat_expert_x_page_straddle_rejected(device, expect_error):
+    """x pages that are neither a multiple nor a divisor of the relay's 2 KB read segment would make a segment read
+    run past its page into the wrong bank: H 7168 with 2 pages per row (7 KB pages) must be rejected."""
+    case = CASES[1]  # k2, H 7168
+    tag, H, I, E, m, NG = case
+    op, gids = _op(device, case)
+    counts = _counts(E, m, 1)
+    d, _, _ = _indexed_inputs(device, case, gids, counts, 1)
+    x2 = ttnn.from_torch(
+        torch.randn(m * 2, H // 2),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "read segment"):
+        op(x2, d["counts"], d["regions"], token_index=d["tok"], x_pages_per_row=2)

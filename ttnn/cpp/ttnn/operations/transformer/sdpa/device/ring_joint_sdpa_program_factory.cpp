@@ -2344,7 +2344,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Production Minimax3 GQA has one local K/V head per chip (B=1, NHK=NHV=1). In that case every
         // active Q-head core consumes the same K and V chunks, so use row-wide multicast instead
         // of the store-and-forward grouped chain. Idle cores in an active row participate in padded iterations.
-        if (NHK != 1) {
+        if (K_SPLIT > 1) {
+            // Partitions read different K chunks (k % K_SPLIT == p): a row-wide multicast of one stream would feed
+            // cores of other partitions K chunks they skip, so they never signal the injector (deadlock). The
+            // per-(partition, KV head) grouped chains built above stay in place.
+            gqa_mcast_fallback_reason = "K split (partitions read disjoint K chunks)";
+        } else if (NHK != 1) {
             gqa_mcast_fallback_reason = "NHK != 1 (multi-KV-head GQA mcast not supported)";
         } else if (num_cores < 2) {
             gqa_mcast_fallback_reason = "num_cores < 2";
