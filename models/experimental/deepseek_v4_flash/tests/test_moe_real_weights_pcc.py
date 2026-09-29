@@ -47,7 +47,7 @@ from loguru import logger
 from tracy import signpost
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.moe import (
+from models.experimental.deepseek_v4_flash.tt.decode.moe import (
     DeepSeekV4PreloadedExperts,
     DeepSeekV4SparseMoeBlock,
     _swiglu_cols_per_core,

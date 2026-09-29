@@ -1246,7 +1246,7 @@ def test_matmul_decode_packed_weights(device, m):
 
     The model keeps its resident decode weights in a single bfloat4_b tensor, HEIGHT sharded
     across the chip with one equal-sized, one-tile-wide shard per core (see
-    models/experimental/deepseek_v4_flash/tt/l1_weights.py). Every core's shard is the
+    models/experimental/deepseek_v4_flash/tt/decode/l1_weights.py). Every core's shard is the
     concatenation of the tile streams of the weight slabs that core owns, zero-padded so all
     shards match; each matmul then receives the fused tensor plus a
     ``MatmulDecodePackedWeightSpec`` locating its region (tile offset, [K, N], cores, cut).
@@ -1363,7 +1363,7 @@ def test_matmul_decode_packed_weights(device, m):
 def test_matmul_decode_deepseek_layer_packed_weights(device):
     """All 13 non-expert linear matmuls in one DeepSeek-V4 CSA layer, packed into one BF4 L1 tensor.
 
-    This mirrors the one-layer subset of deepseek_v4_flash/tt/l1_placement.py:
+    This mirrors the one-layer subset of deepseek_v4_flash/tt/decode/l1_placement.py:
 
       Z0 cores 0-63:    q_a, q_b, compressor.gate, o_b
       Z1 cores 64-95:   compressor.kv, grouped o_a, attn_hc.fn, ffn_hc.fn

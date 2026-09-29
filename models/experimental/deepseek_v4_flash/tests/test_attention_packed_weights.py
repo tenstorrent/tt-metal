@@ -8,10 +8,10 @@ import pytest
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.attention import DeepSeekV4Attention
-from models.experimental.deepseek_v4_flash.tt.hyperconnection import DeepSeekV4HyperConnection
-from models.experimental.deepseek_v4_flash.tt.l1_weights import build_l1_weight_tensor, shard_layout
-from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4MLP, DeepSeekV4TopKRouter
+from models.experimental.deepseek_v4_flash.tt.decode.attention import DeepSeekV4Attention
+from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import DeepSeekV4HyperConnection
+from models.experimental.deepseek_v4_flash.tt.decode.l1_weights import build_l1_weight_tensor, shard_layout
+from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4MLP, DeepSeekV4TopKRouter
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

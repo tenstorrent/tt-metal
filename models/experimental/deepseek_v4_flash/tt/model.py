@@ -42,7 +42,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from .attention import (
+from .decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
     CSA_MAX_COMPRESSED_ENTRIES,
     PAGED_KV_LAYER_TYPES,
@@ -51,9 +51,9 @@ from .attention import (
     dense_kv_context_limit,
     dense_kv_rows,
 )
-from .attention_csa import _scatter_window_rows
-from .decode_prefetch import make_decode_prefetch_buffers
-from .paged_cache import (
+from .decode.attention_csa import _scatter_window_rows
+from .decode.decode_prefetch import make_decode_prefetch_buffers
+from .decode.paged_cache import (
     PagedCacheFull,
     PagedGroup,
     PagedKVManager,
@@ -62,11 +62,11 @@ from .paged_cache import (
     plan_pool_blocks,
 )
 from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
-from .decoder_layer import DeepSeekV4DecoderLayer
+from .decode.decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
-from .hyperconnection import DeepSeekV4HyperHead
+from .decode.hyperconnection import DeepSeekV4HyperHead
 from .layers import DeepSeekV4RMSNorm
-from .moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
+from .decode.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .quant import dequantize_weight
 from .system_config import SystemConfig, load_system_config, set_active_system_config
 from .weight_cache import WeightCache, _as_cache
@@ -252,7 +252,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1
         per receiver core for the whole model rather than per layer, and the prefetcher stays
         on under TP for every projection whose per-rank B-core count still matches that GCB
-        (see :class:`~.attention.DeepSeekV4Attention`).
+        (see :class:`~.decode.attention.DeepSeekV4Attention`).
 
         ``system_config`` is the per-machine tuning profile (see :mod:`.system_config`); it
         defaults to the one matching ``full_device``'s device count and supplies every
@@ -1069,7 +1069,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
     #     plus a ``page_table`` tensor per (submesh, layer type). Switching sessions rewrites
     #     the table's *contents* with that session's logical->physical block row, so blocks
     #     are handed out on demand and N conversations share a total token budget instead of
-    #     reserving ``N x max_context`` (see :mod:`.paged_cache`).
+    #     reserving ``N x max_context`` (see :mod:`.decode.paged_cache`).
     #   * The compressor window buffers (one window of projections, a few KB) stay dense and
     #     are copied in and out of the trace-addressed buffers when the seated batch changes
     #     -- which a round-robin over batches does every step, so the copy is held to one per
@@ -1637,7 +1637,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         concurrent conversations sharing the budget. Everything a session needs is allocated
         here, before any trace exists, because allocating on a device that holds a trace is
         unsafe; :meth:`open_session` then only claims a slot, and ``block_size`` sets the
-        same row count for every layer type (see :func:`.paged_cache.build_groups`).
+        same row count for every layer type (see :func:`.decode.paged_cache.build_groups`).
 
         ``batch`` > 1 decodes that many users per step, one per slot: the packet carries a
         token each, every cache and page table gains a leading user dimension, and a step

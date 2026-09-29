@@ -23,7 +23,7 @@ by its own paged KV cache, and ``/user N`` switches between them mid-session:
     you[1]> write me a haiku about cache coherence
 
 The KV caches are *paged*: every layer reads its cache through a pool of
-fixed-size blocks plus a per-user page table (``tt/paged_cache.py``), so all users
+fixed-size blocks plus a per-user page table (``tt/decode/paged_cache.py``), so all users
 share one captured decode trace -- switching users rewrites a page table rather
 than the cache -- and blocks are handed out on demand, letting the users share one
 token budget (``--total-context``) instead of reserving a full context each. A
@@ -66,7 +66,7 @@ import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
-from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull, round_context
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import PagedCacheFull, round_context
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader

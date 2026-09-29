@@ -3,7 +3,7 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpost, width_sharded_l1_config
+from ..common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpost, width_sharded_l1_config
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     KV_GCB,
@@ -17,15 +17,15 @@ from .decode_prefetch import (
     q_a_page_bytes,
     router_gate_page_bytes,
 )
-from .layers import (
+from ..layers import (
     BatchedLinearDecode,
     DeepSeekV4RMSNorm,
     LinearDecode,
     _core_grid_contains,
 )
 from .paged_cache import PagedLayerView
-from .system_config import active_system_config
-from .weight_cache import WeightCache, _as_cache, _load_weight
+from ..system_config import active_system_config
+from ..weight_cache import WeightCache, _as_cache, _load_weight
 
 
 def _decode_activation(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -685,7 +685,7 @@ def _compressor_projections(
 ):
     """The compressor's ``(kv_proj, gate_proj)``, both projecting the block's ``hidden``.
 
-    Returns two :class:`~.layers.LinearDecode` per compressor: a full-width hub-mode
+    Returns two :class:`~..layers.LinearDecode` per compressor: a full-width hub-mode
     ``matmul_decode`` taking the decode all-gather replica as A (``[T, D]`` ROW_MAJOR
     HEIGHT_SHARDED, ``T`` = shard height) against a DRAM ND-sharded weight ``[D, N]``,
     with ``N = Dh`` for HCA and ``2*Dh`` for CSA's Ca/Cb pair -- which is why the layout

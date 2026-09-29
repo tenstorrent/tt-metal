@@ -1,6 +1,6 @@
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.decode_prefetch import (
+from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     DECODE_GCB_GROUP,
     DECODE_LAYOUTS,
     HC_FN_GCB,
@@ -9,7 +9,7 @@ from models.experimental.deepseek_v4_flash.tt.decode_prefetch import (
     decode_prefetch_page_bytes,
     hc_fn_ring_specs,
 )
-from models.experimental.deepseek_v4_flash.tt.l1_placement import placement_for
+from models.experimental.deepseek_v4_flash.tt.decode.l1_placement import placement_for
 from models.experimental.deepseek_v4_flash.tt.layers import (
     LinearDecode,
     decode_weight_layout,

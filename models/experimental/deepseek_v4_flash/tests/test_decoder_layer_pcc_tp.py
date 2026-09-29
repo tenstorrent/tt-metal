@@ -35,13 +35,13 @@ from models.experimental.deepseek_v4_flash.tests.test_decoder_layer_pcc import (
     _weight_cache,
 )
 from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
-from models.experimental.deepseek_v4_flash.tt.attention import (
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     int32_pos_tensor,
     make_rope_table,
 )
-from models.experimental.deepseek_v4_flash.tt.decoder_layer import DeepSeekV4DecoderLayer
-from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers
-from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
+from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import DeepSeekV4DecoderLayer
+from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import make_decode_prefetch_buffers
+from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 

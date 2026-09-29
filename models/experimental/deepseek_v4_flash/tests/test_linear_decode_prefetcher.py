@@ -158,8 +158,8 @@ def test_shared_expert_prefetched_pcc(device):
     """
     from types import SimpleNamespace
 
-    from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers
-    from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4MLP
+    from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import make_decode_prefetch_buffers
+    from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4MLP
 
     tokens, hidden, inter = 32, 4096, 2048
     dtype = ttnn.bfloat16
