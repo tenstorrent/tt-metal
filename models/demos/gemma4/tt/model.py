@@ -1635,6 +1635,10 @@ class Gemma4Model:
             owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % lanes
             host = torch.zeros((lanes, int(pt.shape[-1])), dtype=torch.int32)
             host[owner] = pt[0]
+        elif rows == lanes and lanes != full:
+            # Lane-parallel prefill: one row per lane, shard as-is (each
+            # column sees its own [1, w] single-user table).
+            host = pt
         else:
             host = pt
             if rows < full:
@@ -1875,7 +1879,8 @@ class Gemma4Model:
             assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
             assert batch_size == 1, "lane_parallel runs single-user semantics per column"
             assert not trace_enabled, "lane_parallel prefill is eager-only"
-            assert chunk_page_table is None, "lane_parallel prefill is single-chunk"
+            # Multi-chunk lane prefill passes a pre-stacked chunk table
+            # ([lanes, rows, chunk_blocks], flattened below like page_table).
             if self.hidden_size_per_layer_input:
                 raise NotImplementedError("lane_parallel prefill does not support PLI models")
             lanes = self.mesh_config.lanes
@@ -1952,7 +1957,12 @@ class Gemma4Model:
         if chunk_page_table is not None:
             cpt_mapper = mesh_mapper
             if lane_sharded:
-                chunk_page_table = _lane_stack(chunk_page_table)
+                if lane_parallel:
+                    # Pre-stacked per-lane chunk tables: flatten for the same
+                    # 2-D-per-column reason as page_table.
+                    chunk_page_table = chunk_page_table.reshape(-1, chunk_page_table.shape[-1])
+                else:
+                    chunk_page_table = _lane_stack(chunk_page_table)
                 cpt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
