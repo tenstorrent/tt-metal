@@ -1669,6 +1669,79 @@
   "started": "2026-09-29T11:58:58",
   "status": "PASS"
  },
+ "C.moe_full.ffn_hc": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "4ad208ae-c58d-406a-a740-a5c3af4e25ee"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_full.ffn_hc.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_full.ffn_hc.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 333.5,
+    "session_id": "4ad208ae-c58d-406a-a740-a5c3af4e25ee",
+    "t": "2026-09-29T12:22:37"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 24.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T12:23:53"
+   }
+  ],
+  "last_run": "2026-09-29T12:23:53",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.moe_full.ffn_hc.log",
+  "metrics": {
+   "ffn_x_rel_l2_ffn_hc_L01": 0.00135123694781214,
+   "ffn_x_worst_row_rel_l2_ffn_hc_L01": 0.005180650856345892,
+   "max_col_rel_l2_ffn_hc_L01": 0.007466705981642008,
+   "out_max_stream_rel_l2_ffn_hc_L01": 0.0025780510623008013,
+   "out_worst_row_rel_l2_ffn_hc_L01": 0.0063000088557600975,
+   "pcc_ffn_hc_L01": 0.9999989020235706,
+   "post_worst_row_rel_l2_ffn_hc_L01": 0.009268059395253658,
+   "rel_l2_ffn_hc_L01": 0.0013250155607238412
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T12:23:28",
+  "status": "PASS"
+ },
  "C.moe_full.indexer": {
   "agent": {
    "defs": {
