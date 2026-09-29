@@ -24,41 +24,6 @@
 
 namespace cmbf2d {
 
-struct UntilizerRtArgManager;
-
-struct UntilizerRtArgs {
-    uint32_t dram_in;
-    uint32_t dram_counts;
-    uint32_t dram_region;
-    uint32_t dram_expert_offsets;
-
-private:
-    friend struct UntilizerRtArgManager;
-
-#ifdef KERNEL_BUILD
-    UntilizerRtArgs() :
-        dram_in(get_arg_val<uint32_t>(0)),
-        dram_counts(get_arg_val<uint32_t>(1)),
-        dram_region(get_arg_val<uint32_t>(2)),
-        dram_expert_offsets(get_arg_val<uint32_t>(3)) {}
-#else
-    UntilizerRtArgs() = default;
-#endif
-};
-
-struct UntilizerRtArgManager {
-#ifndef KERNEL_BUILD
-    explicit UntilizerRtArgManager(const op::DramBuffers& dram) : dram_(dram) {}
-
-    void setup_rt_args(tt::tt_metal::KernelDescriptor& kernel_desc, const tt::tt_metal::CoreCoord& core) const {
-        kernel_desc.emplace_runtime_args(core, {dram_.in, dram_.counts, dram_.region, dram_.expert_offsets});
-    }
-
-private:
-    op::DramBuffers dram_;
-#else
-    static UntilizerRtArgs get_rt_args() { return UntilizerRtArgs(); }
-#endif
-};
+#include "combine_fabric2d_untilizer_rt_args_body.hpp"
 
 }  // namespace cmbf2d

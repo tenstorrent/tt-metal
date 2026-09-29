@@ -24,52 +24,6 @@
 
 namespace cmbf2d {
 
-#ifdef KERNEL_BUILD
-inline uint32_t get_rt_arg(uint32_t idx) { return get_arg_val<uint32_t>(idx); }
-#endif
-
-struct ReaderRtArgManager;
-
-struct ReaderRtArgs {
-    uint32_t dram_in;
-    uint32_t dram_out;
-    uint32_t dram_fwd;
-    uint32_t dram_meta;
-    uint32_t dram_counts;
-    uint32_t dram_region;
-    uint32_t dram_expert_offsets;
-
-private:
-    friend struct ReaderRtArgManager;
-
-#ifdef KERNEL_BUILD
-    ReaderRtArgs() :
-        dram_in(get_rt_arg(0)),
-        dram_out(get_rt_arg(1)),
-        dram_fwd(get_rt_arg(2)),
-        dram_meta(get_rt_arg(3)),
-        dram_counts(get_rt_arg(4)),
-        dram_region(get_rt_arg(5)),
-        dram_expert_offsets(get_rt_arg(6)) {}
-#else
-    ReaderRtArgs() = default;
-#endif
-};
-
-struct ReaderRtArgManager {
-#ifndef KERNEL_BUILD
-    explicit ReaderRtArgManager(const op::DramBuffers& dram) : dram_(dram) {}
-
-    void setup_rt_args(tt::tt_metal::KernelDescriptor& kernel_desc, const tt::tt_metal::CoreCoord& core) const {
-        kernel_desc.emplace_runtime_args(
-            core, {dram_.in, dram_.out, dram_.fwd, dram_.meta, dram_.counts, dram_.region, dram_.expert_offsets});
-    }
-
-private:
-    op::DramBuffers dram_;
-#else
-    static ReaderRtArgs get_rt_args() { return ReaderRtArgs(); }
-#endif
-};
+#include "combine_fabric2d_reader_rt_args_body.hpp"
 
 }  // namespace cmbf2d
