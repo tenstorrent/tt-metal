@@ -11,9 +11,8 @@ number comes from the summaries; the AI summary, if any, is inserted later at
 """
 
 import json
+import math
 from pathlib import Path
-
-from accuracy import CLASSES
 
 from perf import ROWS_PER_TILE
 
@@ -56,7 +55,8 @@ def _flag(cell):
 def _bold_if_better(new, old, lower_is_better=True):
     if new is None or old is None:
         return _num(new)
-    better = new < old if lower_is_better else new > old
+    new_r, old_r = round(new), round(old)
+    better = new_r < old_r if lower_is_better else new_r > old_r
     return f"**{_num(new)}**" if better else _num(new)
 
 
@@ -83,11 +83,33 @@ def perf_section(summaries):
                 rows.append(
                     ((s["arch"], row["op"], i, o, row["approx"], row["dest_acc"]), row)
                 )
-    any_row = bool(rows)
-    for key, _, cells in _merge_approx(rows, _perf_cells):
-        lines.append(_row_prefix(key) + "| " + " | ".join(cells) + " |")
-    if not any_row:
+    header = lines[-2:]
+    main, rest = [], []
+    for key, row, cells in _merge_approx(rows, _perf_cells):
+        # The main table: every row that moved, plus each op's bf16 rows so the
+        # op's cost is always visible. The rest (the other format pairs of an
+        # unchanged op) folds away.
+        moved = any(
+            row.get(rt, {}).get("regression") or row.get(rt, {}).get("improvement")
+            for rt in ("MATH_ISOLATE", "L1_TO_L1")
+        )
+        primary = key[2] == key[3] == "Float16_b"
+        (main if moved or primary else rest).append(
+            _row_prefix(key) + "| " + " | ".join(cells) + " |"
+        )
+    lines += main
+    if not rows:
         lines.append("| – | no op was measured | | | | | | | | | |")
+    if rest:
+        lines += [
+            "",
+            f"<details><summary>{len(rest)} more format combination(s), none beyond the thresholds</summary>",
+            "",
+            *header,
+            *rest,
+            "",
+            "</details>",
+        ]
     lines += ["", _loadmacro_note(summaries), ""]
     return lines
 
@@ -171,13 +193,19 @@ def _merge_approx(rows, cells):
     )
 
 
+def _acc_regressed(rec):
+    """Worse overall: a higher max, more lanes worse than better, or new non-finite."""
+    b, h = rec["base"], rec["head"]
+    return (
+        h["max"] > b["max"]
+        or rec["worse"] > rec["better"]
+        or h["nonfinite"] > b["nonfinite"]
+    )
+
+
 def _acc_cells(rec):
     b, h = rec["base"], rec["head"]
-    flag = (
-        "⚠️ "
-        if h["max"] > b["max"] or rec["worse"] > 0 or h["nonfinite"] > b["nonfinite"]
-        else ""
-    )
+    flag = "⚠️ " if _acc_regressed(rec) else ""
     return (
         _num(b["max"]),
         f"{flag}{_bold_if_better(h['max'], b['max'])}",
@@ -245,64 +273,90 @@ def accuracy_section(summaries):
     return lines + [""]
 
 
-def _class_cell(spec, cls):
-    if cls not in spec:
-        return "–"
-    c = spec[cls]
-    return "✅" if not c["failures"] else f"❌ {len(c['failures'])}/{c['inputs']}"
+def _val(x):
+    if x != x:
+        return "nan"
+    if x == 0:
+        return "-0" if math.copysign(1.0, x) < 0 else "0"
+    return f"{x:.9g}"
+
+
+def _kind(x):
+    """The part of a result that a changed value rarely should change."""
+    if x != x:
+        return "nan"
+    if math.isinf(x):
+        return "+inf" if x > 0 else "-inf"
+    if x == 0:
+        return "-0" if math.copysign(1.0, x) < 0 else "+0"
+    return "+" if x > 0 else "-"
 
 
 def edge_section(summaries):
-    rows, examples, clean = [], [], 0
+    """What the hardware returns for the special inputs, where the PR changed it."""
+    severe, minor, nan_lost, nan_gained, total = [], [], [], [], 0
     for s in summaries:
         for rec in s["accuracy"]:
             sp = rec.get("specials")
             if not sp:
                 continue
-            cells, interesting = [], False
-            for cls in CLASSES:
-                old, new = _class_cell(sp["base"], cls), _class_cell(sp["head"], cls)
-                regressed = new != old and new.startswith("❌")
-                interesting |= old != "✅" or new != "✅"
-                cells.append(
-                    ("⚠️ " if regressed else "")
-                    + (old if old == new else f"{old} → {new}")
+            total += 1
+            op, i, o, approx, dest = rec["key"]
+            where = f"{_ARCH[s['arch']]} | {op} | {_fmt_pair(f'{i}->{o}')} | {dest} | {approx}"
+            for c in sp["changed"]:
+                bad = _kind(c["old"]) != _kind(c["new"])
+                row = (
+                    f"| {where} | `{_val(c['input'])}` | `{_val(c['old'])}` | "
+                    f"{'⚠️ ' if bad else ''}`{_val(c['new'])}` |"
                 )
-                if regressed:
-                    op, i, o, approx, dest = rec["key"]
-                    for x, g, r in sp["head"][cls]["failures"][:2]:
-                        examples.append(
-                            f"- {_ARCH[s['arch']]} `{op}` {_fmt_pair(f'{i}->{o}')} dest_acc={dest} approx={approx}: "
-                            f"`f({x:g})` = `{r:g}`, expected `{g:g}`"
-                        )
-            if interesting:
-                rows.append(((s["arch"], *rec["key"]), tuple(cells)))
-            else:
-                clean += 1
+                (severe if bad else minor).append(row)
+            nan = sp["nan_propagates"]
+            if nan["base"] and not nan["head"]:
+                nan_lost.append(where)
+            elif nan["head"] and not nan["base"]:
+                nan_gained.append(where)
+    header = [
+        "| arch | op | format | dest_acc | approx | input | old | new |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
     lines = [
         "### Edge cases",
         "",
-        "Inputs the sweep does not feed (NaN, ±inf, ±0, subnormals, the format's extremes), checked "
-        "against the reference: value, NaN-ness and sign must all match. `old → new`; a class failing "
-        "on both sides is pre-existing.",
+        "What the hardware returns for inputs the sweep does not feed: NaN, ±inf, ±0, subnormals, and "
+        "the format's largest and smallest normal values, where the PR changed it. ⚠️ = the result "
+        "changed kind (finite ↔ NaN/inf, sign, zero).",
         "",
     ]
-    if rows:
-        lines += [
-            "| arch | op | format | dest_acc | approx | " + " | ".join(CLASSES) + " |",
-            "|---|---|---|---|---|" + "---|" * len(CLASSES),
-            *[
-                _row_prefix(k) + "| " + " | ".join(cells) + " |"
-                for k, _, cells in _merge_approx(rows, lambda c: c)
-            ],
-        ]
-    if clean:
+    if severe:
+        lines += header + severe[:40]
+        if len(severe) > 40:
+            lines.append(f"| … | {len(severe) - 40} more in the artifact | | | | | | |")
+    elif not minor:
+        lines.append(f"No special-input result changed across the {total} variant(s).")
+    else:
+        lines.append("No special-input result changed kind.")
+    if minor:
         lines += [
             "",
-            f"All classes match the reference on both sides for the other {clean} variant(s).",
+            f"<details><summary>{len(minor)} special-input result(s) changed value only</summary>",
+            "",
+            *header,
+            *minor[:60],
+            "",
+            "</details>",
         ]
-    if examples:
-        lines += ["", "New failures:", *examples[:12]]
+    if nan_lost:
+        lines += [
+            "",
+            "⚠️ NaN input no longer returns NaN: "
+            + "; ".join(f"`{w}`" for w in nan_lost[:10]),
+        ]
+    if nan_gained:
+        lines += [
+            "",
+            "NaN input now returns NaN (it did not before): "
+            + "; ".join(f"`{w}`" for w in nan_gained[:10]),
+        ]
     return lines + [""]
 
 
@@ -404,7 +458,37 @@ def render(summaries):
     parts += cross_arch_section(summaries)
     parts += notes_section(summaries)
     parts += footer(summaries)
-    return "\n".join(parts) + "\n"
+    return _fit("\n".join(parts) + "\n")
+
+
+#: A GitHub comment holds 65,536 characters; leave room for the AI summary and footer.
+MAX_CHARS = 60000
+
+
+def _fit(text):
+    """Keep the comment postable: fold <details> bodies first, then cut tables."""
+    if len(text) <= MAX_CHARS:
+        return text
+    import re
+
+    text = re.sub(
+        r"(<details><summary>.*?</summary>)\n.*?\n</details>",
+        r"\1\n\n(Too long for a comment: see the run's `llk-sfpu-report` artifact.)\n\n</details>",
+        text,
+        flags=re.S,
+    )
+    if len(text) <= MAX_CHARS:
+        return text
+    lines, out, size = text.split("\n"), [], 0
+    for line in lines:
+        if line.startswith("| ") and size + len(line) > MAX_CHARS - 500:
+            continue
+        out.append(line)
+        size += len(line) + 1
+    out.append(
+        "\n_Some table rows were cut to fit a comment; the artifact has all of them._"
+    )
+    return "\n".join(out)
 
 
 def main(argv=None):
