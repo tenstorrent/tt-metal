@@ -418,3 +418,24 @@ Watch: the block-out per-row ratio minimum vs golden drops with each swap (swap 
 ffn steps still to come (ffn_collapse, ffn_norm, mlp, ffn_residual) add noise to this same ratio.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_06_ffn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.ffn_collapse test (attempt 1)
+
+Reviewed the rendered component test for ffn_collapse (`sum_n pre[:, n] * h_mid[:, n]`, pre = ffn_hc[:, 0:4]). Rewrote
+it on the attn_collapse test's pattern: the gated PCC plus asserted checks, on layer 0 and again (same weightless
+module) on layer 1's golden.
+Sensitivity (CPU host script on the goldens, not kept), layer 0 PCC / rel L2 / ratio: h_mid's streams already differ
+at layer 0 (rel 0.6..1.5), so order bugs fail PCC there (pre reversed 0.919, stream-major rows 0.336, last stream
+dropped 0.891, pre 0/1 swapped 0.988). PCC passes mean instead of sum (0.999997 / 0.75), x1.02 (rel 0.020, ratio
+[1.018, 1.022]), x1.01 (0.0103, [1.008, 1.012]), last row zeroed (0.99993 / 0.012), and one row's pre reversed (rel
+0.0104, worst row 0.38).
+Noise: the golden's ffn_hc is bf16, so an exact fp32 reference already scores rel 0.0024. bf16 h_mid with fp32
+accumulation gives rel 0.0027 / worst row 0.0041 / ratio [0.9978, 1.0022]; all-bf16 0.0038..0.0047 / <= 0.0076 /
+[0.9974, 1.0024].
+Checks per layer: rel L2 <= 0.008, worst per-token rel L2 <= 0.03, per-token norm ratio [0.99, 1.01]. These are
+tighter than attn_collapse's 0.01 / [0.985, 1.015], because the noise here is small.
+Results: reference passes (PCC 0.999997; L0 rel 0.0024 / row 0.0039, L1 0.0032 / 0.0065). Stub fails (PCC 0). The
+device gate already passes through `TtHcCollapse` (hooks `_COLLAPSE_STEPS`): PCC 0.999996, L0 rel 0.0027 / row 0.0041 /
+[0.9978, 1.0022], L1 0.0036 / 0.0067 / [0.9977, 1.0024].
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
