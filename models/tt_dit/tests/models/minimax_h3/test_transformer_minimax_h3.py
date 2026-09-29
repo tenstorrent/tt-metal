@@ -448,6 +448,13 @@ def _prepare_tt_inputs(
         pytest.param(
             15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, None, id="golden_shape_full_depth_real_weights_bf8"
         ),
+        # bf8_out at depth 50 as well, not only at depth 2. Depth is the regime where narrowing one
+        # input of the fused addcmul epilogue could plausibly show, and it is the preset the largest
+        # supported canvas runs on, so measuring it only where this test just proved the error is
+        # understated a hundredfold would be measuring it where it cannot matter.
+        pytest.param(
+            15, 74, 448, (8, 8), (), "checkpoint_bf8_out", 50, None, id="golden_shape_full_depth_real_weights_bf8_out"
+        ),
         # THE PRODUCTION p150 PATH, which nothing measured numerically before: full depth, real
         # checkpoint, real published Turbo adapter, and the quantized weights the adapter is merged
         # into. The reference fuses alpha/rank * B@A into the plain torch weights, so the device
