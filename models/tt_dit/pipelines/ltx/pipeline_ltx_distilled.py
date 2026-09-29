@@ -1277,8 +1277,10 @@ class LTXDistilledPipeline(LTXPipeline):
             mesh_axes=[None, None, sp_axis, None],
             device=self.mesh_device,
         )
+        # fp32 per-channel stats: the host path applies them in fp32, and rounding them to bf16 alone costs
+        # ~0.4 % per channel on the stage-2 input.
         for key, v in (("mean", mean), ("std", std)):
-            io[key].update(v.reshape(1, 1, 1, -1).float(), False, device=self.mesh_device)
+            io[key].update(v.reshape(1, 1, 1, -1).float(), False, dtype=ttnn.float32, device=self.mesh_device)
         self._t12_io = io
         return io
 
@@ -1315,7 +1317,11 @@ class LTXDistilledPipeline(LTXPipeline):
         n_real = latent_frames * s1_h * s1_w
 
         x = ccl.all_gather(tokens, dim=2, mesh_axis=sp_axis, use_hyperparams=False)  # replicated tokens
+        # Same numerics as the host path: un-normalize in fp32, bf16 into the upsampler (the host uploads
+        # bf16), fp32 again for the re-normalize and the noise mix.
+        x = ttnn.typecast(x, ttnn.float32)
         x = ttnn.add(ttnn.multiply(x, std_t), mean_t)  # un-normalize (padded rows are garbage, sliced next)
+        x = ttnn.typecast(x, ttnn.bfloat16)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, n_real, C])
         x = ttnn.reshape(x, (latent_frames, s1_h, s1_w, C))  # THWC (B=1 folded)
@@ -1341,11 +1347,17 @@ class LTXDistilledPipeline(LTXPipeline):
         x = ttnn.slice(x, [0, 0, 0, 0], [latent_frames, 2 * s1_h, 2 * s1_w, C])
         x = ttnn.reshape(x, (1, 1, latent_frames * 2 * s1_h * 2 * s1_w, C))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        base = ttnn.multiply(ttnn.subtract(x, mean_t), ttnn.reciprocal(std_t))  # re-normalize
+        x = ttnn.typecast(x, ttnn.float32)
+        # Re-normalize with a true division, in fp32. Multiplying by the reciprocal is off by up to one fp32
+        # ulp from the host path's (x - mean) / std on a quarter of the elements; enough of those flip a bf16
+        # rounding in the noise mix that the 3-step distilled stage 2 renders a visibly different (though
+        # equally valid) sample, 36 dB PSNR_Y against the host path. With the division the galaxy ring run
+        # was bit-identical to it (PR #56839).
+        base = ttnn.divide(ttnn.subtract(x, mean_t), std_t)
         if video_N > video_N_real:
             base = ttnn.pad(base, [(0, 0), (0, 0), (0, video_N - video_N_real), (0, 0)], 0.0)
         base = ttnn.mesh_partition(base, dim=2, cluster_axis=sp_axis)
-        base32 = ttnn.typecast(base, ttnn.float32)
+        base32 = base if base.dtype == ttnn.float32 else ttnn.typecast(base, ttnn.float32)
         noise32 = ttnn.typecast(noise, ttnn.float32)
         lat = ttnn.add(ttnn.multiply(noise32, sigma), ttnn.multiply(base32, 1.0 - sigma))
         return ttnn.typecast(lat, ttnn.bfloat16)
