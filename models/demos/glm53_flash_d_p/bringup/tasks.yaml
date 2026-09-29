@@ -247,6 +247,13 @@ tasks:
     - attn_hc
     - attn_collapse
     layer: 0
+  frozen:
+    at: '2026-09-29T03:35:53'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_02_attn_collapse.py: 78ec6c1d2dee07b26318b41686a95ed76d4c35cf62e95ac153b3f1c0b7f9bcd1
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_dense.attn_norm
   title: kda_dense attn_norm (norm) on device, layer 0
   step: implement
