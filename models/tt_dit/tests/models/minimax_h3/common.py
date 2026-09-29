@@ -19,6 +19,7 @@ from models.common.utility_functions import is_blackhole
 from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 from ....utils.tensor import from_torch
 from ....utils.test import (
+    line_params_req_exact_devices,
     ring_params_4k_req_exact_devices,
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
@@ -145,6 +146,27 @@ MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
 
 GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
 
+# The two small Blackhole meshes: one p150 (or one chip of a p300, selected with
+# TT_METAL_VISIBLE_DEVICES) and the QB2's four chips on a line.
+#
+# `FABRIC_1D` rather than the Galaxy rows' `FABRIC_1D_RING`: neither shape closes a ring, and a ring
+# collective on a line fabric cannot resolve a forwarding direction. The 4 KB default router payload
+# is what these parts open with; the 8 KB request is a Galaxy-only tuning for the ring SDPA's fabric
+# all-gather, which SP=1 never reaches.
+#
+# `require_exact_physical_num_devices` separates them from each other and from the Galaxy rows, so a
+# QB2 collects only `1x4` and a `TT_METAL_VISIBLE_DEVICES=0` run collects only `1x1`.
+_line = {**line_params_req_exact_devices, "l1_small_size": _L1_SMALL}
+
+MESH_1X1_LINE = pytest.param((1, 1), _line, id="1x1", marks=_BH_ONLY)
+MESH_1X4_LINE = pytest.param((1, 4), _line, id="1x4", marks=_BH_ONLY)
+
+SMALL_MESHES = [MESH_1X1_LINE, MESH_1X4_LINE]
+
+# Every mesh MiniMax-H3 is expected to run on. Tests that only make sense on a Galaxy (ref2va, whose
+# arena caps do not fit a 32 GB part) keep `GALAXY_MESHES`.
+H3_MESHES = GALAXY_MESHES + SMALL_MESHES
+
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
     """Randomize every `nn.RMSNorm` affine in place, BEFORE taking `state_dict`: all-ones norms make norm-weight loading invisible to PCC."""
@@ -160,40 +182,54 @@ def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> to
 # rest, so 4x8 -> 4x32 moves only `sp_factor`, which every test body derives from `mesh_device.shape`.
 # `device_params` travels inside the tuple because the router payload differs per shape; crossing them
 # independently would pair a 4x8 mesh with the 4x32 router config.
-GALAXY_RING = pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        # 4x8 takes the 8 KB router payload like 4x32: sp_sim runs on it emulate the 4x32 machine,
-        # and the exp ring SDPA's fabric all-gather packs 4 tiles per packet only at 8 KB.
-        pytest.param(
-            (4, 8), 1, 0, 2, _ring_8k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0", marks=_BH_ONLY
-        ),
-        pytest.param(
-            (4, 32),
-            1,
-            0,
-            2,
-            _ring_8k_trace,
-            ttnn.Topology.Ring,
-            False,
-            id="4x32sp1tp0nl2_ring_is_fsdp0",
-            marks=_BH_ONLY,
-        ),
-        # Wormhole Galaxy, mirroring `MESH_4X8_RING_WH` and `_PRESETS_WH`: 4 links and the 4 KB router
-        # payload the WH meshes open with, on the 8x9 compute grid (against Blackhole's 12x10). Every
-        # blocking the model carries was swept on Blackhole, so this row is what measures the gap.
-        #
-        # Both FSDP settings are listed because the pipeline's default is still open: fsdp1 is what a
-        # 12 GB part actually runs at 10 s and 15 s, fsdp0 is the comparison point that separates the
-        # per-layer weight all-gather from the matmul cost.
-        pytest.param(
-            (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl4_ring_is_fsdp0", marks=_WH_ONLY
-        ),
-        pytest.param(
-            (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1", marks=_WH_ONLY
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+_GALAXY_RING_ROWS = [
+    # 4x8 takes the 8 KB router payload like 4x32: sp_sim runs on it emulate the 4x32 machine,
+    # and the exp ring SDPA's fabric all-gather packs 4 tiles per packet only at 8 KB.
+    pytest.param((4, 8), 1, 0, 2, _ring_8k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0", marks=_BH_ONLY),
+    pytest.param(
+        (4, 32),
+        1,
+        0,
+        2,
+        _ring_8k_trace,
+        ttnn.Topology.Ring,
+        False,
+        id="4x32sp1tp0nl2_ring_is_fsdp0",
+        marks=_BH_ONLY,
+    ),
+    # Wormhole Galaxy, mirroring `MESH_4X8_RING_WH` and `_PRESETS_WH`: 4 links and the 4 KB router
+    # payload the WH meshes open with, on the 8x9 compute grid (against Blackhole's 12x10). Every
+    # blocking the model carries was swept on Blackhole, so this row is what measures the gap.
+    #
+    # Both FSDP settings are listed because the pipeline's default is still open: fsdp1 is what a
+    # 12 GB part actually runs at 10 s and 15 s, fsdp0 is the comparison point that separates the
+    # per-layer weight all-gather from the matmul cost.
+    pytest.param((4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl4_ring_is_fsdp0", marks=_WH_ONLY),
+    pytest.param((4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1", marks=_WH_ONLY),
+]
+
+# Small-mesh rows. Both have `sequence_parallel.factor == 1`, so `MiniMaxH3Attention.use_ring` is
+# false and attention is plain SDPA -- the configuration the pad-row window exists for.
+#
+#   * 1x1: no parallelism at all. tp_axis 0 and sp_axis 1 are both size 1; the assignment matches
+#     `_PRESETS_BH[(1, 1)]` and is otherwise arbitrary. 1 link, because a 1-device mesh has no
+#     fabric to put links on.
+#   * 1x4: TP takes the whole mesh on axis 1 (56 heads / 4 = 14, and 5376 % (32 * 4) == 0), SP is the
+#     size-1 axis 0. Same axes as Wan's `(1, 4)` preset, 2 links on the line.
+_SMALL_LINE_ROWS = [
+    pytest.param((1, 1), 1, 0, 1, _line, ttnn.Topology.Linear, False, id="1x1sp1tp0nl1_line_is_fsdp0", marks=_BH_ONLY),
+    pytest.param((1, 4), 0, 1, 2, _line, ttnn.Topology.Linear, False, id="1x4sp0tp1nl2_line_is_fsdp0", marks=_BH_ONLY),
+]
+
+_MESH_PARALLEL_FIELDS = ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp")
+_INDIRECT = ["mesh_device", "device_params"]
+
+GALAXY_RING = pytest.mark.parametrize(_MESH_PARALLEL_FIELDS, _GALAXY_RING_ROWS, indirect=_INDIRECT)
+# Small meshes only, for the checks that are specifically about the SP=1 path.
+SMALL_LINE_PARALLEL = pytest.mark.parametrize(_MESH_PARALLEL_FIELDS, _SMALL_LINE_ROWS, indirect=_INDIRECT)
+# Galaxy + small meshes. `require_exact_physical_num_devices` picks exactly one row per cluster.
+H3_MESH_PARALLEL = pytest.mark.parametrize(
+    _MESH_PARALLEL_FIELDS, _GALAXY_RING_ROWS + _SMALL_LINE_ROWS, indirect=_INDIRECT
 )
 
 REAL_BLOCK_CONFIG = dict(

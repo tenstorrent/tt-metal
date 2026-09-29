@@ -21,7 +21,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
-from .common import GALAXY_MESHES, create_fractal_image
+from .common import H3_MESHES, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -46,7 +46,7 @@ SEED = 0
 PROMPT = CALIBRATED_FOX_PROMPT
 
 # Ring collectives require FABRIC_1D_RING.
-MESHES = GALAXY_MESHES
+MESHES = H3_MESHES
 
 # calibrated 2026-08-04, fox prompt, seed 0
 ANCHOR_PCC_FLOOR = 0.95

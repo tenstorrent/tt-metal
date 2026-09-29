@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from .common import GALAXY_MESHES
+from .common import H3_MESHES
 from .common_av import weights_dir
 
 HEIGHT, WIDTH = 768, 1344
@@ -25,7 +25,7 @@ def _noise_image(seed: int) -> Image.Image:
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), H3_MESHES, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("num_keyframes", [1, 2], ids=["one_keyframe", "two_keyframes"])
 def test_encode_prompt_vision_sp_tower(mesh_device, num_keyframes):
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir(), warmup=False)

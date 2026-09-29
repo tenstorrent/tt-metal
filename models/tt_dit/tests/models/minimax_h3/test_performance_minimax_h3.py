@@ -25,7 +25,7 @@ from ....pipelines.minimax_h3.packing_ref2va import (
     reference_from_video_file,
 )
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from .common import GALAXY_MESHES, create_fractal_image
+from .common import H3_MESHES, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -60,7 +60,7 @@ SWEEP = [
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), H3_MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     pretest_user_repl()
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
@@ -145,7 +145,7 @@ REF2VA_AUDIO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1
 _REF2VA_L1_SMALL = 16384
 REF2VA_MESHES = [
     pytest.param(shape, {**params, "l1_small_size": _REF2VA_L1_SMALL}, id=param.id, marks=param.marks)
-    for param in GALAXY_MESHES
+    for param in H3_MESHES
     for shape, params in [param.values]
 ]
 
