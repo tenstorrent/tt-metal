@@ -1078,7 +1078,25 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         for name, spec in case["kwargs"].items()
     }
 
-    out = op(*args, **kwargs)
+    # Captured cases were recorded on an 8x8 (64-core) N150; many pin a grid or allocate buffers that do not
+    # fit the 2-compute-node Quasar emulator. Some of those mismatches are only discovered inside the op (a grid
+    # derived from num_heads, a program-config grid, or an L1 allocation), AFTER build_memory_config's shard-grid
+    # pre-check has passed -- so convert those specific device-too-small FATALs into a skip rather than a failure.
+    # (Errors that are not clearly a device-size mismatch still propagate.)
+    try:
+        out = op(*args, **kwargs)
+    except RuntimeError as e:
+        msg = str(e)
+        _too_small = (
+            "Target number of cores" in msg  # e.g. nlp_concat_heads_decode num_heads(32) > device cores
+            or "must not contain more cores than the device" in msg  # SDPA program-config grid > device
+            or "exceeds grid size" in msg
+            or "Out of Memory" in msg  # e.g. concat output/intermediate L1 > 2-bank capacity
+            or "Not enough space to allocate" in msg
+        )
+        if _too_small:
+            pytest.skip(f"captured case does not fit this device (grid/memory): {msg.splitlines()[0][:200]}")
+        raise
 
     _check_output(out, case, mesh_device, op_name)
 
