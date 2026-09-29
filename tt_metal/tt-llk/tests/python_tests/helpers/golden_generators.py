@@ -709,14 +709,11 @@ def quantize_mx_tensor_chunked(
 def quantize_input_to_unpack_format(
     operand: torch.Tensor,
     input_format: Optional[DataFormat],
-    *,
-    all_mx_formats: bool = False,
 ) -> torch.Tensor:
     """
     Quantize input stimuli to match the values visible after hardware unpack.
 
-    Some callers only model MXFP4 today; keep that as the default and let broader
-    MX golden paths opt in explicitly.
+    Model Bfp2_b, Bfp4_b, Bfp8_b, and all MX input formats; pass other formats through.
     """
     if input_format == DataFormat.Bfp2_b:
         return _bfp2b_to_float16b(operand)
@@ -725,9 +722,7 @@ def quantize_input_to_unpack_format(
     if input_format == DataFormat.Bfp8_b:
         return _bfp8b_to_float16b(operand)
     if input_format is not None and input_format.is_mx_format():
-        if all_mx_formats or input_format == DataFormat.MxFp4:
-            return quantize_mx_tensor_chunked(operand, input_format)
-        return operand
+        return quantize_mx_tensor_chunked(operand, input_format)
     return operand
 
 
@@ -1787,9 +1782,7 @@ class DataCopyGolden:
         torch_format = format_dict[data_format]
 
         # Quantize input to match what hardware actually sees after unpack from L1.
-        operand1 = quantize_input_to_unpack_format(
-            operand1, input_format, all_mx_formats=True
-        )
+        operand1 = quantize_input_to_unpack_format(operand1, input_format)
 
         height, width = input_dimensions[0], input_dimensions[1]
 
@@ -1899,9 +1892,7 @@ class TypecastGolden:
         output_format: DataFormat,
         input_dimensions: list[int] = [32, 32],
     ):
-        operand = quantize_input_to_unpack_format(
-            operand, input_format, all_mx_formats=True
-        )
+        operand = quantize_input_to_unpack_format(operand, input_format)
         if not isinstance(operand, torch.Tensor):
             operand = torch.tensor(operand)
 
@@ -2475,9 +2466,7 @@ class UnarySFPUGolden:
         # Quantize input to match what hardware actually sees after unpack from L1.
         # Matters most for discontinuous ops (floor/ceil/trunc/frac), where a sub-ULP
         # quantization step across an integer becomes a full 1.0 error.
-        operand1 = quantize_input_to_unpack_format(
-            operand1, input_format, all_mx_formats=True
-        )
+        operand1 = quantize_input_to_unpack_format(operand1, input_format)
 
         # Column and Row reduction process the entire tensor, so they return before the
         # element-wise path below and apply their own Dest write and pack steps -- see
@@ -4929,9 +4918,7 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(
-            operand, input_format, all_mx_formats=True
-        )
+        operand = quantize_input_to_unpack_format(operand, input_format)
 
         result = untilize_block(
             operand,

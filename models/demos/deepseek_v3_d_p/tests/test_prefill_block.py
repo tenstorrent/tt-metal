@@ -668,10 +668,10 @@ GLM_BLOCK_OUTPUT_PCC = 0.98
 
 
 def _first_full_moe_layer(config):
-    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.2 "shared" indexer
+    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.3 "shared" indexer
     # layer reuses a prior full layer's top-k, which an isolated single block cannot supply; a full
     # layer computes its own. glm_5_1 has no indexer_types -> every layer is full -> returns
-    # first_k_dense_replace (3). glm_5_2 layers 3-5 are shared -> returns 6.
+    # first_k_dense_replace (3). glm_5_3 layers 3-5 are shared -> returns 6.
     idx = config.first_k_dense_replace
     while indexer_layer_is_reused(config, idx):
         idx += 1
@@ -772,7 +772,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block(
@@ -791,9 +791,9 @@ def test_glm_prefill_block(
     is_moe = layer_type == "moe"
     config = config_only
     config.max_seq_len = seq_len
-    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.2 "shared"
+    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.3 "shared"
     # indexer layer reuses a prior full layer's indices, which an isolated single block cannot supply
-    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_2 -> 6 (3-5 shared).
+    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_3 -> 6 (3-5 shared).
     layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
     sp_axis, tp_axis = 0, 1
@@ -889,7 +889,7 @@ def test_glm_prefill_block(
     # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
     # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
-    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_3 cross-layer reuse — matching the
     # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len

@@ -19,7 +19,6 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -294,10 +293,14 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
+        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
+            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -305,6 +308,19 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        // Snapshot the env once: includes() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+        // TODO: Use UMD supplied variant instead of env var
+        // defaults to Quasar if no variant is set
+        if (quasar_variant != nullptr && std::string(quasar_variant) == "horizon") {
+            log_info(LogMetal, "Using variant: Horizon");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else {
+            log_info(LogMetal, "Using variant: Quasar");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -341,6 +357,11 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         // Snapshot the env once: defines() runs separately for firmware and
         // kernel builds, and a mid-process env change must not compile them
         // against different maps.
