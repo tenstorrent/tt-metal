@@ -29,8 +29,8 @@ Handed to every hunter:
 Not handed to hunters by default:
 3. The repo pack, if one exists: `packs/<repo>.md`. It holds class weights from the repo's real bug history, hot
    spots per area, "fix seeds", fixes found incomplete, and the checks reviewers apply. As reading for hunters it
-   showed **no measurable recall benefit** in either benchmark run (see *Measured recall*), so it costs tokens on every
-   batch for no measured gain. Add it only to re-measure it, with
+   showed **no measurable recall benefit** in either benchmark run (`references/measurement-history.md`), so it
+   costs tokens on every batch for no measured gain. Add it only to re-measure it, with
    `--knowledge references/classes-universal.md,<domain>,packs/<repo>.md`: an explicit list replaces the default,
    so name the class lists too. Its hot areas still set the batch order: `init_run.py` finds the pack for `--repo`
    and moves files in those directories, if no `--prio` glob claimed them, to priority A (`--pack none` turns
@@ -60,8 +60,9 @@ benchmark and a sibling sweep.
 | refresh | only what closed since the last mining | `mining/marker.py delta`, then `fetch_repo.py --since` (*Refreshing the mined history*) |
 
 Full, area and bench runs fan out through the **Workflow** tool. That needs the user's explicit opt-in to
-multi-agent orchestration. Get it, and state the cost first. Calibration from earlier runs: about 50k tokens per
-file audited, and about 70M tokens per 120-batch wave. Verification is most of the agent count.
+multi-agent orchestration. Get it, and state the cost first. Measured: one 50-batch wave took about 37M tokens and
+881 agents. A full tt-metal run (about 18,000 files and 4.4M lines with the default extensions, so about 1,250
+batches) is therefore about 25 waves: roughly 0.9B tokens and 22,000 agents. Verification is most of the agent count.
 
 ## Start of every audit: ask the user
 Before `init_run.py`, ask questions 1-4 in one AskUserQuestion call, then question 5 in a second call: its cost
@@ -77,10 +78,14 @@ through `exec_tier.py configure`), and never assume a default for the execution 
    - **Existing tests:** runs the tests that reference each batch's files. This needs the target hardware, and the
      user must confirm which machine and card(s) can be used; the cards go to `exec_tier.py configure --devices`,
      which pins every test to them (`TT_VISIBLE_DEVICES`) and resets only them.
-   If yes, ask for the exact commands (or confirm the presets below), the machine, and a time budget. The tier runs
-   the repo's code with those commands, so confirm it is acceptable on this machine.
-3. **Budget:** tokens and wall-clock. State the calibration (about 50k tokens per file hunted, plus about 40% for
-   verification), and whether to run the optional second pass.
+   If yes, ask for the exact commands (or confirm the presets below) and the machine, and state the worst-case time:
+   up to the timeout per batch's test group, twice if it fails and is re-run (about 4 hours per batch with the preset
+   7,200 s), with no overall cap. The tier runs the repo's code with those commands, so confirm it is acceptable on
+   this machine.
+3. **Cost, and the second pass.** The audit is exhaustive by design: it runs until every in-scope file is audited,
+   with no token or time cap. State the cost for the chosen scope up front (see the calibration above); a user who
+   wants to spend less narrows the scope (question 1) rather than capping the run. Ask whether to run the optional
+   second pass over priority A.
 4. **New history since the last mining.** Run `mining/marker.py delta <mine>/<repo>.mined.json` first (count queries
    only) and report what closed since the watermark. If there is any, offer the refresh (*Refreshing the mined
    history*): it costs agents only for the new cases, and it gives the sibling sweep new leads and the recall
@@ -173,8 +178,8 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
      merged site gets a fix grounded in the current code, from the verifiers' write-ups, with a `Test:` line. A
      history-sibling lead has no fix of its own until this step: its scenario and evidence describe the past bug.
 7. **Optional second pass over the highest-priority areas.** Independent hunts miss different bugs, but the measured
-   gain is small: three post-fix passes together found 49%, against 45% for the best single pass. It is worth it only
-   for the areas that matter most: priority-A batches (device kernels, core runtime, the pack's hot areas).
+   benchmark gain was a few points (`references/measurement-history.md`). It is worth it only for the areas that
+   matter most: priority-A batches (device kernels, core runtime, the pack's hot areas).
    Re-issue each batch once more to a fresh hunter with `next_wave.py --run <run> 45 A --second-pass`, then run
    the usual workflow and persist. persist_wave.py archives the first hunt, merges the verdicts, and consolidate
    dedupes them by `file:line`.
@@ -307,95 +312,22 @@ private overlay.
   when CI passes on EVERY gate platform, not just locally.
 - **Ask before anything public:** filing, commenting, pushing.
 
-## Measured recall (2026-09-26, held-out real bugs audited at the commit before their fix)
-Scored SEMANTICALLY (`bench.py judge-inputs`, then `judge-wave.js`, then `bench.py judged`). Two blind judges per case
-agreed on 809 of 810 findings. The earlier line-proximity scores overstated some arms by up to 11 points and are not
-used. Nine of the 75 held-out "bugs" were not defects in the pre-fix code and are excluded.
-
-| Repo (valid held-out bugs) | Universal classes | + Tenstorrent classes | + mined pack (full skill) |
-|---|---|---|---|
-| tt-metal (53), first run | 28% | 36% | 32% |
-| tt-metal (53), after the post-mortem fixes | **42%** | **45%** | 38% |
-| tt-llk (13), first run | 38% | 38% | 38% (54% counting unconfirmed candidates) |
-
-What the data supports:
-- **The post-mortem fixes are the one significant, measured gain.** The contract-trace hunter step and the new
-  classes took the universal-only arm from 15 to 22 of 53 (8 gained, 1 lost; exact McNemar p ≈ 0.04).
-- **The mined pack shows no measurable recall benefit, in either run.** Before the fixes it scored 5 vs 3 against
-  the baseline (p ≈ 0.7). After them it scored 1 vs 5 against the domain arm (p ≈ 0.2): not significant, but not
-  better. The "significant pack win" first reported was a line-proximity artifact. The pack arm does confirm the
-  most findings in the same files (145, against 128 and 116), but whether those extra findings are real is
-  unmeasured.
-- **The mining still paid off indirectly.** The classes and the contract-trace rule behind the measured gain came from
-  a post-mortem of what the audit missed on the mined held-out bugs. As a benchmark and a source of lessons, the
-  history is valuable. As text for hunters to read up front, it has not shown value.
-- **Extra passes help less than line proximity suggested.** The three post-fix arms together found 26 of 53 (49%),
-  against 45% for the best single arm. All six runs together found 30 (57%).
-- **Noise is about ±5 cases per run,** so differences smaller than that between single runs mean nothing.
-- A transcript diagnostic of the discordant cases found no case where the pack distracted or misled a hunter.
-  Hunters spent only about 5-20% of their tool calls on it.
-- **One defect per finding:** a finding that bundles a real defect with a wrong claim gets refuted whole.
-
-**Why the post-fix audit still misses about 55%** (post-mortem of the best arm's 29 misses):
-- **The hunter read the buggy lines in 27 of 29 cases, but only skimmed them.** It did the required contract trace
-  fully in just 2 cases (partly in 20, not at all in 5). The misses are about depth and diligence per site, not coverage.
-- **For 11 of 29, execution is the cheapest reliable catch, not reading:** a compile of a non-default build flavour
-  (5), a sanitizer or static analyzer (4), or an existing test on the target arch (2). A static-only audit has a
-  ceiling that more knowledge will not lift.
-- For 16, the analysts proposed a narrow prompt rule or class. Adding those one by one would overfit: the rules
-  come from the benchmark's own cases, so any "gain" would be measured on the answers. Needed instead:
-  - **structural enforcement:** the hunter's output lists each boundary with the other-side `file:line` it checked,
-    so a skipped trace is visible and verifiable;
-  - **less code per hunter:** smaller batches, or a focused per-function pass on the highest-priority files;
-  - **a fresh holdout** for measuring any rule derived from these misses.
-- Only 1 of 29 is genuinely not findable from source or execution.
-
-**The shipped version, measured on a FRESH holdout** (`packs/tt-metal-holdout-v2.jsonl`: 50 screened bugs, none in the
-first holdout or among the deep-read fixes, 3 excluded as contaminated). Static only, full skill (universal +
-Tenstorrent classes + pack, the contract-trace ledger with its trace audit, and the post-mortem hunter rules):
-**23 of 47 = 49%**, scored semantically, with the two judges agreeing on every finding. It is not directly
-comparable to the 45%/38% above, which were measured on a different set of bugs. That run still handed hunters the
-pack; the default no longer does, since no run measured a gain from it. Re-measure on this holdout to confirm.
-The run cost about 880 agents for 50 batches (~17.7 per batch; waves are capped accordingly). The trace audit
-overturned 24 of 223 re-checked "consistent" verdicts (11%), so hunters' own trace verdicts are wrong about one time
-in nine. Verification confirmed 260 of 261 candidates. **Precision, measured separately:** 24 of a random 25 of those
-confirmations (the non-benchmark ones) were judged real and reachable by two independent reviewers (96%, 95% CI
-about 80-99%), with the reviewers agreeing on all 25. 19 of the 25 were later fixed on main by other commits.
-Trace-audit findings scored 9 of 10, own-hunt 10 of 10.
-
-Built from that post-mortem, and NOT yet measured in isolation: the recorded and audited contract-trace ledger, smaller
-priority-A batches, the "look hard / one defect per finding" hunter rules, and the optional execution tier. These
-were designed from the current holdout's misses, so measure them on a FRESH holdout (`select.py holdout --seed <new>`
-plus the screen, excluding the old holdout), not on the 53 cases they were derived from.
-
-**Why the rest were missed** (post-mortem of all 45 misses; details in the benchmark run's `miss-analysis/REPORT.md`):
-- **Cross-file tracing not done (13 cases), and the defect lived outside the batch (6):** the largest group. The
-  evidence was one hop away, and the hunter did not take that hop. Examples: a caller's `uint32_t` narrowed into a callee's
-  `uint8_t` parameter that is packed into a 4-bit field; `validate()` accepting layouts the program factory does not
-  implement; a renamed keyword argument that callers still pass; unpack and math MOPs disagreeing on dvalid counts.
-- **Class missing from the lists (6), or domain knowledge missing (4):** examples are symbol visibility across
-  shared libraries, preprocessor-macro collisions and `#elif` on undefined macros, namespace lookup shadowing,
-  `.begin()` on a possibly-empty container, stall-resource versus stall-condition constants, and register-literal
-  consistency.
-- **Hunt variance (5):** another arm found the bug and this one did not. A second pass recovers these.
-- **Attention (3):** the site was read but a low-salience defect went unnoticed (a dead local, a wrong diagnostic).
-- **Verifier kills (2, both tt-llk):** each finding was right but was held back because the library entry point had no
-  in-tree caller. The callers live in another repo.
-- **Not statically visible (2):** a compiled stack-frame overflow, and an undocumented NoC erratum.
-
-Applied after the post-mortem, and re-measured (see the table above):
-- a mandatory one-hop CONTRACT TRACE, sibling comparison and mechanical sweeps in the hunter prompt;
-- the missing classes (`sibling-divergence`, `dead-store`, `empty-access`, `lossy-compare`, `validate-vs-impl`,
-  `symbol-resolution`, `preprocessor`, `linkage-visibility`, and the `tt-` classes for dvalid balance, stall
-  operands, register literals, hardcoded arch constants, core-flavour maps, JIT defines and dispatch field width);
-- a verifier rule that library entry points are reachable by default;
-- a stricter triage definition of "code bug", a holdout validity screen, and deep-read verdicts overriding triage in
-  the weights;
-- the second-pass step in the run loop.
-To re-measure after any change to the prompts, classes or packs: `bench.py prepare` into fresh run directories,
-then `score --cases <holdout>`. Do NOT edit any knowledge file while a run is in flight: hunters read them at start
-time, so an edit mid-run measures a mixture. For long runs, launch each arm with `engine/run_headless.py
---run <arm> --bench-cases <holdout>` in tmux (a plain `claude -p` exits after about 10 minutes and kills its workflow).
+## What the measurements mean for a run
+Recall and precision were measured on the repos' own past bugs; the rounds, their conditions and the post-mortems are
+in `references/measurement-history.md`. What matters when running an audit:
+- **One pass finds roughly half of the known bugs** (23 of 47 on a fresh holdout, exact 95% interval 34-64%). So zero
+  findings in an area does not mean the area is clean. Say so in the report.
+- **That is an optimistic figure.** It was measured on benchmark batches of 1-3 files, each known to hold a bug, with
+  the pack handed to hunters; the shipped default does not hand out the pack. Real batches are up to 20 files and
+  1,500-3,500 lines, where hunters skim more, so real recall is probably lower. Precision (24 of 25 confirmations real)
+  was measured on the same small batches; on normal-sized batches it is unmeasured.
+- **Most misses are read but not traced:** hunters read the buggy lines in 27 of 29 post-fix misses and skimmed them.
+  That is why the contract trace is recorded and audited, and why priority-A batches are smaller.
+- **Independent passes find different bugs.** Run the second pass (step 7) over priority A when those areas matter.
+- **Verification earns its cost on real input.** It refuted 28% of candidates in the whole-repo July audit and in the
+  sibling sweep, though almost nothing on the tiny benchmark batches.
+- **Execution catches what reading cannot:** for 11 of 29 post-fix misses, a build flavour, a sanitizer or a test was
+  the cheapest catch (the optional execution tier).
 
 ## Lessons from earlier large audits
 - **Hunt, don't fill a checklist.** A candidate-list-driven pass found nothing in a tree where a method-driven hunt
