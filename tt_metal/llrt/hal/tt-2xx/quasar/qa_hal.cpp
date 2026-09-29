@@ -341,6 +341,11 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         // Snapshot the env once: defines() runs separately for firmware and
         // kernel builds, and a mid-process env change must not compile them
         // against different maps.
