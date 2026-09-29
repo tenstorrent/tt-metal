@@ -167,6 +167,11 @@ def _patch_model_args(
     # the configured max_context. Override with GEMMA4_GEN_PREFILL_CHUNK, or
     # force full-ISL single-chunk via GEMMA4_VLLM_SINGLE_CHUNK=1.
     chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
+    if chunk_override <= 0 and os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes"):
+        # CP prefill pairs with a large generator chunk (measured 254K ladder:
+        # optimum 24576; CP alone and big-chunks alone are both <=0). Same
+        # default as the standalone generator path.
+        chunk_override = 24576
     if chunk_override > 0:
         model_args.max_prefill_chunk_size = chunk_override
         logger.info(
@@ -1478,6 +1483,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 getattr(self, "_prev_decode_batch", None),
             )
         return out
+
+    @property
+    def kv_head_shard_devices(self):
+        """How many devices KV heads shard over (the TP group), for the
+        plugin's per-device kv-cache spec. On a 2D one-instance mesh this is
+        the tp-axis size (8), not the mesh device count (32) — dividing by 32
+        under-declared sliding heads (1 instead of 2) and broke the paged-fill
+        geometry checks at warmup. Equals device count on 1xN meshes.
+        """
+        models = getattr(self, "model", None) or []
+        mc = getattr(models[0], "mesh_config", None) if models else None
+        return getattr(mc, "tp", None) if mc is not None else None
 
     def allocate_kv_cache(self, *args, **kwargs):
         # Legacy uniform path (vLLM falls back here when ``get_kv_cache_spec``
