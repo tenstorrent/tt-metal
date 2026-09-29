@@ -8,6 +8,7 @@ import sys
 
 import ttnn
 from ttnn.operations import integer_golden
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 __all__ = []
 
@@ -176,6 +177,27 @@ def _integer_path_scalars(input_tensor_a, input_tensor_b):
     return _as_device_scalar(input_tensor_a), _as_device_scalar(input_tensor_b)
 
 
+def _integral_float_scalars_as_int(input_tensor_a, input_tensor_b):
+    """Integral float scalars against a 32-bit integer tensor, converted to the integers the device packs.
+    Without this, Torch promotes the addition to float32, which changes the dtype and loses exactness.
+    """
+    import torch
+
+    tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
+    if not torch.is_tensor(tensor_operand) or tensor_operand.dtype not in _promotable_integer_dtypes():
+        return input_tensor_a, input_tensor_b
+
+    def as_int(value):
+        return int(value) if isinstance(value, float) and value.is_integer() else value
+
+    return as_int(input_tensor_a), as_int(input_tensor_b)
+
+
+def _apply_binary_output_dtype(output_tensor, dtype, output_tensor_dtype):
+    """Model the stored output dtype selected by dtype or a preallocated output tensor."""
+    return golden_to_output_dtype(output_tensor, dtype if dtype is not None else output_tensor_dtype)
+
+
 def _promoted_for_float_scalar(input_tensor_a, input_tensor_b):
     """The operands as multiply and divide compute them. A float scalar against a 32-bit integer
     tensor promotes that tensor to float32 on device; the other ops reject the call instead, so
@@ -309,6 +331,7 @@ def _golden_function_add(
     activations=None,
     input_tensor_a_activations=None,
     input_tensor_b_activations=None,
+    dtype=None,
     _ttnn_input_tensor_a_dtype=None,
     _ttnn_input_tensor_b_dtype=None,
     _ttnn_output_tensor_dtype=None,
@@ -318,6 +341,7 @@ def _golden_function_add(
     # result activations afterward. Mirror that order in comparison-mode goldens.
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _integral_float_scalars_as_int(input_tensor_a, input_tensor_b)
     input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
@@ -329,6 +353,7 @@ def _golden_function_add(
     else:
         output_tensor = input_tensor_a + input_tensor_b
     output_tensor = apply_activations(output_tensor, activations)
+    output_tensor = _apply_binary_output_dtype(output_tensor, dtype, _ttnn_output_tensor_dtype)
     return _set_binary_scalar_comparison_config(
         output_tensor,
         has_scalar_operand=has_scalar_operand,
@@ -629,6 +654,19 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.logical_xor_, golden_function=_golden_function)
 
 
+def _make_inplace_golden_function(golden_function):
+    """Wrap an out-of-place binary golden for its positional in-place form.
+    The global golden of the mutated first operand must follow the caller-visible alias.
+    """
+
+    def inplace_golden_function(input_tensor_a, input_tensor_b, *args, _ttnn_global_golden=False, **kwargs):
+        output_tensor = golden_function(input_tensor_a, input_tensor_b, *args, **kwargs)
+        return _copy_inplace_golden_result(input_tensor_a, output_tensor) if _ttnn_global_golden else output_tensor
+
+    inplace_golden_function._ttnn_mutates_global_inputs = True
+    return inplace_golden_function
+
+
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
@@ -636,7 +674,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.ldexp, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.ldexp_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.ldexp_, golden_function=_make_inplace_golden_function(_golden_function))
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -646,7 +684,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.logaddexp, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.logaddexp_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logaddexp_, golden_function=_make_inplace_golden_function(_golden_function))
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -656,7 +694,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.logaddexp2, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.logaddexp2_, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.logaddexp2_, golden_function=_make_inplace_golden_function(_golden_function))
 
 
 def _golden_function_divide(
@@ -917,19 +955,39 @@ def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.maximum, golden_function=_golden_function_maximum)
 
 
-def _golden_function_minimum(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_minimum(
+    input_tensor_a,
+    input_tensor_b,
+    *args,
+    activations=None,
+    input_tensor_a_activations=None,
+    input_tensor_b_activations=None,
+    dtype=None,
+    _ttnn_output_tensor_dtype=None,
+    **kwargs,
+):
     import torch
 
+    # minimum shares the binary kernel contract: operand activations first, result activations last.
+    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
+    input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
-        return integer_golden.binary(input_tensor_a, input_tensor_b, torch.minimum)
-    if not torch.is_tensor(input_tensor_b):
-        # PyTorch minimum requires two tensors even though TTNN accepts a scalar operand.
-        input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
-    return torch.minimum(input_tensor_a, input_tensor_b)
+        output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, torch.minimum)
+    else:
+        if not torch.is_tensor(input_tensor_b):
+            # PyTorch minimum requires two tensors even though TTNN accepts a scalar operand.
+            input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
+        output_tensor = torch.minimum(input_tensor_a, input_tensor_b)
+    output_tensor = apply_activations(output_tensor, activations)
+    return _apply_binary_output_dtype(output_tensor, dtype, _ttnn_output_tensor_dtype)
 
 
-ttnn.attach_golden_function(ttnn.minimum, golden_function=_golden_function_minimum)
+ttnn.attach_golden_function(
+    ttnn.minimum,
+    golden_function=_golden_function_minimum,
+    preprocess_golden_function_inputs=_preprocess_binary_golden_function_inputs,
+)
 
 
 def _golden_function_logical_xor(input_tensor_a, input_tensor_b, *args, **kwargs):

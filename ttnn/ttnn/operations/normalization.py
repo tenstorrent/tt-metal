@@ -6,6 +6,7 @@
 from typing import Optional
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 import math
 
@@ -49,11 +50,16 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor: ttnn.Tensor, scalar: float, attention_mask=None, **_):
+def _golden_function(input_tensor: ttnn.Tensor, scale=None, mask=None, *_, scalar=None, attention_mask=None, **__):
     import torch
 
+    # The public API names these scale and mask and makes both optional; scalar and attention_mask
+    # remain accepted for direct callers of the older golden spelling.
+    scale = scale if scale is not None else scalar
+    attention_mask = mask if mask is not None else attention_mask
     input_tensor = input_tensor.float()
-    input_tensor = input_tensor * scalar
+    if scale is not None:
+        input_tensor = input_tensor * scale
     if attention_mask is not None:
         input_tensor = input_tensor + attention_mask
     return torch.softmax(input_tensor, dim=-1)
@@ -196,7 +202,7 @@ def _apply_affine(normalized, weight, bias):
     return normalized
 
 
-def _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, *, include_sum):
+def _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, *, include_sum, dtype=None):
     """Pack partial statistics into tile-wide blocks; only the stat columns are well-defined."""
     import torch
 
@@ -211,6 +217,7 @@ def _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, *, include
     if include_sum:
         stats[..., _TILE_WIDTH] = input_tensor.sum(dim=-1)
         mask[..., _TILE_WIDTH] = True
+    stats = golden_to_output_dtype(stats, dtype)
     ttnn.decorators.set_golden_comparison_config(stats, method="allclose", scope="all", rtol=1e-2, atol=1e-2, mask=mask)
     return stats
 
@@ -241,15 +248,17 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function_rms_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
+def _golden_function_rms_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, dtype=ttnn.bfloat16, **_):
     # RMS norm only needs sum(x^2); the stats tensor is a single tile wide with sum(x^2) at column 0.
-    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=False)
+    return _golden_pre_all_gather_stats(input_tensor, residual_input_tensor, include_sum=False, dtype=dtype)
 
 
 ttnn.attach_golden_function(ttnn.rms_norm_pre_all_gather, golden_function=_golden_function_rms_norm_pre_all_gather)
 
 
-def _golden_function_rms_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
+def _golden_function_rms_norm_post_all_gather(
+    input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, dtype=None, **_
+):
     import torch
 
     # Stats holds one per-device partial sum(x^2) in column 0 of each tile-wide block.
@@ -257,7 +266,7 @@ def _golden_function_rms_norm_post_all_gather(input_tensor, stats, *, epsilon=1e
     global_width = input_tensor.shape[-1] * num_devices
     ex2 = sum(stats[..., d * _TILE_WIDTH] for d in range(num_devices)) / global_width
     normalized = input_tensor * torch.rsqrt(ex2.unsqueeze(-1) + epsilon)
-    return _apply_affine(normalized, weight, bias)
+    return golden_to_output_dtype(_apply_affine(normalized, weight, bias), dtype)
 
 
 ttnn.attach_golden_function(ttnn.rms_norm_post_all_gather, golden_function=_golden_function_rms_norm_post_all_gather)
@@ -589,18 +598,23 @@ def _golden_function(
     import torch
 
     num_channels = input_tensor.shape[-1]
-    shard_orientation = getattr(memory_config.shard_spec, "orientation", None) if memory_config.shard_spec else None
-    num_cores_across_channel = get_group_norm_cores_across_channel(
-        memory_config.memory_layout, core_grid, shard_orientation
-    )
-    weight = weight.reshape((num_cores_across_channel, -1))
-    weight = weight[:, : num_channels // num_cores_across_channel].flatten()
-    if bias is not None:
-        bias = bias.reshape((num_cores_across_channel, -1))
-        bias = bias[:, : num_channels // num_cores_across_channel].flatten()
+    num_cores_across_channel = 1
+    if memory_config is not None and core_grid is not None:
+        # Affine parameters are packed per channel-splitting core, which only an explicit layout identifies.
+        shard_orientation = getattr(memory_config.shard_spec, "orientation", None) if memory_config.shard_spec else None
+        num_cores_across_channel = get_group_norm_cores_across_channel(
+            memory_config.memory_layout, core_grid, shard_orientation
+        )
+
+    def unpack(parameter):
+        # weight and bias are optional; an omitted parameter leaves the normalization unscaled or unshifted.
+        if parameter is None:
+            return None
+        parameter = parameter.reshape((num_cores_across_channel, -1))
+        return parameter[:, : num_channels // num_cores_across_channel].flatten().float()
 
     input_tensor = input_tensor.permute(0, 3, 1, 2)
-    output = torch.nn.functional.group_norm(input_tensor.float(), num_groups, weight.float(), bias.float(), eps=epsilon)
+    output = torch.nn.functional.group_norm(input_tensor.float(), num_groups, unpack(weight), unpack(bias), eps=epsilon)
     output = output.permute(0, 2, 3, 1)
     return output
 

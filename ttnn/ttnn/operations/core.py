@@ -11,6 +11,7 @@ import ttnn.decorators
 from loguru import logger
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
 def _validate_file_extension(file_name: pathlib.Path):
@@ -244,11 +245,15 @@ ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operation
 ttnn.attach_golden_function(ttnn.unsqueeze_to_4D, golden_function=_golden_function_unsqueeze_to_4d)
 
 
-def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=None, **_):
+def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=None, col_tilize=False, **_):
     if input_tensor is None:
         return None
 
     import torch
+
+    if col_tilize:
+        # Column tilization stores the transposed matrix, so the result has its last two dimensions swapped.
+        input_tensor = input_tensor.transpose(-2, -1).contiguous()
 
     target_dtype = spec.dtype if spec is not None else dtype
     if target_dtype is None:
@@ -404,15 +409,13 @@ def from_torch(
     )
 
 
-def _golden_function(tensor, *, torch_rank=None, **kwargs):
-    if torch_rank is None:
-        return tensor
-
-    while len(tensor.shape) > torch_rank:
-        if tensor.shape[0] != 1:
-            raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-        tensor = tensor.squeeze(0)
-    return tensor
+def _golden_function(tensor, dtype=None, *, torch_rank=None, **kwargs):
+    if torch_rank is not None:
+        while len(tensor.shape) > torch_rank:
+            if tensor.shape[0] != 1:
+                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+            tensor = tensor.squeeze(0)
+    return tensor.to(dtype) if dtype is not None else tensor
 
 
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
@@ -612,8 +615,8 @@ def _golden_function(tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.to_layout, golden_function=_golden_function)
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+def _golden_function(tensor, dtype, *args, **kwargs):
+    return golden_to_output_dtype(tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
@@ -725,8 +728,8 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
+def _golden_function(tensor, *args, dtype=None, **kwargs):
+    return golden_to_output_dtype(tensor, dtype)
 
 
 ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
@@ -805,7 +808,14 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
-@ttnn.register_python_operation(name="ttnn.as_tensor", golden_function=_golden_function_from_torch)
+def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
+    # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
+    if preprocess is not None:
+        tensor = preprocess(tensor)
+    return _golden_function_from_torch(tensor, dtype, **kwargs)
+
+
+@ttnn.register_python_operation(name="ttnn.as_tensor", golden_function=_golden_function_as_tensor)
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
     dtype: Optional[ttnn.DataType] = None,

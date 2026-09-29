@@ -4,6 +4,7 @@
 
 import ttnn
 from typing import Tuple
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
 def golden_maxpool2d(
@@ -18,6 +19,7 @@ def golden_maxpool2d(
     dilation: Tuple[int, int],
     ceil_mode: bool = False,
     return_indices: bool = False,
+    dtype=None,
     **_,
 ):
     import torch
@@ -37,7 +39,7 @@ def golden_maxpool2d(
         return_indices=True,
     )
 
-    output_tensor = pool_output_to_flat_nhwc(output_tensor)
+    output_tensor = golden_to_output_dtype(pool_output_to_flat_nhwc(output_tensor), dtype)
     indices = pool_output_to_flat_nhwc(indices)
 
     if return_indices:
@@ -212,6 +214,7 @@ def golden_avg_pool2d(
     ceil_mode: bool = False,
     count_include_pad: bool = True,
     divisor_override: int = None,
+    dtype=None,
     **_,
 ):
     """
@@ -250,7 +253,7 @@ def golden_avg_pool2d(
         divisor_override=divisor_override,
     )
 
-    return pool_output_to_flat_nhwc(output_tensor)
+    return golden_to_output_dtype(pool_output_to_flat_nhwc(output_tensor), dtype)
 
 
 ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
@@ -357,6 +360,39 @@ def golden_upsample(
 ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
 
 
+def _sample_precomputed_grid(input_tensor, grid, mode, values_per_point):
+    """Sample an NHWC input with records from prepare_grid_sample_grid, returning (N, points, C)."""
+
+    import torch
+
+    def pixel_indices(values):
+        # BFLOAT16 grids store indices as int16 bit patterns; wider grids store them as values.
+        if values.dtype == torch.bfloat16:
+            return values.contiguous().view(torch.int16).to(torch.int64)
+        return values.to(torch.int64)
+
+    N, H, W, C = input_tensor.shape
+    records = grid.reshape(N, -1, values_per_point)
+    # A zero border lets out-of-range corners and the -1 invalid-point sentinel read zero.
+    padded_input = torch.nn.functional.pad(input_tensor.float(), (0, 0, 1, 1, 1, 1))
+    batch_index = torch.arange(N).unsqueeze(1)
+
+    def gather(h, w):
+        return padded_input[batch_index, (h + 1).clamp(0, H + 1), (w + 1).clamp(0, W + 1)]
+
+    h0 = pixel_indices(records[..., 0])
+    w0 = pixel_indices(records[..., 1])
+    if mode == "nearest":
+        return gather(h0, w0)
+    weights = records[..., 2:6].float()
+    return (
+        weights[..., 0:1] * gather(h0, w0)
+        + weights[..., 1:2] * gather(h0, w0 + 1)
+        + weights[..., 2:3] * gather(h0 + 1, w0)
+        + weights[..., 3:4] * gather(h0 + 1, w0 + 1)
+    )
+
+
 def golden_grid_sample(
     input_tensor: ttnn.Tensor,
     grid: ttnn.Tensor,
@@ -365,6 +401,7 @@ def golden_grid_sample(
     align_corners: bool = False,
     batch_output_channels: bool = False,
     grid_batching_factor: int = None,
+    use_precomputed_grid: bool = False,
     **_,
 ):
     """
@@ -394,22 +431,30 @@ def golden_grid_sample(
     from tests.sweep_framework.sweep_utils.pool2d_common import prepare_grid_batching_expected_output
 
     N, H_grid, W_grid, last_dim = grid.shape
-    K_grid = last_dim // 2
+    C = input_tensor.shape[-1]
 
-    input_nchw = input_tensor.permute(0, 3, 1, 2)
-    C = input_nchw.shape[1]
+    if use_precomputed_grid:
+        # A prepared grid holds pixel indices and bilinear weights rather than normalized coordinates.
+        values_per_point = 2 if mode == "nearest" else 6
+        K_grid = last_dim // values_per_point
+        total_W = W_grid * K_grid
+        output_nhwc = _sample_precomputed_grid(input_tensor, grid, mode, values_per_point)
+        output_nhwc = output_nhwc.reshape(N, H_grid, total_W, C).to(input_tensor.dtype)
+    else:
+        K_grid = last_dim // 2
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
 
-    # Unpack K_grid coordinate sets from last dim into the W dimension:
-    # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
-    total_W = W_grid * K_grid
-    grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
+        # Unpack K_grid coordinate sets from last dim into the W dimension:
+        # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
+        total_W = W_grid * K_grid
+        grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
 
-    output_nchw = torch.nn.functional.grid_sample(
-        input_nchw.float(), grid_unpacked.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
-    )
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(), grid_unpacked.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
+        )
 
-    # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
-    output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+        # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
+        output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
 
     # Use explicit grid_batching_factor if provided, otherwise use K_grid from grid shape
     effective_K = grid_batching_factor if grid_batching_factor is not None else K_grid

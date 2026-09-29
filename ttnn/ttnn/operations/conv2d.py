@@ -177,8 +177,8 @@ def _golden_function(
     input_height: int,
     input_width: int,
     kernel_size: Union[int, Tuple[int, int]],
-    stride: Union[int, Tuple[int, int]],
-    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]],
+    stride: Union[int, Tuple[int, int]] = (1, 1),
+    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]] = (0, 0),
     dilation: Union[int, Tuple[int, int]] = (1, 1),
     groups: int = 1,
     bias_tensor=None,
@@ -193,7 +193,8 @@ def _golden_function(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
 
-    bias_tensor = bias_tensor.reshape(-1)  # torch expected 1D bias
+    if bias_tensor is not None:
+        bias_tensor = bias_tensor.reshape(-1).float()  # torch expected 1D bias
 
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -226,7 +227,7 @@ def _golden_function(
     output_tensor = torch.nn.functional.conv2d(
         torch_padded_input,
         weight_tensor.float(),
-        bias=bias_tensor.float(),
+        bias=bias_tensor,
         stride=stride,
         padding=(0, 0),
         dilation=dilation,

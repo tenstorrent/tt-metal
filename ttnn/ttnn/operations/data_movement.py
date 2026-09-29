@@ -77,18 +77,10 @@ def _golden_function(input_tensor, padding, *args, value=0, **_):
     return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
 
 
-def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
-    output_tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output_tensor, args, kwargs)
-    # Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.padded_shape)
-    return output_tensor
-
-
 ttnn.attach_golden_function(
     ttnn.pad,
     golden_function=_golden_function,
     preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
-    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
 )
 
 
@@ -434,16 +426,29 @@ def _parse_fold_padding(padding):
     return tuple(padding)
 
 
-def _golden_function_fold_transposed(input_tensor, stride_h, stride_w, padding, collapse_output):
+def _golden_function_fold_transposed(input_tensor, stride_h, stride_w, padding, collapse_output, input_is_sharded):
     import torch
 
-    # The transpose-based device path consumes NCHW and emits NHWC; six-element padding also aligns channels.
-    pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = _parse_fold_padding(padding)
-    if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
+    # The transpose-based device path consumes NCHW and emits NHWC. It keeps only pad_top, pad_left, and
+    # pad_c_back: the sharded kernel pads H and W on both sides by those amounts, the interleaved one at the end.
+    pad_top, _, pad_left, _, _, pad_c_back = _parse_fold_padding(padding)
+    pad_front_h, pad_front_w = (pad_top, pad_left) if input_is_sharded else (0, 0)
+    if pad_top or pad_left or pad_c_back:
         input_tensor = torch.nn.functional.pad(
-            input_tensor, (pad_left, pad_right, pad_top, pad_bottom, pad_c_front, pad_c_back), value=0.0
+            input_tensor, (pad_front_w, pad_left, pad_front_h, pad_top, 0, pad_c_back), value=0.0
         )
     return _fold_nhwc(input_tensor.permute(0, 2, 3, 1), stride_h, stride_w, collapse_output)
+
+
+def _preprocess_fold_golden_inputs(function_args, function_kwargs):
+    """Record whether the fold input is sharded, which selects the legacy transpose padding placement."""
+
+    input_tensor = function_args[0] if function_args else function_kwargs["input"]
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+    golden_kwargs["_ttnn_input_is_sharded"] = isinstance(input_tensor, ttnn.Tensor) and input_tensor.is_sharded()
+    return golden_args, golden_kwargs
 
 
 def _golden_function(
@@ -454,12 +459,15 @@ def _golden_function(
     padding=(0, 0),
     collapse_output=False,
     use_transpose_as_fold=False,
+    _ttnn_input_is_sharded=False,
     **kwargs,
 ):
     import torch
 
     if use_transpose_as_fold:
-        return _golden_function_fold_transposed(input, stride_h, stride_w, padding, collapse_output)
+        return _golden_function_fold_transposed(
+            input, stride_h, stride_w, padding, collapse_output, _ttnn_input_is_sharded
+        )
 
     pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = _parse_fold_padding(padding)
     if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
@@ -469,7 +477,9 @@ def _golden_function(
     return _fold_nhwc(input, stride_h, stride_w, collapse_output)
 
 
-ttnn.attach_golden_function(ttnn.fold, golden_function=_golden_function)
+ttnn.attach_golden_function(
+    ttnn.fold, golden_function=_golden_function, preprocess_golden_function_inputs=_preprocess_fold_golden_inputs
+)
 
 
 def _golden_function(input_tensor, *args, **kwargs):
@@ -515,7 +525,8 @@ def _golden_function(N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, *args, **kwa
 
     output_tensor = torch.full((N, C, H, W), float(val_lo), dtype=torch.float32)
     output_tensor[:, :, 0:hOnes, 0:wOnes] = float(val_hi)
-    return output_tensor
+    # The any tensor only supplies the output dtype.
+    return output_tensor.to(any.dtype)
 
 
 ttnn.attach_golden_function(ttnn.fill_rm, golden_function=_golden_function)
@@ -526,7 +537,8 @@ def _golden_function(N, C, H, W, hOnes, wOnes, any, *args, **kwargs):
 
     output_tensor = torch.zeros((N, C, H, W), dtype=torch.float32)
     output_tensor[:, :, 0:hOnes, 0:wOnes] = 1.0
-    return output_tensor
+    # The any tensor only supplies the output dtype.
+    return output_tensor.to(any.dtype)
 
 
 ttnn.attach_golden_function(ttnn.fill_ones_rm, golden_function=_golden_function)
@@ -661,6 +673,9 @@ def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dt
     zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
     output = torch.round(torch.div(input_tensor, scale) + zero_point)
     torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
+    if torch_dtype in (torch.int8, torch.uint8):
+        # Narrow quantized outputs saturate on device, while a direct Torch cast would wrap.
+        output = torch.clamp(output, torch.iinfo(torch_dtype).min, torch.iinfo(torch_dtype).max)
     return output.to(torch_dtype)
 
 
@@ -674,12 +689,15 @@ def _golden_function_dequantize(input_tensor, scale, zero_point, *_, axis=None, 
     scale = _broadcast_quantization_arg(scale, input_tensor, axis)
     zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
     output = (input_tensor - zero_point) * scale
-    if dtype is not None:
-        output = output.to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
-    return output
+    # TTNN dequantizes to BFLOAT16 when dtype is omitted.
+    return output.to(ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16)
 
 
-ttnn.attach_golden_function(ttnn.dequantize, golden_function=_golden_function_dequantize)
+ttnn.attach_golden_function(
+    ttnn.dequantize,
+    golden_function=_golden_function_dequantize,
+    postprocess_golden_function_outputs=ttnn.decorators.dtype_preserving_postprocess_golden_function_outputs,
+)
 
 
 def _golden_function_requantize(
@@ -694,6 +712,9 @@ def _golden_function_requantize(
     out_zero_point = _broadcast_quantization_arg(out_zero_point, input_tensor, axis)
     output = torch.round((input_tensor - in_zero_point) * (in_scale / out_scale) + out_zero_point)
     torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
+    if torch_dtype == torch.int8:
+        # The int8 requantize path saturates through quantize; the uint8 path narrows by typecast instead.
+        output = torch.clamp(output, -128, 127)
     return output.to(torch_dtype)
 
 

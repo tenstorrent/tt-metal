@@ -2,6 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
+
+
+def golden_to_output_dtype(tensor, dtype):
+    """Return the values TTNN stores for a golden result written in the requested output dtype."""
+
+    import torch
+
+    if dtype is None or not isinstance(tensor, torch.Tensor):
+        return tensor
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        # Block floats share one exponent per 16 values, so small values beside large ones lose precision;
+        # round-trip through host packing to model the stored values.
+        return ttnn.Tensor(tensor=tensor.contiguous(), data_type=dtype, layout=ttnn.TILE_LAYOUT).to_torch()
+    return tensor.to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+
 
 def golden_compute_gradients(output, inputs, grad_output):
     """Compute ordered gradients, preserving None for inputs unused by the output."""

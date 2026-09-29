@@ -5,6 +5,7 @@
 import ttnn
 import functools
 from ttnn.operations import integer_golden
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
 @functools.lru_cache(maxsize=1)
@@ -154,10 +155,13 @@ def _get_unary_golden_table():
 
 
 def register_ttnn_cpp_unary_function(unary_function):
-    def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, *args, diagonal=None, **_):
         # PyTorch is optional; resolve its functions only when a golden is called.
         name_to_golden_function = _get_unary_golden_table()
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
+        if diagonal is not None:
+            # tril and triu bind diagonal as keyword-only, so it must survive the kwarg filtering below.
+            return torch_function(input_tensor, *args, diagonal=diagonal)
         # Preserve operation-specific positional parameters while discarding TTNN-only kwargs.
         return torch_function(input_tensor, *args)
 
@@ -237,10 +241,23 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
 
+# bitcast returns the requested dtype, so its fallback output must not be converted back to the input dtype.
+ttnn.attach_golden_function(
+    ttnn.bitcast,
+    golden_function=ttnn.bitcast.golden_function,
+    postprocess_golden_function_outputs=ttnn.decorators.dtype_preserving_postprocess_golden_function_outputs,
+)
 
-def _golden_function_tanh(input_tensor, *args, **kwargs):
+
+def _golden_function_tanh(input_tensor, *args, fast_and_approximate_mode=False, **kwargs):
     import torch
 
+    if fast_and_approximate_mode:
+        # The approximate LUT is specified against exact tanh with a 0.0184 maximum absolute error,
+        # so degenerate outputs use that bound instead of the accurate-mode ULP contract.
+        result = torch.tanh(input_tensor)
+        ttnn.decorators.set_golden_comparison_config(result, method="allclose", scope="degenerate", rtol=0.0, atol=0.03)
+        return result
     if input_tensor.dtype == torch.bfloat16:
         # Evaluate BF16 tanh with FP32 intermediates, then apply the hardware DAZ/FTZ boundary.
         # Singleton regressions use the documented two-ULP contract where PCC is undefined.
@@ -423,11 +440,15 @@ ttnn.attach_golden_function(
 def _golden_function_acos(input_tensor, *args, _ttnn_input_is_bfloat8_b=False, **kwargs):
     import torch
 
-    # Wide out-of-domain BFLOAT8_B blocks are validated by their non-finite mask, not value PCC.
-    # Returning no local golden lets that operation-specific check observe the device output.
-    if _ttnn_input_is_bfloat8_b and bool(torch.any(torch.abs(input_tensor) > 1)):
-        return None
     result = torch.acos(input_tensor)
+    if _ttnn_input_is_bfloat8_b and bool(torch.any(torch.abs(input_tensor) > 1)):
+        # A non-finite out-of-domain lane gives its whole BFLOAT8_B block a non-finite shared exponent,
+        # so model the stored block values, then compare non-finite positions and finite lanes.
+        result = golden_to_output_dtype(result, ttnn.bfloat8_b)
+        ttnn.decorators.set_golden_comparison_config(
+            result, method="allclose", scope="all", rtol=0.05, atol=0.05, nonfinite="mask"
+        )
+        return result
     if input_tensor.dtype == torch.bfloat16 and bool(torch.any(torch.abs(input_tensor) > 1)):
         # BF16 packing represents the SFPU's out-of-domain NaN as positive infinity.
         # Mirror that representation for direct ULP callers and compare finite lanes to two ULP.
@@ -993,10 +1014,8 @@ def _golden_function_normalize_global(input_tensor_a, *args, **kwargs):
     import torch
 
     mx = torch.mean(input_tensor_a, [0, 1, 2, 3], keepdim=True)
-    sx = torch.std(input_tensor_a, [0, 1, 2, 3], keepdim=True)
-    input_tensor_a = (input_tensor_a - mx) / sx
-
-    return input_tensor_a
+    sx = torch.std(input_tensor_a, [0, 1, 2, 3], keepdim=True, correction=0)
+    return (input_tensor_a - mx) / sx
 
 
 ttnn.attach_golden_function(ttnn.normalize_global, golden_function=_golden_function_normalize_global)
@@ -1006,13 +1025,8 @@ def _golden_function_normalize_hw(input_tensor_a, *args, **kwargs):
     import torch
 
     mean_hw = torch.mean(input_tensor_a, [-2, -1], keepdim=True)
-    std_hw = torch.std(input_tensor_a, [-2, -1], keepdim=True)
-
-    for i in range(input_tensor_a.shape[0]):
-        for j in range(input_tensor_a.shape[1]):
-            input_tensor_a[i, j, :, :] = (input_tensor_a[i, j, :, :] - mean_hw[i, j, :, :]) / std_hw[i, j, :, :]
-
-    return input_tensor_a
+    std_hw = torch.std(input_tensor_a, [-2, -1], keepdim=True, correction=0)
+    return (input_tensor_a - mean_hw) / std_hw
 
 
 ttnn.attach_golden_function(ttnn.normalize_hw, golden_function=_golden_function_normalize_hw)
@@ -1123,6 +1137,17 @@ def _get_unary_chain_torch_op(op_type):
 def _golden_function_unary_chain(input_tensor, ops_chain, *args, **kwargs):
     output = input_tensor
     for op in ops_chain:
+        if op.op_type in (ttnn.UnaryOpType.TYPECAST, ttnn.UnaryOpType.BITCAST):
+            # Dtype-changing chain ops encode their source and target DataType values as float params,
+            # so they are dispatched to the standalone typecast and bitcast goldens with decoded dtypes.
+            input_dtype, output_dtype = (ttnn.DataType(int(value)) for value in op.params[:2])
+            if op.op_type == ttnn.UnaryOpType.TYPECAST:
+                output = ttnn.get_golden_function(ttnn.typecast)(
+                    output, input_dtype=input_dtype, output_dtype=output_dtype
+                )
+            else:
+                output = _get_unary_golden_table()["bitcast"](output, output_dtype)
+            continue
         torch_op, takes_param = _get_unary_chain_torch_op(op.op_type)
         params = list(op.params) if takes_param else []
         output = torch_op(output, *params)

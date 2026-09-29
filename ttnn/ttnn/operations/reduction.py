@@ -101,10 +101,29 @@ def _create_golden_function(torch_function_name):
 
 
 def _create_golden_function_topk():
-    def golden_function(input_tensor: ttnn.Tensor, k: int, dim: Optional[int] = None, largest=True, sorted=True, **_):
+    def golden_function(
+        input_tensor: ttnn.Tensor,
+        k: int = 32,
+        dim: int = -1,
+        largest=True,
+        sorted=True,
+        *,
+        stable=False,
+        indices_tensor=None,
+        **_,
+    ):
         import torch
 
-        return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted)
+        if stable:
+            # torch.topk has no tie-breaking guarantee; a stable sort keeps the lowest index first among ties.
+            sorted_values, sorted_indices = torch.sort(input_tensor, dim=dim, descending=largest, stable=True)
+            values, indices = sorted_values.narrow(dim, 0, k), sorted_indices.narrow(dim, 0, k)
+        else:
+            values, indices = torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted)
+        if indices_tensor is not None:
+            # indices_tensor supplies the label returned for each position along dim.
+            indices = torch.gather(indices_tensor.to(torch.int64), dim, indices)
+        return values, indices
 
     return golden_function
 

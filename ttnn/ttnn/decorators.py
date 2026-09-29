@@ -95,6 +95,22 @@ def _copy_golden_comparison_config(source, destination):
     return destination
 
 
+def _split_complex_outputs(golden_outputs, outputs):
+    """Pair a ComplexTensor output's components with the real and imaginary parts of a complex golden."""
+
+    import torch
+
+    # ComplexTensor wraps two real device tensors and is not a ttnn.Tensor, so compare it component-wise.
+    if not isinstance(outputs, ttnn._ttnn.operations.complex.ComplexTensor):
+        return golden_outputs, outputs
+    output_components = (outputs.real, outputs.imag)
+    set_tensor_id(list(output_components))
+    if isinstance(golden_outputs, torch.Tensor) and golden_outputs.is_complex():
+        golden_outputs = (golden_outputs.real.contiguous(), golden_outputs.imag.contiguous())
+        set_tensor_id(list(golden_outputs))
+    return golden_outputs, output_components
+
+
 def compare_tensors_using_pcc(
     python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison, output_path=()
 ):
@@ -103,6 +119,7 @@ def compare_tensors_using_pcc(
 
     from models.common.utility_functions import comp_pcc, comp_ulp
 
+    golden_outputs, outputs = _split_complex_outputs(golden_outputs, outputs)
     if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
         comparison_records = []
         for leaf_path, golden_output, output in _structured_output_leaves(golden_outputs, outputs):
@@ -194,9 +211,13 @@ def compare_tensors_using_pcc(
     # Operation goldens opt into non-PCC metrics only where their numerical contract requires it.
     # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.
     if use_comparison_config and comparison_config.method == "skip":
-        return []
-
-    if use_comparison_config and same_shape:
+        if same_shape:
+            return []
+        # Skipped outputs, such as uninitialized allocations, have no meaningful values, but a
+        # logical-shape mismatch is still a wrong result.
+        matches = False
+        actual_pcc = 0.0
+    elif use_comparison_config and same_shape:
         nonfinite_masks_match = True
         if comparison_config.nonfinite == "mask" and (
             comparison_golden.dtype.is_floating_point
@@ -811,7 +832,7 @@ def prepare_backward_golden_inputs(function_args_and_kwargs):
     return prepare(args), prepare(kwargs)
 
 
-def default_postprocess_golden_function_outputs(output, function_args, function_kwargs):
+def default_postprocess_golden_function_outputs(output, function_args, function_kwargs, *, keep_golden_dtype=False):
     input_tensors = get_ttnn_tensors((function_args, function_kwargs))
 
     input_dtype = None
@@ -819,7 +840,7 @@ def default_postprocess_golden_function_outputs(output, function_args, function_
     input_device = None
     if input_tensors:
         input_tensor, *_ = input_tensors
-        input_dtype = input_tensor.dtype
+        input_dtype = None if keep_golden_dtype else input_tensor.dtype
         input_layout = input_tensor.layout
         if ttnn.is_tensor_storage_on_device(input_tensor):
             input_device = input_tensor.device()
@@ -837,6 +858,14 @@ def default_postprocess_golden_function_outputs(output, function_args, function_
 
     output = recursive_postprocess_golden_function_outputs(output)
     return output
+
+
+def dtype_preserving_postprocess_golden_function_outputs(output, function_args, function_kwargs):
+    """Convert golden outputs with their own dtype.
+    Operations that change dtype would otherwise be cast back to the first input's dtype.
+    """
+
+    return default_postprocess_golden_function_outputs(output, function_args, function_kwargs, keep_golden_dtype=True)
 
 
 TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
@@ -894,6 +923,8 @@ def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
 def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, mesh_tensors_as_shards=False):
     if ttnn.CONFIG.report_path is None:
         return None
+    import torch
+
     input_index = 0
 
     def recursive_preprocess_golden_function_inputs(object_value):
@@ -920,6 +951,11 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, 
             return golden_tensor
         if isinstance(object_value, ttnn.Shape):
             return tuple(object_value)
+        if isinstance(object_value, ttnn._ttnn.operations.complex.ComplexTensor):
+            # Complex goldens take one Torch complex tensor rebuilt from the components' retained goldens.
+            real = recursive_preprocess_golden_function_inputs(object_value.real)
+            imag = recursive_preprocess_golden_function_inputs(object_value.imag)
+            return torch.complex(real.float(), imag.float())
         if isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)
@@ -938,6 +974,7 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     import numbers
     import torch
 
+    golden_outputs, outputs = _split_complex_outputs(golden_outputs, outputs)
     for golden_output, output in _structured_output_pairs(golden_outputs, outputs):
         if isinstance(golden_output, numbers.Number) or isinstance(output, numbers.Number):
             if isinstance(golden_output, numbers.Number) and isinstance(output, numbers.Number):
