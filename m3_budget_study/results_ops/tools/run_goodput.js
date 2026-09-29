@@ -11,8 +11,8 @@
 //   --features full,near    feature sets (see SETS below) or a '+'-joined list of feature keys, e.g. pool+host+batch
 //   --budget 4096,8192      batching token budget (feature 'batch'; ignored as chunk when batching is off: chunk 2048)
 //   --slo 10,3              p90 TTFT SLOs in seconds; each SLO gets its own sweep + cliff bisection, as in lib/pool.js
-//   --effs FILE             JSON {"2x4": {"moe": {op: eff}, "dense": {...}}, "4x2": {...}} (or {"effs": {...}}),
-//                           merged per op over the calibrated CAL.effs
+//   --effs FILE[,FILE..]    JSON {"2x4": {"moe": {op: eff}, "dense": {...}}, "4x2": {...}} (or {"effs": {...}}),
+//                           merged per op over the calibrated CAL.effs, left to right (later files win)
 //   --no-moe-mult           drop the pipeline MoE multiplier (CAL.pipe.moeMult, fitted against the original effs)
 //   --pipe JSON|FILE        merge into CAL.pipe, e.g. '{"ringC":0.35}'. The dense ring-joint compute efficiency the
 //                           pipeline uses is pipe.ringC (x effs[mesh].dense.ring_c / effs['2x4'].dense.ring_c), and the
@@ -96,10 +96,11 @@ function refineCliff(points, slo, steps, run) {
 
 function buildCal(SIM, opts) {
   const cal = SIM.calibrate(JSON.parse(fs.readFileSync(path.join(__dirname, 'calib_data.json'))));
-  if (opts.effs) {
-    let over = JSON.parse(fs.readFileSync(opts.effs));
+  for (const f of opts.effs || []) {
+    let over = JSON.parse(fs.readFileSync(f));
     if (over.effs) over = over.effs;
     for (const mesh in over) {
+      if (mesh === 'about') continue;
       cal.effs[mesh] = cal.effs[mesh] || { moe: {}, dense: {} };
       for (const kind of ['moe', 'dense']) Object.assign(cal.effs[mesh][kind], (over[mesh] || {})[kind] || {});
     }
@@ -151,7 +152,7 @@ function parse(argv) {
     else if (k === '--features') a.features = list(v());
     else if (k === '--budget') a.budget = list(v(), Number);
     else if (k === '--slo') a.slo = list(v(), Number);
-    else if (k === '--effs') a.effs = path.resolve(v());
+    else if (k === '--effs') a.effs = list(v(), (x) => path.resolve(x));
     else if (k === '--no-moe-mult') a.noMoeMult = true;
     else if (k === '--pipe') { const x = v(); a.pipe = JSON.parse(fs.existsSync(x) ? fs.readFileSync(x, 'utf8') : x); }
     else if (k === '--arena') a.arena = Number(v());
@@ -207,7 +208,7 @@ async function main() {
   const res = await Promise.all(jobs);
   for (const w of workers) w.terminate();
   const k = (x) => (x / 1000).toFixed(1) + 'k';
-  console.log(`effs: ${a.effs || 'calibrated (calib_data.json)'}${a.noMoeMult ? ', no MoE multiplier' : ''}${a.pipe ? ', pipe ' + JSON.stringify(a.pipe) : ''}; data ${a.data}; ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  console.log(`effs: ${a.effs ? a.effs.join(' + ') : 'calibrated (calib_data.json)'}${a.noMoeMult ? ', no MoE multiplier' : ''}${a.pipe ? ', pipe ' + JSON.stringify(a.pipe) : ''}; data ${a.data}; ${((Date.now() - t0) / 1000).toFixed(0)} s`);
   console.log('features  topo       budget  SLO  goodput   at conc  p90 s  util');
   for (const r of res) {
     console.log(`${r.features.padEnd(9)} ${r.topo.padEnd(10)} ${String(r.budget).padStart(6)} ${String(r.slo).padStart(4)}  ${k(r.goodput).padStart(7)}  ${String(r.at ? r.at.conc : '-').padStart(7)}  ${r.at ? r.at.ttftP90.toFixed(2).padStart(5) : '  -  '}  ${r.at ? (100 * r.at.maxUtil).toFixed(0) + '%' : '-'}`);
