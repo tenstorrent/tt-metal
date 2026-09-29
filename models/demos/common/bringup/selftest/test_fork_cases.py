@@ -4,6 +4,7 @@
 """The derived-op test pass (task O.1): captured ttnn.bringup calls vs the forks' test cases."""
 
 import json
+import subprocess
 
 import pytest
 
@@ -134,41 +135,46 @@ def test_source_outcomes_from_junit(tmp_path):
     assert S._outcomes(x) == {"m::a": "passed", "m::b": "failed", "m::c": "skipped"}
 
 
-def test_gate_commit_stages_changed_forks_and_knowledge_only(fx):
-    """F48: a fork the agent made (or changed) and its knowledge-file entries are committed with the gate; other
-    forks' files are not staged (the formatting pass must not touch them)."""
-    import subprocess
+def test_gate_commit_stages_the_shared_paths_an_agent_may_change(fx):
+    """F49: fork edits (ttnn/ttnn/bringup) and knowledge entries are allowed paths, so the gate commit must carry them."""
+    from models.demos.common.bringup.core.gate import git_commit, stage_paths
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
 
+    s = Spec.load(fx())
+    led = Ledger(s.bringup_dir)
+    led.results_dir.mkdir(parents=True, exist_ok=True)
+    (led.results_dir / "C.x.json").write_text("{}")
+    repo = s.repo
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    fork = repo / "ttnn/ttnn/bringup/sdpa"
+    (fork / "tests/unit").mkdir(parents=True)
+    (fork / "CHANGELOG.md").write_text("- option\n")
+    (fork / "tests/unit/test_new.py").write_text("def test_x():\n    pass\n")
+    know = repo / "models/demos/common/bringup/knowledge"
+    know.mkdir(parents=True)
+    (know / "known_issues.md").write_text("# Known issues\n")
+    (know / "repo_map.md").write_text("# Repo map\n")
+    got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
+    assert "ttnn/ttnn/bringup" in got
+    assert {
+        "models/demos/common/bringup/knowledge/known_issues.md",
+        "models/demos/common/bringup/knowledge/repo_map.md",
+    } <= set(got)
+    assert git_commit(s, got, "gate", "")
+    tracked = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True).split()
+    assert "ttnn/ttnn/bringup/sdpa/tests/unit/test_new.py" in tracked
+    assert "ttnn/ttnn/bringup/sdpa/CHANGELOG.md" in tracked
+    assert "models/demos/common/bringup/knowledge/known_issues.md" in tracked
+
+
+def test_gate_commit_skips_shared_paths_that_do_not_exist(fx):
     from models.demos.common.bringup.core.gate import stage_paths
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.spec import Spec
 
     s = Spec.load(fx())
-    repo = s.repo
-    git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)  # noqa: E731
-    git("init", "-q")
-    kn = repo / "models/demos/common/bringup/knowledge"
-    kn.mkdir(parents=True)
-    (kn / "known_issues.md").write_text("# issues\n")
-    (kn / "repo_map.md").write_text("# map\n")
-    old = repo / "ttnn/ttnn/bringup/old_fork"
-    old.mkdir(parents=True)
-    (old / "op.cpp").write_text("int a;\n")
-    (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n")
-    git("add", "-A")
-    git("-c", "user.email=x@y", "-c", "user.name=x", "commit", "-qm", "base")
     led = Ledger(s.bringup_dir)
-    task = {"id": "C.1", "step": "implement", "paths": []}
-    assert not [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
-    new = repo / "ttnn/ttnn/bringup/new_fork"
-    (new / "__pycache__").mkdir(parents=True)
-    (new / "op.cpp").write_text("int b;\n")
-    (new / "__pycache__" / "x.pyc").write_text("")
-    (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n| new_fork |\n")
-    (kn / "known_issues.md").write_text("# issues\n- new entry\n")
-    got = [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
-    assert got == [
-        "models/demos/common/bringup/knowledge/known_issues.md",
-        "ttnn/ttnn/bringup/INDEX.md",
-        "ttnn/ttnn/bringup/new_fork/op.cpp",
-    ]
+    got = stage_paths(s, led, {"id": "C.x", "step": "implement"})
+    assert "ttnn/ttnn/bringup" not in got
