@@ -1566,3 +1566,41 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
+
+## S.moe_full.07 test (attempt 1)
+
+What was done
+- Replaced the rendered 28-line swap test (moe_full layer 1, attn_hc .. attention + attn_residual on device, rest
+  CPU) with swap 06 (test_swap_moe_full_06_attention.py) plus attn_residual checks. The gated pcc_swap_out (0.98), the
+  trail, and every swap-06 check at its limits stay as they were (gates, attn_x, attn_norm, q_resid, topk, attn_out
+  five ways, h_mid vs golden 0.007 / 0.025, router 0.99, out rel 0.01).
+  New h_mid checks: per-token per-stream norm ratio vs golden [0.98, 1.02]; vs the CPU attn_residual on the same
+  device inputs rel <= 5e-4 / worst (row, stream) <= 1e-3; the component's rounding-aware addend checks (float64);
+  and the module on rotated post gates (row mod 4) vs the CPU step at the same tight limits.
+- CPU mutation study at layer 1 (/tmp/hy4_sm7/study.py, outside the repo, ~10 s per variant). The table is in the
+  test docstring.
+
+Decisions
+- Tight vs-CPU limits, as layer 0's swap 07: the device TtHcPost is fp32 and bit-identical to the CPU step, so a bf16
+  output (0.0016) or a 1 % scale (0.0054) fails there.
+- Rotated post gates instead of layer 0's distinct-stream probe. The layer-1 streams are already distinct, but the
+  post gates of streams 0 / 1 are ~3e-4. Dropping the addend on stream 0 or 1, or swapping post columns 0 / 1, passes
+  every golden-side check; with rotated gates those bugs score rel >= 0.28.
+- Stream norm ratio kept at layer 0's [0.98, 1.02], not the component's [0.99, 1.01]: device attention error reaches
+  stream 3 (post ~0.23). The device scores [0.9972, 1.0038].
+
+Gotchas
+- 12 of 24 residual bugs pass the 0.98 out gate, including input streams 0 / 1 swapped (0.9966). Every bug fails the
+  vs-CPU check.
+- The trail's pcc_swap_topk is positional match (0.0003 on the device). Ignore it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (every vs-CPU check exact, h_mid 0.0021, out rel 0.00242).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device): PASS. pcc_swap_out 0.999984; h_mid 0.00405 / 0.0112, ratio [0.99722, 1.00379]; h_mid vs CPU 0,
+  addend exact, rotated 0; router 0.99396; out rel 0.00576.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
