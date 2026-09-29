@@ -149,7 +149,15 @@ def test_quantize_then_merge_matches_merge_then_quantize(
             ttnn.subtract(shipped_w, delta_dev, output_tensor=shipped_w)
             round_trip = down(shipped_w)
             base_quantized = down(up(weight, ttnn.bfloat8_b))
+            # Did the delta survive, in EACH ordering separately? The briefed one quantizes a weight
+            # that already contains the delta, so it almost has to move. The shipped one adds a
+            # bf16 delta into a bfloat8_b tensor, where the tile row's shared exponent gives a
+            # quantization step of roughly 2^-3 of the row maximum -- and a rank-128 adapter delta
+            # is ~1e-4 to 3e-3 of the weight. If that is below the step, `ttnn.add` returns the
+            # weight unchanged and the adapter silently does NOTHING on a quantized model, which is
+            # the one failure this whole test exists to exclude.
             moved = _stats(base_quantized, briefed)
+            moved_shipped = _stats(base_quantized, shipped)
 
             row = {
                 "block": index,
@@ -163,6 +171,7 @@ def test_quantize_then_merge_matches_merge_then_quantize(
                 # fused weight differs from the quantized base one. If it did not, every comparison
                 # above would pass by measuring nothing.
                 "fused_vs_base_quantized": moved,
+                "shipped_vs_base_quantized": moved_shipped,
                 "briefed_vs_fp32": _stats(fused_fp32, briefed),
                 "shipped_vs_fp32": _stats(fused_fp32, shipped),
                 "shipped_vs_briefed": _stats(briefed, shipped),
@@ -179,7 +188,13 @@ def test_quantize_then_merge_matches_merge_then_quantize(
                 f"    shipped vs briefed            : PCC {row['shipped_vs_briefed']['pcc']:.6f}  "
                 f"RMSE/sigma {row['shipped_vs_briefed']['rmse_over_sigma']:.5f}\n"
                 f"    bind->unbind vs q(W)          : PCC {row['unbind_vs_quantized_base']['pcc']:.6f}  "
-                f"max|err| {row['unbind_vs_quantized_base']['max_abs_err']:.3e}"
+                f"max|err| {row['unbind_vs_quantized_base']['max_abs_err']:.3e}\n"
+                f"    DID THE DELTA SURVIVE? quantize(W+d) vs q(W): max|err| "
+                f"{row['fused_vs_base_quantized']['max_abs_err']:.3e}  RMSE/sigma "
+                f"{row['fused_vs_base_quantized']['rmse_over_sigma']:.3e}\n"
+                f"                           requantize(q(W)+d) vs q(W): max|err| "
+                f"{row['shipped_vs_base_quantized']['max_abs_err']:.3e}  RMSE/sigma "
+                f"{row['shipped_vs_base_quantized']['rmse_over_sigma']:.3e}"
             )
 
     # What the assertions are for. The claim being tested is NOT that the two orderings are equal --
@@ -201,3 +216,79 @@ def test_quantize_then_merge_matches_merge_then_quantize(
             f"{tag}: quantize(W+delta) is identical to quantize(W), so the adapter's delta vanished "
             "in the rounding and this row measures nothing"
         )
+        # Whether the SHIPPED ordering's delta survives at all is its own test below, because it
+        # does not -- see test_the_adapter_delta_survives_a_quantized_merge.
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "OPEN DEFECT, measured here. Merging a Turbo LoRA into a bfloat8_b weight is a no-op: "
+        "`requantize(quantize(W) + delta)` comes back BIT-IDENTICAL to `quantize(W)` on 3 of the 4 "
+        "rows measured (max|err| 0.000e+00), and moves by a single LSB (1.953e-03) on the fourth. "
+        "bfloat8_b shares one exponent across a tile row, so its quantization step is ~2^-7 of the "
+        "row maximum, and a rank-128 adapter delta is 1.7e-4 (v1.2_768p at alpha/rank) to 3.3e-3 "
+        "(v0.1 at the scale-1 fallback) of the weight -- below the step, so `ttnn.add` returns the "
+        "weight unchanged. The briefed ordering `quantize(W + delta)` does carry the delta "
+        "(max|err| 1.6e-2 to 3.1e-2, RMSE/sigma 7.5e-3), which is what makes this a fixable "
+        "ordering bug rather than a precision limit. End-to-end consequence on a p150: the same "
+        "seeded 512x288x56 request returns a BIT-IDENTICAL clip with the adapter at strength 1.0, "
+        "at 0.0625, and with no adapter at all. strict=True so this flips to a failure the moment "
+        "the merge is fixed."
+    ),
+)
+@H3_MESH_PARALLEL
+def test_the_adapter_delta_survives_a_quantized_merge(
+    mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, num_links: int, is_fsdp: bool, topology, reset_seeds
+) -> None:
+    """Does binding an adapter to a quantized weight change the weight at all?
+
+    Separate from the ordering comparison above because it asks a different question, and because
+    the answer is no: the ordering comparison is a valid passing measurement (both orderings are
+    equally accurate *against an fp32 target*), while this one is the defect that measurement was
+    not built to see. Two equally accurate orderings can still differ in whether either of them
+    applied the adapter.
+    """
+    turbo = os.environ.get(TURBO_FILE_ENV)
+    model_root = os.environ.get(MODEL_PATH_ENV)
+    if not turbo or not os.path.exists(turbo):
+        pytest.skip(f"set {TURBO_FILE_ENV} to a lightx2v MiniMax-H3 Turbo safetensors file")
+    if not model_root:
+        pytest.skip(f"set {MODEL_PATH_ENV} to a MiniMax-H3 diffusers snapshot")
+    directory = Path(model_root) / "transformer"
+
+    unchanged = []
+    for index in BLOCKS:
+        for adapter_base_tmpl, leaf in TARGETS:
+            adapter_base = adapter_base_tmpl.format(i=index)
+            weight = _checkpoint_weight(directory, f"{adapter_base}.weight").to(torch.float32)
+            a, b, scale = _adapter_pair(turbo, adapter_base)
+            delta = (b.to(torch.bfloat16).to(torch.float32) @ a.to(torch.bfloat16).to(torch.float32)) * scale
+
+            def up(tensor: torch.Tensor, dtype) -> ttnn.Tensor:
+                return ttnn.from_torch(
+                    tensor.unsqueeze(0).unsqueeze(0), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device
+                )
+
+            def down(tensor: ttnn.Tensor) -> torch.Tensor:
+                out = ttnn.to_torch(
+                    tensor,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=[0, 1], mesh_shape=tuple(mesh_device.shape)
+                    ),
+                )
+                return out.reshape(-1, *out.shape[2:])[0].to(torch.float32)
+
+            base = down(up(weight, ttnn.bfloat8_b))
+            merged_dev = up(weight, ttnn.bfloat8_b)
+            ttnn.add(merged_dev, up(delta, ttnn.bfloat16), output_tensor=merged_dev)
+            moved = float((down(merged_dev) - base).abs().max())
+            logger.info(f"block {index} {leaf}: merging into bfloat8_b moved the weight by {moved:.3e}")
+            if moved == 0.0:
+                unchanged.append(f"block {index} {leaf}")
+
+    assert not unchanged, (
+        f"binding this adapter to a bfloat8_b weight left it BIT-IDENTICAL on {len(unchanged)} of "
+        f"{len(BLOCKS) * len(TARGETS)} targets ({', '.join(unchanged)}) -- the delta rounded away "
+        "against the tile row's shared exponent, so the adapter does nothing on a quantized mesh"
+    )
