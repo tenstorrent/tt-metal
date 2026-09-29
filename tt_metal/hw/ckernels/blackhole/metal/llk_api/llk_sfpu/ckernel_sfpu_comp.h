@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_is_fp16_zero.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
@@ -126,78 +127,32 @@ inline void calculate_comp() {
     }
 }
 
+// Integer compares. The int32 zero-compares and the int32 ==/!= scalar compares share their
+// implementation with the tt-llk unary int compares in sfpu/ckernel_sfpu_comp.h: arithmetic on the
+// sign bit and the leading-zero count, no condition codes, exact over the whole two's-complement
+// range including INT_MIN. The uint16/uint32 zero-compares below reuse its helpers.
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
-    for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt zero = 0;
-
-        // a[i] == 0
-        if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(v == zero) { v = 1; }
-            v_else { v = zero; }
-            v_endif;
-        }
-
-        // a[i] != 0
-        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            v_if(v == zero) { v = zero; }
-            v_else { v = 1; }
-            v_endif;
-        }
-
-        // a[i] < 0
-        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            v_if(v < zero) { v = 1; }
-            v_else { v = zero; }
-            v_endif;
-        }
-
-        // a[i] > 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { v = 1; }
-            v_else { v = zero; }
-            v_endif;
-        }
-
-        // a[i] <= 0
-        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { v = 1; }
-            v_else { v = zero; }
-            v_endif;
-        }
-
-        // a[i] >= 0
-        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            v_if(v >= zero) { v = 1; }
-            v_else { v = zero; }
-            v_endif;
-        }
-
-        dst_reg[0] = v;
-        dst_reg++;
-    }
+    _calculate_zero_comp_int_<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
-    // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
-    // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
+    // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads them
+    // zero-extended and stores the low 16 bits back (SFPLOAD/SFPSTORE mod = UINT16), matching
+    // the InstrModLoadStore::LO16 path. The zero test is on the zero-extended word.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
+        const vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
+        vInt r;
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            vUInt r = 0;
-            v_if(v == 0) { r = 1; }
-            v_endif;
-            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
+            r = _int_is_zero_(as<vInt>(v));
         } else {
-            vUInt r = 1;
-            v_if(v == 0) { r = 0; }
-            v_endif;
-            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
+            r = _int_is_nonzero_(as<vInt>(v));
         }
+        dst_reg[0].mode<sfpi::DataLayout::U16>() = as<vUInt>(r);
         dst_reg++;
     }
 }
@@ -206,14 +161,11 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
     // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
     // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
-    // (only a compare against the all-zero word), so a plain unsigned compare works.
+    // (only a test against the all-zero word), so the leading-zero count of the raw word decides.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        vUInt r = 0;
-        v_if(v == 0) { r = 1; }
-        v_endif;
-        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
+        const vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = as<vUInt>(_int_is_zero_(as<vInt>(v)));
         dst_reg++;
     }
 }
@@ -222,35 +174,17 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
-        vUInt r = 0;
-        v_if(v != 0) { r = 1; }
-        v_endif;
-        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
+        const vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = as<vUInt>(_int_is_nonzero_(as<vInt>(v)));
         dst_reg++;
     }
 }
 
+// a[i] == scalar / a[i] != scalar on int32, bitwise-exact for every pattern (the scalar is
+// hoisted once; the previous v_if form re-issued its two SFPLOADI halves on every row).
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt val = 0;
-
-        // a[i] != scalar
-        if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != scalar) { val = 1; }
-            v_endif;
-        }
-        // a[i] == scalar
-        else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == scalar) { val = 1; }
-            v_endif;
-        }
-        dst_reg[0] = val;
-        dst_reg++;
-    }
+    _calculate_comp_unary_int_<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>(scalar);
 }
 
 }  // namespace sfpu

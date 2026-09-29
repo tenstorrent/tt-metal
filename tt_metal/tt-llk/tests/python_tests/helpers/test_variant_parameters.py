@@ -329,6 +329,25 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_COMP_INT_SCALAR(TemplateParameter):
+    """Scalar the Int32 unary compares (UnaryEq/Ne/Gt/Lt/Ge/Le) test against.
+
+    Same ``#ifdef`` arrangement as :class:`SFPU_RELU_MIN_INT_THRESHOLD`: sfpu_operations.h is
+    shared by every unary test and only the int32 compare sweep sets this, so the rest keep
+    compiling without it and get the kernel's fixed 5.
+
+    Takes a *signed* Python int and emits its two's-complement pattern as a uint32 literal, so
+    INT_MIN and negative scalars survive the trip through the preprocessor; the header casts it
+    back to int.
+    """
+
+    scalar: int = 5
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_UNARY_COMP_INT_SCALAR {self.scalar & 0xFFFFFFFF}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 

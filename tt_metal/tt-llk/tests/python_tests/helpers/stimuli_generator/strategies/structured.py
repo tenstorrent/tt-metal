@@ -78,8 +78,13 @@ class CustomStrategy:
             )
         dtype = _get_dtype_for_format(stimuli_format)
         if stimuli_format.is_integer():
-            int_min, int_max = _get_integer_bounds(stimuli_format)
-            vals = [max(int_min, min(int(round(v)), int_max)) for v in spec.values]
+            # Clip to the dtype's own range, not _get_integer_bounds(): that excludes the most
+            # negative value for the sign-magnitude packers, which clip it themselves
+            # (pack.py: pack_int32 / pack_int16 / pack_int8). Explicit values are the one way a
+            # two's-complement test (StimuliConfig(twos_complement=True)) can put INT_MIN in
+            # front of a kernel, so the custom path carries it through.
+            info = torch.iinfo(dtype)
+            vals = [max(info.min, min(int(round(v)), info.max)) for v in spec.values]
         else:
             vals = list(spec.values)
         tensor = torch.zeros(size, dtype=dtype)
