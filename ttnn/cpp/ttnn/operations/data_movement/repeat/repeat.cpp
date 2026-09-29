@@ -637,7 +637,7 @@ ttnn::Tensor repeat_force_codegen(
         "repeat_force_codegen invoked for a case the codegen path does not support (requires a "
         "rank-2..4 input with a default untransposed tile, at least one dim repeated more than once "
         "and none repeated zero times, and no row-major "
-        "leg over bfloat8_b, over bfloat16 with a last dim below 2 elements, or with a stick too wide "
+        "leg over bfloat8_b or with a stick too wide "
         "for its CB -- a TILE input whose sub-tile H/W "
         "axis is repeated runs row-major). Use ttnn::repeat if you want the case routed.");
     return repeat_via_codegen(working_tensor, working_repetition_vector, output_mem_config);

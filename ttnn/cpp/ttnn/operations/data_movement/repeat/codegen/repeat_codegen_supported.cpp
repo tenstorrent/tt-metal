@@ -33,12 +33,6 @@ bool is_sub_tile(const ttnn::Shape& shape) {
     return shape[-2] % tt::constants::TILE_HEIGHT != 0 || shape[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-// ttnn does not support a bfloat16 ROW_MAJOR tensor whose last dim is a single element, and native
-// refuses it, so a row-major leg over one is out of scope.
-bool row_major_stick_ok(DataType dtype, const ttnn::Shape& shape) {
-    return dtype != DataType::BFLOAT16 || shape[-1] >= 2;
-}
-
 MemoryConfig interleaved_in(BufferType buffer_type) {
     return MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
 }
@@ -252,7 +246,9 @@ bool supported_by_codegen(
         return true;
     }
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        if (input.dtype() == DataType::BFLOAT8_B || !row_major_stick_ok(input.dtype(), shape)) {
+        // A one-element bfloat16 stick is served: the last-dim reader replicates a 2-byte stick with
+        // halfword stores, and every other leg moves whole aligned pages.
+        if (input.dtype() == DataType::BFLOAT8_B) {
             return false;
         }
         if (input.storage_type() != ttnn::StorageType::DEVICE) {
@@ -316,9 +312,8 @@ bool supported_by_codegen(
     if (input.layout() != ttnn::TILE_LAYOUT && input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
         return false;
     }
-    // Every leg below reads the input's stick width first, so the one-stick rule applies to the round
-    // trip's row-major legs as well.
-    if (input.dtype() == DataType::BFLOAT8_B || !row_major_stick_ok(input.dtype(), shape)) {
+    // Every leg below runs row-major, the round trip's included.
+    if (input.dtype() == DataType::BFLOAT8_B) {
         return false;
     }
     if (input.storage_type() != ttnn::StorageType::DEVICE) {
