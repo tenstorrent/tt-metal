@@ -2118,3 +2118,29 @@ Results:
 Next (implement): no module change is needed; add shared_expert to `DEVICE_STEPS["kda_moe"]` if not there yet.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_shared_expert.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.11 test (attempt 1)
+Reviewed the rendered swap 11 test (kda_moe layer 4, shared_expert added). The rendered file was the bare
+`run_swap_test`. I rebuilt it from the frozen kda_moe swap 10 test (every check and limit kept) plus dsa_moe swap 13's
+shared-expert additions:
+- a shared-share block (device outputs through experts fixed, CPU shared_expert and tail); the experts share is now
+  it vs the experts-share block;
+- shared_expert vs the fp32 CPU shared expert of the same ffn_norm (the layer-4 component limits), also on chunk 0;
+- shared_expert vs golden.
+The gated metric pcc_swap_out (>= 0.98) is unchanged.
+- Sensitivity: /tmp/kmoe11/sens.py (CPU only, not kept; golden tail tensors with shared_out perturbed). At layer 4,
+  shared_out reaches block out at about 0.038x: x1.01 gives 0.00038 / ratio max 1.0037, and a zeroed last row gives
+  a minimum ratio of 0.984. Shared-share limits: rel <= 0.00025, ratio [0.9985, 1.0015].
+- The first device run failed only on shared_expert vs golden (0.0121 / [0.9895, 1.0191] / worst row 0.0427, against
+  dsa_moe 13's 0.012 / [0.985, 1.015] / 0.03). The CPU shared expert of the same device ffn_norm scores the same, so
+  the error comes from upstream. I widened only those limits: rel 0.018, ratio [0.98, 1.03], worst row 0.06, coef
+  [0.995, 1.005], blocks [0.994, 1.006]. Proposed as a known issue.
+Results:
+- Device passes: PCC 0.999990, rel 0.00456; every swap 10 number is unchanged.
+  - Shared share: 0.00009 / [0.9997, 1.0000].
+  - Shared expert vs CPU same input: 0.00236 / 0.99922 (chunk 0: 0.00234).
+- Reference passes (PCC 0.999997, every share exact). Stub fails.
+- About 105 s for the real pass (200 s in total).
+Next: the device shared expert (`tt/mlp.py:TtDenseMLP` via the hooks) already works in this swap.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_11_shared_expert.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
