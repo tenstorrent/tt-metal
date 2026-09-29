@@ -258,6 +258,17 @@ def caps_stale(demo_dir):
 _WEDGE_RETRY_ENV = "E2E_TRACE_WEDGE_RETRIES"
 _WEDGE_RETRIES = 2
 
+# WHAT THE CAPTURE SAW, IN THE FIELD THE AGENT ACTUALLY READS.
+#
+# `capture_detail` is the only model-specific evidence this gate produces: the stage markers the
+# capture printed before it stopped, one line per attempt. It was returned in the result and written
+# to the report -- and left OUT of `reasons`, which is the list the gate server turns into
+# next_target.reason and blocking[]. So the agent was handed the verdict PROSE only ("trace did not
+# engage ..."), identical every round, while the line naming where it stopped sat in a file nothing
+# told it to read: five rounds of guessing, no edits. The report keeps its own copy; this puts the
+# same fact into the pipe that reaches the agent.
+_CAPTURE_DETAIL_CHARS = 900  # next_target.reason is capped at 2000 -- leave room for the other blockers
+
 
 def _wedge_retries() -> int:
     try:
@@ -335,6 +346,8 @@ def evaluate_trace_gate(demo_dir, trace_caps=None, allow_no_trace=False, overflo
         reclaim_mesh()
     if verdict == "FAIL":
         reasons.append("G6 trace-gate: " + reason)
+        if capture_detail:
+            reasons.append("G6 trace-gate: what the capture itself reported: " + capture_detail[:_CAPTURE_DETAIL_CHARS])
         for g in glue:
             reasons.append("G6 trace-gate: " + g)
         if repin:
@@ -507,7 +520,12 @@ def build_fix_directive(result):
     for g in result.get("glue_violations") or []:
         parts.append("Port to on-device ttnn (remove from traced step): " + g)
     if not parts:
+        # Nothing static to point at, so the only lead is what the capture reported. Without it this
+        # fell back to the verdict prose, which is the same sentence every round and names nothing.
         parts.append(result.get("reason", "trace did not engage"))
+        detail = result.get("capture_detail")
+        if detail:
+            parts.append("The capture's own last output was: " + detail[:_CAPTURE_DETAIL_CHARS])
     return " ".join(parts)
 
 

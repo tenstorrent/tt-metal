@@ -1469,28 +1469,53 @@ def _import_closure(demo_dir: Path) -> list:
     return out
 
 
-def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
-    """Fingerprint of everything that decides the correctness verdict, or None if it cannot be taken.
+def _source_fingerprint(demo_dir: Path) -> Optional[str]:
+    """Content hash of every file that can change this demo's verdict, or None if it cannot be taken.
 
     Content, not mtimes: a checkout or a no-op rewrite must not invalidate a good answer, and a real
-    edit must."""
+    edit must. Two callers need exactly this fact and must agree on it -- the correctness cache (is
+    this the code that already passed?) and the loop's no-edit check (did the last round change
+    anything at all?) -- so it is taken once, here."""
     try:
-        from models.experimental.perf_automation.agent.device_recovery import _run_stamp
-
-        stamp = _run_stamp()
-    except Exception:  # noqa: BLE001
-        stamp = ""
-    if not stamp:
-        return None  # no run identity -> cannot scope a pass to this run -> never cache
-    try:
+        files = sorted(_import_closure(demo_dir))
+        if not files:
+            return None  # nothing found to hash: no evidence, NOT "the same as last time"
         h = hashlib.sha256()
-        h.update(repr((_GATE_KEY_VERSION, stamp, float(pcc), int(batch))).encode())
-        for f in sorted(_import_closure(demo_dir)):
+        for f in files:
             h.update(str(f).encode())
             h.update(f.read_bytes())
         return h.hexdigest()[:16]
-    except Exception:  # noqa: BLE001 - a key that cannot be taken must not block the gate
+    except Exception:  # noqa: BLE001 - a fingerprint that cannot be taken must not block the gate
         return None
+
+
+def run_stamp() -> str:
+    """Which run this state belongs to, or "" when nothing said.
+
+    State that outlives the run that earned it is a latch -- device_recovery._run_stamp's own
+    docstring is the case history -- and more than one piece of gate state now has to be scoped the
+    same way, so they ask one function rather than each spelling the lookup."""
+    try:
+        from models.experimental.perf_automation.agent.device_recovery import _run_stamp
+
+        return _run_stamp() or ""
+    except Exception:  # noqa: BLE001 - no run identity is a valid answer, not an error
+        return ""
+
+
+def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
+    """The correctness verdict's cache key: this demo's sources, plus the bar they were judged against.
+
+    None if it cannot be taken (no run identity, or the sources cannot be read) -> never cache."""
+    stamp = run_stamp()
+    if not stamp:
+        return None  # no run identity -> cannot scope a pass to this run -> never cache
+    src = _source_fingerprint(demo_dir)
+    if src is None:
+        return None
+    h = hashlib.sha256()
+    h.update(repr((_GATE_KEY_VERSION, stamp, float(pcc), int(batch), src)).encode())
+    return h.hexdigest()[:16]
 
 
 def _cached_correctness_pass(demo_dir: Path, key: Optional[str]) -> bool:
@@ -2230,10 +2255,14 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
         max_rounds=max_rounds,
         claude_bin=agent_bin,
     )
-    final = gate_fn()
+    # A HALT ALREADY CARRIES THE VERDICT that caused it, and re-running the gate here would spend the
+    # whole thing again to reach the same answer -- the exact cost the halt exists to avoid.
+    final = res.get("state") if res.get("halted") else gate_fn()
     sep = "=" * 78
     print("\n" + sep)
     print(f"  cc engine: rounds={res['rounds']} can_stop={final.get('can_stop')} halted={res['halted']}")
+    if res.get("halted") and final.get("reason"):
+        print(f"  halted because: {final.get('reason')}")
     print(sep)
     if final.get("can_stop"):
         emit_e2e_report(model_id, demo_dir, verdict="PASS")

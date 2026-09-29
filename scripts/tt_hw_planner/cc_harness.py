@@ -469,10 +469,15 @@ def run_cc_loop(
     timeout_s = _resolve_agent_timeout_s(agent_timeout_s)
     consecutive_timeouts = 0
     verbose = _verbose()
+    st: dict = {}
     while rounds < max_rounds:
         st = gate_fn()
         if st.get("halt"):
             halted = True
+            # A HALT MUST SAY WHY. This branch used to break silently, so a loop that stopped on the
+            # gate's own authority looked identical to one that ran out of rounds, and the reason the
+            # gate had already computed was thrown away here.
+            print("  [cc-gate] HALT: %s" % (st.get("reason") or "no reason given"), flush=True)
             break
         if st.get("can_stop"):
             can_stop = True
@@ -569,4 +574,6 @@ def run_cc_loop(
         rounds += 1
         if on_round is not None:
             on_round(rounds, st)
-    return {"rounds": rounds, "can_stop": can_stop, "halted": halted}
+    # `state` is the last gate verdict this loop saw. A caller that has to report a verdict after a
+    # halt can use it instead of paying for the whole gate again to be told the same thing.
+    return {"rounds": rounds, "can_stop": can_stop, "halted": halted, "state": st}
