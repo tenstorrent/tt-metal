@@ -149,7 +149,8 @@ def _build_mlp_optimizations(
     mesh_device, max_seq_len, max_batch, dtype, hidden_size, intermediate_size, core_grid, act_mem
 ):
     """MLP program/memory configs. The S8192 (JiT) shape resolves minimal_matmul
-    configs for Wi/Wo; other shapes use tuned or default program configs."""
+    configs for Wi/Wo when dtype is bfloat8_b; other shapes, and bfloat16 S8192,
+    use tuned or default program configs."""
     # The S8192 minimal_matmul configs below were tuned for bfloat8_b (N300 B12 data
     # parallel, and the bfloat8_b single-chip demo). Their circular buffers are sized
     # for 1088 B tiles; with bfloat16 (2048 B tiles) the Wi buffers reach 2,481,376 B

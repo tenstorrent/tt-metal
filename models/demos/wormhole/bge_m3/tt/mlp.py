@@ -158,9 +158,11 @@ class BgeM3MLP(LightweightModule):
 class BgeM3MLPJit(BgeM3MLP):
     """MLP for the B12/S8192 data-parallel serving shape.
 
-    ModelArgs sets use_jit only for that shape. Optimizations always resolves a
-    minimal_matmul config for Wi and Wo there, so this path runs both matmuls
-    with minimal_matmul and fuses GELU into Wi.
+    ModelArgs sets use_jit only for that shape. Optimizations resolves a
+    minimal_matmul config for Wi and Wo there when the model dtype is bfloat8_b,
+    so this path runs both matmuls with minimal_matmul and fuses GELU into Wi.
+    With any other dtype the configs are None and minimal_matmul falls back to
+    its default block sizes.
     """
 
     def forward(self, hidden_states: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
