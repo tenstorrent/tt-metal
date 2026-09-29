@@ -878,3 +878,61 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_09_ffn_hc_pre.py
+
+## C.dense_full.ffn_norm test (attempt 1)
+
+What was done
+- Reviewed the rendered component test (ffn_norm = post_attention_layernorm, w * x * rsqrt(mean(x^2) + 1e-5), plain
+  w, on ffn_x). Kept the gated pcc_ffn_norm_L00 (0.99) and added the attn_norm test's asserted checks vs the golden:
+  finite, element count, rel L2 <= 0.008, row norm ratio in [0.993, 1.007], worst row <= 0.015. Asserts the module is
+  not a CPU bridge. Added a second run on the golden input x 30 (bf16) vs the CPU step on the same input: rel <= 0.006,
+  ratio in [0.993, 1.007], worst row <= 0.015.
+- CPU mutation study in /tmp/hy4_ffnnorm/study{,2}.py (outside the repo); tables in the test docstring.
+
+Decisions and why
+- ffn_x is small (row rms 0.00083-0.0099; 76% of rows have mean(x^2) < eps), so eps dominates the golden. The
+  opposite of attn_norm: here eps errors are large on the golden (eps 1.2e-5 rel 0.052, 1e-6 PCC 0.968). But the RMS
+  reduction is damped (half columns rel 0.0044, LayerNorm 0.0075). So the synthetic probe scales the input up (x 30,
+  mean(x^2) >= 60x eps) instead of down (x 0.1 would only test the eps-dominated regime again).
+- Golden limits are the same as attn_norm (device noise estimate 0.0037 / [0.996, 1.0038] / 0.0053; attn_norm's
+  device module measured 0.0017).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 1.0, rel 0.00234, ratio [0.99952, 1.00048], worst row 0.0028; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): FAIL, NotImplementedError "no device module for ffn_norm yet" (expected before implement).
+
+Gotcha for implement
+- Same module as attn_norm (`tt/norm.py:TtDistributedRmsNorm`, fp32 input, stats mask): add
+  "ffn_norm": "post_attention_layernorm" to `hooks._NORM_STEPS` (and DEVICE_STEPS). It is called twice (golden,
+  then x 30).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_norm.py
+
+## C.dense_full.ffn_norm implement (attempt 1)
+
+What was done
+- `tt/norm.py:TtGatheredRmsNorm` (new): `ttnn.all_gather(x, dim=3, cluster_axis=1, Linear)` of the column-split
+  ffn_x [1, 1, S/2, 3072] fp32 -> [S/2, 6144], then `ttnn.bringup.rms_norm` (post_attention_layernorm full weight as
+  fp32 row-major [1, 1, 192, 32] replicated, eps rms_norm_eps 1e-5, HiFi4 + fp32 dest) -> typecast to bf16. Output
+  [1, 1, S/2, 6144] bf16 per chip, replicated over the 2 columns of a row (components.yaml / plan.md: the dense MLP,
+  router, dispatch and shared expert all take the full hidden). `norm_impl="native"` keeps ttnn.rms_norm selectable.
+  No host work in __call__.
+- `bringup/hooks.py`: `_GATHERED_NORM_STEPS = {"ffn_norm": "post_attention_layernorm"}`, `_gathered_norm_module`,
+  harness boundary `_col_in_row_out_host_fn` (col_split_to_device in, row_split_to_host out, column 0's copy);
+  routed in `_device_step_fn` / `device_component`; "ffn_norm" added to `DEVICE_STEPS["dense_full"]`.
+- `ttnn/ttnn/bringup/INDEX.md`: rms_norm_ttnn "Used by" lists tt/norm.py:TtGatheredRmsNorm.
+
+Decisions
+- Followed components.yaml (gather + local fork norm), not the attn_norm distributed norm: the output must be the full
+  hidden anyway, and the gathered form needs no stats mask (known issue: rms_norm_pre_all_gather junk on fp32 input).
+- bf16 output (as attn_norm / q_a); the golden is bf16. The MLP implement step can ask for fp32 via `dtype=`.
+
+Results
+- Gate: PASS. pcc_ffn_norm_L00 0.999996. golden: rel 0.00284, row ratio [0.99874, 1.00071], worst row 0.00352.
+  scaled x30: rel 0.00171, ratio [0.99933, 1.00100], worst row 0.00203.
+- The "FAIL pcc ... 0.000000" line at the top of the log is the stubbed precompile collect pass.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_norm.py
