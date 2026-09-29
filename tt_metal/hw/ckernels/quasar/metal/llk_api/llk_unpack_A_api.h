@@ -123,13 +123,16 @@ inline void llk_unpack_A_init(
  * format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
+ * @param dst_tile_index: DEST tile index the tile lands at. Used on the unpack-to-dest path only: there the unpacker
+ * writes DEST directly, so math cannot place the tile. Ignored otherwise.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
     [[maybe_unused]] bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+inline void llk_unpack_A(
+    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t dst_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -141,7 +144,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
             // EN_32BIT_DEST sizes the SyncHalf bank flip. It must agree with the pack side
             // (llk_pack_dest_section_done) or unpack and pack address different DEST halves; both derive it from
             // DST_ACCUM_MODE.
-            _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx);
+            _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx, dst_tile_index);
         } else {
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);

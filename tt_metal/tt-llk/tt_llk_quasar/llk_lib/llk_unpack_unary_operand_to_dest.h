@@ -96,8 +96,8 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
  *        synchronized with math and pack through the UNPACK_MATH / MATH_PACK semaphores.
  *
  * One call is one section: wait for a free bank, unpack the block_ct_dim tiles programmed at init starting at DEST tile
- * 0 of the current bank, post UNPACK_MATH, then (SyncHalf) move the section base to the other bank. Callers loop this
- * block_rt_dim times, advancing l1_tile_idx by block_ct_dim per section.
+ * dst_tile_idx of the current bank, post UNPACK_MATH, then (SyncHalf) move the section base to the other bank. Callers
+ * loop this block_rt_dim times, advancing l1_tile_idx by block_ct_dim per section.
  *
  * The math thread is the middleman with two single-counting semaphores (max = N each). Without an extra wait on
  * MATH_PACK, unpack could race 2N iterations ahead of pack and overwrite a bank that pack has not read yet; waiting on
@@ -110,17 +110,20 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
  *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
  *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
  * @param l1_tile_idx: Index into the L1 buffer of the first tile of this section
+ * @param dst_tile_idx: DEST tile index, relative to the current section base, of the first tile of this section. The
+ *        block_ct_dim tiles must fit below the section's tile capacity for the sync mode and DEST width, see
+ *        @ref get_dest_max_tiles. The pack thread reads the tiles back from the same indices of its section.
  * @note Call @ref _llk_unpack_unary_operand_to_dest_init_ before this function. Unpack-to-dest counterpart of
  *       @ref _llk_unpack_unary_operand_.
  */
 template <DstSync DEST_SYNC_MODE, bool EN_32BIT_DEST>
-inline void _llk_unpack_unary_operand_to_dest_(const std::uint32_t l1_tile_idx)
+inline void _llk_unpack_unary_operand_to_dest_(const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx = 0)
 {
     _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
 
     // UNP_DEST is driven off the UNP_A bank's counters.
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, dst_tile_idx);
 
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
