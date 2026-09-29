@@ -2044,6 +2044,13 @@ tasks:
     kind: op
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T17:29:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py: bf30317695dfea00bbaac7637a414fab61a5e8e38a0782da6fff75b31649f8c0
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.05
   title: 'moe_shared block with steps 1-5 on device (last: topk_shared)'
   step: implement
