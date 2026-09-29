@@ -254,9 +254,16 @@ bool causal_pairs_uniform(uint32_t q_num_chunks, uint32_t Sq_chunk_t, uint32_t S
     return true;
 }
 
+// The causal chains cut K/V DRAM reads, so they pay once the stream is DRAM bound: on 64 cores or more, and from 32
+// for bf16 K/V at d128 and up with bf16 DEST (measured on Blackhole; below that the relay costs up to 2 percent).
+bool causal_chains_pay(uint32_t num_cores, uint32_t DHt, bool bf16_kv, bool fp32_dest_acc_en) {
+    return num_cores >= 64 || (bf16_kv && !fp32_dest_acc_en && DHt >= 4 && num_cores >= 32);
+}
+
 uint32_t kv_chain_mode_for(
     bool is_causal,
     bool blackhole,
+    bool chains_pay,
     bool plain_kv_stream,
     bool causal_pairs,
     bool fp32_legacy_block_float_kv,
@@ -272,7 +279,7 @@ uint32_t kv_chain_mode_for(
         return 1;
     }
     // The causal chains below were measured on Blackhole only; other archs keep main's configuration.
-    if (!blackhole) {
+    if (!blackhole || !chains_pay) {
         return 0;
     }
     // The legacy kernel with fp32 DEST is compute bound: with block float K/V a chain pays only for bfp8 on the full
@@ -789,6 +796,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t kv_chain_mode = kv_chain_mode_for(
         is_causal,
         device->arch() == tt::ARCH::BLACKHOLE,
+        causal_chains_pay(num_cores, DHt, input_tensor_k.dtype() == DataType::BFLOAT16, fp32_dest_acc_en),
         !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
         global_q_pair_distribute && !use_provided_mask,
         fp32_dest_acc_en && !use_streaming_compute && block_float_kv,
