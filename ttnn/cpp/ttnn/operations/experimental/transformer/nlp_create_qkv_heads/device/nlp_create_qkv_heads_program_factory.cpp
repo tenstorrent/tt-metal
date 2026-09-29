@@ -36,15 +36,21 @@ struct InterleavedWorkSplit {
 };
 
 InterleavedWorkSplit build_interleaved_work_split(
-    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor,
+    bool input_tensor_kv_present) {
     const auto& input_shape = input_tensor.padded_shape();
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
     const uint32_t sequence_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    // Split heads only when the Q-only sequence split would leave cores idle.
-    const bool head_parallel = operation_attributes.num_kv_heads == 0 && operation_attributes.num_q_heads > 1 &&
-                               !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y;
-    const uint32_t num_blocks = sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
+    // Split heads only when the sequence split would leave cores idle. A block is then one (batch, head, row) of
+    // one output: Q heads first, then K, then V.
+    const bool q_only = operation_attributes.num_kv_heads == 0;
+    const uint32_t head_slots = operation_attributes.num_q_heads + 2 * operation_attributes.num_kv_heads;
+    const bool head_parallel =
+        head_slots > 1 && !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y &&
+        (q_only || (!input_tensor_kv_present && !operation_attributes.q_head_split.has_value()));
+    const uint32_t num_blocks = sequence_blocks * (head_parallel ? head_slots : 1);
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_blocks);
 
@@ -160,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    const auto split = build_interleaved_work_split(operation_attributes, input_tensor, read_from_input_tensor_kv);
     const auto& core_group_1 = split.core_group_1;
     const auto& core_group_2 = split.core_group_2;
     const uint32_t num_blocks_per_core_group_1 = split.num_blocks_per_core_group_1;

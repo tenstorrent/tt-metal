@@ -45,12 +45,27 @@ void kernel_main() {
     // Tiles read per barrier; divides the head width.
     constexpr uint32_t tile_batch = get_arg(args::tile_batch);
     if constexpr (head_parallel) {
-        constexpr uint32_t heads = q_num_tiles / head_tiles;
+        // Blocks are (batch, head slot, row); the slots are the Q heads, then K, then V. Tied K and V read the same
+        // input columns.
+        constexpr uint32_t q_heads = q_num_tiles / head_tiles;
+        constexpr uint32_t kv_heads = kv_num_tiles / head_tiles;
+        constexpr uint32_t slots = q_heads + 2 * kv_heads;
+#ifdef KV_TIED
+        constexpr uint32_t input_heads = q_heads + kv_heads;
+#else
+        constexpr uint32_t input_heads = slots;
+#endif
         for (uint32_t block = in0_tensor_tile_id; block < in0_tensor_tile_id + num_blocks; ++block) {
-            const uint32_t batch_head = block / seq_tiles;
+            const uint32_t batch_slot = block / seq_tiles;
             const uint32_t row = block % seq_tiles;
+            uint32_t slot = batch_slot % slots;
+#ifdef KV_TIED
+            if (slot >= q_heads + kv_heads) {
+                slot -= kv_heads;
+            }
+#endif
             uint32_t source =
-                ((batch_head / heads) * seq_tiles + row) * q_num_tiles + (batch_head % heads) * head_tiles;
+                ((batch_slot / slots) * seq_tiles + row) * input_heads * head_tiles + slot * head_tiles;
             for (uint32_t tile = 0; tile < head_tiles; tile += tile_batch) {
                 dfb_qv.reserve_back(tile_batch);
                 uint32_t destination = dfb_qv.get_write_ptr();
