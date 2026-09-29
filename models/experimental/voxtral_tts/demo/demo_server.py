@@ -13,6 +13,7 @@ Performance table in the README describes. `--ckpt` > $VOXTRAL_CKPT > HF hub dow
 """
 
 import argparse
+import os
 import sys
 
 from models.experimental.voxtral_tts import frontend
@@ -65,12 +66,13 @@ def main(argv=None):
                 print(f"seed={seed}")
                 continue
             if line.startswith(r"\out "):
-                out = line.split(None, 1)[1].strip()
+                out, n = line.split(None, 1)[1].strip(), 0  # the next utterance goes to exactly this path
                 print(f"out={out}")
                 continue
 
             wav = pipe.synthesize(line, voice, seed=seed, max_frames=a.max_frames)
-            path = out if n == 0 else out.replace(".wav", f"_{n}.wav")
+            root, ext = os.path.splitext(out)
+            path = out if n == 0 else f"{root}_{n}{ext}"  # out.wav, out_1.wav, ...; any suffix, or none
             write_wav(path, wav)
             t = pipe.last_timings
             audio_s = t["frames"] / FRAME_RATE

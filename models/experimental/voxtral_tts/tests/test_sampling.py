@@ -16,12 +16,14 @@ torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import END_AUDIO_ID  # noqa: E402
-from models.experimental.voxtral_tts.tests.reference_helpers import fixture_embeds  # noqa: E402
+from models.experimental.voxtral_tts.tests.reference_helpers import fixture_embeds, needs_checkpoint  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: E402
     CFG_ALPHA,
     TtVoxtralPipeline,
     open_device,
 )
+
+pytestmark = needs_checkpoint
 
 CASE = 0
 N = 8  # a few frames is enough to see the draw change; this file is about plumbing, not accuracy
@@ -44,15 +46,14 @@ def _gen(pipe, embeds, **kw):
 
 @pytest.mark.slow
 def test_a_different_seed_changes_the_draw(pipe):
-    """A different seed must change the draw."""
+    """A different seed must change the draw: a different length or different codes."""
     embeds, _ = fixture_embeds(CASE, pipe.wb)
     a = _gen(pipe, embeds, seed=0)
     b = _gen(pipe, embeds, seed=12345)
-    assert (
-        a.shape == b.shape
-    ), "different seeds changed the frame count, which is fine, but then compare lengths instead"
-    assert not torch.equal(a, b), "two different seeds produced identical codes -- seed is ignored"
-    print(f"\n  seed 0 vs 12345: {int((a != b).sum())} of {a.numel()} codes differ")
+    n = min(a.shape[0], b.shape[0])
+    differ = int((a[:n] != b[:n]).sum())
+    print(f"\n  seed 0 vs 12345: {a.shape[0]} vs {b.shape[0]} frames, {differ} of {a[:n].numel()} shared codes differ")
+    assert a.shape[0] != b.shape[0] or differ, "two different seeds produced identical codes -- seed is ignored"
 
 
 @pytest.mark.slow

@@ -79,7 +79,7 @@ VOICE_SWEEP_LANG = "en"
 VOICE_SWEEP_SENTENCES = 2  # breadth over voices, not depth over sentences
 
 MAX_DEGENERATE = 2  # runs per cell at or past COLLAPSE; see VOXTRAL_TTS_GATES.md [wer-09]
-# hi/long: 40% of its 20 runs; measured 4 and 7 on two tt-metal builds. see VOXTRAL_TTS_GATES.md [wer-08]
+# Per-cell overrides of MAX_DEGENERATE. see VOXTRAL_TTS_GATES.md [wer-08]
 MAX_DEGENERATE_CELL = {("hi", "long"): 8}
 # runs that hit the frame cap without [END_AUDIO]; WER cannot hear a missing tail
 MAX_NON_TERMINATING = 2

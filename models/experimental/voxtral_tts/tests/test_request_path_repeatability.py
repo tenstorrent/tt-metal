@@ -18,11 +18,14 @@ ttnn = pytest.importorskip("ttnn")
 from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
     case_ids,
     fixture_embeds,
+    needs_checkpoint,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: E402
     TtVoxtralPipeline,
     open_device,
 )
+
+pytestmark = needs_checkpoint
 
 # Big enough for [END_AUDIO] to decide the length: under a cap both arms stop at the cap and
 # compare equal for a trivial reason.

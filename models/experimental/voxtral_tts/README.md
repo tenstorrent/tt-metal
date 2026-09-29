@@ -109,6 +109,8 @@ tts.close()                    # releases the trace, and the device if the pipel
 `synthesize` chains the text front end, `generate` (prompt embeddings -> codes) and `decode`
 (codes -> waveform); those two halves stay public for callers that need the codes.
 `tts.last_timings` holds the last request's per-stage times. Progress goes through loguru.
+A device you pass in must be opened with the L1 scratch and trace region the model needs: use
+`open_device()` from the same module, or `l1_small_size=L1_SMALL_SIZE, trace_region_size=TRACE_REGION_SIZE`.
 
 ## Tests
 
@@ -211,9 +213,9 @@ trace capture; 11x10 p150b, tt-metal main aa97958452, 2026-09-29):
 
 Quality: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**.
 
-One-time `warmup()` takes **~74 s** with a hot kernel cache — 16 prefill shapes (32.8 s), the flow model
-(6.0 s), 5 codec buckets (32.6 s) and one trace capture (2.6 s) — and longer on a first-ever run
-when kernels build from scratch. It compiles **every** prefill shape and **every** codec bucket, so
+One-time `warmup()` takes **~13 s** with the kernel cache on local disk — 16 prefill shapes (4.5 s), the
+flow model (0.3 s), 16 codec buckets (7.6 s) and one trace capture (0.2 s) — and much longer on a
+first-ever run, when kernels build from scratch. It compiles **every** prefill shape and **every** codec bucket, so
 no request pays a compile at request time. `TtVoxtralPipeline.warmed` records what was compiled;
 `tests/perf/test_warmup.py` asserts it.
 

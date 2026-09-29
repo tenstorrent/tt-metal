@@ -73,13 +73,23 @@ _SDPA_PRG = ttnn.SDPAProgramConfig(
 # Decode matmul program configs. DECODE ONLY: per_core_M=1 and fuse_batch=True assume one tile of
 # rows, so _mlp takes them as an argument. SiLU fuses via fused_activation, not activation="silu".
 # see VOXTRAL_TTS_BACKBONE.md [gpt-26]
-_MM_GRID = (11, 7)  # fits 11x10 and 13x10. see VOXTRAL_TTS_BACKBONE.md [gpt-29]
+_MM_CORES = 72  # every per_core_N below splits N over this many cores. see VOXTRAL_TTS_BACKBONE.md [gpt-29]
 
 
-def _mm1d(in0_block_w, per_core_n, activation=None):
+def decode_grid(device_grid):
+    """-> the decode matmuls' core grid: the widest, up to 12 columns, with _MM_CORES cores that fits
+    `device_grid`. see VOXTRAL_TTS_BACKBONE.md [gpt-29]"""
+    for x in range(min(device_grid.x, 12), 0, -1):
+        y = -(-_MM_CORES // x)
+        if y <= device_grid.y:
+            return (x, y)
+    raise RuntimeError(f"device grid {device_grid.x}x{device_grid.y} has no rectangle of {_MM_CORES} cores")
+
+
+def _mm1d(grid, in0_block_w, per_core_n, activation=None):
     """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=_MM_GRID,
+        compute_with_storage_grid_size=grid,
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         # largest legal width: osh*osw <= 4 and per_core_N % osw == 0, both TT_FATAL.
@@ -93,13 +103,19 @@ def _mm1d(in0_block_w, per_core_n, activation=None):
     )
 
 
-#                       in0_block_w   per_core_N = ceil(N_tiles / 72) -- 12x6's split, kept on 11x7
-_PRG_QKV = _mm1d(2, 3)  # K=3072  N=6144   Nt=192
-_PRG_WO = _mm1d(4, 2)  # K=4096  N=3072   Nt= 96
-_PRG_W1 = _mm1d(2, 4, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))  # K=3072 N=9216 Nt=288
-_PRG_W3 = _mm1d(2, 4)  # same shape as w1, no activation
-_PRG_W2 = _mm1d(4, 2)  # K=9216  N=3072   Nt= 96 -- the deepest reduction in the model
-DECODE_PRG = {"wqkv": _PRG_QKV, "wo": _PRG_WO, "w1": _PRG_W1, "w3": _PRG_W3, "w2": _PRG_W2}
+# (in0_block_w, per_core_N = ceil(N_tiles / _MM_CORES), fused activation) per decode matmul
+_DECODE_SPLIT = {
+    "wqkv": (2, 3, None),  # K=3072  N=6144   Nt=192
+    "wo": (4, 2, None),  # K=4096  N=3072   Nt= 96
+    "w1": (2, 4, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)),  # K=3072 N=9216 Nt=288
+    "w3": (2, 4, None),  # same shape as w1, no activation
+    "w2": (4, 2, None),  # K=9216  N=3072   Nt= 96 -- the deepest reduction in the model
+}
+
+
+def decode_program_configs(grid):
+    """-> {matmul name: program config} on `grid` (see decode_grid)."""
+    return {name: _mm1d(grid, *split) for name, split in _DECODE_SPLIT.items()}
 
 
 def _pc(prg, key):
@@ -131,7 +147,6 @@ def check_device_grid(device):
     see VOXTRAL_TTS_BACKBONE.md [gpt-29]"""
     g = device.compute_with_storage_grid_size()
     need = {
-        "_MM_GRID": _MM_GRID,
         "_NORM_GRID": _NORM_GRID,
         "_SDPA_PRG": (_SDPA_PRG.compute_with_storage_grid_size.x, _SDPA_PRG.compute_with_storage_grid_size.y),
     }
@@ -192,6 +207,7 @@ class TtVoxtralGPT:
         `max_seq_len=0` skips the KV cache. see VOXTRAL_TTS_BACKBONE.md [gpt-09]"""
         check_device_grid(device)
         self.device = device
+        self.decode_prg = decode_program_configs(decode_grid(device.compute_with_storage_grid_size()))
         self.dtype = DTYPE
         self.n_layers = n_layers
         self.max_seq_len = max_seq_len
@@ -299,7 +315,7 @@ class TtVoxtralGPT:
         return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
 
     def _mlp(self, x, h, w, mc, prg=None):
-        """Residual + SwiGLU over an already-normed `h`; `prg` is DECODE_PRG on decode, None on
+        """Residual + SwiGLU over an already-normed `h`; `prg` is decode_prg on decode, None on
         prefill. see VOXTRAL_TTS_BACKBONE.md [gpt-14], [gpt-26], [gpt-27]"""
         prg = prg or {}
         # w1 and w3 stay separate matmuls. see VOXTRAL_TTS_BACKBONE.md [gpt-22]
@@ -351,7 +367,10 @@ class TtVoxtralGPT:
         See VOXTRAL_TTS_BACKBONE.md [gpt-16].
         """
         qkv = ttnn.linear(
-            self._norm(x, w["an"]), w["wqkv"], program_config=DECODE_PRG["wqkv"], compute_kernel_config=COMPUTE_CONFIG
+            self._norm(x, w["an"]),
+            w["wqkv"],
+            program_config=self.decode_prg["wqkv"],
+            compute_kernel_config=COMPUTE_CONFIG,
         )
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
@@ -384,11 +403,11 @@ class TtVoxtralGPT:
             a,
             w["wo"],
             bias=ttnn.reshape(x, [1, DIM]),
-            program_config=DECODE_PRG["wo"],
+            program_config=self.decode_prg["wo"],
             compute_kernel_config=COMPUTE_CONFIG,
             memory_config=_L1,
         )
-        return self._mlp(x, self._norm(x, w["fn"]), w, _L1, DECODE_PRG)
+        return self._mlp(x, self._norm(x, w["fn"]), w, _L1, self.decode_prg)
 
     @torch.no_grad()
     def prefill(self, embeds, apply_final_norm=True, last_only=False):

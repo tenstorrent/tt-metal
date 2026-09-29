@@ -16,8 +16,6 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-pytestmark = pytest.mark.slow
-
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # noqa: E402
     DIM,
@@ -31,17 +29,19 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
     fixture_embeds,
     ill_conditioned_frames,
     long_frame_cases,
+    needs_checkpoint,
     real_frames_long,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
+pytestmark = [pytest.mark.slow, needs_checkpoint]
+
 # Every teacher-forced comparison uses the prompt's OWN recorded trajectory.
 # Gate constants and why the breadth floor is lower: see VOXTRAL_TTS_BACKBONE.md [gpt-51]
 PCC_DECODE = 0.999
 PCC_DECODE_HORIZON = 0.997  # a minimum over every well-conditioned frame of all 15 prompts
-# Ill-conditioned frames skip the floors above but must each clear this one; the worst measured is
-# 0.996603. see VOXTRAL_TTS_BACKBONE.md [gpt-53]
+# Ill-conditioned frames skip the floors above but must each clear this one. see VOXTRAL_TTS_BACKBONE.md [gpt-53]
 PCC_DECODE_ILL_CONDITIONED = 0.995
 CACHE_PCC = 0.998
 TILE = 32

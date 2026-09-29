@@ -20,7 +20,10 @@ from models.experimental.voxtral_tts.tt import ttnn_voxtral_pipeline as pipemod 
 from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
     case_ids,
     fixture_embeds,
+    needs_checkpoint,
 )
+
+pytestmark = needs_checkpoint
 
 SEEDS = (0, 1, 2)
 # A cap, not a budget: generation stops on [END_AUDIO], and hitting the cap is reported.

@@ -16,10 +16,14 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
+from models.experimental.voxtral_tts.tests.reference_helpers import needs_checkpoint  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import TtVoxtralPipeline, open_device  # noqa: E402
+
+pytestmark = needs_checkpoint
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(1800)  # see VOXTRAL_TTS_BRINGUP.md [pipe-06]
 def test_warmup_compiles_every_prefill_shape_and_codec_bucket():
     """Warmup must leave nothing for a request to compile: every prefill shape and codec bucket.
 
@@ -43,8 +47,12 @@ def test_warmup_compiles_every_prefill_shape_and_codec_bucket():
             f"warmup compiled {len(w['prefill_shapes'])} of {len(expected_shapes)} prefill shapes: "
             f"missing {sorted(set(expected_shapes) - set(w['prefill_shapes']))}"
         )
-        assert w["codec_buckets"], "no codec bucket compiled"
-        assert w["codec_buckets"][0] == (p.codec.bucket or 1)
+        bucket = p.codec.bucket or 1
+        expected_buckets = list(range(bucket, -(-p.backbone.max_seq_len // bucket) * bucket + 1, bucket))
+        assert w["codec_buckets"] == expected_buckets, (
+            f"warmup compiled codec buckets {w['codec_buckets']}; a request can reach up to "
+            f"{p.backbone.max_seq_len} frames, so it needs {expected_buckets}"
+        )
         assert w["traced"], "the frame-loop trace was not captured, so generate() still pays it"
         p.close()
     finally:

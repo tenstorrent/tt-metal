@@ -30,8 +30,9 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import CFG_ALPHA, N_DE
 
 FRAME_RATE = 12.5
 
-# L1 scratch every caller needs: the codec's convs fail with "bank size is 0 B" without it.
-L1_SMALL_SIZE = 65536
+# L1 scratch the codec's convs need, sized for every codec bucket warmup compiles.
+# see VOXTRAL_TTS_BRINGUP.md [pipe-06]
+L1_SMALL_SIZE = 131072
 # Trace region for the frame loop; 0 falls back to eager. see VOXTRAL_TTS_BRINGUP.md [pipe-05]
 TRACE_REGION_SIZE = 250 * 1024 * 1024
 
@@ -168,9 +169,10 @@ class TtVoxtralPipeline:
         ac = flow._fsq_quantize(ttnn.to_torch(xr).float().reshape(1, flow.N_ACOUSTIC_CODEBOOK))
         return torch.cat([sem, ac + flow.N_AUDIO_SPECIAL], dim=1)
 
-    def warmup(self, max_frames=640, capture_trace=True, verbose=False):
+    def warmup(self, max_frames=None, capture_trace=True, verbose=False):
         """Compile every program the request path can reach, then capture (and release) the
-        frame-loop trace. Sets `self.warmed`. see VOXTRAL_TTS_BRINGUP.md [pipe-06]
+        frame-loop trace. `max_frames` defaults to the cache length, the most any request can
+        reach. Sets `self.warmed`. see VOXTRAL_TTS_BRINGUP.md [pipe-06]
         """
         import time as _time
 
@@ -203,7 +205,8 @@ class TtVoxtralPipeline:
         from models.experimental.voxtral_tts.reference import voxtral_codec_ref as _cref
 
         bucket = self.codec.bucket or 1
-        buckets = list(range(bucket, max(max_frames, bucket) + 1, bucket))
+        top = -(-(max_frames or self.backbone.max_seq_len) // bucket) * bucket
+        buckets = list(range(bucket, top + 1, bucket))
         for n in buckets:
             self.codec(_cref.make_synthetic_codes(n))
         log(f"codec: {len(buckets)} buckets ({buckets[0]}..{buckets[-1]}) in {_time.perf_counter() - t0:.1f}s")
@@ -263,6 +266,8 @@ class TtVoxtralPipeline:
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
         """prompt embeds [1,P,3072] -> frames [T,37] int64 (offset applied, [END_AUDIO] excluded)."""
+        if max_frames < 1:
+            raise ValueError(f"max_frames must be positive, got {max_frames}")
         if seed is not None:
             torch.manual_seed(seed)
         t0 = time.perf_counter()

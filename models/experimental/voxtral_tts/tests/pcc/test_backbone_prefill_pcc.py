@@ -15,10 +15,6 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-# Every test here opens a device, the one-layer wiring test included. Module-level, so a new
-# test cannot miss the mark.
-pytestmark = pytest.mark.slow
-
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # noqa: E402
     DIM,
@@ -37,9 +33,14 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
     case_ids,
     fixture_embeds,
     ill_conditioned_positions,
+    needs_checkpoint,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
+
+# Every test here opens a device, the one-layer wiring test included. Module-level, so a new
+# test cannot miss the mark.
+pytestmark = [pytest.mark.slow, needs_checkpoint]
 
 # Gate constants; their measured bands: see VOXTRAL_TTS_BACKBONE.md [gpt-50]
 PCC_PREFILL = 0.999

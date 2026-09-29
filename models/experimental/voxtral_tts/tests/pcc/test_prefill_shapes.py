@@ -15,8 +15,6 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-pytestmark = pytest.mark.slow
-
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # noqa: E402
     N_KV_HEADS,
@@ -29,10 +27,13 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
     backbone_state,
     fixture_embeds,
     long_prompt_embeds,
+    needs_checkpoint,
 )
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
+
+pytestmark = [pytest.mark.slow, needs_checkpoint]
 
 MAX_SEQ = 2048
 SHAPES = tuple(range(gpt.PREFILL_MULTIPLE, MAX_SEQ + 1, gpt.PREFILL_MULTIPLE))  # 128 .. 2048
@@ -67,8 +68,20 @@ def big(dev, w):
     return TtVoxtralGPT(dev, n_layers=N_LAYERS, state=w, max_seq_len=MAX_SEQ)
 
 
-# Filled in by the parametrized test, read by the cross-shape test that follows.
+# Pooled PCC per shape, recorded by whichever test prefills that shape first.
 _POOLED: dict = {}
+
+
+def _prefill_at(big, w, sp):
+    """Prefill a prompt that pads to `sp`; -> (S, embeds, repeated, exp, out). Records the pooled PCC."""
+    S = sp - 5  # reach the shape WITH padding
+    embeds, repeated = long_prompt_embeds(S, w)
+    exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)  # all positions
+    big.reset()
+    out = big.prefill(embeds, last_only=False)
+    assert torch.isfinite(out).all(), f"Sp={sp}: non-finite output"
+    _POOLED[sp] = compare_hidden(out, exp)["pcc"]
+    return S, embeds, repeated, exp, out
 
 
 @pytest.mark.parametrize("sp", SHAPES, ids=lambda s: f"Sp{s}")
@@ -77,21 +90,14 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
 
     K needs the head-dim permutation; V does not, being unrotated.
     """
-    S = sp - 5  # reach the shape WITH padding
-    embeds, repeated = long_prompt_embeds(S, w)
     gate = SHAPE_PCC_FLOOR
-
-    exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)  # all positions
+    S, embeds, repeated, exp, out = _prefill_at(big, w, sp)
+    assert big.pos == S, f"Sp={sp}: pos {big.pos}, expected {S}"
     inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
     inc.prefill(embeds)  # populates the reference cache
-    big.reset()
-    out = big.prefill(embeds, last_only=False)
-    assert torch.isfinite(out).all(), f"Sp={sp}: non-finite output"
-    assert big.pos == S, f"Sp={sp}: pos {big.pos}, expected {S}"
     assert out.shape == exp.shape, f"Sp={sp}: {tuple(out.shape)} vs {tuple(exp.shape)}"
     m = compare_hidden(out, exp)
     m_last = compare_hidden(out[:, S - 1], exp[:, S - 1])
-    _POOLED[sp] = m["pcc"]
     n_tiles = (S + TILE - 1) // TILE
     per = [pcc(out[0, i], exp[0, i]) for i in range(S)]
     collapsed = [i for i in range(S) if per[i] <= gate]
@@ -139,12 +145,18 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
     ), f"Sp={sp}: worst sample {m_keep['worst_pct']:.2f}% over {len(keep)} positions though pooled PCC is {m['pcc']:.6f}"
 
 
-def test_no_shape_computes_differently_from_its_neighbours():
-    """No shape may compute unlike its neighbours. Needs the whole sweep, so skipped under -k."""
-    if len(_POOLED) < len(SHAPES):
-        pytest.skip(f"needs all {len(SHAPES)} shapes; have {len(_POOLED)}")
+@pytest.mark.timeout(1800)  # see VOXTRAL_TTS_BACKBONE.md [gpt-52]
+def test_no_shape_computes_differently_from_its_neighbours(big, w):
+    """No shape may compute unlike its neighbours. Reuses the sweep's scores and prefills any shape
+    this run has not, so a reordered, filtered or split run still checks every shape."""
+    missing = [sp for sp in SHAPES if sp not in _POOLED]
+    for sp in missing:
+        _prefill_at(big, w, sp)
     lo, hi = min(_POOLED.values()), max(_POOLED.values())
-    print(f"\n  pooled PCC across {len(_POOLED)} shapes: {lo:.6f} .. {hi:.6f} (spread {hi - lo:.6f})")
+    print(
+        f"\n  pooled PCC across {len(_POOLED)} shapes: {lo:.6f} .. {hi:.6f} (spread {hi - lo:.6f}); "
+        f"{len(missing)} prefilled here"
+    )
     assert hi - lo < SHAPE_SPREAD, (
         f"pooled PCC varies by {hi - lo:.6f} across shapes -- one shape computes differently from "
         f"its neighbours: {sorted((k, round(v, 6)) for k, v in _POOLED.items())}"

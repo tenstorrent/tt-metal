@@ -22,7 +22,7 @@ from models.experimental.voxtral_tts.reference.voxtral_flow_ref import (
 
 # Same dims as the backbone, so the decode matmul program configs are shared (gpt does not import
 # flow, so no cycle). see VOXTRAL_TTS_FLOW.md [flow-23]
-from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import DECODE_PRG, sharded_norm
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import decode_grid, decode_program_configs, sharded_norm
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     DEFAULT_CKPT,
     EMPTY_AUDIO_ID,
@@ -94,6 +94,7 @@ class TtVoxtralFlow:
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT):
         self.device = device
+        self.decode_prg = decode_program_configs(decode_grid(device.compute_with_storage_grid_size()))
         self.dtype = DTYPE
         w = load_flow_state(ckpt_path)
         self.inv_freq = w["time_embedding.inv_freq"]  # host: time_embedding
@@ -158,7 +159,7 @@ class TtVoxtralFlow:
         h = self._norm(x, w["an"])
         # q, k and v in one matmul, on the backbone's program config.
         # see VOXTRAL_TTS_FLOW.md [flow-09], [flow-23]
-        qkv = ttnn.linear(h, w["wqkv"], program_config=DECODE_PRG["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        qkv = ttnn.linear(h, w["wqkv"], program_config=self.decode_prg["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
         # hand-rolled head split. see VOXTRAL_TTS_FLOW.md [flow-10]
         qh, kh, vh = _split_heads(qkv, B)
         # sdpa handles GQA natively. scale=1.0 is mandatory: SCALE is already folded into wqkv's
@@ -173,25 +174,37 @@ class TtVoxtralFlow:
         x = ttnn.add_(
             x,
             ttnn.linear(
-                a, w["wo"], program_config=DECODE_PRG["wo"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
+                a,
+                w["wo"],
+                program_config=self.decode_prg["wo"],
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=_L1,
             ),
         )
         h = self._norm(x, w["fn"])
-        # SiLU is fused by DECODE_PRG["w1"], not by an activation kwarg.
+        # SiLU is fused by the w1 program config, not by an activation kwarg.
         # see VOXTRAL_TTS_FLOW.md [flow-12]
         g = ttnn.linear(
-            h, w["w1"], program_config=DECODE_PRG["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
+            h, w["w1"], program_config=self.decode_prg["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
         )
         u = ttnn.multiply_(
             g,
             ttnn.linear(
-                h, w["w3"], program_config=DECODE_PRG["w3"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
+                h,
+                w["w3"],
+                program_config=self.decode_prg["w3"],
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=_L1,
             ),
         )
         return ttnn.add_(
             x,
             ttnn.linear(
-                u, w["w2"], program_config=DECODE_PRG["w2"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1
+                u,
+                w["w2"],
+                program_config=self.decode_prg["w2"],
+                compute_kernel_config=COMPUTE_CONFIG,
+                memory_config=_L1,
             ),
         )
 

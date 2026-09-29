@@ -26,12 +26,15 @@ from models.experimental.voxtral_tts.tests.gates import compare_codes_frame  # n
 from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
     case_ids,
     fixture_embeds,
+    needs_checkpoint,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: E402
     CFG_ALPHA,
     TtVoxtralPipeline,
     open_device,
 )
+
+pytestmark = needs_checkpoint
 
 N_FRAMES = 64  # reaches frames 40 and 55. see VOXTRAL_TTS_BRINGUP.md [test-01]
 LONG_CASES = (2, 3)  # the two prompts with a full-length natural utterance

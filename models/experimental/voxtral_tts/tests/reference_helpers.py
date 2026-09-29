@@ -13,13 +13,18 @@ import functools
 import json
 import os
 
+import pytest
 import torch
+
+from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(HERE, "tests", "prompt_fixture.json")
 FRAMES = os.path.join(HERE, "tests", "real_frames_fixture.pt")
 FRAMES_LONG = os.path.join(HERE, "tests", "real_frames_long_fixture.pt")
 CONDITIONING = os.path.join(HERE, "tests", "conditioning_fixture.json")
+
+needs_checkpoint = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
 
 
 @functools.lru_cache(maxsize=1)

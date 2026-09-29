@@ -15,12 +15,14 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-from models.experimental.voxtral_tts.tests.reference_helpers import fixture_embeds  # noqa: E402
+from models.experimental.voxtral_tts.tests.reference_helpers import fixture_embeds, needs_checkpoint  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: E402
     FRAME_RATE,
     TtVoxtralPipeline,
     open_device,
 )
+
+pytestmark = needs_checkpoint
 
 CASES = ((14, "short"), (2, "long"))
 REPEATS = 2  # best of, so one noisy run on a shared card does not decide the result
@@ -58,6 +60,7 @@ def _best_of(pipe, embeds, max_frames=MAX_FRAMES):
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(1800)  # see VOXTRAL_TTS_BRINGUP.md [pipe-06]
 def test_perf(pipe):
     rows, failed = [], []
     for ci, name in CASES:

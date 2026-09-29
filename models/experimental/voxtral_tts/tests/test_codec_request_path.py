@@ -30,7 +30,9 @@ STAGE_PCC = 0.996  # per-stage gate, as in tests/pcc/test_codec_pcc.py
 
 @pytest.fixture(scope="module")
 def device():
-    d = ttnn.open_device(device_id=0, l1_small_size=65536)
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import L1_SMALL_SIZE
+
+    d = ttnn.open_device(device_id=0, l1_small_size=L1_SMALL_SIZE)
     yield d
     ttnn.close_device(d)
 

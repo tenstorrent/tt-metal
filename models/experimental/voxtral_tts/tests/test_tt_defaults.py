@@ -114,26 +114,29 @@ def test_wo_does_not_get_the_n150_hand_tuned_config_back():
     see VOXTRAL_TTS_STATUS.md §6.43, §6.52, §6.78 and VOXTRAL_TTS_BACKBONE.md [gpt-20]"""
     assert not hasattr(gpt, "_WO_PRG"), "the N150's hand-tuned wo config is back -- 6.43"
     assert not hasattr(gpt, "_WO_GRID")
-    assert gpt.DECODE_PRG["wo"] is gpt._PRG_WO
+    assert "wo" in gpt._DECODE_SPLIT
 
 
-def test_decode_matmul_grid_fits_the_smaller_card_and_keeps_the_12x6_split():
-    """_MM_GRID fits the 11x10 card and keeps 12x6's per_core_N, so the output stays bit-identical;
-    changing any per_core_N is a model change. see VOXTRAL_TTS_STATUS.md §6.78, [gpt-29]"""
+def test_decode_grid_follows_the_device_and_keeps_the_12x6_split(expect_error):
+    """decode_grid picks a grid that fits the device, and every grid it picks keeps 12x6's
+    per_core_N, so the output is bit-identical; changing any per_core_N is a model change.
+    see VOXTRAL_TTS_BACKBONE.md [gpt-29]"""
     import math
+    from types import SimpleNamespace as Grid
 
-    assert (
-        gpt._MM_GRID[0] <= 11 and gpt._MM_GRID[1] <= 10
-    ), f"_MM_GRID {gpt._MM_GRID} does not fit the 11x10 p150b this port runs on"
-    was = 12 * 6
+    assert gpt.decode_grid(Grid(x=13, y=10)) == (12, 6)
+    assert gpt.decode_grid(Grid(x=11, y=10)) == (11, 7)
+    assert gpt.decode_grid(Grid(x=10, y=10)) == (10, 8)
+    with expect_error(RuntimeError, "no rectangle"):
+        gpt.decode_grid(Grid(x=7, y=10))
     ntiles = {"wqkv": 6144, "wo": 3072, "w1": 9216, "w3": 9216, "w2": 3072}
-    for name, n in ntiles.items():
-        exp = math.ceil(n // gpt.TILE / was)
-        assert (
-            gpt.DECODE_PRG[name].per_core_N == exp
-        ), f"{name}: per_core_N {gpt.DECODE_PRG[name].per_core_N} != 12x6's {exp} -- not bit-exact"
-        cores = math.ceil(n // gpt.TILE / exp)
-        assert cores <= gpt._MM_GRID[0] * gpt._MM_GRID[1], f"{name} needs {cores} cores"
+    for grid in ((12, 6), (11, 7), (10, 8)):
+        cfgs = gpt.decode_program_configs(grid)
+        for name, n in ntiles.items():
+            exp = math.ceil(n // gpt.TILE / (12 * 6))
+            assert cfgs[name].per_core_N == exp, f"{grid} {name}: per_core_N {cfgs[name].per_core_N} != 12x6's {exp}"
+            cores = math.ceil(n // gpt.TILE / exp)
+            assert cores <= grid[0] * grid[1], f"{grid} {name} needs {cores} cores"
 
 
 def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
@@ -141,8 +144,9 @@ def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
     fused on this chip. see VOXTRAL_TTS_STATUS.md §6.52, VOXTRAL_TTS_BACKBONE.md [gpt-26]"""
     import inspect
 
-    assert gpt._PRG_W1.fused_activation is not None, "w1 lost its fused silu -- 6.52"
-    assert gpt._PRG_W3.fused_activation is None, "w3 must NOT have an activation"
+    cfgs = gpt.decode_program_configs((11, 7))
+    assert cfgs["w1"].fused_activation is not None, "w1 lost its fused silu -- 6.52"
+    assert cfgs["w3"].fused_activation is None, "w3 must NOT have an activation"
     for fn in (gpt.TtVoxtralGPT._layer_step, flow.TtVoxtralFlow._block):
         # comments explain WHY the kwarg is gone and name it; strip them so only code is checked
         code = "\n".join(ln.split("#")[0] for ln in inspect.getsource(fn).splitlines())
@@ -153,7 +157,7 @@ def test_out_subblock_w_is_the_largest_legal_one():
     """out_subblock_w is the largest legal width: h * w <= 4 (fp32_dest_acc_en) and
     per_core_N % w == 0. see VOXTRAL_TTS_STATUS.md §6.61
     """
-    for name, cfg in gpt.DECODE_PRG.items():
+    for name, cfg in gpt.decode_program_configs((11, 7)).items():
         w, n, h = cfg.out_subblock_w, cfg.per_core_N, cfg.out_subblock_h
         assert h * w <= 4, f"{name}: h*w={h*w} exceeds the fp32_dest_acc_en limit of 4"
         assert n % w == 0, f"{name}: per_core_N={n} is not divisible by out_subblock_w={w}"
@@ -205,10 +209,10 @@ def test_decode_matmul_configs_assume_one_tile_of_rows():
     see VOXTRAL_TTS_STATUS.md §6.52, VOXTRAL_TTS_BACKBONE.md [gpt-26]"""
     import inspect
 
-    for p in gpt.DECODE_PRG.values():
+    for p in gpt.decode_program_configs((11, 7)).values():
         assert p.per_core_M == 1, "a decode config grew rows; prefill would silently share it"
     prefill = inspect.getsource(gpt.TtVoxtralGPT._layer)
-    assert "DECODE_PRG" not in prefill, "prefill must keep the ttnn heuristic -- 6.52"
+    assert "decode_prg" not in prefill, "prefill must keep the ttnn heuristic -- 6.52"
     assert _flat('self._mlp(x, self._norm(x, w["fn"]), w, ttnn.DRAM_MEMORY_CONFIG)') in _flat(
         prefill
     ), "prefill's _mlp call gained an argument -- check it is not a program config"

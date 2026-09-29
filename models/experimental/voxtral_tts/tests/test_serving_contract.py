@@ -135,6 +135,17 @@ def test_synthesize_caps_frames_by_the_text_then_the_cache(monkeypatch):
     assert caps == [frame_budget("Hi."), 50, 2048 - 100]
 
 
+def test_a_non_positive_frame_limit_is_refused_before_any_work(monkeypatch, expect_error):
+    tts, _ = _deviceless_pipeline(monkeypatch, prompt_len=100)
+    del tts.generate
+    tts.backbone.prefill_last = lambda *a, **kw: pytest.fail("generate() prefilled before checking max_frames")
+    for n in (0, -5):
+        with expect_error(ValueError, "max_frames must be positive"):
+            tts.synthesize("Hi.", "neutral_male", max_frames=n)
+        with expect_error(ValueError, "max_frames must be positive"):
+            tts.generate(torch.zeros(1, 100, 8), max_frames=n)
+
+
 def test_synthesize_refuses_a_prompt_that_fills_the_cache(monkeypatch, expect_error):
     tts, caps = _deviceless_pipeline(monkeypatch, prompt_len=2048)
     with expect_error(ValueError, "leaves no room for audio"):
