@@ -430,7 +430,8 @@ Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender
   producer writes. The in1 buffer is a relay DFB over the pipes' rings paged by tile, so nothing is
   copied and compute consumes in1 exactly as it does from DRAM (`wait_front` / `matmul_block` /
   `pop_front` of a block's tiles). A relay may page each pipe entry as a whole number of its own
-  entries (`DFBAdvancedOptions::prefetcher_pipe_relays`; not on Quasar). The ring may be any size
+  entries (`DFBAdvancedOptions::prefetcher_pipe_relays`; on Quasar only with a single-threaded relay
+  producer). The ring may be any size
   that holds at least two K-blocks (the reader publishes a block while the previous one drains): the
   pipe re-grids it to whole K-blocks and skips any trailing gap at the wrap, and the relay covers
   those whole K-blocks, so a block's tiles never wrap.

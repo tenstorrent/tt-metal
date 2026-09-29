@@ -915,7 +915,8 @@ bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_config, c
 // Rules per relay DFB:
 //  5. Not also borrowed_from. Every relayed pipe shares ring_size / entry_size; the DFB's
 //     entry_size divides that entry_size (the relay may page one pipe entry as several pages, e.g.
-//     a K-block as tiles; Quasar requires them equal) and entry_size * num_entries is the pipe's
+//     a K-block as tiles, or one entry per consumer; only with a single-threaded producer) and
+//     entry_size * num_entries is the pipe's
 //     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
 //     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
 //  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
@@ -1138,24 +1139,29 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
             relayed_receivers = relayed_receivers.merge(receivers);
         }
 
-        if (is_gen2_arch(hal)) {
-            TT_FATAL(
-                dfb.entry_size == first->entry_size,
-                "DFB '{}' entry_size {} differs from relayed PrefetcherPipeParameter '{}' entry_size {}; on this "
-                "architecture a relay DFB pages exactly like the pipes it relays",
-                dfb.unique_id,
-                dfb.entry_size,
-                first->unique_id,
-                first->entry_size);
-        } else {
-            TT_FATAL(
-                dfb.entry_size != 0 && first->entry_size % dfb.entry_size == 0,
-                "DFB '{}' entry_size {} must divide relayed PrefetcherPipeParameter '{}' entry_size {}: a relay DFB "
-                "pages each pipe entry as a whole number of its own entries",
-                dfb.unique_id,
-                dfb.entry_size,
-                first->unique_id,
-                first->entry_size);
+        TT_FATAL(
+            dfb.entry_size != 0 && first->entry_size % dfb.entry_size == 0,
+            "DFB '{}' entry_size {} must divide relayed PrefetcherPipeParameter '{}' entry_size {}: a relay DFB "
+            "pages each pipe entry as a whole number of its own entries",
+            dfb.unique_id,
+            dfb.entry_size,
+            first->unique_id,
+            first->entry_size);
+        if (dfb.entry_size != first->entry_size) {
+            // Credit lanes stripe whole pipe entries over the relay's producer threads; a relay paged
+            // finer than the pipe is only implemented for one producer thread.
+            for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
+                TT_FATAL(
+                    rec.kernel->num_threads == 1,
+                    "DFB '{}' pages relayed PrefetcherPipeParameter '{}' entry_size {} as entries of {} bytes, which "
+                    "needs a single-threaded relay producer, but kernel '{}' has {} threads",
+                    dfb.unique_id,
+                    first->unique_id,
+                    first->entry_size,
+                    dfb.entry_size,
+                    rec.kernel->unique_id,
+                    rec.kernel->num_threads);
+            }
         }
         const uint32_t usable_ring_size = first->ring_size - first->ring_size % first->entry_size;
         TT_FATAL(

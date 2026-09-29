@@ -760,12 +760,10 @@ public:
         // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer view of the
         // same relay id; STRIDED pap partitions producer slots.
         relay_dfb_.emplace(RelayDFBBindingToken{iface.relay_id});
-#ifndef ARCH_QUASAR
-        // Before anything re-pages the relay: its local CB still has the page size firmware set from
-        // the relay's config, which fixes how many relay pages one pipe entry is.
+        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
+        // config, which fixes how many relay pages one pipe entry is.
         relay_pages_per_entry_ =
             static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
-#endif
         sync_threads();
         // Align shared local iface once after all producers have constructed.
         if (get_my_thread_id() == 0) {
@@ -866,7 +864,6 @@ private:
 #if !defined(COMPILE_FOR_TRISC)
     std::optional<DataflowBuffer> relay_dfb_;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
-    // Always 1 on Quasar, whose relays page exactly like the pipe.
     uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR
     uint16_t relay_entries_acked_checkpoint_ = 0;

@@ -62,8 +62,7 @@
 
 #ifdef ENABLE_PREFETCHER_PIPE
 #ifdef ARCH_QUASAR
-#error \
-    "PrefetcherPipe weight delivery into this matmul pages the relay finer than the pipe, which Quasar relays do not support"
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
 #endif
 #include "api/dataflow/prefetcher_pipe.h"
 #endif

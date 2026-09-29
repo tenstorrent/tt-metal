@@ -30,12 +30,25 @@ using test_helpers::pipe_ring_size;
 using test_helpers::PrefetcherPipeSpecTestQuasar;
 using test_helpers::relay_dfb_name;
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayEntrySizeMismatchFails) {
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayPagingEachEntryFinerPasses) {
+    // Two relay entries per pipe entry, from a single-threaded relay producer.
     ProgramSpec spec = MakeFullPipeSpec();
     spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
     spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
-    EXPECT_SPEC_REJECTED(
-        spec, "entry_size 1024 differs from relayed PrefetcherPipeParameter 'weights' entry_size 2048");
+    EXPECT_SPEC_VALID(spec);
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayPagingEachEntryFinerWithLanesFails) {
+    ProgramSpec spec = MakeFullPipeSpec(/*receiver_threads=*/2);
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
+    spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
+    EXPECT_SPEC_REJECTED(spec, "needs a single-threaded relay producer, but kernel 'receiver' has 2 threads");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayEntryNotDividingPipeEntryFails) {
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size * 3 / 4;
+    EXPECT_SPEC_REJECTED(spec, "entry_size 1536 must divide relayed PrefetcherPipeParameter 'weights' entry_size 2048");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNotCoveringRingFails) {
