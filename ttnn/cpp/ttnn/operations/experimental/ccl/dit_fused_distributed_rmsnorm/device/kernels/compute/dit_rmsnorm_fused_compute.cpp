@@ -137,10 +137,10 @@ void kernel_main() {
     constexpr uint32_t stats_reduce_src_cb =
         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
-    constexpr bool preserve_rope_rounding = get_compile_time_arg_val(44);
-    constexpr uint32_t rope_normalized_cb = get_compile_time_arg_val(45);
-    constexpr uint32_t rope_cos_product_cb = get_compile_time_arg_val(46);
-    constexpr uint32_t rope_sin_product_cb = get_compile_time_arg_val(47);
+    constexpr bool preserve_rope_rounding = get_compile_time_arg_val(43);
+    constexpr uint32_t rope_normalized_cb = get_compile_time_arg_val(44);
+    constexpr uint32_t rope_cos_product_cb = get_compile_time_arg_val(45);
+    constexpr uint32_t rope_sin_product_cb = get_compile_time_arg_val(46);
     constexpr uint32_t rope_input_cb = preserve_rope_rounding ? rope_normalized_cb : intermediate_cb;
     static_assert(
         !preserve_rope_rounding || (fuse_rope && has_weight && !has_bias && !per_head_norm && per_head_rope &&

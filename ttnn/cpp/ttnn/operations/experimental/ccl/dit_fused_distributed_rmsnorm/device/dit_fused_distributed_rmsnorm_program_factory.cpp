@@ -1351,7 +1351,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(per_batch_weight),
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
-        // CT44-47: preserve the standalone BF16 norm/RoPE pack boundaries.
+        // CT43-46: preserve the standalone BF16 norm/RoPE pack boundaries.
         static_cast<uint32_t>(args.preserve_rope_rounding),
         rope_normalized_cb_id,
         rope_cos_product_cb_id,
