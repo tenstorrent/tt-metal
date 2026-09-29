@@ -193,6 +193,7 @@
     exit_code=0
     export GLM52_MLA_REF_CACHE=/tmp/glm_5_2_mla_ref_cache
     # Sparse MLA (GLM-5.2) vs MLACPU. Random weights + on-the-fly CPU truth -> no staged weights.
+    # test_sparse_mla.py parametrizes glm_5_2 (not glm_5_3): only GLM-5.2 has a populated MLACPU ref cache.
     # GLM-5.2 reshards heads->sequence in _sparse_mla so it now runs at tp=4; 2x4 is its coverage (accuracy
     # + the determinism/chunked anchor cases, which pin to the highest-TP mesh). The sparse suite carries
     # no tier markers, so there is no -m gate.

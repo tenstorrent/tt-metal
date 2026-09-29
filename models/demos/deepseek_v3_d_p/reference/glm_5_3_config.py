@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-GLM 5.2 Model Configuration.
+GLM 5.3 Model Configuration.
 
 Single source of truth for model dimension constants.
-Values from HuggingFace config.json for GLM-5.2 (model_type ``glm_moe_dsa``).
+Values from HuggingFace config.json for GLM-5.3 (model_type ``glm_moe_dsa``).
 
 Geometry is identical to GLM-5.1 (attention, MoE, indexer sizing, layer count). The 5.2
 deltas: longer context (rope_theta 8e6, 1M positions) and cross-layer DSA indexer reuse,
@@ -17,8 +17,8 @@ recent full layer's top-k selection. The full/shared map is ``indexer_types``.
 import types
 
 
-class GLM52Config:
-    """GLM 5.2 model dimensions."""
+class GLM53Config:
+    """GLM 5.3 model dimensions."""
 
     # Core dimensions
     EMB_SIZE = 6144  # embedding dimension
@@ -88,8 +88,8 @@ class GLM52Config:
         return ["full" if (max(i - off + 1, 0) % freq) == 0 else "shared" for i in range(n)]
 
 
-def glm_5_2_hf_config(max_seq: int = 8192):
-    """HF-attribute-style config the unified ttMLA reads (GLM-5.2 dims, no YaRN).
+def glm_5_3_hf_config(max_seq: int = 8192):
+    """HF-attribute-style config the unified ttMLA reads (GLM-5.3 dims, no YaRN).
 
     Mirrors ``glm_5_1_config.glm_hf_config`` (same curated field set device + CPU-reference read),
     with the 5.2 deltas: ``rope_theta=8e6`` and the indexer-reuse fields (``indexer_types`` map plus
@@ -97,19 +97,19 @@ def glm_5_2_hf_config(max_seq: int = 8192):
     The four ``index_*`` attrs size the DSA indexer (GLM's indexer RoPE is interleaved).
     """
     return types.SimpleNamespace(
-        vocab_size=GLM52Config.VOCAB_SIZE,
-        hidden_size=GLM52Config.EMB_SIZE,
-        intermediate_size=GLM52Config.INTERMEDIATE_SIZE,  # dense-FFN (layers 0-2) hidden dim = 12288
-        num_attention_heads=GLM52Config.NUM_ATTENTION_HEADS,
-        num_key_value_heads=GLM52Config.NUM_ATTENTION_HEADS,
-        kv_lora_rank=GLM52Config.KV_LORA_RANK,
-        q_lora_rank=GLM52Config.Q_LORA_RANK,
-        qk_nope_head_dim=GLM52Config.QK_NOPE_HEAD_DIM,
-        qk_rope_head_dim=GLM52Config.QK_ROPE_HEAD_DIM,
-        v_head_dim=GLM52Config.V_HEAD_DIM,
-        rms_norm_eps=GLM52Config.RMS_NORM_EPS,
+        vocab_size=GLM53Config.VOCAB_SIZE,
+        hidden_size=GLM53Config.EMB_SIZE,
+        intermediate_size=GLM53Config.INTERMEDIATE_SIZE,  # dense-FFN (layers 0-2) hidden dim = 12288
+        num_attention_heads=GLM53Config.NUM_ATTENTION_HEADS,
+        num_key_value_heads=GLM53Config.NUM_ATTENTION_HEADS,
+        kv_lora_rank=GLM53Config.KV_LORA_RANK,
+        q_lora_rank=GLM53Config.Q_LORA_RANK,
+        qk_nope_head_dim=GLM53Config.QK_NOPE_HEAD_DIM,
+        qk_rope_head_dim=GLM53Config.QK_ROPE_HEAD_DIM,
+        v_head_dim=GLM53Config.V_HEAD_DIM,
+        rms_norm_eps=GLM53Config.RMS_NORM_EPS,
         max_seq_len=max_seq,
-        rope_theta=float(GLM52Config.ROPE_THETA),
+        rope_theta=float(GLM53Config.ROPE_THETA),
         attention_bias=False,
         rope_scaling={
             "factor": 1.0,
@@ -119,21 +119,21 @@ def glm_5_2_hf_config(max_seq: int = 8192):
             "beta_slow": 1,
             "original_max_position_embeddings": max_seq,
         },
-        index_n_heads=GLM52Config.INDEX_N_HEADS,
-        index_head_dim=GLM52Config.INDEX_HEAD_DIM,
-        index_topk=GLM52Config.INDEX_TOPK,
+        index_n_heads=GLM53Config.INDEX_N_HEADS,
+        index_head_dim=GLM53Config.INDEX_HEAD_DIM,
+        index_topk=GLM53Config.INDEX_TOPK,
         index_rope_interleave=True,
         # Full indexer layers overlap their local TopK on 80 cores with the sparse-KV SP gather on
         # the remaining 30 (QB2) or 40 (LoudBox/Galaxy) cores. Shared layers reuse those indices.
         sparse_mla_overlap_profile="auto",
         # Indexer reuse: the per-layer full/shared map (length NUM_LAYERS) plus the params it derives
         # from. Consumers read `indexer_types` by layer index; absent on GLM-5.1 -> all layers full.
-        indexer_types=GLM52Config.indexer_types(),
-        index_topk_freq=GLM52Config.INDEX_TOPK_FREQ,
-        index_skip_topk_offset=GLM52Config.INDEX_SKIP_TOPK_OFFSET,
-        first_k_dense_replace=GLM52Config.NUM_DENSE_LAYERS,
-        n_routed_experts=GLM52Config.NUM_ROUTED_EXPERTS,
-        num_hidden_layers=GLM52Config.NUM_LAYERS,
+        indexer_types=GLM53Config.indexer_types(),
+        index_topk_freq=GLM53Config.INDEX_TOPK_FREQ,
+        index_skip_topk_offset=GLM53Config.INDEX_SKIP_TOPK_OFFSET,
+        first_k_dense_replace=GLM53Config.NUM_DENSE_LAYERS,
+        n_routed_experts=GLM53Config.NUM_ROUTED_EXPERTS,
+        num_hidden_layers=GLM53Config.NUM_LAYERS,
         # Counts MTP weight *modules*, not prediction levels: one module replayed at K levels.
         num_nextn_predict_layers=1,
         index_share_for_mtp_iteration=True,
