@@ -25,7 +25,7 @@ struct SparseSDPAMsaOperation {
 
     struct SparseSDPAMsaProgramFactory {
         // The MeshCoordinate overload opts this op into per-coordinate program creation, so each device bakes
-        // its own causal chunk_start (see compute_chunk_start_local). Without it the mesh adapter builds one
+        // its own causal geometry (see compute_causal_geometry). Without it the mesh adapter builds one
         // program for the whole device range and every rank shares rank 0's offset.
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& attrs,
@@ -59,6 +59,8 @@ struct SparseSDPAMsaOperation {
         kReaderKGroupStride,
         kReaderVGroupStride,
         kReaderChunkStart,
+        kReaderStraddleRow,
+        kReaderStraddleJump,
         kReaderArgCount,
     };
     enum WriterArg : uint32_t {
@@ -82,9 +84,19 @@ struct SparseSDPAMsaOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a
-    // single device or when non-causal).
-    static uint32_t compute_chunk_start_local(
+    // Per-device causal geometry, in rows: the global position of this device's query row 0, plus the
+    // straddle (query rows >= straddle_row sit straddle_jump positions further along; jump 0 = none).
+    struct CausalGeometry {
+        uint32_t chunk_start = 0;
+        uint32_t straddle_row = 0;
+        uint32_t straddle_jump = 0;
+    };
+    // Block-cyclic cache + cluster_axis (the SP-sharded chunked-prefill cache read): the rotation-exact
+    // geometry of the update_padded_kv_cache writer, shared with indexer_score so the diagonal-block mask and
+    // the indexer's selection agree on every query's position, including mid-slab (non-chunk-aligned) starts.
+    // Otherwise the linear chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a single
+    // device). All zeros when non-causal.
+    static CausalGeometry compute_causal_geometry(
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
@@ -101,7 +113,7 @@ struct SparseSDPAMsaOperation {
         uint32_t v_batch_tile_offset = 0;
         uint32_t k_group_tile_stride = 0;
         uint32_t v_group_tile_stride = 0;
-        uint32_t chunk_start_local = 0;
+        CausalGeometry causal;
     };
     static DispatchArgs compute_dispatch_args(
         const operation_attributes_t& attrs,

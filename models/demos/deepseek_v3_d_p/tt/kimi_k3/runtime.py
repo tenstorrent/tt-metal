@@ -31,7 +31,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     MODEL_CLS = TtKimiK3Transformer
 
     def _build_model(self, state_dict: dict) -> None:
-        # The shared build starts GLM-5.2's MTP predictor before MODEL_CLS runs, so reject here.
+        # The shared build starts GLM-5.3's MTP predictor before MODEL_CLS runs, so reject here.
         if self.config.mtp_levels:
             raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
         super()._build_model(state_dict)

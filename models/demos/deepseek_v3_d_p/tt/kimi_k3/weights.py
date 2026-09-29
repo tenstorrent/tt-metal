@@ -205,7 +205,7 @@ def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts
 
 _CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
 
-# Alongside the other prefill caches on the models share, next to `glm52_ttnn_cache` and the GLM and
+# Alongside the other prefill caches on the models share, next to `glm53_ttnn_cache` and the GLM and
 # DeepSeek caches. `/mnt/models` itself is group-writable only by local-syseng, so this sits in
 # `deepseek-prefill-cache/`, which is where the golden traces and the other models' TTNN caches
 # already live. This is a DEFAULT rather than a requirement: the point of a cache is that every run
