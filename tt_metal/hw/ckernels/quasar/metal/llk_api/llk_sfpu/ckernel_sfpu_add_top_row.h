@@ -35,10 +35,10 @@ inline void calculate_add_top_row(
         format == DataFormat::Int32 || format == DataFormat::Float32,
         "Unsupported data format. Supported formats are: DataFormat::Int32, DataFormat::Float32");
 
-    // sfpi dst_reg[] indexes in SFPU passes: one pass is SFP_ROWS = 2 Dest rows x 16 columns on
-    // Quasar (4 rows x 8 even/odd columns on Blackhole), 8 passes per face, 32 per tile. The
-    // Blackhole indices {0, +1, +8, +9} therefore cover the same datums here: rows 0-3 of face 0
-    // (index 0, 1) and of face 1 (index 8, 9), i.e. the top four rows of the tile.
+    // sfpi dst_reg[] indexes in SFPU passes, 8 per face and 32 per tile, and a pass reads the same
+    // lanes as on Blackhole (4 Dest rows x 8 even or odd columns). The Blackhole indices
+    // {0, +1, +8, +9} therefore cover the same datums here: rows 0-3 of face 0 (index 0 even and
+    // 1 odd columns) and of face 1 (index 8, 9), i.e. the top four rows of the tile.
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     const std::uint32_t off0 = tile_idx_0 * dst_tile_size_sfpi;
     const std::uint32_t off1 = tile_idx_1 * dst_tile_size_sfpi;
