@@ -10,9 +10,13 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+#ifndef ARCH_QUASAR  // cbrt.h hard-includes ckernel_sfpu_cbrt.h under TRISC_MATH; Quasar has no such SFPU LLK
 #include "api/compute/eltwise_unary/cbrt.h"
+#endif
 #include "api/compute/eltwise_unary/log1p.h"
+#ifndef ARCH_QUASAR  // rpow.h hard-includes ckernel_sfpu_rpow.h under TRISC_MATH; Quasar has no such SFPU LLK
 #include "api/compute/eltwise_unary/rpow.h"
+#endif
 #include "api/compute/cumsum.h"              // Cumsum
 #include "api/compute/compute_kernel_api.h"  // log_tile / log_tile_init / power_tile
 
@@ -62,11 +66,15 @@ struct Rsqrt : UnaryOp<Rsqrt<fast, Slot>, Slot> {
 };
 
 // ---- Cbrt ----
+// cbrt_tile / cbrt_tile_init have no Quasar SFPU LLK (ckernel_sfpu_cbrt.h absent); guard the struct out to
+// match the guarded include above.
+#ifndef ARCH_QUASAR
 template <Dst Slot>
 struct Cbrt : UnaryOp<Cbrt<Slot>, Slot> {
     static ALWI void init() { cbrt_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { cbrt_tile(to_u32(Slot) + slot_offset); }
 };
+#endif
 
 // ---- Log1p — fast (approximate) vs exact mode selected by template ----
 template <Approx fast, Dst Slot>
@@ -90,6 +98,9 @@ struct Power : UnaryOp<Power<Slot>, Slot> {
 #endif
 
 // ---- Rpow — base^x, runtime base. ----
+// rpow_tile / rpow_tile_init have no Quasar SFPU LLK (ckernel_sfpu_rpow.h absent); guard the struct out to
+// match the guarded include above.
+#ifndef ARCH_QUASAR
 template <Dst Slot>
 struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     uint32_t base;
@@ -98,6 +109,7 @@ struct Rpow : UnaryOp<Rpow<Slot>, Slot> {
     static ALWI void init() { rpow_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rpow_tile(to_u32(Slot) + slot_offset, base); }
 };
+#endif
 
 // ---- Cumsum — columnwise cumulative sum (in-DEST). ----
 // LLK `cumsum_tile(idst, first)` where `first` resets the accumulator for the first row tile.
