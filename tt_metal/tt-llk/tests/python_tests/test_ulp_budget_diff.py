@@ -17,8 +17,10 @@ import pytest
 from helpers.ulp_budget_diff import (
     _MAX_ROWS,
     _measured_cells,
+    _nonfinite_cells,
     compare,
     parse_table,
+    recorded_nonfinite,
     render_budget_diff,
     render_headroom,
 )
@@ -456,3 +458,103 @@ def test_this_parse_agrees_with_the_registry_loader_on_the_live_table():
         f"only this parser sees: {sorted(mine - theirs)[:5]}\n"
         f"only the loader sees: {sorted(theirs - mine)[:5]}"
     )
+
+
+def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
+    """Agreeing on the rows is not agreeing on what a query resolves to, and a
+    regression is defined over the latter. Every cell the sweep drives, for every
+    enrolled unary op, must land on the same row through ``_resolve`` as through the
+    registry's ``_winner``."""
+    from helpers.sfpu_accuracy_budget import (
+        _SFPU_ACCURACY_BUDGET,
+        _TABLE_PATH,
+        MEASURED_ARCH,
+        BudgetKey,
+        _winner,
+    )
+    from helpers.ulp_budget_diff import _resolve
+    from helpers.ulp_sweep import sweep_cells
+
+    table = parse_table(_TABLE_PATH.read_text(encoding="utf-8"))
+    compared = 0
+    for op, rows in _SFPU_ACCURACY_BUDGET.items():
+        for in_fmt, out_fmt, approx, dest in sweep_cells():
+            query = BudgetKey(
+                approx_mode=approx,
+                input_format=in_fmt,
+                output_format=out_fmt,
+                dest_acc=dest,
+                arch=MEASURED_ARCH,
+            )
+            found = _winner(rows, query, op.name)
+            theirs = None
+            if found is not None:
+                key = found[0]
+                theirs = tuple(
+                    (short, getattr(key, attr).name)
+                    for short, attr in (
+                        ("in", "input_format"),
+                        ("out", "output_format"),
+                        ("approx", "approx_mode"),
+                        ("dest", "dest_acc"),
+                        ("arch", "arch"),
+                    )
+                    if getattr(key, attr) is not None
+                )
+            asked = (
+                ("in", in_fmt.name),
+                ("out", out_fmt.name),
+                ("approx", approx.name),
+                ("dest", dest.name),
+                ("arch", MEASURED_ARCH.name),
+            )
+            mine = _resolve(table, op.name, asked)
+            assert (mine.key if mine else None) == theirs, (op.name, asked)
+            compared += 1
+    from helpers.ulp_sweep import sweep_cells as _cells
+
+    assert compared == len(_cells()) * len(_SFPU_ACCURACY_BUDGET)
+
+
+def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
+    """A "not measurable" row records how many lanes went non-finite; the sweep skips
+    such a tolerance cell but records the count, and more lanes than the row names --
+    or any on a row that names none -- is a regression the nightly must fail on."""
+    table = parse_table(
+        "Exp:\n"
+        '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}'
+        "  # not measurable: 2 lane(s) disagreeing with the golden about being finite "
+        "(golden -> result: x=3e38: 3e38 -> inf)\n"
+        '  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 511 ULP\n'
+        "Exp2:\n"
+        '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}'
+        "  # not measurable: 2 lane(s) non-finite against a finite golden (x=3e38)\n"
+    )
+
+    def judged(cells=None):
+        measurements = [
+            {"op": "Exp", "in": i, "out": o, "dest": d, "max": 0, "nonfinite": n}
+            for (i, o, d), n in (cells or {}).items()
+        ]
+        _, regressions = render_headroom(
+            table, _measured_cells(measurements), _nonfinite_cells(measurements)
+        )
+        return regressions
+
+    at_row = ("Float32", "Bfp8_b", "Yes")
+    plain = ("Float16", "Float16", "No")
+    assert judged() == 0
+    assert judged({at_row: 2}) == 0  # what the row accounts for
+    assert judged({at_row: 3}) == 1  # one more lane than it names
+    assert judged({plain: 1}) == 1  # any on a row that names none
+    # The older spelling of a "not measurable" row still names its count.
+    (exp2,) = [row for (op, _), row in table.items() if op == "Exp2"]
+    assert recorded_nonfinite(exp2) == 2
+    # A measurement written before the count existed judges as before.
+    _, regressions = render_headroom(
+        table,
+        _measured_cells(
+            [{"op": "Exp", "in": "Float16", "out": "Float16", "dest": "No", "max": 3}]
+        ),
+    )
+    assert regressions == 0
