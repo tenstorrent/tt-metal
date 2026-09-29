@@ -1743,6 +1743,10 @@ class _RingMeshDevice(_FakeMeshDevice):
         _, column = tuple(coordinate)
         return [_FakeCore(x, y) for x, y in self._per_die[column]]
 
+    def get_optimal_dram_bank_to_logical_worker_assignment(self, noc, coordinate):
+        # Native returns a bank-keyed map whose iteration order is not the bank order.
+        return dict(reversed(list(enumerate(self.assignment(coordinate)))))
+
 
 # Observed on a QuietBox 2 (2x p300c): three dies serve their banks from worker column 6, the fourth from column 5.
 QB2_COLUMN_6 = ((0, 9), (0, 0), (0, 7), (0, 3), (6, 9), (6, 1), (6, 6), (6, 4))
@@ -1753,12 +1757,7 @@ QB2_RING_ORDER = (4, 0, 2, 6, 7, 3, 5, 1)
 class BF4LiveRingQualificationTest(unittest.TestCase):
     def _qualify(self, per_die_signatures):
         mesh = _RingMeshDevice(per_die_signatures)
-        with mock.patch.object(
-            bf4_module.ttnn.device,
-            "get_optimal_dram_bank_to_logical_worker_assignment_at_mesh_coordinate",
-            side_effect=lambda device, noc, coordinate: mesh.assignment(coordinate),
-        ):
-            return bf4_module.qualify_live_bf4_ring(mesh)
+        return bf4_module.qualify_live_bf4_ring(mesh)
 
     def test_ring_order_is_the_bank_order_the_packing_produces(self):
         """The guard's sort against ``get_weight_core_shard_maps`` on the same assignment: one sort, pinned here."""

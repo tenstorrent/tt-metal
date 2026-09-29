@@ -431,10 +431,10 @@ def qualify_live_bf4_ring(mesh_device) -> tuple[int, ...]:
                 f"mesh coordinate {coordinate} reports physical ID {coordinate_device_id}, "
                 f"expected {physical_ids[index]}"
             )
-        assignment = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment_at_mesh_coordinate(
-            mesh_device, ttnn.NOC.RISCV_0_default, coordinate
+        assignment = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
+            ttnn.NOC.RISCV_0_default, coordinate
         )
-        signature = tuple(_core_xy(core) for core in assignment)
+        signature = tuple(_core_xy(assignment[bank]) for bank in sorted(assignment))
         if len(signature) not in BLACKHOLE_RING_SIZES or len(set(signature)) != len(signature):
             raise RuntimeError(f"physical device {physical_ids[index]} has unsupported DRAM worker order {signature}")
         signatures.append(signature)
