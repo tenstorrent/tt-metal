@@ -564,3 +564,38 @@ overseer committed them by hand (5da28095718, and the knowledge commit after it)
 file under ttnn/ttnn/bringup and the two shared knowledge files (`_dirty_under`, git status, no __pycache__, no deletes):
 one agent runs at a time, so those changes are the task's. Only changed files, so the gate's formatting pass does not
 reformat other forks. Selftest test_fork_cases.py::test_gate_commit_stages_changed_forks_and_knowledge_only; 199 pass.
+
+## F49 (2026-09-29): swap tests gate every swapped step; no test-role review for swap tasks
+Owner (Hy4 run1): the test-role review of the swap tests cost the most agent time and found no bug. From the Hy4
+state.json in this tree: 42 swap-test reviews (S.*.test.1), 8.1 h, 50 % of all agent time (16.1 h); the owner's
+count was 41 reviews, 7.8 h, 51 %, 4 changed tests, 0 bugs. Note: in this tree all 42 frozen Hy4 swap tests carry
+hand-added checks (165-1658 lines, the template is 25), not 4; the reviews added the same things each time: the
+swapped step vs golden and vs the CPU step on the same (device) inputs with rel L2 / worst row / row norm ratio
+limits, finiteness, "not a CPU bridge", and downstream / block-out rel limits.
+- `testing/component.py`: `run_swap_test(..., checks=None)` is unchanged (block-out PCC gate + ungated trail).
+  `checks="steps"`: each swapped step's override first runs the CPU step on the same inputs (a stateful step on a
+  context whose state is a deep copy, before the swapped step, so the block's own state evolves exactly as before;
+  side effects on the reference object itself, e.g. Hy4's per-chunk top-k record, are not isolated), then gates
+  `swap_<step>_vs_cpu` / `_vs_golden` (COMPARE / THRESHOLD of the step's frozen component test, read with ast),
+  and for float outputs `_finite`, `_rel` (<= swap_step_rel 0.02), `_row` (<= swap_step_row 0.05), `_ratio_min/max`
+  (1 +- swap_step_ratio 0.02), and `_cpu_bridge` in device mode. An optional hook `swap_context(spec, ref, layer,
+  golden, chunk, rctx, dctx)` fills what one block cannot compute (Hy4 moe_shared: the source layer's top-k).
+- Added after the proof showed gaps (all generic, spec-overridable): `_bias` (median row norm ratio within 1 +-
+  swap_step_bias 0.01: scale1.02 / 0.98 sat exactly on the 0.02 rel and ratio limits); the rel limit tightened to
+  swap_step_calib 2 x the step's own component-gate error (sqrt(2 (1 - pcc)) from results/C.<bt>.<step>.json),
+  never below swap_step_floor 0.005 (noise1e-2 on an fp32-exact step: rel ~0.01; the Hy4 device vs-CPU errors are at
+  most 1.07 x the component errors); `swap_<last>_out_rel` (the block out with vs without the last swapped step's
+  error: the tail re-run on the CPU from the CPU step's output, context snapshot after the step; <= swap_out_rel
+  0.01; noise on the attn_hc gates moves out by 0.028 while the gates themselves move 0.006); selection outputs
+  (>= 75 % exact zeros, e.g. dense router weights): rows whose top-k support moved are counted (`_reselected` <=
+  swap_step_reselect 0.02) and left out of the row numbers (the Hy4 device router flips 0.07 % of its choices vs
+  the CPU on the same input, which would fail a worst-row limit).
+- `testing/mutate.py`, `BRINGUP_IMPL=mutate:<kind>` (+ `BRINGUP_MUTATE_STEP`): the CPU step with its output altered:
+  scale1.02, scale0.98, halfswap, rowshift, quarterzero, noise1e-2, sign; idxshift for integer outputs; control
+  `bf16` (bf16-rounded inputs and output) must pass. mesh_parametrize opens no device in these modes.
+- `testing/templates.py`: the swap template has `CHECKS = "steps"`; the component template is unchanged; rendered
+  files are untouched (all existing frozen swap tests keep their behaviour).
+- `orchestrator.py`: `freeze_tests` freezes a swap task at once (reference PASS, stub FAIL still required), logging
+  `[S.x] swap test frozen without review (F49)`, unless `agents.swap_review: all | [block types]` names it; a failed
+  unreviewed freeze starts the test role with the failure. Component tasks keep their test agent.
+- `dev/f49_mutation_proof.py` / `.md`: the proof (below). Selftests: test_swap_checks.py.
