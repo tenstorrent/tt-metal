@@ -195,7 +195,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
 
     // The whole table, not one device's slice: which slot of a chip holds which global expert is what both
     // this op and the routed expert must agree on, and a relay looks up chips other than its own.
-    const auto& table = tensor_args.global_expert_idx_table;
+    TT_FATAL(
+        tensor_args.global_expert_idx_table.has_value(),
+        "combine_fabric2d: overlapped with the routed expert but no global_expert_idx_table");
+    const auto& table = *tensor_args.global_expert_idx_table;
     validate_dram_row_major(table, "global_expert_idx_table");
     TT_FATAL(
         table.dtype() == tt::tt_metal::DataType::INT32 || table.dtype() == tt::tt_metal::DataType::UINT32,
