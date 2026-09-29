@@ -1878,6 +1878,22 @@ def run_ring_joint_sdpa_chunked(
             )
             for q_chunk, k_chunk in qk_configs
         }
+        # The merge changes the accumulation order, so a split output identical to the unsplit one on every chunk
+        # means eligibility fell back and the split never ran.
+        unsplit_program_configs = (
+            {
+                (q_chunk, k_chunk): ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=sdpa_compute_grid,
+                    q_chunk_size=q_chunk,
+                    k_chunk_size=k_chunk,
+                    exp_approx_mode=False,
+                )
+                for q_chunk, k_chunk in qk_configs
+            }
+            if max_k_splits > 1 and do_check and num_iterations == 1
+            else None
+        )
+        ksplit_differs_by_config = {}
 
         use_device_determinism_compare = (
             num_iterations > 1 and chunk_size % ttnn.TILE_SIZE == 0 and d_v % ttnn.TILE_SIZE == 0
@@ -2335,11 +2351,35 @@ def run_ring_joint_sdpa_chunked(
                             e,
                             out_i,
                         )
+                        if unsplit_program_configs is not None:
+                            unsplit_out = run_chunk_call(
+                                config_id,
+                                unsplit_program_configs[(q_chunk_size, k_chunk_size)],
+                                0,
+                                i,
+                                s,
+                                e,
+                                tt_Q,
+                                tt_K,
+                                tt_V,
+                                persistent_output_buffer_k,
+                                persistent_output_buffer_v,
+                                kv_cache_batch_idx_arg,
+                            )
+                            unsplit_i = to_host(unsplit_out, chunk_size)
+                            if use_ring_mla:
+                                unsplit_i = unsplit_i[:, :, :, :d_v]
+                            ksplit_differs_by_config.setdefault(config_id, False)
+                            if not torch.equal(out_i, unsplit_i):
+                                ksplit_differs_by_config[config_id] = True
 
         if num_iterations > 1 and use_device_determinism_compare and determinism_mismatch_marker is not None:
             assert not device_mismatch_marker_is_set(
                 determinism_mismatch_marker
             ), "Chunked prefill produced output that differs from iteration 0"
+
+        for config_id, differs in ksplit_differs_by_config.items():
+            assert differs, f"{config_id}: max_k_splits={max_k_splits} output equals the unsplit op on every chunk"
 
         for config_id, per_chunk_results in per_chunk_results_by_config.items():
             failures = [
@@ -4798,6 +4838,16 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores(
         )
         scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
         assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
+        # The replays below compare against these references exactly, so a K-split merge that is wrong the same way
+        # every run is caught only here.
+        torch_dense_ref = torch_chunked_causal_sdpa_reference(
+            q_full[:, :, :chunk_global, :],
+            k_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            v_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            0,
+        )
+        dense_rmse = torch.sqrt(((torch_dense_ref - references[0][1]) ** 2).mean()).item()
+        assert dense_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar dense reference RMSE={dense_rmse}"
 
         # The host value remains fixed at the stable cache capacity. Cache-slot selection, prefix growth,
         # and halo relocation must therefore come exclusively from the two metadata tensors refreshed by stage().
