@@ -55,7 +55,7 @@ from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights imp
     _weight_cache,
 )
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (  # noqa: E402
     DeepSeekV4Attention,
     build_static_layer_cache,
     decode_sdpa_bounds,

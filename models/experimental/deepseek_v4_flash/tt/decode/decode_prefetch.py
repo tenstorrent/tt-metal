@@ -4,8 +4,8 @@
 
 """The GlobalCircularBuffer ("GCB") rings every prefetched decode weight streams through.
 
-One *shared* ring per device serves every :class:`~.layers.LinearDecode` and
-:class:`~.layers.BatchedLinearDecode` on it: the attention block's q_b and grouped output
+One *shared* ring per device serves every :class:`~..layers.LinearDecode` and
+:class:`~..layers.BatchedLinearDecode` on it: the attention block's q_b and grouped output
 projection, and the MoE shared expert's down (:data:`DECODE_GCB_GROUP`). Cuts that do not fit
 that ring's 64 receivers get their own -- q_a full-width on 32 (the CSA compressor shares it),
 kv on 16 (HCA shares it), the router gate full-width but hub mode on 8, and the
@@ -26,7 +26,7 @@ Why share rather than size a ring per shape:
 
 Sharing is possible because the weights stream. The slabs here run from 32 to 512 tiles but all
 divide into 32-tile pages, so a ring's page size never changes between transfers -- a ring whose
-page size *does* change hangs (see :func:`~.layers.make_shared_decode_gcb`) -- and every weight
+page size *does* change hangs (see :func:`~..layers.make_shared_decode_gcb`) -- and every weight
 on a ring wants the same receiver count, because a GCB's receiver set is fixed at construction
 (64 on the shared ring; a "B core" is a receiver core of the matmul's second operand, not the
 decode batch). ``o_a_proj``'s batched ``b_blocks x n_blocks`` grid is 64 for exactly that
@@ -53,8 +53,8 @@ from typing import Optional
 
 import ttnn
 
-from .layers import decode_gcb_page_bytes, make_shared_decode_gcb
-from .system_config import active_system_config
+from ..layers import decode_gcb_page_bytes, make_shared_decode_gcb
+from ..system_config import active_system_config
 
 # The hyper-connections' ``fn`` ring, keyed separately from ``DECODE_GCB_GROUP`` because its
 # 8-tile slab shares no page with that group's 32. :func:`ensure_named_gcb` builds it on first
@@ -206,7 +206,7 @@ def hc_fn_ring_specs() -> list:
 
     The ring's page is the gcd of their slabs -- the ``fn`` layout's ``[256, 32]`` slab, 8 tiles
     (4.6 KB) at bf4 -- which the other two entries do not change; they are listed so that
-    :func:`~.layers.make_shared_decode_gcb` asserts the same receiver count (64) for those cuts
+    :func:`~..layers.make_shared_decode_gcb` asserts the same receiver count (64) for those cuts
     too. Only ``fn`` streams through the ring; q_a/kv weights go through :data:`Q_A_GCB` /
     :data:`KV_GCB`.
 
@@ -348,7 +348,7 @@ def check_decode_layout(name: str, K: int, N: int, batch: Optional[int] = None) 
     The layouts are constants (the shared GCB is sized from them before any weight is built),
     so a config they do not describe has to be caught here: left alone it would reach the
     device as a silently mis-sharded weight rather than an error. ``batch`` is the number of
-    ``o_groups`` folded into :class:`~.layers.BatchedLinearDecode`'s ``[Bc*K, Nc]`` per-core
+    ``o_groups`` folded into :class:`~..layers.BatchedLinearDecode`'s ``[Bc*K, Nc]`` per-core
     block, and is ``None`` for an unbatched weight.
     """
     layout = DECODE_LAYOUTS[name]

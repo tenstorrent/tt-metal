@@ -17,7 +17,7 @@ from typing import NamedTuple, Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _profile, width_sharded_l1_config
+from ..common import DeepSeekV4Module, _profile, width_sharded_l1_config
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     Q_A_GCB,
@@ -30,9 +30,9 @@ from .decode_prefetch import (
     router_gate_page_bytes,
     tp_gate_up_layout,
 )
-from .layers import Linear, LinearDecode, _core_grid_contains
-from .system_config import active_system_config
-from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
+from ..layers import Linear, LinearDecode, _core_grid_contains
+from ..system_config import active_system_config
+from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 
 class SparseRouting(NamedTuple):

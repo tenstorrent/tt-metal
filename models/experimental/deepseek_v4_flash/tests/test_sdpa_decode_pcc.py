@@ -26,7 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.attention import DeepSeekV4Attention
+from models.experimental.deepseek_v4_flash.tt.decode.attention import DeepSeekV4Attention
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 
 _MASK_NEG = -1.0e9
