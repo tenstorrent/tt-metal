@@ -121,6 +121,30 @@
   "status": "PASS",
   "waiting": null
  },
+ "R.3": {
+  "attempts": 0,
+  "duration_s": 295.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T01:45:24"
+   }
+  ],
+  "last_run": "2026-09-29T01:45:24",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/R.3.log",
+  "metrics": {
+   "boundaries_missing": 0,
+   "graph_errors": 0,
+   "graph_replay_maxabs": 0.0,
+   "maxabs_hidden": 0.0,
+   "pcc_hidden": 1.0,
+   "pcc_state_min": 0.999999999999993
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T01:40:28",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/glm53_prefill",
   "created": "2026-09-29T00:16:27",
