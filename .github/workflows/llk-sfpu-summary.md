@@ -15,6 +15,10 @@ on:
     types: [completed]
     branches: [main]
 
+# A run replaced by a newer /llk-sfpu-test on the same PR is cancelled and leaves no
+# report; the newer run posts one.
+if: ${{ github.event.workflow_run.conclusion != 'cancelled' }}
+
 timeout-minutes: 10
 
 permissions:
