@@ -55,6 +55,19 @@ class GateResult:
         return "\n".join([f"{self.verdict} {self.tid}"] + self.lines)
 
 
+STATE_METRICS_MAX = 64  # above this, state.json keeps only the gated metrics; results/<task>.json keeps them all
+
+
+def state_metrics(spec: dict[str, str], got: dict) -> dict:
+    """The metrics state.json records for a gate run: all of them, or the gated ones when a test records many
+    (swap tests record hundreds of informational metrics; the repo's 500 KB large-file hook caps state.json)."""
+    vals = {k: v["value"] for k, v in got.items()}
+    if len(vals) <= STATE_METRICS_MAX:
+        return vals
+    globs = list(spec or {})
+    return {k: v for k, v in vals.items() if any(fnmatch.fnmatchcase(k, g) for g in globs)}
+
+
 def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
     ok, lines = True, []
     for glob, cond in (spec or {}).items():
@@ -333,7 +346,7 @@ def run_gate(
         duration_s=round(dur, 1),
         rc=rc,
         attempts=entry.get("attempts", 0) + (0 if verdict == "PASS" else 1),
-        metrics={k: v["value"] for k, v in got.items()},
+        metrics=state_metrics(task["gate"].get("metrics", {}), got),
         log=str(log),
         reason=[] if verdict == "PASS" else res.lines,
         history_add={"t": now(), "status": verdict},
