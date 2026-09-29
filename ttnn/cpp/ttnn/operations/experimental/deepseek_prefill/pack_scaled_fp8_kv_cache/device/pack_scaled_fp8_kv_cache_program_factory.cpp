@@ -3,16 +3,16 @@
 
 #include "pack_scaled_fp8_kv_cache_program_factory.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 
 namespace ttnn::experimental::prim::pack_scaled_fp8_kv_cache {
-
-namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
 
 PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgramFactory::create(
     const PackScaledFp8KvCacheParams&, const PackScaledFp8KvCacheInputs& args, Tensor& output) {
@@ -21,9 +21,12 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
 
     auto* latent_buffer = args.latent.buffer();
     auto* scale_buffer = args.scales.buffer();
-    auto* rope_buffer = args.rope.buffer();
+    const bool has_rope = args.rope.has_value();
     auto* output_buffer = output.buffer();
-    const uint32_t rows = args.latent.logical_volume() / packed::LATENT_WIDTH;
+    const uint32_t latent_bytes = args.latent.logical_shape()[-1];  // one FP8 byte per value
+    const uint32_t scale_bytes = ::sparse_sdpa::scaled_kv_scale_bytes(latent_bytes);
+    const uint32_t rope_bytes = has_rope ? args.rope->logical_shape()[-1] * sizeof(uint16_t) : 0u;
+    const uint32_t rows = args.latent.logical_volume() / latent_bytes;
 
     Program program;
     const auto grid = args.latent.device()->compute_with_storage_grid_size();
@@ -31,19 +34,19 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     auto cores = corerange_to_cores(all_cores, num_cores, true);
 
     constexpr uint32_t cb_scratch = CBIndex::c_0;
-    constexpr uint32_t scratch_bytes = packed::LATENT_WIDTH;
+    const uint32_t scratch_bytes = std::max({latent_bytes, scale_bytes, rope_bytes});
     CreateCircularBuffer(
         program,
         all_cores,
         CircularBufferConfig(scratch_bytes, {{cb_scratch, DataFormat::UInt8}})
             .set_page_size(cb_scratch, scratch_bytes));
 
-    std::vector<uint32_t> compile_args = {
-        cb_scratch, packed::LATENT_WIDTH, packed::SCALE_WIDTH * sizeof(float), packed::ROPE_WIDTH * sizeof(uint16_t)};
+    // rope_bytes == 0 compiles the RoPE copy out; the RoPE accessor chains last (a placeholder when absent).
+    std::vector<uint32_t> compile_args = {cb_scratch, latent_bytes, scale_bytes, rope_bytes};
     TensorAccessorArgs(latent_buffer).append_to(compile_args);
     TensorAccessorArgs(scale_buffer).append_to(compile_args);
-    TensorAccessorArgs(rope_buffer).append_to(compile_args);
     TensorAccessorArgs(output_buffer).append_to(compile_args);
+    TensorAccessorArgs(has_rope ? args.rope->buffer() : nullptr).append_to(compile_args);
 
     const auto kernel_id = CreateKernel(
         program,
@@ -62,7 +65,7 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
             core,
             {latent_buffer->address(),
              scale_buffer->address(),
-             rope_buffer->address(),
+             has_rope ? args.rope->buffer()->address() : 0u,
              output_buffer->address(),
              start_row,
              core_rows});
@@ -81,7 +84,7 @@ void PackScaledFp8KvCacheProgramFactory::override_runtime_arguments(
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached.program, cached.shared_variables.kernel_id, core);
         runtime_args[0] = args.latent.buffer()->address();
         runtime_args[1] = args.scales.buffer()->address();
-        runtime_args[2] = args.rope.buffer()->address();
+        runtime_args[2] = args.rope.has_value() ? args.rope->buffer()->address() : 0u;
         runtime_args[3] = output.buffer()->address();
     }
 }

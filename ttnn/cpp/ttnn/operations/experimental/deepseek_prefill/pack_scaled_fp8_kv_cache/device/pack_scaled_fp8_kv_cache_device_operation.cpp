@@ -11,10 +11,9 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 
 namespace ttnn::experimental::prim::pack_scaled_fp8_kv_cache {
-
-namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
 
 namespace {
 
@@ -23,15 +22,13 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& config) {
            config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
-void validate_input(const Tensor& tensor, const char* name, tt::tt_metal::DataType dtype, uint32_t width) {
+void validate_input(const Tensor& tensor, const char* name, tt::tt_metal::DataType dtype) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
     TT_FATAL(tensor.dtype() == dtype, "{} has the wrong dtype", name);
     TT_FATAL(!tensor.logical_shape().empty(), "{} must have at least one dimension", name);
-    TT_FATAL(
-        tensor.logical_shape()[-1] == width, "{} last dim must be {}, got {}", name, width, tensor.logical_shape()[-1]);
 }
 
 }  // namespace
@@ -43,26 +40,47 @@ PackScaledFp8KvCacheDeviceOperation::program_factory_t PackScaledFp8KvCacheDevic
 
 void PackScaledFp8KvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    validate_input(
-        args.latent, "pack_scaled_fp8_kv_cache: latent", tt::tt_metal::DataType::FP8_E4M3, packed::LATENT_WIDTH);
-    validate_input(
-        args.scales, "pack_scaled_fp8_kv_cache: scales", tt::tt_metal::DataType::FLOAT32, packed::SCALE_WIDTH);
-    validate_input(args.rope, "pack_scaled_fp8_kv_cache: rope", tt::tt_metal::DataType::BFLOAT16, packed::ROPE_WIDTH);
+    validate_input(args.latent, "pack_scaled_fp8_kv_cache: latent", tt::tt_metal::DataType::FP8_E4M3);
+    validate_input(args.scales, "pack_scaled_fp8_kv_cache: scales", tt::tt_metal::DataType::FLOAT32);
+    const uint32_t latent_width = args.latent.logical_shape()[-1];
+    TT_FATAL(
+        latent_width > 0 && latent_width % ::sparse_sdpa::SCALE_BLOCK_WIDTH == 0,
+        "pack_scaled_fp8_kv_cache: latent width must be a positive multiple of {}, got {}",
+        ::sparse_sdpa::SCALE_BLOCK_WIDTH,
+        latent_width);
+    TT_FATAL(
+        args.scales.logical_shape()[-1] == ::sparse_sdpa::scale_block_count(latent_width),
+        "pack_scaled_fp8_kv_cache: scales last dim must be {} (one per {} latent values), got {}",
+        ::sparse_sdpa::scale_block_count(latent_width),
+        ::sparse_sdpa::SCALE_BLOCK_WIDTH,
+        args.scales.logical_shape()[-1]);
+    if (args.rope.has_value()) {
+        validate_input(*args.rope, "pack_scaled_fp8_kv_cache: rope", tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(args.rope->logical_shape()[-1] > 0, "pack_scaled_fp8_kv_cache: rope width must be positive");
+        TT_FATAL(
+            ::sparse_sdpa::scaled_kv_rope_offset_is_aligned(latent_width),
+            "pack_scaled_fp8_kv_cache: the RoPE field offset (latent {} + scales) must be {}-byte aligned",
+            latent_width,
+            ::sparse_sdpa::PACKED_FIELD_ADDRESS_UNIT_BYTES);
+    }
     TT_FATAL(
         is_dram_interleaved(attrs.output_memory_config), "pack_scaled_fp8_kv_cache: output must be DRAM interleaved");
     TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "pack_scaled_fp8_kv_cache requires Blackhole");
     TT_FATAL(
-        args.latent.device() == args.scales.device() && args.latent.device() == args.rope.device(),
+        args.latent.device() == args.scales.device() &&
+            (!args.rope.has_value() || args.latent.device() == args.rope->device()),
         "all inputs must be on the same device");
 
     const auto& shape = args.latent.logical_shape();
     TT_FATAL(
-        shape.size() == args.scales.logical_shape().size() && shape.size() == args.rope.logical_shape().size(),
+        shape.size() == args.scales.logical_shape().size() &&
+            (!args.rope.has_value() || shape.size() == args.rope->logical_shape().size()),
         "all inputs must have the same rank");
     uint64_t rows = 1;
     for (size_t dim = 0; dim + 1 < shape.size(); ++dim) {
         TT_FATAL(
-            shape[dim] == args.scales.logical_shape()[dim] && shape[dim] == args.rope.logical_shape()[dim],
+            shape[dim] == args.scales.logical_shape()[dim] &&
+                (!args.rope.has_value() || shape[dim] == args.rope->logical_shape()[dim]),
             "all inputs must have identical leading shapes");
         rows *= static_cast<uint64_t>(shape[dim]);
         TT_FATAL(rows <= std::numeric_limits<uint32_t>::max(), "folded row count exceeds uint32_t");
@@ -83,7 +101,9 @@ PackScaledFp8KvCacheDeviceOperation::spec_return_value_t PackScaledFp8KvCacheDev
     for (size_t dim = 0; dim + 1 < input_shape.size(); ++dim) {
         dims.push_back(static_cast<uint32_t>(input_shape[dim]));
     }
-    dims.push_back(packed::PACKED_ROW_BYTES);
+    const uint32_t latent_width = input_shape[-1];
+    const uint32_t rope_width = args.rope.has_value() ? args.rope->logical_shape()[-1] : 0;
+    dims.push_back(::sparse_sdpa::packed_kv_payload_bytes(latent_width + rope_width, latent_width));
     return tt::tt_metal::TensorSpec(
         ttnn::Shape(dims),
         tt::tt_metal::TensorLayout(
@@ -103,7 +123,8 @@ ttsl::hash::hash_t PackScaledFp8KvCacheDeviceOperation::compute_program_hash(
         attrs,
         args.latent.memory_config(),
         args.scales.memory_config(),
-        args.rope.memory_config(),
+        args.rope.has_value() ? std::optional(args.rope->memory_config()) : std::nullopt,
+        args.rope.has_value() ? std::optional(args.rope->logical_shape()) : std::nullopt,
         args.latent.logical_shape());
 }
 
@@ -114,7 +135,7 @@ namespace ttnn::prim {
 ttnn::Tensor pack_scaled_fp8_kv_cache(
     const Tensor& latent,
     const Tensor& scales,
-    const Tensor& rope,
+    const std::optional<Tensor>& rope,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using Operation = ttnn::experimental::prim::pack_scaled_fp8_kv_cache::PackScaledFp8KvCacheDeviceOperation;
     return ttnn::device_operation::launch<Operation>(

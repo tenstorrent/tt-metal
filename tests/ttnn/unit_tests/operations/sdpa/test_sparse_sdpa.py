@@ -45,20 +45,21 @@ def test_sparse_kv_format_api_is_explicit(expect_error):
         ttnn.transformer.sparse_sdpa(None, None, None, V_DIM)
 
 
-def make_scaled_kv_cache(device, batch, T, seed, round_scale):
-    """Build a packed cache and its reconstructed BF16 reference."""
+def make_scaled_kv_cache(device, batch, T, seed, round_scale, k_dim=K_DIM, v_dim=V_DIM):
+    """Build a packed cache and its reconstructed BF16 reference. ``k_dim == v_dim`` packs rows without a
+    BF16 RoPE tail (scaled FP8 over the whole row)."""
     gen = torch.Generator().manual_seed(seed)
-    latent = torch.randn(batch, 1, T, V_DIM, generator=gen, dtype=torch.float32)
-    block_scales = torch.logspace(-3, 0, steps=V_DIM // SCALE_BLOCK_WIDTH)
+    latent = torch.randn(batch, 1, T, v_dim, generator=gen, dtype=torch.float32)
+    block_scales = torch.logspace(-3, 0, steps=v_dim // SCALE_BLOCK_WIDTH)
     latent *= block_scales.repeat_interleave(SCALE_BLOCK_WIDTH)
-    rope = torch.randn(batch, 1, T, K_DIM - V_DIM, generator=gen, dtype=torch.float32).to(torch.bfloat16)
+    rope = torch.randn(batch, 1, T, k_dim - v_dim, generator=gen, dtype=torch.float32).to(torch.bfloat16)
 
     tt_latent = to_dev(latent.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_fp8, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
         tt_latent, round_scale_to_power_of_two=round_scale
     )
     tt_packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(
-        tt_fp8, tt_scales, to_dev(rope, device, ttnn.bfloat16)
+        tt_fp8, tt_scales, to_dev(rope, device, ttnn.bfloat16) if k_dim > v_dim else None
     )
     tt_reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
         tt_fp8, tt_scales, output_dtype=ttnn.bfloat16
@@ -121,6 +122,39 @@ def test_sparse_sdpa_scaled_fp8_kv(device, S, T, TOPK, kc, all_valid, round_scal
     expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
     score = pcc(ttnn.to_torch(tt_out), expected)
     assert score >= 0.999, f"scaled FP8 sparse SDPA PCC {score:.5f}"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "dim,H,S,T,TOPK,kc,all_valid",
+    [
+        (512, 32, 32, 128, 64, 32, False),
+        (512, 64, 64, 256, 256, 128, False),
+        (512, 64, 32, 512, 256, 256, True),
+        (128, 32, 32, 256, 128, 64, False),
+    ],
+    ids=["multi_chunk", "v41_heads_partial", "two_slab_pipeline_wrap", "one_scale_block"],
+)
+def test_sparse_sdpa_scaled_fp8_kv_without_rope(device, dim, H, S, T, TOPK, kc, all_valid):
+    """K_DIM == v_dim: every row dimension is scaled FP8 (no BF16 RoPE tail), e.g. DeepSeek-V4.1's 512-dim KV;
+    a 128-dim row has one scale and a row end that is not 16-byte aligned."""
+    q, _, indices = make_inputs(
+        H, S, T, TOPK, dim, (lambda s: TOPK) if all_valid else (lambda s: 1 + (s * 7) % TOPK), seed=71
+    )
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=72, round_scale=True, k_dim=dim, v_dim=dim)
+    assert tuple(tt_packed.shape) == (1, 1, T, dim + (dim // SCALE_BLOCK_WIDTH) * 4)
+    out = ttnn.transformer.sparse_sdpa(
+        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_packed,
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        dim,
+        kv_format=SCALED_FP8_KV,
+        scale=dim**-0.5,
+        k_chunk_size=kc,
+    )
+    expected = golden(q, reconstructed, indices, dim**-0.5, dim)
+    score = pcc(ttnn.to_torch(out), expected)
+    assert score >= 0.999, f"scaled FP8 (no RoPE tail) sparse SDPA PCC {score:.5f}"
 
 
 @run_for_blackhole()

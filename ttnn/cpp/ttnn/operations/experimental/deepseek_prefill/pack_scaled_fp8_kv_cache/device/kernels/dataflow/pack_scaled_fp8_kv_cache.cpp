@@ -25,11 +25,9 @@ void kernel_main() {
 
     constexpr auto latent_args = TensorAccessorArgs<4>();
     constexpr auto scale_args = TensorAccessorArgs<latent_args.next_compile_time_args_offset()>();
-    constexpr auto rope_args = TensorAccessorArgs<scale_args.next_compile_time_args_offset()>();
-    constexpr auto output_args = TensorAccessorArgs<rope_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<scale_args.next_compile_time_args_offset()>();
     const auto latent = TensorAccessor(latent_args, latent_addr);
     const auto scales = TensorAccessor(scale_args, scale_addr);
-    const auto rope = TensorAccessor(rope_args, rope_addr);
     const auto output = TensorAccessor(output_args, output_addr);
 
     Noc noc;
@@ -56,15 +54,19 @@ void kernel_main() {
             {.page_id = row, .offset_bytes = scale_offset});
         noc.async_write_barrier();
 
-        noc.async_read(rope, scratch, rope_bytes, {.page_id = row}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        noc.async_write(
-            use<CircularBuffer::AddrSelector::WRITE_PTR>(scratch),
-            output,
-            rope_bytes,
-            {.offset_bytes = 0},
-            {.page_id = row, .offset_bytes = rope_offset});
-        noc.async_write_barrier();
+        if constexpr (rope_bytes > 0) {  // rope_bytes == 0: no RoPE tail, the row ends after the scales
+            constexpr auto rope_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+            const auto rope = TensorAccessor(rope_args, rope_addr);
+            noc.async_read(rope, scratch, rope_bytes, {.page_id = row}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.async_write(
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(scratch),
+                output,
+                rope_bytes,
+                {.offset_bytes = 0},
+                {.page_id = row, .offset_bytes = rope_offset});
+            noc.async_write_barrier();
+        }
         scratch.push_back(1);
         scratch.pop_front(1);
     }

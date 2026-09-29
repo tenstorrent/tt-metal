@@ -3,20 +3,20 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache {
 
-constexpr uint32_t LATENT_WIDTH = 512;
-constexpr uint32_t SCALE_WIDTH = 4;
-constexpr uint32_t ROPE_WIDTH = 64;
-constexpr uint32_t PACKED_ROW_BYTES = LATENT_WIDTH + SCALE_WIDTH * sizeof(float) + ROPE_WIDTH * sizeof(uint16_t);
-
+// Packs one sparse-SDPA SCALED_FP8 row per token: [latent FP8 bytes | latent/128 FP32 scales | BF16 RoPE], the
+// geometry of sparse_sdpa_common.hpp. Widths come from the inputs (latent a multiple of 128). Without ``rope``
+// the row ends after the scales (scaled FP8 over every dimension, e.g. DeepSeek-V4.1's 512-dim KV).
 ttnn::Tensor pack_scaled_fp8_kv_cache(
     const Tensor& latent,
     const Tensor& scales,
-    const Tensor& rope,
+    const std::optional<Tensor>& rope,
     const tt::tt_metal::MemoryConfig& output_memory_config = ttnn::DRAM_MEMORY_CONFIG);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache

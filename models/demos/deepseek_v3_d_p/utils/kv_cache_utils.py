@@ -93,8 +93,9 @@ class MlaKvCacheGeometry:
         return cls(latent_dim=config.kv_lora_rank, rope_dim=config.qk_rope_head_dim)
 
     def __post_init__(self) -> None:
-        if self.latent_dim <= 0 or self.rope_dim <= 0:
-            raise ValueError("MLA KV cache dimensions must be positive")
+        # rope_dim 0: no BF16 RoPE tail, the scaled FP8 row covers every dimension (DeepSeek-V4.1 KV)
+        if self.latent_dim <= 0 or self.rope_dim < 0:
+            raise ValueError("MLA KV cache latent dimension must be positive and RoPE dimension non-negative")
 
     @property
     def logical_width(self) -> int:
@@ -120,7 +121,7 @@ class MlaKvCacheGeometry:
         return self.rope_offset_bytes + self.rope_dim * self.ROPE_ELEMENT_BYTES
 
     def validate_scaled(self) -> None:
-        if self.rope_offset_bytes % self.PACKED_FIELD_ADDRESS_UNIT_BYTES != 0:
+        if self.rope_dim and self.rope_offset_bytes % self.PACKED_FIELD_ADDRESS_UNIT_BYTES != 0:
             raise ValueError(
                 f"scaled MLA KV RoPE offset {self.rope_offset_bytes} must be "
                 f"{self.PACKED_FIELD_ADDRESS_UNIT_BYTES}-byte aligned"

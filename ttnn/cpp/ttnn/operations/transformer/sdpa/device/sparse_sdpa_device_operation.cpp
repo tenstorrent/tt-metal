@@ -115,8 +115,9 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             attrs.v_dim % ::sparse_sdpa::SCALE_BLOCK_WIDTH == 0,
             "scaled KV v_dim must be divisible by {}",
             ::sparse_sdpa::SCALE_BLOCK_WIDTH);
+        // Rows without a RoPE tail (K_DIM == v_dim) have no RoPE field to address.
         TT_FATAL(
-            ::sparse_sdpa::scaled_kv_rope_offset_is_aligned(attrs.v_dim),
+            q.logical_shape()[3] == attrs.v_dim || ::sparse_sdpa::scaled_kv_rope_offset_is_aligned(attrs.v_dim),
             "scaled KV scale/RoPE boundary must be {}-byte aligned (got v_dim={})",
             ::sparse_sdpa::PACKED_FIELD_ADDRESS_UNIT_BYTES,
             attrs.v_dim);

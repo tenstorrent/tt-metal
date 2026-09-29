@@ -31,6 +31,6 @@ namespace ttnn::prim {
 ttnn::Tensor pack_scaled_fp8_kv_cache(
     const Tensor& latent,
     const Tensor& scales,
-    const Tensor& rope,
+    const std::optional<Tensor>& rope,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 }

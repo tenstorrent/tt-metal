@@ -10,7 +10,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_c
 ttnn::Tensor pack_scaled_fp8_kv_cache(
     const Tensor& latent,
     const Tensor& scales,
-    const Tensor& rope,
+    const std::optional<Tensor>& rope,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     return ttnn::prim::pack_scaled_fp8_kv_cache(latent, scales, rope, output_memory_config);
 }

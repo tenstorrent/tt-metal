@@ -80,6 +80,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t k_row_bytes = k_dim * kv_elem_bytes;
     const uint32_t packed_page_bytes = scaled_kv ? t.kv.buffer()->aligned_page_size() : 0;
     const uint32_t scale_blocks = ::sparse_sdpa::scale_block_count(v_dim);
+    // Scaled rows without a BF16 RoPE tail (v_dim == K_DIM, scaled FP8 over the whole row) need no RoPE CBs.
+    const uint32_t rope_DHt = DHt - vDHt;
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr tt::DataFormat fp32 = tt::DataFormat::Float32;
     constexpr uint32_t tile_bytes = tt::tile_size(bf);  // 2048
@@ -131,20 +133,19 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         // the physical packed-page stride. Only cb_k_rm advances FIFO state; compute derives the alias read
         // pointer from the owner before reading RoPE. This lets the reader gather slab N+1 while compute
         // reconstructs slab N without independent alias pointers drifting at the ring wrap.
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        tt::tt_metal::CBDescriptor packed_cb{
             .total_size = packed_page_bytes * tt::constants::TILE_HEIGHT * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
             .core_ranges = core_grid,
-            .format_descriptors = {{
-                tt::tt_metal::CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(cb_k_rm),
-                    .data_format = native_kv_df,
-                    .page_size = packed_page_bytes},
-                tt::tt_metal::CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(cb_k_rope_rm),
-                    .data_format = bf,
-                    .page_size = packed_page_bytes},
-            }},
-        });
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_k_rm),
+                .data_format = native_kv_df,
+                .page_size = packed_page_bytes}}},
+        };
+        if (rope_DHt > 0) {
+            packed_cb.format_descriptors.push_back(tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_k_rope_rm), .data_format = bf, .page_size = packed_page_bytes});
+        }
+        desc.cbs.push_back(std::move(packed_cb));
     } else {
         cb(cb_k_rm, k_row_bytes, k_chunk, native_kv_df);
     }
@@ -171,7 +172,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     if (scaled_kv) {
         cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, fp32);
         cb(cb_k_latent_tile, k_in_tile_bytes, vDHt, tt::DataFormat::Bfp8_b);
-        cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
+        if (rope_DHt > 0) {
+            cb(cb_k_rope_tile, tile_bytes, Skt * rope_DHt, bf);
+        }
     }
 
     if (use_attention_sink) {

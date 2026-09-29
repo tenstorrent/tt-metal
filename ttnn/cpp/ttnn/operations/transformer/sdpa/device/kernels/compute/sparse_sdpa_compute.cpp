@@ -183,7 +183,7 @@ void kernel_main() {
                 constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_width);
                 constexpr uint32_t scale_bytes = sparse_sdpa::scaled_kv_scale_bytes(latent_width);
                 static_assert(
-                    !scaled_kv || sparse_sdpa::scaled_kv_rope_offset_is_aligned(latent_width),
+                    rope_DHt == 0 || sparse_sdpa::scaled_kv_rope_offset_is_aligned(latent_width),
                     "scaled KV scale/RoPE boundary must be addressable in 16-byte units");
                 static_assert(
                     packed_row_bytes % (tt::constants::TILE_WIDTH * sizeof(uint16_t)) == 0,
@@ -227,9 +227,10 @@ void kernel_main() {
                         scale_bcast_cb.pop_front(scale_blocks);
                     }
 
-                    {
+                    if constexpr (rope_DHt > 0) {
                         // cb_k_rope_rm is a format-only alias: synchronize its UNPACK pointer to the owning
                         // packed FIFO for this slab. It never participates in wait/pop lifecycle accounting.
+                        // Rows without a RoPE tail (rope_DHt == 0) have no alias and no RoPE tiles.
                         UNPACK(get_local_cb_interface(cb_k_rope_rm).fifo_rd_ptr =
                                    get_local_cb_interface(cb_k_rm).fifo_rd_ptr;);
                         tilize_packed_field<
@@ -268,7 +269,9 @@ void kernel_main() {
             out_cur.reserve_back(Sqt * vDHt);
             if constexpr (scaled_kv) {
                 k_in_cb.wait_front(Skt * vDHt);
-                rope_tile_cb.wait_front(Skt * (DHt - vDHt));
+                if constexpr (DHt > vDHt) {
+                    rope_tile_cb.wait_front(Skt * (DHt - vDHt));
+                }
             } else {
                 k_in_cb.wait_front(Skt * DHt);  // shared by every query group (QK + PV)
             }
@@ -317,26 +320,28 @@ void kernel_main() {
                                 /*skip_pack_configure=*/true);
                         }
                         // Unscaled BF16 RoPE contribution, accumulated into the same held score tiles.
-                        reconfig_data_format(cb_k_rope_tile, cb_q_in);
-                        mm_no_mop_init_short(cb_q_in, cb_k_rope_tile, /*transpose=*/true, 1, qsb, q_row_stride);
-                        configure_row_pack_width(cb_qk_im, 1);
-                        pack_reconfig_l1_acc(1);
-                        for (uint32_t kt = 0; kt < Skt; ++kt) {
-                            blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
-                                cb_q_in,
-                                cb_k_rope_tile,
-                                cb_qk_im,
-                                /*in0_index_start=*/row_base * DHt + vDHt,
-                                /*in1_index_start=*/kt * rope_DHt,
-                                /*row_subblock_idx=*/qg,
-                                /*out_col_offset=*/kt,
-                                /*subblock_w=*/1,
-                                /*subblock_h=*/qsb,
-                                /*inner_dim=*/rope_DHt,
-                                /*matmul_stride=*/q_row_stride,
-                                /*skip_pack_configure=*/true);
+                        if constexpr (rope_DHt > 0) {
+                            reconfig_data_format(cb_k_rope_tile, cb_q_in);
+                            mm_no_mop_init_short(cb_q_in, cb_k_rope_tile, /*transpose=*/true, 1, qsb, q_row_stride);
+                            configure_row_pack_width(cb_qk_im, 1);
+                            pack_reconfig_l1_acc(1);
+                            for (uint32_t kt = 0; kt < Skt; ++kt) {
+                                blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
+                                    cb_q_in,
+                                    cb_k_rope_tile,
+                                    cb_qk_im,
+                                    /*in0_index_start=*/row_base * DHt + vDHt,
+                                    /*in1_index_start=*/kt * rope_DHt,
+                                    /*row_subblock_idx=*/qg,
+                                    /*out_col_offset=*/kt,
+                                    /*subblock_w=*/1,
+                                    /*subblock_h=*/qsb,
+                                    /*inner_dim=*/rope_DHt,
+                                    /*matmul_stride=*/q_row_stride,
+                                    /*skip_pack_configure=*/true);
+                            }
+                            pack_reconfig_l1_acc(0);
                         }
-                        pack_reconfig_l1_acc(0);
                     } else {
                         // scores[q,sk]=ΣQ·K. in1=K, transpose=true (within-tile transpose => Kᵀ).
                         mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
@@ -512,7 +517,9 @@ void kernel_main() {
             qk_cb.pop_front(Sqt * KT_stride);
             if constexpr (scaled_kv) {
                 k_in_cb.pop_front(Skt * vDHt);
-                rope_tile_cb.pop_front(Skt * (DHt - vDHt));
+                if constexpr (DHt > vDHt) {
+                    rope_tile_cb.pop_front(Skt * (DHt - vDHt));
+                }
             } else {
                 k_in_cb.pop_front(Skt * DHt);
             }
