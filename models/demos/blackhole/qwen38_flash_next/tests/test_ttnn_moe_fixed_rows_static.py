@@ -787,28 +787,10 @@ def test_python_path_preserves_normalized_scores_and_dynamic_shared_gate() -> No
     assert [call.args[0].id for call in replicated_validations] == ["router", "shared_scalar_gate"]
 
 
-def test_pinned_ttnn_source_contracts_match_the_five_row_choreography() -> None:
-    moe_source = (
-        REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/moe_compute_device_operation.cpp"
-    ).read_text()
-    assert "const uint32_t total_tokens = input_shape[0] * input_shape[1];" in moe_source
-    assert ".seq_size = total_tokens" in moe_source
-    assert "path=FullLocal requires combine_params->local_combine to be true" in moe_source
-    # the replicated-input contract holds on a multi-device mesh; a 1x1 mesh has nothing to replicate
-    assert "if (mesh_device->num_devices() > 1) {" in moe_source
-    assert "path=FullLocal on a multi-device mesh requires a fully replicated logical-token input " in moe_source
-
-    reduce_source = (
-        REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/device/"
-        "deepseek_moe_fast_reduce_nc_fused_program_factory.cpp"
-    ).read_text()
-    assert "const uint32_t num_tokens = scores_tensor.logical_shape()[0]" in reduce_source
-    assert "scores shape: [tokens, 1, seq, experts_k]" in reduce_source
-
-    blackhole_test_source = (
-        REPO_ROOT / "tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_single_card.py"
-    ).read_text()
-    assert "https://github.com/tenstorrent/tt-metal/issues/50038" in blackhole_test_source
+def test_source_numeric_admission_labels_remain_explicit() -> None:
+    # These source-era labels are not current hardware qualification. Shared
+    # replication, shape and dispatch behavior is covered by the direct MoE
+    # operation suite and the real-checkpoint model numerical controls.
     assert ROWS5_HARDWARE_PROVEN is True and ROWS32_HARDWARE_PROVEN is True
     assert BLACKHOLE_MOE_NUMERIC_ISSUE.endswith("/50038")
 
