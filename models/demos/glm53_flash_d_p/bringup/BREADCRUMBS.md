@@ -592,3 +592,21 @@ Watch: cpu_tail margin is shrinking (0.0025 -> 0.0029 -> 0.0035 of 0.005), and m
 0.03. ffn_residual is next.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_09_mlp.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.ffn_residual test (attempt 1)
+
+Reviewed the rendered component test for `out = post * mlp_out + comb^T @ h_mid` ([S * 4, H], token-major; inputs
+h_mid, ffn_hc, mlp_out). Rewrote it from the attn_residual test: the gated PCC plus asserted checks, run on layer 0
+and again (same weightless module) on layer 1's golden. Unlike attn_residual, h_mid's streams already differ at
+layer 0, so the comb is visible there (comb not transposed: rel 0.098 at layer 0, 0.038 at layer 1).
+Sensitivity (CPU host script /tmp/ffnres/sens.py, not kept), layer 0 PCC / rel L2 / ratio: post x1.01 (= mlp_out
+x1.01) 0.99996 / 0.0087 / [0.9925, 1.0205]; post x1.02 0.99987 / 0.016 / worst row 0.053; comb x1.02 0.024; last row
+zeroed 0.99998 / 0.0062 / ratio min 0. The fp32 reference itself is at rel 0.0034 / [0.9949, 1.0052] vs the bf16
+golden; all-bf16 mix 0.0044 / [0.9945, 1.0053] / term rel up to 0.0082.
+Limits tightened from attn_residual: ratio [0.99, 1.01], per-stream rel <= 0.012, worst row <= 0.03, term coefficient
+[0.99, 1.01], term rel <= 0.015; rel L2 <= 0.01 kept. The layer-1 metrics are tagged `L01`.
+Results: reference passes (L0 rel 0.0034, L1 0.0028). Stub fails (PCC 0). Device passes already, because
+`_residual_host_fn` serves ffn_residual too: PCC 0.999993, L0 rel 0.0037 / [0.9949, 1.0052] / worst row 0.0096, term
+rel 0.0021 / 0.0014; L1 rel 0.0032, post term rel 0.0055.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
