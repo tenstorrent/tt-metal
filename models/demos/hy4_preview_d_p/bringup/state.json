@@ -557,6 +557,111 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.dense_full.ffn_hc": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "da05ba48-2a13-462a-b681-2c641c7f3922"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.dense_full.ffn_hc.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.dense_full.ffn_hc.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 242.8,
+    "session_id": "7173a6a4-3f3b-4337-81bc-806314705436",
+    "t": "2026-09-29T08:04:04"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.dense_full.ffn_hc.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.dense_full.ffn_hc.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 60.9,
+    "session_id": "da05ba48-2a13-462a-b681-2c641c7f3922",
+    "t": "2026-09-29T08:05:48"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 13.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-29T08:04:46"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-29T08:06:04"
+   }
+  ],
+  "last_run": "2026-09-29T08:06:04",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.dense_full.ffn_hc.log",
+  "metrics": {
+   "ffn_x_rel_l2_ffn_hc_L00": 0.002024038229137659,
+   "ffn_x_worst_row_rel_l2_ffn_hc_L00": 0.004626253619790077,
+   "pcc_ffn_hc_L00": 0.999997165973821,
+   "post_col_rel_l2_ffn_hc_L00": 0.0017710145330056548,
+   "post_worst_row_rel_l2_ffn_hc_L00": 0.0032740673050284386,
+   "rel_l2_ffn_hc_L00": 0.001726961461827159
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-29T08:05:50",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.dense_full.indexer": {
   "agent": {
    "defs": {
