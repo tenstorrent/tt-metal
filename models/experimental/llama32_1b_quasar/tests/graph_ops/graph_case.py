@@ -526,12 +526,18 @@ def build_tensor(spec, mesh_device, case, op_name, key):
 
     # Quasar: from_torch(layout=TILE) routes to the mainline device tilize, which faults on wide-short
     # tensors (MEM_READ_NO_RESPONSE) and leaks state into later ops. Build TILE floats via quasar.tilize
-    # instead (the model's path). Partial shards keep the from_torch two-step (their logical->shard padding
-    # is a from_torch behavior); non-float dtypes and ROW_MAJOR inputs are unaffected.
+    # instead (the model's path). Only for already tile-aligned shapes: from_torch(TILE) auto-pads a
+    # non-tile-aligned height/width, but quasar.tilize requires it divisible by TILE (dim%32==0) and FATALs
+    # otherwise -- so non-aligned tensors keep the from_torch path (which pads). Partial shards also keep
+    # from_torch (their logical->shard padding is a from_torch behavior); non-float dtypes / ROW_MAJOR are
+    # unaffected.
+    shp = spec["shape"]
+    tile_aligned = len(shp) >= 2 and shp[-2] % 32 == 0 and shp[-1] % 32 == 0
     if (
         _is_quasar(mesh_device)
         and spec["layout"] == "TILE"
         and spec["dtype"] in _QUASAR_TILE_REROUTE_DTYPES
+        and tile_aligned
         and not partial
     ):
         tt = _quasar_tilize_build(data, DTYPE[spec["dtype"]], memory_config, mesh_device)
