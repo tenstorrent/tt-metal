@@ -193,9 +193,11 @@ STREAM_CASE = "zero_shot_260-123286-0014"
 @pytest.mark.skipif(not INPUTS_DIR, reason="set COSYVOICE2_INPUTS")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 50_000_000}], indirect=True)
 @pytest.mark.timeout(0)  # a device job is never killed mid-op (pytest.ini sets 300 s)
-def test_device_streaming_interleaved_with_llm(device):
+def test_device_streaming_interleaved_with_llm(device, expect_error):
     """With the decode trace on, a chunk's flow and HiFT run between decode steps while the trace is alive, after
     `warmup_streaming()` compiled and verified every streaming geometry. Checked:
+    - before `warmup_streaming()`, the call is refused, before any device work (docs/VALIDATION.md: without it, the
+      first chunk allocates under the live trace);
     - at least one chunk's audio is ready before the LLM has finished;
     - the streamed tokens (greedy) equal the batch tokens: the chunk work between decode steps doesn't disturb the
       decode;
@@ -208,10 +210,12 @@ def test_device_streaming_interleaved_with_llm(device):
     from models.experimental.cosyvoice2.tt.streaming import stream_fixed_tokens
 
     pipeline = CosyVoice2TTNN(device, replace(CosyVoice2Config.reported(), sampler="greedy"))
-    pipeline.warmup_buckets()
-    pipeline.warmup_streaming()
     ctx = PromptContext.from_npz(os.path.join(INPUTS_DIR, f"{STREAM_CASE}.npz"))
     text = ctx.meta["case"]["text"]
+    pipeline.warmup_buckets()
+    with expect_error(RuntimeError, r"needs warmup_streaming\(\) first"):
+        pipeline.synthesize_stream(ctx, text)
+    pipeline.warmup_streaming()
 
     def noise_for(k, samples):
         return torch.randn(1, samples, pipeline.harmonics, generator=torch.Generator().manual_seed(1000 + k))

@@ -85,6 +85,26 @@ WORMHOLE: dict = {
     # enforced by a device test.
     "wer": Meets(),
     "speaker_similarity": Meets(),
+    # Streaming (demo.py --stream, 2026-09-29): warmup_buckets() and warmup_streaming() first, then the six distinct
+    # corpus utterances, two runs in fresh processes. The figure is the worst utterance, as for rtf_nonstreaming.
+    # Recorded from those runs, not yet enforced by a device test.
+    # Time to first packet: worst 1,455 and 1,479 ms (best 1,336). The first chunk is 0.37-0.47 s of text and LLM
+    # until its 25 or 32 tokens and 3 look-ahead, then the flow over the prompt and the chunk, 0.81-0.92 s, and HiFT,
+    # 0.12 s.
+    "ttfp_ms": Misses(
+        1470.0,
+        0.15,
+        "the first chunk's flow: the CFM's 10 Euler steps (67-73 ms each) over the prompt plus the chunk; with a free "
+        "flow, first audio would be 0.51-0.59 s (the LLM's first 28-35 tokens, then HiFT)",
+    ),
+    # Streaming RTF: worst 1.057 and 1.122, both on the 3.8 s utterance (aggregate 0.853 and 0.843). Every chunk reruns
+    # the flow over the whole prefix, and the final chunk runs it non-streaming over every token, as upstream does.
+    "rtf_streaming": Misses(
+        1.09,
+        0.2,
+        "the flow per chunk (the CFM over the whole prefix, 10 Euler steps); short utterances carry the ~1.4 s first "
+        "chunk over little audio",
+    ),
 }
 EXPECTATIONS = {"wormhole": WORMHOLE}
 

@@ -12,7 +12,8 @@ text-to-speech model, for [tenstorrent/tt-metal#54104](https://github.com/tensto
 The whole model runs on device, non-streaming: text → speech tokens (LLM) → mel (flow matching) → 24 kHz waveform
 (HiFT vocoder). **The four Stage 1 targets are met.** Streaming runs too: chunks of audio are produced while the LLM
 generates, on upstream's chunk schedule. That schedule, run over fixed tokens, matches upstream's own streaming run
-(`docs/VALIDATION.md`). The Stage 3 targets are not measured yet.
+(`docs/VALIDATION.md`). It misses both Stage 3 targets: the first audio arrives after 1.34–1.48 s, and the worst
+streaming RTF is 1.06–1.12.
 
 | target (#54104) | stage | measured | status |
 |---|---|---|---|
@@ -20,10 +21,10 @@ generates, on upstream's chunk schedule. That schedule, run over fixed tokens, m
 | token accuracy > 95 % vs the PyTorch reference | 1 | **95.94 %**, teacher-forced over 5,003 positions (27 sequences, 4 speakers) | met |
 | WER < 5 % | 1 | **0.68 %** (1 error in 147 words); the PyTorch reference also 0.68 % | met |
 | speaker similarity > 0.60 (cosine) | 1 | **0.959**; the PyTorch reference 0.952 | met |
-| time to first packet < 500 ms; streaming RTF < 0.4 | 3 | not measured yet | — |
+| time to first packet < 500 ms; streaming RTF < 0.4 | 3 | first audio **1.34–1.48 s**; streaming RTF worst **1.06–1.12**, aggregate 0.84–0.85 | missed |
 
-- Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The RTF and token-accuracy gates are
-  enforced by tests.
+- Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The non-streaming RTF and token-accuracy
+  gates are enforced by tests; the two streaming figures are recorded there but not enforced yet.
 - A second N150 (2026-09-29) reproduced these figures, with the same tokens and scores.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) has the per-utterance tables and how each figure was produced.
 - [`PERF.md`](PERF.md) has the timing, including start-up.
@@ -108,7 +109,7 @@ $REF $S/prepare_inputs.py --extension --out-dir $COSYVOICE2_INPUTS
 ```
 
 **3. The demo (device).** It warms every bucket, then synthesizes the six targets. It writes wavs, `results.json` and
-a timing table.
+a timing table. `--stream` streams them instead, after warming the streaming set too.
 
 ```bash
 pip install -r models/experimental/cosyvoice2/requirements.txt   # once, into python_env
@@ -169,7 +170,9 @@ COSYVOICE2_INPUTS=$COSYVOICE2_INPUTS pytest models/experimental/cosyvoice2/tests
     an empty cache ([`PERF.md`](PERF.md)).
   - Any change to the code, the configuration or the checkpoint costs one cold start.
 - **Streaming needs its own warm-up.** A chunk runs between decode steps while the LLM's decode trace is alive, so
-  `warmup_streaming()` compiles and verifies every streaming geometry first. The Stage 3 targets are unmeasured.
+  `warmup_streaming()` compiles and verifies every streaming geometry first (2.5 minutes with the kernels on disk).
+  `synthesize_stream` refuses to run without it. On a pipeline without it, the first chunk allocated 1,259 buffers
+  that the trace's next replay would have overwritten (`docs/VALIDATION.md`).
 - **Blackhole is untested.**
   `tests/pcc/test_flow_decoder.py::test_device_decoder_fused_sdpa_ignores_tile_padding_at_t_1_mod_32` guards the
   fused-SDPA tile-padding bug reported for Blackhole ([#57608](https://github.com/tenstorrent/tt-metal/issues/57608)).
@@ -209,6 +212,6 @@ forward twin for the NSF source. The identity is the one the CosyVoice1 port
 | `tt/flow/` | the Conformer encoder, the CFM estimator and solver, and the module that ties them together |
 | `tt/hifigan/` | the vocoder: convs with per-geometry checks, resblocks, NSF source, F0 predictor, STFT/iSTFT, chunking |
 | `tt/checkpoint.py`, `tt/geometry_cache.py` | checkpoint loading; the per-geometry weight caches |
-| `demo/demo.py` | the Stage 1 demo |
+| `demo/demo.py` | the Stage 1 demo; `--stream` for streaming |
 | `scripts/` | reference-venv scripts: the corpus, inputs, the PyTorch reference, the scorer, the references for two tests |
 | `tests/` | `e2e/` (pipeline, text, prompt, token accuracy), `pcc/` (per module, against torch or upstream), `perf/` (the gates) |

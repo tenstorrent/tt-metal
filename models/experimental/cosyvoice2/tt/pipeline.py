@@ -472,6 +472,8 @@ class CosyVoice2TTNN:
         self._clock = _StageClock(device)
         self.llm.prefill = self._clock.wrap("llm_prefill", self.llm.prefill)
         self.flow.decoder.forward = self._clock.wrap("flow_cfm", self.flow.decoder.forward)
+        # Set by warmup_streaming(); synthesize_stream() refuses to run without it.
+        self._streaming_warmed = False
 
     # ------------------------------------------------------------------------------------------------------------
     # stages
@@ -616,9 +618,11 @@ class CosyVoice2TTNN:
         """Streaming synthesis: upstream's `inference_zero_shot(..., stream=True)`, segment for segment (tt/streaming.py).
 
         Each segment's tokens feed a `StreamSession` as the LLM samples them. A chunk's flow and HiFT run between two
-        decode steps, while the decode trace is alive, so `warmup_streaming()` must have run: nothing may compile or
-        prepare weights under a live trace. `generate()` releases the trace when it returns, before the final chunk
-        (notes: D22, D31). `on_audio(audio)` receives each chunk's audio as soon as it is ready.
+        decode steps, while the decode trace is alive, so `warmup_streaming()` must have run, or this raises: nothing
+        may compile or prepare weights under a live trace. Without it, a cold request's first chunk allocated 1,259
+        buffers there, which the trace's next replay would have overwritten (the allocation tracker's count,
+        docs/VALIDATION.md). `generate()` releases the trace when it returns, before the final chunk (notes: D22, D31).
+        `on_audio(audio)` receives each chunk's audio as soon as it is ready.
 
         `noise_for(k, samples)` gives HiFT call k's sine noise. The default draws from a generator of its own: host-side
         RAS sampling draws from torch's global RNG, and noise drawn from it between decode steps would change the
@@ -626,6 +630,12 @@ class CosyVoice2TTNN:
         (`chunks`, times since the call began) and `first_audio_s`."""
         from .streaming import StreamSession
 
+        if not self._streaming_warmed:
+            raise RuntimeError(
+                "synthesize_stream() needs warmup_streaming() first: a chunk's flow and HiFT run while the LLM's "
+                "decode trace is alive, and on a pipeline not warmed for streaming they would compile and allocate "
+                "there, where the trace's next replay overwrites what they allocated"
+            )
         if ctx.mode != "zero_shot":
             raise NotImplementedError(f"mode {ctx.mode!r}: only zero_shot is wired end to end so far")
         rng = rng or RandomSources()
@@ -752,7 +762,7 @@ class CosyVoice2TTNN:
         fixed order every time): the flow's streaming path at every flow bucket (the chunk-causal attention programs;
         the convs are the non-streaming set's), then HiFT's streaming calls with their first-sight conv checks: 128
         frames padded in front (the first chunk), 108 and 208 (middle chunks), 128 and 256 padded at the end (the
-        final chunk). Returns the seconds each took."""
+        final chunk). `synthesize_stream()` refuses to run until this has. Returns the seconds each took."""
         from .hifigan.chunking import HOP
         from .streaming import PRE_LOOKAHEAD, HiFTStream
 
@@ -789,6 +799,7 @@ class CosyVoice2TTNN:
 
         timed("hift_stream_128_108_208_128", lambda: hift_calls(50, [100, 200], 62))
         timed("hift_stream_128_256", lambda: hift_calls(50, [], 130))
+        self._streaming_warmed = True
         return clock
 
     def _hift_at(self, frames: int) -> None:

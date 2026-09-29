@@ -4,7 +4,7 @@
 """Synthesize the fixed corpus on a Tenstorrent device: wavs, results.json and a timing table.
 
     python models/experimental/cosyvoice2/demo/demo.py --inputs <dir> --out <dir> [--cases a,b] [--seed 1986] \\
-        [--config reported|eager] [--hift-source-dtype float32|bfloat16] [--warmup buckets|sentence|none]
+        [--config reported|eager] [--hift-source-dtype float32|bfloat16] [--warmup buckets|sentence|none] [--stream]
 
 `--inputs` (or `COSYVOICE2_INPUTS`) is the directory `scripts/prepare_inputs.py` wrote: one `.npz` per corpus
 case, made once in the reference venv, because the frontend (ONNX speech tokenizer, CAM++, mel filterbank) is not
@@ -22,6 +22,12 @@ Warm-up (`--warmup`):
   Every corpus utterance that follows is a distinct sentence that lands in an already-warmed bucket.
 - `sentence`: one throwaway sentence first, reported as the process's cold call.
 - `none`: the first corpus utterance is the cold first request.
+
+`--stream`: streaming synthesis (`CosyVoice2TTNN.synthesize_stream`, tt/streaming.py). Chunks of audio are produced
+while the LLM generates, on upstream's chunk schedule. It needs `--warmup buckets`, which then warms the streaming
+set too (`warmup_streaming`): a chunk's flow and HiFT run while the LLM's decode trace is alive, where nothing may
+compile or allocate (docs/VALIDATION.md, "Streaming, measured"). The table then reports each utterance's time to
+first audio, the first chunk's breakdown and the RTF; `results.json` keeps every chunk's times.
 """
 
 from __future__ import annotations
@@ -64,6 +70,21 @@ def row(name: str, syn: Synthesis) -> str:
     )
 
 
+def stream_row(name: str, syn: Synthesis) -> str:
+    """Streaming: the first chunk's breakdown (LLM until the chunk starts, flow with its CFM, HiFT) and the totals."""
+    c = syn.chunks[0]
+    return (
+        f"| {name} | {syn.audio_s:.2f} | {len(syn.tokens)} | {len(syn.chunks)} | {c['hop']} | {c['start_s']:.3f} | "
+        f"{c['flow']:.3f} | {c['cfm']:.3f} | {c['hift']:.3f} | **{syn.first_audio_s:.3f}** | {syn.wall_s:.3f} | "
+        f"{syn.rtf:.3f} |"
+    )
+
+
+STREAM_TABLE_HEAD = (
+    "| utterance | audio s | tokens | chunks | first chunk tokens | until it starts s (text + LLM) | its flow s | its CFM s "
+    "| its HiFT s | first audio s | wall s | RTF |\n|---|---|---|---|---|---|---|---|---|---|---|---|"
+)
+
 TABLE_HEAD = (
     "| utterance | audio s | tokens | LLM prefill s | LLM decode s | tok/s | flow encoder s | CFM s | HiFT s "
     "| wall s | RTF |\n|---|---|---|---|---|---|---|---|---|---|---|"
@@ -80,7 +101,14 @@ def main() -> int:
     ap.add_argument("--config", choices=("reported", "eager"), default="reported")
     ap.add_argument("--hift-source-dtype", choices=("float32", "bfloat16"), default=None)
     ap.add_argument("--warmup", choices=("buckets", "sentence", "none"), default="buckets")
+    ap.add_argument(
+        "--stream",
+        action="store_true",
+        help="streaming synthesis (synthesize_stream); needs --warmup buckets, which then warms the streaming set too",
+    )
     args = ap.parse_args()
+    if args.stream and args.warmup != "buckets":
+        ap.error("--stream needs --warmup buckets: synthesize_stream() refuses to run before warmup_streaming()")
     if not args.inputs:
         raise SystemExit("pass --inputs (or set COSYVOICE2_INPUTS) to scripts/prepare_inputs.py's --out-dir")
 
@@ -113,7 +141,7 @@ def main() -> int:
         build_s = time.perf_counter() - t0
         print(f"built in {build_s:.1f} s; config {json.dumps(cfg.describe())}", flush=True)
         mem0 = device_memory(device)
-        warmup_s = warmup_clock = None
+        warmup_s = warmup_clock = stream_warmup_s = stream_clock = None
         if args.warmup == "buckets":
             t0 = time.perf_counter()
             warmup_clock = pipe.warmup_buckets()
@@ -123,13 +151,19 @@ def main() -> int:
                 f"warmed every bucket in {warmup_s:.1f} s: " + ", ".join(f"{k} {v:.1f} s" for k, v in parts.items()),
                 flush=True,
             )
+            if args.stream:
+                t0 = time.perf_counter()
+                stream_clock = pipe.warmup_streaming()
+                stream_warmup_s = time.perf_counter() - t0
+                print(f"warmed the streaming set in {stream_warmup_s:.1f} s", flush=True)
         elif args.warmup == "sentence":
             cold = pipe.warmup(ctxs[0])
             lines.append(row("(warm-up, cold: first call in this process)", cold))
             print(lines[-1], flush=True)
         for ctx in ctxs:
             case = ctx.meta["case"]
-            syn = pipe.synthesize(ctx, case["text"], rng=RandomSources(llm_seed=args.seed))
+            synth = pipe.synthesize_stream if args.stream else pipe.synthesize
+            syn = synth(ctx, case["text"], rng=RandomSources(llm_seed=args.seed))
             assert not pipe.live_traces(), pipe.live_traces()
             name = f"{case['case_id']}.wav"
             soundfile.write(os.path.join(args.out, name), syn.audio, SAMPLE_RATE)
@@ -148,9 +182,10 @@ def main() -> int:
                     "stage_s": {k: round(v, 4) for k, v in syn.stage_totals().items()},
                     "notes": syn.notes,
                     "device_memory_after": mem,
+                    **({"first_audio_s": round(syn.first_audio_s, 4), "chunks": syn.chunks} if args.stream else {}),
                 }
             )
-            lines.append(row(case["case_id"], syn))
+            lines.append((stream_row if args.stream else row)(case["case_id"], syn))
             print(lines[-1], f" DRAM {mem['dram'] / 2**20:.1f} MiB/bank, L1_SMALL {mem['l1_small']} B/bank", flush=True)
         evictions = pipe.conv_cache_evictions()
         pipe.release()
@@ -170,6 +205,11 @@ def main() -> int:
             "warmup_buckets_by_geometry_s": (
                 None if warmup_clock is None else {k: round(v, 2) for k, v in warmup_clock.items()}
             ),
+            "stream": args.stream,
+            "warmup_streaming_s": None if stream_warmup_s is None else round(stream_warmup_s, 1),
+            "warmup_streaming_by_geometry_s": (
+                None if stream_clock is None else {k: round(v, 2) for k, v in stream_clock.items()}
+            ),
             "warmup_sentence": (
                 None if cold is None else {"audio_s": round(cold.audio_s, 3), "wall_s": round(cold.wall_s, 3)}
             ),
@@ -181,13 +221,20 @@ def main() -> int:
     }
     with open(os.path.join(args.out, "results.json"), "w") as fh:
         json.dump(run, fh, indent=2, ensure_ascii=False)
-    table = "\n".join([TABLE_HEAD, *lines])
+    table = "\n".join([STREAM_TABLE_HEAD if args.stream else TABLE_HEAD, *lines])
     summary = (
         f"{table}\n\nDistinct utterances: {len(warm)}, audio {total_audio:.2f} s, wall {total_wall:.2f} s, "
         f"aggregate RTF {total_wall / total_audio:.3f}, worst {max(r['rtf'] for r in warm):.3f}. "
         f"Config: {args.config}, HiFT F0/source {cfg.hift_source_dtype}, bucketing {cfg.bucketing}, "
         f"warm-up {args.warmup}" + ("" if warmup_s is None else f" ({warmup_s:.1f} s)") + f", seed {args.seed}."
     )
+    if args.stream:
+        firsts = [r["first_audio_s"] for r in warm]
+        summary += (
+            f" Streaming: first audio {min(firsts):.3f}-{max(firsts):.3f} s"
+            + ("" if stream_warmup_s is None else f"; streaming warm-up {stream_warmup_s:.1f} s")
+            + "."
+        )
     with open(os.path.join(args.out, "timings.md"), "w") as fh:
         fh.write(summary + "\n")
     print("\n" + summary)

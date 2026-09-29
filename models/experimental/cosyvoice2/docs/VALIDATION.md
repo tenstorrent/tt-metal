@@ -10,7 +10,7 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 | token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 95.94 %** teacher-forced over 5,003 positions (27 sequences, 4 speakers), with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
 | WER < 5.0 | Stage 1 | **met: corpus WER 0.68 %** on the Stage 1 audio (chunked HiFT), the same as the PyTorch reference (below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
 | speaker similarity > 0.60 | Stage 1 | **met: 95.87** on the Stage 1 audio (chunked HiFT), reference 95.21 (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
-| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | not measured yet; streaming's first stage (offline, from fixed tokens) is built and gated against upstream's own streaming ("Streaming, stage A" below) | — |
+| time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | **missed: first audio at 1.34–1.48 s, worst streaming RTF 1.06–1.12** (aggregate 0.84–0.85) over six distinct utterances, two runs after both warm-ups ("Streaming, measured" below); `Misses()` recorded, with the lever | not yet by a device test: `demo/demo.py --stream` |
 
 ## How the figures are produced
 
@@ -718,6 +718,64 @@ docstring) over a fixed token list, as if the LLM had finished.
 
 The measurement proper follows ("Streaming, measured").
 
+## Streaming, measured (2026-09-29)
+
+**The run:** `demo/demo.py --stream` twice, each in a fresh process:
+- first `warmup_buckets()` (186.1 s both times) and `warmup_streaming()` (149.2 s and 149.8 s);
+- then the corpus's six distinct utterances, with RAS sampling, seed 1986.
+
+The kernel cache held every kernel: 0 compiled in either run. The tokens equal the Stage 1 demo's. The board is the
+second N150 (KMD 2.9.0, firmware 19.11.0.0). "First audio" runs from the call to the moment the first chunk's audio
+is on the host; it is the time to first packet.
+
+| utterance | audio s | tokens | chunks | first chunk tokens | first audio s, run 1 / 2 | RTF, run 1 / 2 |
+|---|---|---|---|---|---|---|
+| 121-127105-0003 | 8.52 | 213 | 4 | 32 | 1.455 / 1.418 | 0.806 / 0.812 |
+| 121-127105-0015 | 3.80 | 95 | 3 | 32 | 1.365 / 1.479 | 1.057 / 1.122 |
+| 121-127105-0024 | 13.88 | 347 | 5 | 32 | 1.439 / 1.475 | 0.835 / 0.810 |
+| 260-123286-0014 | 3.00 | 75 | 2 | 25 | 1.398 / 1.399 | 0.973 / 0.945 |
+| 260-123440-0002 | 12.68 | 317 | 5 | 25 | 1.413 / 1.336 | 0.819 / 0.787 |
+| 260-123440-0010 | 8.08 | 202 | 4 | 25 | 1.403 / 1.441 | 0.847 / 0.850 |
+| **corpus** (49.96 s) | | | | | **1.365–1.455 / 1.336–1.479** | aggregate **0.853 / 0.843**, worst **1.057 / 1.122** |
+
+**The first chunk**, over both runs:
+- 0.371–0.466 s until it starts: text normalization, the LLM's prefill, and its decode up to the chunk's tokens plus
+  3 look-ahead tokens. The chunk is 25 tokens plus the prompt's padding to a multiple of 25: 32 for speaker 121.
+- Its flow: 0.812–0.920 s, of which the CFM takes 0.674–0.731 s (10 Euler steps at 67–73 ms each, over the prompt
+  plus the chunk).
+- Its HiFT: 0.121–0.127 s.
+
+**Against the targets** (recorded as `Misses()` in `tests/perf/gates.py`; no device test enforces them yet):
+- **Time to first packet < 500 ms: missed**, by about 3x. Without its flow, the first chunk would be ready at
+  0.51–0.59 s (the time until it starts, plus HiFT), so even a free flow would miss. The flow is the lever.
+- **Streaming RTF < 0.4: missed.** Every chunk reruns the flow over the whole prefix, as upstream does, and the final
+  chunk runs it non-streaming over every token. The two short utterances (3.0 and 3.8 s) are the worst: they carry
+  the ~1.4 s first chunk over the least audio.
+
+**Speech quality** (`scripts/eval_wer_sim.py` on run 1's audio, against upstream's streaming of the same tokens,
+stage A's reference):
+- corpus WER 1.36 % (2 errors in 147 words) and similarity 95.85;
+- upstream: 0.68 % and 95.90.
+
+The extra error is Whisper appending "you" to 260-123440-0010, as it did on stage A's offline streaming of the same
+tokens.
+
+**Streaming without its warm-up is refused.** A third process ran one request (121-127105-0003) with `--warmup none`,
+under `TT_METAL_TRACE_ALLOC_TRACKING=1`:
+- It compiled 416 kernels, then failed at the first decode replay after the first chunk: `Found 1259 device
+  buffer(s) still alive before trace replay. These will be corrupted on replay.`
+- Those buffers are what the first chunk's flow and HiFT allocated while the decode trace was alive:
+  - host-to-device copies of weights and constants, made on first use;
+  - outputs of their ops (convs, halos, norms, matmuls) that outlive the chunk.
+
+  Untracked, the replay would have overwritten them silently.
+- So `synthesize_stream` now raises unless `warmup_streaming()` has run, and `demo.py` refuses `--stream` without
+  `--warmup buckets`.
+- The interleaved test checks the refusal first. It passed again: 2 passed, 0 kernels compiled, first audio 1.373 s,
+  RTF 0.890.
+- Non-streaming requests are unaffected: `generate()` releases the trace before the flow and HiFT run.
+- A cold streaming start is therefore the two warm-ups on an empty kernel cache. It is not measured yet.
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch
@@ -765,5 +823,9 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
 - **tenstorrent/tt-metal#36487** (prepared conv weights wrong under DRAM slicing) is worked around by the per-geometry
   checks. Where the TILE-prepared weight is wrong, a ROW_MAJOR-prepared one usually isn't, and the checks keep it.
   A comment with our geometries is drafted, not posted.
-- **Streaming:** stage A (offline, from fixed tokens) is built and gated against upstream's own streaming. Streaming
-  interleaved with the LLM, and its time to first packet and RTF, are not measured yet.
+- **Streaming misses both Stage 3 targets** ("Streaming, measured"):
+  - first audio at 1.34–1.48 s against 0.5 s;
+  - a worst streaming RTF of 1.06–1.12 against 0.4.
+
+  The first chunk's flow is the lever: its CFM alone takes 0.67–0.73 s. No device test enforces the two figures
+  yet. A cold streaming start (the warm-ups on an empty kernel cache) is not measured.
