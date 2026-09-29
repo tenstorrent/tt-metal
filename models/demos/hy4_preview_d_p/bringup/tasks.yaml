@@ -1986,6 +1986,13 @@ tasks:
     kind: op
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T17:13:52'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py: e7e1bfef0f0c4aaff93bd3152d29ab1c3139b9d8b80a96f21b3e6fc83227ffaf
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.04
   title: 'moe_shared block with steps 1-4 on device (last: q_a)'
   step: implement
