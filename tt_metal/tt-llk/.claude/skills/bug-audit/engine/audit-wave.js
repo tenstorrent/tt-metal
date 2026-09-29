@@ -67,7 +67,7 @@ const FIND_SCHEMA = {
     },
     boundaries_skipped: {
       type: 'array', items: { type: 'string' },
-      description: 'boundaries you saw but did not trace, as "file:line: why" (budget, out of scope...)',
+      description: 'boundaries you saw but could not trace, as "file:line: why" (the other side is outside the tree, generated at build time, or cannot be resolved)',
     },
     findings: {
       type: 'array',
@@ -159,7 +159,8 @@ METHOD (be a hunter, not a checklist-filler):
 - CONTRACT TRACE (mandatory, one hop, RECORDED): most missed bugs sit on a boundary, with the evidence in the file
   next door. For every boundary your files cross, open the other side and check that the two agree, and record each
   one in "boundaries" (site, kind, the other side's file:line you read, verdict, what you compared). A boundary you
-  saw but did not trace goes in "boundaries_skipped" with the reason. The ledger is checked: a sample of your
+  saw but could not trace goes in "boundaries_skipped" with the reason; there is no token budget, so the size of a
+  file or the number of boundaries is never a reason to skip one. The ledger is checked: a sample of your
   "consistent" entries is re-traced by an independent auditor, so record only what you actually compared.
   * call -> callee: each argument against the parameter type, including silent narrowing (a wider value into a
     narrower parameter, or into a bit field whose *_MASK/*_SHIFT constant bounds it), argument order and defaults;
