@@ -70,6 +70,7 @@ void kernel_main() {
     // Compile-time args
     constexpr uint32_t tile_size = get_named_compile_time_arg_val("tile_size_bf16");
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+    constexpr uint32_t num_senders = get_named_compile_time_arg_val("num_senders");
     constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
     constexpr uint32_t k_padded = get_named_compile_time_arg_val("k_padded");
     constexpr uint32_t collector_phys_x = get_named_compile_time_arg_val("collector_physical_x");
@@ -214,15 +215,15 @@ void kernel_main() {
         cb_bcast_scaler.push_back(1);
     }
 
-    // 2. Reserve space in CB2 for the 2 incoming partial tiles
-    cb_partial_recv.reserve_back(2);
+    // 2. Reserve space in CB2 for the incoming partial tiles
+    cb_partial_recv.reserve_back(num_senders);
 
-    // Wait for both senders' partials to arrive
+    // Wait for all senders' partials to arrive
     Semaphore<> partial_sem(sem_partial_ready);
-    partial_sem.wait(2);
+    partial_sem.wait(num_senders);
     partial_sem.set(0);
 
-    cb_partial_recv.push_back(2);
+    cb_partial_recv.push_back(num_senders);
 
     // 3. Wait for compute to produce logit output (cb_topk_val).
     cb_topk_val.wait_front(1);
