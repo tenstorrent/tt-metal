@@ -294,10 +294,14 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
+        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
+            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -341,6 +345,11 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         // Snapshot the env once: defines() runs separately for firmware and
         // kernel builds, and a mid-process env change must not compile them
         // against different maps.

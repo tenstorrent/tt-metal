@@ -386,6 +386,7 @@
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace.py -vvv --tb=short
     '
   test_type: kimi_dflash
   test_tags: [kimi_k2_7, dflash]
@@ -1060,6 +1061,28 @@
   sp_config: sc1
 
 
+- name: "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_block_chunked.py -k "(pro and L3-hca-topk) or (flash and L1-swa-hash)" -vvv --tb=short
+    '
+  test_type: v4_block_chunked
+  test_tags: [v4_block_chunked]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 12
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
@@ -1088,7 +1111,37 @@
       timeout: 30
       tier: 1
       release_ready: false
-  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+
+- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k@8k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_mock256k
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
+    mpirun --bind-to none --pernode --tag-output \
+      python3 -m pytest \
+        'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k]' \
+        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
+  test_type: gemma4_prefill_kv_pcc
+  test_tags: [gemma4_d_p, runner, kv_cache]
+  test_group: disagg_prefill
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 1
+      release_ready: false
+  owner_id: U02LLCK5MML # Sasha Vuckovic
   team: models
   sp_config: sc1
 

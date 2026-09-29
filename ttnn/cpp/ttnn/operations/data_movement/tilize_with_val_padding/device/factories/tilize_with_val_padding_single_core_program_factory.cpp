@@ -180,7 +180,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     // ---------------------------------------------------------------------
@@ -197,7 +197,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     });
 
     // ---------------------------------------------------------------------
@@ -212,7 +212,14 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     if (fp32_llk_acc) {
         compute_gen1.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
+    // Quasar gets only the common fields set above; WH/BH use compute_gen1 as is.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (a.device()->arch() == tt::ARCH::QUASAR) {
+        ComputeHardwareConfig compute_gen2;
+        compute_gen2.enable_32_bit_dest = compute_gen1.enable_32_bit_dest;
+        compute_gen2.unpack_modes = compute_gen1.unpack_modes;  // TODO(#52269): copied from WH/BH
+        compute_hw = compute_gen2;
+    }
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,
