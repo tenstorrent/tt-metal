@@ -252,7 +252,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
         }
     }
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
 
     // Wait for all contexts to be free
     wait_for_next_context(1);
