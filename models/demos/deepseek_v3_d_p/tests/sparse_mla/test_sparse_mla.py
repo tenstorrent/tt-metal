@@ -942,10 +942,13 @@ def run_sparse_mla_rotated_case(
     SPARSE_ANCHOR_CASES,
     indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
+@pytest.mark.parametrize("iters_isl", [[2560, 1600, 5120]], ids=["maxedge"])
 # KV dedup under ROTATION is the interesting case (test_sparse_mla_cache.py only starts slab-aligned):
 # the writer rotates at sp*tp stripes while indexer_score's causal geometry rotates at sp, and the two
-# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 5152 -- aligned, mid-slab, straddle.
+# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 4160 -- aligned, mid-slab on an SP
+# boundary, and a full chunk starting mid SP slab (4160 % 640 = 320) that straddles into the next slab.
+# The last one is where query ownership (SP rotation + TP window) and a per-device stripe rotation
+# disagree on a fused full-mesh ring (#58339).
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_rotated_chunked(
