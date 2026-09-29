@@ -53,6 +53,7 @@ class _ProjectedInputs:
     qkv: ttnn.Tensor
     decay_rank: ttnn.Tensor
     output_gate: ttnn.Tensor
+    output_gate_offset: int
     beta: ttnn.Tensor
 
 
@@ -305,11 +306,9 @@ class ttKDA:
         return _ProjectedInputs(
             qkv=_slice_width(projected, 0, auxiliary_start),
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
-            output_gate=_slice_width(
-                projected,
-                auxiliary_start + config.head_k_dim,
-                auxiliary_start + config.head_k_dim + config.v_dim,
-            ),
+            # The gated norm reads its gate columns straight from the fused projection.
+            output_gate=projected,
+            output_gate_offset=auxiliary_start + config.head_k_dim,
             beta=_slice_width(
                 projected,
                 auxiliary_start + config.head_k_dim + config.v_dim,
@@ -369,6 +368,7 @@ class ttKDA:
         self,
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
+        output_gate_offset: int = 0,
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights
@@ -381,6 +381,7 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
+            gate_column_offset=output_gate_offset,
         )
 
     def _project_output(
@@ -473,6 +474,6 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
         )
-        output = self._kda_rms_norm(result.output, projected.output_gate)
+        output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)

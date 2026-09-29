@@ -72,9 +72,13 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
             input_shape[2] == attrs.value_dim,
         "sigmoid_gated_rms_norm: input shape does not match derived attributes");
     TT_FATAL(
+        attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
+        "sigmoid_gated_rms_norm: gate_column_offset must be tile aligned");
+    TT_FATAL(
         gate_shape[0] == attrs.batch && gate_shape[1] == attrs.sequence &&
-            gate_shape[2] == attrs.num_heads * attrs.value_dim,
-        "sigmoid_gated_rms_norm: gate must have shape [B,T,H*V]");
+            gate_shape[2] >= attrs.gate_column_offset + attrs.num_heads * attrs.value_dim &&
+            (attrs.gate_column_offset > 0 || gate_shape[2] == attrs.num_heads * attrs.value_dim),
+        "sigmoid_gated_rms_norm: gate must have shape [B,T,H*V], or hold H*V columns at gate_column_offset");
     TT_FATAL(in.weight.logical_volume() == attrs.value_dim, "sigmoid_gated_rms_norm: weight volume must equal V");
     TT_FATAL(attrs.batch > 0, "sigmoid_gated_rms_norm: batch must be positive");
     TT_FATAL(
@@ -122,7 +126,8 @@ Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    DataType output_dtype) {
+    DataType output_dtype,
+    uint32_t gate_column_offset) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
@@ -138,7 +143,8 @@ Tensor sigmoid_gated_rms_norm(
             .epsilon = epsilon,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .gate_column_offset = gate_column_offset},
         SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
     return results[0];
 }

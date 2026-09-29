@@ -44,6 +44,10 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
 
+        ``gate_column_offset`` (keyword, default 0) reads the gate from columns
+        ``[offset, offset + H*V)`` of a wider tile-aligned ``[B, T, W]`` tensor,
+        so a fused projection's gate columns need not be sliced out first.
+
         Note:
             ``T`` and ``V`` must be positive and tile-aligned. All input tensors
             must be allocated on the same device. Inputs are not modified.
@@ -57,7 +61,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("epsilon") = 1e-5f,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output_dtype") = ttnn::DataType::FLOAT32);
+        nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
+        nb::arg("gate_column_offset") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail
