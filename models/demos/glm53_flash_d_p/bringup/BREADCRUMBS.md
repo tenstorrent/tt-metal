@@ -1754,3 +1754,27 @@ the fast-decay bias. Known issues Proposed has the entry. Implement only needs t
 `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attention.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.04 test (attempt 1)
+Reviewed the rendered swap test for kda_moe layer 4 with attn_hc, attn_collapse, attn_norm and attention on the
+device. The rendered file was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 03 test (all its
+checks and limits kept) and added the attention checks from kda_dense swap 04 and the share design from dsa_moe swap 06:
+- attention vs the fp32 CPU KDA of the same device attn_norm, and vs golden: rel, per-token ratio, worst row, worst
+  128-row block, coefficient.
+- Post-chunk KDA state (read right after the main run) vs the golden snapshot and vs the same-input CPU state.
+- Attention share: the CPU block with the device hc/attn_in/attn_norm fixed and the CPU attention. The collapse and
+  norm shares are now taken against that block (CPU attention downstream), so swap 03's limits still apply.
+- Chunk 0: the device hc..attention on the chunk-0 golden `in` after the chunk-1 run, so a KDA that fails to restart
+  from a zero state fails the test.
+Limits come from a CPU perturbation study (/tmp/kmoe04/sens.py, not kept; the numbers are in the test docstring). At
+layer 4, block out is nearly blind to the attention: x1.02 gives a same-routing rel of 0.0024, and a zeroed recurrent
+prefix gives 0.0054. Known issues Proposed has the entry.
+Results:
+- Device: PCC 0.999993, rel 0.0039. Attention vs CPU same input: rel 0.0071, ratio [0.9883, 1.0001], row 0.031,
+  coefficient 0.9962. State recurrent 0.017, worst head 0.048 (head 20), conv 0.0030. Attention share: 58 flips /
+  0.00103. Two runs gave identical numbers. About 85 s for the real pass, 167 s total.
+- Reference passes (PCC 0.999997). Stub fails (PCC 0 and every check).
+Watch: the worst-head margin is small (0.048 of 0.05, the component test's limit, kept). The flip counts are 52 and
+58 of 96.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_04_attention.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
