@@ -59,7 +59,7 @@ Run (ttnn venv)::
     DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
     DEEPSEEK_V4_NUM_USERS=64 DEEPSEEK_V4_DECODE_BATCH=1 \\
     DEEPSEEK_V4_MAX_NEW_TOKENS=64 \\
-    pytest -s models/experimental/deepseek_v4_flash/tests/test_multi_user_paged_decode_demo.py
+    pytest -s models/experimental/deepseek_v4_flash/tests/decode/test_multi_user_paged_decode_demo.py
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 # Construction, encoding and RoPE tables come from the single-user decode demo so the
 # two tests cannot drift (the CLI does the same). ``system_config=None`` below then
 # resolves to the same machine profile on the same mesh.
-from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import (
+from models.experimental.deepseek_v4_flash.tests.decode.test_full_model_decode_demo import (
     _DEFAULT_MODEL_DIR,
     _assert_decode_parallelism,
     _build_rope,
