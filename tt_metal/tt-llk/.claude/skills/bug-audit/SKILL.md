@@ -156,7 +156,9 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
      - its severity is the worst across its sites;
      - tables show every site (`file:line`, plus `+ file:line` for each copy);
      - it is filed as one issue naming all the sites, and `OPEN.md` counts it once.
-     The merged-in rows stay in `CONFIRMED.md`, marked "merged into".
+     The merged-in rows stay in `CONFIRMED.md`, marked "merged into". `file:line` is a finding's identity, so a
+     second finding on the same line (the same defect under another class, or a second defect) is kept on that
+     entry as "also reported at this line" with its own status, never dropped; split it out if it is a second bug.
    - **Against GitHub:** `engine/filed_check.py --run <run> candidates`. It searches the repo's issues and PRs, all
      authors, open and closed, by file name, by the function enclosing the site, and by the finding's identifiers.
      For a large run pass `--local` with current dumps of EVERY issue and PR, open and closed, of every repo where the

@@ -6,7 +6,9 @@
 Writes (all DERIVED — never annotate them by hand, the next run overwrites them):
   CONFIRMED.json / CONFIRMED.md   confirmed findings, deduplicated by file:line, with dispositions stamped in; a bug
                                   present at several sites (e.g. arch copies) is MERGED into one entry that carries
-                                  every site's content; the merged-in rows stay listed, marked "merged into"
+                                  every site's content; the merged-in rows stay listed, marked "merged into". A
+                                  second finding on the same file:line is kept on the entry as "also reported at
+                                  this line", unjudged, never dropped
   UNCERTAIN.md                    findings no verifier could settle — surfaced, never filed, never dropped
   OPEN.md                         confirmed findings nothing has been done about yet: the work queue
   REFUTED.md                      refuted candidates, so later runs do not re-raise them
