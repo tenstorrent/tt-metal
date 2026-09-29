@@ -97,16 +97,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_init(pack_target_id);
 #endif
 
-                // K chunks after the first reload the partials the previous K chunk left in this thread's
-                // C_partials share. One that packs partials again frees the share first so the reserve below gets
-                // it back (this NEO is its only writer, and each subblock is reloaded before it is overwritten);
-                // the last K chunk keeps it until the reloads are done.
-                if (K_chunk > 0) {
+                // The last K chunk reloads the partials the second-to-last one left in this thread's share and
+                // holds them until the reloads are done; earlier K chunks released theirs below.
+                if (last_K_chunk && K_chunk > 0) {
                     C_partials.wait_front(C_entries_per_thread);
-                    if (!last_K_chunk) {
-                        dummy_unpack(dfb::C_partials);
-                        C_partials.pop_front(C_entries_per_thread);
-                    }
                 }
                 pack_target.reserve_back(C_entries_per_thread);
 
@@ -174,6 +168,20 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                     dummy_pack(pack_target_id);
                 }
                 pack_target.push_back(C_entries_per_thread);
+
+                // The partials pushed this K chunk are only credits: the next K chunk reloads them (or has the
+                // packer add onto them) and rewrites the share in place, so pop them so its reserve gets the share
+                // back (this NEO is the share's only writer, and each subblock is reloaded before it is
+                // overwritten). Two exceptions: the last K chunk pushed nothing here, and the second-to-last K
+                // chunk's share is what the last K chunk reloads.
+                const bool second_to_last_K_chunk = K_chunk + 2 == num_K_chunks;
+                if (!last_K_chunk && !second_to_last_K_chunk) {
+                    // Pop without reading: dummy_unpack orders the pop after the wait on Quasar (a no-op
+                    // elsewhere).
+                    C_partials.wait_front(C_entries_per_thread);
+                    dummy_unpack(dfb::C_partials);
+                    C_partials.pop_front(C_entries_per_thread);
+                }
                 if (last_K_chunk && K_chunk > 0) {
                     if (!has_subblocks) {
                         dummy_unpack(dfb::C_partials);
