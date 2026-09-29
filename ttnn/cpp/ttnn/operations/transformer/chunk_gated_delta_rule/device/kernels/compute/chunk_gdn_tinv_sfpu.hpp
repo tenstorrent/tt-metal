@@ -52,33 +52,79 @@ inline constexpr std::uint32_t gdn_tinv_elem(std::uint32_t row, std::uint32_t co
 inline constexpr std::uint32_t kGdnTinvRowOff[32] = {0,  2,  16, 18, 4,  6,  20, 22, 8,  10, 24, 26, 12, 14, 28, 30,
                                                      32, 34, 48, 50, 36, 38, 52, 54, 40, 42, 56, 58, 44, 46, 60, 62};
 
+// kNeg (P3_FLAPREP): the solve reads kk*L_mask (prep's scr1) instead of negN and forms negN's element in
+// flight. prep's negN = diag(kk*L) - kk*L unpacked kk*L through srcB, which truncates fp32 to tf32 (the low 13
+// mantissa bits), so its strictly-lower element is exactly -tf32(x): flip the sign bit, clear bits 12..0.
+// The UPPER/LOWER SFPLOADI words of that value: imm16 = hi16 ^ 0x8000 and lo16 & 0xE000. The opcode base has
+// a zero imm16 field, so base + imm == base | imm == base ^ imm: each word is one shift/mask plus one xor/or.
+template <bool kNeg>
+constexpr std::uint32_t gdn_tinv_hi_word(std::uint32_t base, std::uint32_t bits) {
+    return kNeg ? ((bits >> 16) ^ (base ^ 0x8000u)) : (base + (bits >> 16));
+}
+template <bool kNeg>
+constexpr std::uint32_t gdn_tinv_lo_word(std::uint32_t base, std::uint32_t bits) {
+    return kNeg ? ((bits & 0xE000u) | base) : (base + (bits & 0xFFFFu));
+}
+
 // Splat one fp32 L element into LREG7 across all lanes.
+template <bool kNeg = false>
 inline void gdn_tinv_load_l(std::uint32_t bits) {
-    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, bits >> 16);
-    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, bits & 0xFFFF);
+    ckernel::instrn_buffer[0] =
+        gdn_tinv_hi_word<kNeg>(TT_OP_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, 0), bits);
+    ckernel::instrn_buffer[0] =
+        gdn_tinv_lo_word<kNeg>(TT_OP_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, 0), bits);
 }
 
-// Rank-1 update of the live 4-row window: X[col] (LREG4) times L[row0 + r][col] (stride 16 in L1),
-// folded into LREG0..3. The L1 reads of the next rows issue in the shadow of the SFPU instructions.
-inline void gdn_tinv_apply_prev_col(volatile tt_l1_ptr std::uint32_t* l_col, std::uint32_t x_addr) {
-    const std::uint32_t b0 = l_col[0];
-    TT_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, x_addr);
-    const std::uint32_t b1 = l_col[16];
-    // SFPLOAD and SFPLOADI are both load-class and must not issue in adjacent slots; the SFPLOADI then
-    // also covers the SFPLOAD -> SFPMAD load-use of LREG4.
-    TTI_SFPNOP;
-    gdn_tinv_load_l(b0);
-    const std::uint32_t b2 = l_col[32];
-    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-    gdn_tinv_load_l(b1);
-    const std::uint32_t b3 = l_col[48];
-    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG1, 0);
-    gdn_tinv_load_l(b2);
-    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG2, 0);
-    gdn_tinv_load_l(b3);
-    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LREG3, 0);
-}
+// Previous-column rank-1 updates of the live 4-row window (P3_FLAPREP): X[col] times L[row0 + r][col] (stride 16
+// in L1) folded into LREG0..3. The SFPMADs (operands, order) are those of the original one-column helper, so the
+// solve is bit-identical, but the instruction stream is cheaper (T_inv 6.1 -> 5.2 us on the math thread):
+//  * the four L elements of a column splat into two registers (LREG6/LREG7) so each pair of SFPLOADIs is
+//    followed by two independent MADs;
+//  * X[col] is double-buffered in LREG4/LREG5: X[col + 1] loads between the column's third and fourth MAD
+//    (never next to a load-class SFPLOADI), which removes the per-column SFPNOP;
+//  * the eight L1 reads of a column pair issue first, ahead of the instruction words that use them, and the
+//    SFPLOADI/SFPLOAD words are built from constant opcodes (one shift or zero-extend plus one add each).
+#define GDN_TINV_COL(XA, NEXT_X_WORD, B0, B1, B2, B3)               \
+    ib[0] = gdn_tinv_hi_word<kNeg>(kHi6, B0);                       \
+    ib[0] = gdn_tinv_lo_word<kNeg>(kLo6, B0);                       \
+    ib[0] = gdn_tinv_hi_word<kNeg>(kHi7, B1);                       \
+    ib[0] = gdn_tinv_lo_word<kNeg>(kLo7, B1);                       \
+    TTI_SFPMAD(p_sfpu::LREG6, XA, p_sfpu::LREG0, p_sfpu::LREG0, 0); \
+    TTI_SFPMAD(p_sfpu::LREG7, XA, p_sfpu::LREG1, p_sfpu::LREG1, 0); \
+    ib[0] = gdn_tinv_hi_word<kNeg>(kHi6, B2);                       \
+    ib[0] = gdn_tinv_lo_word<kNeg>(kLo6, B2);                       \
+    ib[0] = gdn_tinv_hi_word<kNeg>(kHi7, B3);                       \
+    ib[0] = gdn_tinv_lo_word<kNeg>(kLo7, B3);                       \
+    TTI_SFPMAD(p_sfpu::LREG6, XA, p_sfpu::LREG2, p_sfpu::LREG2, 0); \
+    ib[0] = (NEXT_X_WORD);                                          \
+    TTI_SFPMAD(p_sfpu::LREG7, XA, p_sfpu::LREG3, p_sfpu::LREG3, 0);
 
+// Columns [c_begin, c_end) of the window at rows row0..row0+3; l = &L[row0][c_begin] (4 rows at stride 16).
+// c_end - c_begin is even (row0 is a multiple of 4) and X[c_begin] is already in LREG4 (c_begin even).
+// out_base = DEST row of the solution tile (the stashed rows X[c] live at out_base + kGdnTinvRowOff[c]).
+template <bool kNeg>
+inline __attribute__((always_inline)) void gdn_tinv_prev_cols(
+    volatile tt_l1_ptr std::uint32_t* l, std::uint32_t c_begin, std::uint32_t c_end, std::uint32_t out_base) {
+    volatile std::uint32_t* const ib = &ckernel::instrn_buffer[0];
+    constexpr std::uint32_t kHi6 = TT_OP_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0);
+    constexpr std::uint32_t kLo6 = TT_OP_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0);
+    constexpr std::uint32_t kHi7 = TT_OP_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, 0);
+    constexpr std::uint32_t kLo7 = TT_OP_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, 0);
+    const std::uint32_t ld4 = TT_OP_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 0) + out_base;
+    const std::uint32_t ld5 = TT_OP_SFPLOAD(p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, 0) + out_base;
+#pragma GCC unroll 1
+    for (std::uint32_t c = c_begin; c < c_end; c += 2) {
+        const std::uint32_t a0 = l[0], a1 = l[16], a2 = l[32], a3 = l[48];
+        const std::uint32_t e0 = l[1], e1 = l[17], e2 = l[33], e3 = l[49];
+        l += 2;
+        // c + 2 <= 30 here; at the window's last column it loads a not-yet-solved row into the idle buffer.
+        GDN_TINV_COL(p_sfpu::LREG4, ld5 + kGdnTinvRowOff[c + 1], a0, a1, a2, a3)
+        GDN_TINV_COL(p_sfpu::LREG5, ld4 + kGdnTinvRowOff[c + 2], e0, e1, e2, e3)
+    }
+}
+#undef GDN_TINV_COL
+
+template <bool kNeg>
 inline void gdn_tinv_trisolve(std::uint32_t dst_in, std::uint32_t dst_out, std::uint32_t l1_base) {
     constexpr std::uint32_t dst_tile_size = 64;  // DEST rows per tile
     volatile tt_l1_ptr std::uint32_t* const tile = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(l1_base);
@@ -98,16 +144,12 @@ inline void gdn_tinv_trisolve(std::uint32_t dst_in, std::uint32_t dst_out, std::
         // Previous-chunk columns. Columns 0..15 and 16..row0-1 live in different faces, so the element
         // pointer restarts at column 16 instead of walking across the face boundary.
         if (row0 > 0) {
+            TT_SFPLOAD(p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + kGdnTinvRowOff[0]);
+            TTI_SFPNOP;  // SFPLOAD and SFPLOADI must not issue in adjacent slots
             const std::uint32_t nface0 = row0 < 16u ? row0 : 16u;
-            volatile tt_l1_ptr std::uint32_t* l_face0 = tile + gdn_tinv_elem(row0, 0);
-            for (std::uint32_t col = 0; col < nface0; col++) {
-                gdn_tinv_apply_prev_col(l_face0 + col, out_base + kGdnTinvRowOff[col]);
-            }
+            gdn_tinv_prev_cols<kNeg>(tile + gdn_tinv_elem(row0, 0), 0, nface0, out_base);
             if (row0 > 16u) {
-                volatile tt_l1_ptr std::uint32_t* l_face1 = tile + gdn_tinv_elem(row0, 16);
-                for (std::uint32_t col = 16; col < row0; col++) {
-                    gdn_tinv_apply_prev_col(l_face1 + (col - 16u), out_base + kGdnTinvRowOff[col]);
-                }
+                gdn_tinv_prev_cols<kNeg>(tile + gdn_tinv_elem(row0, 16), 16, row0, out_base);
             }
         }
 
@@ -115,30 +157,30 @@ inline void gdn_tinv_trisolve(std::uint32_t dst_in, std::uint32_t dst_out, std::
         TT_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + kGdnTinvRowOff[row0 + 0]);
         {
             volatile tt_l1_ptr std::uint32_t* l_row = tile + gdn_tinv_elem(row0 + 1, row0);
-            gdn_tinv_load_l(l_row[0]);
+            gdn_tinv_load_l<kNeg>(l_row[0]);
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
             TT_SFPSTORE(p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + kGdnTinvRowOff[row0 + 1]);
         }
         {
             volatile tt_l1_ptr std::uint32_t* l_row = tile + gdn_tinv_elem(row0 + 2, row0);
             const std::uint32_t b0 = l_row[0];
-            gdn_tinv_load_l(b0);
+            gdn_tinv_load_l<kNeg>(b0);
             const std::uint32_t b1 = l_row[1];
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG2, 0);
-            gdn_tinv_load_l(b1);
+            gdn_tinv_load_l<kNeg>(b1);
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, 0);
             TT_SFPSTORE(p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + kGdnTinvRowOff[row0 + 2]);
         }
         {
             volatile tt_l1_ptr std::uint32_t* l_row = tile + gdn_tinv_elem(row0 + 3, row0);
             const std::uint32_t b0 = l_row[0];
-            gdn_tinv_load_l(b0);
+            gdn_tinv_load_l<kNeg>(b0);
             const std::uint32_t b1 = l_row[1];
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3, 0);
-            gdn_tinv_load_l(b1);
+            gdn_tinv_load_l<kNeg>(b1);
             const std::uint32_t b2 = l_row[2];
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG3, 0);
-            gdn_tinv_load_l(b2);
+            gdn_tinv_load_l<kNeg>(b2);
             TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG3, 0);
             TT_SFPSTORE(p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ADDR_MOD_7, out_base + kGdnTinvRowOff[row0 + 3]);
         }
@@ -168,6 +210,8 @@ inline void gdn_tinv_trisolve_init() {}
 
 // Solve (I - negN) X = DST[idst_in] into DST[idst_out]. negN is tile `l_tile_idx` of cb_l (fp32,
 // front-waited, read in place). DST must be acquired; call gdn_tinv_trisolve_tile_init() first.
+// kNeg: cb_l holds kk*L_mask instead of negN (see gdn_tinv_hi_word); the solve is bit-identical either way.
+template <bool kNeg = false>
 ALWI void gdn_tinv_trisolve_tile(CircularBuffer& cb_l, uint32_t l_tile_idx, uint32_t idst_in, uint32_t idst_out) {
     // UNPACK resolves the tile's L1 address and mailboxes it to MATH and PACK.
     const uint32_t l1_base = cb_l.get_tile_address(l_tile_idx);
@@ -176,7 +220,7 @@ ALWI void gdn_tinv_trisolve_tile(CircularBuffer& cb_l, uint32_t l_tile_idx, uint
     // chunk's L.
     MATH((invalidate_l1_cache()));
     MATH((_llk_math_eltwise_sfpu_start_(0)));  // the solve addresses DEST absolutely (idst * 64 rows)
-    MATH((sfpu::gdn_tinv_trisolve(idst_in, idst_out, l1_base)));
+    MATH((sfpu::gdn_tinv_trisolve<kNeg>(idst_in, idst_out, l1_base)));
     MATH((_llk_math_eltwise_sfpu_done_()));
 }
 

@@ -4,6 +4,7 @@
 #include "ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/sigmoid_gated_rms_norm_program_factory.hpp"
 
 #include <cstring>
+#include <filesystem>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -51,6 +52,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const m2::KernelSpecName COMPUTE{"compute"};
 
     const m2::DFBSpecName X_DFB{"x"};
+    const m2::DFBSpecName X0_DFB{"x0"};        // fused kernel: x of the core's even units
+    const m2::DFBSpecName X1_DFB{"x1"};        // fused kernel: x of the core's odd units
+    const m2::DFBSpecName WFULL_DFB{"wfull"};  // fused kernel: weight row 0 copied to all 32 rows
     const m2::DFBSpecName GATE_DFB{"gate"};
     const m2::DFBSpecName WEIGHT_DFB{"weight"};
     const m2::DFBSpecName TMP_DFB{"tmp"};
@@ -69,6 +73,15 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const auto input_format = datatype_to_dataformat_converter(input.dtype());
     const auto output_format = datatype_to_dataformat_converter(attrs.output_dtype);
 
+    // kernel_variant 0 = legacy seven-pass kernel; >= 1 = fused kernel (see sigmoid_gated_rms_norm_fused.cpp).
+    const bool fused = attrs.kernel_variant != kSigmoidGatedRmsNormKernelVariantLegacy;
+    const uint32_t gate_impl = attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantFastSigmoid ? 2u
+                               : attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantFusedGate ? 1u
+                                                                                                    : 0u;
+    const uint32_t pack_sfpu = attrs.kernel_variant >= kSigmoidGatedRmsNormKernelVariantPackSfpu ? 1u : 0u;
+    // Fused path: the writer reads the gate this many units ahead (gate DFB = kFusedGateDepth units).
+    constexpr uint32_t kFusedGateDepth = 3;
+
     auto make_dfb = [](const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
@@ -78,18 +91,36 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         };
     };
 
-    m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(X_DFB, 2 * Vt, input_format),
-        make_dfb(GATE_DFB, 2 * Vt, tt::DataFormat::Float16_b),
-        make_dfb(WEIGHT_DFB, Vt, tt::DataFormat::Float16_b),
-        make_dfb(TMP_DFB, Vt, tt::DataFormat::Float32),
-        make_dfb(STATS_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(INV_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
-        make_dfb(OUT_DFB, 2 * Vt, output_format),
-        make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
-    };
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    if (fused) {
+        // x0/x1 = x of even/odd units (the kernel reads unit u+1 while unit u is in use), two units each, so that
+        // the reader runs ahead; the gate is read by the writer. tmp = sum of squares and inv = inverse RMS, one
+        // tile per unit, two entries (inv of units u and u+1 are live at the same time).
+        dfbs = {
+            make_dfb(X0_DFB, 2 * Vt, input_format),
+            make_dfb(X1_DFB, 2 * Vt, input_format),
+            make_dfb(GATE_DFB, kFusedGateDepth * Vt, tt::DataFormat::Float16_b),
+            make_dfb(WEIGHT_DFB, Vt, tt::DataFormat::Float16_b),
+            make_dfb(WFULL_DFB, Vt, tt::DataFormat::Float16_b),
+            make_dfb(TMP_DFB, 2, tt::DataFormat::Float32),
+            make_dfb(INV_DFB, 2, tt::DataFormat::Float32),
+            make_dfb(OUT_DFB, 2 * Vt, output_format),
+            make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
+        };
+    } else {
+        dfbs = {
+            make_dfb(X_DFB, 2 * Vt, input_format),
+            make_dfb(GATE_DFB, 2 * Vt, tt::DataFormat::Float16_b),
+            make_dfb(WEIGHT_DFB, Vt, tt::DataFormat::Float16_b),
+            make_dfb(TMP_DFB, Vt, tt::DataFormat::Float32),
+            make_dfb(STATS_DFB, 1, tt::DataFormat::Float32),
+            make_dfb(INV_DFB, 1, tt::DataFormat::Float32),
+            make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
+            make_dfb(OUT_DFB, 2 * Vt, output_format),
+            make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
+            make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
+        };
+    }
 
     uint32_t eps_bits = 0;
     std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
@@ -124,6 +155,23 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
+    if (fused) {
+        reader.source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
+            "reader_sigmoid_gated_rms_norm_fused.cpp");
+        reader.dfb_bindings = {
+            m2::DFBBinding{X0_DFB, "x0", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{X1_DFB, "x1", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
+        };
+        reader.tensor_bindings = {
+            m2::TensorBinding{INPUT, "input"},
+            m2::TensorBinding{WEIGHT, "weight"},
+        };
+        reader.compile_time_args = {{"Vt", Vt}};
+    }
+
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source =
@@ -136,15 +184,44 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
+    if (fused) {
+        // The fused writer also reads the gate (on the writer's NOC), kFusedGateDepth units ahead.
+        writer.source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
+            "writer_sigmoid_gated_rms_norm_fused.cpp");
+        writer.dfb_bindings = {
+            m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
+        };
+        writer.tensor_bindings = {
+            m2::TensorBinding{OUTPUT, "output"},
+            m2::TensorBinding{GATE, "gate"},
+        };
+        writer.compile_time_args = {
+            {"Vt", Vt},
+            {"H", attrs.num_heads},
+            {"Mt", Mt},
+            {"gate_row_tiles", gate_row_tiles},
+            {"gate_col_offset", attrs.gate_col_offset_tiles},
+            {"gate_depth", kFusedGateDepth}};
+    }
+
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
     unpack_modes[TMP_DFB] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATS_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[INV_DFB] = UnpackMode::UnpackToSrc;
-    unpack_modes[NORM_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[SCALER_DFB] = UnpackMode::UnpackToSrc;
+    if (!fused) {
+        unpack_modes[STATS_DFB] = UnpackMode::UnpackToSrc;
+        unpack_modes[NORM_DFB] = UnpackMode::UnpackToSrc;
+    }
     if (input_format == tt::DataFormat::Float32) {
-        unpack_modes[X_DFB] = UnpackMode::UnpackToSrc;
+        if (fused) {
+            unpack_modes[X0_DFB] = UnpackMode::UnpackToSrc;
+            unpack_modes[X1_DFB] = UnpackMode::UnpackToSrc;
+        } else {
+            unpack_modes[X_DFB] = UnpackMode::UnpackToSrc;
+        }
     }
 
     m2::KernelSpec compute{
@@ -174,6 +251,32 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };
+    if (fused) {
+        compute.source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/compute/"
+            "sigmoid_gated_rms_norm_fused.cpp");
+        // The fused kernel has no stats/norm buffers and reads epsilon from a compile-time arg.
+        compute.dfb_bindings = {
+            m2::DFBBinding{X0_DFB, "x0", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{X1_DFB, "x1", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{WFULL_DFB, "wfull", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{WFULL_DFB, "wfull", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{TMP_DFB, "tmp", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{TMP_DFB, "tmp", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::CONSUMER},
+            m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::PRODUCER},
+            m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
+        };
+        compute.compile_time_args = {
+            {"Vt", Vt},
+            {"gate_silu", gate_silu},
+            {"gate_impl", gate_impl},
+            {"pack_sfpu", pack_sfpu},
+            {"epsilon_bits", eps_bits}};
+    }
 
     m2::KernelRunArgs reader_run_args{.kernel = READER};
     m2::KernelRunArgs writer_run_args{.kernel = WRITER};

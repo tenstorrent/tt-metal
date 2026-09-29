@@ -54,6 +54,7 @@
 #include <string>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -375,7 +376,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     prep_compute.core_ranges = prod_set;
     prep_compute.compile_time_args = prep_compute_ct;
-    prep_compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    // R10B experiment hook (plan_0928/P2_R10B): QWEN36_FLA_PREP_FID / QWEN36_FLA_SCAN_FID let the
+    // producer (prep) and receiver (scan) compute kernels run at a lower math fidelity than the
+    // hard-coded HiFi4, independently of each other, to measure where FLA op time goes. Unset =
+    // today's behaviour exactly (see gdn_compute_config). One fidelity setting per process: env
+    // vars are not part of the program hash, so a cached program from a different setting could be
+    // reused silently.
+    const tt::tt_metal::ComputeConfigDescriptor prep_compute_cfg =
+        gdn_compute_config(attrs.compute_kernel_config, "QWEN36_FLA_PREP_FID");
+    prep_compute.config = prep_compute_cfg;
     // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
     prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
     if (attrs.tinv == static_cast<uint32_t>(GdnTinv::SFPU_FP32)) {
@@ -412,8 +421,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     scan_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     scan_compute.core_ranges = rcv_set;
     scan_compute.compile_time_args = ct_scan;
-    scan_compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    const tt::tt_metal::ComputeConfigDescriptor scan_compute_cfg =
+        gdn_compute_config(attrs.compute_kernel_config, "QWEN36_FLA_SCAN_FID");
+    scan_compute.config = scan_compute_cfg;
     scan_compute.runtime_args.reserve(R);
+    log_info(
+        tt::LogOp,
+        "chunk_gdn_fused: prep_fidelity={} scan_fidelity={}",
+        prep_compute_cfg.math_fidelity,
+        scan_compute_cfg.math_fidelity);
 
     KernelDescriptor scan_writer;
     scan_writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_scan.cpp";

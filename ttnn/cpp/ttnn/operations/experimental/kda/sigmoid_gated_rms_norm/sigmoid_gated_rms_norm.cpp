@@ -17,7 +17,8 @@ ttnn::Tensor sigmoid_gated_rms_norm(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     DataType output_dtype,
     const std::string& gate_activation,
-    uint32_t gate_col_offset_tiles) {
+    uint32_t gate_col_offset_tiles,
+    std::optional<uint32_t> kernel_variant) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
         "sigmoid_gated_rms_norm: input must be an allocated device tensor");
@@ -48,7 +49,8 @@ ttnn::Tensor sigmoid_gated_rms_norm(
         kernel_config,
         output_dtype,
         activation,
-        gate_col_offset_tiles);
+        gate_col_offset_tiles,
+        kernel_variant.value_or(ttnn::experimental::prim::kSigmoidGatedRmsNormDefaultKernelVariant));
 }
 
 }  // namespace ttnn::experimental::kda

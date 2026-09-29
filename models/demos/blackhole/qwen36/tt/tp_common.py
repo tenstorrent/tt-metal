@@ -380,6 +380,16 @@ def c2_sgrn_gab_dram():
     return os.environ.get("QWEN36_LAYER_RESID_L1", "0") == "1" and not r3_enabled("SGRN_GAB_L1")
 
 
+def sgrn_kernel_variant():
+    """P6_INT1C item 2 (fused gated RMSNorm, sgrn_fast_vs_r3.patch): the sigmoid_gated_rms_norm op's
+    kernel_variant (0 = legacy 7-pass kernel; 1-3 = fused kernel variants, bit-exact with each other;
+    4 = fused kernel with an exp_21f sigmoid, within 1 bf16 ulp of 0 for >99.9% of values, not
+    bit-exact). Env QWEN36_SGRN_VARIANT: when set, returns int(value); unset -> None (the op's own
+    default, kernel_variant=4). Runner default since P6_INT1C: 4."""
+    v = os.environ.get("QWEN36_SGRN_VARIANT")
+    return int(v) if v is not None else None
+
+
 # --- R3 L1 placement flags (2026-09-26; analysis_50ms/R3_fla_cb_spec.md sec 4 items 5-7) --------------
 # They need the Ct == 1 ChunkGdnFused CB shrink (R3 op patch: producer CB region ends at 480,256 B instead of
 # 1,217,536 B); without it these L1 tensors clash with the fused FLA op's static CBs. Each flag applies only to

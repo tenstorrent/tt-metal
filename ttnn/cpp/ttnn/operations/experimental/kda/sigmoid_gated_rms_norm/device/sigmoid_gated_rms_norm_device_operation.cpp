@@ -57,6 +57,11 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
         std::isfinite(attrs.epsilon) && attrs.epsilon > 0.0F,
         "sigmoid_gated_rms_norm: epsilon must be finite and positive");
     TT_FATAL(
+        attrs.kernel_variant <= kSigmoidGatedRmsNormKernelVariantMax,
+        "sigmoid_gated_rms_norm: kernel_variant must be in [0, {}], got {}",
+        kSigmoidGatedRmsNormKernelVariantMax,
+        attrs.kernel_variant);
+    TT_FATAL(
         !attrs.compute_kernel_config.packer_l1_acc,
         "sigmoid_gated_rms_norm: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
         "through L1");
@@ -135,7 +140,8 @@ Tensor sigmoid_gated_rms_norm(
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
     SigmoidGatedRmsNormGateActivation gate_activation,
-    uint32_t gate_col_offset_tiles) {
+    uint32_t gate_col_offset_tiles,
+    uint32_t kernel_variant) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
@@ -153,7 +159,8 @@ Tensor sigmoid_gated_rms_norm(
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
             .gate_activation = gate_activation,
-            .gate_col_offset_tiles = gate_col_offset_tiles},
+            .gate_col_offset_tiles = gate_col_offset_tiles,
+            .kernel_variant = kernel_variant},
         SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
     return results[0];
 }

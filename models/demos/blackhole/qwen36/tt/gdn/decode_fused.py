@@ -23,7 +23,9 @@ Supported shapes: rf = Nv / Nk = 1, Dk == Dv, 2 * Nv <= 32, qkvz tile aligned (Q
 Dk = Dv = 128). Other configs warn and keep the composite path.
 
 QWEN36_GDN_CONV_REPACK selects the conv_hist rebuild: "batched" (one op chain over all GDN
-layers + one slice/copy per layer) or "perlayer" (default: the 8-op chain per layer).
+layers + one slice/copy per layer), "gather" (R12: one ttnn.embedding per layer against a shared
+index table, built once, in place of the per-layer slice/copy -- see repack_conv_hist_gather()), or
+"perlayer" (default: the 8-op chain per layer).
 """
 import os
 
@@ -44,7 +46,7 @@ def decode_fused_enabled():
 
 def repack_variant():
     v = os.environ.get("QWEN36_GDN_CONV_REPACK", "perlayer")
-    assert v in ("batched", "perlayer"), f"QWEN36_GDN_CONV_REPACK must be batched|perlayer (got {v!r})"
+    assert v in ("batched", "perlayer", "gather"), f"QWEN36_GDN_CONV_REPACK must be batched|perlayer|gather (got {v!r})"
     return v
 
 
@@ -142,6 +144,81 @@ def repack_conv_hist_batched(pairs, cfg):
         ttnn.copy(s, hist)
         ttnn.deallocate(s)
     ttnn.deallocate(packed)
+
+
+# R12 (analysis_50ms/R_small_items_spec.md): one shared index table + one ttnn.embedding per layer,
+# in place of repack_conv_hist_batched's per-layer slice + copy. Keyed by (layer count, Nv, Dk) --
+# not by device, since this module already assumes a single device throughout (see
+# Qwen36Model._gdn_refresh_conv_hist: `if self.num_devices > 1: return`) -- so it is built once per
+# shape (before any trace capture, on the first repack call) and reused: same discipline as conv_hist
+# / conv_taps, fixed addresses, no host reads on later calls.
+_gather_cache = {}
+
+
+def _gather_cache_key(cfg, n_layers):
+    return (n_layers, cfg.num_v_heads, cfg.head_k_dim)
+
+
+def _build_gather_cache(fcs0, cfg, n_layers, device):
+    """One-time host + device build of the gather index tensors and the shared all-zero fcs block.
+
+    Table row for (layer l, head h, slot s, tile-row r) of conv_hist: with c = r // 2,
+      l * rows_per_layer + (s - 1) * slot_stride + (c // cph) * (Nv * cph) + h * cph + (c % cph)
+    matching _pack_chain's layout (row 2c of tile (h, s) = channel-chunk c of head h, slot s; q chunks
+    0 : cph, k chunks cph : 2*cph, v chunks 2*cph : 3*cph). Dead slot 0, odd r, and r >= 2 * nck (the
+    q|k|v-to-16-chunk pad) instead point at a shared all-zero block appended after the last real
+    layer's rows (pad_token = n_layers * rows_per_layer): any row in that block works, since it is
+    all zero, so one padding_idx value covers every padded position.
+    """
+    Nv, Dk = cfg.num_v_heads, cfg.head_k_dim
+    cph = Dk // TILE  # channel-chunks per head per q/k/v section (4 for Dk = 128)
+    nck = 3 * cph  # channel-chunks per head across q|k|v (12)
+    C = 3 * Nv * Dk  # fused_conv_state's raw per-slot channel width (6144 for Nv=16, Dk=128)
+    rows_per_layer = 3 * C // TILE  # a layer's [3, C] block flattened to rows of width TILE (576)
+    slot_stride = C // TILE  # rows contributed by one slot (192)
+    pad_token = n_layers * rows_per_layer
+    out_rows = Nv * 4 * TILE  # conv_hist flattened to [1, 1, out_rows, TILE] (2048)
+
+    idx_dev = []
+    for l in range(n_layers):
+        idx = torch.full((1, out_rows), pad_token, dtype=torch.int64)
+        for h in range(Nv):
+            for s in range(1, 4):  # s == 0 (dead slot) stays padded
+                for r in range(0, 2 * nck, 2):  # odd r and r >= 2 * nck stay padded
+                    c = r // 2
+                    group = (c // cph) * (Nv * cph) + h * cph + (c % cph)
+                    idx[0, h * (4 * TILE) + s * TILE + r] = l * rows_per_layer + (s - 1) * slot_stride + group
+        idx_dev.append(ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device))
+
+    return {
+        "idx": idx_dev,
+        "zero_fcs": ttnn.zeros_like(fcs0),
+        "pad_token": pad_token,
+        "rows_per_layer": rows_per_layer,
+        "out_rows": out_rows,
+    }
+
+
+def repack_conv_hist_gather(pairs, cfg, device):
+    """All layers at once: concat (+ shared zero block) -> untilize -> one reshape -> one
+    ttnn.embedding per layer straight into conv_hist (3 + n device ops, vs batched's 3 + 2n)."""
+    n = len(pairs)
+    if n == 0:
+        return
+    key = _gather_cache_key(cfg, n)
+    cache = _gather_cache.get(key)
+    if cache is None:
+        cache = _build_gather_cache(pairs[0][0], cfg, n, device)
+        _gather_cache[key] = cache
+
+    t = ttnn.concat([f for f, _ in pairs] + [cache["zero_fcs"]], dim=0)  # [n + 1, 3, C] TILE
+    tr = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(t)
+    tbl = ttnn.reshape(tr, [(n + 1) * cache["rows_per_layer"], TILE])
+    for i, (_, hist) in enumerate(pairs):
+        out = ttnn.reshape(hist, [1, 1, cache["out_rows"], TILE])  # metadata only (same tile order)
+        ttnn.embedding(cache["idx"][i], tbl, layout=ttnn.TILE_LAYOUT, padding_idx=cache["pad_token"], output_tensor=out)
+    ttnn.deallocate(tbl)
 
 
 def _l1_debug(gdn):

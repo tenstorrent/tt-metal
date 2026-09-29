@@ -1285,6 +1285,7 @@ def gated_deltanet_forward_ttnn(
             output_dtype=ttnn.bfloat16,
             gate_activation="silu",
             gate_col_offset_tiles=0,
+            kernel_variant=tpc.sgrn_kernel_variant(),
         )
         ttnn.deallocate(_c2_gab)
         _c2_gab = None

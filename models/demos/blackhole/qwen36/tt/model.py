@@ -3702,6 +3702,10 @@ class Qwen36Model:
             return
         if variant == "batched":
             _df.repack_conv_hist_batched([(dn.fused_conv_state, dn.ensure_conv_hist()) for dn in live], live[0].cfg)
+        elif variant == "gather":
+            _df.repack_conv_hist_gather(
+                [(dn.fused_conv_state, dn.ensure_conv_hist()) for dn in live], live[0].cfg, self.device
+            )
         else:
             for dn in live:
                 _df.repack_conv_hist(dn.fused_conv_state, dn.ensure_conv_hist(), dn.cfg)

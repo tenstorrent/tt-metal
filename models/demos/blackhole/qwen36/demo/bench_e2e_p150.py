@@ -202,7 +202,8 @@ ALL_QWEN_FLAG_DEFAULTS = {
     "QWEN36_GDN_CONV_T3_MAX": ("0", "cap on the conv kernel's T3 tiling dimension; 0=no cap"),
     "QWEN36_GDN_CONV_REPACK": (
         "perlayer",
-        "fused GDN decode only: conv-history repack after prefill, perlayer (8 ops/layer) or batched",
+        "fused GDN decode only: conv-history repack after prefill, perlayer (8 ops/layer), batched, or "
+        "gather (one shared index table + one ttnn.embedding per layer; P6_INT1C item 3)",
     ),
     "QWEN36_GDN_CONV_TILED_SPLIT": ("0", "split the conv1d input into tiles; 1=enable"),
     "QWEN36_GDN_CONV_XIN_L1_MAX_T": (
@@ -384,6 +385,13 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "MM: single device, T == 2048 prefill chunks: in0_block_w 16 (instead of 8) for MLP down (M1 S2), GDN "
         "z|a|0|b|0 in-proj (M1 S4), the o-proj family (FA/GDN o_proj) and the FA q|k|v fused proj (numerics change, "
         "PCC ~0.99995); excludes GDN q|k|v in-proj (M1 S3); 0=in0_block_w 8 for all of them",
+    ),
+    # SGRN item flag (tt/tp_common.py sgrn_kernel_variant(); only with QWEN36_C2_SGRN=1); unset = op default 4.
+    "QWEN36_SGRN_VARIANT": (
+        "<unset>",
+        "P6_INT1C item 2: kernel_variant passed to sigmoid_gated_rms_norm. 0=legacy 7-pass kernel (bit-exact "
+        "with the pre-P6_INT1C op); 1-3=fused kernel (bit-exact with each other); 4=fused kernel with an "
+        "exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact); unset=op default (4)",
     ),
     # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
     "QWEN36_I4_SDPA_EXP_COMPAT": (
