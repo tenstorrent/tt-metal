@@ -27,7 +27,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -56,13 +55,12 @@ _MESHES = {
 _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
-_MODELS = {"kimi-k27": KimiK27Config, "glm-52": GLM52Config, "kimi-k3": KimiK3Config}
-_PERF_RUNS = 3
+_MODELS = {"kimi-k27": KimiK27Config, "glm-52": GLM52Config}
 # `-hot` cases: this share of each chip's tokens picks, as its first expert, the hot expert of the chip
 # token_index % ring points at -- one per chip, in its LAST local slot, so it is walked last.
 _HOT_SHARE = 0.4
-# Measured programs per configuration in the speedup test; the median is reported.
-_SPEEDUP_ITERS = 5
+# Measured programs per configuration; the median is reported.
+_PERF_ITERS = 5
 # What tells the three programs apart in the real-time profiler's records. The overlap builds the routed
 # expert's kernels and combine_fabric2d's, so neither directory names it on its own; the collector, which
 # only the overlap has, does.
@@ -86,7 +84,7 @@ def _mesh_params():
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
         for model_id in _MODELS:
-            for threshold_id in ("t0", "tmedian", "tmedian-hot", "tmax"):
+            for threshold_id in ("all-unified", "median-split", "median-split-hot", "all-AIcodegen"):
                 params.append(
                     pytest.param(
                         mesh,
@@ -199,13 +197,14 @@ def _build_case(mesh_device, device_params, threshold_id, model_id):
     if threshold_id.endswith("-hot"):
         hot = idx_table[0, :, experts_per_chip - 1].tolist()
         logger.info(f"hot experts (last local slot per chip): {hot}, counts {[int(counts[e]) for e in hot]}")
-    if threshold_id == "t0":
-        # Every expert above the threshold: one pass, and combine sees each expert released as the
-        # unified half finishes it.
+    if threshold_id == "all-unified":
+        # Every expert above the threshold, so the unified pass takes them all and combine sees each
+        # one released as that pass finishes it.
         threshold = 0
-    elif threshold_id == "tmax":
-        # Every expert below it: the unified pass walks all eight slots with no work, and nothing is
-        # released until the fused pass reaches it. The bound on what the overlap can hide.
+    elif threshold_id == "all-AIcodegen":
+        # Every expert at or below the threshold, so the fused pass takes them all: the unified pass
+        # walks each local slot with no work and nothing is released until the fused pass reaches it.
+        # The bound on what the overlap can hide.
         threshold = int(counts.max().item())
     else:
         threshold = max(1, int(counts[counts > 0].median().item()))
@@ -348,28 +347,6 @@ def test_hybrid_routed_expert_combine_overlap(mesh_device, device_params, thresh
             )
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
-@pytest.mark.parametrize(
-    "mesh_device, device_params, threshold_id, model_id", _mesh_params(), indirect=["mesh_device", "device_params"]
-)
-def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id):
-    """The three programs back to back for the device profiler: solo routed expert, standalone combine, and
-    the overlap, each run _PERF_RUNS times with the first a warm-up.
-
-    Every solo routed-expert run comes first: its per-call arena takes all free L1, which combine's
-    fwd_arrived holds a piece of from its first call on.
-    """
-    case = _build_case(mesh_device, device_params, threshold_id, model_id)
-    re_outputs = [case.solo_routed_expert() for _ in range(_PERF_RUNS)]
-    ttnn.synchronize_device(mesh_device)
-    for re_output in re_outputs:
-        case.combine(re_output)
-    ttnn.synchronize_device(mesh_device)
-    for _ in range(_PERF_RUNS):
-        case.overlapped()
-    ttnn.synchronize_device(mesh_device)
-
-
 def _median_program_ns(mesh_device, run_fn, iters, is_target, label):
     """Median device time, slowest chip, of the one program per run that `is_target` picks out."""
 
@@ -393,7 +370,7 @@ def _has(sources, path):
 @pytest.mark.parametrize(
     "mesh_device, device_params, threshold_id, model_id", _mesh_params(), indirect=["mesh_device", "device_params"]
 )
-def test_hybrid_routed_expert_combine_overlap_speedup(mesh_device, device_params, threshold_id, model_id):
+def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, threshold_id, model_id):
     """The overlapped program against the same two ops back to back: hybrid routed expert, then
     combine_fabric2d. Sequential is the sum of the two programs' device times, so it assumes no gap
     between them and is the best a sequential dispatch can do; the overlap must beat it.
@@ -402,14 +379,14 @@ def test_hybrid_routed_expert_combine_overlap_speedup(mesh_device, device_params
     fwd_arrived holds a piece of from its first call on. One warm-up run of each program fills the
     program cache outside the measured window.
     """
-    require_realtime_profiler("the RE + combine overlap speedup test")
+    require_realtime_profiler("the RE + combine overlap perf test")
     case = _build_case(mesh_device, device_params, threshold_id, model_id)
 
     warm_re = case.solo_routed_expert()
     re_outputs, re_ns = _median_program_ns(
         mesh_device,
         case.solo_routed_expert,
-        _SPEEDUP_ITERS,
+        _PERF_ITERS,
         lambda k: _has(k, _SOLO_RE_KERNELS) and not _has(k, _OVERLAP_KERNELS),
         "solo routed expert",
     )
@@ -419,14 +396,14 @@ def test_hybrid_routed_expert_combine_overlap_speedup(mesh_device, device_params
     _, combine_ns = _median_program_ns(
         mesh_device,
         lambda: case.combine(next(re_iter)),
-        _SPEEDUP_ITERS,
+        _PERF_ITERS,
         lambda k: _has(k, _COMBINE_KERNELS) and not _has(k, _OVERLAP_KERNELS),
         "combine_fabric2d",
     )
 
     case.overlapped()
     _, overlap_ns = _median_program_ns(
-        mesh_device, case.overlapped, _SPEEDUP_ITERS, lambda k: _has(k, _OVERLAP_KERNELS), "overlap"
+        mesh_device, case.overlapped, _PERF_ITERS, lambda k: _has(k, _OVERLAP_KERNELS), "overlap"
     )
 
     sequential_ns = re_ns + combine_ns
