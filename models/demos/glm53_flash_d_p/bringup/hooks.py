@@ -41,6 +41,7 @@ DEVICE_STEPS = {
         "ffn_hc",
         "ffn_collapse",
         "ffn_norm",
+        "mlp",
     },
     "dsa_moe": set(),
     "kda_moe": set(),
@@ -192,6 +193,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.rms_norm import build_norm
 
         return _norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, _NORM_STEPS[step]))
+    if step == "mlp" and not cfg.is_moe(layer):
+        from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
+
+        return _norm_host_fn(mesh, build_mlp(mesh, loader, cfg, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
