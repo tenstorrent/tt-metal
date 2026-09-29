@@ -1654,6 +1654,13 @@ tasks:
     - experts
     - shared_expert
     layer: 1
+  frozen:
+    at: '2026-09-29T15:10:24'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py: 7f5e511cfcbcb2b141c27af5b4597939addb7bb05a3035f43562a12722332ce1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_full.moe_combine
   title: moe_full moe_combine (residual) on device, layer 1
   step: implement
