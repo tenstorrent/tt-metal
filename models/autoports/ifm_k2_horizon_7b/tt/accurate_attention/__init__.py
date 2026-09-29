@@ -12,21 +12,33 @@ from functools import lru_cache
 from pathlib import Path
 
 
+def _sha256_handle(handle):
+    """hashlib.file_digest equivalent that also runs on Python 3.10 serving images."""
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: handle.read(1 << 20), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 @lru_cache(maxsize=1)
 def _load():
     build = Path(__file__).resolve().parent / ".build"
     library = build / ("_k2_accurate_attention" + sysconfig.get_config_var("EXT_SUFFIX"))
     if not library.exists():
-        raise RuntimeError("Build the model-local accurate_attention binding before decoder setup")
+        # Serving images have no separate model-setup step; build once on first use.
+        # Host compilation only (clang++-20 + this checkout's build/build.ninja).
+        from .build import build as _build
+
+        _build()
     provenance = json.loads((build / "provenance.json").read_text())
     root = Path(__file__).resolve().parents[5]
     for relative, expected in provenance["files"].items():
         with (root / relative).open("rb") as handle:
-            actual = hashlib.file_digest(handle, "sha256").hexdigest()
+            actual = _sha256_handle(handle)
         if actual != expected:
             raise RuntimeError(f"Accurate attention build is stale ({relative}); rerun accurate_attention.build")
     with library.open("rb") as handle:
-        if hashlib.file_digest(handle, "sha256").hexdigest() != provenance["library_sha256"]:
+        if _sha256_handle(handle) != provenance["library_sha256"]:
             raise RuntimeError("Accurate attention binding does not match its build provenance; rebuild it")
     spec = importlib.util.spec_from_file_location("_k2_accurate_attention", library)
     module = importlib.util.module_from_spec(spec)

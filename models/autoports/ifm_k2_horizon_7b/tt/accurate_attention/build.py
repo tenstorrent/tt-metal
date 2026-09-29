@@ -21,8 +21,12 @@ DATAFLOW = CORE.parent / "dataflow"
 
 
 def sha256(path):
+    # Chunked read: hashlib.file_digest needs Python 3.11; serving images run 3.10.
+    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def replace_checked(text, before, after, count):

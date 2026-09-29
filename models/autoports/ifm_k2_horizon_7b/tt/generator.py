@@ -8,7 +8,11 @@ from collections import Counter
 from contextlib import contextmanager
 
 import torch
-from readiness_check.contract import Generator
+
+try:
+    from readiness_check.contract import Generator
+except ImportError:  # Serving images (e.g. TTI/CI) do not ship the bring-up runtime.
+    from models.autoports.ifm_k2_horizon_7b.tt.readiness_contract import Generator
 
 import ttnn
 from models.autoports.ifm_k2_horizon_7b.tt.model import K2Model
