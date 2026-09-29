@@ -7,7 +7,11 @@ import torch
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
-from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
+from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
+    pack_global_rope_device,
+    pack_sliding_rope_device,
+    packed_rope_columns,
+)
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
@@ -50,8 +54,13 @@ def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
     return order
 
 
-def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=None):
-    """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup."""
+def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=None, packed=False):
+    """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup.
+
+    The third dict, filled only with packed, holds replicated 2D tables whose columns are already in the packed
+    RoPE lane orders (packed_rope_columns), per layer type in pack_*_rope_device output order, so a traced chunk
+    looks them up with ttnn.embedding instead of gathering columns out of the canonical tables.
+    """
     mesh_device = mesh_config.device
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
@@ -76,6 +85,7 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
 
     caches_4d = {}
     caches_2d = {}
+    caches_2d_packed = {}
     for layer_type in set(hf_config.layer_types):
         cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
         # cos, sin: [1, max_seq_len, head_dim]
@@ -125,7 +135,22 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
         )
         caches_2d[layer_type] = (cos_2d, sin_2d)
 
-    return caches_4d, caches_2d
+        if packed:
+            tables = []
+            for columns in packed_rope_columns(layer_type, int(cos.shape[-1])):
+                for table in (cos, sin):
+                    tables.append(
+                        ttnn.from_torch(
+                            table.squeeze(0)[:, columns].contiguous(),
+                            device=mesh_device,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            mesh_mapper=replicate,
+                        )
+                    )
+            caches_2d_packed[layer_type] = tuple(tables)
+
+    return caches_4d, caches_2d, caches_2d_packed
 
 
 def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
@@ -202,13 +227,18 @@ class Gemma4Model:
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
-            self.rope_caches, self.rope_caches_2d = create_rope_caches(
-                self.mesh_config, hf_text_config, max_seq_len, prefill_chunk_size=prefill_chunk_size
+            self.rope_caches, self.rope_caches_2d, self.rope_caches_2d_packed = create_rope_caches(
+                self.mesh_config,
+                hf_text_config,
+                max_seq_len,
+                prefill_chunk_size=prefill_chunk_size,
+                packed=self._packed_global_rope_trans_mat is not None,
             )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
             self.rope_caches = {}
             self.rope_caches_2d = {}
+            self.rope_caches_2d_packed = {}
 
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
@@ -307,6 +337,7 @@ class Gemma4Model:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         gathered_rope = {}
+        packed_rope_by_type = {}
         if self._rope_prefill_positions is not None:
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)]):
                 cos, sin = self.rope_caches_2d[layer_type]
@@ -314,8 +345,19 @@ class Gemma4Model:
                     ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos, layout=ttnn.TILE_LAYOUT)),
                     ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
                 )
+                # Packed lanes straight from pre-permuted tables: the same values as gathering columns
+                # out of the lookups above, without the per-chunk column gathers.
+                if layer_type in self.rope_caches_2d_packed:
+                    packed_rope_by_type[layer_type] = (
+                        *(
+                            ttnn.unsqueeze_to_4D(
+                                ttnn.embedding(self._rope_prefill_positions, table, layout=ttnn.TILE_LAYOUT)
+                            )
+                            for table in self.rope_caches_2d_packed[layer_type]
+                        ),
+                        self._packed_global_rope_trans_mat,
+                    )
 
-        packed_rope_by_type = {}
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
             if gathered_rope:
