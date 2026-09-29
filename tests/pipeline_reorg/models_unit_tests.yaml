@@ -1195,6 +1195,7 @@
 - name: TT-DiT Flux.2-dev multihost unit tests
   cmd: |
     export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1 # Program size (28864) too large for kernel config buffer (26624) on ACTIVE_ETH
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
