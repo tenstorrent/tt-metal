@@ -27,12 +27,12 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
-    runtime,
+    quasar_mx_smoke,
+    select_perf_input_dimensions,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
@@ -45,10 +45,10 @@ from helpers.test_variant_parameters import (
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
@@ -136,11 +136,7 @@ def generate_qsr_transpose_dest_combinations(
     }
 
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    transpose_faces_modes = (
-        (Transpose.No,) if is_perf else (Transpose.No, Transpose.Yes)
-    )
-    perf_dimensions = [32, 32]
-
+    transpose_faces_modes = (Transpose.No, Transpose.Yes)
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -153,15 +149,29 @@ def generate_qsr_transpose_dest_combinations(
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
                         if is_perf:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    math_transpose_faces,
-                                    runtime(perf_dimensions),
-                                )
+                            mode_dimensions = dimensions_by_mode[(dest_acc, dest_sync)]
+                            perf_dimensions = select_perf_input_dimensions(
+                                mode_dimensions,
+                                use_largest_fallback=False,
                             )
+                            # Dest-full vs 2-block is selected via PERF_INPUT_DIMENSIONS.
+                            # Keep the 3-block / 2-switch case when the mode defines it.
+                            three_block = [64, 384]
+                            if (
+                                three_block in mode_dimensions
+                                and three_block not in perf_dimensions
+                            ):
+                                perf_dimensions.append(three_block)
+                            for dimensions in perf_dimensions:
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        math_transpose_faces,
+                                        dimensions,
+                                    )
+                                )
                             continue
                         for dimensions in dimensions_by_mode[(dest_acc, dest_sync)]:
                             combinations.append(
@@ -170,7 +180,7 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    runtime(dimensions),
+                                    dimensions,
                                 )
                             )
 
@@ -193,11 +203,12 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+    # The MX pair here is on the output side: the transpose happens inside Dest at
+    # math precision, so the packer re-derives the block exponents from the
+    # post-transpose layout. That interaction is specific to this test -- the pack
+    # test never transposes -- so it is the pair worth keeping.
+) + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxInt8)
 PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     TRANSPOSE_DEST_FORMATS,
     is_perf=True,
@@ -334,6 +345,7 @@ def test_transpose_dest_quasar(
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(
@@ -370,18 +382,15 @@ def test_transpose_dest_quasar(
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

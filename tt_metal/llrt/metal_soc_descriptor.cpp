@@ -10,6 +10,10 @@
 #include <umd/device/types/arch.hpp>
 
 namespace {
+// NOCs a DRAM view names a preferred endpoint for. Matches the `noc < 2` contract both
+// preferred-endpoint accessors assert on, rather than being re-derived from one table's row length.
+constexpr uint8_t k_num_dram_endpoint_nocs = 2;
+
 // True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
 // bit-masking convention used across the DRAM-view helpers below.
 bool is_dram_channel_harvested(uint32_t dram_harvesting_mask, size_t channel) {
@@ -40,15 +44,25 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_
     return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
 
-bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
-    // dram_view_worker_cores (and thus get_preferred_worker_core_for_dram_view) holds TRANSLATED
-    // coords, so this compares like-for-like against a TRANSLATED argument. See the header note.
-    for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
-        if (get_preferred_worker_core_for_dram_view(static_cast<int>(dram_view), /*noc=*/0) == translated_coord) {
-            return true;
+uint8_t metal_SocDescriptor::get_dram_endpoint_noc_mask(const tt::tt_metal::CoreCoord& translated_coord) const {
+    // Both endpoint tables matter: worker and eth DRAM reads can route through different subchannels,
+    // and a NIU serving either one has to keep forwarding to AXI. Both tables hold TRANSLATED coords
+    // (see the header note), so this compares like-for-like against a TRANSLATED argument.
+    uint8_t mask = 0;
+    for (int dram_view = 0; dram_view < static_cast<int>(this->dram_view_worker_cores.size()); ++dram_view) {
+        for (uint8_t noc = 0; noc < k_num_dram_endpoint_nocs; ++noc) {
+            const bool is_view_endpoint = get_preferred_worker_core_for_dram_view(dram_view, noc) == translated_coord ||
+                                          get_preferred_eth_core_for_dram_view(dram_view, noc) == translated_coord;
+            if (is_view_endpoint) {
+                mask |= static_cast<uint8_t>(1u << noc);
+            }
         }
     }
-    return false;
+    return mask;
+}
+
+bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
+    return (get_dram_endpoint_noc_mask(translated_coord) & 0b1) != 0;
 }
 
 std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
@@ -324,17 +338,35 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
         this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
 
-        size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
-        size_t preferred_subchannel = worker_endpoints[0];
+        // Order a bank's endpoints by role (see dram_bank_endpoint_coords): the worker endpoints in
+        // NOC order first -- NOC0 at y == 0, the endpoint CMFW also uses for DRAM telemetry (SYS-1419)
+        // -- then whatever subchannels are left, ascending. Endpoints that repeat a subchannel
+        // (Wormhole declares the same one for both NOCs) are placed once, which leaves those
+        // descriptors ordered exactly as before.
+        const size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
+        TT_FATAL(
+            !worker_endpoints.empty(),
+            "DRAM view {} declares no worker_endpoint, so its logical y=0 would not name the NOC0 worker endpoint",
+            this->dram_view_channels.size() - 1);
+        std::vector<bool> placed(num_subchannels, false);
         std::vector<tt::tt_metal::CoreCoord> bank_endpoints;
         bank_endpoints.reserve(num_subchannels);
-        auto preferred_coord =
-            get_dram_core_for_channel(logical_channel, preferred_subchannel, tt::CoordSystem::TRANSLATED);
-        bank_endpoints.push_back({preferred_coord.x, preferred_coord.y});
+        const auto push_subchannel = [&](size_t sub) {
+            placed[sub] = true;
+            const tt::umd::CoreCoord coord =
+                get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
+            bank_endpoints.push_back({coord.x, coord.y});
+        };
+        // worker_endpoints entries were bounds-checked above; each subchannel is visited once by
+        // the second loop, so only the first needs the placed[] guard.
+        for (const size_t worker_endpoint : worker_endpoints) {
+            if (!placed[worker_endpoint]) {
+                push_subchannel(worker_endpoint);
+            }
+        }
         for (size_t sub = 0; sub < num_subchannels; sub++) {
-            if (sub != preferred_subchannel) {
-                auto coord = get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
-                bank_endpoints.push_back({coord.x, coord.y});
+            if (!placed[sub]) {
+                push_subchannel(sub);
             }
         }
         this->dram_bank_endpoint_coords.push_back(std::move(bank_endpoints));

@@ -14,8 +14,6 @@
 #include "tilize_multi_core_retile_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/distributed/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -40,15 +38,6 @@ struct TilizeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses)
-    // from the same factory the miss path picks. See the .cpp.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 ttnn::Tensor tilize(

@@ -70,6 +70,10 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
     std::optional<float> fused_ternary_scalar,
-    int32_t chunks);
+    int32_t chunks,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode,
+    // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N; the matmul
+    // emits silu(gate) * up of width N. See MinimalMatmulParams::fuse_swiglu.
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::prim

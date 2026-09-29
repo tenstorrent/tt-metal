@@ -63,10 +63,13 @@ jobs:
               - 'tt_llk_quasar/**'
               - 'tests/sources/quasar/**'
               - 'tests/python_tests/quasar/**'
+              - 'tests/python_tests/fuser/**'
             tests:
               - 'tests/**'
               - '!tests/sources/quasar/**'
               - '!tests/python_tests/quasar/**'
+              - '!tests/python_tests/fuser/quasar/**'
+              - '!tests/python_tests/fuser/tests/quasar/**'
             github:
               - '.github/**'
             documentation:

@@ -34,7 +34,7 @@ struct MorehMatmulOperation {
     using tensor_return_value_t = Tensor;
 
     struct MultiCoreProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

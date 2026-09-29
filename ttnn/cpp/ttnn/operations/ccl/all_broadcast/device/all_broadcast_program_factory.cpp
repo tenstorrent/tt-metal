@@ -91,11 +91,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    // Cap payloads at the fabric max payload, not the channel buffer size: the channel buffer also holds
+    // the packet header, so a row-major chunk sized to the full buffer overflows the router slot.
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t MAX_PACKET_SIZE_BYTES =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
-    const size_t packet_size_bytes =
-        tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
+    const size_t packet_size_bytes = tilized ? fabric_max_packet_size_bytes : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
@@ -188,13 +189,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     std::map<std::string, std::string> kernel_defines;
+    const auto& output_tensor = output_tensors[ring_index];
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the
@@ -364,7 +366,7 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     const auto& init_barrier_semaphore = workload_descriptor.semaphores[0];
     const auto& final_barrier_semaphore = workload_descriptor.semaphores[1];
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     // Build a per-coord ProgramDescriptor.  Unlike pool/upsample, all_broadcast's

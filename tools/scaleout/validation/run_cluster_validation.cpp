@@ -18,6 +18,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
@@ -49,9 +50,12 @@ struct InputArgs {
     uint32_t data_size = 0;
     uint32_t packet_size_bytes = 64;
     uint32_t num_iterations = 50;
+    uint32_t max_retrains = 5;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
     std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
+    bool skip_retrain = false;                               // Report missing links without reset_ethernet_links
+    bool cross_host_port_down = false;
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -100,6 +104,9 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<bool>()->default_value("false"))(
         "send-traffic", "Send traffic across detected links", cxxopts::value<bool>()->default_value("false"))(
         "num-iterations", "Number of iterations to send traffic", cxxopts::value<uint32_t>()->default_value("50"))(
+        "max-retrains",
+        "Number of times a missing link is retrained before it is reported as unretrainable",
+        cxxopts::value<uint32_t>()->default_value("5"))(
         "data-size", "Data size (bytes) sent across each link per iteration", cxxopts::value<uint32_t>())(
         "packet-size-bytes",
         "Packet size (bytes) sent across each link",
@@ -109,7 +116,14 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<bool>()->default_value("false"))(
         "min-connections",
         "Minimum connections per ASIC pair required for relaxed validation mode",
-        cxxopts::value<uint32_t>())("h,help", "Print usage information");
+        cxxopts::value<uint32_t>())(
+        "skip-retrain",
+        "Do not retrain or reset missing Ethernet links; report them and continue",
+        cxxopts::value<bool>()->default_value("false"))(
+        "cross-host-port-down",
+        "Bring down all cross-host Ethernet ports (from golden connectivity) and exit; requires "
+        "--cabling-descriptor-path/--deployment-descriptor-path or --factory-descriptor-path",
+        cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
 
     return options;
 }
@@ -204,6 +218,10 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         // Parse num iterations
         input_args.num_iterations = result["num-iterations"].as<uint32_t>();
 
+        // Parse retrain budget
+        input_args.max_retrains = result["max-retrains"].as<uint32_t>();
+        TT_FATAL(input_args.max_retrains > 0, "Maximum retrains must be a positive integer.");
+
         // Parse data size
         if (result.contains("data-size")) {
             input_args.data_size = result["data-size"].as<uint32_t>();
@@ -229,8 +247,14 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.print_connectivity = result["print-connectivity"].as<bool>();
         input_args.send_traffic = result["send-traffic"].as<bool>();
         input_args.sweep_traffic_configs = result["sweep-traffic-configs"].as<bool>();
+        input_args.skip_retrain = result["skip-retrain"].as<bool>();
+        input_args.cross_host_port_down = result["cross-host-port-down"].as<bool>();
         input_args.validate_connectivity =
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+        if (input_args.skip_retrain) {
+            log_output_rank0(
+                "Link retrain disabled (--skip-retrain). Missing connections will be reported and left as-is.");
+        }
 
         // Parse min-connections
         if (result.contains("min-connections")) {
@@ -359,6 +383,20 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
+    if (input_args.cross_host_port_down) {
+        TT_FATAL(
+            input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value(),
+            "--cross-host-port-down requires a golden reference: pass --cabling-descriptor-path (with "
+            "--deployment-descriptor-path for multi-host) or --factory-descriptor-path");
+        auto fsd_proto = get_factory_system_descriptor(
+            input_args.cabling_descriptor_path,
+            input_args.deployment_descriptor_path,
+            input_args.fsd_path,
+            physical_system_descriptor.get_all_hostnames());
+        bring_down_cross_host_ethernet_ports(fsd_proto, physical_system_descriptor);
+        return 0;
+    }
+
     // Handle link_reset subcommand
     if (input_args.mode == CommandMode::LINK_RETRAIN) {
         perform_link_reset(
@@ -375,11 +413,13 @@ int main(int argc, char* argv[]) {
     bool links_reset = false;
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const bool link_retrain_supported = cluster.supports_ethernet_link_retraining();
-    constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
-        5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
     std::unordered_map<EthChannelIdentifier, uint32_t> link_retrain_counts;
-    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+    if (input_args.skip_retrain && !missing_asic_topology.empty()) {
+        log_output_rank0("Skipping link retrain (--skip-retrain); leaving post-reset missing links in place.");
+    }
+    while (!missing_asic_topology.empty() && link_retrain_supported && !input_args.skip_retrain &&
+           num_retrains < input_args.max_retrains) {
         auto retrained_links = collect_retrained_link_identifiers(missing_asic_topology, physical_system_descriptor);
         for (const auto& link_id : retrained_links) {
             link_retrain_counts[link_id]++;
@@ -391,6 +431,12 @@ int main(int argc, char* argv[]) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
+        // Refresh the cluster descriptor from hardware so the retrained links are reflected in the
+        // re-discovery below. run_physical_system_discovery() derives its entire ethernet topology from
+        // cluster_desc.get_ethernet_connections(), which is only rebuilt by rediscover_ethernet_links().
+        // Without this, re-discovery returns the stale (pre-reset) topology, missing_asic_topology never
+        // shrinks, and the loop always exhausts the retrain budget even when the retrain succeeded.
+        cluster.rediscover_ethernet_links();
         // Re-run discovery
         auto& context_ref = tt::tt_metal::MetalContext::instance();
         physical_system_descriptor.clear();
@@ -405,11 +451,11 @@ int main(int argc, char* argv[]) {
     }
 
     distributed_context.barrier();
-    if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
+    if (num_retrains >= input_args.max_retrains && !missing_asic_topology.empty()) {
         log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
         log_unretrainable_channels(
             missing_asic_topology, physical_system_descriptor, num_retrains, input_args.output_path);
-        TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
+        log_output_rank0("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
@@ -440,7 +486,7 @@ int main(int argc, char* argv[]) {
     }
     distributed_context.barrier();
     if (input_args.fail_on_warning && !eth_connections_healthy) {
-        TT_THROW("Encountered unhealthy ethernet connections, listed above");
+        log_output_rank0("Encountered unhealthy ethernet connections, listed above");
         return -1;
     }
     return 0;

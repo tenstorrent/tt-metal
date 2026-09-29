@@ -59,8 +59,11 @@ GROUP_NORM_ROW_MAJOR_SHAPES = [
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        # Only SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+        # SDXL/sd35 tests with 512x512 or larger sizes and cases taking more than 4 minutes in sim.
         #  SDXL VAE
+        (1, 256, 256, 256, 32, 4, 8, 8),
+        (1, 512, 256, 256, 32, 4, 8, 8),
+        (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
         (1, 128, 1024, 1024, 32, 32, 8, 8),
         (1, 128, 512, 512, 32, 8, 8, 8),
         (1, 256, 1024, 1024, 32, 48, 8, 8),
@@ -160,7 +163,6 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device, expect_error):
         (1, 1152, 128, 128, 32, 2, 8, 4),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         # sd35. 4 indicates the number of device.
         (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
@@ -218,6 +220,19 @@ def test_group_norm_no_input_mask_DRAM_unit_shapes(
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", base.SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_sdxl_base_group_norm_split_unit_shapes(device, N, C, H, W, num_groups, num_splits, specify_grid):
+    base.test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_splits",
+    [
+        (1, 256, 512, 512, 32, 8),
+        (1, 512, 512, 512, 32, 16),
+    ],
+)
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_sdxl_base_group_norm_split_large(device, N, C, H, W, num_groups, num_splits, specify_grid):
     base.test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid)
 
 

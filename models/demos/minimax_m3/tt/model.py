@@ -15,6 +15,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d
+from .residual import norm_mode, use_sharded_residual
 from .rms_norm import RMSNorm
 
 
@@ -107,7 +108,6 @@ class Model:
         mesh_config=None,
         max_local_batch_size=1,
         users_row_sharded=False,
-        use_throughput_experts=False,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         expert_weight_dtype=ttnn.bfloat4_b,
@@ -156,6 +156,13 @@ class Model:
 
         # Prefill mesh parallelization: TP over the cols; SP and the EP MoE follow from the rows.
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        # Residual-stream layout (tt/residual.py). Sharded degenerates to replicated on a TP=1 mesh.
+        self.sharded_residual = use_sharded_residual() and self.mesh_config.tp > 1
+        logger.info(
+            f"[residual] residual stream: "
+            + (f"SHARDED emb/tp (norm={norm_mode()})" if self.sharded_residual else "REPLICATED full emb")
+            + f" (tp={self.mesh_config.tp})"
+        )
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
@@ -238,12 +245,19 @@ class Model:
                 f"{first_layer_idx + hf_config.num_hidden_layers}) is_first={is_first_rank}"
             )
             return
+        # Final norm: pinned to the SINGLE-PASS form even under a sharded residual. The LM head is
+        # column-parallel on vocab and needs full hidden as its K dim, so the tail has to all-gather
+        # anyway; gathering first and then normalizing full width costs 2 ops, while the distributed
+        # norm + a gather would cost 4. It also keeps this norm's gain replicated, i.e. its weight cache
+        # entry byte-identical across both schemes.
         self.norm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "model.norm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
+            ccl_manager=ccl_manager,
+            is_distributed=False,
         )
         # Pad lm_head vocab dimension to padded_vocab_size BEFORE column-parallel sharding.
         # TTSampling._create_indices_tensors uses padded_per_device as the stride for device
@@ -335,6 +349,7 @@ class Model:
         kv_cache=None,
         cached_len=0,
         indexed_rope=False,
+        actual_isl=None,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -365,6 +380,7 @@ class Model:
                 batch_size=batch_size,
                 cached_len=cached_len,
                 indexed_rope=indexed_rope,
+                actual_isl=actual_isl,
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -402,6 +418,14 @@ class Model:
         if skip_lm_head:
             return hidden_states
 
+        # Sharded residual: gather emb/tp back to full hidden for the column-parallel LM head (and the
+        # single-pass final norm). Done AFTER the get_last_token slice above, so this gathers 32 rows
+        # rather than the whole chunk. Once per forward, not per layer.
+        if self.sharded_residual and self.mesh_config.tp > 1 and hidden_states.shape[-1] < self.hf_config.hidden_size:
+            gathered = self.mesh_config.allgather(hidden_states, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=3)
+            hidden_states.deallocate(True)
+            hidden_states = gathered
+
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
@@ -426,8 +450,13 @@ class Model:
         on_layer_complete=None,
         cached_len=0,
         indexed_rope=False,
+        actual_isl=None,
     ):
-        """Prefill forward pass - processes full sequences"""
+        """Prefill forward pass - processes full sequences.
+
+        actual_isl: real (non-pad) tokens in this chunk across the SP axis, or None for a full chunk.
+        Only the MoE layers read it, to bound the gate/dispatch padding config (tt/topk.py).
+        """
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
         if rot_mats_global is not None:
@@ -452,6 +481,7 @@ class Model:
             on_layer_complete=on_layer_complete,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
+            actual_isl=actual_isl,
         )
 
         return logits

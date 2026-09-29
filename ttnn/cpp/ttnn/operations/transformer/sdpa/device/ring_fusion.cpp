@@ -73,7 +73,14 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     // Even-ring split-forwarding: the diametric shard S arrives split across both links
     const uint32_t split_shard_id =
         this->ring_size ? ((this->ring_index + this->backward_writes_expected + 1) % this->ring_size) : 0;
-    const uint32_t split_second_half_wait = this->backward_writes_expected + 1;
+    // The forward chain's semaphore counts the local-slice pre-signal (the direction-1 all-gather
+    // writer signals its own slice; see synchronize_workers_and_signal_op in
+    // ring_attention_all_gather_writer.cpp) plus one signal per received slice — which is why
+    // RingIdSequencer's dir-0 waits use received + 1. The diametric shard's second half is that
+    // chain's final arrival, so its count is 1 (local) + backward_writes_expected (full slices)
+    // + 1 (second half). Waiting for backward_writes_expected + 1 would be subsumed by the
+    // sequencer's earlier wait for shard ring_index + backward_writes_expected, i.e. a no-op.
+    const uint32_t split_second_half_wait = this->backward_writes_expected + 2;
     out_rt_args.push_back(static_cast<uint32_t>(this->split_forwarding_enabled ? 1 : 0));
     out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
     out_rt_args.push_back(static_cast<uint32_t>(split_second_half_wait));

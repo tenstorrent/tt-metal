@@ -27,10 +27,23 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
         ttnn::operations::data_movement::repeat_codegen::supported_by_codegen(
             input, operation_attributes.rep_dim, operation_attributes.num_repeats),
         "Input is not supported by RepeatCodegen");
+
+    if (tensor_args.optional_output_tensor.has_value()) {
+        const auto& out = tensor_args.optional_output_tensor.value();
+        auto expected_shape = input.logical_shape();
+        expected_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
+        TT_FATAL(out.logical_shape() == expected_shape, "Repeat codegen optional output shape mismatch");
+        TT_FATAL(out.dtype() == input.dtype(), "Repeat codegen optional output dtype mismatch");
+        TT_FATAL(out.layout() == input.layout(), "Repeat codegen optional output layout mismatch");
+        TT_FATAL(out.device() == input.device(), "Repeat codegen optional output must be on the same device");
+    }
 }
 
 RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor->tensor_spec();
+    }
     const auto& input = tensor_args.input;
     auto output_shape = input.logical_shape();
     output_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
@@ -42,6 +55,9 @@ RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::
 
 RepeatCodegenDeviceOperation::tensor_return_value_t RepeatCodegenDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
@@ -55,9 +71,11 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatCodegenDeviceOp
 }
 
 RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
-    const Tensor& input, const RepeatCodegenParams& params) {
+    const Tensor& input, const RepeatCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
     using OperationType = RepeatCodegenDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(params, OperationType::tensor_args_t{.input = input});
+    return ttnn::device_operation::launch<OperationType>(
+        params,
+        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
 
 }  // namespace ttnn::prim

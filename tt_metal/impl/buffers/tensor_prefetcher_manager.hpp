@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -24,6 +25,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
+#include "tt_metal/common/scoped_timer.hpp"
 #include "impl/buffers/tensor_prefetcher_request.hpp"
 
 namespace tt::tt_metal {
@@ -78,7 +80,7 @@ public:
     TensorPrefetcherManager(TensorPrefetcherManager&&) = delete;
     TensorPrefetcherManager& operator=(TensorPrefetcherManager&&) = delete;
 
-    void start();
+    void start(const experimental::TensorPrefetcherConfig& config);
 
     // Capture-vs-send contract, and the `trace_capture_cq` precondition: see
     // QueueTensorPrefetcherRequest. Captured pages live in trace_requests_ keyed by the
@@ -136,10 +138,22 @@ private:
         std::vector<uint32_t> target_sender_indices;
     };
 
+    struct MpfeWeights {
+        uint32_t free_sender;
+        uint32_t noc1_sender;
+        uint32_t ordinary;
+    };
+
+    struct MpfePolicy {
+        MpfeWeights active;
+        bool dynamic;
+    };
+
     void worker_loop();
     void enumerate_dram_senders();
     std::vector<uint32_t> sender_indices_for_gcb(const experimental::GlobalCircularBuffer& gcb) const;
-    void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
+    void build_and_launch_programs(
+        uint32_t stage_ring_base, uint32_t stage_ring_size, const std::optional<MpfePolicy>& mpfe_policy);
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
@@ -179,9 +193,11 @@ private:
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] = logical DRAM core for sender s. Both available
-    // sender cores per bank are provisioned at start. Each queued GCB may map either
-    // the primary sender only or both senders; PREFETCH requests target that subset.
+    // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
+    // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
+    // queued GCB may map the primary only or both, and PREFETCH requests target that subset.
+    // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
+    // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;
@@ -208,6 +224,10 @@ private:
     // queue() when its command queue is mid-capture; drained back onto pending_ by
     // replay_trace() on each trace execution; erased by release_trace(). Guarded by queue_mu_.
     std::unordered_map<MeshTraceId, std::vector<Request>> trace_requests_;
+
+    // In benchmark mode, created only after kernels and the worker are live and
+    // destroyed immediately after shutdown/drain so setup and cleanup are excluded.
+    std::optional<tt::ScopedTimer<std::chrono::microseconds>> active_lifetime_timer_;
 };
 
 }  // namespace distributed

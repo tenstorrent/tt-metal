@@ -43,14 +43,14 @@ static_assert(
 
 // ---- construction / emptiness ------------------------------------------------
 
-TEST(TableTest, DefaultConstructedIsEmpty) {
+TEST(TableTest, CPU_DefaultConstructedIsEmpty) {
     StrIntTable t;
     EXPECT_TRUE(t.empty());
     EXPECT_EQ(t.size(), 0u);
     EXPECT_EQ(t.begin(), t.end());
 }
 
-TEST(TableTest, InitializerListConstruction) {
+TEST(TableTest, CPU_InitializerListConstruction) {
     StrIntTable t{{"a", 1}, {"b", 2}, {"c", 3}};
     EXPECT_FALSE(t.empty());
     EXPECT_EQ(t.size(), 3u);
@@ -59,7 +59,7 @@ TEST(TableTest, InitializerListConstruction) {
     EXPECT_EQ(*t.get("c"), 3);
 }
 
-TEST(TableTest, SpanConstruction) {
+TEST(TableTest, CPU_SpanConstruction) {
     std::vector<StrIntTable::value_type> entries{{"a", 1}, {"b", 2}};
     std::span<const StrIntTable::value_type> entries_view(entries);
     StrIntTable t(entries_view);
@@ -68,7 +68,7 @@ TEST(TableTest, SpanConstruction) {
     EXPECT_EQ(*t.get("b"), 2);
 }
 
-TEST(TableTest, RangeConstructionFromUnorderedMap) {
+TEST(TableTest, CPU_RangeConstructionFromUnorderedMap) {
     std::unordered_map<std::string, int> src{{"a", 1}, {"b", 2}, {"c", 3}};
     StrIntTable t(src);
     EXPECT_EQ(t.size(), 3u);
@@ -77,7 +77,7 @@ TEST(TableTest, RangeConstructionFromUnorderedMap) {
     EXPECT_EQ(*t.get("c"), 3);
 }
 
-TEST(TableTest, RangeConstructionFromMap) {
+TEST(TableTest, CPU_RangeConstructionFromMap) {
     std::map<std::string, int> src{{"a", 1}, {"b", 2}};
     StrIntTable t(src);
     EXPECT_EQ(t.size(), 2u);
@@ -85,7 +85,7 @@ TEST(TableTest, RangeConstructionFromMap) {
     EXPECT_EQ(*t.get("b"), 2);
 }
 
-TEST(TableTest, RangeConstructionFromVectorOfPlainPairs) {
+TEST(TableTest, CPU_RangeConstructionFromVectorOfPlainPairs) {
     std::vector<std::pair<std::string, int>> src{{"a", 1}, {"b", 2}};  // non-const key
     StrIntTable t(src);
     EXPECT_EQ(t.size(), 2u);
@@ -93,20 +93,20 @@ TEST(TableTest, RangeConstructionFromVectorOfPlainPairs) {
     EXPECT_EQ(*t.get("b"), 2);
 }
 
-TEST(TableTest, RangeConstructionDuplicateThrows) {
+TEST(TableTest, CPU_RangeConstructionDuplicateThrows) {
     std::vector<std::pair<std::string, int>> src{{"a", 1}, {"a", 2}};
     EXPECT_ANY_THROW(StrIntTable{src});
 }
 
 // ---- operator[] --------------------------------------------------------------
 
-TEST(TableTest, SubscriptInsertsDefaultOnMiss) {
+TEST(TableTest, CPU_SubscriptInsertsDefaultOnMiss) {
     StrIntTable t;
     EXPECT_EQ(t["a"], 0);  // default-constructed int
     EXPECT_EQ(t.size(), 1u);
 }
 
-TEST(TableTest, SubscriptAssignThenOverwrite) {
+TEST(TableTest, CPU_SubscriptAssignThenOverwrite) {
     StrIntTable t;
     t["a"] = 1;
     EXPECT_EQ(t.size(), 1u);
@@ -116,7 +116,7 @@ TEST(TableTest, SubscriptAssignThenOverwrite) {
     EXPECT_EQ(*t.get("a"), 2);
 }
 
-TEST(TableTest, SubscriptReadsExistingWithoutOverwriting) {
+TEST(TableTest, CPU_SubscriptReadsExistingWithoutOverwriting) {
     StrIntTable t{{"a", 5}};
     EXPECT_EQ(t["a"], 5);
     EXPECT_EQ(t.size(), 1u);
@@ -124,7 +124,7 @@ TEST(TableTest, SubscriptReadsExistingWithoutOverwriting) {
 
 // ---- insert (insert-if-absent) -----------------------------------------------
 
-TEST(TableTest, InsertNewKey) {
+TEST(TableTest, CPU_InsertNewKey) {
     StrIntTable t;
     auto [it, inserted] = t.insert({"a", 1});
     EXPECT_TRUE(inserted);
@@ -132,7 +132,7 @@ TEST(TableTest, InsertNewKey) {
     EXPECT_EQ(t.size(), 1u);
 }
 
-TEST(TableTest, InsertExistingKeyDoesNotOverwrite) {
+TEST(TableTest, CPU_InsertExistingKeyDoesNotOverwrite) {
     StrIntTable t{{"a", 1}};
     auto [it, inserted] = t.insert({"a", 2});
     EXPECT_FALSE(inserted);
@@ -143,7 +143,7 @@ TEST(TableTest, InsertExistingKeyDoesNotOverwrite) {
 
 // ---- erase -------------------------------------------------------------------
 
-TEST(TableTest, EraseRemovesPresentKey) {
+TEST(TableTest, CPU_EraseRemovesPresentKey) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     EXPECT_EQ(t.erase("a"), 1u);
     EXPECT_EQ(t.size(), 1u);
@@ -151,14 +151,14 @@ TEST(TableTest, EraseRemovesPresentKey) {
     EXPECT_EQ(*t.get("b"), 2);  // surviving entry intact
 }
 
-TEST(TableTest, EraseAbsentKeyIsNoop) {
+TEST(TableTest, CPU_EraseAbsentKeyIsNoop) {
     StrIntTable t{{"a", 1}};
     EXPECT_EQ(t.erase("missing"), 0u);
     EXPECT_EQ(t.size(), 1u);
     EXPECT_EQ(*t.get("a"), 1);
 }
 
-TEST(TableTest, EraseThenReinsert) {
+TEST(TableTest, CPU_EraseThenReinsert) {
     StrIntTable t{{"a", 1}};
     EXPECT_EQ(t.erase("a"), 1u);
     EXPECT_TRUE(t.empty());
@@ -169,7 +169,7 @@ TEST(TableTest, EraseThenReinsert) {
 
 // ---- emplace (insert-if-absent, in place) ------------------------------------
 
-TEST(TableTest, EmplaceNewKey) {
+TEST(TableTest, CPU_EmplaceNewKey) {
     StrIntTable t;
     auto [it, inserted] = t.emplace("a", 1);
     EXPECT_TRUE(inserted);
@@ -177,7 +177,7 @@ TEST(TableTest, EmplaceNewKey) {
     EXPECT_EQ(t.size(), 1u);
 }
 
-TEST(TableTest, EmplaceExistingKeyDoesNotOverwrite) {
+TEST(TableTest, CPU_EmplaceExistingKeyDoesNotOverwrite) {
     StrIntTable t;
     t.emplace("a", 1);
     auto [it, inserted] = t.emplace("a", 2);
@@ -188,7 +188,7 @@ TEST(TableTest, EmplaceExistingKeyDoesNotOverwrite) {
 
 // ---- get ---------------------------------------------------------------------
 
-TEST(TableTest, GetPresentAndAbsent) {
+TEST(TableTest, CPU_GetPresentAndAbsent) {
     StrIntTable t{{"a", 7}};
     auto present = t.get("a");
     ASSERT_TRUE(present);
@@ -196,13 +196,13 @@ TEST(TableTest, GetPresentAndAbsent) {
     EXPECT_FALSE(t.get("missing"));
 }
 
-TEST(TableTest, GetMutatesThroughReference) {
+TEST(TableTest, CPU_GetMutatesThroughReference) {
     StrIntTable t{{"a", 1}};
     *t.get("a") = 42;
     EXPECT_EQ(*t.get("a"), 42);
 }
 
-TEST(TableTest, GetOnConstTable) {
+TEST(TableTest, CPU_GetOnConstTable) {
     const StrIntTable t{{"a", 3}};
     auto v = t.get("a");
     ASSERT_TRUE(v);
@@ -212,7 +212,7 @@ TEST(TableTest, GetOnConstTable) {
 
 // ---- find --------------------------------------------------------------------
 
-TEST(TableTest, FindHitAndMiss) {
+TEST(TableTest, CPU_FindHitAndMiss) {
     StrIntTable t{{"a", 1}};
     auto it = t.find("a");
     ASSERT_NE(it, t.end());
@@ -222,7 +222,7 @@ TEST(TableTest, FindHitAndMiss) {
 
 // ---- size / clear ------------------------------------------------------------
 
-TEST(TableTest, Clear) {
+TEST(TableTest, CPU_Clear) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     EXPECT_EQ(t.size(), 2u);
     t.clear();
@@ -232,7 +232,7 @@ TEST(TableTest, Clear) {
 
 // ---- iteration ---------------------------------------------------------------
 
-TEST(TableTest, IterationVisitsAllEntries) {
+TEST(TableTest, CPU_IterationVisitsAllEntries) {
     StrIntTable t{{"a", 1}, {"b", 2}, {"c", 3}};
     std::map<std::string, int> seen;
     for (const auto& [k, v] : t) {
@@ -241,7 +241,7 @@ TEST(TableTest, IterationVisitsAllEntries) {
     EXPECT_EQ(seen, (std::map<std::string, int>{{"a", 1}, {"b", 2}, {"c", 3}}));
 }
 
-TEST(TableTest, RangeConstructsStdMap) {
+TEST(TableTest, CPU_RangeConstructsStdMap) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     std::map<std::string, int> m(t.begin(), t.end());
     EXPECT_EQ(m.size(), 2u);
@@ -251,7 +251,7 @@ TEST(TableTest, RangeConstructsStdMap) {
 
 // ---- equality (order independent) --------------------------------------------
 
-TEST(TableTest, EqualityIsOrderIndependent) {
+TEST(TableTest, CPU_EqualityIsOrderIndependent) {
     StrIntTable a{{"a", 1}, {"b", 2}};
     StrIntTable b;
     b["b"] = 2;
@@ -259,7 +259,7 @@ TEST(TableTest, EqualityIsOrderIndependent) {
     EXPECT_EQ(a, b);
 }
 
-TEST(TableTest, InequalityCases) {
+TEST(TableTest, CPU_InequalityCases) {
     StrIntTable base{{"a", 1}, {"b", 2}};
     EXPECT_NE(base, (StrIntTable{{"a", 1}}));             // different size
     EXPECT_NE(base, (StrIntTable{{"a", 1}, {"b", 99}}));  // different value
@@ -268,12 +268,12 @@ TEST(TableTest, InequalityCases) {
 
 // ---- duplicate-key rejection at construction ---------------------------------
 
-TEST(TableTest, InitializerListDuplicateThrows) {
+TEST(TableTest, CPU_InitializerListDuplicateThrows) {
     auto build = [] { return StrIntTable{{"a", 1}, {"a", 2}}; };
     EXPECT_ANY_THROW(build());
 }
 
-TEST(TableTest, SpanDuplicateThrows) {
+TEST(TableTest, CPU_SpanDuplicateThrows) {
     std::vector<StrIntTable::value_type> dup{{"a", 1}, {"a", 2}};
     std::span<const StrIntTable::value_type> sp(dup);
     EXPECT_ANY_THROW(StrIntTable{sp});
@@ -281,7 +281,7 @@ TEST(TableTest, SpanDuplicateThrows) {
 
 // ---- genericity over other K/V types -----------------------------------------
 
-TEST(TableMiscTest, IntKeyStringValue) {
+TEST(TableMiscTest, CPU_IntKeyStringValue) {
     m2::Table<int, std::string> t;
     t[1] = "one";
     t.emplace(2, "two");
@@ -293,24 +293,24 @@ TEST(TableMiscTest, IntKeyStringValue) {
 
 // ---- contains ----------------------------------------------------------------
 
-TEST(TableTest, ContainsReturnsTrueForPresentKey) {
+TEST(TableTest, CPU_ContainsReturnsTrueForPresentKey) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     EXPECT_TRUE(t.contains("a"));
     EXPECT_TRUE(t.contains("b"));
 }
 
-TEST(TableTest, ContainsReturnsFalseForAbsentKey) {
+TEST(TableTest, CPU_ContainsReturnsFalseForAbsentKey) {
     StrIntTable t{{"a", 1}};
     EXPECT_FALSE(t.contains("missing"));
     EXPECT_FALSE(t.contains(""));
 }
 
-TEST(TableTest, ContainsOnEmptyTable) {
+TEST(TableTest, CPU_ContainsOnEmptyTable) {
     StrIntTable t;
     EXPECT_FALSE(t.contains("anything"));
 }
 
-TEST(TableTest, ContainsReflectsInsertAndErase) {
+TEST(TableTest, CPU_ContainsReflectsInsertAndErase) {
     StrIntTable t;
     EXPECT_FALSE(t.contains("a"));
     t.insert({"a", 1});
@@ -319,13 +319,13 @@ TEST(TableTest, ContainsReflectsInsertAndErase) {
     EXPECT_FALSE(t.contains("a"));
 }
 
-TEST(TableTest, ContainsWorksOnConstTable) {
+TEST(TableTest, CPU_ContainsWorksOnConstTable) {
     const StrIntTable t{{"a", 1}, {"b", 2}};
     EXPECT_TRUE(t.contains("a"));
     EXPECT_FALSE(t.contains("z"));
 }
 
-TEST(TableTest, ContainsDoesNotMutateTable) {
+TEST(TableTest, CPU_ContainsDoesNotMutateTable) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     const auto size_before = t.size();
     EXPECT_TRUE(t.contains("a"));
@@ -333,7 +333,7 @@ TEST(TableTest, ContainsDoesNotMutateTable) {
     EXPECT_EQ(t.size(), size_before);
 }
 
-TEST(TableMiscTest, ContainsWithIntKey) {
+TEST(TableMiscTest, CPU_ContainsWithIntKey) {
     m2::Table<int, std::string> t;
     t[1] = "one";
     t.emplace(2, "two");
@@ -362,40 +362,40 @@ struct TaggedTable {
     auto attribute_values() const { return std::forward_as_tuple(tag, table); }
 };
 
-TEST(TableHashTest, HashIsDeterministic) {
+TEST(TableHashTest, CPU_HashIsDeterministic) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     EXPECT_EQ(hash_of(t), hash_of(t));  // same object hashes identically every time
 }
 
-TEST(TableHashTest, EqualTablesHashEqual) {
+TEST(TableHashTest, CPU_EqualTablesHashEqual) {
     StrIntTable a{{"a", 1}, {"b", 2}, {"c", 3}};
     StrIntTable b{{"a", 1}, {"b", 2}, {"c", 3}};
     ASSERT_EQ(a, b);
     EXPECT_EQ(hash_of(a), hash_of(b));
 }
 
-TEST(TableHashTest, EmptyTables) {
+TEST(TableHashTest, CPU_EmptyTables) {
     EXPECT_EQ(hash_of(StrIntTable{}), hash_of(StrIntTable{}));
     EXPECT_NE(hash_of(StrIntTable{}), hash_of(StrIntTable{{"a", 1}}));
 }
 
-TEST(TableHashTest, DifferentValueChangesHash) {
+TEST(TableHashTest, CPU_DifferentValueChangesHash) {
     StrIntTable base{{"a", 1}, {"b", 2}};
     StrIntTable diff{{"a", 1}, {"b", 99}};
     EXPECT_NE(hash_of(base), hash_of(diff));
 }
 
-TEST(TableHashTest, DifferentKeyChangesHash) {
+TEST(TableHashTest, CPU_DifferentKeyChangesHash) {
     EXPECT_NE(hash_of(StrIntTable{{"a", 1}}), hash_of(StrIntTable{{"z", 1}}));
 }
 
-TEST(TableHashTest, DifferentSizeChangesHash) {
+TEST(TableHashTest, CPU_DifferentSizeChangesHash) {
     StrIntTable small{{"a", 1}};
     StrIntTable big{{"a", 1}, {"b", 2}};
     EXPECT_NE(hash_of(small), hash_of(big));
 }
 
-TEST(TableHashTest, HashIsOrderIndependent) {
+TEST(TableHashTest, CPU_HashIsOrderIndependent) {
     // Two tables that compare equal but were built in opposite order must hash equally:
     // std::hash<Table> folds the per-entry hashes in sorted order, so insertion order drops out
     // (consistent with operator==, which ignores order).
@@ -409,7 +409,7 @@ TEST(TableHashTest, HashIsOrderIndependent) {
     EXPECT_EQ(hash_of(a), hash_of(b));
 }
 
-TEST(TableHashTest, NonStringKeyValueHashes) {
+TEST(TableHashTest, CPU_NonStringKeyValueHashes) {
     // Reflection recurses into K and V, so any hashable key/value type works.
     m2::Table<int, std::string> a;
     a[1] = "one";
@@ -421,7 +421,7 @@ TEST(TableHashTest, NonStringKeyValueHashes) {
     EXPECT_NE(hash_of(a), hash_of(m2::Table<int, std::string>{{1, "one"}}));
 }
 
-TEST(TableHashTest, NestedInReflectedStruct) {
+TEST(TableHashTest, CPU_NestedInReflectedStruct) {
     TaggedTable a{.tag = 7, .table = {{"a", 1}, {"b", 2}}};
     TaggedTable b{.tag = 7, .table = {{"a", 1}, {"b", 2}}};
     EXPECT_EQ(hash_of(a), hash_of(b));

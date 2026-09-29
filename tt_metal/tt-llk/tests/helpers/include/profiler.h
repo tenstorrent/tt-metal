@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "barrier.h"
 #include "ckernel.h"
 
 // Logic to convert zone name -> 16bit numeric id
@@ -63,18 +64,7 @@ enum class EntryType : std::uint32_t
     ZONE_END       = 0b1011
 };
 
-// Initialize id of the core executing the kernel
-#if defined(LLK_TRISC_UNPACK)
-constexpr std::uint32_t TRISC_ID = 0;
-#elif defined(LLK_TRISC_MATH)
-constexpr std::uint32_t TRISC_ID = 1;
-#elif defined(LLK_TRISC_PACK)
-constexpr std::uint32_t TRISC_ID = 2;
-#elif defined(LLK_TRISC_ISOLATE_SFPU)
-constexpr std::uint32_t TRISC_ID = 3;
-#else
-#error "Profiler can only be used on TRISC cores"
-#endif
+constexpr std::uint32_t TRISC_ID = llk_barrier::THREAD_ID;
 
 constexpr std::uint32_t BUFFER_LENGTH  = 0x400; // 1024 entries per core
 constexpr std::uint32_t ZONE_END_WORDS = 2;     // words written per ZONE_END on scope exit
@@ -86,6 +76,8 @@ constexpr std::uint32_t BUFFERS_END = 0x16F000;
 constexpr std::uint32_t NUM_CORES   = 3;
 constexpr std::uint32_t BUFFERS_END = 0x16E000;
 #endif
+static_assert(llk_barrier::NUM_THREADS == NUM_CORES, "llk_barrier::NUM_THREADS disagrees with llk_profiler::NUM_CORES");
+
 constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(std::uint32_t));
 
 constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
@@ -105,69 +97,10 @@ extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
-    auto& barrier = *barrier_ptr;
-
-    // wait for all the threads to set the barrier
-    barrier[TRISC_ID] = 1;
-    ckernel::invalidate_data_cache();
-    for (std::uint32_t i = 0; i < NUM_CORES; ++i)
-    {
-        if (i == TRISC_ID)
-        {
-            continue;
-        }
-        while (barrier[i] != 1)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
+    llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
-// Cross-thread actor-release rendezvous used at each zone: all announce arrival, the actor waits for
-// all, runs action() then bumps epoch to release. Actor spins only before action(), so it never lands
-// inside the measured window. Compiler fences at entry/exit keep surrounding work from reordering
-// across the rendezvous.
-template <typename Action>
-__attribute__((always_inline)) inline void sync_point(bool is_actor, Action action)
-{
-    ckernel::fence_compiler();
-
-    auto& barrier = *barrier_ptr;
-
-    // Read epoch BEFORE announcing arrival (else the actor could bump it first and a waiter deadlocks).
-    const std::uint32_t my_epoch = *epoch_ptr;
-
-    const std::uint32_t gen = barrier[TRISC_ID] + 1;
-    barrier[TRISC_ID]       = gen;
-
-    if (is_actor)
-    {
-        for (std::uint32_t i = 0; i < NUM_CORES; ++i)
-        {
-            if (i == TRISC_ID)
-            {
-                continue;
-            }
-            // Lock-step: a peer cannot advance past this generation before the actor releases it, so
-            // wait for exact equality — also wrap-safe if the 32-bit generation ever rolls over.
-            while (barrier[i] != gen)
-            {
-                ckernel::invalidate_data_cache();
-            }
-        }
-        action();                  // arm / freeze / no-op — actor never spins AFTER this
-        *epoch_ptr = my_epoch + 1; // single-writer release
-    }
-    else
-    {
-        while (*epoch_ptr == my_epoch)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
-
-    ckernel::fence_compiler();
-}
+// Only Quasar still uses these, but BARRIER_END anchors BUFFERS_START, so reclaiming them moves every buffer.
 
 __attribute__((always_inline)) inline void reset()
 {
@@ -178,6 +111,9 @@ __attribute__((always_inline)) inline void reset()
     reserved_words_count = 0;
 
     *epoch_ptr = 0;
+
+    // The Quasar rendezvous uses a relative generation, which needs a uniform start.
+    (*barrier_ptr)[TRISC_ID] = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
@@ -264,15 +200,6 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 } // namespace llk_profiler
 
-// WC build: emit only metadata; NC build: full wall_clock tracking. Mutually exclusive with MEASURE_PERF_COUNTERS.
-#ifdef PERF_COUNTERS_COMPILED
-
-#define ZONE_SCOPED(marker)          PROFILER_META(MARKER_FULL(marker))
-#define TIMESTAMP(marker)            PROFILER_META(MARKER_FULL(marker))
-#define TIMESTAMP_DATA(marker, data) PROFILER_META(MARKER_FULL(marker))
-
-#else // !PERF_COUNTERS_COMPILED
-
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
     const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
@@ -284,8 +211,6 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 #define TIMESTAMP_DATA(marker, data)   \
     PROFILER_META(MARKER_FULL(marker)) \
     llk_profiler::write_timestamp(MARKER_ID(marker), data);
-
-#endif // PERF_COUNTERS_COMPILED
 
 #define PROFILER_SYNC() tensix_sync()
 

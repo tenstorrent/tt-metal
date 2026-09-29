@@ -127,8 +127,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
-        static_config_.prefetch_q_pcie_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
 
         static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base(cq_id_);
         static_config_.cmddat_q_size = my_dispatch_constants.cmddat_q_size();
@@ -184,8 +182,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
-        static_config_.prefetch_q_pcie_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
 
         static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base(cq_id_);
         static_config_.cmddat_q_size = my_dispatch_constants.cmddat_q_size();
@@ -219,8 +215,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
-        static_config_.prefetch_q_pcie_rd_ptr_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
 
         static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.cmddat_q_size = my_dispatch_constants.prefetch_d_buffer_size();
@@ -482,7 +476,6 @@ void PrefetchKernel::CreateKernel() {
         {"PREFETCH_Q_BASE", std::to_string(static_config_.prefetch_q_base.value())},
         {"PREFETCH_Q_SIZE", std::to_string(static_config_.prefetch_q_size.value())},
         {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(static_config_.prefetch_q_rd_ptr_addr.value())},
-        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(static_config_.prefetch_q_pcie_rd_ptr_addr.value())},
         {"CMDDAT_Q_BASE", std::to_string(static_config_.cmddat_q_base.value())},
         {"CMDDAT_Q_SIZE", std::to_string(static_config_.cmddat_q_size.value())},
         {"SCRATCH_DB_BASE", std::to_string(static_config_.scratch_db_base.value())},
@@ -560,7 +553,7 @@ void PrefetchKernel::CreateKernel() {
     defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
 
     // Compile at Os on IERISC to fit in code region.
-    auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
+    auto optimization_level = (GetCoreType() == CoreType::ETH) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O2;
     configure_kernel_variant(dispatch_kernel_file_names[PREFETCH], {}, defines, optimization_level);
 }
 
@@ -582,10 +575,7 @@ void PrefetchKernel::ConfigureCore() {
     // Only H-type prefetchers need L1 configuration
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ
-        uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
         const auto& my_dispatch_constants = get_dispatch_mem_map();
-        uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();
         TT_ASSERT(prefetch_q_bytes % sizeof(uint32_t) == 0);
         std::vector<uint32_t> prefetch_q(prefetch_q_bytes / sizeof(uint32_t), 0);
@@ -595,17 +585,7 @@ void PrefetchKernel::ConfigureCore() {
             (uint32_t)(prefetch_q_base + my_dispatch_constants.prefetch_q_size())};
         uint32_t prefetch_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id_);
-        uint32_t prefetch_q_pcie_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id_);
-        const uint32_t command_queue_start_addr =
-            device_->sysmem_manager().is_dram_backed()
-                ? get_absolute_cq_offset(
-                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
-                : get_absolute_cq_offset(channel, cq_id_, cq_size);
-        std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {command_queue_start_addr + cq_start};
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, GetCoreType());
-        detail::WriteToDeviceL1(
-            device_, logical_core_, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, GetCoreType());
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_base, prefetch_q, GetCoreType());
     }
 }

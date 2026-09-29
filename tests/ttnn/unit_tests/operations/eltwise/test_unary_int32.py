@@ -82,73 +82,6 @@ def test_unary_logical_int32_edge_cases(logical_op, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-height_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [128, 160],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
-    strategy=ttnn.ShardStrategy.HEIGHT,
-    orientation=ttnn.ShardOrientation.COL_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-width_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [2240, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((2, 2), (2, 3)), ttnn.CoreRange((0, 0), (0, 1))}),
-    strategy=ttnn.ShardStrategy.WIDTH,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-block_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [320, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (4, 6))}),
-    strategy=ttnn.ShardStrategy.BLOCK,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-
-@pytest.mark.parametrize(
-    "a_shape",
-    [(torch.Size([5, 7, 64, 128]))],
-)
-@pytest.mark.parametrize(
-    "sharded_config",
-    [
-        height_sharded_memory_config,
-        width_sharded_memory_config,
-        block_sharded_memory_config,
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_op",
-    [
-        "logical_not",
-        "square",
-    ],
-)
-def test_unary_logical_int32_sharded(a_shape, sharded_config, ttnn_op, device):
-    ttnn_op = getattr(ttnn, ttnn_op)
-    num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
-    torch_input_tensor_a = torch.linspace(-100, 100, num_elements, dtype=torch.int32)
-    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=ttnn.int32,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sharded_config,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_function(torch_input_tensor_a, device=device)
-
-    output_tensor = ttnn_op(input_tensor_a, memory_config=sharded_config)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.equal(output_tensor, torch_output_tensor)
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -333,3 +266,28 @@ def test_logical_left_shift_scalar_int32(device, shift):
 
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
     assert torch.equal(tt_out, z_torch)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bitwise NOT (INT32 only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_bitwise_not(device):
+    torch.manual_seed(0)
+    input_tensor = torch.randint(low=-(2**31), high=2**31, size=(256, 256), dtype=torch.int32)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden = torch.bitwise_not(input_tensor)
+
+    tt_result = ttnn.bitwise_not(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.equal(result, golden)

@@ -40,12 +40,9 @@ GROUP_NORM_DRAM_SHAPES = [
         4,
         4,
     ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-    # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+    # SDXL/sd35 test cases. Additional slower test cases in nightly test.
     # SDXL Base
     (1, 1920, 16, 16, 32, 1, 4, 4),
-    # SDXL VAE
-    (1, 256, 256, 256, 32, 4, 8, 8),
-    (1, 512, 256, 256, 32, 4, 8, 8),
     # SDXL Refiner
     (1, 1536, 8, 8, 32, 1, 2, 8),
     (1, 1152, 128, 128, 32, 2, 8, 4),
@@ -56,7 +53,6 @@ GROUP_NORM_DRAM_SHAPES = [
     (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
-    (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
     # mochi
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
@@ -128,14 +124,6 @@ SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
     # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
     (
         1,
-        256,
-        512,
-        512,
-        32,
-        8,
-    ),  # Can fit in 8 slices, each slice does: (0,8ms for split, 0.3ms for interleavedToSharded + 0.68ms for GN) = 1.78ms, 8 slices x 1.78ms = 14.24ms + 4.6ms for concat = 18.84ms (original is 15.7ms)
-    (
-        1,
         512,
         128,
         128,
@@ -150,14 +138,6 @@ SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
         32,
         4,
     ),  # Can fit in 4 slice, split= 0.3ms i2s = 0.1ms GN = 0.6ms, s2i = 0.421ms = 5.6ms + 1ms for concat = 6.6ms (original is 6.1ms)
-    (
-        1,
-        512,
-        512,
-        512,
-        32,
-        16,
-    ),  # Can fit in 16 slice, split= 0.8ms i2s = 0.33ms GN = 0.38ms, s2i = 1.58ms = 49.44ms + 7.806ms for concat = 57.246ms (original is 24ms)
     # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
 ]
 
@@ -701,17 +681,9 @@ def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.xfail(
-    strict=True,
-    reason="tt-metal #50682: the analytical correction requires the tile-padding rows to hold "
-    "exact zeros (every TILE-layout producer supplies them). With garbage in the padding the "
-    "reduce ingests it and the result is meaningless -- measured ~1.92 vs ~0.045. If this XPASSes, "
-    "the padding rows are being masked and the precondition can be dropped from the kernel docs.",
-)
 def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
-    # Documents (as a strict xfail) the precondition the correction depends on. The op reduced over
-    # the padding rows before the fix too, so the dependence is not new -- but the fix is what makes
-    # "correct for non-tile-aligned H*W" a claim, and this is its boundary.
+    # Was a strict xfail while group_norm reduced over the tile padding (measured ~1.92 vs ~0.045);
+    # the padding rows are masked out now, so it is a plain test.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -737,6 +709,97 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
     max_abs_err = (out - ref).abs().max().item()
     logger.info(f"garbage tile-padding rows: max_abs_err={max_abs_err}")
     assert max_abs_err < 0.08, f"max abs error {max_abs_err} with garbage padding rows (see #50682)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "N, cores_y, num_out_blocks",
+    [
+        # The grid fixes num_virtual_rows, hence whether a batch is split across core rows and so
+        # which cores hold the padding row-tile.
+        pytest.param(1, 1, None, id="N1_grid1x8_whole_batch_per_core"),
+        pytest.param(1, 2, None, id="N1_grid2x8_batch_split_2"),
+        pytest.param(1, 4, None, id="N1_grid4x8_batch_split_4_block_h_1"),
+        pytest.param(2, 1, None, id="N2_grid1x8_two_batches_per_core"),
+        pytest.param(2, 4, None, id="N2_grid4x8_batch_split_2"),
+        # num_out_blocks=3 over block_h=4 leaves the last out-block empty -- the case that breaks a
+        # naive "last block, last row" test.
+        pytest.param(1, 1, 3, id="N1_grid1x8_num_out_blocks_3_empty_last_block"),
+        pytest.param(1, 1, 4, id="N1_grid1x8_num_out_blocks_4"),
+    ],
+)
+def test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, N, cores_y, num_out_blocks):
+    # Which core applies the row mask depends on how the grid splits H*W, and with N > 1 the padding
+    # recurs once per batch on the same core -- a single auto-selected grid reaches neither. Also
+    # pins the out-block indexing: num_out_blocks not dividing block_h can leave the last out-block
+    # with zero rows, so the final row-tile is found by its global index within the batch.
+    cores_x = 8
+    if device.core_grid.y < cores_y or device.core_grid.x < cores_x:
+        pytest.skip(f"device grid too small for {cores_x}x{cores_y}")
+
+    torch.manual_seed(0)
+    C, HW, G, padded = 512, 100, 32, 128
+
+    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
+    ref = ref.permute(0, 2, 3, 1).reshape(N, 1, HW, C)
+
+    buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
+    buf[:, :, :HW, :] = real
+    buf[:, :, HW:, :] = 7.0
+
+    tt = ttnn.from_torch(
+        buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
+    out = ttnn.group_norm(
+        tt,
+        num_groups=G,
+        inplace=False,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=ttnn.CoreGrid(y=cores_y, x=cores_x),
+        num_out_blocks=num_out_blocks,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float()[:, :, :HW, :]
+
+    max_abs_err = (out - ref).abs().max().item()
+    pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
+    logger.info(f"N={N} grid={cores_x}x{cores_y} num_out_blocks={num_out_blocks}: max_abs_err={max_abs_err} pcc={pcc}")
+    assert max_abs_err < 0.08, (
+        f"max abs error {max_abs_err} with dirty tile padding at N={N} grid={cores_x}x{cores_y} "
+        f"num_out_blocks={num_out_blocks}; group_norm must be independent of its padding (see #52685)"
+    )
+    assert pcc > 0.999, f"pcc {pcc} with dirty tile padding (see #52685)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM(device):
+    # The same logical rows with different padding bytes must give bit-identical output -- unlike an
+    # error threshold, this cannot be satisfied by merely keeping the damage small.
+    torch.manual_seed(0)
+    N, C, HW, G, padded = 1, 512, 100, 32, 128
+
+    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+
+    def run(padding_value):
+        buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
+        buf[:, :, :HW, :] = real
+        buf[:, :, HW:, :] = padding_value
+        tt = ttnn.from_torch(
+            buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
+        out = ttnn.group_norm(tt, num_groups=G, inplace=False, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=None)
+        return ttnn.to_torch(ttnn.from_device(out)).float()[:, :, :HW, :]
+
+    baseline = run(0.0)
+    for padding_value in (7.0, 1.0, -3.5, 0.5, 100.0):
+        other = run(padding_value)
+        assert torch.equal(baseline, other), (
+            f"group_norm output changed when the tile padding changed from 0.0 to {padding_value} "
+            f"(max delta {(baseline - other).abs().max().item()}); the padding rows must not reach "
+            f"either accumulation pass (see #52685)"
+        )
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -949,9 +1012,34 @@ GN_INTERLEAVED_SHAPES = [
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
-@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
-@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+# One case per (reduction path x input dtype) pair.
+# Those two axes interact: the accuracy thresholds branch on use_welford x in_dtype,
+# and fp32 input on the welford path additionally aliases cb_x onto cb_in0 and enables
+# UnpackToDestFp32. On the other hand, gamma/beta dtype interacts with neither: it only selects
+# the gamma/beta CB format, it is varied across the six cases rather than crossed with them.
+@pytest.mark.parametrize(
+    "welford_mode, in_dtype, gb_dtype",
+    [
+        ("legacy", ttnn.bfloat16, ttnn.bfloat16),
+        ("legacy", ttnn.bfloat16, ttnn.float32),
+        ("legacy", ttnn.float32, ttnn.float32),
+        ("legacy", ttnn.float32, ttnn.bfloat16),
+        ("welford_normal", ttnn.bfloat16, ttnn.float32),
+        ("welford_normal", ttnn.float32, ttnn.bfloat16),
+        ("welford_reciprocal", ttnn.bfloat16, ttnn.bfloat16),
+        ("welford_reciprocal", ttnn.float32, ttnn.float32),
+    ],
+    ids=[
+        "legacy-bf16-gb_bf16",
+        "legacy-bf16-gb_fp32",
+        "legacy-fp32-gb_fp32",
+        "legacy-fp32-gb_bf16",
+        "welford_normal-bf16-gb_fp32",
+        "welford_normal-fp32-gb_bf16",
+        "welford_reciprocal-bf16-gb_bf16",
+        "welford_reciprocal-fp32-gb_fp32",
+    ],
+)
 def test_group_norm_interleaved_all_config(
     device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, welford_mode
 ):

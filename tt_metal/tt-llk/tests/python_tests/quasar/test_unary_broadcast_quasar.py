@@ -22,12 +22,13 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -38,7 +39,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -85,16 +85,18 @@ UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float32,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
         DataFormat.Int32,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
     same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
-)
+    # This test only runs input_fmt == output_fmt, so its MX pair carries both the
+    # unpack decode and the pack encode.
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.MxFp4)
+
+BROADCAST_TYPES = [
+    BroadcastType.Scalar,
+    BroadcastType.Column,
+    BroadcastType.Row,
+]
 
 
 def get_valid_dest_acc_unary_broadcast(formats):
@@ -102,19 +104,16 @@ def get_valid_dest_acc_unary_broadcast(formats):
     if formats.input_format.is_32_bit():
         return [DestAccumulation.Yes]
     return [
-        DestAccumulation.No
-    ]  # 32bit dest is not supported for the unpack_to_dest=False case, ISSUE: #47560
+        DestAccumulation.No,
+        DestAccumulation.Yes,
+    ]
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
-    broadcast_type=[
-        BroadcastType.Scalar,
-        BroadcastType.Column,
-        BroadcastType.Row,
-    ],
+    broadcast_type=BROADCAST_TYPES,
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
@@ -233,19 +232,15 @@ def test_unary_broadcast_quasar(
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
-
-    configuration = TestConfig(
-        boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
 
     res_from_L1 = configuration.run().result
 

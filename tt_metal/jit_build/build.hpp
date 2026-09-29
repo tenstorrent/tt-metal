@@ -62,7 +62,7 @@ public:
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
-    uint32_t get_max_cbs() const { return max_cbs_; };
+    uint32_t get_max_dfbs() const { return max_dfbs_; };
     const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
@@ -82,7 +82,7 @@ private:
     const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
 
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     // Paths
     std::string root_;
@@ -130,6 +130,14 @@ protected:
 
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
+
+    // True for the TENSIX compute pack state (TRISC2) — the only state where the per-kernel
+    // RVV opt-in (JitBuildSettings::get_trisc2_rvv_enabled) may apply.
+    bool is_compute_pack_{};
+    // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
+    // processor does not support it. Appended to a kernel's recipe cflags only when that
+    // kernel opted in, so default builds are unchanged.
+    std::string rvv_cflags_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided

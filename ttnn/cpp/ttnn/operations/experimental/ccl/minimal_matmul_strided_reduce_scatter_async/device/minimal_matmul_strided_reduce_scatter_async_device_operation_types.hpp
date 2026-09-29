@@ -110,6 +110,9 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
     // Caller-owned RS->MM credit array for the rolling window; see mm_window_blocks. Allocated per
     // compiled program when absent, which permanently lowers the device's L1 floor.
     const std::optional<const Tensor> mm_credit_counters = std::nullopt;
+
+    /* Fused concatenation: the second in0 source (suffix K-tiles). */
+    const std::optional<const Tensor> mm_optional_input_tensor = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

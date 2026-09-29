@@ -14,12 +14,11 @@ from bug_checker.orchestrator import (
     dry_run_command,
     list_rules_command,
 )
+from bug_checker.output import RERUN_FOOTER
 from bug_checker.rules import Rule
 
 
-def _rule(
-    id="test-rule", paths=None, labels=None, severity="warning", content="# Test"
-):
+def _rule(id="test-rule", paths=None, labels=None, severity="warning", content="# Test"):
     return Rule(
         id=id,
         file="test.md",
@@ -126,6 +125,8 @@ def test_list_rules_posts_comment(mock_post, mock_load):
     mock_post.assert_called_once()
     assert mock_post.call_args[1]["pr_number"] == 42
     assert "Available Rules" in mock_post.call_args[1]["body"]
+    # Explicitly-requested output — no rerun footer here
+    assert RERUN_FOOTER not in mock_post.call_args[1]["body"]
 
 
 @patch("bug_checker.orchestrator.load_rules")
@@ -149,6 +150,7 @@ def test_check_rule_unknown_id(mock_post, mock_load):
     mock_post.assert_called_once()
     assert "not found" in mock_post.call_args[1]["body"]
     assert "real-rule" in mock_post.call_args[1]["body"]
+    assert mock_post.call_args[1]["body"].endswith(RERUN_FOOTER)
 
 
 @patch("bug_checker.orchestrator.load_rules")
@@ -182,6 +184,7 @@ def test_check_rule_no_diff_posts_message(mock_post, mock_llm_cls, mock_load):
     assert result == []
     mock_post.assert_called_once()
     assert "no matching diff sections" in mock_post.call_args[1]["body"]
+    assert mock_post.call_args[1]["body"].endswith(RERUN_FOOTER)
 
 
 # --- dry_run_command ---
@@ -198,6 +201,8 @@ def test_dry_run_posts_comment(mock_post, mock_select, mock_load):
     dry_run_command(pr, post_comments=True)
     mock_post.assert_called_once()
     assert "Dry Run" in mock_post.call_args[1]["body"]
+    # Explicitly-requested output — no rerun footer here
+    assert RERUN_FOOTER not in mock_post.call_args[1]["body"]
 
 
 @patch("bug_checker.orchestrator.load_rules")

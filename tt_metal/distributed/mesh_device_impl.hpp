@@ -41,6 +41,8 @@ namespace tt::tt_metal {
 class Allocator;
 class HWCommandQueue;
 class MetalEnv;
+class MetalEnvImpl;
+class MetalContext;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -60,9 +62,13 @@ class FabricNodeId;
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
+class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+namespace streaming_profiler {
+class Receiver;
+}
 
 namespace distributed {
 
@@ -131,6 +137,10 @@ private:
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
     ContextId context_id_ = DEFAULT_CONTEXT_ID;
+    // Handles to the runtime this MeshDevice belongs to, resolved once at construction.
+    // context_id_ is retained while thread pools, DriscL1Arena, and context teardown still take an id.
+    MetalContext* metal_context_ = nullptr;
+    MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
     // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
@@ -139,6 +149,12 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
+    // Only ever read on the dispatch path, which holds the api lock.
+    mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
+    // Established once the devices are open (see establish_device_property_caches) so that the
+    // accessors below stay pure reads: ttnn calls them from many threads without the api lock.
+    std::optional<CoreCoord> compute_with_storage_grid_size_;
+    std::optional<uint32_t> l1_size_per_core_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -158,6 +174,10 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
+    // close_impl().
+    std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
@@ -181,11 +201,6 @@ private:
     // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
     std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
@@ -193,11 +208,21 @@ private:
     // Validates that the sub_device_manager_tracker_ is initialized before accessing it.
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
+    std::vector<AllocatorImpl*> trace_allocators() const;
+    std::vector<AllocatorImpl*> trace_allocators(SubDeviceManagerId manager_id) const;
+    // Resolves the mesh-wide device properties that are fixed once the devices are open. Called
+    // during initialization and again after a reshape swaps the view.
+    void establish_device_property_caches();
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     // Active distributed context used by mesh command queues (split from distributed_context_).
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+    // Lazily computed; see coowner_ranks() / coowner_context(). Both die with the mesh, so a
+    // carved submesh does not leave a communicator behind.
+    mutable std::mutex coowner_mutex_;
+    mutable std::optional<std::vector<int>> coowner_ranks_;
+    mutable std::shared_ptr<distributed::multihost::DistributedContext> coowner_context_;
 
     friend class ::tt::tt_metal::experimental::DispatchContext;
 
@@ -206,7 +231,7 @@ public:
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh,
-        ContextId context_id);
+        MetalContext& metal_context);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
@@ -216,12 +241,28 @@ public:
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
 
     ContextId get_context_id() const { return context_id_; }
+    MetalContext& metal_context() const;
+    MetalEnvImpl& metal_env() const;
     // The MeshDevice will call MetalContext::destroy_instance on close when this is set to true.
     // This was added to cleanup the MetalContext after MeshDevice closes.
     // It needs to be removed to enable https://github.com/tenstorrent/tt-metal/issues/21500.
     void set_destroy_metal_context_instance_on_close(bool destroy) {
         destroy_metal_context_instance_on_close_ = destroy;
     }
+
+    // Trace allocation safety lifecycle.
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void register_active_trace(const MeshTraceId& trace_id);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void unregister_active_trace(const MeshTraceId& trace_id);
+
+    // Unsafe allocation tracking
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
+        SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
+    void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    void push_corruptible_allocation_scope();
+    void pop_corruptible_allocation_scope();
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
@@ -248,6 +289,7 @@ public:
         NOC noc, const MeshCoordinate& coord);
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
@@ -277,7 +319,6 @@ public:
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
-    // If cq_id is not provided, the current command queue is returned from the current thread
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
@@ -304,6 +345,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 
@@ -317,21 +359,25 @@ public:
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
 
-    // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
-    // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
-    // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
-    // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
-    CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
+    // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
+    // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
+    // safe for a DRISC kernel to occupy. Resolved against `device`'s harvested DRAM topology.
+    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range.
+    CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
-    // prefetcher: element 0 is the free non-endpoint subchannel
+    // prefetcher on `device`: element 0 is the free non-endpoint subchannel
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set. Indices are derived
-    // per-bank from the SOC descriptor (they are not fixed across banks). Used by both
-    // the DRAM-sender GCB factory and the TensorPrefetcherManager so their sender
-    // cores always agree.
-    std::vector<CoreCoord> dram_sender_logical_cores(uint32_t bank_id) const;
+    // pair lets two DRISC cores share a bank's receiver set.
+    //
+    // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
+    // well-formed descriptor set returns the same coords for every `device` in a mesh; the
+    // `device` argument exists because that is a property of the descriptors rather than one this
+    // function can guarantee, and because the physical subchannel each role resolves to does vary
+    // with the device's DRAM harvest mask. Callers addressing hardware must translate the returned
+    // coords through the device they mean.
+    std::vector<CoreCoord> dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const;
 
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
@@ -372,9 +418,20 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
+    const std::vector<IDevice*>& get_local_devices(const MeshCoordinateRange& range) const;
     IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+
+    // The MPI ranks driving at least one device of this mesh, sorted; empty when this rank drives
+    // all of them. Computed once -- the walk costs one control-plane lookup per device.
+    const std::vector<int>& coowner_ranks() const;
+
+    // Sub-context over coowner_ranks(), or null when this mesh is not co-owned. Created on first
+    // use, since building one per carved submesh up front would create communicators for the many
+    // slots that never allocate. All co-owners reach their first co-owned allocation together,
+    // which is what makes the lazy (collective) creation safe.
+    const std::shared_ptr<distributed::multihost::DistributedContext>& coowner_context() const;
 
     DeviceIds get_device_ids() const;
 

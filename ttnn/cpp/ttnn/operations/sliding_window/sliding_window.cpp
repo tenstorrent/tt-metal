@@ -784,15 +784,15 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size) {
     auto core_id_to_noc_coords =
-        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
+        [is_block_sharded, transpose_mcast, &device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
                                            : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-        return device->worker_core_from_logical_core(core_coord);
+        return device.worker_core_from_logical_core(core_coord);
     };
 
     uint32_t num_cores_nhw = shard_boundaries.size();

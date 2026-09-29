@@ -11,16 +11,17 @@ The test can also run on smaller Blackhole boxes by profiling a per-chip Galaxy 
 and the cache scale by SP/8, so smaller boxes run a proportionally shorter sequence — the per-chip
 workload mirrors Galaxy rather than a heavier one:
   * Galaxy   (32 chips): SP=8 × TP=4, chunk=5120, cache=50k,   heads=128 (full workload)
-  * LoudBox  (8 chips):  SP=2 × TP=4, chunk=1280, cache=12.5k, heads=128 (1/4 sequence length)
-  * QuietBox (4 chips):  SP=1 × TP=4, chunk=640,  cache=6.25k, heads=128 (1/8 sequence length)
+  * LoudBox  (8 chips):  SP=2 × TP=4, chunk=1280, cache=12.5k (1/4 sequence length)
+  * QuietBox (4 chips):  SP=2 × TP=2, chunk=1280, cache=12.5k (1/4 sequence length)
 
-That keeps the per-chip COMPUTE shapes equal to Galaxy: local query rows/chip (640), MLA heads/chip
-(32), indexer heads/chip (16), the per-chip KVPE depth (cache/SP = 6.25k on every box), AND the number
-of chunks-to-fill in `cold` (11 on every box, not 41 on LoudBox). CAVEAT: the indexer K-cache is
-replicated full-depth (= the box-local cache), so on smaller boxes it holds a proportionally SHORTER
-prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k depth; smaller boxes
-under-represent any op that scales with the replicated key-cache length.
-No reference values: this just runs the real device forward and reports per-op device-kernel time.
+That keeps local query rows/chip (640), per-chip KVPE depth (cache/SP = 6.25k), and the number of
+chunks-to-fill in `cold` (11) equal to Galaxy. QuietBox deliberately uses SP=2 so it exercises the
+all-gather/top-k overlap path; its TP=2 head shard is twice the Galaxy per-chip head shard. CAVEAT: the
+indexer K-cache is replicated full-depth (= the box-local cache), so on smaller boxes it holds a
+proportionally SHORTER prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k
+depth; smaller boxes under-represent any op that scales with the replicated key-cache length.
+No reference values: this runs the real device forward, reports host end-to-end time, and retains
+realtime-profiler device duration for each individual operation.
 
 Profiler — realtime (lightweight), in-process (replaces Tracy)
 --------------------------------------------------------------
@@ -36,17 +37,17 @@ CCL benchmarks (LoudBox: ~11× faster wall-clock). Two semantic notes versus the
     (``_op_code``: a priority table over the operations dir, verified against the tracy op-code
     counts/durations). One program = one op code, matching Tracy's op names — not per-instance identical
     to a tracy op struct, but the same code space the report/graph pipeline consumes.
-  * Multi-chip collapse takes the **max** ``duration_ns`` across chips for every program (the slowest
-    chip gates that program's critical path). Tracy used max for compute and avg for collectives, so
-    collective-heavy numbers can differ a few percent (see PR #49840 deltas). Both express the same
-    per-step critical-path quantity.
+  * Multi-chip collapse takes the **max** per-chip value for each program. Realtime-profiler records
+    remain the source of individual operation duration, but they are not used to infer overlap or an
+    end-to-end interval. End-to-end time is measured on the host around enqueue plus an explicit mesh
+    synchronization, so naturally overlapped device work is counted once.
 
-Each measured ``forward()`` is profiled as its own region (register callback → run one forward →
-drain). ``runtime_id`` is a globally monotonic per-execution id (assigned per enqueue, cache hit or
-miss — ttnn ``device_operation.hpp``), so every op execution — including the same op across cold
-iterations — gets a distinct id; the max-collapse only merges the per-chip records of one execution.
-Per-forward regions are what attribute ops to each cold iteration (the per-iteration breakdown) and
-replace the old MLA_START signpost split. The run total is the sum of per-forward criticals.
+Each measured ``forward()`` is compiled, captured as segmented traces around the sparse-overlap
+sub-device-manager boundaries, replay-warmed once, then profiled as its own region (register callback →
+host timer start → replay the complete segmented forward → synchronize → host timer stop → drain
+profiler records). Host E2E for traced execution is the primary metric. Per-forward regions attribute
+operations and host duration to each cold iteration even when cached programs reuse runtime IDs. The run
+total is the sum of the per-forward host durations; per-program device durations are secondary diagnostics.
 
 Single test (was a two-test tracy driver+impl split):
   * test_mla_chunked_perf — parametrized over [deepseek_v32, glm_5_1, glm_5_2] × [warm, cold, long] ×
@@ -64,16 +65,16 @@ Three scenarios (the test sweeps all three):
     caches (both by per-chunk block-cyclic slab writes). The measured region spans ALL chunks = the
     total cold-start prefill cost; the final chunk (start=cache) is exactly the `warm` step. Besides the
     aggregate per-op table, cold also emits a per-cache-fill-iteration breakdown (…_cold_by_iter.csv:
-    iteration, cache_depth_tokens, total_ns, op_count) showing how the per-chunk critical path grows as
+    iteration, cache_depth_tokens, total_ns, op_count) showing how per-chunk host end-to-end time grows as
     the cache fills — recovered by profiling each forward as its own region.
   * long — like `warm` but with a 0.5M-token Galaxy cache (512000 = 100 chunks), to profile a single
     chunk over a long prefix. Like the others the cache scales by SP/8, so per-chip depth stays
-    Galaxy-equal on every box (LoudBox=128k, QuietBox=64k box-local cache).
+    Galaxy-equal on every box (LoudBox=128k, QuietBox=128k box-local cache).
 
-variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). All run the
-  SAME TP=4 meshes: GLM's thin per-chip head shard (64/4=16 < 32) is handled by the head→sequence
-  reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer, so GLM is no longer
-  TP-capped. GLM-5.2's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
+variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). Galaxy and
+  LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. GLM's thin TP=4 head shard is handled by the
+  head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer.
+  GLM-5.2's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
   its compact 21-slot index cache. This makes the fused ring op select nonzero slot 20—the multi-slot path
   used by the complete 78-layer model—rather than exercising only the trivial single-slot GLM-5.1 proxy.
   All model dims come from the single-source reference configs.
@@ -90,11 +91,17 @@ kv_cache_format axis — sparse mode runs both supported persistent-cache format
   * kv_scaled_fp8 — packed [512 E4M3 + four FP32 scales + 64 BF16 RoPE] rows (656 bytes/token).
   Dense mode retains its tiled bfloat8_b cache and therefore has no sparse-cache-format sweep.
 
-Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenarios × 3 cache/mode cases), or narrow via -k:
+kv_shard axis — sparse mode runs both persistent-cache shardings (id suffix on the deduped one only):
+  * (no suffix) — SP-sharded, TP-replicated: every chip in a TP row holds the whole SP slab.
+  * tp_sharded — GLM-5.2 KV dedup (``tp_shard_kv``): KVPE + indexer index_kv_cache striped over all
+    sp*tp chips, so each chip holds 1/tp of its SP slab and both read legs pay a TP-inner all-gather.
+    Dense ring MLA does not support dedup, so it has no kv_shard sweep.
+
+Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenarios × 5 cache/mode cases), or narrow via -k:
     pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf -s
     pytest -m perf ...::test_mla_chunked_perf -k "glm_5_1 and cold and sparse and kv_scaled_fp8" -s
-    pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16" -s
-    pytest -m perf ...::test_mla_chunked_perf -k "deepseek_v32 and dense" -s
+    pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16 and not tp_sharded" -s
+    pytest -m perf ...::test_mla_chunked_perf -k "warm and kv_bf16 and tp_sharded" -s
 
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
@@ -116,6 +123,7 @@ import csv
 import datetime
 import json
 import os
+import time
 from dataclasses import dataclass
 
 import pandas as pd
@@ -135,7 +143,9 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
@@ -149,11 +159,11 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 # indexer, no top-k), a baseline to compare the sparse impl against. Each mode writes its own profiler
 # subdir + per-scenario CSVs so the two runs never clobber and stay directly comparable.
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
-# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). ALL
-# run the SAME TP=4 meshes — GLM's thin per-chip head shard (64/4=16 < 32) is handled by the
-# head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer, so
-# no TP cap applies. Every model dimension comes from the single-source reference config, never hardcoded
-# here. GLM-5.2 additionally exercises a nonzero slot of its compact full-indexer cache below.
+# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32).
+# Galaxy/LoudBox use TP=4; QuietBox uses TP=2 so its four chips retain SP=2 and exercise the overlap path.
+# GLM's thin TP=4 head shard is handled by the head→sequence reshard in ttMLA._sparse_mla (#48727).
+# Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.2
+# additionally exercises a nonzero slot of its compact full-indexer cache below.
 VARIANTS = ("deepseek_v32", "glm_5_1", "glm_5_2")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {
@@ -162,12 +172,9 @@ _CONFIG_BUILDERS = {
     "glm_5_2": glm_5_2_hf_config,
 }
 
-# Fabric transport being profiled — single source for BOTH the device_params and the run manifest, so the
-# recorded provenance can never drift from what actually ran (FABRIC_2D is the production transport;
-# FABRIC_1D exhibited the multi-hop line-broadcast hang). FABRIC_2D + fabric_router_config leaves the
-# fabric-tensix datamover off, so the realtime profiler stays eligible (see PR #49840 CCL benchmarks).
-PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
-
+# Fabric transport is selected after workload detection below: production Galaxy uses Fabric2D with
+# physical X/Y wrapping, while smaller boxes use unwrapped Fabric2D. The selected value is shared by
+# device_params, model CCL topology, and the run manifest so recorded provenance matches the run.
 # Realtime-profiler record drain ceiling. The receiver thread delivers records asynchronously; the
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
 # default covers a many-program forward across up to 32 chips; each forward is profiled as its own
@@ -187,20 +194,23 @@ def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
     }[cache_format]
 
 
-def _profile_case_id(mode: str, cache_format: MlaKvCacheFormat) -> str:
-    return f"{mode}-{_cache_format_id(cache_format)}" if mode == "sparse" else mode
+def _profile_case_id(mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
+    if mode != "sparse":
+        return mode
+    case = f"{mode}-{_cache_format_id(cache_format)}"
+    return case  # one sparse layout now, so no -tp_sharded discriminator
 
 
-def _subdir(variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
+def _subdir(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
     """Format-specific profiler directory; matched sparse BF16/FP8 reports must never clobber each other."""
-    profile_case = _profile_case_id(mode, cache_format).replace("-", "_")
+    profile_case = _profile_case_id(mode, cache_format, tp_shard_kv).replace("-", "_")
     return f"{variant}_{profile_case}_mla_perf"
 
 
-def _csv_name(variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
+def _csv_name(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
     return os.environ.get(
         "DS_PERF_CSV" if mode == "sparse" else "DS_DENSE_PERF_CSV",
-        f"{_subdir(variant, mode, cache_format)}.csv",
+        f"{_subdir(variant, mode, cache_format, tp_shard_kv)}.csv",
     )
 
 
@@ -245,9 +255,11 @@ def _output_dir(subdir: str) -> str:
     return d
 
 
-def _scenario_csv(out_dir, scenario: str, variant: str, mode: str, cache_format: MlaKvCacheFormat) -> str:
+def _scenario_csv(
+    out_dir, scenario: str, variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False
+) -> str:
     """Per-scenario summary CSV path under its format-specific profiler directory."""
-    root, ext = os.path.splitext(_csv_name(variant, mode, cache_format))
+    root, ext = os.path.splitext(_csv_name(variant, mode, cache_format, tp_shard_kv))
     return os.path.join(out_dir, f"{root}_{scenario}{ext}")
 
 
@@ -298,7 +310,9 @@ def _git_head() -> dict:
         return {"commit": None, "branch": None}
 
 
-def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_format, command, workload) -> None:
+def _write_run_manifest(
+    report_dir, *, variant, scenario, attn_mode, cache_format, tp_shard_kv, command, workload
+) -> None:
     """Drop a lean run_manifest_<scenario>.json into the output dir. Records ONLY what cannot be
     reconstructed from git (given the commit) or from the co-located ops CSV:
       * commit / branch — the code-state anchor (read subprocess-free from .git; no dirty flag — the
@@ -316,19 +330,21 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_forma
             if os.path.exists(so)
             else None
         )
-        case_filter = _profile_case_id(attn_mode, cache_format)
+        case_filter = _profile_case_id(attn_mode, cache_format, tp_shard_kv)
         reproducer = (
             f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
             f"{command} -k '{variant} and {scenario} and {case_filter}'"
         )
         head = _git_head()
         manifest = {
-            "schema_version": 3,
+            "schema_version": 6,
+            "execution": "segmented_trace_replay",
             "profiler": "realtime",
             "variant": variant,
             "scenario": scenario,
             "attn_mode": attn_mode,
             "kv_cache_format": _cache_format_id(cache_format) if attn_mode == "sparse" else None,
+            "kv_shard": "tp_sharded" if attn_mode == "sparse" else None,
             "commit": head["commit"],
             "branch": head["branch"],
             "device": {
@@ -351,11 +367,12 @@ def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, cache_forma
 
 def _local_cache_tokens(galaxy_cache: int, sp: int) -> int:
     """Box-local cached sequence length: scale the Galaxy-global cache by SP/GALAXY_SP exactly like the
-    chunk, so every box profiles the Galaxy per-chip workload rather than a heavier one. This keeps the
+    chunk, so every box profiles the Galaxy per-chip sequence workload rather than a longer one. This keeps
     number of chunks-to-fill constant (Galaxy=11, LoudBox=11, QuietBox=11 — NOT 41) and the per-chip
     KVPE depth Galaxy-equal (cache/SP = galaxy_cache/GALAXY_SP on every box). LoudBox runs 1/4 the
-    sequence length, QuietBox 1/8. CACHE_TOKENS/LONG_CACHE_TOKENS are multiples of GALAXY_SP and of the
-    per-box chunk, so the result stays an exact chunk multiple (required by the indexed rope table)."""
+    sequence length, and QuietBox also runs 1/4. CACHE_TOKENS/LONG_CACHE_TOKENS are multiples of
+    GALAXY_SP and of the per-box chunk, so the result stays an exact chunk multiple (required by the
+    indexed rope table)."""
     return galaxy_cache * sp // GALAXY_SP
 
 
@@ -391,7 +408,7 @@ class PerfWorkload:
 
 
 _SYSTEM_BY_DEVICE_COUNT = {
-    4: ("QuietBox", (1, 4)),
+    4: ("QuietBox", (2, 2)),
     8: ("LoudBox", (2, 4)),
     32: ("Galaxy", (8, 4)),
 }
@@ -418,20 +435,25 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
     # glm_5_1: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
     cfg = _CONFIG_BUILDERS[variant_name]()
     local_chunk = _exact_div(CHUNK_TOKENS, GALAXY_SP, "DS_PERF_CHUNK")
-    local_heads = _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")
-    local_index_heads = _exact_div(cfg.index_n_heads, GALAXY_TP, f"{variant_name}.index_n_heads")
+    _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")
+    _exact_div(cfg.index_n_heads, GALAXY_TP, f"{variant_name}.index_n_heads")
     workload = PerfWorkload(
         system_name=system_name,
         num_devices=num_devices,
         mesh_shape=mesh_shape,
         chunk_tokens=local_chunk * sp,
-        num_attention_heads=local_heads * tp,
-        index_n_heads=local_index_heads * tp,
+        num_attention_heads=cfg.num_attention_heads,
+        index_n_heads=cfg.index_n_heads,
     )
     return workload, None
 
 
 PERF_WORKLOAD, PERF_SKIP_REASON = _detect_perf_workload(VARIANT)
+PERF_FABRIC = (
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    if PERF_WORKLOAD.mesh_shape == (GALAXY_SP, GALAXY_TP)
+    else ttnn.FabricConfig.FABRIC_2D
+)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -537,7 +559,8 @@ def _write_ops_dump(out_dir: str, name_root: str, forwards: list) -> str:
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["forward", "seq", "runtime_id", "OP CODE", "DEVICE KERNEL DURATION [ns]", "kernel_sources"])
-        for forward_index, per_program in enumerate(forwards):
+        for forward_index, forward in enumerate(forwards):
+            per_program = forward["programs"]
             for seq, (runtime_id, info) in enumerate(per_program.items()):
                 w.writerow(
                     [
@@ -555,12 +578,22 @@ def _write_ops_dump(out_dir: str, name_root: str, forwards: list) -> str:
 def _profile_forward(mesh_device, run_fn) -> dict:
     """Profile one region and collapse the device dimension: return {runtime_id -> {"duration_ns",
     "kernel_sources"}} where duration_ns is the MAX across chips for that program (slowest chip = that
-    program's critical path). Mirrors PR #49840's _profile_programs. runtime_id 0 is the profiler's
+    program's device duration). Mirrors PR #49840's _profile_programs. runtime_id 0 is the profiler's
     sentinel and is skipped. The dict preserves first-arrival order, which equals device execution
     (dispatch) order — the profiler delivers records in program order; verified equal to the device
     start-tick order across every case/forward — so callers get the ops in program order for free."""
+    host_duration_ns = 0
+
+    def measured_run():
+        nonlocal host_duration_ns
+        start_ns = time.perf_counter_ns()
+        result = run_fn()
+        ttnn.synchronize_device(mesh_device)
+        host_duration_ns = time.perf_counter_ns() - start_ns
+        return result
+
     _, records = profile_realtime_program(
-        mesh_device, run_fn, collect_all=True, record_timeout_seconds=RT_RECORD_TIMEOUT_S
+        mesh_device, measured_run, collect_all=True, record_timeout_seconds=RT_RECORD_TIMEOUT_S
     )
     per_program: dict = {}
     for record in records:
@@ -574,25 +607,85 @@ def _profile_forward(mesh_device, run_fn) -> dict:
         else:
             current["duration_ns"] = max(current["duration_ns"], duration_ns)
     assert per_program, "real-time profiler returned no valid program records for the measured forward"
-    return per_program
+    return {"programs": per_program, "host_duration_ns": host_duration_ns}
 
 
-def _programs_to_frame(per_program: dict, dur_col: str) -> pd.DataFrame:
-    """One row per device program: (OP CODE label, critical-path duration)."""
+def _profile_traced_forward(mesh_device, mla, run_fn) -> dict:
+    """Compile, capture, warm, then measure one complete segmented trace replay.
+
+    The controller splits capture around sparse MLA's overlap-manager load/clear boundaries. Replay
+    executes those trace segments and manager actions in order, with one final device synchronization;
+    the measured host duration is therefore the production-style traced forward E2E.
+    """
+    controller = SubDeviceTraceController(mesh_device)
+    capture_out = None
+    compile_out = None
+    capture_started = False
+    capture_ended = False
+    mla.set_trace_controller(controller)
+    try:
+        compile_out = run_fn()
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(compile_out)
+        compile_out = None
+
+        controller.begin_capture()
+        capture_started = True
+        capture_out = run_fn()
+        controller.end_capture()
+        capture_ended = True
+        ttnn.synchronize_device(mesh_device)
+
+        # Exclude first-replay jitter, and drain its asynchronous realtime-profiler records before
+        # registering the measured callback. The controller performs the final synchronization, so
+        # _profile_forward's additional sync is an already-drained no-op.
+        _profile_forward(mesh_device, controller.replay)
+        measured = _profile_forward(mesh_device, controller.replay)
+        measured["trace_segments"] = controller.num_segments
+        return measured
+    finally:
+        if capture_started and not capture_ended:
+            try:
+                controller.end_capture()
+            except Exception:
+                pass
+        # A segmented replay always ends on the default manager. Release each trace while walking the
+        # same manager program so manager-owned trace buffers are resolved under their capture manager.
+        try:
+            controller.release()
+        finally:
+            mla.set_trace_controller(None)
+            if capture_out is not None:
+                ttnn.deallocate(capture_out)
+            if compile_out is not None:
+                ttnn.deallocate(compile_out)
+
+
+def _programs_to_frame(forward: dict, dur_col: str) -> pd.DataFrame:
+    """One row per device program with its max-per-chip realtime-profiler duration."""
+    per_program = forward["programs"]
     return pd.DataFrame(
-        [{"OP CODE": _op_code(info["kernel_sources"]), dur_col: info["duration_ns"]} for info in per_program.values()]
+        [
+            {
+                "OP CODE": _op_code(info["kernel_sources"]),
+                dur_col: info["duration_ns"],
+            }
+            for info in per_program.values()
+        ]
     )
 
 
 def _by_op(frame: pd.DataFrame, dur_col: str) -> pd.DataFrame:
-    """Aggregate per-op-label: count, total_ns, avg_ns, pct — sorted by total desc (old table shape)."""
-    total_ns = frame[dur_col].sum()
+    """Aggregate max-per-chip realtime-profiler durations by operation label."""
     by_op = (
-        frame.groupby("OP CODE")[dur_col]
-        .agg(count="count", total_ns="sum", avg_ns="mean")
-        .sort_values("total_ns", ascending=False)
+        frame.groupby("OP CODE")
+        .agg(
+            count=(dur_col, "count"),
+            inclusive_ns=(dur_col, "sum"),
+            avg_inclusive_ns=(dur_col, "mean"),
+        )
+        .sort_values("inclusive_ns", ascending=False)
     )
-    by_op["pct"] = 100.0 * by_op["total_ns"] / total_ns
     return by_op
 
 
@@ -600,9 +693,9 @@ def _by_op(frame: pd.DataFrame, dur_col: str) -> pd.DataFrame:
 # The perf test — build the DSA ttMLA, profile the measured forward(s), report
 # ============================================================================
 PERF_CASES = [
-    pytest.param("sparse", MlaKvCacheFormat.BF16_RM, id="sparse-kv_bf16"),
-    pytest.param("sparse", MlaKvCacheFormat.SCALED_FP8, id="sparse-kv_scaled_fp8"),
-    pytest.param("dense", MlaKvCacheFormat.BF16_RM, id="dense"),
+    pytest.param("sparse", MlaKvCacheFormat.BF16_RM, True, id="sparse-kv_bf16"),
+    pytest.param("sparse", MlaKvCacheFormat.SCALED_FP8, True, id="sparse-kv_scaled_fp8"),
+    pytest.param("dense", MlaKvCacheFormat.BF16_RM, False, id="dense"),
 ]
 
 
@@ -615,17 +708,18 @@ PERF_CASES = [
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            "trace_region_size": 16 * 1024 * 1024,
         }
     ],
-    ids=["fabric2d"],
+    ids=["torus-xy" if PERF_FABRIC == ttnn.FabricConfig.FABRIC_2D_TORUS_XY else "fabric2d"],
     indirect=True,
 )
-@pytest.mark.parametrize("attn_mode,kv_cache_format", PERF_CASES)
+@pytest.mark.parametrize("attn_mode,kv_cache_format,tp_shard_kv", PERF_CASES)
 @pytest.mark.parametrize("scenario", list(SCENARIOS), ids=list(SCENARIOS))
 @pytest.mark.parametrize("variant", list(VARIANTS), indirect=True, ids=list(VARIANTS))
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, config_only):
+def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, tp_shard_kv, config_only):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
 
@@ -641,9 +735,10 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     scenario_cfg = SCENARIOS[scenario]
     is_cold = scenario_cfg["loop"]
     has_indexer = attn_mode == "sparse"  # dense baseline drops the indexer -> full-prefix ring MLA
-    subdir = _subdir(variant.name, attn_mode, kv_cache_format)
+    subdir = _subdir(variant.name, attn_mode, kv_cache_format, tp_shard_kv)
     sp_axis, tp_axis = 0, 1
     sp, tp = mesh_device.shape
+    kv_tp_axis = tp_axis if tp_shard_kv else None  # KV dedup: None = SP-only (TP-replicated) caches
     # cache scales per box (sp/GALAXY_SP) like the chunk, so every box profiles the Galaxy per-chip
     # workload: constant chunks-to-fill and Galaxy-equal per-chip depth (see _local_cache_tokens).
     galaxy_cache = scenario_cfg["cache"]
@@ -654,6 +749,14 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     # table (get_rope_tensors_indexed) requires total = cache + chunk to be a multiple of chunk.
     assert cache % chunk == 0, f"cache {cache} must be a whole number of {chunk}-token chunks"
     assert total % sp == 0 and (total // sp) % 32 == 0, f"total {total} must be tile-aligned per SP={sp} chip"
+    if tp_shard_kv:
+        assert (
+            total % (sp * tp) == 0 and (total // (sp * tp)) % 32 == 0
+        ), f"tp_shard_kv needs a tile-aligned per-chip cache stripe: total {total} / (sp {sp} * tp {tp})"
+        assert chunk % (sp * tp) == 0 and (chunk // (sp * tp)) % 32 == 0, (
+            f"tp_shard_kv needs a tile-aligned per-chip chunk stripe: chunk {chunk} / (sp {sp} * tp {tp}) "
+            f"= {chunk // (sp * tp)}"
+        )
     assert config_only.num_attention_heads % tp == 0 and config_only.index_n_heads % tp == 0, (
         f"{variant.name} heads (MLA={config_only.num_attention_heads}, index={config_only.index_n_heads}) "
         f"must be divisible by TP={tp}"
@@ -685,6 +788,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         config,
         dict(weights),
         mesh_device,
+        # Match production CCL topology: Ring only on fabric-wrapped axes.
+        topology=per_axis_topology(PERF_FABRIC),
         layer_idx=mla_layer_idx,
         seq_len=total,
         sp_axis=sp_axis,
@@ -708,6 +813,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             mesh_shape=list(mesh_device.shape),
             sp_axis=sp_axis,
             num_kvpe_cache_layers=1,
+            tp_axis=kv_tp_axis,
         )
     else:
         kvpe_cache = init_mla_kv_cache(
@@ -738,6 +844,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             num_kvpe_cache_layers=index_cache_layers,
             num_users=1,
             dtype=ttnn.bfloat8_b,
+            tp_axis=kv_tp_axis,
         )
 
     hidden = make_hidden(chunk, config.hidden_size, seed=42)  # one chunk of input (reused per forward)
@@ -757,8 +864,10 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     # reuses its runtime_id across forwards, so per-forward regions are what make the cold per-iteration
     # sum correct (and replace the old signposted-region split).
     starts = list(range(0, cache + chunk, chunk)) if is_cold else [cache]
+    kv_layout = f"SPxTP-deduped (stripe={chunk // (sp * tp)})" if tp_shard_kv else "SP-only, TP-replicated"
     logger.info(
-        f"profiling {workload.system_name} {_profile_case_id(attn_mode, kv_cache_format)}/{scenario} proxy: "
+        f"profiling {workload.system_name} {_profile_case_id(attn_mode, kv_cache_format, tp_shard_kv)}/{scenario} "
+        f"proxy [kv {kv_layout}]: "
         f"{len(starts)} × {chunk}-token "
         f"chunk(s) filling to end_pos={total} on SP={sp}×TP={tp}; local chunk={chunk // sp}, "
         f"local MLA heads={config.num_attention_heads // tp}"
@@ -771,38 +880,38 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     )
 
     def _one_forward(start):
-        out = mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
-        ttnn.deallocate(out)
+        return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
 
-    forwards = []  # one {runtime_id -> {...}} per measured forward (device-collapsed to critical path)
+    forwards = []  # per-forward host e2e duration plus max-per-chip device duration for each program
     for start in starts:
         ttnn.synchronize_device(mesh_device)  # drain prior programs so only this forward contributes records
-        forwards.append(_profile_forward(mesh_device, lambda start=start: _one_forward(start)))
+        forwards.append(_profile_traced_forward(mesh_device, mla, lambda start=start: _one_forward(start)))
 
-    dur_col = "DEVICE KERNEL DURATION [ns]"  # kept for downstream compatibility (holds RT critical-path ns)
-    frame = pd.concat([_programs_to_frame(pp, dur_col) for pp in forwards], ignore_index=True)
+    dur_col = "DEVICE KERNEL DURATION [ns]"  # realtime-profiler op duration; kept for downstream compatibility
+    frame = pd.concat([_programs_to_frame(forward, dur_col) for forward in forwards], ignore_index=True)
     assert len(frame), "no device programs in the measured region — was the impl skipped (wrong device count)?"
 
-    total_ns = frame[dur_col].sum()
+    wall_ns = sum(forward["host_duration_ns"] for forward in forwards)
     by_op = _by_op(frame, dur_col)
 
     # Manual formatting (pandas to_string can truncate long tables) — print every op.
-    header = f"{'OP CODE':<44}{'count':>7}{'total_ms':>12}{'avg_us':>12}{'pct':>8}"
+    header = f"{'OP CODE':<44}{'count':>7}{'device_ms':>15}{'avg_us':>12}"
     rows = [
-        f"{op:<44}{int(r['count']):>7}{r['total_ns']/1e6:>12.3f}{r['avg_ns']/1e3:>12.1f}{r['pct']:>7.1f}%"
+        f"{op:<44}{int(r['count']):>7}{r['inclusive_ns']/1e6:>15.3f}" f"{r['avg_inclusive_ns']/1e3:>12.1f}"
         for op, r in by_op.iterrows()
     ]
     span = f"full cold prefill 0→{cache}-tok cache" if is_cold else f"one chunk @ {cache}-tok cache"
     table = "\n".join(
         [
-            f"{variant.name} MLA chunked perf [{_profile_case_id(attn_mode, kv_cache_format)}/{scenario}] — "
+            f"{variant.name} MLA chunked perf "
+            f"[{_profile_case_id(attn_mode, kv_cache_format, tp_shard_kv)}/{scenario}] — "
             f"{workload.system_name} proxy "
             f"{workload.chunk_tokens}-tok chunk, {span}, SP={workload.sp}×TP={workload.tp}",
             f"Galaxy target: {CHUNK_TOKENS}-tok chunk @ {galaxy_cache}-tok cache, SP={GALAXY_SP}×TP={GALAXY_TP}; "
             f"local chunk={CHUNK_TOKENS // GALAXY_SP}, local MLA heads={workload.num_attention_heads // GALAXY_TP}",
-            f"critical-path device-kernel time over the {'prefill' if is_cold else 'chunk'} "
-            f"(realtime profiler; per-program max across chips): "
-            f"{total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} device programs",
+            f"host end-to-end time over the {'prefill' if is_cold else 'chunk'} "
+            f"(segmented trace replay through device synchronization): {wall_ns/1e6:.3f} ms; "
+            f"{int(by_op['count'].sum())} device programs",
             "(OP CODE = tracy-style op code mapped from kernel sources; see module docstring)",
             header,
             "-" * len(header),
@@ -813,9 +922,24 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     print("\n" + table)  # ensure full table reaches stdout even if logging is filtered
 
     out_dir = _output_dir(subdir)
-    csv_out = _contained(_scenario_csv(out_dir, scenario, variant.name, attn_mode, kv_cache_format))
+    csv_out = _contained(_scenario_csv(out_dir, scenario, variant.name, attn_mode, kv_cache_format, tp_shard_kv))
     by_op.reset_index().to_csv(csv_out, index=False)
     logger.info(f"per-op CSV written to {os.path.abspath(csv_out)}")
+
+    e2e_csv = _contained(csv_out.replace(".csv", "_e2e.csv"))
+    pd.DataFrame(
+        [
+            {
+                "scenario": scenario,
+                "HOST E2E DURATION [ns]": wall_ns,
+                "forward_count": len(forwards),
+                "trace_segments": [forward["trace_segments"] for forward in forwards],
+                "overlap_profile": getattr(getattr(mla, "_sparse_mla_overlap", None), "profile", "off"),
+                "rt_program_records_complete": mla._sparse_mla_overlap is None,
+            }
+        ]
+    ).to_csv(e2e_csv, index=False)
+    logger.info(f"host end-to-end CSV written to {os.path.abspath(e2e_csv)}")
 
     if RT_OPS_DUMP:
         ops_csv = _write_ops_dump(out_dir, os.path.splitext(os.path.basename(csv_out))[0], forwards)
@@ -833,24 +957,25 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         scenario=scenario,
         attn_mode=attn_mode,
         cache_format=kv_cache_format,
+        tp_shard_kv=tp_shard_kv,
         command=command,
         workload=workload,
     )
 
     # cold only: per-cache-fill-iteration breakdown. The aggregate above sums all chunks; this shows how
-    # the per-chunk critical path grows as the cache fills (the point of the cold scenario). Each forward
+    # per-chunk host end-to-end time grows as the cache fills (the point of the cold scenario). Each forward
     # was profiled as its own region, so iteration i is simply forwards[i] — no signpost splitting.
     if not is_cold:
         return
     per_op_rows, totals = [], []
-    for i, per_program in enumerate(forwards):
-        seg = _programs_to_frame(per_program, dur_col)
-        tot = seg[dur_col].sum()
+    for i, forward in enumerate(forwards):
+        seg = _programs_to_frame(forward, dur_col)
+        tot = forward["host_duration_ns"]
         g = _by_op(seg, dur_col).reset_index()
         g.insert(0, "cache_depth_tokens", i * chunk)  # tokens already cached when this chunk ran
         g.insert(0, "iteration", i)
         per_op_rows.append(g)
-        totals.append((i, i * chunk, tot, len(g)))
+        totals.append((i, i * chunk, tot, len(forward["programs"])))
     by_iter_op = pd.concat(per_op_rows, ignore_index=True)
 
     # stdout: compact per-iteration totals (the full per-op×iteration detail goes to the CSV — too many
@@ -858,8 +983,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     iter_header = f"{'iter':>4}{'cache_depth':>12}{'total_ms':>12}{'ops':>6}"
     iter_table = "\n".join(
         [
-            f"cold per-iteration critical path [{variant.name}/{workload.system_name}] "
-            f"(realtime profiler; last iter == the `warm` step):",
+            f"cold per-iteration host end-to-end time [{variant.name}/{workload.system_name}] "
+            f"(last iter == the `warm` step):",
             iter_header,
             "-" * len(iter_header),
             *(f"{i:>4}{d:>12}{t/1e6:>12.3f}{n:>6}" for i, d, t, n in totals),
@@ -867,6 +992,6 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     )
     logger.info("\n" + iter_table)
     print("\n" + iter_table)
-    iter_csv = _scenario_csv(out_dir, f"{scenario}_by_iter", variant.name, attn_mode, kv_cache_format)
+    iter_csv = _scenario_csv(out_dir, f"{scenario}_by_iter", variant.name, attn_mode, kv_cache_format, tp_shard_kv)
     by_iter_op.to_csv(iter_csv, index=False)
     logger.info(f"per-op×iteration CSV written to {os.path.abspath(iter_csv)}")

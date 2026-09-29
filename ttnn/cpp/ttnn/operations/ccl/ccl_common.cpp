@@ -7,11 +7,14 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <set>
+#include <tuple>
 
 #include "ccl_host_datastructures.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
@@ -61,13 +64,21 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
     const size_t ideal_packet_size = (pages_per_packet == 0) ? hw_max_packet_size : pages_per_packet * page_size;
 
     if (packet_size != ideal_packet_size) {
-        log_warning(
-            tt::LogOp,
-            "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to maximize "
-            "throughput.",
-            packet_size,
-            page_size,
-            ideal_packet_size);
+        // A given (packet_size, page_size, ideal_packet_size) combination is identical on every
+        // call for a fixed op/shape/topology, so this fires once per worker/iteration in a hot
+        // loop (up to hundreds of times per run for the same underlying condition). Warn only
+        // once per distinct combination per process to surface the actionable message without
+        // spamming identical repeats.
+        static std::set<std::tuple<size_t, uint32_t, size_t>> warned_packet_sizes;
+        if (warned_packet_sizes.insert({packet_size, page_size, ideal_packet_size}).second) {
+            log_warning(
+                tt::LogOp,
+                "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to "
+                "maximize throughput.",
+                packet_size,
+                page_size,
+                ideal_packet_size);
+        }
     }
 }
 
@@ -123,6 +134,58 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    if (mesh_shape[axis] < 2) {
+        return true;  // no hops to compare
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        for (size_t i = 1; i < nodes.size(); i++) {
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
+                return false;
+            }
+            axis_direction = directions.front();
+        }
+    }
+    return true;
+}
+
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const size_t l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+}
+
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& allocator = mesh_device.allocator();
+    return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+}
+
+bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    // A 2-device axis would close on the link it already uses, so it stays open and never rings.
+    if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
+        return false;
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        if (tt::tt_fabric::get_neighbor_eth_directions(nodes.back(), nodes.front()).empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 tt::tt_fabric::Topology get_axis_topology(
     const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
     // Whether the fabric wraps this axis into a ring/torus.
@@ -140,9 +203,9 @@ tt::tt_fabric::Topology get_axis_topology(
         axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
     }
 
-    // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
-    const bool axis_is_ring = axis_can_wrap && get_boundary_mode(tensor, tt::tt_fabric::Topology::Torus, axis) ==
-                                                   tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+    // The torus flags name a fabric axis. A view axis can be a permutation of it, so the flag alone
+    // says nothing about this axis: only a wired closing link makes it a ring.
+    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(*tensor.device(), axis);
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 
@@ -152,8 +215,14 @@ tt::tt_fabric::Topology get_usable_topology(
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
-        auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        bool wraps;
+        if (cluster_axis.has_value()) {
+            wraps = is_axis_wrap_wired(*tensor.device(), *cluster_axis);
+        } else {
+            wraps = get_boundary_mode(tensor, topology_, cluster_axis) ==
+                    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        }
+        if (wraps) {
             return topology_;
         }
         if (topology_ == tt::tt_fabric::Topology::Torus) {
@@ -403,7 +472,7 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
@@ -411,12 +480,12 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
     CoreAllocationStrategy strategy) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    const auto worker_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = worker_cores;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }
@@ -471,7 +540,38 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             break;
         }
     }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+
+    // The loops above shift each candidate by core_grid_offset without re-checking it, so an offset near the grid
+    // edge can push cores off the worker grid entirely (onto dispatch cores).
+    WorkerCoreSelection selection{
+        sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true), {}};
+    for (const auto& core : selection.cores) {
+        if (!worker_cores.contains(core)) {
+            selection.unplaceable_cores.push_back(core);
+        }
+    }
+    return selection;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    auto selection = try_choose_worker_cores(
+        num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy);
+    TT_FATAL(
+        selection.all_placeable(),
+        "Core grid offset {} pushed {} of the {} selected worker cores (first: {}) off the worker grid; kernels "
+        "cannot be placed there. Request fewer cores or use a smaller offset.",
+        core_grid_offset.str(),
+        selection.unplaceable_cores.size(),
+        selection.cores.size(),
+        selection.unplaceable_cores.front().str());
+    return {std::move(selection.core_range_set), std::move(selection.cores)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
@@ -1251,141 +1351,6 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     auto worker_slice_start_offset =
         /*fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} :*/ TensorSlice::ords_t{
             worker_index * worker_slice_shape.x, 0};
-
-    auto generate_slice = [forward_direction,
-                           incr,
-                           &slices,
-                           &tensor_shape,
-                           &slice_shape,
-                           &worker_slice_shape,
-                           tensor_slice_offset,
-                           &worker_slice_start_offset,
-                           fracture_dim,
-                           dim_start_offset,
-                           slice_size_on_dim](std::int64_t i) {
-        auto tensor_slice_offset_adjusted = tensor_slice_offset;
-        if (fracture_dim == 0) {
-            tensor_slice_offset_adjusted.y = slice_size_on_dim * i;
-        } else {
-            tensor_slice_offset_adjusted.x = slice_size_on_dim * i;
-        }
-        TT_ASSERT(tensor_shape.x > 0, "Invalid tensor shape. x = 0 but it must be > 0");
-        TT_ASSERT(tensor_shape.y > 0, "Invalid tensor shape. y = 0 but it must be > 0");
-        TT_ASSERT(slice_shape.x > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(slice_shape.y > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(
-            tensor_slice_offset_adjusted.x < tensor_shape.x,
-            "Invalid tensor slice offset. x = {} but it must be < tensor shape x={}. slice_offset: (y={},x={}), "
-            "tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}",
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.x,
-            tensor_slice_offset_adjusted.y,
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.y,
-            tensor_shape.x,
-            slice_size_on_dim,
-            i);
-        TT_ASSERT(
-            tensor_slice_offset_adjusted.y < tensor_shape.y,
-            "Invalid tensor slice offset. y = {} but it must be < tensor shape y={}. slice_offset: (y={},x={}), "
-            "tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}",
-            tensor_slice_offset_adjusted.y,
-            tensor_shape.y,
-            tensor_slice_offset_adjusted.y,
-            tensor_slice_offset_adjusted.x,
-            tensor_shape.y,
-            tensor_shape.x,
-            slice_size_on_dim,
-            i);
-        TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
-        TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
-
-        const auto& tensor_slice = TensorSlice(
-            tensor_shape,
-            slice_shape,
-            tensor_slice_offset_adjusted,
-            worker_slice_shape,
-            worker_slice_start_offset,
-            fracture_dim);
-        if (forward_direction) {
-            log_trace(
-                tt::LogOp,
-                "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: "
-                "(y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker "
-                "relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: "
-                "{}\n\tslice_size_on_dim: {}\n",
-                i,
-                tensor_slice.tensor_shape.y,
-                tensor_slice.tensor_shape.x,
-                tensor_slice.tensor_slice_shape.y,
-                tensor_slice.tensor_slice_shape.x,
-                tensor_slice.tensor_slice_offset.y,
-                tensor_slice.tensor_slice_offset.x,
-                tensor_slice.worker_slice_shape.y,
-                tensor_slice.worker_slice_shape.x,
-                tensor_slice.worker_slice_offset.y,
-                tensor_slice.worker_slice_offset.x,
-                fracture_dim,
-                dim_start_offset,
-                slice_size_on_dim);
-        }
-
-        slices.push_back(tensor_slice);
-    };
-
-    for (int i = start_slice_index; i != end_slice_index_exclusive; i += incr) {
-        generate_slice(i);
-    }
-
-    return slices;
-}
-
-/*
- * @brief: Given a tensor shape, evenly break it into pieces along a given dimension and generate the slices
- * accordingly. This can be fed into a CCL Send command generator
- */
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index) {
-    static_assert(
-        std::is_same_v<TensorSlice::ords_t, tt_xy_pair>,
-        "generate_slice_sequence_on_dim_v2 not yet implemented for type not of tt_xy_pair");
-    // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some
-    // cases so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
-    if (fracture_dim == 3) {
-        fracture_dim -= 2;
-    } else {
-        // dims are
-        fracture_dim = 0;
-    }
-
-    TT_ASSERT(worker_slice_shape.y == 1);
-
-    std::vector<TensorSlice> slices;
-    auto dim_size = fracture_dim == 1 ? tensor_shape.x : tensor_shape.y;
-    TT_ASSERT(dim_size % num_slices == 0);
-    auto slice_size_on_dim = dim_size / num_slices;
-    auto slice_shape = fracture_dim == 0 ? tt_xy_pair{tensor_shape.x, slice_size_on_dim}
-                                         : tt_xy_pair{slice_size_on_dim, tensor_shape.y};
-
-    auto dim_start_offset = start_slice_index * slice_size_on_dim;
-    TensorSlice::ords_t tensor_slice_offset =
-        fracture_dim == 0 ? tt_xy_pair{0, dim_start_offset} : tt_xy_pair{dim_start_offset, 0};
-
-    bool forward_direction = start_slice_index > end_slice_index_exclusive;  // only for debug
-    auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
-    if (forward_direction) {
-        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
-        log_trace(tt::LogOp, "worker_index {}", worker_index);
-    }
-
-    auto worker_slice_start_offset = worker_slice_offset;
 
     auto generate_slice = [forward_direction,
                            incr,

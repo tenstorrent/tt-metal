@@ -11,6 +11,7 @@ from .attention import Attention, AttentionConfig
 from .attention_configs import MiniMaxM3AttentionProgramConfig
 from .dense_mlp import DenseMLP
 from .mlp import MLP
+from .residual import gather_before_norm, use_sharded_residual
 from .rms_norm import RMSNorm
 
 
@@ -43,6 +44,7 @@ class DecoderLayer:
             substate(state_dict, "input_layernorm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "input_layernorm"),
             mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
         )
         self.post_attention_layernorm = RMSNorm(
             mesh_device,
@@ -50,7 +52,20 @@ class DecoderLayer:
             substate(state_dict, "post_attention_layernorm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "post_attention_layernorm"),
             mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
         )
+        # Residual-stream layout (see tt/residual.py). Sharded => the residual carries emb/tp and each
+        # norm output is all-gathered ONCE to full emb for the column-parallel consumers below it
+        # (q/k/v/index_q/index_k for attention; router + shared expert + dispatch for the MoE). That
+        # single shared gather per norm is where the layout's value lives — if each consumer gathered
+        # for itself the change would be pointless.
+        self.sharded_residual = use_sharded_residual() and mesh_config is not None and mesh_config.tp > 1
+        # Where that gather sits: after the (distributed, 3-op) norm, or before a single-pass norm on
+        # full emb. Same one gather either way — see tt/residual.py::DEFAULT_NORM_MODE for the op-count
+        # vs DRAM-traffic trade the two make.
+        self.gather_before_norm = self.sharded_residual and gather_before_norm()
+        self.mesh_config = mesh_config
+        self.ccl_manager = ccl_manager
         # Hybrid dense/MoE schedule (M3): layers with moe_layer_freq[idx]==0 are a plain dense
         # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). If
         # moe_layer_freq is absent, default to MoE.
@@ -150,6 +165,35 @@ class DecoderLayer:
         # path from the nesting (see utils/profiler_utils.py).
         self.zone_name = f"layer{layer_idx:02d}_{'sparse' if is_sparse else 'dense'}"
 
+    def _gather_emb(self, tensor):
+        """TP all-gather emb/tp -> full emb. The managed all_gather_async (ping-pong + barrier
+        semaphores) rather than the raw prim, matching every other M3 collective."""
+        return self.mesh_config.allgather(tensor, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=3)
+
+    def _norm_to_full_emb(self, norm, hidden_states, zone_name):
+        """Normalize the residual and hand back FULL emb, gathering exactly once.
+
+        Replicated residual: the input is already full emb, so this is just the norm.
+        Sharded residual: one TP all-gather, placed either after the distributed norm (norm the
+        emb/tp shard, then gather) or before a single-pass norm (gather, then norm full width).
+        """
+        if not self.sharded_residual:
+            with zone(zone_name, FINE):
+                return norm(hidden_states)
+        if self.gather_before_norm:
+            with zone(f"{zone_name}_allgather"):
+                gathered = self._gather_emb(hidden_states)
+            with zone(zone_name, FINE):
+                out = norm(gathered)
+            gathered.deallocate(True)
+            return out
+        with zone(zone_name, FINE):
+            normed = norm(hidden_states)
+        with zone(f"{zone_name}_allgather"):
+            out = self._gather_emb(normed)
+        normed.deallocate(True)
+        return out
+
     def __call__(
         self,
         hidden_states,
@@ -160,6 +204,7 @@ class DecoderLayer:
         batch_size=1,
         cached_len=0,
         indexed_rope=False,
+        actual_isl=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -170,11 +215,11 @@ class DecoderLayer:
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
         with zone(self.zone_name, COARSE):
             residual = hidden_states
-            with zone("input_norm", FINE):
-                hidden_states_post_norm = self.input_layernorm(hidden_states)
+            # -> [1, 1, tokens/num_rows, hidden_size] (FULL emb). Under a sharded residual this is where
+            # the layer's single pre-attention TP all-gather happens, rebuilding full hidden_size for the
+            # column-parallel q/k/v/index_q/index_k projections, which take emb as their K dim.
+            hidden_states_post_norm = self._norm_to_full_emb(self.input_layernorm, hidden_states, "input_norm")
 
-            # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
-            # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
             with zone("attn", COARSE):
                 hidden_states = self.self_attn(
                     hidden_states_post_norm,
@@ -193,15 +238,26 @@ class DecoderLayer:
                 hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
             residual.deallocate(True)
             residual = hidden_states
-            with zone("post_attn_norm", FINE):
-                hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
-            # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+            # The ONE pre-MLP all-gather (sharded residual only). Its full-emb output is consumed by the
+            # router, the shared expert AND the MoE dispatch — tt/mlp.py forwards this single tensor to
+            # all three, and TtMiniMaxMoE's own pre_dispatch_allgather stays skipped because x already
+            # arrives full width. That sharing is what makes the shared expert stop paying its own.
+            hidden_states_post_norm = self._norm_to_full_emb(
+                self.post_attention_layernorm, hidden_states, "post_attn_norm"
+            )
 
             with zone("mlp", COARSE):
-                hidden_states = self.mlp(hidden_states_post_norm)
+                # actual_isl only reaches the MoE MLP — it drives the gate/dispatch padding config.
+                # The dense layers (0-2) have no router or dispatch, so DenseMLP takes no such argument.
+                hidden_states = (
+                    self.mlp(hidden_states_post_norm)
+                    if self.is_dense
+                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl)
+                )
             hidden_states_post_norm.deallocate(True)
 
-            # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
+            # Both MLPs close with a reduce-scatter under a sharded residual (emb/tp, matching
+            # `residual`) and with an all-reduce under the replicated one (full emb).
             with zone("residual_mlp", FINE):
                 hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
             residual.deallocate(True)

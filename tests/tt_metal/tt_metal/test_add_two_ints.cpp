@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -21,11 +22,14 @@ using namespace tt::tt_metal;
 // Runs the add_two_ints kernel on BRISC to add two ints in L1
 // Result is read from L1
 ////////////////////////////////////////////////////////////////////////////
-TEST_F(MeshDeviceSingleCardFixture, AddTwoInts) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    uint32_t l1_unreserved_base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
+TEST_F(UnitMeshFixture, AddTwoInts) {
+    uint32_t l1_unreserved_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
 
-    Program program = CreateProgram();
+    auto device_range = distributed::MeshCoordinateRange(this->device().shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, CreateProgram());
+    Program& program = workload.get_programs().at(device_range);
+
     CoreCoord core = {0, 0};
     constexpr std::array<uint32_t, 2> first_runtime_args = {101, 202};
     constexpr std::array<uint32_t, 2> second_runtime_args = {303, 606};
@@ -41,18 +45,18 @@ TEST_F(MeshDeviceSingleCardFixture, AddTwoInts) {
 
     // First run
     SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
-    detail::LaunchProgram(dev, program);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> first_kernel_result;
-    detail::ReadFromDeviceL1(dev, core, l1_unreserved_base, sizeof(int), first_kernel_result);
+    slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(int), first_kernel_result);
     log_info(LogVerif, "first kernel result = {}", first_kernel_result[0]);
 
     // Second run with updated args
     SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
-    detail::LaunchProgram(dev, program);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> second_kernel_result;
-    detail::ReadFromDeviceL1(dev, core, l1_unreserved_base, sizeof(int), second_kernel_result);
+    slow_dispatch::ReadFromL1(this->device(), core, l1_unreserved_base, sizeof(int), second_kernel_result);
     log_info(LogVerif, "second kernel result = {}", second_kernel_result[0]);
 
     // Validation

@@ -9,6 +9,8 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "minimal_matmul.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -27,14 +29,26 @@ void bind_minimal_matmul(nb::module_& mod) {
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
         to be minimal and fast, with a small set of required constraints explicitly validated at runtime.
 
+        input_tensor may be either a single tensor or a 2-element list [prefix, suffix] for fused concat
+        over the K (inner/last) axis:
+            - Single tensor: standard matmul; input_tensor is the full activation matrix A.
+            - Fused concat: pass exactly 2 tensors [prefix, suffix] to source in0's K from both (no host
+              concat). Concatenation is on the channel (K, last) axis ONLY — the two must be identical on
+              every other axis. Any per-segment channel count is allowed: the seam lands on the prefix's
+              padded-K tile boundary, so the weight must be the per-segment tile-padded stack
+              [W_prefix; W_suffix] in that K order (see prepare_weight_for_concatenated_input in
+              models/tt_dit/utils/tensor.py), such that prefix_padded_K + suffix_padded_K == weight_padded_K.
+
         Parameters
         ----------
-        input_tensor : ttnn.Tensor
-            Activation/input matrix A.
+        input_tensor : ttnn.Tensor or List[ttnn.Tensor]
+            Activation/input matrix A, or a 2-element [prefix, suffix] list for fused concat over K.
             - Layout: TILE (required).
             - Device: must be on device and allocated in a device buffer.
-            - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}.
+            - DType: one of {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B, DataType::FLOAT32}.
             - Shape: [..., M, K]. Upper (leading) dimensions are broadcast over rows (folded into M).
+              With fused concat, each list element carries its own K; the contraction K is taken from
+              the weight and spans both padded segments.
 
         weight_tensor : ttnn.Tensor
             Weight matrix B.

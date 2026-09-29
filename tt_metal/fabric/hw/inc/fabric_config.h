@@ -18,7 +18,7 @@ namespace tt::tt_fabric {
  */
 FORCE_INLINE uint32_t get_fabric_max_packet_size() {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
 
     uint32_t valid_mask = connection_info->valid_connections_mask;
 

@@ -21,6 +21,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_WIDTH,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def is_npu_dtype_uint32(data_type):
     return data_type == ttnn.uint32
@@ -256,6 +259,9 @@ def test_moreh_sum_rank_1_global(input_shape, dim, use_provide_output, device):
 )
 def test_moreh_sum_enable_cache(input_shape, dim, device):
     torch.manual_seed(3072)
+    # Asserts an absolute cache-entry count, so start from an empty cache: the
+    # module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     keepdim = [True, False]
     use_provide_output = [True, False]
     for i in range(2):
@@ -429,6 +435,9 @@ def test_moreh_sum_backward_wo_input_grad(input_shape, dim, device):
 )
 def test_moreh_sum_backward_enable_cache(input_shape, dim, device):
     torch.manual_seed(3072)
+    # Asserts an absolute cache-entry count, so start from an empty cache: the
+    # module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     keepdim = [True, False]
     use_provide_output = [True, False]
     num_cache_entires = [2, 2, 2]

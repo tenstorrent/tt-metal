@@ -126,7 +126,7 @@ Multicast Reader/Writer Kernel Setup
 
 In datareuse, we spawned reader and writer kernels per core.  In mcast, we have designated core ranges (or more generally speaking, "groups"), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
 
-Below, let's set some core ID's associated with a specific sender-receiver kernel.  Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the ``$TT_METAL_HOME/tt_metal/impl/kernels/data_types.hpp`` file.
+Below, let's set some core ID's associated with a specific sender-receiver kernel.  Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the ``$TT_METAL_HOME/tt_metal/api/tt-metalium/kernel_types.hpp`` file.
 
 .. code-block:: cpp
 

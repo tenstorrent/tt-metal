@@ -207,3 +207,99 @@ def test_kv_cache_multichunk_write_vs_ref(mesh_device, chunk, n_chunks, reset_se
     logger.info(f"multi-chunk write ({n_chunks} x {chunk} tokens): K pcc={pcc_k} V pcc={pcc_v}")
     assert ok_k, f"K multi-chunk mismatch: {pcc_k}"
     assert ok_v, f"V multi-chunk mismatch: {pcc_v}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("num_users", [2], ids=["u2"])
+def test_bounded_kv_cache_device_write_vs_ref(mesh_device, num_users, reset_seeds):
+    """Chunked writes into a BOUNDED cache through the real ``update_padded_kv_cache`` kernel.
+
+    5 chunks per (user, layer) slot into a 2-slab sliding cache (wraps twice) + a full-length cache,
+    via ``write_kv_chunk``'s host-side ``kv_actual mod capacity``. Verifies on device readback that:
+    full layers keep the entire sequence; sliding layers keep EXACTLY the last ``capacity`` positions
+    at the placement ``bounded_blockcyclic_positions`` predicts; and the two users' slots stay
+    isolated (each holds its own random data). PCC >= 0.99 per slot.
+    """
+    from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions
+
+    rows, cols = tuple(mesh_device.shape)
+    sp, tp = rows, cols
+    sp_axis = 0
+    nkv = tp
+    chunk, n_chunks = 128, 5
+    max_seq_len = chunk * n_chunks
+    layer_types = ["sliding_attention", "full_attention"]
+    num_layers = len(layer_types)
+    assert chunk % (32 * sp) == 0
+
+    torch.manual_seed(0)
+    sent_k = torch.randn(num_users, num_layers, nkv, max_seq_len, HEAD_DIM)
+    sent_v = torch.randn(num_users, num_layers, nkv, max_seq_len, HEAD_DIM)
+
+    kv_cache = allocate_kv_cache(
+        mesh_device,
+        num_layers=num_layers,
+        max_seq_len=max_seq_len,
+        sp_axis=sp_axis,
+        num_users=num_users,
+        head_dim=HEAD_DIM,
+        layer_types=layer_types,
+        bounded_sliding_kv_cache=True,
+        chunk_sizes=(chunk,),
+        sliding_window=128,
+    )
+    capacity = kv_cache.sliding_capacity
+    assert capacity == 2 * chunk
+
+    in_dims = [None, None]
+    in_dims[sp_axis] = 2
+    in_dims[1 - sp_axis] = 1
+
+    def to_chunk(nat):  # nat: [nkv, chunk, HEAD_DIM] -> device chunk, SP+TP sharded
+        return ttnn.from_torch(
+            nat.reshape(1, nkv, chunk, HEAD_DIM),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
+        )
+
+    for u in range(num_users):
+        for l in range(num_layers):
+            for i in range(n_chunks):
+                a = i * chunk
+                tt_k = to_chunk(sent_k[u, l, :, a : a + chunk])
+                tt_v = to_chunk(sent_v[u, l, :, a : a + chunk])
+                write_kv_chunk(kv_cache, tt_k, tt_v, slot_idx=u, layer_idx=l, kv_actual=a, sp_axis=sp_axis)
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
+    ttnn.synchronize_device(mesh_device)
+
+    def rows_of(cache_tensor, batch_idx, col):
+        dts = ttnn.get_device_tensors(cache_tensor)
+        return torch.cat([ttnn.to_torch(dts[r * cols + col])[batch_idx, 0].float() for r in range(rows)], dim=0)
+
+    for u in range(num_users):
+        for l, ltype in enumerate(layer_types):
+            k_c, v_c, batch_idx, cap_tokens, bounded = kv_cache.layer_view(u, l)
+            assert bounded == (ltype == "sliding_attention")
+            if bounded:
+                pos = bounded_blockcyclic_positions(sp, chunk, cap_tokens, max_seq_len)
+                valid = pos >= 0
+                # After 5 chunks both slabs are resident and hold EXACTLY the last `capacity` positions.
+                assert int(valid.sum()) == cap_tokens
+                assert int(pos[valid].min()) == max_seq_len - cap_tokens
+            else:
+                pos = blockcyclic_positions(sp, chunk, cap_tokens)
+                valid = torch.ones_like(pos, dtype=torch.bool)
+            for col in range(nkv):
+                for cache_tensor, sent, tag in ((k_c, sent_k, "K"), (v_c, sent_v, "V")):
+                    dev = rows_of(cache_tensor, batch_idx, col)
+                    got = dev[valid]
+                    want = sent[u, l, col][pos[valid]]
+                    ok, pcc = comp_pcc(want, got, 0.99)
+                    logger.info(f"(user={u}, layer={l} {ltype}) {tag} col={col}: pcc={pcc}")
+                    assert ok, f"{tag} mismatch (user={u}, layer={l} {ltype}, col={col}): {pcc}"
+
+    logger.info(f"bounded device write round-trip OK ({num_users} users, {n_chunks} chunks into {capacity}-tok slots)")

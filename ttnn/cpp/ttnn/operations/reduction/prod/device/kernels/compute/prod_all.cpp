@@ -8,19 +8,18 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const tt::CBIndex input_dfb = tt::CBIndex::c_0;
-    const tt::CBIndex final_output_dfb = tt::CBIndex::c_3;
-
-    DataflowBuffer input_dfb_obj(input_dfb);
-    DataflowBuffer final_output_dfb_obj(final_output_dfb);
+    // dfb::in = input DFB (c_0), dfb::out = final output DFB (c_3).
+    DataflowBuffer input_dfb_obj(dfb::in);
+    DataflowBuffer final_output_dfb_obj(dfb::out);
 
     const int one_tile = 1;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr auto num_tiles = get_arg(args::num_tiles);
 
-    compute_kernel_hw_startup(input_dfb, input_dfb, final_output_dfb);
-    pack_reconfig_data_format(final_output_dfb);
+    compute_kernel_hw_startup(dfb::in, dfb::in, dfb::out);
+    pack_reconfig_data_format(dfb::out);
 
     final_output_dfb_obj.reserve_back(one_tile);
 
@@ -29,23 +28,23 @@ void kernel_main() {
 
     // Seed DEST with the first input tile.
     input_dfb_obj.wait_front(one_tile);
-    copy_tile_to_dst_init_short(input_dfb);
-    copy_tile(input_dfb, 0, 0);
+    copy_init(dfb::in);
+    copy_tile(dfb::in, 0, 0);
     input_dfb_obj.pop_front(one_tile);
 
     // Fold each remaining tile in: DEST = DEST * next_tile.
     // DEST_TO_SRCA loads the running product from DEST into SRCA.
-    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_dfb);
-    for (uint32_t t = 1; t < num_tiles; t++) {
+    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in);
+    for (std::uint32_t t = 1; t < num_tiles; t++) {
         input_dfb_obj.wait_front(one_tile);
-        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_dfb, 0, 0);
+        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in, 0, 0);
         input_dfb_obj.pop_front(one_tile);
     }
 
     tile_regs_commit();
     tile_regs_wait();
 
-    pack_tile(0, final_output_dfb);
+    pack_tile(0, dfb::out);
     final_output_dfb_obj.push_back(one_tile);
     tile_regs_release();
 }

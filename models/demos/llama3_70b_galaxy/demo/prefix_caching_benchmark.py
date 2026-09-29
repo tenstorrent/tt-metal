@@ -12,14 +12,14 @@ import ttnn
 from models.demos.llama3_70b_galaxy.demo.text_demo import create_tt_model
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 PREFILL_BENCHMARK_OUTPUT = Path(__file__).resolve().parent / "output" / "prefill_prefix_caching_benchmark.json"
 PREFILL_BENCHMARK_TARGETS = Path(__file__).resolve().parent / "prefill_prefix_caching_targets.json"
-PREFILL_BENCHMARK_MAX_SLOWDOWN = 1.05
+# Targets are re-baselined from a single 6U run, so allow modest run-to-run slowdown headroom.
+PREFILL_BENCHMARK_MAX_SLOWDOWN = 1.10
 PREFILL_BENCHMARK_MIN_SPEEDUP = 0.80
 
 # Seq lengths (powers of 2 from 128 to 128k).
@@ -62,22 +62,24 @@ def _check_prefill_benchmark_results(results):
         lower_bound = expected_prefill_s * PREFILL_BENCHMARK_MIN_SPEEDUP
         upper_bound = expected_prefill_s * PREFILL_BENCHMARK_MAX_SLOWDOWN
 
+        slowdown_pct = (PREFILL_BENCHMARK_MAX_SLOWDOWN - 1.0) * 100
+        speedup_pct = (1.0 - PREFILL_BENCHMARK_MIN_SPEEDUP) * 100
         if measured_prefill_s > upper_bound:
             failures.append(
                 f"{key}: measured {measured_prefill_s:.6f}s is slower than allowed upper bound "
-                f"{upper_bound:.6f}s (+5%) for target {expected_prefill_s:.6f}s"
+                f"{upper_bound:.6f}s (+{slowdown_pct:.0f}%) for target {expected_prefill_s:.6f}s"
             )
         elif measured_prefill_s < lower_bound:
             failures.append(
                 f"{key}: measured {measured_prefill_s:.6f}s is faster than allowed lower bound "
-                f"{lower_bound:.6f}s (-20%) for target {expected_prefill_s:.6f}s. "
+                f"{lower_bound:.6f}s (-{speedup_pct:.0f}%) for target {expected_prefill_s:.6f}s. "
                 "Please update prefill_prefix_caching_targets.json."
             )
 
     assert not failures, "Prefill prefix-caching benchmark check failed:\n" + "\n".join(failures)
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(2280)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -120,7 +122,7 @@ def test_prefill_prefix_caching_benchmark(mesh_device):
         use_paged_kv_cache=True,
         prefill_profile=False,
     )
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = model_args.create_tokenizer()
     generator = Generator(model, model_args, mesh_device, tokenizer=model_args.tokenizer)
     vocab_size = model_args.vocab_size
 

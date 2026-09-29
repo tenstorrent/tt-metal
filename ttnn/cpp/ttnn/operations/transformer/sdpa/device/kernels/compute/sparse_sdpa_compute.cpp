@@ -90,6 +90,9 @@ ALWI void tilize_packed_field() {
 }
 
 void kernel_main() {
+    constexpr bool sink_per_row = true;  // sparse query rows represent different heads
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_ATTENTION_SINK);
     constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::H);
     constexpr uint32_t DHt = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::DHT);
     constexpr uint32_t vDHt = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::V_DHT);
@@ -248,7 +251,7 @@ void kernel_main() {
             // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
             // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
             // mm_no_mop_init_short only programs the matmul MOP.
-            reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
+            reconfig_full_operand(cb_k_in, cb_q_in);
             // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
             // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
             // the qg loop refreshes only the MOP. No-op for bf16.
@@ -498,7 +501,10 @@ void kernel_main() {
                     cb_col_identity,
                     cb_recip_scratch,
                     cb_out_im,
-                    scale_fp32>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt);
+                    scale_fp32,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    sink_per_row>(sum_cur.get_cb_id(), out_cur.get_cb_id(), Sqt, max_cur.get_cb_id());
                 max_cur.pop_front(Sqt);  // running max no longer needed
             }
 

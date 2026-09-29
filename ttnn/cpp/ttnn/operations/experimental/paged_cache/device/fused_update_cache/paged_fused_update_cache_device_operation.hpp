@@ -14,7 +14,6 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 #include "paged_tiled_fused_update_cache_program_factory.hpp"
 #include "paged_row_major_fused_update_cache_program_factory.hpp"
-#include <tt-metalium/program.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -44,17 +43,6 @@ struct PagedFusedUpdateCacheDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    // update_idxs is excluded from the program hash (so decode steps that differ only in position
-    // cache-hit). On every dispatch this hook re-derives the cache offsets it determines
-    // (cache_start_id, tile_update_offset_B) plus every buffer address, and writes them into the
-    // cached program in place — no descriptor rebuild.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

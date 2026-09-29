@@ -49,7 +49,7 @@ NpHaloMeshWorkloadFactory::cached_mesh_workload_t NpHaloMeshWorkloadFactory::cre
     // Synchronize before dispatching programs.
     auto* mesh_device = tensor_args.input_tensor.device();
     {
-        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     }
 
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {

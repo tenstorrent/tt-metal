@@ -34,7 +34,7 @@ sfpi_inline void calculate_fmod_int32_body(
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = r;
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) {
     // fmod(a, b) = a - trunc(a/b) * b
 
@@ -106,8 +106,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     return result;
 }
 
+// Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
+// this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
@@ -115,7 +117,7 @@ inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store

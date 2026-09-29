@@ -28,12 +28,19 @@ void kernel_main() {
         dfb.reserve_back(1);
         {
             auto lk = dfb.scoped_write_lock(lock_n);
-            const uint32_t wr_ptr = static_cast<uint32_t>(lk.get_ptr().get_address());
+            // get_ptr() hands out the UNCACHED L1 alias on Quasar DM, so the view must be selected here
+            // rather than assumed: NONSNOOP needs the alias, the default variant needs the cacheable
+            // address. Normalize in whichever direction is required, tolerating the alias being absent --
+            // it is temporary DFB API behaviour (see dataflow_buffer.h get_write_ptr). Blindly adding
+            // MEM_L1_UNCACHED_BASE would double-apply it and land at 0x800000+, i.e. in RISC local memory.
+            const uint32_t lock_ptr = static_cast<uint32_t>(lk.get_ptr().get_address());
+            const bool uncached = lock_ptr >= MEM_L1_UNCACHED_BASE;
 #if defined(DFB_CACHE_NONSNOOP_PRODUCER)
-            volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)(wr_ptr + MEM_L1_UNCACHED_BASE);
+            const uint32_t entry_addr = uncached ? lock_ptr : lock_ptr + MEM_L1_UNCACHED_BASE;
 #else
-            volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)wr_ptr;
+            const uint32_t entry_addr = uncached ? lock_ptr - MEM_L1_UNCACHED_BASE : lock_ptr;
 #endif
+            volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)entry_addr;
             entry[0] = new_val + r;  // round value VALUE_r
         }
         dfb.push_back(1);

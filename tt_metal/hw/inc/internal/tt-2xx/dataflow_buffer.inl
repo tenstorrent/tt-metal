@@ -17,6 +17,9 @@
 #endif
 
 #include "api/kernel_thread_globals.h"
+#include "internal/scoped_lock_cache_ops.h"  // scoped_lock_acquire/release_cache_ops
+
+#include <type_traits>
 
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
@@ -249,6 +252,25 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
 #endif
 }
 
+#if !defined(COMPILE_FOR_TRISC)
+inline void DataflowBuffer::wait_relay_consumer_caught_up() const {
+    // Same posted==acked drain as finish()'s DM path; scoped for PrefetcherPipe relay handoff.
+    bool all_acked = false;
+    while (!all_acked) {
+        all_acked = true;
+        for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
+            const dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+            const uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
+            const uint8_t tc_id = dfb::get_counter_id(packed_tc);
+            if (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) !=
+                overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) {
+                all_acked = false;
+            }
+        }
+    }
+}
+#endif
+
 inline void DataflowBuffer::finish_impl() {
 #if !DFB_IS_COMPUTE_MATH
 #ifndef COMPILE_FOR_TRISC
@@ -331,9 +353,59 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 #endif
 }
 
+#ifdef COMPILE_FOR_TRISC
+inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
+    uint32_t address = 0;
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
+        // not straddle slot.limit; tile_index is in [0, n).
+        const uint32_t base_address =
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
+        address = address_units_to_bytes(base_address + offset_address);
+        mailbox_write(ckernel::ThreadId::MathThreadId, address);
+        mailbox_write(ckernel::ThreadId::PackThreadId, address);
+        mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, address);
+    }
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
+    address = mailbox_read(ckernel::ThreadId::UnpackThreadId);
+#endif
+    return address;
+}
+
+template <typename T>
+T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "read_tile_value: T must be 1, 2, or 4 bytes");
+    static_assert(
+        (std::is_integral_v<T> && std::is_unsigned_v<T> && !std::is_same_v<T, bool>),
+        "read_tile_value: T must be an unsigned integral type");
+
+    T value = T{};
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        // Same linear addressing as get_tile_address: the wait_front window does not wrap.
+        const uint32_t base_address =
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
+        const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
+        value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
+        mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, static_cast<uint32_t>(value));
+    }
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
+    value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));
+#endif
+    return value;
+}
+#endif  // COMPILE_FOR_TRISC
+
 #ifndef COMPILE_FOR_TRISC
 template <bool is_producer>
-inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
+inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If transactions_issued lands exactly on
     // a boundary, txn_id_index has already wrapped past it, so step back one slot.
     uint8_t tail_txn_idx = (transactions_issued % local_dfb_interface_.num_entries_per_txn_id == 0)
@@ -343,7 +415,8 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
+    uint16_t expected_slot0 =
+        static_cast<uint16_t>(transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u));
 
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
@@ -460,8 +533,9 @@ inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
         // TODO: with concurrent ALL consumers, this invalidates the same shared cache line once per
         // consumer; the redundant invalidations could be deduplicated (e.g. first-locker-per-round).
-        // invalidate_l2 also drops the matching L1 D$ line on all DM cores.
-        invalidate_l2_cache_range(addr, entry);
+        // Currently this invalidates the L2 range, which also drops the matching L1 D$ line on all
+        // DM cores.
+        scoped_lock_acquire_cache_ops(addr, entry);
         addr += stride;
         if (addr >= region.limit) {
             addr = region.base;
@@ -478,8 +552,8 @@ inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t 
     for (uint16_t k = 0; k < num_entries; ++k) {
         // Flush on release only for a write lock. A read lock never writes.
         if constexpr (is_write) {
-            // flush_l2 writes back + drops the matching L1 D$ line on all DM cores.
-            flush_l2_cache_range(addr, entry);
+            // Currently this flushes l2, which writes back + drops the matching L1 D$ line on all DM cores.
+            scoped_lock_release_cache_ops(addr, entry);
         }
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, entry);
         addr += stride;
@@ -522,7 +596,14 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    // HW free space only discounts reads that have already reached POSTED, so a
+    // read this kernel issued but that has not posted yet still looks like a
+    // free slot. Track it instead as "reservations this kernel has made on this
+    // TC that the consumer has not acked", and require room for one more.
+    const uint16_t capacity = static_cast<uint16_t>(overlay::fast_llk_intf_get_capacity(tensix_id, tc_id));
+    const uint16_t reserved = static_cast<uint16_t>(
+        local_dfb_interface_.broadcast_tc ? ptiles_read_ : ptiles_read_ / local_dfb_interface_.num_tcs_to_rr);
+    while (static_cast<uint16_t>(reserved - overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) >= capacity);
     WAYPOINT("PIRD");
     return txn_id;
 }
@@ -556,7 +637,12 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    // HW occupancy still counts entries this kernel has claimed but whose ACK is
+    // batched and pending, so it can hand the same posted entry out twice. Count
+    // instead the posted entries on this TC that the kernel has not claimed yet
+    // and require at least one.
+    const uint16_t claimed = static_cast<uint16_t>(ctiles_written_ / local_dfb_interface_.num_tcs_to_rr);
+    while (static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id) - claimed) == 0);
     WAYPOINT("PIWD");
     return txn_id;
 }
@@ -588,13 +674,18 @@ Noc::async_read(
     DataflowBuffer& dst,
     const typename noc_traits_t<Src>::src_args_type& src_args,
     const DataflowBufferArgs& dst_args) const {
+    // Implicit sync always issues one full-entry read at get_noc_write_addr() and advances wr_ptr by
+    // stride_size in commit_implicit_read(); offset_bytes is ignored, so a non-zero offset would
+    // land data in the wrong place while still posting a full entry's credit.
+    ASSERT(dst_args.offset_bytes == 0);
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
-        dst.get_write_ptr(),
+        // Use cached addresses for NOC APIs
+        dst.get_noc_write_addr(),
         dst.get_entry_size(),
         noc_id_,
         NOC_UNICAST_WRITE_VC);
@@ -608,8 +699,12 @@ Noc::async_write(
     const Dst& dst,
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
+    // Same contract as async_read above: implicit sync always transfers get_entry_size() bytes from
+    // get_noc_read_addr() and ignores offset_bytes.
+    ASSERT(src_args.offset_bytes == 0);
     uint32_t txn_id = src.prepare_implicit_write();
-    auto src_addr = src.get_read_ptr();
+    // Use cached addresses for NOC APIs
+    auto src_addr = src.get_noc_read_addr();
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());

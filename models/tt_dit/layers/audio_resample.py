@@ -129,7 +129,12 @@ class LowPassFilter1d(Module):
             x = x_BTC
 
         return depthwise_tap_filter(
-            x, self._taps_cpu, self.stride, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+            x,
+            self._taps_cpu,
+            self.stride,
+            mesh_device=self.mesh_device,
+            dtype=self.dtype,
+            cache=self._conv1d_cache,
         )
 
 
@@ -225,10 +230,20 @@ class UpSample1d(Module):
             sub0 = [scaled_taps[2 * j + 0] for j in range(self._poly_K_sub)] + [0.0]
             sub1 = [0.0] + [scaled_taps[2 * j + 1] for j in range(self._poly_K_sub)]
             ph0 = depthwise_tap_filter(
-                base, sub0, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+                base,
+                sub0,
+                1,
+                mesh_device=self.mesh_device,
+                dtype=self.dtype,
+                cache=self._conv1d_cache,
             )
             ph1 = depthwise_tap_filter(
-                base, sub1, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+                base,
+                sub1,
+                1,
+                mesh_device=self.mesh_device,
+                dtype=self.dtype,
+                cache=self._conv1d_cache,
             )
             if base is not x_pad:
                 ttnn.deallocate(base)

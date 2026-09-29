@@ -279,6 +279,42 @@ def apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size: int
     return gathered
 
 
+def assert_sharded_residual_unpadded(mesh_config, hidden_size: int) -> None:
+    """A sharded residual requires ``hidden_size / tp`` to be tile-aligned.
+
+    The o_proj output-dim padding (weights.py, for tile-aligned CCL) appends its columns at the END of
+    the padded full width, so after a reduce-scatter they land inside the LAST TP column's slice only —
+    the residual would then carry a per-column-inconsistent width that nothing downstream can trim.
+    M3 is 6144/4 = 1536 (already tile-aligned) so no padding exists; fail loudly rather than silently
+    corrupt a future config that does need it.
+    """
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32
+    assert padded_local_hidden == local_hidden, (
+        f"sharded residual needs a tile-aligned per-device hidden width, but hidden_size={hidden_size} "
+        f"/ tp={mesh_config.tp} = {local_hidden} pads to {padded_local_hidden}. The o_proj padding "
+        f"columns would end up inside one TP column's residual shard."
+    )
+
+
+def apply_reduce_scatter(tensor, mesh_config, ccl_manager, hidden_size: int):
+    """TP reduce-scatter only — attention's closing collective under a SHARDED residual stream.
+
+    The replicated-residual path needs an all-reduce (``apply_allreduce`` = RS + AG) because the
+    residual is full emb on every TP column. With an ``emb/tp``-sharded residual the trailing
+    all-gather is exactly what the layout removes: o_proj is row-parallel, so the reduce-scatter both
+    completes the partial sums AND lands the result in the residual's own layout.
+
+    Returns [1, 1, S, hidden_size / tp].
+    """
+    if mesh_config.tp <= 1:
+        return tensor
+    assert_sharded_residual_unpadded(mesh_config, hidden_size)
+    scattered = mesh_config.reduce_scatter(tensor, ccl_manager, dim=3, axis=mesh_config.tp_axis)
+    tensor.deallocate(True)
+    return scattered
+
+
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """
     Apply tensor parallel allreduce if needed.

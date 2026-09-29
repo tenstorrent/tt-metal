@@ -16,11 +16,15 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // add
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 
-namespace pre_add = norm::kernel_util::compute::pre_add;
+namespace ckl = compute_kernel_lib;
 
 // The statistics pass reads either the raw input or the fused a + b result, depending on whether a
 // residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
@@ -40,8 +44,20 @@ void kernel_main() {
     // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-
+    DataflowBuffer dfb_inp(dfb_inp_id);
+    DataflowBuffer dfb_reduce(dfb::reduce);
     constexpr uint32_t onetile = 1;
+#ifdef IS_MERGE_CORE
+    DataflowBuffer dfb_zero(dfb::zero);
+#endif
+#ifdef FUSE_PRE_ADD
+    constexpr auto in0_input =
+        ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+    constexpr auto res_input =
+        ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+#endif
+    constexpr auto input_squared =
+        ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -49,68 +65,38 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
-    DataflowBuffer dfb_inp(dfb_inp_id);
-    DataflowBuffer dfb_x2(dfb::x2);
-    DataflowBuffer dfb_reduce(dfb::reduce);
-#ifdef FUSE_PRE_ADD
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_res(dfb::res);  // residual b
-#endif
-#ifdef IS_MERGE_CORE
-    DataflowBuffer dfb_zero(dfb::zero);
-#endif
+    constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
-        pre_add::one_row<true, unpack_fp32_active>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
+        if constexpr (unpack_fp32_active) {
+            ckl::binary_sfpu<
+                ckl::AddBinary<>,
+                in0_input,
+                res_input,
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape);
+        } else {
+            ckl::add<
+                in0_input,
+                res_input,
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape);
+        }
 #endif
 
-        /*
-         * x**2
-         */
-        reconfig_data_format(dfb_inp_id, dfb_inp_id);
-        pack_reconfig_data_format(dfb::x2);
         if constexpr (unpack_fp32_active) {
-            copy_tile_to_dst_init_short(dfb_inp_id);
-            square_tile_init();
+            ckl::unary<
+                ckl::Square<>,
+                input_squared,
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         } else {
-            mul_init(dfb_inp_id, dfb_inp_id);
+            ckl::square<
+                input_squared,
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         }
 
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_inp.wait_front(wt + blk);  // cumulative wait
-            dfb_x2.reserve_back(blk);
-
-            if constexpr (unpack_fp32_active) {
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    tile_regs_acquire();
-                    copy_tile(dfb_inp_id, wt + wtr, 0);
-                    square_tile(0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, dfb::x2, wt + wtr);
-                    tile_regs_release();
-                }
-            } else {
-                tile_regs_acquire();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    pack_tile(wtr, dfb::x2, wt + wtr);
-                }
-                tile_regs_release();
-            }
-
-            dfb_x2.push_back(blk);
-        }
-
-        /*
-         * sum(x**2)
-         */
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         compute_kernel_lib::reduce<
             reduce_type,
@@ -139,14 +125,15 @@ void kernel_main() {
         dfb_zero.wait_front(1);
 
         // Initialize accumulation
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
         reconfig_data_format(dfb::x2_merge, dfb::zero);
         pack_reconfig_data_format(dfb::out_final);
         // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
         // add_tiles would pull each through SrcA/SrcB and round it to TF32.
         if constexpr (unpack_fp32_active) {
-            copy_tile_to_dst_init_short(dfb::x2_merge);
+            copy_init(dfb::x2_merge);
             add_binary_tile_init();
         } else {
             add_init(dfb::x2_merge, dfb::zero, true);

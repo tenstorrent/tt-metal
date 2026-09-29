@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -11,7 +10,7 @@ from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
-SEQUENCE_LENGTHS = [128, 1024, 2048, 4096, 8192]
+SEQUENCE_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 
 
 def require_single_device(device) -> None:
