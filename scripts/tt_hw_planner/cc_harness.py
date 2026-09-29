@@ -115,15 +115,14 @@ _gate_status_observed: dict = {}
 
 
 def _gate_status_budget(key: str, floor: int) -> int:
-    """Seconds this gate check may take: operator's value, else measured cost, else the floor."""
-    override = os.environ.get(_GATE_STATUS_TIMEOUT_ENV)
-    if override:
-        try:
-            return max(1, int(override))
-        except ValueError:
-            pass
-    observed = float(_gate_status_observed.get(key) or 0.0)
-    return max(int(floor), int(_GATE_STATUS_GROWTH * observed))
+    """Seconds this gate check may take: operator's value, else measured cost, else the floor.
+
+    The SIZING is probes.sized_budget -- one owner, because a second piece of gate state now needs
+    the same rule and two copies of "how long may this take" is how the 600 s window came to disagree
+    with the 2400 s one. What stays here is the OBSERVATION: this process's own longest gate."""
+    from models.experimental.perf_automation.agent import probes as _pr_budget
+
+    return _pr_budget.sized_budget(_gate_status_observed.get(key), floor, override_env=_GATE_STATUS_TIMEOUT_ENV)
 
 
 def _record_gate_status_cost(key: str, seconds: float) -> None:

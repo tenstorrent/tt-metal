@@ -2,8 +2,8 @@ import ast
 import json
 import os
 import re
+import time
 from pathlib import Path
-
 
 _STATUS_FILE = "bringup_status.json"
 
@@ -318,6 +318,66 @@ _WEDGE_RETRIES = 2
 _CAPTURE_DETAIL_CHARS = 900  # next_target.reason is capped at 2000 -- leave room for the other blockers
 
 
+# WHAT A CAPTURE MAY COST, FROM WHAT ONE HAS COST.
+#
+# This was a literal 900 s in the signature below, and probes._execute ends a step absolutely at
+# _HARD_CEILING_MULT x its budget -- so 900 became a 3600 s wall. A Qwen-Image-Edit capture needed
+# longer and was SIGKILLed there twice, 3611 s apart, by the gate's own process, both times with one
+# stage traced and the next mid-replay. The ceiling is right to be absolute (it is the only guard
+# against work that progresses forever); what was wrong is that it multiplied a number typed for a
+# much smaller step.
+#
+# So the budget is sized by probes.sized_budget -- operator's value, else headroom over the longest
+# capture actually observed, else the old 900 as a FLOOR, so nothing gets tighter than before. The
+# observation has to OUTLIVE the process: the gate runs in a fresh interpreter every round, so an
+# in-memory record would never be read back. It is kept beside the demo's other gate state and
+# scoped to the run that measured it, because a cost measured on another board says nothing here.
+_CAPTURE_COST_FILE = ".e2e_capture_cost.json"
+_CAPTURE_BUDGET_ENV = "E2E_TRACE_CAPTURE_TIMEOUT"
+_CAPTURE_FLOOR_S = 900  # what the typed default used to be, kept as the floor
+
+
+def _run_stamp_of_this_run() -> str:
+    try:
+        from .commands.emit_e2e import run_stamp
+
+        return run_stamp()
+    except Exception:  # noqa: BLE001 -- no run identity is a valid answer
+        return ""
+
+
+def _observed_capture_s(demo_dir) -> float:
+    """The longest capture measured for this demo IN THIS RUN, or 0 when there is no such record."""
+    try:
+        doc = json.loads((Path(demo_dir) / _CAPTURE_COST_FILE).read_text())
+    except Exception:  # noqa: BLE001
+        return 0.0
+    if not isinstance(doc, dict) or doc.get("run") != _run_stamp_of_this_run():
+        return 0.0
+    try:
+        return max(0.0, float(doc.get("seconds") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _record_capture_s(demo_dir, seconds: float) -> None:
+    """Keep the LONGEST observed; a budget that shrank on a lucky attempt would kill the next one."""
+    try:
+        if not seconds or seconds <= 0 or seconds <= _observed_capture_s(demo_dir):
+            return
+        (Path(demo_dir) / _CAPTURE_COST_FILE).write_text(
+            json.dumps({"run": _run_stamp_of_this_run(), "seconds": round(float(seconds), 1)})
+        )
+    except OSError:
+        pass
+
+
+def _capture_budget_s(demo_dir) -> int:
+    from models.experimental.perf_automation.agent import probes as _pr_budget
+
+    return _pr_budget.sized_budget(_observed_capture_s(demo_dir), _CAPTURE_FLOOR_S, override_env=_CAPTURE_BUDGET_ENV)
+
+
 def _wedge_retries() -> int:
     try:
         return max(0, int(os.environ.get(_WEDGE_RETRY_ENV, str(_WEDGE_RETRIES))))
@@ -330,8 +390,11 @@ def _is_wedge(status, detail) -> bool:
     return status == "invalid" and "WEDGE" in (detail or "")
 
 
-def run_fresh_trace_capture(demo_dir, timeout_s=900):
+def run_fresh_trace_capture(demo_dir, timeout_s=None):
     demo_dir = Path(demo_dir)
+    # None -> sized from what a capture has actually cost here (see _capture_budget_s). An explicit
+    # value from a caller still wins, so existing callers are unaffected.
+    timeout_s = int(timeout_s) if timeout_s else _capture_budget_s(demo_dir)
     perf = _perf_test(demo_dir)
     if perf is None:
         return None, "no perf test to capture"
@@ -344,11 +407,16 @@ def run_fresh_trace_capture(demo_dir, timeout_s=900):
     os.environ.setdefault("PERF_MCP_VALIDATE_TIMEOUT", str(timeout_s))
     attempts = []
     for attempt in range(1 + _wedge_retries()):
+        _t0 = time.monotonic()
         try:
             status, detail = validate_generated_perf_test(perf, task)
         except Exception as e:  # noqa: BLE001
             attempts.append("capture raised: %s" % e)
             break
+        finally:
+            # Recorded even for a FAILED attempt: how long it ran is a fact about this model's cost,
+            # and a capture killed at the wall is the strongest evidence the wall was too low.
+            _record_capture_s(demo_dir, time.monotonic() - _t0)
         attempts.append("%s %s" % (status, detail or ""))
         if not _is_wedge(status, detail):
             break

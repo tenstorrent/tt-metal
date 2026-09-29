@@ -668,6 +668,42 @@ _GAP_MULT = 3
 # it scales with what the caller already said the work is worth.
 _HARD_CEILING_MULT = 4
 
+# HOW LONG A STEP MAY TAKE, WHEN NOBODY CAN KNOW IN ADVANCE.
+#
+# Every budget in this tree started as a number someone typed for the step they had in front of them,
+# and each one later killed a bigger step that was working: 2400 -> 600 s for the stall window, then
+# a 900 s capture budget whose 4x ceiling ended a trace capture twice while it was visibly
+# progressing. A typed number is a guess about work nobody has measured yet, so it is only ever the
+# FLOOR here -- never the answer while a measurement exists.
+#
+# Order: an operator's explicit value wins outright and unscaled; else headroom over the longest run
+# actually OBSERVED for this kind of work; else the caller's floor, so a wrapper can never be tighter
+# than what it wraps. The POLICY lives here, with the ceiling that enforces it. WHERE the observation
+# is kept stays with the caller -- one domain holds it in memory for the life of a process, another
+# must persist it because its gate is a fresh process every round -- and that is a storage question,
+# not a sizing one.
+_BUDGET_GROWTH = 4  # headroom over measured cost, the same multiple the ceiling uses
+
+
+def sized_budget(observed_s, floor_s, override_env: str = "") -> int:
+    """Seconds this step may take: operator's value, else headroom over measured cost, else floor."""
+    if override_env:
+        override = os.environ.get(override_env)
+        if override:
+            try:
+                return max(1, int(override))
+            except ValueError:
+                pass
+    try:
+        observed = float(observed_s or 0.0)
+    except (TypeError, ValueError):
+        observed = 0.0
+    try:
+        floor = int(floor_s or 0)
+    except (TypeError, ValueError):
+        floor = 0
+    return max(floor, int(_BUDGET_GROWTH * observed))
+
 
 def _pgroup_io_counters(pgid) -> tuple:
     """(syscalls, io_bytes) summed over the process group. (0, 0) when /proc cannot be read.
