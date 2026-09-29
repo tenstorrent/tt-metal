@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "pcc_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.9999982136959273
+  },
+  "rel_l2_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.001965852687135339
+  },
+  "row_norm_ratio_max_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.999987006187439
+  },
+  "row_norm_ratio_min_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.998935878276825
+  },
+  "syn_rel_l2_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.0007247354951687157
+  },
+  "syn_row_norm_ratio_max_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.9996602535247803
+  },
+  "syn_row_norm_ratio_min_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.999193549156189
+  },
+  "syn_worst_row_rel_l2_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.0009645604877732694
+  },
+  "worst_row_rel_l2_shared_expert_L01": {
+   "t": "2026-09-29T15:00:21",
+   "value": 0.002543326001614332
+  }
+ },
+ "task": "C.moe_full.shared_expert"
+}
