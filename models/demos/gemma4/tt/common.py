@@ -100,6 +100,7 @@ def create_tt_model(
                 weight_fracture=True,
             )
             mesh_config.lane_sharded = _lanes
+            mesh_config.cp_prefill = os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes")
         elif is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
