@@ -19,9 +19,9 @@ namespace ttnn::prim {
 namespace {
 // The SP-sharded read of a block-cyclic chunked-prefill cache: the global positions of this device's query rows
 // follow the cache writer's rotation (see compute_causal_geometry) -- q holds its SP rank's chunk_local rows, or,
-// seq-sharded across TP as well (chunk_local == tp*S), its TP rank's S-row slice of them. Host-int path only.
-bool rotation_exact_causal(const SparseSDPAMsaParams& attrs) {
-    return attrs.chunk_start_idx.has_value() && attrs.cluster_axis.has_value() && attrs.has_block_cyclic();
+// seq-sharded across TP as well (chunk_local == tp*S), its TP rank's S-row slice of them. Either chunk-start form.
+bool rotation_exact_causal(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    return causal_enabled(attrs, t) && rotation_exact_geometry(attrs) && attrs.has_block_cyclic();
 }
 
 // Container checks for a 1-element metadata tensor. Its VALUE lives on device, so only the container is
@@ -159,7 +159,7 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
         // Without cluster_axis every device masks at chunk_start_idx + its flat rank * S, which matches the
         // writer's placement only for a slab-aligned start.
         TT_FATAL(
-            rotation_exact_causal(attrs) || bc.sp <= 1 || chunk_start_idx % (bc.sp * bc.chunk_local) == 0,
+            rotation_exact_causal(attrs, t) || bc.sp <= 1 || chunk_start_idx % (bc.sp * bc.chunk_local) == 0,
             "sparse_sdpa_msa: a mid-slab chunk_start_idx ({}, slab {} = sp {} x chunk_local {}) with a block-cyclic "
             "cache needs cluster_axis (the SP axis) for the rotated per-device query positions",
             chunk_start_idx,
@@ -167,15 +167,21 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
             bc.sp,
             bc.chunk_local);
     }
-    // Rotation-exact causal geometry (cluster_axis named): cluster_axis's rank IS the slab the device
-    // owns, and each device owns a whole chunk_local slab. A TP sub-shard (chunk_local == tp*S) would need
-    // a per-device row offset within the slab that this op does not take -- the same combination
-    // indexer_score_msa rejects (seq_shard_axes takes at most [SP]). Checked on hits too: on the host-int path
-    // cluster_axis is not hashed (the geometry is a runtime arg), so a call that only adds cluster_axis reuses
-    // a program a cluster_axis=None call built -- and would skip a miss-only check.
-    if (attrs.has_block_cyclic() && causal_enabled(attrs, t) && rotation_exact_geometry(attrs)) {
+    // The tensor form's start is a device word: the host cannot tell a slab-aligned value from a mid-slab one,
+    // so across more than one SP rank it needs cluster_axis unconditionally (the host int only when mid-slab).
+    if (t.has_chunk_start_metadata() && attrs.has_block_cyclic()) {
+        const auto& bc = attrs.block_cyclic.value();
+        TT_FATAL(
+            rotation_exact_causal(attrs, t) || bc.sp <= 1,
+            "sparse_sdpa_msa: chunk_start_idx_tensor with a block-cyclic cache over sp {} needs cluster_axis (the SP "
+            "axis): its start is read on device, so a mid-slab value cannot be rejected on the host",
+            bc.sp);
+    }
+    // Rotation-exact geometry reads the SP rank off cluster_axis, so that axis must span exactly the sp ranks the
+    // cache was striped over. Checked on hits too: cluster_axis is not hashed on the host-int path (the geometry
+    // is a runtime arg), so a call that only adds cluster_axis reuses a program a cluster_axis=None call built.
+    if (rotation_exact_causal(attrs, t)) {
         const uint32_t sp = attrs.block_cyclic->sp;
-        const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
         const auto mesh_shape = q.device()->get_view().shape();
         const uint32_t axis = *attrs.cluster_axis;
         TT_FATAL(
@@ -185,13 +191,6 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
             axis,
             axis < mesh_shape.dims() ? mesh_shape[axis] : 0u,
             sp);
-        TT_FATAL(
-            chunk_local == q.logical_shape()[2],
-            "sparse_sdpa_msa: causal block-cyclic with cluster_axis needs block_cyclic_chunk_local ({}) == q "
-            "seq-len ({}); a TP sub-shard of the query chunk is not supported (pass cluster_axis=None for the "
-            "flat linearization instead)",
-            chunk_local,
-            q.logical_shape()[2]);
     }
 }
 }  // namespace
@@ -347,6 +346,43 @@ uint32_t SparseSDPAMsaOperation::compute_device_index(
                : 0;
 }
 
+uint32_t SparseSDPAMsaOperation::compute_tp_index(
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (!rotation_exact_causal(attrs, t)) {
+        return 0;
+    }
+    const uint32_t S = t.q.logical_shape()[2];
+    const auto& bc = attrs.block_cyclic.value();
+    const uint32_t device_index = compute_device_index(attrs, t, mesh_dispatch_coordinate);
+    TT_FATAL(
+        device_index < bc.sp,
+        "sparse_sdpa_msa: cluster_axis rank {} out of range for block-cyclic sp={} (cluster_axis must be the "
+        "block-cyclic SP axis)",
+        device_index,
+        bc.sp);
+    if (bc.chunk_local == S) {
+        return 0;
+    }
+    const auto mesh_shape = t.q.device()->get_view().shape();
+    TT_FATAL(
+        mesh_shape.dims() == 2 && bc.chunk_local % S == 0 && mesh_dispatch_coordinate.has_value(),
+        "sparse_sdpa_msa: a TP-sub-sharded q (block_cyclic_chunk_local {} = tp * q seq-len {}) needs a 2D mesh",
+        bc.chunk_local,
+        S);
+    const uint32_t tp_axis = 1 - attrs.cluster_axis.value();
+    const uint32_t tp_index =
+        ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, tp_axis);
+    TT_FATAL(
+        tp_index < bc.chunk_local / S,
+        "sparse_sdpa_msa: TP rank {} out of range for block_cyclic_chunk_local {} / q seq-len {}",
+        tp_index,
+        bc.chunk_local,
+        S);
+    return tp_index;
+}
+
 SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_geometry(
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
@@ -360,7 +396,7 @@ SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_ge
     const uint32_t S = t.q.logical_shape()[2];
     const uint32_t chunk_start_idx = attrs.chunk_start_idx.value();
     const uint32_t device_index = compute_device_index(attrs, t, mesh_dispatch_coordinate);
-    if (!rotation_exact_causal(attrs)) {
+    if (!rotation_exact_causal(attrs, t)) {
         return {.chunk_start = chunk_start_idx + device_index * S};
     }
     // The chunk [chunk_start_idx, +sp*chunk_local) was written round-robin by update_padded_kv_cache, so this
@@ -369,29 +405,7 @@ SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_ge
     // TP (chunk_local == tp*S) the device holds its TP rank's S-row slice of its SP rank's rows: the same
     // [SP, TP] geometry indexer_score uses with seq_shard_axes=[SP, TP].
     const auto& bc = attrs.block_cyclic.value();
-    TT_FATAL(
-        device_index < bc.sp,
-        "sparse_sdpa_msa: cluster_axis rank {} out of range for block-cyclic sp={} (cluster_axis must be the "
-        "block-cyclic SP axis)",
-        device_index,
-        bc.sp);
-    uint32_t tp_index = 0;
-    if (bc.chunk_local != S) {
-        const auto mesh_shape = t.q.device()->get_view().shape();
-        TT_FATAL(
-            mesh_shape.dims() == 2 && bc.chunk_local % S == 0 && mesh_dispatch_coordinate.has_value(),
-            "sparse_sdpa_msa: a TP-sub-sharded q (block_cyclic_chunk_local {} = tp * q seq-len {}) needs a 2D mesh",
-            bc.chunk_local,
-            S);
-        const uint32_t tp_axis = 1 - attrs.cluster_axis.value();
-        tp_index = ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, tp_axis);
-        TT_FATAL(
-            tp_index < bc.chunk_local / S,
-            "sparse_sdpa_msa: TP rank {} out of range for block_cyclic_chunk_local {} / q seq-len {}",
-            tp_index,
-            bc.chunk_local,
-            S);
-    }
+    const uint32_t tp_index = compute_tp_index(attrs, t, mesh_dispatch_coordinate);
     return tt::block_cyclic::causal_geometry(
         chunk_start_idx,
         /*has_block_cyclic=*/true,
@@ -434,6 +448,7 @@ SparseSDPAMsaOperation::DispatchArgs SparseSDPAMsaOperation::compute_dispatch_ar
         .v_group_tile_stride = v_group_tile_stride,
         .causal = compute_causal_geometry(attrs, t, mesh_dispatch_coordinate),
         .device_index = compute_device_index(attrs, t, mesh_dispatch_coordinate),
+        .tp_index = compute_tp_index(attrs, t, mesh_dispatch_coordinate),
         .k_slot_tile_stride = n_kv * k_group_tile_stride,
         .v_slot_tile_stride = n_kv * v_group_tile_stride,
         .cache_slots = static_cast<uint32_t>(t.k.logical_shape()[0]),
@@ -505,6 +520,7 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
         reader[kReaderNumLayers] = attrs.index_cache_num_layers;
         reader[kReaderLayerIdx] = attrs.index_cache_layer_idx;
         reader[kReaderCacheSlots] = dyn.cache_slots;
+        reader[kReaderTpIndex] = dyn.tp_index;
 
         auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
         TT_FATAL(

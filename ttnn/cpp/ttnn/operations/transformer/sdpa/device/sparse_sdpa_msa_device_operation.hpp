@@ -70,6 +70,7 @@ struct SparseSDPAMsaOperation {
         kReaderNumLayers,
         kReaderLayerIdx,
         kReaderCacheSlots,  // K/V batch extent, bounds the recomposed slot
+        kReaderTpIndex,     // TP rank within the SP slab for the in-kernel geometry (TP-sub-sharded q; else 0)
         kReaderArgCount,
     };
     enum WriterArg : uint32_t {
@@ -109,6 +110,13 @@ struct SparseSDPAMsaOperation {
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+    // This device's TP rank within its SP rank's rows when q is also seq-sharded over TP (chunk_local == tp*S),
+    // from the mesh axis other than cluster_axis. 0 unless the geometry is rotation-exact. Either chunk-start form:
+    // the host geometry uses it, and the metadata path hands it to the kernel.
+    static uint32_t compute_tp_index(
+        const operation_attributes_t& attrs,
+        const tensor_args_t& t,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     // Block-cyclic cache + cluster_axis (the SP-sharded chunked-prefill cache read): the rotation-exact
     // geometry of the update_padded_kv_cache writer, shared with indexer_score (block_cyclic_causal_geometry.hpp)
     // so the diagonal-block mask and the indexer's selection agree on every query's position, including mid-slab
@@ -134,6 +142,7 @@ struct SparseSDPAMsaOperation {
         uint32_t v_group_tile_stride = 0;
         CausalGeometry causal{};
         uint32_t device_index = 0;
+        uint32_t tp_index = 0;
         uint32_t k_slot_tile_stride = 0;  // n_kv * k_group_tile_stride
         uint32_t v_slot_tile_stride = 0;
         uint32_t cache_slots = 0;  // K/V batch extent

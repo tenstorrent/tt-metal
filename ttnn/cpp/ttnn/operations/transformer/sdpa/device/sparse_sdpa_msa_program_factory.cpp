@@ -205,11 +205,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     for (uint32_t id : {cb_q_rm, cb_k_in, cb_v_in, cb_idx, cb_ctrl, cb_kreq, cb_kack}) {
         reader_ct.push_back(id);
     }
-    reader_ct.push_back(k_tile_bytes);                      // K is tiled: per-tile read size
-    reader_ct.push_back(v_tile_bytes);                      // V is tiled: per-tile read size
-    reader_ct.push_back(causal ? 1u : 0u);                  // CAUSAL_MASK_ENABLED
-    reader_ct.push_back(block_size);                        // block_size: for diag_block = p/bs, offset = p%bs
-    reader_ct.push_back(cb_vmask);                          // reader builds the per-token partial-column tile
+    reader_ct.push_back(k_tile_bytes);      // K is tiled: per-tile read size
+    reader_ct.push_back(v_tile_bytes);      // V is tiled: per-tile read size
+    reader_ct.push_back(causal ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    reader_ct.push_back(block_size);        // block_size: for diag_block = p/bs, offset = p%bs
+    reader_ct.push_back(cb_vmask);          // reader builds the per-token partial-column tile
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
@@ -250,8 +250,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     }
     writer_ct.push_back(k_tile_bytes);
     writer_ct.push_back(v_tile_bytes);
-    writer_ct.push_back(causal ? 1u : 0u);                  // CAUSAL_MASK_ENABLED
-    writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
+    writer_ct.push_back(causal ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    writer_ct.push_back(cb_neginf);         // writer builds the persistent -inf mask tile
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
@@ -301,9 +301,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         }
     }
     compute_ct.push_back(qsb);
-    compute_ct.push_back(causal ? 1u : 0u);                  // CAUSAL_MASK_ENABLED
-    compute_ct.push_back(cb_neginf);                         // full -inf mask tile (future key-tiles)
-    compute_ct.push_back(cb_vmask);                          // partial-column mask tile (boundary key-tile)
+    compute_ct.push_back(causal ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    compute_ct.push_back(cb_neginf);         // full -inf mask tile (future key-tiles)
+    compute_ct.push_back(cb_vmask);          // partial-column mask tile (boundary key-tile)
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_msa_compute.cpp";
@@ -370,6 +370,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         reader_rt[RArg::kReaderNumLayers] = attrs.index_cache_num_layers;
         reader_rt[RArg::kReaderLayerIdx] = attrs.index_cache_layer_idx;
         reader_rt[RArg::kReaderCacheSlots] = dyn.cache_slots;
+        reader_rt[RArg::kReaderTpIndex] = dyn.tp_index;
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         using WArg = SparseSDPAMsaOperation::WriterArg;

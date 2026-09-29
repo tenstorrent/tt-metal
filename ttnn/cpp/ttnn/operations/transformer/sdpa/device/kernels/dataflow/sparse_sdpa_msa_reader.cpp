@@ -8,9 +8,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
-#include "dataflow_common.hpp"         // fill_vertical_tile_bf16 (causal partial-column mask tile)
-#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "sparse_sdpa_msa_gather.hpp"        // per-NoC trid-ring (K_TRID_RING knob)
+#include "dataflow_common.hpp"               // fill_vertical_tile_bf16 (causal partial-column mask tile)
+#include "block_cyclic_remap.hpp"            // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
 #include "block_cyclic_causal_geometry.hpp"  // per-device start / rotation, shared with the host and the indexer
 #include "metadata_scalar_read.hpp"          // trace-safe 1-element metadata reads
 
@@ -115,6 +115,9 @@ void kernel_main() {
             // block-cyclic compile-time args are in blocks; the geometry works in tokens.
             const uint32_t chunk_start_idx =
                 trace_metadata::read_metadata_scalar_u32(noc, chunk_meta_args, get_arg_val<uint32_t>(13), meta_l1);
+            // The host int form is rejected unless 32-aligned under a block-cyclic cache (the rotated geometry
+            // works in tile-rows, as the KV writer does); the device word can only be checked here.
+            ASSERT(!block_cyclic || chunk_start_idx % tt::constants::TILE_HEIGHT == 0);
             geom = tt::block_cyclic::causal_geometry(
                 chunk_start_idx,
                 block_cyclic,
@@ -122,7 +125,7 @@ void kernel_main() {
                 bc_sp,
                 bc_chunk_local * block_size,
                 get_arg_val<uint32_t>(14),  // device_index
-                /*tp_index=*/0,
+                get_arg_val<uint32_t>(21),  // tp_index (TP-sub-sharded q; 0 otherwise)
                 S);
         }
         if constexpr (meta_slot) {

@@ -267,7 +267,7 @@ def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset)
             x, dtype=dt, layout=layout, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mapper
         )
 
-    out = ttnn.transformer.sparse_sdpa_msa(
+    inputs = (
         dev(q_all.to(torch.float32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, shard),
         dev(
             _natural_to_block_cyclic(k, sp, n_slabs, chunk_local).to(torch.bfloat16),
@@ -282,19 +282,33 @@ def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset)
             repl,
         ),
         dev(idx_all, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, shard),
-        scale=scale,
-        block_size=BLK_KV,
-        chunk_start_idx=chunk_start,
-        cluster_axis=sp_axis,
-        block_cyclic_sp_axis=sp_axis,
-        block_cyclic_chunk_local=chunk_local,
     )
-    dev_outs = ttnn.get_device_tensors(out)
+
+    def run(**kw):
+        out = ttnn.transformer.sparse_sdpa_msa(
+            *inputs,
+            scale=scale,
+            block_size=BLK_KV,
+            cluster_axis=sp_axis,
+            block_cyclic_sp_axis=sp_axis,
+            block_cyclic_chunk_local=chunk_local,
+            **kw,
+        )
+        return [ttnn.to_torch(t)[:, :H] for t in ttnn.get_device_tensors(out)]
+
+    host = run(chunk_start_idx=chunk_start)
     for r in range(tp):
         for c in range(sp):
             gold = sparse_attention_ref_msa(qs[r][c], k, v, idxs[r][c], scale, causal=True, q_positions=positions[r][c])
-            p = pcc(ttnn.to_torch(dev_outs[r * cols + c])[:, :H], gold)
+            p = pcc(host[r * cols + c], gold)
             assert p >= DEVICE_PCC, f"mesh {(rows, cols)} chunk_start={chunk_start}: device ({r},{c}) pcc={p:.5f}"
+
+    # Metadata path: each device derives its (SP, TP) geometry in-kernel from rank 0's start and must reproduce
+    # the host int bit-exactly -- a kernel that dropped the TP rank would mask every tp>0 device at the tp=0 rows.
+    start_t = dev(torch.tensor([[[[chunk_start]]]], dtype=torch.int64), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, repl)
+    meta = run(chunk_start_idx_tensor=start_t)
+    for i, (m, h) in enumerate(zip(meta, host)):
+        assert torch.equal(m, h), f"mesh {(rows, cols)} chunk_start={chunk_start}: device {i} metadata != host path"
 
 
 @run_for_blackhole()
@@ -328,10 +342,17 @@ def test_msa_block_cyclic_causal_guards(mesh_device, expect_error):
             **kw,
         )
 
+    def start_t(value):
+        return dev(torch.tensor([[[[value]]]], dtype=torch.int64), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+
     with expect_error(RuntimeError, "needs cluster_axis"):
         run(chunk_start_idx=32)
+    with expect_error(RuntimeError, "needs cluster_axis"):
+        run(chunk_start_idx_tensor=start_t(32))
     with expect_error(RuntimeError, "must equal block_cyclic_sp_axis"):
         run(chunk_start_idx=0, cluster_axis=0)
+    with expect_error(RuntimeError, "must equal block_cyclic_sp_axis"):
+        run(chunk_start_idx_tensor=start_t(0), cluster_axis=0)
 
 
 def _owned_positions(chunk_start, sp, chunk_local):
@@ -339,28 +360,7 @@ def _owned_positions(chunk_start, sp, chunk_local):
     op's closed form): the global chunk [chunk_start, chunk_start + sp*chunk_local) is striped so token g lands on
     rank (g // chunk_local) % sp, and each rank's queries are its tokens in order. A mid-slab start rotates which
     rank owns which slab and splits the boundary rank's queries across two slabs."""
-    owned = [[] for _ in range(sp)]
-    for g in range(chunk_start, chunk_start + sp * chunk_local):
-        owned[(g // chunk_local) % sp].append(g)
-    return owned
-
-
-def _flat_positions(chunk_start, sp, chunk_local, S):
-    """Global positions of each rank's queries under the FLAT both-axes geometry (cluster_axis=None), written out
-    row by row rather than through the op's closed form: rank r's run starts at chunk_start + r*S, and a row whose
-    slab-local offset reaches chunk_local continues in the same rank's column of the NEXT slab, i.e. jumps by the
-    (sp-1)*chunk_local keys the other ranks own in between."""
-    owned = []
-    for r in range(sp):
-        run_start = chunk_start + r * S
-        slab_offset = run_start % chunk_local
-        owned.append(
-            [
-                run_start + row + ((sp - 1) * chunk_local if slab_offset and slab_offset + row >= chunk_local else 0)
-                for row in range(S)
-            ]
-        )
-    return owned
+    return [p.tolist() for p in _block_cyclic_chunk_positions(chunk_start, sp, chunk_local)]
 
 
 def _causal_indices_at(positions, topk, gen):
@@ -797,19 +797,15 @@ def test_msa_block_cyclic_sp_metadata_contiguous(mesh_device):
 
 @run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)
-def test_msa_block_cyclic_sp_flat_linearization(mesh_device):
-    """`cluster_axis=None` on a block-cyclic cache: the causal start takes the FLAT both-axes branch (linear +
-    within-block straddle) instead of the rotation-exact one. Two claims:
+def test_msa_block_cyclic_sp_flat_linearization(mesh_device, expect_error):
+    """`cluster_axis=None` on a block-cyclic cache: every device masks at chunk_start + its flat rank * S, which
+    matches the cache writer's placement only for a slab-aligned start.
 
-    1. On a SLAB-ALIGNED start the two branches must agree EXACTLY -- that is the PR's compatibility claim
-       ("identical to before for slab-aligned starts, which covers every current caller"), and it is checked
-       by running the same inputs with and without cluster_axis and comparing bit-for-bit.
-    2. On a mid-slab start, where the flat branch's straddle fields go nonzero on every rank, the host-int
-       path must match a golden at the flat positions written out independently (`_flat_positions`), and the
-       metadata path must reproduce the host-int path bit-exactly. Without the golden both paths run the same
-       shared branch, so a regression there (e.g. back to the linear chunk_start + rank*S) would pass. This is
-       the only coverage of the kernel's meta_rotation_exact=0 compile-time branch at sp>1; the rest of this
-       file always sets cluster_axis.
+    1. On a SLAB-ALIGNED start that linear geometry must agree EXACTLY with the rotation-exact one -- checked by
+       running the same inputs with and without cluster_axis and comparing bit-for-bit.
+    2. A mid-slab start without cluster_axis is rejected, for the host int AND the tensor form. The tensor's
+       start is a device word the host cannot inspect, so the tensor form is rejected whenever the cache spans
+       more than one SP rank: any start it later holds could be mid-slab.
     """
     sp_axis, sp = _sp_or_skip(mesh_device)
     q_ranks, k, v, q_dev, k_dev, v_dev = _meta_inputs(mesh_device, sp, seed=83)
@@ -830,46 +826,21 @@ def test_msa_block_cyclic_sp_flat_linearization(mesh_device):
             flat[r], exact[r]
         ), f"sp={sp} start={aligned}: cluster_axis=None diverged from the rotation-exact geometry on a slab-aligned start"
 
-    # (2) mid-slab: the flat branch straddles on every rank (offset = start % S != 0). The host-int path is
-    # anchored to the independently written flat positions, then the metadata path must derive the same
-    # geometry on device as the host patched in.
-    mid = 2 * sp * META_S + 96
-    assert mid % META_S != 0, "start must be mid-block for the flat branch to straddle"
-    flat_owned = _flat_positions(mid, sp, META_S, META_S)
-    linear = [list(range(mid + r * META_S, mid + (r + 1) * META_S)) for r in range(sp)]
-    assert all(flat_owned[r] != linear[r] for r in range(sp)), "every rank must straddle, or the golden is weak"
-    idx_ranks = [_causal_indices_at(flat_owned[r], META_TOPK, gen) for r in range(sp)]
-    idx_mid = _mesh_tensor(
-        mesh_device,
-        torch.cat(idx_ranks, dim=2),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ShardTensorToMesh(mesh_device, dim=2),
-    )
-    host = _meta_shards(
-        _meta_dispatch(q_dev, k_dev, v_dev, idx_mid, sp_axis, flat=True, chunk_start_idx=mid, cache_batch_idx=slot)
-    )
-    for r in range(sp):
-        gold = _ref_at_positions(
-            q_ranks[r], k[slot : slot + 1], v[slot : slot + 1], idx_ranks[r], META_SCALE, flat_owned[r]
-        )
-        p = pcc(host[r], gold)
-        assert p >= DEVICE_PCC, f"sp={sp} start={mid}: rank {r} flat host path vs flat golden pcc={p:.5f}"
-    meta = _meta_shards(
-        _meta_dispatch(
-            q_dev,
-            k_dev,
-            v_dev,
-            idx_mid,
-            sp_axis,
-            flat=True,
-            **_meta_kwargs(_meta_u32(mesh_device, mid), _meta_u32(mesh_device, user)),
-        )
-    )
-    for r in range(sp):
-        assert torch.equal(meta[r], host[r]), f"sp={sp} start={mid}: flat-branch metadata != host path on rank {r}"
-    # The mid-slab flat start must not coincide with the aligned run, or the checks above are vacuous.
-    assert not torch.equal(host[0], exact[0]), "mid-slab flat output matched the aligned run; pick a different start"
+    # (2) mid-slab without cluster_axis: rejected in both forms (the tensor form even at an aligned value).
+    mid = aligned + 96
+    with expect_error(RuntimeError, "needs cluster_axis"):
+        _meta_dispatch(q_dev, k_dev, v_dev, idx_dev, sp_axis, flat=True, chunk_start_idx=mid, cache_batch_idx=slot)
+    for start in (mid, aligned):
+        with expect_error(RuntimeError, "needs cluster_axis"):
+            _meta_dispatch(
+                q_dev,
+                k_dev,
+                v_dev,
+                idx_dev,
+                sp_axis,
+                flat=True,
+                **_meta_kwargs(_meta_u32(mesh_device, start), _meta_u32(mesh_device, user)),
+            )
 
 
 @run_for_blackhole()
@@ -877,86 +848,25 @@ def test_msa_block_cyclic_sp_flat_linearization(mesh_device):
 def test_msa_block_cyclic_sp_rejects_wrong_cluster_axis(mesh_device, expect_error):
     """The rotation-exact geometry reads this device's SP rank off cluster_axis, so that axis must BE the axis
     the cache was striped over. Naming a different one (here axis 0, extent 1 on a 1xN mesh) would hand every
-    device rank 0 and silently score every rank against rank 0's causal window."""
+    device rank 0 and silently score every rank against rank 0's causal window. Both chunk-start forms: the
+    tensor form cannot be checked against its value, so the axis check must not depend on it."""
     sp_axis, sp = _sp_or_skip(mesh_device)
     q_ranks, _, _, q_dev, k_dev, v_dev = _meta_inputs(mesh_device, sp, seed=89)
     _, _, idx_dev = _meta_indices(mesh_device, sp, sp * META_S, torch.Generator().manual_seed(89))
-    with expect_error(RuntimeError, "must be the SP axis the cache was striped over"):
-        ttnn.transformer.sparse_sdpa_msa(
-            q_dev,
-            k_dev,
-            v_dev,
-            idx_dev,
-            scale=META_SCALE,
-            block_size=BLK_KV,
-            cluster_axis=0,  # extent 1 on a (1, sp) mesh, but the cache was striped over axis 1
-            block_cyclic_sp_axis=sp_axis,
-            block_cyclic_chunk_local=META_S,
-            chunk_start_idx=sp * META_S,
-            cache_batch_idx=1 * LAYERS + LAYER,
-        )
-
-
-def _system_mesh_is_2d():
-    """Whether a (2,2) submesh can be opened at all. The mesh_device fixture only compares the device COUNT,
-    so a 4-chip box exposed as a 1x4 mesh passes that check and then FATALs inside open_mesh_device; decide
-    from the system mesh shape instead and skip cleanly. No try/except: only a real non-2D shape may skip --
-    swallowing a query failure would silently skip the only (2,2) reject coverage."""
-    shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
-    return shape.dims() >= 2 and shape[0] >= 2 and shape[1] >= 2
-
-
-@run_for_blackhole()
-@pytest.mark.skipif(not _system_mesh_is_2d(), reason="a (2,2) submesh requires a 2D system mesh")
-@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["sp2xtp2"], indirect=True)
-@pytest.mark.parametrize("warm", [False, True], ids=["miss", "hit"])
-def test_msa_block_cyclic_tp_subshard_reject(mesh_device, warm, expect_error):
-    """A TP sub-shard of the query chunk (block_cyclic_chunk_local == tp*Sq) needs a per-device row offset
-    WITHIN the slab that this op does not take, so causal block-cyclic with cluster_axis rejects it -- the same
-    combination indexer_score_msa rejects. Needs a 2D mesh: on a 1xN mesh tp is 1 and the two are equal.
-
-    `hit`: a legal cluster_axis=None call builds the program first. cluster_axis is not hashed on the host-int
-    path, so the rejected call reuses that program -- the check must run on the hit too, not only on a miss."""
-    rows, cols = tuple(mesh_device.shape)
-    sp_axis, sp = 0, rows
-    tp = (rows * cols) // sp
-    if sp < 2 or tp < 2:
-        pytest.skip(f"needs sp>1 and tp>1 (mesh shape {(rows, cols)})")
-    chunk_local = tp * META_S  # the sub-shard form the op must refuse
-    n_chunks = 3
-    T = sp * n_chunks * chunk_local
-    gen = torch.Generator().manual_seed(97)
-    repl = ttnn.ReplicateTensorToMesh(mesh_device)
-    q_dev = _mesh_tensor(
-        mesh_device,
-        torch.randn(1, META_H, rows * cols * META_S, META_D, generator=gen),
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ShardTensorToMesh(mesh_device, dim=2),
-    )
-    kv = torch.randn(1, 1, T, META_D, generator=gen).to(torch.bfloat16)
-    k_dev = _mesh_tensor(mesh_device, kv, ttnn.bfloat16, ttnn.TILE_LAYOUT, repl)
-    v_dev = _mesh_tensor(mesh_device, kv.clone(), ttnn.bfloat16, ttnn.TILE_LAYOUT, repl)
-    idx = _causal_indices_at(list(range(chunk_local, chunk_local + META_S)), META_TOPK, gen)
-    idx_dev = _mesh_tensor(mesh_device, idx, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, repl)
-
-    def call(cluster_axis):
-        return ttnn.transformer.sparse_sdpa_msa(
-            q_dev,
-            k_dev,
-            v_dev,
-            idx_dev,
-            scale=META_SCALE,
-            block_size=BLK_KV,
-            cluster_axis=cluster_axis,
-            block_cyclic_sp_axis=sp_axis,
-            block_cyclic_chunk_local=chunk_local,
-            chunk_start_idx=sp * chunk_local,
-        )
-
-    if warm:
-        entries = mesh_device.num_program_cache_entries()
-        ttnn.deallocate(call(None))  # the flat linearization accepts the sub-shard
-        assert mesh_device.num_program_cache_entries() == entries + 1
-    with expect_error(RuntimeError, "needs block_cyclic_chunk_local"):
-        call(sp_axis)
+    for start in (
+        dict(chunk_start_idx=sp * META_S, cache_batch_idx=1 * LAYERS + LAYER),
+        _meta_kwargs(_meta_u32(mesh_device, sp * META_S), _meta_u32(mesh_device, 1)),
+    ):
+        with expect_error(RuntimeError, "must equal block_cyclic_sp_axis"):
+            ttnn.transformer.sparse_sdpa_msa(
+                q_dev,
+                k_dev,
+                v_dev,
+                idx_dev,
+                scale=META_SCALE,
+                block_size=BLK_KV,
+                cluster_axis=0,  # extent 1 on a (1, sp) mesh, but the cache was striped over axis 1
+                block_cyclic_sp_axis=sp_axis,
+                block_cyclic_chunk_local=META_S,
+                **start,
+            )
