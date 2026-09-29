@@ -50,6 +50,7 @@ void preallocated_tensors_check(
 
 // After a broadcast-shape multiply, sum-reduce along the axes where the operand was
 // expanded so the grad matches operand shape; mirrors tt-train unbroadcast_grad.
+// bf16 ttnn::sum caps ULP tightness; fused broadcast+reduce kernel (fp32 dest-acc) tracked in #58284.
 Tensor reduce_grad_to_operand_shape(
     const Tensor& grad, const ttnn::Shape& operand_shape, const std::optional<MemoryConfig>& memory_config) {
     const auto axes = broadcast_reduce_axes(operand_shape, grad.logical_shape());
@@ -873,10 +874,12 @@ std::vector<std::optional<Tensor>> mul_bw(
         input_tensor_arg.dtype());
 
     std::vector<std::optional<Tensor>> result;
+    // Allocate to input's dtype+config: empty_like(grad, ...) leaks grad's dtype/mem_config, diverging from the fused
+    // path.
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad_tensor_arg, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+        input_grad = ttnn::empty_like(input_tensor_arg, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
-    ttnn::multiply(grad_tensor_arg, scalar, std::nullopt, output_mem_config, input_grad);
+    ttnn::multiply(grad_tensor_arg, scalar, input_tensor_arg.dtype(), output_mem_config, input_grad);
     result.push_back(input_grad);
     return result;
 }
@@ -926,13 +929,16 @@ std::vector<std::optional<Tensor>> mul_bw(
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     const bool input_grad_preallocated = input_grad.has_value();
     const bool other_grad_preallocated = other_grad.has_value();
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad,
-        other_grad,
-        input_tensor_arg,
-        other_tensor_arg,
-        {are_required_outputs[0], are_required_outputs[1]},
-        output_mem_config);
+    // Skip auto empty_like(input): ROW_MAJOR preallocation + ttnn::multiply's TILE write reads back as garbled tiles.
+    if (input_grad_preallocated || other_grad_preallocated) {
+        operations::binary_backward::detail::preallocated_tensors_check(
+            input_grad,
+            other_grad,
+            input_tensor_arg,
+            other_tensor_arg,
+            {input_grad_preallocated && are_required_outputs[0], other_grad_preallocated && are_required_outputs[1]},
+            output_mem_config);
+    }
 
     // Broadcast on the forward makes grad_out.shape == out.shape > operand.shape on some axes;
     // ttnn::multiply(grad, other) then produces at grad shape, so reduce back to operand shape
@@ -942,14 +948,17 @@ std::vector<std::optional<Tensor>> mul_bw(
     const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
         other_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
 
+    // Pin memory_config to operand's — else ttnn::multiply/sum inherit grad's and leak L1 into the returned grad.
+    const auto mc_a = output_mem_config.value_or(input_tensor_arg.memory_config());
+    const auto mc_b = output_mem_config.value_or(other_tensor_arg.memory_config());
+
     if (are_required_outputs.at(0)) {
         if (input_needs_reduce) {
-            // Pin dtype to input's — else ttnn::multiply resolves to grad's dtype and diverges from the fused /
-            // empty_like paths.
-            Tensor grad_a =
-                ttnn::multiply(grad_tensor_arg, other_tensor_arg, input_tensor_arg.dtype(), output_mem_config);
+            // Pin dtype to input's — else ttnn::multiply resolves to grad's dtype and diverges from the
+            // fused/empty_like paths.
+            Tensor grad_a = ttnn::multiply(grad_tensor_arg, other_tensor_arg, input_tensor_arg.dtype(), mc_a);
             grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
-                grad_a, input_tensor_arg.logical_shape(), output_mem_config);
+                grad_a, input_tensor_arg.logical_shape(), mc_a);
             if (input_grad_preallocated) {
                 ttnn::assign(grad_a, input_grad.value());
                 result[0] = input_grad;
@@ -957,16 +966,17 @@ std::vector<std::optional<Tensor>> mul_bw(
                 result[0] = grad_a;
             }
         } else {
-            ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config, input_grad);
-            result[0] = input_grad;
+            // Pin dtype and capture return: input_grad is const& optional, so writing it back leaks nullopt when not
+            // preallocated.
+            Tensor out = ttnn::multiply(grad_tensor_arg, other_tensor_arg, input_tensor_arg.dtype(), mc_a, input_grad);
+            result[0] = input_grad_preallocated ? input_grad : std::optional<Tensor>{out};
         }
     }
     if (are_required_outputs.at(1)) {
         if (other_needs_reduce) {
-            Tensor grad_b =
-                ttnn::multiply(grad_tensor_arg, input_tensor_arg, other_tensor_arg.dtype(), output_mem_config);
+            Tensor grad_b = ttnn::multiply(grad_tensor_arg, input_tensor_arg, other_tensor_arg.dtype(), mc_b);
             grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
-                grad_b, other_tensor_arg.logical_shape(), output_mem_config);
+                grad_b, other_tensor_arg.logical_shape(), mc_b);
             if (other_grad_preallocated) {
                 ttnn::assign(grad_b, other_grad.value());
                 result[1] = other_grad;
@@ -974,8 +984,8 @@ std::vector<std::optional<Tensor>> mul_bw(
                 result[1] = grad_b;
             }
         } else {
-            ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config, other_grad);
-            result[1] = other_grad;
+            Tensor out = ttnn::multiply(grad_tensor_arg, input_tensor_arg, other_tensor_arg.dtype(), mc_b, other_grad);
+            result[1] = other_grad_preallocated ? other_grad : std::optional<Tensor>{out};
         }
     }
     return result;
