@@ -587,7 +587,10 @@ class Gemma4Model:
         # meshes where each row samples users independently (e.g. Galaxy 4x8).
         #
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
-        self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
+        _fracture_env = os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
+        _is_2d = is_mesh and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1
+        # One-instance fracture: rows are the vocab/TP axis, not sampling groups.
+        self.sampling_dp = 1 if (_fracture_env and _is_2d) else (mesh_device.shape[0] if is_mesh else 1)
 
         # dFlash residual-tap capture (armed by dflash_capture_taps; consumed by
         # the dFlash drafter — see tt/dflash_drafter.py).
@@ -634,6 +637,15 @@ class Gemma4Model:
                     # penalty-free sampling is unaffected; a request that sets
                     # penalties would fail loudly in apply_penalties.
                     self.sampling.tt_sampling._allow_penalties_sampling = False
+                    # The force-argmax all-gather must run along the vocab
+                    # (TP) axis; the sampler default of axis 1 fits (1,N)
+                    # meshes but on the (8,4) one-instance grid vocab shards
+                    # over axis 0.
+                    self.sampling.tt_sampling.sampling_all_gather_axis = self.mesh_config.tp_axis
+                    # Top-k/top-p on-device sampling is (1,N)-shaped too
+                    # (global-index broadcast add); this rail serves argmax
+                    # (decode_only force-argmax), so skip that program.
+                    self.sampling.tt_sampling._allow_topk_sampling = False
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
                 topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
                 logger.info(
@@ -705,10 +717,24 @@ class Gemma4Model:
         per_device_vocab = _compute_per_device_vocab(args.vocab_size, tp)
         args.padded_vocab_size = per_device_vocab * tp
         args.cluster_shape = tuple(mesh_device.shape)
-        args.sampling_all_gather_axis = 1  # gather across TP (column) axis
-        args.sampling_dp = mesh_device.shape[0]
+        _shape = tuple(mesh_device.shape)
+        _fracture = (
+            os.environ.get("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
+            and _shape[0] > 1
+            and _shape[1] > 1
+        )
+        if _fracture:
+            # One-instance fracture: vocab/TP on the size-8 axis, one pooled
+            # sampler (no row sampling-DP), no llama-TG row-sharded behaviors.
+            _tp_axis = 0 if _shape[0] == 8 else 1
+            args.sampling_all_gather_axis = _tp_axis
+            args.sampling_dp = 1
+            args.is_galaxy = False
+        else:
+            args.sampling_all_gather_axis = 1  # gather across TP (column) axis
+            args.sampling_dp = mesh_device.shape[0]
+            args.is_galaxy = mesh_device.shape[0] > 1
         args.num_devices = mesh_device.get_num_devices()
-        args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
         args.use_topk_logprobs = False
         return args

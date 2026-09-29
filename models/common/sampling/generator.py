@@ -408,6 +408,12 @@ class SamplingGenerator:
                 # penalty buffers' shapes don't match the vocab sharding yet.
                 if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
                     continue
+                # Same escape for the top-k/top-p program: its global-index
+                # reconstruction broadcasts are (1,N)-mesh shaped. Rails that
+                # force argmax (e.g. the fractured one-instance mesh) skip
+                # compiling it rather than crash at precompile.
+                if (not force_argmax) and not getattr(self.tt_sampling, "_allow_topk_sampling", True):
+                    continue
                 self._penalties_active = penalties_on
                 # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
                 # the live request params, and only the flag selects the program being compiled.
