@@ -1,0 +1,66 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "target_mesh": {
+    "hardware": "Wormhole B0 T3K (4x n300, 8 chips)",
+    "mesh_shape": [
+      1,
+      8
+    ],
+    "tensor_parallel": 8,
+    "dram_per_device_bytes": 12884901888
+  },
+  "hf_advertised_context": 262144,
+  "current_supported_context": 262144,
+  "per_device_bytes": {
+    "weights": 4089127104,
+    "trace_region_reserved": 1073741824,
+    "state_budget_remaining": 7722665472,
+    "kv_cache_per_page": 278528,
+    "gdn_recurrent_and_conv_per_request": 19243008
+  },
+  "measurement": {
+    "method": "summed live device weight tensors deduplicated by buffer address; KV and GDN state from the decoder's own state_shapes() at TP=8; byte-per-element from ttnn.tile_size (bfloat4_b 0.5625, bfloat8_b 1.0625, float32 4.0)",
+    "commit": "see git log for models/demos/qwen38_27b_t3k",
+    "hardware": "wh-lb LoudBox, ClusterType.T3K, 8x WORMHOLE_B0"
+  },
+  "capacity_evidence": {
+    "note": "Only 16 of 64 layers hold a paged KV cache; the 48 linear_attention layers hold a fixed-size recurrent and convolution state that does not grow with context.",
+    "batch_context_frontier": [
+      {
+        "batch": 1,
+        "context": 262144,
+        "state_gib": 2.14,
+        "fits": true
+      },
+      {
+        "batch": 8,
+        "context": 32768,
+        "state_gib": 2.27,
+        "fits": true
+      },
+      {
+        "batch": 8,
+        "context": 131072,
+        "state_gib": 8.64,
+        "fits": false
+      },
+      {
+        "batch": 16,
+        "context": 32768,
+        "state_gib": 4.54,
+        "fits": true
+      },
+      {
+        "batch": 32,
+        "context": 32768,
+        "state_gib": 9.07,
+        "fits": false
+      }
+    ],
+    "shared_pool_tokens_max_that_fits": 885024,
+    "shared_pool_tokens_recommended": 525312,
+    "shared_pool_derivation": "max = (state_budget_remaining - gdn_recurrent_and_conv_per_request) // kv_cache_per_page * 32 = 27657 pages = 885024 tokens at batch 1. The recommended 525312 is two full contexts plus 1024 of slack, costing 4.258 GiB, chosen to leave headroom for activations and dispatch rather than because it is the ceiling."
+  },
+  "limiting_reason": "none for single-request context; the binding constraint is the shared paged pool across concurrent requests, not the per-request context",
+  "outstanding_verification": "An end-to-end 262144-token run has not been executed on this mesh; the figure above is a capacity result, not a latency or quality result."
+}
