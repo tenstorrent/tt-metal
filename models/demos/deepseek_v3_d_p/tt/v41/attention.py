@@ -39,6 +39,46 @@ def _round_up(x: int, m: int) -> int:
     return -(-x // m) * m
 
 
+# Dense projections on a 2D-multicast program config (bead 8y7.9.7): ttnn's default config for these shapes is 1.4-2x
+# slower at chunk 5120. The K block is per projection: bf16 partial sums round more with wider blocks, so each takes the
+# widest that keeps the default's accuracy (tests/v41/test_v41_attention_matmuls.py sweeps and checks them).
+MATMUL_GRID = (11, 10)  # as tt/mla/mla_config.py
+DENSE_IN0_BLOCK_W = {"wq_a": 5, "wkv": 5, "wq_b": 5, "wo_a": 8}
+DENSE_L1_BUDGET = 1 << 20  # bytes of output block + double-buffered in0 / in1 blocks per core
+# ttnn.linear without a program config runs bf16 x bfp8 at HiFi2 with packer L1 accumulation; a program config alone
+# would select LoFi. Every projection runs this explicit config (the default's numerics).
+DENSE_COMPUTE_CONFIG = ttnn.types.BlackholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+)
+
+
+def dense_program_config(m: int, k: int, n: int, in0_block_w: int):
+    """2D-multicast config of a [m, k] x [k, n] bf16 x bfp8 matmul (per batch) on ``MATMUL_GRID``, or None (ttnn's
+    default) when the blocks do not fit ``DENSE_L1_BUDGET`` or ``in0_block_w`` does not divide K."""
+    tile = 32
+    mt, kt, nt = m // tile, k // tile, n // tile
+    gx, gy = MATMUL_GRID
+    per_core_m, per_core_n = -(-mt // gy), -(-nt // gx)
+    if kt % in0_block_w:
+        return None
+    l1 = per_core_m * per_core_n * 2048 + 2 * per_core_m * in0_block_w * 2048 + 2 * in0_block_w * per_core_n * 1088
+    if l1 > DENSE_L1_BUDGET:
+        return None
+    sub_w = max(w for w in range(1, 9) if per_core_n % w == 0)
+    sub_h = max(h for h in range(1, 9) if per_core_m % h == 0 and h * sub_w <= 8)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=MATMUL_GRID,
+        in0_block_w=in0_block_w,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=None,
+    )
+
+
 class TtV41Attention(LightweightModule):
     def __init__(
         self,
@@ -59,7 +99,7 @@ class TtV41Attention(LightweightModule):
         self.o_groups, self.eps = config.O_GROUPS, config.RMS_NORM_EPS
         self.scale = self.head_dim**-0.5
         self.sp, self.tp = mesh_device.shape
-        self.compute_kernel_config = compute_kernel_config
+        self.compute_kernel_config = compute_kernel_config or DENSE_COMPUTE_CONFIG
         self.ccl = V41Collectives(mesh_device)
         shape = tuple(mesh_device.shape)
         tp_mapper = lambda dim: ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(None, dim))
@@ -124,6 +164,12 @@ class TtV41Attention(LightweightModule):
         )
         self.index_keys = TtV41IndexKeys(mesh_device, config, layer, weights["indexer"]) if self.is_kv_source else None
         self.indexer = TtV41Indexer(mesh_device, config, layer, weights["indexer"]) if self.is_index_source else None
+
+    def _dense(self, x, name: str):
+        """``x @ self.<name>`` on its tuned program config."""
+        w = getattr(self, name)
+        config = dense_program_config(x.shape[-2], w.shape[-2], w.shape[-1], DENSE_IN0_BLOCK_W[name])
+        return ttnn.linear(x, w, program_config=config, compute_kernel_config=self.compute_kernel_config)
 
     def _rope(self, t, cos, sin, inverse=False):
         b, h, s, d = t.shape
@@ -208,17 +254,17 @@ class TtV41Attention(LightweightModule):
         xq = fp8_qdq(x)
 
         qr = ttnn.rms_norm(
-            self.ccl.tp_all_reduce(ttnn.linear(xq, self.wq_a, compute_kernel_config=self.compute_kernel_config)),
+            self.ccl.tp_all_reduce(self._dense(xq, "wq_a")),
             weight=self.q_norm,
             epsilon=self.eps,
         )
-        q = ttnn.linear(fp8_qdq(qr), self.wq_b, compute_kernel_config=self.compute_kernel_config)
+        q = self._dense(fp8_qdq(qr), "wq_b")
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False
         )
 
         kv = ttnn.rms_norm(
-            self.ccl.tp_all_reduce(ttnn.linear(xq, self.wkv, compute_kernel_config=self.compute_kernel_config)),
+            self.ccl.tp_all_reduce(self._dense(xq, "wkv")),
             weight=self.kv_norm,
             epsilon=self.eps,
         )
@@ -278,8 +324,6 @@ class TtV41Attention(LightweightModule):
         x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_local, self.head_dim])
         x = ttnn.experimental.nlp_concat_heads(x)
         x = ttnn.reshape(x, [1, groups_local, seq_local, in_per_group])
-        grouped = ttnn.experimental.nlp_concat_heads(
-            ttnn.linear(x, self.wo_a, compute_kernel_config=self.compute_kernel_config)
-        )  # [1, groups, S, rank] -> [1, 1, S, groups * rank]
+        grouped = ttnn.experimental.nlp_concat_heads(self._dense(x, "wo_a"))  # [1, g, S, rank] -> [1, 1, S, g * rank]
         out = ttnn.linear(fp8_qdq(grouped), self.wo_b, compute_kernel_config=self.compute_kernel_config)
         return self.ccl.tp_reduce_scatter(out)
