@@ -1422,3 +1422,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
+
+## S.moe_full.05 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_full layer 1, attn_hc + attn_hc_pre + attn_norm + q_a + indexer on
+  device, rest CPU). It is swap 04 (moe_full) with its topk overlap check (>= 0.995) replaced by the dense_full swap 05
+  topk checks: normalized integer output (pads -1 / 0xFFFFFFFF), overlap >= 0.99 and worst row >= 0.97 vs golden and
+  vs the CPU indexer on the device attn_norm / q_resid, causal, no repeats, exactly min(pos + 1, 2048) valid per row,
+  own position selected, and the indexer module on golden chunk 0 (must be exactly [0, pos] per row). The gated
+  pcc_swap_out (0.98), the trail and every other swap 04 check (gates, attn_x, attn_norm, q_resid, attn_out, h_mid
+  0.005 / 0.02, router 0.99, out rel 0.01) are unchanged.
+- CPU mutation study at layer 1 (/tmp/hy4_sm5/study.py, the dense study at L = 1 plus router and per-stream columns,
+  outside the repo, ~12 s per variant). Table in the test docstring.
+
+Decisions
+- Overlap limit 0.99 (the component gate), not swap 04's 0.995: the layer-1 device indexer scores 0.9959.
+- Router 0.99 kept: the device run gives 0.99799. It also fails several indexer bugs (RoPE from 0 0.9870, t <= s + 1
+  0.9873, non-causal 0.9688), but the topk checks already catch those.
+
+Gotchas
+- 14 of 21 indexer bugs pass the 0.98 out gate at layer 1 (as at layer 0), including non-causal selection, no k_norm,
+  RoPE from 0 and prefix keys zero (0.98498). The topk checks catch all of them.
+- The trail's pcc_swap_topk is positional match (0.758 for the reference). Ignore it.
+- The first block of printed metrics (pcc 0 / rel 1.0, router 0.37) comes from the precompile collect pass.
+
+Results
+- BRINGUP_IMPL=reference: PASS (topk 0.99909 / worst 0.99658, chunk 0 exact, router 0.99866, out rel 0.00242).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device TtHcGates + TtHcPre + attn_norm + TtQa + TtHy4Indexer): PASS. pcc_swap_out 0.999995. topk vs golden
+  0.99592 / worst 0.98926, vs CPU 0.99602 / 0.98828, self 1.0, chunk 0 exact. attn_out 0.00206 / 0.0046. h_mid
+  0.00225 / 0.0039. router 0.99799. out rel 0.00316.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
