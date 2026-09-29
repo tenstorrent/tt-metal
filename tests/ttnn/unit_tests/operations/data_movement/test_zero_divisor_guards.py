@@ -66,6 +66,17 @@ def _interleaved_to_sharded(device):
     )
 
 
+def _interleaved_to_sharded_memory_config(device):
+    x = _rm(device, (1, 1, 64, 64))
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (64, 0), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn.interleaved_to_sharded(x, mem)
+
+
 def _interleaved_to_sharded_partial(device):
     x = ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.interleaved_to_sharded_partial(
@@ -88,9 +99,19 @@ def _interleaved_to_sharded_partial(device):
         (_slice_write, "Step must be greater than 0"),
         (_concat, "groups must be greater than 0"),
         (_interleaved_to_sharded, "shard_shape must be greater than 0"),
+        (_interleaved_to_sharded_memory_config, "shard_shape must be greater than 0"),
         (_interleaved_to_sharded_partial, "num_slices must be greater than 0"),
     ],
-    ids=["fold", "fold_transpose", "slice_step", "slice_write_step", "concat_groups", "i2s_shard_shape", "i2s_partial"],
+    ids=[
+        "fold",
+        "fold_transpose",
+        "slice_step",
+        "slice_write_step",
+        "concat_groups",
+        "i2s_shard_shape",
+        "i2s_memory_config",
+        "i2s_partial",
+    ],
 )
 def test_zero_divisor_raises(device, expect_error, run, message):
     with expect_error(RuntimeError, message):
