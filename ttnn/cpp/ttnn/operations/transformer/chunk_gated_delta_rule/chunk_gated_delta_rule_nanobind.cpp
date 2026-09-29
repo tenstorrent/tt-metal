@@ -309,11 +309,13 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         Standalone chunked Gated Delta Rule forward (flash-linear-attention algorithm).
 
         Args:
-            q (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]   (bf16 or castable; see Input layouts)
-            k (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]
-            v (ttnn.Tensor):    [B, T, HV, V]  or flat [B, T, HV*V]
-            g (ttnn.Tensor):    [B, T, HV]   log-space decay
-            beta (ttnn.Tensor): [B, T, HV]
+            q (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16; see Input layouts)
+            k (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16)
+            v (ttnn.Tensor):    [B, T, HV, V]  or flat [B, T, HV*V]  (cast to bf16)
+            g (ttnn.Tensor):    [B, T, HV]   log-space decay        (cast to fp32)
+            beta (ttnn.Tensor): [B, T, HV]                          (cast to fp32)
+            All of them, and every optional tensor below, must be device tensors in TILE layout: the
+            op casts dtypes but never relayouts, and a ROW_MAJOR input fails the device op's validation.
 
         Input layouts (selected by the rank of q/k/v; there is no flag):
             Rank 4, head-split: q/k/v carry an explicit head axis. q/k are expected L2-normalized
@@ -324,16 +326,17 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 conv emits, passed RAW (unnormalized, unscaled). No host relayout: the prep reader
                 tile-addresses each head's chunk out of the flat grid, maps value heads to key heads for
                 GQA at read time, and applies the L2 norm over K and `scale` in the kernel. Requires
-                K == V (H is inferred as the flat q width / V, HV from beta's last dim), chunk_size == 32
-                and T a multiple of chunk_size; fused and phased paths only (mono rejects it). The rank of
-                q/k and of v is checked independently, but pass all three the same way. g, beta and
-                initial_state keep the shapes above on both paths. This is the zero-relayout entry point
-                for callers whose q/k/v are already token-major.
+                K == V (assumed, not verifiable from a flat width: K = V, H = flat q width / V, HV =
+                beta's last dim), chunk_size == 32 and T a multiple of chunk_size; fused and phased paths
+                only (mono rejects it). The rank of q/k and of v is checked independently, but pass all
+                three the same way. g, beta and initial_state keep the shapes above on both paths. This is
+                the zero-relayout entry point for callers whose q/k/v are already token-major.
 
         Keyword Args:
             scale (float, optional): defaults to K**-0.5; multiplied into q on the host (rank 4) or in
                 the kernel (rank 3).
-            initial_state (ttnn.Tensor, optional): [B, HV, K, V] fp32 (cast if not); zeros when omitted.
+            initial_state (ttnn.Tensor, optional): [B, HV, K, V] fp32 TILE on device (the dtype is cast
+                if not, the layout is not); zeros when omitted.
             output_final_state (bool): default False.
             chunk_size (int): default 64; 32 is what the models use and the only value the rank-3 path
                 accepts.
@@ -345,20 +348,25 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
                 laid out on the chip — the alternative you pass selects the path, its fields the
                 geometry (see each class). None: the fused path or the phased path depending on the cost model.
-            memory_config (ttnn.MemoryConfig, optional).
+            memory_config (ttnn.MemoryConfig, optional): default DRAM interleaved. Placement of the
+                device op's outputs (the head-major o and final_state) and, on the phased path, of its
+                seven DRAM intermediates; not passed to the token-major post-processing.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): every path runs HiFi4 with
                 fp32 destination accumulation and no approx mode; a config asking for other arithmetic
                 is rejected rather than applied.
             eye, tril, ones (ttnn.Tensor, optional): [1,1,C,C] fp32 TILE constant tiles (identity,
-                lower-triangular ones, all-ones). Caller-supplied. Traced callers MUST pass these;
-                if omitted they are built eagerly.
+                lower-triangular ones, all-ones). Caller-supplied, all four together with masks or none:
+                a partial set is ignored and all four are rebuilt, a host upload on every call, so traced
+                callers MUST pass them. Only dtype and layout are validated, not the shape against
+                chunk_size.
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
-                o [B, T, HV, V] (or [B*HV, T, V] if output_head_major),
-                final_state [B, HV, K, V] (if output_final_state).
+                o [B, T, HV, V] (or [B*HV, T, V] if output_head_major), fp32 on the fused and phased
+                paths, bf16 on mono;
+                final_state [B, HV, K, V] fp32 (if output_final_state).
         )doc";
 
     ttnn::bind_function<"chunk_gated_delta_rule", "ttnn.transformer.">(

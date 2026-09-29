@@ -16,9 +16,11 @@ namespace ttnn::transformer {
 /**
  * Standalone chunked Gated Delta Rule forward (from scratch, FLA algorithm).
  *
- * Implements flash-linear-attention `chunk_gated_delta_rule` forward on-device:
- * one Tensix core per (B*HV) head, sequential over chunks, holding the recurrent
- * state on-core. Matches FLA `naive_chunk_gated_delta_rule` numerics (fp32/HiFi4).
+ * Implements flash-linear-attention `chunk_gated_delta_rule` forward on-device: the sequence is
+ * processed in chunks of chunk_size tokens; the state-independent per-chunk work (WY inverse,
+ * decays, intra-chunk terms) is fanned across cores and the recurrent state [K, V] is carried
+ * from chunk to chunk on-core, in fp32 at HiFi4. Matches FLA `naive_chunk_gated_delta_rule`
+ * numerics. How the work is split over cores is the program_config's choice (below).
  *
  *   q    [B, T, H,  K]   or flat [B, T, H*K]
  *   k    [B, T, H,  K]   or flat [B, T, H*K]
@@ -35,17 +37,25 @@ namespace ttnn::transformer {
  *     Requires K == V (H = flat q width / V, HV from beta), chunk_size == 32 and T % chunk_size == 0;
  *     fused and phased paths only.
  *
+ * All inputs, including the optional tensors, must be device tensors in TILE layout: the op casts
+ * dtypes (q/k/v -> bf16; g, beta, initial_state -> fp32) but never relayouts, and a ROW_MAJOR input
+ * fails the device op's validation. eye/tril/ones/masks are taken all four or none (a partial set
+ * is ignored and all four rebuilt, a host upload on every call); only their dtype and layout are
+ * validated, not their shape against chunk_size. memory_config places the device op's outputs
+ * (and, on the phased path, its seven DRAM intermediates); it is not passed to the token-major
+ * post-processing.
+ *
  * Returns:
  *   o           [B, T, HV, V]           (default; ROW_MAJOR)
  *               [B*HV, T, V]  TILE       (when output_head_major)
- *   final_state [B, HV, K, V]  (present iff output_final_state)
+ *               fp32 on the fused and phased paths, bf16 on mono
+ *   final_state [B, HV, K, V]  fp32      (present iff output_final_state)
  *
  * program_config: which device implementation runs and how it is laid out (chunk_gated_delta_rule_config.hpp):
  * ChunkGdnFusedProgramConfig (one program, NP producers -> NV receivers per head over the NoC),
  * ChunkGdnPhasedProgramConfig (prep -> DRAM -> scan, the bit-exact reference) or
  * ChunkGdnMonoProgramConfig (the single-kernel op). std::nullopt: the fused path with the cost
- * model's geometry when it fits this grid and is predicted to beat phased, else phased. All three
- * paths are bit-identical for the same inputs and compute_kernel_config.
+ * model's geometry when it fits this grid and is predicted to beat phased, else phased.
  *
  * output_head_major: the kernel natively produces o head-major ([BH,T,V]); the default
  * path permutes it to token-major [B,T,HV,V]. Callers that want head-major (e.g. the qwen36
