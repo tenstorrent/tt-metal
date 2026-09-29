@@ -43,7 +43,19 @@ DEVICE_STEPS = {
         "ffn_norm",
         "mlp",
     },
-    "dsa_moe": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "indexer", "attention"},
+    "dsa_moe": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "indexer",
+        "attention",
+        "attn_residual",
+        "ffn_hc",
+        "ffn_collapse",
+        "ffn_norm",
+        "router",
+    },
     "kda_moe": set(),
 }
 
@@ -130,6 +142,24 @@ def _norm_host_fn(mesh, module):
         y = replicated_to_host(yd).reshape(x.shape[-2], -1)
         ttnn.deallocate(xd)
         ttnn.deallocate(yd)
+        return y
+
+    return fn
+
+
+def _router_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> dense routing host [S, E] bf16 around TtRouter (harness boundary: bf16 upload, chip-0
+    read-back)."""
+    import ttnn
+    from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+
+    def fn(ctx, x):
+        s = x.shape[-2]
+        xd = replicate(mesh, x.reshape(1, 1, s, x.shape[-1]).to(torch.bfloat16))
+        dense, idx, wts = module(xd)
+        y = replicated_to_host(dense).reshape(s, -1)
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
         return y
 
     return fn
@@ -287,6 +317,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
 
         return _norm_host_fn(mesh, build_mlp(mesh, loader, cfg, layer))
+    if step == "router":
+        from models.demos.glm53_flash_d_p.tt.router import build_router
+
+        return _router_host_fn(mesh, build_router(mesh, loader, cfg, layer, max(_chunks(spec))))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
