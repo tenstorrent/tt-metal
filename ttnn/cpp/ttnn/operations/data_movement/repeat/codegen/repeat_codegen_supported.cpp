@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_supported.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <optional>
 
@@ -92,6 +93,73 @@ bool tile_geometry_ok(const Tensor& input) {
     const auto& tile = input.tensor_spec().tile();
     return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
+}
+
+// A measured perf loss with no identified mechanism, matched exactly. `input_shard_cores` is 0 for an
+// interleaved input; a sharded input or output is ROW_MAJOR-oriented. An interleaved output matches in
+// either buffer type unless `output_buffer` pins one.
+struct UngeneralizedDemotion {
+    std::array<uint32_t, 4> shape;
+    std::array<uint32_t, 4> repeat_dims;
+    DataType dtype;
+    Layout layout;
+    TensorMemoryLayout input_layout;
+    uint32_t input_shard_cores;
+    TensorMemoryLayout output_layout;
+    std::optional<BufferType> output_buffer;
+};
+
+// Ungeneralized: each entry is one measured case, not a condition. Replace an entry with a predicate once
+// the cause of its loss is known.
+constexpr TensorMemoryLayout kInterleaved = TensorMemoryLayout::INTERLEAVED;
+constexpr TensorMemoryLayout kHeight = TensorMemoryLayout::HEIGHT_SHARDED;
+constexpr TensorMemoryLayout kWidth = TensorMemoryLayout::WIDTH_SHARDED;
+const std::array<UngeneralizedDemotion, 13> kUngeneralizedDemotions = {{
+    {{1, 2, 6, 12}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 8, 16}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 12, 24}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 14, 28}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 16, 32}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 18, 36}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 20, 40}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 22, 44}, {1, 2, 1, 1}, DataType::BFLOAT16, Layout::ROW_MAJOR, kInterleaved, 0, kInterleaved, {}},
+    {{1, 2, 128, 64}, {1, 1, 1, 2}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 4, kHeight, {}},
+    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::BFLOAT16, Layout::TILE, kHeight, 8, kHeight, {}},
+    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::TILE, kHeight, 8, kHeight, {}},
+    {{1, 2, 256, 128}, {2, 1, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kHeight, 8, kInterleaved, BufferType::L1},
+    {{1, 2, 64, 128}, {2, 2, 1, 1}, DataType::FLOAT32, Layout::ROW_MAJOR, kWidth, 4, kWidth, {}},
+}};
+
+bool placement_matches(const MemoryConfig& memory_config, TensorMemoryLayout layout, uint32_t shard_cores) {
+    if (memory_config.memory_layout() != layout) {
+        return false;
+    }
+    if (layout == kInterleaved) {
+        return true;
+    }
+    const auto& shard_spec = memory_config.shard_spec();
+    return shard_spec.has_value() && shard_spec->orientation == ShardOrientation::ROW_MAJOR &&
+           (shard_cores == 0 || shard_spec->grid.num_cores() == shard_cores);
+}
+
+bool is_ungeneralized_demotion(
+    const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
+    const auto& shape = input.logical_shape();
+    if (shape.rank() != 4 || repeat_dims.size() != 4) {
+        return false;
+    }
+    return std::any_of(kUngeneralizedDemotions.cbegin(), kUngeneralizedDemotions.cend(), [&](const auto& c) {
+        for (uint32_t d = 0; d < 4; ++d) {
+            if (shape[d] != c.shape[d] || repeat_dims[d] != c.repeat_dims[d]) {
+                return false;
+            }
+        }
+        // The output shard spec is resized for the repeated shape, so only its strategy is pinned.
+        return input.dtype() == c.dtype && input.layout() == c.layout &&
+               placement_matches(input.memory_config(), c.input_layout, c.input_shard_cores) &&
+               placement_matches(output_mem_config, c.output_layout, 0) &&
+               (!c.output_buffer.has_value() || output_mem_config.buffer_type() == *c.output_buffer);
+    });
 }
 
 }  // namespace
@@ -358,6 +426,9 @@ bool supported_by_codegen(
 // repeated axes native unshards up front too, and the two routes compete on equal terms.
 bool is_demoted(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
+    if (is_ungeneralized_demotion(input, repeat_dims, output_mem_config)) {
+        return true;
+    }
     const auto& input_mc = input.memory_config();
     if (input.layout() != Layout::ROW_MAJOR || !input_mc.is_sharded() ||
         shard_spec_is_page_identical(input_mc, input.logical_shape(), Layout::ROW_MAJOR)) {
