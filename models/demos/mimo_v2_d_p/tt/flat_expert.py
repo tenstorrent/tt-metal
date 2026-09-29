@@ -15,8 +15,10 @@ tests/perf/FLAT_EXPERT_WORKLOG.md for the design, measurements and the MIMO_FL_*
     y = fe(dispatch_buffer_rm_bf16, counts, regions)        # y: [rows, H] bfp8 TILE, expert e's rows at its region
 """
 
+import hashlib
 import json
 import os
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -260,10 +262,11 @@ def _layout(device, x2=False, xcol=0, nh=1, nsg=1, sg_rects=None):
     return grid, phys, readers, gu, rects, relays, down
 
 
-def _bank_sharded(regions_per_dev, banks, dtype, device):
+def _bank_sharded(regions_per_dev, banks, dtype, device, cache_file=None):
     """Per-core weight regions (equal-size [tiles, 32, 32]) -> one width-sharded DRAM tensor: core i's region is
     contiguous in bank i % banks at byte offset (i // banks) * region bytes. One region list per device (a mesh:
-    row-major device order; lockstep allocation gives every device the same address)."""
+    row-major device order; lockstep allocation gives every device the same address). ``cache_file``: also dump the
+    host (bfp-packed) tensor there, for _load_cached."""
     hosts = []
     for regions in regions_per_dev:
         per = -(-len(regions) // banks)
@@ -279,16 +282,25 @@ def _bank_sharded(regions_per_dev, banks, dtype, device):
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(grid, (hosts[0].shape[0], 32), ttnn.ShardOrientation.ROW_MAJOR),
     )
-    if len(hosts) == 1:
-        return ttnn.from_torch(hosts[0], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
-    return ttnn.from_torch(
-        torch.stack(hosts),
+    one = len(hosts) == 1
+    host = ttnn.from_torch(
+        hosts[0] if one else torch.stack(hosts),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
         memory_config=mc,
-        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        mesh_mapper=None if one else ttnn.ShardTensorToMesh(device, dim=0),
     )
+    if cache_file is not None:
+        Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(cache_file), host)
+    return host.to(device, mc)
+
+
+def _load_cached(cache_file, device):
+    """A _bank_sharded tensor from its dump (the memory config is part of the stored spec), or None."""
+    if cache_file is None or not Path(cache_file).is_file():
+        return None
+    return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(cache_file), device=device)
 
 
 def _kd_of(pcd, it):
@@ -1223,7 +1235,17 @@ class FlatExpert:
                             kernel_source=f"{KDIR_OP}/se11_xrd.cpp",
                             source_type=FP,
                             core_ranges=rl_crs,
-                            compile_time_args=[0, H * 2, E, MT, nsb, S, XRD_BATCH],
+                            compile_time_args=[
+                                0,
+                                H * 2,
+                                E,
+                                MT,
+                                nsb,
+                                S,
+                                XRD_BATCH,
+                                0,
+                                1,
+                            ],  # 7: token index arg (unused), 8: pages per row
                             runtime_args=xr_rt,
                             defines=[("SE_SBT", str(SBT))]
                             + zones
@@ -1715,27 +1737,40 @@ class FlatRoutedExpert:
     op re-applies every buffer address itself on a program-cache hit (per-call arena / words / x / y cost nothing
     on the host). weights / gids as for FlatExpert."""
 
-    def __init__(self, device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1):
-        E, n_dev = len(weights[0]), len(weights)
-        assert all(len(w_) == E for w_ in weights) and len(gids) == n_dev
+    def __init__(self, device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1, cache_prefix=None):
+        """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
+        (only called when the weight cache misses). ``cache_prefix``: path stem of the laid-out weight cache; the
+        file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale layout."""
+        E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self.plan = ttnn._ttnn.operations.experimental.flat_routed_expert_plan(
             device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin
         )
         lay = dict(self.plan)
         w_dtype = W_DTYPES[wdtype][0]
-        w_all, wd_all, wr_all = [], [], []
-        for W_l in weights:
-            regions, dregs, rregs = flat_weight_regions(W_l, lay)
-            w_all.append(regions)
-            wd_all.append(dregs)
-            if lay["rdown"]:
-                wr_all.append(rregs)
         banks = lay["banks"]
-        self.w_gu = _bank_sharded(w_all, banks, w_dtype, device)
-        self.w_d = _bank_sharded(wd_all, banks, w_dtype, device)
-        self.w_rd = _bank_sharded(wr_all, banks, w_dtype, device) if lay["rdown"] else None
-        del w_all, wd_all, wr_all
+        names = ("w_gu", "w_d", "w_rd") if lay["rdown"] else ("w_gu", "w_d")
+        files = dict.fromkeys(names)
+        if cache_prefix is not None:
+            key = hashlib.sha1(repr((sorted(lay.items()), gids, n_dev)).encode()).hexdigest()[:12]
+            files = {n: f"{cache_prefix}.flat.{wdtype}.{key}.{n}.tensorbin" for n in names}
+        cached = {n: _load_cached(files[n], device) for n in names}
+        if any(t is None for t in cached.values()):
+            weights = weights() if callable(weights) else weights
+            assert len(weights) == n_dev and all(len(w_) == E for w_ in weights)
+            w_all, wd_all, wr_all = [], [], []
+            for W_l in weights:
+                regions, dregs, rregs = flat_weight_regions(W_l, lay)
+                w_all.append(regions)
+                wd_all.append(dregs)
+                if lay["rdown"]:
+                    wr_all.append(rregs)
+            del weights
+            src = {"w_gu": w_all, "w_d": wd_all, "w_rd": wr_all}
+            cached = {n: _bank_sharded(src[n], banks, w_dtype, device, files[n]) for n in names}
+            del w_all, wd_all, wr_all, src
+        self.w_gu, self.w_d = cached["w_gu"], cached["w_d"]
+        self.w_rd = cached.get("w_rd")
         gid_host = torch.tensor(gids, dtype=torch.int32).reshape(n_dev, 1, E)
         mesh = n_dev > 1
         self.gidx = ttnn.from_torch(
@@ -1759,9 +1794,12 @@ class FlatRoutedExpert:
             ),
         )
 
-    def __call__(self, x, counts, regions):
+    def __call__(self, x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False):
         """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32 rows.
-        Returns y [rows, H] bfp8 TILE (the active experts' rows)."""
+        token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
+        token_index[r]. x_pages_per_row P: x is [rows * P, H / P] (P = 8: every row spread over the 8 DRAM banks).
+        Returns y [rows, H] bfp8 TILE (the active experts' rows); ``y_row_major``: bf16 ROW_MAJOR (pack-untilized on
+        the down cores, no separate untilize)."""
         return ttnn.experimental.deepseek_prefill.flat_routed_expert(
             x,
             counts,
@@ -1775,4 +1813,7 @@ class FlatRoutedExpert:
             max_tokens_per_expert=self.m,
             activation=self.act,
             pin=self.pin,
+            token_index=token_index,
+            x_pages_per_row=x_pages_per_row,
+            y_row_major=y_row_major,
         )

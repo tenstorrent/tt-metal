@@ -28,6 +28,12 @@
 #ifdef SE_DYN
 #include "se_dyn.hpp"
 #endif
+#ifdef SE_Y_RM
+#include "se_yrm.hpp"
+#if !defined(SE_DYN) || !defined(SE_E2E) || defined(SE_SMALL_T)
+#error "SE_Y_RM needs SE_DYN + SE_E2E (and no SE_SMALL_T)"
+#endif
+#endif
 
 void kernel_main() {
     constexpr uint32_t h_all_cb = get_compile_time_arg_val(0);
@@ -102,6 +108,9 @@ void kernel_main() {
         .bank_base_address = get_arg_val<uint32_t>(6), .page_size = 2048, .data_format = DataFormat::Float16_b};
 #endif
     const uint32_t col0 = get_arg_val<uint32_t>(7);
+#ifdef SE_Y_RM
+    SeYRmWriter<out_cb, pcd, mt, ht> yw(get_arg_val<uint32_t>(6), col0);
+#endif
     const uint32_t done_words = get_arg_val<uint32_t>(8);
     const uint32_t my_index = get_arg_val<uint32_t>(9);
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
@@ -163,6 +172,13 @@ void kernel_main() {
 #else
         constexpr bool x_ready = true;
 #endif
+#ifdef SE_Y_RM
+        yw.issue(dyn);
+        if (yw.retire(dyn)) {
+            noc_semaphore_inc(done_noc, 1);
+            ++out_done;
+        }
+#else
         if (!y_pending && out_done < num_v && x_ready && cb_pages_available_at_front(out_cb, out_tiles)) {
             const uint32_t src = get_read_ptr(out_cb);
             for (uint32_t r = 0; r < mt; ++r) {
@@ -210,6 +226,7 @@ void kernel_main() {
 #endif
             y_pending = false;
         }
+#endif
         bool all_done = is_coord && go_sent + 1 < num_v;
         for (uint32_t d = 0; all_done && d < n_down_e; ++d) {
             all_done = dw[d] >= go_sent + 1;

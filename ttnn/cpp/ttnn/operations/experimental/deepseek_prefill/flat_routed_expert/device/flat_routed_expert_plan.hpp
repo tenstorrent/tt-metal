@@ -34,6 +34,7 @@ struct FlatRoutedExpertConfig {
     bool weights_bf8 = false;         // weight tiles bfp8 (else bfp4)
     uint32_t activation = 0;          // se3_compute.cpp SE_ACT
     uint32_t pin = 1;                 // SE_PIN_MIN (0: no pinning)
+    bool y_row_major = false;         // y as row-major bf16 [rows, H] (else bfp8 tiles); no effect on the plan
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -43,10 +44,19 @@ struct FlatRoutedExpertConfig {
         "max_tokens",
         "weights_bf8",
         "activation",
-        "pin");
+        "pin",
+        "y_row_major");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            hidden, intermediate, experts_per_chip, num_global_experts, max_tokens, weights_bf8, activation, pin);
+            hidden,
+            intermediate,
+            experts_per_chip,
+            num_global_experts,
+            max_tokens,
+            weights_bf8,
+            activation,
+            pin,
+            y_row_major);
     }
 };
 

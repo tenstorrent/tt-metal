@@ -16,6 +16,9 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/pack.h"
+#ifdef SE_Y_RM
+#include "api/compute/pack_untilize.h"
+#endif
 #ifdef SE_ZONES
 #include "tools/profiler/kernel_profiler.hpp"
 #endif
@@ -48,8 +51,26 @@ constexpr uint32_t dst_cols = 4;
 #else
 constexpr uint32_t dst_cols = 8;
 #endif
+#ifdef SE_Y_RM
+// pack_untilize places column block c at c * block width, so every pass has the same width: the largest divisor of
+// PCD that fits DST
+constexpr uint32_t largest_div(uint32_t n, uint32_t cap) {
+    for (uint32_t d = cap < n ? cap : n; d > 1; --d) {
+        if (n % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
+constexpr uint32_t cpw = largest_div(pcd, dst_cols);
+#else
 constexpr uint32_t cpw = pcd < dst_cols ? pcd : dst_cols;
+#endif
 static_assert(pcd <= 16 && kt_d % kblk_d == 0 && kt_d % hk == 0 && ring >= nblk);
+#ifdef SE_Y_RM
+// Row-major y: each row tile is pack-untilized into PCD pages (32 rows x PCD * 32 bf16) and pushed on its own
+static_assert(pcd % cpw == 0);
+#endif
 
 uint32_t popped = 0;
 
@@ -91,6 +112,9 @@ FORCE_INLINE uint32_t wblock(uint32_t a) {
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_all_cb, in1_cb, out_cb);
     matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
+#ifdef SE_Y_RM
+    pack_untilize_dest_init<cpw, pcd>(out_cb);
+#endif
 #ifdef SE_DYN
     // Dynamic counts: CB 6 holds [n_act, num_v, subs of each active expert] (from the down core's data movement); the
     // in1 ring holds only the active experts, so an active expert's index is its place in the stream.
@@ -129,9 +153,14 @@ void kernel_main() {
 #ifdef SE_ZONES
         DeviceZoneScopedN("SE_DOWN");
 #endif
+#ifndef SE_Y_RM
         cb_reserve_back(out_cb, mt * pcd);
+#endif
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
+#ifdef SE_Y_RM
+            cb_reserve_back(out_cb, pcd);
+#endif
             for (uint32_t c0 = 0; c0 < pcd; c0 += cpw) {
                 const uint32_t cw = pcd - c0 < cpw ? pcd - c0 : cpw;
                 const bool final_pass = c0 + cw == pcd;
@@ -160,11 +189,18 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef SE_Y_RM
+                pack_untilize_dest<cpw, pcd>(out_cb, 1, c0 / cpw);
+#else
                 for (uint32_t i = 0; i < cw; ++i) {
                     pack_tile<true>(i, out_cb, r * pcd + c0 + i);  // row-major [MT x PCD]
                 }
+#endif
                 tile_regs_release();
             }
+#ifdef SE_Y_RM
+            cb_push_back(out_cb, pcd);
+#endif
         }
 #ifdef SE_SMALL_T
         if (xs) {
@@ -196,7 +232,9 @@ void kernel_main() {
         }
 #endif
         cb_pop_front(h_all_cb, h_all_tiles);
+#ifndef SE_Y_RM
         cb_push_back(out_cb, mt * pcd);
+#endif
 #ifndef SE_EARLY_POP
         if (last_sub) {  // the expert's last sub-block: its weights can go
             cb_pop_front(in1_cb, nblk * slot);

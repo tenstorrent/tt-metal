@@ -57,26 +57,31 @@ ttnn::Tensor flat_routed_expert(
     uint32_t intermediate,
     uint32_t max_tokens_per_expert,
     uint32_t activation,
-    uint32_t pin) {
+    uint32_t pin,
+    const std::optional<ttnn::Tensor>& token_index,
+    uint32_t x_pages_per_row,
+    bool y_row_major) {
     using namespace tt::tt_metal;
     FlatRoutedExpertConfig cfg{
-        .hidden = x.logical_shape()[-1],
+        .hidden = x.logical_shape()[-1] * x_pages_per_row,
         .intermediate = intermediate,
         .experts_per_chip = static_cast<uint32_t>(global_expert_ids.logical_volume()),
         .num_global_experts = counts.logical_shape()[-1],
         .max_tokens = (max_tokens_per_expert + 31) / 32 * 32,
         .weights_bf8 = gate_up_weights.dtype() == DataType::BFLOAT8_B,
         .activation = activation,
-        .pin = pin};
+        .pin = pin,
+        .y_row_major = y_row_major};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
         plan->rdown == reader_down_weights.has_value(),
         "flat_routed_expert: reader_down_weights iff the plan has reader tails");
     const ttnn::Tensor output = ttnn::empty(
-        ttnn::Shape({x.logical_shape()[-2], cfg.hidden}),
-        DataType::BFLOAT8_B,
-        Layout::TILE,
+        ttnn::Shape(
+            {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row, cfg.hidden}),
+        y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+        y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
         device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     // per-launch scratch: the arena (every role's buffers) and the relays' freed words; freed right after the launch
@@ -96,7 +101,8 @@ ttnn::Tensor flat_routed_expert(
             .done_words = done_words,
             .arena = arena,
             .words = words,
-            .output = output});
+            .output = output,
+            .token_index = token_index});
     arena.deallocate(true);
     words.deallocate(true);
     return y;

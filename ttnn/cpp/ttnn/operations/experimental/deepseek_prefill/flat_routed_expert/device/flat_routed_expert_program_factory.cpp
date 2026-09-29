@@ -185,8 +185,26 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     for (const auto& [r, tail] : p.rdn) {
         tail_succ[tail] = pk(p.readers[r]);
     }
+    // row-major y (cfg.y_row_major): the down compute pack-untilizes, the writers send row segments (se_yrm.hpp)
+    const bool yrm = cfg.y_row_major;
+    // the row-major out CB (bf16 row tiles of PCD pages) takes what the down cores' arena holds after the out region's
+    // start (the plan sizes the arena for the largest role; the plan's 2 KB margin is kept), at most 2 MT (a virtual
+    // expert ahead) and 8 (the writers' transaction ids 8..15)
+    auto yrm_rows = [&](uint32_t pw) {
+        const uint32_t room = p.arena_tiles * 2048 - p.o_off - 2048;
+        return std::min({room / (pw * 2048), 2 * MT, 8u});
+    };
+    auto yrm_def = [&](Defines d, uint32_t pw = 0) {
+        if (yrm) {
+            d["SE_Y_RM"] = "1";
+            if (pw) {
+                d["SE_Y_RM_ROWS"] = std::to_string(yrm_rows(pw));
+            }
+        }
+        return d;
+    };
     if (p.rdown) {
-        const Defines rdn_def = with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}});
+        const Defines rdn_def = yrm_def(with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
         const auto k =
             dm("se9_rdown.cpp",
                rdn_cores,
@@ -200,7 +218,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             cp("se6_dcompute.cpp",
                rdn_cores,
                {MTG, G, It, p.kd_r, p.pcd_r, E, S, p.slot_dr, p.ring_dr},
-               with(dyn_def, {{"SE_EARLY_POP", "1"}}));
+               yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}})));
         for (uint32_t i = 0; i < p.rdn.size(); ++i) {
             const auto [r, t_] = p.rdn[i];
             Args a;
@@ -268,13 +286,20 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return n;
     };
     {
+        // indexed mode: the token index address is the relay reader's last runtime arg (after dyn + subgrid)
+        const bool indexed = t.token_index.has_value();
+        const uint32_t idx_arg = 3 + static_cast<uint32_t>(dyn.v.size()) + static_cast<uint32_t>(sgx(0).size());
+        Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}});
+        if (indexed) {
+            xrd_def["XRD_INDEXED"] = "1";
+        }
         const auto kxr =
             dm("se11_xrd.cpp",
                p.relays,
                DataMovementProcessor::RISCV_0,
                NOC::NOC_1,
-               {0, p.H * 2, E, MT, p.nsb, S, XRD_BATCH},
-               with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}}));
+               {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, XRD_BATCH, idx_arg, p.H / t.x.logical_shape()[-1]},
+               xrd_def);
         const auto ktz = cp("se11_tz.cpp", p.relays, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
         const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + NR);
         const auto kxm =
@@ -309,6 +334,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             const auto [x0, x1, y0, y1] = p.rects[k];
             Args xr;
             xr.a(AddrSrc::X).lit(p.vstride).lit(rl_off(idx)).cat(dyn).lits(sgx(k));
+            if (indexed) {
+                xr.a(AddrSrc::TokenIndex);
+            }
             add_rt(kxr, rl, xr);
             SetRuntimeArgs(program, ktz, rl, std::vector<uint32_t>{rl_sb(idx)});
             if (idx < NR) {
@@ -418,7 +446,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {2,     p.h_tiles, H_TILE, H_PIECES, 16, out,    V,  S,  ngu_sg, p.nd_sg + p.n_rdn,
                 HARR,  HSFREE,    GATH,   DONE,     GO, p.hbuf, MT, pw, Ht,     GATH,
                 GATH1, GATH2,     E},
-               with(dyn_def, {{"SE_E2E", "1"}}));
+               yrm_def(with(dyn_def, {{"SE_E2E", "1"}}), pw));
         const auto kw =
             dm("se6_dw.cpp",
                cores,
@@ -426,8 +454,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                NOC::NOC_0,
                {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E},
                dyn_def);
-        const auto kc = cp(
-            "se6_dcompute.cpp", cores, {MTG, G, It, kd, pw, E, S, slot, ring}, with(dyn_def, {{"SE_EARLY_POP", "1"}}));
+        const auto kc =
+            cp("se6_dcompute.cpp",
+               cores,
+               {MTG, G, It, kd, pw, E, S, slot, ring},
+               yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}})));
         for (uint32_t d : ds) {
             const CoreCoord dc = p.down[d];
             const uint32_t sg = p.sg_dn(d);
@@ -482,6 +513,16 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             CreateCircularBuffer(program, rect_ranges(cores), c);
         };
     const auto wf = w_format(cfg.weights_bf8);
+    // the down output CB in the arena's out region (bytes = the bfp8 double block): bfp8 tiles, or with row-major y
+    // bf16 row tiles of PCD pages each (as many whole row tiles as the region holds: MT for MT <= 16)
+    auto out_cb = [&](const std::vector<CoreCoord>& cores, uint32_t pw, uint32_t bytes) {
+        if (!yrm) {
+            arena_cb(16, p.o_off, bytes, cores, tt::DataFormat::Bfp8_b, BF8_TILE);
+            return;
+        }
+        TT_FATAL(yrm_rows(pw) >= 1, "flat_routed_expert: row-major y: no room for one row tile");
+        arena_cb(16, p.o_off, yrm_rows(pw) * pw * 2048, cores, tt::DataFormat::Float16_b, 2048);
+    };
     arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, p.readers, wf, w_tile);
     arena_cb(0, 0, RM_CHUNKS * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
     arena_cb(1, p.sb_off, SB_SLOTS * MT * p.sbt * BF8_TILE, p.relays, tt::DataFormat::Bfp8_b, BF8_TILE);
@@ -501,12 +542,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             cores.push_back(p.down[d]);
         }
         arena_cb(1, 0, ring * kd * pw * w_tile, cores, wf, w_tile);
-        arena_cb(16, p.o_off, 2 * MT * pw * BF8_TILE, cores, tt::DataFormat::Bfp8_b, BF8_TILE);
+        out_cb(cores, pw, 2 * MT * pw * BF8_TILE);
     }
     if (p.rdown) {
         arena_cb(1, p.rd_off, p.ring_dr * p.slot_dr * w_tile, rdn_cores, wf, w_tile);
         arena_cb(2, p.h_off, p.hbuf * p.h_tiles * H_TILE, rdn_cores, tt::DataFormat::Bfp8_b, H_TILE);
-        arena_cb(16, p.o_off, 2 * p.out_tiles_r * BF8_TILE, rdn_cores, tt::DataFormat::Bfp8_b, BF8_TILE);
+        out_cb(rdn_cores, p.pcd_r, 2 * p.out_tiles_r * BF8_TILE);
     }
     static_cb(6, meta_bytes, arena_cores, tt::DataFormat::UInt32, meta_bytes);
     static_cb(7, 4 * dyn_half, arena_cores, tt::DataFormat::UInt32, 4 * dyn_half);
@@ -532,6 +573,7 @@ void FlatRoutedExpertProgramFactory::override_runtime_arguments(
     addr[size_t(AddrSrc::Done)] = t.done_words.buffer()->address();
     addr[size_t(AddrSrc::Arena)] = t.arena.buffer()->address();
     addr[size_t(AddrSrc::Words)] = t.words.buffer()->address();
+    addr[size_t(AddrSrc::TokenIndex)] = t.token_index ? t.token_index->buffer()->address() : 0;
     for (const auto& pa : cached.shared_variables.patches) {
         GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
     }

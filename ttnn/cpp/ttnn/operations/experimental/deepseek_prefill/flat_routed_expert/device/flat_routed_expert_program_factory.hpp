@@ -13,7 +13,21 @@
 namespace ttnn::operations::experimental::deepseek_prefill::flat_routed_expert {
 
 // Buffers whose addresses the runtime args carry (re-applied on every program-cache hit).
-enum class AddrSrc : uint8_t { X, Y, Counts, Regions, Ids, GateUp, Down, ReaderDown, Done, Arena, Words, Count };
+enum class AddrSrc : uint8_t {
+    X,
+    Y,
+    Counts,
+    Regions,
+    Ids,
+    GateUp,
+    Down,
+    ReaderDown,
+    Done,
+    Arena,
+    Words,
+    TokenIndex,
+    Count
+};
 
 struct AddrPatch {
     tt::tt_metal::KernelHandle kernel;

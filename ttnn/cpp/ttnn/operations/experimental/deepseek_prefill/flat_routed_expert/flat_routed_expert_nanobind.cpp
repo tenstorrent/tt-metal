@@ -104,9 +104,19 @@ void bind_flat_routed_expert(nb::module_& mod) {
         Keyword Args:
             activation (int): 0 SiLU, 1 SwiGluOai, 2 SituGlu, 3 ClampedSiluGlu, 4 GeluTanh.
             pin (int): pin the largest expert's weights in chunks of >= pin sub-blocks (0: off).
+            token_index (ttnn.Tensor, optional): [1, rows] uint32 ROW_MAJOR DRAM. Indexed mode: row r of the flat
+                (region) space reads x row token_index[r] (x is then e.g. the all-gathered tokens, not a dispatch
+                buffer); y has token_index's rows.
+            x_pages_per_row (int): x stores each token row as this many consecutive pages ([rows * P, H / P]
+                row-major): P = 8 at H 4096 puts a 1 KB piece of every row in each of the 8 DRAM banks, so the reads
+                stay bank-balanced whatever rows the routing picks.
+
+            y_row_major (bool): y as row-major bf16 [rows, H] (one page per row), pack-untilized on the down cores,
+                instead of bfp8 tiles.
 
         Returns:
-            ttnn.Tensor: y [rows, H] bfp8 TILE, written at the active experts' rows.
+            ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
+            indexed mode), written at the active experts' rows.
         )doc",
         &fre::flat_routed_expert,
         nb::arg("dispatched_buffer").noconvert(),
@@ -121,7 +131,10 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("max_tokens_per_expert"),
         nb::kw_only(),
         nb::arg("activation") = 0,
-        nb::arg("pin") = 1);
+        nb::arg("pin") = 1,
+        nb::arg("token_index") = nb::none(),
+        nb::arg("x_pages_per_row") = 1,
+        nb::arg("y_row_major") = false);
 
     mod.def(
         "flat_routed_expert_plan",

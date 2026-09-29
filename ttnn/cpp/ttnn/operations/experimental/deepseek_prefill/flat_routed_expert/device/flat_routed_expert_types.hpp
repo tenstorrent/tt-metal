@@ -25,6 +25,9 @@ struct FlatRoutedExpertInputs {
     Tensor arena;       // per-launch L1 scratch on every role core (FlatRoutedExpertPlan::arena_tiles)
     Tensor words;       // per-launch L1 words on the x relays
     Tensor output;      // [rows, H] bfp8 TILE, DRAM interleaved (only active experts' rows written)
+    // indexed mode: [1, rows] uint32 row-major DRAM; flat row r reads x row token_index[r] (x = e.g. all-gathered
+    // tokens instead of a dispatch buffer)
+    std::optional<Tensor> token_index;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::flat_routed_expert

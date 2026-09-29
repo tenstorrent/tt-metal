@@ -20,6 +20,12 @@
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
+#ifdef SE_Y_RM
+#include "se_yrm.hpp"
+#if !defined(SE_DYN) || !defined(SE_E2E) || defined(SE_SMALL_T)
+#error "SE_Y_RM needs SE_DYN + SE_E2E (and no SE_SMALL_T)"
+#endif
+#endif
 #endif
 #if defined(SE_DN_REG) && !defined(SE9_TRID)
 #error "pinned down ring needs the trid reader (SE9_TRID)"
@@ -71,6 +77,9 @@ void kernel_main() {
         .bank_base_address = get_arg_val<uint32_t>(10), .page_size = 2048, .data_format = DataFormat::Float16_b};
 #endif
     const uint32_t col0 = get_arg_val<uint32_t>(11);
+#ifdef SE_Y_RM
+    SeYRmWriter<out_cb, pcd, mt, ht> yw(get_arg_val<uint32_t>(10), col0);
+#endif
     volatile tt_l1_ptr uint32_t* harr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(harr_sem_id));
 
 #ifdef SE_DYN
@@ -207,6 +216,13 @@ void kernel_main() {
             h_rep = h_cons;
         }
         // output
+#ifdef SE_Y_RM
+        yw.issue(dyn);
+        if (yw.retire(dyn)) {
+            noc_semaphore_inc(done_noc, 1);
+            ++out_done;
+        }
+#else
         if (!y_pending && out_done < num_v && cb_pages_available_at_front(out_cb, out_tiles)) {
             const uint32_t src = get_read_ptr(out_cb);
             for (uint32_t r = 0; r < mt; ++r) {
@@ -242,9 +258,13 @@ void kernel_main() {
             }
 #endif
         }
+#endif
     }
 #ifdef SE9_TRID
     noc_async_read_set_trid(0);
+#endif
+#ifdef SE_Y_RM
+    noc_async_write_set_trid(0);  // y rows went out on write transaction ids: leave the packet tag at 0
 #endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();

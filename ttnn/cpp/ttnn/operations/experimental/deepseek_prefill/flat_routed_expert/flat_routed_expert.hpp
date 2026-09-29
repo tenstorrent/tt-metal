@@ -30,7 +30,10 @@ ttnn::Tensor flat_routed_expert(
     uint32_t intermediate,
     uint32_t max_tokens_per_expert,
     uint32_t activation,
-    uint32_t pin);
+    uint32_t pin,
+    const std::optional<ttnn::Tensor>& token_index = std::nullopt,
+    uint32_t x_pages_per_row = 1,
+    bool y_row_major = false);
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
