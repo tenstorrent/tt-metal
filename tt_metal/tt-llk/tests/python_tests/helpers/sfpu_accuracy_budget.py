@@ -58,7 +58,8 @@ MEASURED_ARCH = ChipArchitecture.WORMHOLE
 #: ambiguous, and :data:`PENDING_AMBIGUOUS` tells the recorder to drop that reading
 #: rather than file it under the wrong variant. A query left over from a *previous* test
 #: is only stale -- the exhaustive sweep resolves and then skips every tolerance cell --
-#: so it is replaced; flagging it dropped every reading that followed a skip.
+#: so it is replaced, and so is the flag: flagging it dropped every reading that
+#: followed a skip, and so did a flag left behind by an ambiguous test that skipped.
 LAST_QUERY: Optional[Tuple[Any, ...]] = None
 PENDING_AMBIGUOUS: bool = False
 
@@ -447,8 +448,9 @@ def accuracy_contract(
     # Tag the variant for --ulp-measure; LAST_QUERY explains the rules.
     global LAST_QUERY, PENDING_AMBIGUOUS
     here = _current_test()
-    if LAST_QUERY is not None and LAST_QUERY[0] == here:
-        PENDING_AMBIGUOUS = True
+    # Recomputed, never only set: an ambiguous test that skips before comparing would
+    # otherwise hand its flag to the next test and drop that test's reading.
+    PENDING_AMBIGUOUS = LAST_QUERY is not None and LAST_QUERY[0] == here
     LAST_QUERY = (here, op.name, input_format, output_format, approx_mode, dest_acc)
 
     table = _SFPU_ACCURACY_BUDGET.get(op)

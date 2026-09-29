@@ -528,13 +528,20 @@ def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch
     monkeypatch.setattr(budget, "LAST_QUERY", None)
     monkeypatch.setattr(budget, "PENDING_AMBIGUOUS", False)
 
+    # An ambiguous test that exits before comparing must not hand its flag on.
+    resolve("t_zero")
+    resolve("t_zero")
+    assert budget.PENDING_AMBIGUOUS
     resolve("t_one")
+    assert not budget.PENDING_AMBIGUOUS
     resolve("t_two")
     assert not budget.PENDING_AMBIGUOUS
     assert budget.LAST_QUERY[0] == "t_two"
 
     resolve("t_three")
     resolve("t_three")
+    assert budget.PENDING_AMBIGUOUS
+    resolve("t_three")  # a third lookup in the same test is still ambiguous
     assert budget.PENDING_AMBIGUOUS
 
 

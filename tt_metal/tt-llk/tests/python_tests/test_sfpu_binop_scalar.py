@@ -138,9 +138,9 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The registry's tolerance arm, as the other drivers use it. The step budgets stay
-    # with the exhaustive sweep that measured them: one derived from a whole format is
-    # far wider than this sampled domain and would loosen the gate here.
+    # The registry's tolerance arm, as the unary functional driver uses it. A step
+    # budget from the exhaustive sweep is derived from a whole format, far wider than
+    # this sampled domain, and would loosen the gate here.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
