@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Qwen Image 2.1 contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Install into a tt-metal Python environment with a matching TTNN runtime.
+# The published diffusers 0.40.0 wheel does not contain QwenImage21Pipeline.
+diffusers @ git+https://github.com/huggingface/diffusers@5ff8e59ff9fe81c6e2df4fb4c6ea0d97a5df5ab2
+transformers==5.17.0
+huggingface-hub>=1.23,<2
+accelerate>=1.10,<2
+safetensors>=0.6,<1
+pillow>=11,<13
+numpy>=1.26,<2
