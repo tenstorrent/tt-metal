@@ -241,3 +241,30 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc_pre.py
+
+## S.dense_full.02 test (attempt 1)
+
+What was done
+- Reviewed the rendered swap test (dense_full layer 0, attn_hc + attn_hc_pre on device, rest CPU). Kept the gated
+  pcc_swap_out (0.98); rewrote it on the swap-01 pattern with asserted checks (informational metrics): attn_hc gates
+  (as swap 01), attn_x vs golden at the component limits (rel L2 <= 0.004, row norm ratio [0.995, 1.005], worst row
+  <= 0.01), attn_x vs the CPU hc_pre on the same inputs (block input + device gates; rel <= 0.004, row <= 0.01), the
+  attn_hc_pre module once more on synthetic distinct streams vs CPU (rel <= 0.008, row <= 0.02, as the component
+  test), h_mid (rel <= 0.01, row <= 0.05), block out (rel <= 0.01). Asserts neither module is a CPU bridge.
+- Mutation table (CPU, attn_hc_pre replaced by mutations, 8 s per run) in the test docstring.
+
+Gotchas
+- Every attn_hc_pre bug except a zeroed row, a post/pre mix-up and SP/TP layout swaps leaves attn_norm, h_mid and out
+  unchanged at layer 0 (attn_norm removes the per-row scale); pre x 1.02, no gating, rows shifted, gate 3 dropped
+  all score out PCC 0.999998+. Only the attn_x checks see them.
+- With the zero stub, the "vs CPU on the same inputs" and synthetic checks compare 0 with 0 (gates are zero); the
+  golden checks fail it instead.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999999; attn_x rel 0.00103, ratio [0.99806, 1.00161]).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98, every check).
+- Gate (device): PASS. pcc_swap_out 0.999998; gates rel 0.000539 / col max 0.0023; attn_x rel 0.00103, ratio
+  [0.99805, 1.00159], worst row 0.0024; vs CPU same inputs 0.0; synthetic 0.0; h_mid 0.00174 / 0.0034; out rel 0.00177.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_02_attn_hc_pre.py
