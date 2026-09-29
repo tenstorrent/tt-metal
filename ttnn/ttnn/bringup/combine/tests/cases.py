@@ -133,4 +133,36 @@ CASES = [
         "seed": 0,
         "exact": True,
     },
+    {
+        # GLM-5.3-Flash routed experts on a 2x2 mesh: dispatch groups are the 2 columns of 2 chips each (cluster_axis 0,
+        # fabric on, Linear); the expert-output buffer is bf16 (unified_routed_expert_moe high_precision).
+        "id": "glm53_flash_d_p-2x2-dgs2-s2560-h4096-e288-k8",
+        "model": "glm53_flash_d_p",
+        "task": "O.1",
+        "sig": "b6242cb705",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "seq_len_per_chip": 2560,
+        "emb_dim": 4096,
+        "num_routed_experts": 288,  # counts / regions are [1, 288] (global expert ids)
+        "num_experts_per_tok": 8,
+        "experts_per_chip": 72,
+        "dispatch_group_size": 2,
+        "max_dispatch_buffer_token_size": 43232,
+        "metadata_len": 3,
+        # buffer [1, 1, 43232, 4096] BFLOAT16 TILE; metadata [1, 1, 43232, 3] INT32 ROW_MAJOR;
+        # counts, regions [1, 288] UINT32 ROW_MAJOR; all DRAM interleaved
+        "buffer": {"dtype": "BFLOAT16", "layout": "TILE"},
+        "metadata": {"dtype": "INT32", "layout": "ROW_MAJOR"},
+        "counts": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "regions": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "cluster_axis": 0,
+        "num_links": 1,
+        "topology": "Linear",
+        "memory_config": "DRAM",
+        "init_zeros": True,
+        "use_fp8_combine": False,
+        "seed": 0,
+        "exact": True,
+    },
 ]

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""ttnn.bringup.scaled_dot_product_attention / chunked_scaled_dot_product_attention against their torch semantics
+"""ttnn.bringup.scaled_dot_product_attention / chunked_scaled_dot_product_attention / sparse_sdpa against their torch semantics
 (reference.py), one random-input case per captured call (cases.py). Math: PCC plus a bound on the relative L2 error,
 per device. Every input differs per device (sharded on dim 0 over the mesh) so each chip is checked on its own data.
 The chunked case uses a random permutation as the page table (the model's is the identity; any valid table must work)."""
@@ -56,6 +56,73 @@ def _randn(g, n_dev, shape):
     return torch.randn([n_dev * shape[0], *shape[1:]], generator=g).to(torch.bfloat16)
 
 
+def _sparse_sdpa(mesh_device, c):
+    """ttnn.bringup.sparse_sdpa: q [1, H, S, K_DIM] and the latent cache kv [1, 1, T, K_DIM] bf16 ROW_MAJOR, idx
+    [1, 1, S, W] uint32 ROW_MAJOR, per device. Query row s sits at position q_pos + d * S + s (chip d holds rows d S ..
+    of the chunk, as the model splits it); its ids are distinct, causal (<= its position) and random, the first
+    n_valid slots, then the 0xFFFFFFFF sentinel. Every n_short_every-th row has fewer valid ids (partly and wholly
+    masked k_chunks). Checked per device vs the float32 reference on the same bf16 inputs: PCC, rel L2 and the per
+    (head, row) output norm ratio."""
+    rows, cols = c["mesh"]
+    n_dev = rows * cols
+    g = torch.Generator().manual_seed(c["seed"])
+    _, nh, sq, kd = c["q"]
+    t_kv = c["kv"][2]
+    w = c["indices"][-1]
+    q = (torch.randn(n_dev, nh, sq, kd, generator=g) * c.get("q_scale", 1.0)).to(torch.bfloat16)
+    kv = torch.randn(n_dev, 1, t_kv, kd, generator=g).to(torch.bfloat16)
+    idx = torch.full((n_dev, 1, sq, w), -1, dtype=torch.int64)
+    for d in range(n_dev):
+        pos = c["q_pos"] + d * sq + torch.arange(sq)
+        assert int(pos.max()) < t_kv
+        r = torch.rand(sq, t_kv, generator=g)
+        r[torch.arange(t_kv)[None, :] > pos[:, None]] = -1.0  # never pick a future row
+        nv = torch.full((sq,), c["n_valid"], dtype=torch.int64)
+        short = torch.arange(sq) % c["n_short_every"] == 0
+        nv[short] = torch.randint(1, c["n_valid"] + 1, (int(short.sum()),), generator=g)
+        top = r.topk(c["n_valid"], dim=-1).indices
+        keep = torch.arange(c["n_valid"])[None, :] < nv[:, None]
+        idx[d, 0, :, : c["n_valid"]] = torch.where(keep, top, -1)
+
+    ck = c["compute_kernel_config"]
+    ckc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=getattr(ttnn.MathFidelity, ck["math_fidelity"]),
+        math_approx_mode=ck["math_approx_mode"],
+        fp32_dest_acc_en=ck["fp32_dest_acc_en"],
+        packer_l1_acc=ck["packer_l1_acc"],
+        dst_full_sync_en=ck["dst_full_sync_en"],
+    )
+    rm = ttnn.ROW_MAJOR_LAYOUT
+    tq, tkv = _shard(mesh_device, q, layout=rm), _shard(mesh_device, kv, layout=rm)
+    ti = _shard(mesh_device, idx.to(torch.int32), dtype=ttnn.uint32, layout=rm)
+    assert list(tq.shape) == c["q"] and list(tkv.shape) == c["kv"] and list(ti.shape) == c["indices"]
+    out = ttnn.bringup.sparse_sdpa(
+        tq,
+        tkv,
+        ti,
+        c["v_dim"],
+        kv_format=getattr(ttnn.bringup.SparseKVFormat, c["kv_format"]),
+        scale=c["scale"],
+        k_chunk_size=c["k_chunk_size"],
+        compute_kernel_config=ckc,
+        high_precision=c["high_precision"],
+    )
+    outs = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
+    assert len(outs) == n_dev
+    for d in range(n_dev):
+        got = outs[d]
+        assert list(got.shape) == [1, nh, sq, c["v_dim"]], f"dev {d}: output shape {list(got.shape)}"
+        want = ref.sparse_sdpa(q[d : d + 1], kv[d : d + 1], idx[d : d + 1], scale=c["scale"], v_dim=c["v_dim"])
+        pcc = _pcc(got, want)
+        rel = float((got - want).norm() / want.norm())
+        ratio = got.norm(dim=-1) / want.norm(dim=-1)
+        lo, hi = float(ratio.min()), float(ratio.max())
+        print(f"dev {d}: pcc {pcc:.7f} rel L2 err {rel:.5f} per-row norm ratio [{lo:.4f}, {hi:.4f}]")
+        assert pcc >= c["pcc"], f"dev {d}: pcc {pcc} < {c['pcc']}"
+        assert rel <= c["rel"], f"dev {d}: rel L2 err {rel} > {c['rel']}"
+        assert c["ratio"][0] <= lo and hi <= c["ratio"][1], f"dev {d}: norm ratio [{lo}, {hi}] outside {c['ratio']}"
+
+
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "mesh_device, device_params, case",
@@ -65,6 +132,8 @@ def _randn(g, n_dev, shape):
 )
 def test_sdpa(mesh_device, device_params, case):
     c = case
+    if c["op"] == "sparse_sdpa":
+        return _sparse_sdpa(mesh_device, c)
     rows, cols = c["mesh"]
     n_dev = rows * cols
     g = torch.Generator().manual_seed(c["seed"])

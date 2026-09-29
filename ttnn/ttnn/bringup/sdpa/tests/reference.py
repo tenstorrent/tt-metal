@@ -43,3 +43,21 @@ def unpage(paged, page_table):
     blocks = paged[page_table.long()]  # [nblocks, NKV, B, D]
     nb, nkv, b, d = blocks.shape
     return blocks.transpose(0, 1).reshape(1, nkv, nb * b, d)
+
+
+def sparse_sdpa(q, kv, idx, *, scale, v_dim, rows=64):
+    """sparse_sdpa (MLA latent attention over selected rows): q [1, H, S, K_DIM], kv [1, 1, T, K_DIM] (K = V source),
+    idx [1, 1, S, W] int64 with -1 (the op's 0xFFFFFFFF sentinel) for an unused slot -> [1, H, S, v_dim], float32.
+    out[h, s] = softmax(q[h, s] . kv[idx[s, w]] * scale over the valid w) @ kv[idx[s, w], :v_dim]. The order of the
+    ids in a row does not matter. Taken from tests/unit/test_sparse_sdpa_high_precision.py (_golden)."""
+    q, kvf = q.float()[0], kv.float()[0, 0]
+    nh, sq = q.shape[0], q.shape[1]
+    out = torch.empty(1, nh, sq, v_dim)
+    for r0 in range(0, sq, rows):
+        i = idx[0, 0, r0 : r0 + rows]
+        valid = i >= 0
+        sel = kvf[i.clamp(min=0)]  # [r, W, K_DIM]
+        s = torch.einsum("hrk,rwk->hrw", q[:, r0 : r0 + rows], sel) * scale
+        s = s.masked_fill(~valid[None], float("-inf"))
+        out[0, :, r0 : r0 + rows] = torch.einsum("hrw,rwv->hrv", s.softmax(-1), sel[..., :v_dim])
+    return out
