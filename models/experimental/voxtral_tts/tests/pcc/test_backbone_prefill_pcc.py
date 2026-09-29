@@ -4,7 +4,6 @@
 """The backbone prefill on device against the fp32 reference: one-layer wiring, all 15 fixture
 prompts (pooled and last position, each with a worst-sample bound), and every KV-cache entry.
 Decode is test_backbone_decode_pcc.py; every padded shape is test_prefill_shapes.py.
-see VOXTRAL_TTS_BACKBONE.md [gpt-50]
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py [-k case0]
@@ -42,15 +41,16 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 # test cannot miss the mark.
 pytestmark = [pytest.mark.slow, needs_checkpoint]
 
-# Gate constants; their measured bands: see VOXTRAL_TTS_BACKBONE.md [gpt-50]
+# Gate constants, each just below what the fixture prompts reach.
 PCC_PREFILL = 0.999
 CACHE_CASES = (0, 2, 3, 12)  # P = 100..357
 CACHE_PCC = 0.998
-# The per-position minimum is printed, not asserted; the last position's worst sample is gated.
+# A single position's PCC is too noisy to gate, so its minimum is printed; the last position's worst
+# sample, the row the flow model consumes, is gated.
 MAX_WORST_SAMPLE_PCT = 5.0
-MAX_POOLED_WORST_SAMPLE_PCT = 8.0  # largest single-element error over the gated positions
+MAX_POOLED_WORST_SAMPLE_PCT = 8.0  # over every gated position, so looser than the last position's bound
 # The accuracy gates skip the fixture's ill-conditioned positions; the whole prompt, those included,
-# still has to clear this collapse floor. see VOXTRAL_TTS_BACKBONE.md [gpt-53]
+# still has to clear this collapse floor.
 COLLAPSE_FLOOR = 0.99
 
 
@@ -158,7 +158,6 @@ def test_prefill_kv_cache_matches_reference(gen, w, ci):
     gen.prefill(embeds)
     dev_cache = _device_cache(gen, P)
     # An ill-conditioned position's K/V diverge from the layer where its hidden state does.
-    # see VOXTRAL_TTS_BACKBONE.md [gpt-53]
     ill = sorted(ill_conditioned_positions(ci))
     keep = torch.tensor([i for i in range(P) if i not in ill])
 

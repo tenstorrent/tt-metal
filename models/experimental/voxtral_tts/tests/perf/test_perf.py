@@ -3,8 +3,8 @@
 
 """Where a request spends its time, per stage, across utterance lengths.
 
-Warm figures (warmup excluded). Ceilings are loose smoke checks; the regression detector is the
-bringup repo's `tools/quality_report.py --compare`. see VOXTRAL_TTS_BRINGUP.md [test-04]
+Warm figures (warmup excluded). Ceilings are loose smoke checks; the regression detector is
+`tools/quality_report.py --compare` (bring-up tooling, see the README).
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/perf/test_perf.py
@@ -29,7 +29,7 @@ REPEATS = 2  # best of, so one noisy run on a shared card does not decide the re
 MAX_FRAMES = 520
 
 MAX_PREFILL_S = 2.0
-MAX_DECODE_MS_PER_FRAME_LONG = 40.0  # capture amortised. see VOXTRAL_TTS_BRINGUP.md [test-04]
+MAX_DECODE_MS_PER_FRAME_LONG = 40.0  # the long case amortises the capture
 MAX_DECODE_MS_PER_FRAME_ANY = 70.0  # the short case carries the whole capture
 MAX_CODEC_S = 2.0
 MIN_RTF = 1.2  # short utterances pay prefill+capture over little audio
@@ -60,7 +60,7 @@ def _best_of(pipe, embeds, max_frames=MAX_FRAMES):
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(1800)  # see VOXTRAL_TTS_BRINGUP.md [pipe-06]
+@pytest.mark.timeout(1800)  # warm-up compiles every kernel on an empty kernel cache
 def test_perf(pipe):
     rows, failed = [], []
     for ci, name in CASES:

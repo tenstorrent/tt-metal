@@ -6,7 +6,8 @@
 The fp32 `reference/` package is the oracle; these helpers feed it the same inputs the pipeline
 would, cached at module scope so every device test shares one backbone state.
 
-There is deliberately no synthetic-input builder: see VOXTRAL_TTS_STATUS.md trap #12.
+There is deliberately no synthetic-input builder: random embeddings are off-manifold and understate
+accuracy.
 """
 
 import functools
@@ -36,24 +37,24 @@ def fixture_cases():
 
 @functools.lru_cache(maxsize=1)
 def conditioning_fixture():
-    """-> the ill-conditioned positions/frames fixture. see VOXTRAL_TTS_BACKBONE.md [gpt-53]"""
+    """-> the ill-conditioned positions/frames fixture."""
     with open(CONDITIONING) as fh:
         return json.load(fh)
 
 
 def ill_conditioned_positions(case_idx):
     """-> prefill positions where the fp32 reference itself is not pinned down at device precision,
-    so a device result there is a rounding draw. see VOXTRAL_TTS_BACKBONE.md [gpt-53]"""
+    so a device result there is a rounding draw."""
     return frozenset(conditioning_fixture()["prefill"].get(str(case_idx), ()))
 
 
 def ill_conditioned_frames(case_idx):
-    """-> the same for decode frames of the prompt's own trajectory. see VOXTRAL_TTS_BACKBONE.md [gpt-53]"""
+    """-> the same for decode frames of the prompt's own trajectory."""
     return frozenset(conditioning_fixture()["decode"].get(str(case_idx), ()))
 
 
 def case_ids():
-    """-> [0, 1, ... n-1], for parametrize. All of them. see VOXTRAL_TTS_BRINGUP.md [gate-01]"""
+    """-> [0, 1, ... n-1], for parametrize. All of them: prompts differ more than most effects."""
     return list(range(len(fixture_cases())))
 
 
@@ -77,8 +78,7 @@ def fixture_embeds(case_idx, w=None):
 
 @functools.lru_cache(maxsize=1)
 def real_frames():
-    """-> real the backbone and flow model output frames [T,37], for teacher-forced decode.
-    see VOXTRAL_TTS_BRINGUP.md [gate-02]"""
+    """-> real frames [T,37] from the backbone and flow model, for teacher-forced decode."""
     return torch.load(FRAMES).long()
 
 
@@ -109,7 +109,7 @@ def all_voices():
 
 
 # The reference caches a rotated head interleaved (pairs adjacent); the device caches it half-split.
-# RoPE applies the same permutation to Q, so attention is identical. VOXTRAL_TTS_BACKBONE.md.
+# RoPE applies the same permutation to Q, so attention is identical.
 _HALF_TO_INTERLEAVED = None
 
 
@@ -154,7 +154,7 @@ def _long_frames_by_case():
 
 def real_frames_long(case_idx):
     """-> that prompt's OWN full utterance of real frames [T,37]; another utterance's frames
-    would be a mismatched pair. see VOXTRAL_TTS_GOLDENS.md
+    would be a mismatched pair.
     """
     return _long_frames_by_case()[case_idx].long()
 

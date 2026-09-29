@@ -4,10 +4,10 @@
 """CPU reference for the Voxtral-TTS autoregressive backbone -- THE BACKBONE (3.4B,
 Ministral-derived).
 
-Self-contained torch, op-for-op with what vLLM-Omni runs (see VOXTRAL_TTS_PROVENANCE.md):
+Self-contained torch, op-for-op with what vLLM-Omni runs:
 inputs_embeds [1, S, 3072] -> 26 x {RMSNorm, GQA causal attention with RoPE, RMSNorm, SwiGLU}
 -> final RMSNorm -> hidden_states [1, S, 3072]. Also builds inputs_embeds (text and audio-frame
-embeddings). Block boundary and architecture notes: see VOXTRAL_TTS_BACKBONE.md [gpt-30].
+embeddings).
 
 Run (regenerates goldens; needs the checkpoint):
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_backbone_ref.py
@@ -51,9 +51,7 @@ GOLDEN_DIR = os.path.join(GOLDEN_ROOT, "backbone")
 
 
 def load_backbone_state(ckpt_path=DEFAULT_CKPT, dtype=torch.float32):
-    """The 26 transformer layers + final norm + both embedding tables, read tensor by tensor.
-
-    See VOXTRAL_TTS_BACKBONE.md [gpt-30]."""
+    """The 26 transformer layers + final norm + both embedding tables, read tensor by tensor."""
     st = SafeTensors(ckpt_path)
     w = {"norm": st.get("norm.weight", dtype)}
     for i in range(N_LAYERS):
@@ -86,8 +84,7 @@ def embed_text(w, token_ids):
 
 def embed_frame(w, codes):
     """One frame's 37 codes (offset by N_AUDIO_SPECIAL, as the flow model emits) -> [1, 1, 3072]:
-    each codebook indexes its own slice of one flat table and the 37 vectors are summed.
-    see VOXTRAL_TTS_BACKBONE.md [gpt-30]"""
+    each codebook indexes its own slice of one flat table and the 37 vectors are summed."""
     c = torch.as_tensor(codes, dtype=torch.long).reshape(-1)
     assert c.numel() == NUM_CODEBOOKS, f"expected {NUM_CODEBOOKS} codes, got {c.numel()}"
     return w["audio_embeddings"][c + codebook_offsets()].sum(0).view(1, 1, DIM)

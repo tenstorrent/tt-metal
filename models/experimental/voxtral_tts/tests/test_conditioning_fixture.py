@@ -4,7 +4,9 @@
 """The ill-conditioned positions and frames the PCC gates skip stay few, in range, and documented.
 
 A regenerated fixture that excluded a large share of a prompt would quietly hollow out the gates, so
-the share is bounded here. The fixture's origin and rule: see VOXTRAL_TTS_BACKBONE.md [gpt-53]
+the share is bounded here. The fixture comes from make_conditioning_fixture.py (bring-up tooling, see
+the README), which runs a CPU proxy of the device's precision and flags the positions whose PCC
+deficit far exceeds the median.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_conditioning_fixture.py

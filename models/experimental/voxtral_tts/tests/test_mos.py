@@ -5,11 +5,10 @@
 
 Generates the per-language clip set (`write_language_set`) on the device and scores it with
 DistillMOS via `tests/mos_score.py` in `/tmp/mosvenv` (build it once with `tests/mos_setup.sh`).
-A missing venv FAILS rather than skips. Why, and how the floors were derived:
-see VOXTRAL_TTS_GATES.md [mos-01] to [mos-05].
+A missing venv FAILS rather than skips, since a skipped gate reads as a pass.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_mos.py      # ~15 min, device + CPU
+    pytest -svv models/experimental/voxtral_tts/tests/test_mos.py      # device + CPU
 """
 
 import json
@@ -29,14 +28,15 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(MODEL)))
 MOSVENV = "/tmp/mosvenv/bin/python"
 SCORE = os.path.join(HERE, "mos_score.py")
 SEED = 0
-MIN_WORDS = 19  # the shortest medium-band sentence; see VOXTRAL_TTS_GATES.md [mos-01]
+MIN_WORDS = 19  # the shortest medium-band sentence; shorter clips give a noisy MOS
 
-# Floor on each language's MEAN MOS, and on any single clip. Rule and the three-seed table:
-# see VOXTRAL_TTS_GATES.md [mos-03] (and VOXTRAL_TTS_STATUS.md §6.78).
+# Floor on each language's MEAN MOS, just below its lowest seed mean so a healthy build passes, and on
+# any single clip, since one clip turning to noise barely moves a mean. Per language because the
+# predictor is biased by language, so each language is compared only with itself.
 MOS_FLOOR = {"ar": 4.61, "de": 4.66, "en": 4.64, "es": 4.67, "fr": 4.63, "hi": 4.49, "it": 4.62, "nl": 4.70, "pt": 4.62}
 CLIP_FLOOR = 3.97
 
-# The predictor's own calibration bounds; see VOXTRAL_TTS_GATES.md [mos-04]
+# The predictor's own calibration bounds: real speech scores high, silence and noise low, far apart.
 SPEECH_MIN, NON_SPEECH_MAX, SEPARATION_MIN = 4.0, 2.5, 2.0
 
 pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
@@ -76,7 +76,7 @@ def _score(clip_dir):
 
 
 def _frame_budget(text):
-    """Frame cap, same rule as the WER gate; see VOXTRAL_TTS_GATES.md [wer-12]"""
+    """Frame cap, same rule as the WER gate."""
     return max(320, int(math.ceil(len(text) / 18.0 * 12.5 * 2.2)))
 
 

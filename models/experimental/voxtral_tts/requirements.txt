@@ -4,4 +4,4 @@ graphviz>=0.20        # ttnn.graph imports it unconditionally; `import ttnn` fai
 # MOS scoring needs DistillMOS, which pulls torchaudio, so it lives in /tmp/mosvenv -- see
 # tests/mos_setup.sh.
 # Regenerating tests/prompt_fixture.json also needs `mistral-common`, in a THROWAWAY venv -- see
-# dump_prompt_ids.py in the bringup repo's voxtral_tts/tools/.
+# dump_prompt_ids.py (bring-up tooling, see the README).

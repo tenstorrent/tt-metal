@@ -9,7 +9,6 @@ codebook gather (_quantizer_host):
     codes [1,37,T] -> quantizer [1,292,T] -> conv k3 -> 4x {2-layer transformer [+ convT k4 s2]}
       -> output projection k7 -> [1,240,8T] -> unpatch -> [1,1,T*1920] @ 24 kHz
 
-Design, precision and measurements: see VOXTRAL_TTS_CODEC.md [codec-01].
 Validate against the reference (on device):
     pytest models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
 """
@@ -52,20 +51,21 @@ for _s in DEC_CONV_STRIDES:
 
 DTYPE = ttnn.float32
 SCALE = CODEC_HEAD_DIM**-0.5
-# Large finite negative instead of -inf (avoids inf-inf NaN); see VOXTRAL_TTS_CODEC.md [codec-02]
+# Large finite negative instead of -inf: a max-subtracting softmax would compute inf-inf = NaN.
 MASK_NEG = -1e9
-# bf16 for the attention interior and its bias; everything outside attention stays DTYPE.
-# see VOXTRAL_TTS_CODEC.md [codec-21]
+# bf16 for the attention interior and its bias; everything outside attention stays DTYPE. bf16
+# weights are not an option: they cost worst-sample accuracy for little speed.
 ATTN_DTYPE = ttnn.bfloat16
-# Attention chunk width; must be tile-aligned. see VOXTRAL_TTS_CODEC.md [codec-03]
+# Attention chunk width; must be tile-aligned, or TILE_LAYOUT pads it up and wastes a row and column
+# of tiles.
 SLAB = 512
-# Chunk attention only above this length. see VOXTRAL_TTS_CODEC.md [codec-04]
+# Chunk attention only above this length: below it the full mask is cheap and chunking only adds ops.
 CHUNK_MIN = 512
-# Round T up to a multiple of this so the convs compile once per bucket; None = off.
-# see VOXTRAL_TTS_CODEC.md [codec-05]
+# Round T up to a multiple of this so the convs compile once per bucket, not once per utterance
+# length; None = off.
 BUCKET = 128
-# Rows in the output projection's reflected prefix, padded to one tile.
-# see VOXTRAL_TTS_CODEC.md [codec-06]
+# Rows in the output projection's reflected prefix, padded to one tile so the concat after it stays
+# tile-aligned; only PATCH_PROJ_KERNEL - 1 of them are used.
 OUT_PREFIX = 32
 
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
@@ -77,14 +77,12 @@ class TtVoxtralCodecDecoder:
     """On-device codec decoder. __call__(codes [1,37,T] int64) -> waveform torch [1,1,T*1920]."""
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT, slab=SLAB, chunk_min=CHUNK_MIN, bucket=BUCKET):
-        """Precision is fixed: fp32 weights, fp32 activations outside attention, bf16 inside it.
-        see VOXTRAL_TTS_CODEC.md [codec-21]"""
+        """Precision is fixed: fp32 weights, fp32 activations outside attention, bf16 inside it."""
         self.device = device
         self.slab = slab  # attention chunk width; see the SLAB constant for why 512
         self.chunk_min = chunk_min  # chunk only when S exceeds this; None = never chunk
         self.bucket = bucket  # round T up to this multiple before decoding; None = off
         # Weights are pre-prepared, so weights_dtype must be explicit and match prepare_*.
-        # see VOXTRAL_TTS_CODEC.md [codec-07]
         self.conv_cfg = ttnn.Conv1dConfig(weights_dtype=DTYPE)
         self.convt_cfg = ttnn.Conv2dConfig(weights_dtype=DTYPE)
         w = load_codec_state(ckpt_path)  # weight_norm already folded by the reference loader
@@ -99,7 +97,7 @@ class TtVoxtralCodecDecoder:
         # torch stores the conv as [out, in, k]; ttnn.linear wants [in, out].
         self._out_taps = [dev(w["output_proj.conv.weight"][:, :, j].t()) for j in range(PATCH_PROJ_KERNEL)]
         # Gather index that builds the projection's reflected prefix (x6..x1 in the last 6 rows).
-        # see VOXTRAL_TTS_CODEC.md [codec-08]
+        # Length-independent, so built once.
         idx = torch.zeros(1, 1, OUT_PREFIX, CODEC_DIM, dtype=torch.int32)
         for m in range(PATCH_PROJ_KERNEL - 1):
             idx[0, 0, OUT_PREFIX - (PATCH_PROJ_KERNEL - 1) + m, :] = (PATCH_PROJ_KERNEL - 1) - m
@@ -108,8 +106,8 @@ class TtVoxtralCodecDecoder:
         )
 
         # --- convs ---
-        # Weights stay on host; `_prepared` prepares and deduplicates them on first use.
-        # see VOXTRAL_TTS_CODEC.md [codec-09]
+        # Weights stay on host; `_prepared` prepares and deduplicates them on first use, so the
+        # convs do not re-prepare their weights on every call.
         self.conv_host = {
             "in": host(w["decoder_blocks.0.conv.weight"].unsqueeze(2)),  # [1024,292,1,3]
             "out": host(w["output_proj.conv.weight"].unsqueeze(2)),  # [240,1024,1,7]
@@ -149,8 +147,8 @@ class TtVoxtralCodecDecoder:
     # Conv weight preparation (hoisted out of the per-call path)
     # ----------------------------------------------------------------------------------
     def _prepared(self, name, in_c, out_c, kernel, stride, L, transpose):
-        """Prepared weight for this conv at this input length, deduplicated by content.
-        see VOXTRAL_TTS_CODEC.md [codec-10]"""
+        """Prepared weight for this conv at this input length, deduplicated by content: most lengths
+        share one layout."""
         key = (name, L)
         if key in self._prep_cache:
             return self._prep_cache[key]
@@ -177,7 +175,7 @@ class TtVoxtralCodecDecoder:
 
     def _prep_weight(self, w_host, in_c, out_c, kernel, stride, L, transpose):
         """prepare_conv_weights or prepare_conv_transpose2d_weights (OIHW vs IOHW), one kwarg set.
-        `input_dtype` is the ACTIVATION dtype. see VOXTRAL_TTS_CODEC.md [codec-11]"""
+        `input_dtype` is the ACTIVATION dtype, not the weight dtype."""
         fn = ttnn.prepare_conv_transpose2d_weights if transpose else ttnn.prepare_conv_weights
         return fn(
             weight_tensor=w_host,
@@ -203,7 +201,6 @@ class TtVoxtralCodecDecoder:
 
     # ----------------------------------------------------------------------------------
     # Attention bias: ALiBi + causal + sliding window as ONE additive term, cached per (S, window).
-    # see VOXTRAL_TTS_CODEC.md [codec-20]
     # ----------------------------------------------------------------------------------
     def _attn_bias(self, S, window):
         key = (S, window, ATTN_DTYPE)
@@ -223,8 +220,7 @@ class TtVoxtralCodecDecoder:
     # ----------------------------------------------------------------------------------
     def _pad_causal(self, x, pad, mode):
         """x [1,1,L,C] -> [1,1,L+pad,C]. `mode` mirrors torch F.pad on the length axis:
-        replicate repeats column 0; reflect mirrors about column 0, excluding it.
-        see VOXTRAL_TTS_CODEC.md [codec-12]"""
+        replicate repeats column 0; reflect mirrors about column 0, excluding it."""
         if pad == 0:
             return x
         L = x.shape[2]
@@ -264,8 +260,8 @@ class TtVoxtralCodecDecoder:
         return ttnn.reshape(out, [1, 1, -1, out_c])
 
     def _conv_transpose(self, x, name, channels, kernel, stride):
-        """Length on the WIDTH axis (kernel (1,k), stride (1,s)), see VOXTRAL_TTS_CODEC.md
-        [codec-01]. Trims (k - stride) samples off the RIGHT, matching upstream's trim_ratio=1.0."""
+        """Length on the WIDTH axis (kernel (1,k), stride (1,s)). Trims (k - stride) samples off the
+        RIGHT, matching upstream's trim_ratio=1.0."""
         L = x.shape[2]
         out = ttnn.conv_transpose2d(
             input_tensor=x,
@@ -292,9 +288,9 @@ class TtVoxtralCodecDecoder:
 
     def _attention_slab(self, q, k, v, bias):
         """Attention with an additive pre-softmax bias, in ATTN_DTYPE. [1,H,S,d] -> [1,H,S,d].
-        Hand-rolled, not sdpa. see VOXTRAL_TTS_CODEC.md [codec-13]"""
+        Hand-rolled, not sdpa: sdpa is faster but less accurate, enough to fail the worst-sample gates."""
         c = lambda t: ttnn.typecast(t, ATTN_DTYPE)
-        q, k, v = c(q), c(k), c(v)  # bias cached in ATTN_DTYPE; see VOXTRAL_TTS_CODEC.md [codec-26]
+        q, k, v = c(q), c(k), c(v)  # the bias is cached in ATTN_DTYPE, never cast per call
         scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1), compute_kernel_config=COMPUTE_CONFIG)
         scores = ttnn.add(ttnn.multiply(scores, SCALE), bias)
         attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
@@ -311,7 +307,7 @@ class TtVoxtralCodecDecoder:
 
     def _attention(self, q, k, v, window):
         """[1,H,S,d] -> [1,H,S,d]. Chunks when S > chunk_min, else one full-S pass.
-        Exact; every chunk is `slab` long. see VOXTRAL_TTS_CODEC.md [codec-14]"""
+        Exact, since output i depends only on inputs i-window..i; every chunk is `slab` long."""
         S = q.shape[2]
         if self.chunk_min is None or S <= self.chunk_min:
             return self._attention_slab(q, k, v, self._attn_bias(S, window))
@@ -345,8 +341,7 @@ class TtVoxtralCodecDecoder:
         # QK-norm over the whole 1024 width, BEFORE splitting heads
         q = ttnn.rms_norm(q, weight=w["qn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
         k = ttnn.rms_norm(k, weight=w["kn"], epsilon=CODEC_QK_NORM_EPS, compute_kernel_config=COMPUTE_CONFIG)
-        # Head split/merge via the fused ops, not reshape+permute. see VOXTRAL_TTS_CODEC.md
-        # [codec-15]
+        # Head split/merge via the fused ops, not reshape+permute, which is far slower here.
         kv = ttnn.concat([k, v], dim=-1)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.reshape(q, [1, 1, L, CODEC_DIM]),
@@ -371,7 +366,7 @@ class TtVoxtralCodecDecoder:
     # ----------------------------------------------------------------------------------
     def _quantizer_host(self, codes):
         """codes torch [1,37,T] -> HOST torch [1,1,T,292] channels-last.
-        Kept on host for an fp32 codebook. see VOXTRAL_TTS_CODEC.md [codec-16]"""
+        Kept on host for an fp32 codebook: ttnn.embedding needs a bf16 table, too coarse for these values."""
         T = codes.shape[2]
         sem = self.semantic_host[codes[:, 0, :].reshape(-1).long()].reshape(1, T, SEMANTIC_DIM)
         ac = codes[:, 1:, :].to(torch.float32) * 2.0 / (ACOUSTIC_CODEBOOK_SIZE - 1) - 1.0
@@ -405,8 +400,8 @@ class TtVoxtralCodecDecoder:
                 )
                 if stages is not None:
                     stages[f"after_up{ci}"] = self._chw(x)
-        # Output projection as 7 tap matmuls over a gathered prefix, not ttnn.conv1d (halo hang).
-        # see VOXTRAL_TTS_CODEC.md [codec-17]
+        # Output projection as 7 tap matmuls over a gathered prefix, not ttnn.conv1d: its halo_gather
+        # hangs the device on a program-cache hit at this shape.
         L = x.shape[2]
         assert L >= OUT_PREFIX, f"output projection needs >= {OUT_PREFIX} rows, got {L}"
         off = OUT_PREFIX - (PATCH_PROJ_KERNEL - 1)
@@ -424,12 +419,12 @@ class TtVoxtralCodecDecoder:
     @torch.no_grad()
     def __call__(self, codes, return_stages=False):
         # return_stages bypasses bucketing so stages match the reference's lengths.
-        # see VOXTRAL_TTS_CODEC.md [codec-18]
         if self.bucket and not return_stages:
             T = codes.shape[2]
             padded = -(-T // self.bucket) * self.bucket
             if padded > T:
-                # pad by repeating the last frame, not zeros. see VOXTRAL_TTS_CODEC.md [codec-19]
+                # pad by repeating the last frame, not zeros: the overlapping transposed convs then
+                # see plausible audio, not a hard edge, before the tail is trimmed.
                 codes = torch.cat([codes, codes[:, :, -1:].repeat(1, 1, padded - T)], dim=2)
                 # return_stages is False in this branch, so _decode returns the waveform alone.
                 return self._decode(codes)[:, :, : T * PATCH_SIZE * UPSAMPLE]

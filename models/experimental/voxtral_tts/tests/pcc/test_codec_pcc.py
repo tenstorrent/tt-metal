@@ -3,7 +3,7 @@
 
 """On-device PCC for the TTNN codec decoder (codec) vs the CPU reference.
 
-The reference is itself validated against upstream; see VOXTRAL_TTS_CODEC.md [codec-50].
+The reference is itself validated against upstream, so matching it is a real correctness check.
 Skips cleanly without ttnn, a device, or the checkpoint.
 
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
@@ -25,7 +25,7 @@ pytestmark = [
     pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}"),
 ]
 
-# Gate derivations and measured bands: see VOXTRAL_TTS_CODEC.md [codec-51]
+# Gate constants, each just below what the codec reaches on its inputs.
 WAVE_PCC = 0.999  # synthetic codes
 REAL_LONG_PCC = 0.9999  # real codes are kinder than synthetic, so the real-input gates are tighter
 REAL_LONG_WORST_PCT = 5.0  # above the 64-frame test's 2%: a whole utterance draws more samples
@@ -60,7 +60,7 @@ def test_waveform_pcc(pair, n_frames):
 
 
 def test_quantizer_is_exact(pair):
-    """The semantic gather runs on host so this stays exact. see VOXTRAL_TTS_CODEC.md [codec-16]"""
+    """The semantic gather runs on host, in fp32, so this stays exact."""
     gen, w = pair
     codes = ref.make_synthetic_codes(16)
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
@@ -91,7 +91,7 @@ def test_every_stage_matches(pair):
 
 def test_final_stage_is_not_itself_lossy(pair):
     """Feeds stage 7 (window 16) the REFERENCE's input: its low in-chain PCC is amplified
-    inherited error, not a defect in the stage. see VOXTRAL_TTS_CODEC.md [codec-52]"""
+    inherited error, not a defect in the stage."""
     gen, w = pair
     codes = ref.make_synthetic_codes(24)
     lat = ref.quantizer_decode(codes, w)
@@ -117,8 +117,7 @@ def test_final_stage_is_not_itself_lossy(pair):
 
 
 def test_shipped_precision_holds_the_gate(device):
-    """The fixed precision (fp32 weights, bf16 attention) clears the waveform gate.
-    see VOXTRAL_TTS_CODEC.md [codec-53]"""
+    """The fixed precision (fp32 weights, bf16 attention) clears the waveform gate."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     gen = TtVoxtralCodecDecoder(device)
@@ -130,7 +129,7 @@ def test_shipped_precision_holds_the_gate(device):
 
 def test_real_speech_frames_decode_correctly(device):
     """Decode REAL model output (64-frame fixture of the backbone and flow model codes), not
-    synthetic codes; gates PCC and worst sample. see VOXTRAL_TTS_CODEC.md [codec-54]"""
+    synthetic codes; gates PCC and worst sample."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     fx = FRAMES
@@ -151,8 +150,7 @@ def test_real_speech_frames_decode_correctly(device):
 @pytest.mark.parametrize("case", long_frame_cases())
 def test_real_utterance_decodes_correctly(pair, case):
     """Real frames over a WHOLE utterance against fp32: the only full-length comparison to the
-    reference, so it catches an error both device paths share.
-    see VOXTRAL_TTS_CODEC.md [codec-51]"""
+    reference, so it catches an error both device paths share."""
     gen, w = pair
     codes = ref.strip_offset_and_trim(real_frames_long(case))
     T = codes.shape[2]

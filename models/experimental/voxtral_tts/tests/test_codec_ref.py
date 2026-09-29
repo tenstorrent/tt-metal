@@ -60,10 +60,10 @@ def w():
 # ---------------------------------------------------------------------------------------
 def test_codec_encoder_is_absent_from_released_checkpoint():
     """The public checkpoint ships NO encoder tensors, so voice cloning from arbitrary audio is
-    impossible. Fails if a future release adds them. see VOXTRAL_TTS_CODEC.md [codec-27]"""
+    impossible. Fails if a future release adds them."""
     man = load_manifest()
     enc = [k for k in man if k.startswith((PREFIX + "input_proj", PREFIX + "encoder_blocks"))]
-    assert enc == [], f"encoder weights appeared ({len(enc)} tensors) — Block 4 is now portable"
+    assert enc == [], f"encoder weights appeared ({len(enc)} tensors) — the codec encoder can now be ported"
 
 
 def test_codec_norm_eps_is_1e_2():

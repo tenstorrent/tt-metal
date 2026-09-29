@@ -5,12 +5,14 @@
 End-to-end CPU reference for Voxtral TTS: text (or prompt ids) + voice preset -> 24 kHz WAV.
 
 Chains the three fp32 reference blocks and is the golden the TTNN pipeline must reproduce.
-Data flow, prompt layout, voice-specific placeholder count: see VOXTRAL_TTS_BRINGUP.md [ref-03].
+Data flow: prompt ids -> embeddings, with the voice preset's rows spliced in at the audio
+placeholders (one per row, so the count is voice-specific) -> backbone prefill; then per frame a
+backbone step -> flow model -> 37 codes, fed back until [END_AUDIO] -> codec -> 24 kHz waveform.
 
 Run:
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_pipeline_ref.py \
         --text "Hello." --voice neutral_male --max-frames 150
-    (or --prompt-ids prompt_ids.json, a dump from tools/dump_prompt_ids.py in the bringup repo)
+    (or --prompt-ids prompt_ids.json, dumped by dump_prompt_ids.py; bring-up tooling, see the README)
 """
 
 import argparse
@@ -60,8 +62,7 @@ def build_prompt_from_text(text, voice):
 
 
 def load_voice(name, voice_dir=VOICE_DIR):
-    """Voice preset [T_ref, 3072], already in the backbone's embedding space, as fp32.
-    see VOXTRAL_TTS_PROVENANCE.md finding 12"""
+    """Voice preset [T_ref, 3072], already in the backbone's embedding space, as fp32."""
     p = os.path.join(voice_dir, f"{name}.pt")
     if not os.path.exists(p):
         avail = sorted(f[:-3] for f in os.listdir(voice_dir)) if os.path.isdir(voice_dir) else []
@@ -76,7 +77,7 @@ def build_inputs_embeds(ids, voice, w):
     assert n == voice.shape[0], (
         f"prompt has {n} audio placeholders but the preset has {voice.shape[0]} rows. The count is "
         f"voice-specific — re-dump the prompt for THIS voice:\n"
-        f"    <venv>/bin/python dump_prompt_ids.py "  # bringup repo, voxtral_tts/tools/
+        f"    <venv>/bin/python dump_prompt_ids.py "  # bring-up tooling, see the README
         f"--text '...' --voice <name>"
     )
     embeds = w["tok_embeddings"][ids.clamp(min=0)].clone()  # [P, 3072]

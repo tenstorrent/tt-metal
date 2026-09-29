@@ -4,8 +4,7 @@
 """The backbone and flow model end to end: do device and reference emit the same integer codes?
 
 Teacher-forced (both loops advance on the reference's codes), 64 frames on every prompt plus two
-full utterances, gated on measured rates rather than absolutes.
-see VOXTRAL_TTS_BRINGUP.md [test-01] and VOXTRAL_TTS_STATUS.md §6.76
+full utterances, gated on mismatch rates rather than exact agreement.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
@@ -36,11 +35,11 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: 
 
 pytestmark = needs_checkpoint
 
-N_FRAMES = 64  # reaches frames 40 and 55. see VOXTRAL_TTS_BRINGUP.md [test-01]
+N_FRAMES = 64  # reaches frames 40 and 55, the hardest for decode
 LONG_CASES = (2, 3)  # the two prompts with a full-length natural utterance
 LONG_CAP = 480
 
-# Rate ceilings, 3x measured with a floor. see VOXTRAL_TTS_STATUS.md §6.76
+# Rate ceilings: a multiple of what the fixture prompts reach, with a floor.
 MAX_SEMANTIC_FLIP_PCT = 5.0
 MAX_BIG_DELTA_FRAME_PCT = 7.5
 MAX_ACOUSTIC_MISMATCH_PCT = 15.0
@@ -56,7 +55,7 @@ def pipe():
 
 def _chain(pipe, embeds, n_frames, cfg_alpha=CFG_ALPHA, stop_on_end=False):
     """Teacher-forced chain -> dict of counts. `stop_on_end` stops at the reference's [END_AUDIO],
-    beyond which it would be off-distribution. see VOXTRAL_TTS_BRINGUP.md [test-01]
+    beyond which it would be off-distribution.
     """
     wf = fref.load_flow_state()
     ref_dec = bref.IncrementalBackbone(pipe.wb)
@@ -91,7 +90,7 @@ def _chain(pipe, embeds, n_frames, cfg_alpha=CFG_ALPHA, stop_on_end=False):
 
 def _assert_rates(label, tot):
     """Assert the three rates. Max delta is reported, never asserted: only its frequency has a
-    defensible bound. see VOXTRAL_TTS_STATUS.md §6.76"""
+    defensible bound."""
     n_frames, n_ac = tot["frames"], tot["frames"] * 36
     sem_pct = tot["sem_bad"] / max(n_frames, 1) * 100
     ac_pct = tot["ac_bad"] / max(n_ac, 1) * 100

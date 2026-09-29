@@ -16,7 +16,7 @@ on Tenstorrent hardware. Text plus a named voice preset in, 24 kHz audio out. On
 Measured on this board: DRAM ceiling **367 GB/s**, per-op launch floor **~68 µs**. Those two
 together invert the Wormhole N150's economics — bytes are cheap and launches are expensive, so
 *deleting ops* wins here where the N150 wanted fewer, bigger kernels. Seven N150-tuned constants
-did not survive the port; see `VOXTRAL_TTS_BRINGUP.md` in the bringup repo.
+did not survive the port.
 
 ## Architecture
 
@@ -88,9 +88,8 @@ python -m models.experimental.voxtral_tts.demo.demo_server --voice neutral_male
 
 The REPL supports `\voice NAME`, `\voices`, `\seed N`, `\out PATH` and `\quit`.
 
-The 15-prompt quality set, its WER scoring and the two-tag quality report are bringup tooling and
-live in the [bringup repo](https://github.com/acicovicTT/model-bringup) under `voxtral_tts/tools/`,
-run against this checkout through `TT_METAL_HOME` (see its README).
+The 15-prompt quality set, its WER scoring and the two-tag quality report are bring-up tooling (see
+[Bring-up tooling](#bring-up-tooling)).
 
 ### Integration API
 
@@ -136,7 +135,7 @@ pytest models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
 pytest models/experimental/voxtral_tts/tests/test_codec_request_path.py
 pytest models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
 # Those gates skip the few positions/frames where the fp32 reference itself is decided by rounding
-# (tests/conditioning_fixture.json, from the bringup repo's tools/make_conditioning_fixture.py);
+# (tests/conditioning_fixture.json, from make_conditioning_fixture.py, see Bring-up tooling);
 # this host test keeps that list small.
 pytest models/experimental/voxtral_tts/tests/test_conditioning_fixture.py
 
@@ -248,6 +247,10 @@ no request pays a compile at request time. `TtVoxtralPipeline.warmed` records wh
 | `tests/` | reference invariants, on-device PCC (`pcc/`), perf (`perf/`), traced loop, WER, MOS |
 | `generated/` | run artifacts (gitignored) |
 
-Bringup history, per-block notes, known bugs and next steps live in the separate bringup repo as
-`voxtral_tts/VOXTRAL_TTS_*.md`, and the measurement tooling -- quality report, audio-set generators
-and scorers, fixture generators, upstream comparison, probes -- in its `voxtral_tts/tools/`.
+## Bring-up tooling
+
+The measurement tooling lives outside tt-metal, in the
+[bring-up repo](https://github.com/acicovicTT/model-bringup) under `voxtral_tts/tools/`, and runs
+against this checkout through `TT_METAL_HOME` (see its README): the quality report, the audio-set
+generators and scorers, the fixture generators (`make_conditioning_fixture.py`,
+`make_asr_calibration_fixture.py`, `dump_prompt_ids.py`), the upstream comparison and the probes.

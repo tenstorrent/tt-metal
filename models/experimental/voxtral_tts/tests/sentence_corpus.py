@@ -3,8 +3,8 @@
 
 """Sentences per language, as data, tokenized at test time by the in-repo tokenizer.
 
-Plain text, unlike `prompt_fixture.json`, so breadth costs nothing. Conventions (no digits, plain
-prose, Arabic undiacritized) and the WER bands: see VOXTRAL_TTS_GOLDENS.md [test-03].
+Plain text, unlike `prompt_fixture.json`, so breadth costs nothing. No digits (the text cleaner
+expands them and a recogniser writes them back as numerals), plain prose, Arabic undiacritized.
 """
 
 # Keyed by the language prefix of a voice name; "en" covers the unprefixed voices
@@ -65,7 +65,7 @@ def first_sentence_for(voice):
 
 
 # Five per language, growing in length, for the WER gate; same text as the xtts_v2 port's
-# WER_SENTENCES. see VOXTRAL_TTS_GOLDENS.md [test-03]
+# WER_SENTENCES, so the two ports' WER compares directly.
 WER_SENTENCES = {
     "en": [
         "The old map showed three islands that no sailor had ever found, and nobody wanted to be the "
@@ -189,8 +189,8 @@ def wer_sentences_for(voice):
     return WER_SENTENCES[lang_of(voice)]
 
 
-# The short band: one five-to-seven-word sentence per language, with its own WER ceilings.
-# see VOXTRAL_TTS_GOLDENS.md [test-03]
+# The short band: one five-to-seven-word sentence per language, with its own WER ceilings, since
+# one wrong word is a large rate at this length.
 WER_SHORT = {
     "en": "The winter market opened early today.",
     "de": "Der Wintermarkt öffnete heute früh.",
@@ -204,8 +204,8 @@ WER_SHORT = {
 }
 
 
-# How many of a language's WER_SENTENCES are joined to make the long band.
-# see VOXTRAL_TTS_GOLDENS.md [test-03]
+# How many of a language's WER_SENTENCES are joined to make the long band, which reaches full
+# utterance length; each part scores well alone, so a long-band failure is about length.
 LONG_BAND_PARTS = 4
 
 BANDS = ("short", "medium", "long")
@@ -213,7 +213,7 @@ BANDS = ("short", "medium", "long")
 
 def wer_band(lang, band):
     """-> the list of sentences for one (language, band). The long band is joined from the
-    language's own WER_SENTENCES. see VOXTRAL_TTS_GOLDENS.md [test-03]
+    language's own WER_SENTENCES.
     """
     if band == "short":
         return [WER_SHORT[lang]]

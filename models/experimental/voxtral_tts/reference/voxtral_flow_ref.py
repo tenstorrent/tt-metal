@@ -4,10 +4,10 @@
 """CPU reference (fp32, torch only) for the Voxtral-TTS flow-matching acoustic transformer, THE FLOW
 MODEL.
 
-Op-for-op port of upstream `FlowMatchingAudioTransformer`; source in VOXTRAL_TTS_PROVENANCE.md.
+Op-for-op port of vLLM-Omni's `FlowMatchingAudioTransformer`.
 Per frame: h [B,3072] -> masked argmax semantic code [B,1], plus 36 acoustic codes from a 7-step
 Euler solve of a 3-layer bidirectional transformer over a 3-token sequence (CFG batched to 2B),
-FSQ-quantised and offset by N_AUDIO_SPECIAL. Block notes: VOXTRAL_TTS_FLOW.md [flow-25].
+FSQ-quantised and offset by N_AUDIO_SPECIAL.
 
 Run (regenerates goldens; needs the checkpoint):
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_flow_ref.py

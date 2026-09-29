@@ -6,8 +6,8 @@ Shared pieces for the Voxtral-TTS CPU reference (all three blocks), torch-only.
 
 A seek-per-tensor safetensors reader, the params.json config, and the primitives (RMSNorm,
 SwiGLU, GQA attention, RoPE, weight-norm folding, codebook offsets, PCC). Config values are from the
-released checkpoint's params.json; N_DECODING_STEPS and FM_NORM_EPS are upstream fallbacks.
-see VOXTRAL_TTS_BRINGUP.md [ref-01] and VOXTRAL_TTS_PROVENANCE.md "Torch-only"
+released checkpoint's params.json; N_DECODING_STEPS and FM_NORM_EPS, which it does not set, are
+upstream fallbacks.
 
 Run to check the config against a real checkpoint's tensor manifest (no weights needed):
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_common_ref.py
@@ -73,8 +73,8 @@ FM_HIDDEN_DIM = 9216
 FM_INPUT_DIM = 3072  # llm_projection input == backbone dim
 FM_TIME_THETA = 10000.0  # TimeEmbedding theta (NOT rope_theta, which is unused: no RoPE here)
 FM_NORM_EPS = 1e-5  # dataclass default; absent from params.json
-N_DECODING_STEPS = 7  # upstream fallback, not in params.json. see VOXTRAL_TTS_BRINGUP.md [ref-01]
-CFG_ALPHA = 1.2  # _DEFAULT_CFG_ALPHA
+N_DECODING_STEPS = 7  # vLLM-Omni's default; params.json does not set it
+CFG_ALPHA = 1.2  # vLLM-Omni's _DEFAULT_CFG_ALPHA; params.json does not set it
 FM_SEMANTIC_OUT = 8320  # pad_to_multiple(8192 + 2, 128)
 
 # Codec decoder
@@ -93,7 +93,7 @@ DEC_TF_LENGTHS = (2, 2, 2, 2)
 DEC_CONV_KERNELS = (3, 4, 4, 4)
 DEC_CONV_STRIDES = (1, 2, 2, 2)
 # decoder_blocks.N: 0 = CausalConv1d(292->1024, k3), 2/4/6 = CausalConvTranspose1d(k4, s2);
-# odd N = 2-layer transformer, window 2/4/8/16. see VOXTRAL_TTS_CODEC.md [codec-27]
+# odd N = 2-layer transformer, window 2/4/8/16.
 DEC_CONV_BLOCKS = (0, 2, 4, 6)
 DEC_TF_BLOCKS = (1, 3, 5, 7)
 DEC_WINDOWS = (2, 4, 8, 16)
@@ -179,7 +179,6 @@ def random_state_from_manifest(prefix="", seed=0, scale=0.02, keys=None, dtype=t
     for k in names:
         shape = tuple(man[k]["shape"])
         # Norm vectors at 1.0 and LayerScale at its init, or the residual stream explodes.
-        # see VOXTRAL_TTS_BRINGUP.md [ref-01]
         if k.endswith(("_norm.weight", "norm.weight")) or k.endswith("cluster_usage"):
             t = torch.ones(shape, dtype=dtype)
         elif k.endswith(("attention_scale", "ffn_scale")):
@@ -233,7 +232,7 @@ def gqa_attention(q, k, v, bias=None):
 
 def rope_cis(seq_len, head_dim, theta, offset=0):
     """Mistral-native RoPE table as a complex tensor [S, head_dim/2], rotating INTERLEAVED pairs
-    (dims (0,1), (2,3), ...), not HF's half-split. see VOXTRAL_TTS_PROVENANCE.md finding 3"""
+    (dims (0,1), (2,3), ...), not HF's half-split, as the Mistral-format checkpoint expects."""
     freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
     t = torch.arange(offset, offset + seq_len).float()
     return torch.polar(torch.ones(seq_len, freqs.shape[0]), torch.outer(t, freqs))

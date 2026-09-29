@@ -4,7 +4,7 @@
 """The traced frame loop against the eager one, on real prompts, over FULL utterances.
 
 Eager is the reference because the per-block tests gate eager against fp32; every fixture prompt
-runs to its own [END_AUDIO] at three seeds. see VOXTRAL_TTS_BRINGUP.md [test-02]
+runs to its own [END_AUDIO] at three seeds.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_traced_frame_loop.py

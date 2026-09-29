@@ -4,7 +4,7 @@
 """Tekken tokenizer + prompt-assembly tests.
 
 The gate that matters is exact token-id equality with `mistral_common`, against the 15 vendored
-prompts in `prompt_fixture.json` (no mistral_common needed). see VOXTRAL_TTS_TOKENIZER.md [tok-04]
+prompts in `prompt_fixture.json` (no mistral_common needed).
 Needs tekken.json (downloaded with the checkpoint); skips cleanly without it.
 
     pytest -svv models/experimental/voxtral_tts/tests/test_tokenizer_ref.py

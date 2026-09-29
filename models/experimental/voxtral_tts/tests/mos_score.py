@@ -3,8 +3,8 @@
 
 """Per-language DistillMOS over a directory of clips. Runs in the MOS venv, NOT the main one.
 
-Used by `test_mos.py` and the bringup repo's quality report. Why a separate venv:
-see VOXTRAL_TTS_GATES.md [mos-01].
+Used by `test_mos.py` and the quality report (bring-up tooling, see the README). A separate venv
+because DistillMOS needs torchaudio, which breaks transformers in the main venv.
 
     /tmp/mosvenv/bin/python tests/mos_score.py /path/to/clip_dir     # a dir with manifest.json
     /tmp/mosvenv/bin/python tests/mos_score.py base                  # = generated/lang_base

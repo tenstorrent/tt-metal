@@ -4,8 +4,8 @@
 """Host-side front end: text + a voice name in, prompt embeddings out.
 
 The serving path's single import for everything before the device. A façade over `reference/`'s
-tokenizer and prompt assembly, not a copy: see VOXTRAL_TTS_BRINGUP.md [ref-02]. Every function takes
-an optional `model_dir`; without one it uses the locally available model (see reference/voxtral_paths).
+tokenizer and prompt assembly, not a copy, so the serving path and the fp32 reference the tests gate
+against cannot drift apart. Every function takes an optional `model_dir`; without one it uses the locally available model (see reference/voxtral_paths).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def prompt_ids(text: str, voice: str, model_dir=None):
 
 def build_prompt_embeds(text: str, voice: str, backbone_state, model_dir=None):
     """text + voice -> inputs_embeds [1, P, 3072] for `TtVoxtralPipeline.generate`. Pass the
-    pipeline's `wb` as `backbone_state` to avoid a second copy. see VOXTRAL_TTS_BRINGUP.md [pipe-03]
+    pipeline's `wb` as `backbone_state` so the embedding tables are not loaded a second time.
     """
     model_dir = model_dir or MODEL_DIR
     ids = torch.tensor(prompt_ids(text, voice, model_dir), dtype=torch.long)

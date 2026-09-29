@@ -24,7 +24,7 @@ pytestmark = [
     pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}"),
 ]
 
-WAVE_PCC = 0.999  # same gate as tests/pcc/test_codec_pcc.py; see VOXTRAL_TTS_CODEC.md [codec-51]
+WAVE_PCC = 0.999  # same gate as tests/pcc/test_codec_pcc.py
 STAGE_PCC = 0.996  # per-stage gate, as in tests/pcc/test_codec_pcc.py
 
 
@@ -46,8 +46,8 @@ def pair(device):
 
 @pytest.mark.parametrize("n_frames", [64, 469])
 def test_chunked_matches_unchunked(device, n_frames):
-    """Chunking must be EXACT (see VOXTRAL_TTS_CODEC.md [codec-14]). Compares the two paths
-    directly rather than both against the reference."""
+    """Chunking must be EXACT: attention is causal and windowed, so each slab holds all the context
+    its kept rows need. Compares the two paths directly rather than both against the reference."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     codes = ref.make_synthetic_codes(n_frames)
@@ -58,7 +58,7 @@ def test_chunked_matches_unchunked(device, n_frames):
 
 def test_bias_cache_does_not_grow_with_utterance_length(device):
     """Every chunk is padded to `slab`, so chunked stages hold ONE bias per window whatever the
-    length; stages with S <= slab keep an SxS bias. see VOXTRAL_TTS_CODEC.md [codec-55]"""
+    length; stages with S <= slab keep an SxS bias."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     gen = TtVoxtralCodecDecoder(device)
@@ -71,8 +71,7 @@ def test_bias_cache_does_not_grow_with_utterance_length(device):
 
 @pytest.mark.parametrize("n_frames", [64, 65, 130, 469])
 def test_bucketing_preserves_length_and_accuracy(device, n_frames):
-    """Bucketed output is trimmed to exactly T frames and matches the reference.
-    see VOXTRAL_TTS_CODEC.md [codec-05]"""
+    """Bucketed output is trimmed to exactly T frames and matches the reference."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     w = ref.load_codec_state()
@@ -85,7 +84,7 @@ def test_bucketing_preserves_length_and_accuracy(device, n_frames):
 
 def test_bucketing_pads_with_last_frame_not_zeros(device):
     """Bucketed (last-frame padded) and unbucketed decodes agree, so the pad does not leak into
-    kept audio. see VOXTRAL_TTS_CODEC.md [codec-19], VOXTRAL_TTS_BUGS.md BUG-4"""
+    kept audio."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     codes = ref.make_synthetic_codes(70)  # 70 -> bucket 128, so 58 frames of padding
@@ -95,8 +94,7 @@ def test_bucketing_pads_with_last_frame_not_zeros(device):
 
 
 def test_prepared_weights_are_deduplicated(device):
-    """Content dedup keeps the prepared-weight cache at <= 8 layouts for 4 convs x 4 buckets.
-    see VOXTRAL_TTS_CODEC.md [codec-10], [codec-56]"""
+    """Content dedup keeps the prepared-weight cache at <= 8 layouts for 4 convs x 4 buckets."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
     gen = TtVoxtralCodecDecoder(device)
@@ -109,8 +107,7 @@ def test_prepared_weights_are_deduplicated(device):
 
 
 def test_slab_is_tile_aligned():
-    """TILE_LAYOUT pads every dim to 32, so an unaligned slab silently wastes tiles.
-    see VOXTRAL_TTS_CODEC.md [codec-03]"""
+    """TILE_LAYOUT pads every dim to 32, so an unaligned slab silently wastes tiles."""
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import SLAB
 
     assert SLAB % 32 == 0, f"slab {SLAB} is not tile-aligned"

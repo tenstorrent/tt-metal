@@ -4,7 +4,7 @@
 """Prefill at every padded shape (multiples of PREFILL_MULTIPLE up to max_seq_len): hidden states
 and every KV-cache entry against fp32, no shape unlike its neighbours, padding-amount independence, and
 an over-long prompt raising. Long shapes use joined fixture texts, so they carry a collapse floor,
-not an accuracy gate. see VOXTRAL_TTS_BACKBONE.md [gpt-52]
+not an accuracy gate.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_prefill_shapes.py
@@ -39,13 +39,13 @@ MAX_SEQ = 2048
 SHAPES = tuple(range(gpt.PREFILL_MULTIPLE, MAX_SEQ + 1, gpt.PREFILL_MULTIPLE))  # 128 .. 2048
 TILE = 32
 
-# Gates are on PCC pooled over all S positions; single positions are reported, not gated.
-# Measured bands and rationale: see VOXTRAL_TTS_BACKBONE.md [gpt-52]
+# Gates are on PCC pooled over all S positions; a single position is too noisy to gate, so it is
+# reported only. Each constant sits just below what every shape reaches.
 SHAPE_PCC_FLOOR = 0.99  # collapse floor, not an accuracy gate
 SHAPE_SPREAD = 0.008  # no shape may compute unlike its neighbours
 SHAPE_WORST_SAMPLE_PCT = 15.0  # PCC alone hides a single far-off element
 # Rows below the collapse floor sit out the worst-sample and cache checks only while they stay
-# scattered, as rounding chaos is and a structural fault is not. see VOXTRAL_TTS_BACKBONE.md [gpt-52]
+# scattered, as rounding chaos is and a structural fault is not.
 MAX_COLLAPSED_PER_TILE = TILE // 2
 MAX_COLLAPSED_SHARE = 0.15
 
@@ -145,7 +145,7 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
     ), f"Sp={sp}: worst sample {m_keep['worst_pct']:.2f}% over {len(keep)} positions though pooled PCC is {m['pcc']:.6f}"
 
 
-@pytest.mark.timeout(1800)  # see VOXTRAL_TTS_BACKBONE.md [gpt-52]
+@pytest.mark.timeout(1800)  # prefills every shape this run skipped
 def test_no_shape_computes_differently_from_its_neighbours(big, w):
     """No shape may compute unlike its neighbours. Reuses the sweep's scores and prefills any shape
     this run has not, so a reordered, filtered or split run still checks every shape."""

@@ -5,8 +5,8 @@
 Tekken tokenizer + Voxtral-TTS prompt assembly, reimplemented from `tekken.json`.
 
 Replaces `mistral_common`; validated by exact token-id match against its `encode_speech_request`
-(tests/test_tokenizer_ref.py). Needs `regex` (see VOXTRAL_TTS_TOKENIZER.md [tok-01]); file format
-and prompt layout: VOXTRAL_TTS_TOKENIZER.md [tok-02], [tok-03].
+(tests/test_tokenizer_ref.py). Needs `regex`: tekken's split pattern uses Unicode property classes
+that stdlib `re` cannot parse.
 
 Run to check against the shipped ground-truth prompts:
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_tokenizer_ref.py
@@ -29,8 +29,7 @@ REPEAT_AUDIO_TEXT = "[REPEAT_AUDIO_TEXT]"
 
 
 def _bpe(ranks, piece):
-    """Classic tiktoken byte-pair merge: repeatedly merge the adjacent pair with the LOWEST rank.
-    see VOXTRAL_TTS_TOKENIZER.md [tok-01]"""
+    """Classic tiktoken byte-pair merge: repeatedly merge the adjacent pair with the LOWEST rank."""
     if piece in ranks:
         return [ranks[piece]]
     parts = [bytes([b]) for b in piece]
@@ -57,7 +56,7 @@ class TekkenTokenizer:
     the full TTS prompt including the audio placeholders."""
 
     def __init__(self, path=DEFAULT_TEKKEN):
-        import regex  # only dependency beyond stdlib. see VOXTRAL_TTS_TOKENIZER.md [tok-01]
+        import regex  # not stdlib re: the split pattern uses Unicode property classes
 
         if not os.path.exists(path):
             raise FileNotFoundError(f"tekken.json not found: {path}\n{DOWNLOAD_HINT}")
@@ -69,7 +68,6 @@ class TekkenTokenizer:
         self.pattern = regex.compile(cfg["pattern"])
 
         # Only the first (vocab_size - n_special) entries are in the released vocabulary.
-        # see VOXTRAL_TTS_TOKENIZER.md [tok-02]
         n_regular = self.vocab_size - self.n_special
         self.ranks = {}
         self.by_rank = {}
@@ -85,7 +83,7 @@ class TekkenTokenizer:
 
     # -- ids <-> bytes -----------------------------------------------------------------
     def encode(self, text):
-        """Raw text -> token ids, with no normalization. see VOXTRAL_TTS_TOKENIZER.md [tok-01]"""
+        """Raw text -> token ids, with no normalization: tekken is byte-level and case/space sensitive."""
         out = []
         for m in self.pattern.findall(text):
             out.extend(r + self.n_special for r in _bpe(self.ranks, m.encode("utf-8")))

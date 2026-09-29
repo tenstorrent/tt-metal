@@ -41,7 +41,7 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 # Every test in this file opens a device, so the whole module is slow (not host-only).
 pytestmark = [pytest.mark.slow, needs_checkpoint]
 
-PCC_VELOCITY = 0.999  # see VOXTRAL_TTS_FLOW.md [flow-50]
+PCC_VELOCITY = 0.999  # one floor for every velocity, layer and integrated-result comparison
 
 
 @pytest.fixture(scope="module")
@@ -81,7 +81,7 @@ def test_semantic_code_is_exact(rig):
     ), f"semantic code mismatch: ref {exp.flatten().tolist()} dev {got.flatten().tolist()}"
 
 
-MAX_FRAME_CODES_DIFF = 4  # see VOXTRAL_TTS_FLOW.md [flow-50]
+MAX_FRAME_CODES_DIFF = 4  # codes in one frame that may differ from the fp32 reference
 
 
 def test_full_frame_codes_close_to_reference(rig):
@@ -96,9 +96,7 @@ def test_full_frame_codes_close_to_reference(rig):
     if n_diff:
         print(f"      ref  {exp[0, :10].tolist()}")
         print(f"      got  {got[0, :10].tolist()}")
-    assert (
-        n_diff <= MAX_FRAME_CODES_DIFF
-    ), f"{n_diff} of {exp.numel()} codes differ (shipped level is 2); flow-model regression"
+    assert n_diff <= MAX_FRAME_CODES_DIFF, f"{n_diff} of {exp.numel()} codes differ; flow-model regression"
     assert worst <= 1, f"a code is off by {worst} FSQ levels, not one -- that is not rounding"
 
 
@@ -221,7 +219,8 @@ def test_every_block_matches_reference(rig, wb):
 def test_velocity_matches_along_the_real_trajectory(rig, wb):
     """The velocity at each solver step, at the reference trajectory's state for that step.
 
-    see VOXTRAL_TTS_FLOW.md [flow-51]
+    The state must come from the trajectory: a late step's converged state paired with fresh noise
+    is an input the model never sees.
     """
     gen, w, _, _ = rig
     h, _ = _real_hidden(wb, REAL_CASES[0])
@@ -244,7 +243,7 @@ def test_velocity_matches_along_the_real_trajectory(rig, wb):
 def test_the_solve_accumulates_correctly(rig, wb):
     """The integrated result after all 7 steps, compared before quantisation.
 
-    Checked only at the end: the solve is one device graph. see VOXTRAL_TTS_FLOW.md [flow-52]
+    Checked only at the end: the solve is one device graph, so per-step states are not exposed.
     """
     gen, w, _, _ = rig
     h, _ = _real_hidden(wb, REAL_CASES[0])

@@ -5,7 +5,7 @@
 
 Its own module on purpose: the test opens a fresh device so the reported warm-up time is not
 inherited from another test's program cache, and a second device open while test_perf.py's
-module-scoped pipeline still holds the chip leaves the device unrecoverable (STATUS 6.81).
+module-scoped pipeline still holds the chip leaves the device unrecoverable.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/perf/test_warmup.py
@@ -23,7 +23,7 @@ pytestmark = needs_checkpoint
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(1800)  # see VOXTRAL_TTS_BRINGUP.md [pipe-06]
+@pytest.mark.timeout(1800)  # warm-up compiles every kernel on an empty kernel cache
 def test_warmup_compiles_every_prefill_shape_and_codec_bucket():
     """Warmup must leave nothing for a request to compile: every prefill shape and codec bucket.
 

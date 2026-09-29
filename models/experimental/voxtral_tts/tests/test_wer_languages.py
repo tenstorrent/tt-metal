@@ -4,8 +4,8 @@
 """End-to-end WER, one gate per (language, length band).
 
 The full request path runs, the waveform is transcribed back with Whisper, and the words are scored
-against each cell's ceiling. Why per language and per band, and how every threshold was derived:
-see VOXTRAL_TTS_GATES.md [wer-01] and [wer-05].
+against each cell's ceiling. Per language because Whisper's own error rate differs by language; per
+band because one wrong word is a different rate in a short sentence than in a long passage.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_wer_languages.py           # full gate
@@ -29,20 +29,19 @@ from models.experimental.voxtral_tts.tests.sentence_corpus import (  # noqa: E40
     wer_band,
 )
 
-ASR_MODEL = "openai/whisper-large-v3"  # see VOXTRAL_TTS_GATES.md [wer-02]
+ASR_MODEL = "openai/whisper-large-v3"  # smaller models hallucinate on short audio and are weak outside English
 ASR_SR = 16000
 OUTPUT_SR = 24000
-# Extra seeds only for the cells whose WER moves with the seed; see VOXTRAL_TTS_GATES.md [wer-07]
+# Extra seeds only for the cells whose WER moves with the seed.
 SEEDS = {("ar", "long"): (0, 1, 2), ("hi", "long"): tuple(range(10))}
 DEFAULT_SEEDS = (0,)
 FULL_SWEEP_LANG = "en"
 
-# A run at or past this did not say the sentence and is counted; see VOXTRAL_TTS_GATES.md [wer-04]
+# A run at or past this did not say the sentence; it is counted against MAX_DEGENERATE, not averaged.
 COLLAPSE = 0.30
 
-# Ceiling per (language, band): min(max(3 x measured mean, per-band floor), COLLAPSE).
-# Derivation, per-band floors, watch list and the measured mean of every cell:
-# see VOXTRAL_TTS_GATES.md [wer-05] and [wer-06].
+# Ceiling per (language, band): three times the cell's mean WER, but no lower than the band's floor
+# (about one wrong word in that band) and no higher than COLLAPSE.
 CEILINGS = {
     ("ar", "short"): 0.25,
     ("ar", "medium"): 0.05,
@@ -61,7 +60,7 @@ CEILINGS = {
     ("fr", "long"): 0.02,
     ("hi", "short"): 0.25,
     ("hi", "medium"): 0.16,
-    # the weakest cell, gated on ten seeds; see VOXTRAL_TTS_GATES.md [wer-08]
+    # the weakest cell; its WER moves with the seed, so SEEDS gives it ten
     ("hi", "long"): 0.30,
     ("it", "short"): 0.25,
     ("it", "medium"): 0.03,
@@ -78,8 +77,8 @@ CEILINGS = {
 VOICE_SWEEP_LANG = "en"
 VOICE_SWEEP_SENTENCES = 2  # breadth over voices, not depth over sentences
 
-MAX_DEGENERATE = 2  # runs per cell at or past COLLAPSE; see VOXTRAL_TTS_GATES.md [wer-09]
-# Per-cell overrides of MAX_DEGENERATE. see VOXTRAL_TTS_GATES.md [wer-08]
+MAX_DEGENERATE = 2  # runs per cell allowed at or past COLLAPSE
+# Per-cell overrides of MAX_DEGENERATE: hi/long degenerates on some seeds on any healthy build.
 MAX_DEGENERATE_CELL = {("hi", "long"): 8}
 # runs that hit the frame cap without [END_AUDIO]; WER cannot hear a missing tail
 MAX_NON_TERMINATING = 2
@@ -101,7 +100,7 @@ pytestmark = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no ch
 # --------------------------------------------------------------------------------------- metric
 
 # Optional orthography, dropped or folded so two legal spellings score alike; each rule is scoped
-# to one script. See VOXTRAL_TTS_GATES.md [wer-11]
+# to one script.
 _DROP_MARKS = {
     "़",  # Devanagari nukta: तेज़ and तेज are one word
     *(chr(c) for c in range(0x64B, 0x656)),  # Arabic harakat, madda, hamza -- omitted in prose
@@ -113,7 +112,7 @@ _FOLD_CHARS = str.maketrans({"ँ": "ं", "ة": "ه", "ى": "ي"})
 def _words(s):
     """Casefold, drop punctuation and fold optional orthography, in ANY script.
 
-    Keeps combining marks, so non-Latin text survives; see VOXTRAL_TTS_GATES.md [wer-11]
+    Keeps combining marks, so non-Latin text survives.
     """
     flat = s.casefold().replace("’", "'").replace("ʼ", "'")  # ASR emits curly apostrophes
     flat = unicodedata.normalize("NFD", flat)  # expose precomposed marks
@@ -181,8 +180,8 @@ def test_every_language_band_is_gated():
 
 
 def frame_budget(text):
-    """Frame cap: ~18 chars/s at 12.5 frames/s, x2.2 margin, floor 320.
-    see VOXTRAL_TTS_GATES.md [wer-12]"""
+    """Frame cap: ~18 chars/s at 12.5 frames/s, x2.2 margin, floor 320. Generation stops on
+    [END_AUDIO], so a generous cap costs nothing; a tight one would fake a non-terminating run."""
     return max(320, int(math.ceil(len(text) / 18.0 * 12.5 * 2.2)))
 
 
@@ -198,13 +197,13 @@ class Asr:
 
     def __call__(self, wav, lang, long_form=None):
         """`long_form` None decides by duration (the gate); False forces the truncating path for the
-        calibration control. See VOXTRAL_TTS_GATES.md [wer-03]"""
+        calibration control."""
         audio = wav.reshape(1, -1)
         n = int(audio.shape[1] * ASR_SR / OUTPUT_SR)
         audio = torch.nn.functional.interpolate(audio.unsqueeze(0), size=n, mode="linear", align_corners=False).squeeze(
             0
         )
-        # Whisper truncates past 30 s unless asked for long form; see VOXTRAL_TTS_BUGS.md BUG-13
+        # Whisper silently truncates past 30 s unless asked for long form
         long_form = n > 30 * ASR_SR if long_form is None else long_form
         kw = {"truncation": False, "padding": "longest", "return_attention_mask": True} if long_form else {}
         inp = self.proc(audio[0].numpy(), sampling_rate=ASR_SR, return_tensors="pt", **kw)
@@ -212,7 +211,7 @@ class Asr:
         if long_form:
             gen |= {"attention_mask": inp.attention_mask, "return_timestamps": True}
         with torch.no_grad():
-            # told the language, not left to detect it; see VOXTRAL_TTS_GATES.md [wer-02]
+            # told the language: detection on a few seconds is unreliable and can pick the wrong script
             ids = self.model.generate(inp.input_features, **gen)
         return self.proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
 
@@ -291,7 +290,7 @@ def rig():
 
 
 @pytest.mark.slow
-# the long band outlasts the default 300 s timeout; see VOXTRAL_TTS_GATES.md [wer-13]
+# the long band outlasts the default 300 s timeout
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("band", BANDS)
 @pytest.mark.parametrize("lang", sorted(WER_SENTENCES), ids=lambda l: LANG_NAMES[l])
@@ -323,7 +322,8 @@ def test_wer_per_language_band(rig, lang, band):
     )
 
 
-# Every voice, on English only; see VOXTRAL_TTS_GATES.md [wer-10]
+# Every voice, on English only: other languages lose accuracy on a foreign-language preset, which is
+# the model's cross-lingual limit, not a device defect.
 @pytest.mark.slow
 @pytest.mark.timeout(3600)
 def test_wer_every_voice_english(rig):
@@ -333,7 +333,7 @@ def test_wer_every_voice_english(rig):
     asr, pipe = rig
     voices = tuple(all_voices())
     s = run_language(VOICE_SWEEP_LANG, asr, pipe, band="medium", voices=voices, max_sentences=VOICE_SWEEP_SENTENCES)
-    # one ceiling for the whole sweep; see VOXTRAL_TTS_GATES.md [wer-05]
+    # one ceiling for the whole sweep
     ceiling = CEILINGS[("en", "voice_sweep")]
     print(
         f"\n  en/voice_sweep: {len(voices)} voices, WER {s['mean']:.4f} "

@@ -5,7 +5,7 @@
 
 Covers the per-prompt horizon, full utterances, determinism, the cache entries decode writes, the
 prompt cache staying untouched, tile boundaries, servable and unservable cache lengths, stack depth,
-and a full cache raising. see VOXTRAL_TTS_BACKBONE.md [gpt-51]
+and a full cache raising.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_decode_pcc.py
@@ -38,10 +38,10 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 pytestmark = [pytest.mark.slow, needs_checkpoint]
 
 # Every teacher-forced comparison uses the prompt's OWN recorded trajectory.
-# Gate constants and why the breadth floor is lower: see VOXTRAL_TTS_BACKBONE.md [gpt-51]
 PCC_DECODE = 0.999
-PCC_DECODE_HORIZON = 0.997  # a minimum over every well-conditioned frame of all 15 prompts
-# Ill-conditioned frames skip the floors above but must each clear this one. see VOXTRAL_TTS_BACKBONE.md [gpt-53]
+# Lower: a minimum over every well-conditioned frame of all 15 prompts, each with an isolated hard frame.
+PCC_DECODE_HORIZON = 0.997
+# Ill-conditioned frames skip the floors above but must each clear this one.
 PCC_DECODE_ILL_CONDITIONED = 0.995
 CACHE_PCC = 0.998
 TILE = 32
@@ -170,7 +170,7 @@ def test_decode_across_a_cache_tile_boundary(gen, w):
     n = min(real_frames_long(CACHE_CASE).shape[0], (P // TILE + 2) * TILE - P)
     crossings = [t for t in range(n) if (P + t) % TILE == 0]
     pcs, _ = _steps(gen, inc, w, n)
-    # The steps walk case 0's own frames, ill-conditioned ones included. see VOXTRAL_TTS_BACKBONE.md [gpt-53]
+    # The steps walk case 0's own frames, ill-conditioned ones included.
     ill = ill_conditioned_frames(CACHE_CASE)
     gated = [p for t, p in enumerate(pcs) if t not in ill]
     at_crossing = [pcs[t] for t in crossings if t < len(pcs) and t not in ill]
@@ -242,8 +242,7 @@ LONG_CASES = tuple(sorted(long_frame_cases(), key=lambda c: -real_frames_long(c)
 @pytest.mark.parametrize("ci", LONG_CASES, ids=lambda c: f"case{c}")
 def test_decode_pcc_over_a_full_utterance(gen, w, ci):
     """A whole utterance, teacher-forced on its own frames, with the trend reported by decile,
-    so drift over a real request's length has somewhere to show.
-    see VOXTRAL_TTS_BACKBONE.md [gpt-51]"""
+    so drift over a real request's length has somewhere to show."""
     frames = real_frames_long(ci)  # this prompt's own trajectory
     inc, P = _prefill_both(gen, w, ci)
     pcs, wss = _steps(gen, inc, w, frames.shape[0], frames=frames)

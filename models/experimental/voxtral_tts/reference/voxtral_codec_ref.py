@@ -5,8 +5,7 @@
 CPU reference for the Voxtral Codec DECODER — THE CODEC (~150M): audio codes -> 24 kHz waveform.
 
 Self-contained (torch only) op-for-op reference for the decode half of upstream
-`VoxtralTTSAudioTokenizer`; see VOXTRAL_TTS_PROVENANCE.md. The encoder is absent from the
-released checkpoint. Block boundary and port details: see VOXTRAL_TTS_CODEC.md [codec-27].
+`VoxtralTTSAudioTokenizer`. The encoder is absent from the released checkpoint.
 
 Run (regenerates goldens; needs the checkpoint — only ~0.6 GB of it is read):
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_codec_ref.py
@@ -60,8 +59,7 @@ PREFIX = "audio_tokenizer."
 def decoder_window_sizes():
     """Sliding-window size per decoder transformer stage -> (2, 4, 8, 16).
 
-    Derived from upstream's encoder-then-decoder window threading, so stage 0 is the NARROWEST.
-    see VOXTRAL_TTS_CODEC.md [codec-28]"""
+    Derived from upstream's encoder-then-decoder window threading, so stage 0 is the NARROWEST."""
     w = CODEC_ATTN_WINDOW
     for s in (2, 2, 2, 1):  # encoder strides, in order
         if s > 1:

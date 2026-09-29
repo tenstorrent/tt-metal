@@ -6,11 +6,11 @@
 Runs the gate's own `Asr` and `wer` on fp32-reference speech that must score near zero, on silence,
 noise and cut clips that must score badly, and on a >30 s clip with long form on and (the control)
 off. The clips are codes in asr_calibration_fixture.pt, decoded here by the fp32 codec; rebuild with
-make_asr_calibration_fixture.py in the bringup repo's voxtral_tts/tools/.
-Why, and how every bound was derived: see VOXTRAL_TTS_GATES.md [asr-01] to [asr-03].
+make_asr_calibration_fixture.py (bring-up tooling, see the README). The metric tests score typed text
+only, so a recogniser that truncates long audio or a cleaner that erases a script would pass them.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_asr_calibration.py      # ~5 min, CPU
+    pytest -svv models/experimental/voxtral_tts/tests/test_asr_calibration.py      # CPU
 """
 
 import os
@@ -32,7 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(HERE, "asr_calibration_fixture.pt")
 SAMPLES_PER_FRAME = 1920
 
-# Known-good bounds: each clip's measured score plus one word; see VOXTRAL_TTS_GATES.md [asr-02]
+# Known-good bounds: each clip's own score plus one word, per clip since Whisper's error rate differs
+# by language.
 GOOD_MAX = {"en_medium": 0.05, "en_long": 0.02, "ar": 0.10, "hi": 0.15}
 CUT_KEEP = 0.5  # keep this fraction of the audio for the cut-tail clips
 CUT_MIN = 0.25  # half the audio gone must cost at least a quarter of the words
@@ -109,7 +110,7 @@ def test_known_good_scores_near_zero(clips, asr, key):
 @pytest.mark.parametrize("key", ["hi", "ar"])
 def test_non_latin_transcript_survives_the_cleaner(clips, asr, key):
     """A real transcript in the target script must come out of the cleaner with its words, in that
-    script, not emptied to a free zero. See VOXTRAL_TTS_GATES.md [wer-11]"""
+    script, not emptied to a free zero."""
     c, wav = clips[key]
     hyp = asr(wav, c["lang"])
     words = _words(hyp)
@@ -154,7 +155,7 @@ def test_cut_tail_shows_the_missing_words(clips, asr, key):
     assert _words(part)[:1] == _words(c["text"])[:1], f"{key}: the kept head is not the sentence's start"
 
 
-# ------------------------------------------------------------------------------ long form (BUG-13)
+# ------------------------------------------------------------------------------ long form
 
 
 def test_long_clip_transcribes_to_the_end(clips, asr):
@@ -173,7 +174,7 @@ def test_long_clip_transcribes_to_the_end(clips, asr):
 
 def test_long_clip_truncates_without_long_form(clips, asr):
     """The control: the same clip with long form OFF loses its tail, so the duration branch is what
-    makes the long test pass. See VOXTRAL_TTS_GATES.md [asr-03]"""
+    makes the long test pass."""
     c, wav = clips["en_long"]
     hyp = asr(wav, "en", long_form=False)
     w = wer(c["text"], hyp)

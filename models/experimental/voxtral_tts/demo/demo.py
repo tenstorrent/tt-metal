@@ -56,7 +56,7 @@ def main(argv=None):
     pipe = TtVoxtralPipeline(ckpt_path=model_dir)
     try:
         # Every prefill shape, every codec bucket, one trace capture; verbose so the wait does
-        # not look like a hang. see VOXTRAL_TTS_BRINGUP.md [pipe-06]
+        # not look like a hang.
         pipe.warmup(verbose=True)
         wav = pipe.synthesize(a.text, a.voice, seed=a.seed, max_frames=a.max_frames)
         write_wav(a.out, wav)
