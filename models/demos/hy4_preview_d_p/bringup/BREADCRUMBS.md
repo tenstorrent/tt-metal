@@ -2306,3 +2306,43 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
+
+## S.moe_shared.01 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_shared layer 2, attn_hc on device, rest CPU). It is the layer-1
+  reviewed swap test (test_swap_moe_full_01_attn_hc.py) with BLOCK_TYPE = moe_shared and two changes:
+  1. It sets `ctx.extra["shared_topk"]` to the golden's L1.topk (src = ref.cfg.topk_source(2)) in the reference and
+     device contexts. The rendered test raised a KeyError in topk_shared, because layer 1 does not run in a
+     one-block harness.
+  2. It adds a per-stream h_mid rel L2 limit (<= 0.005).
+- It keeps the gated pcc_swap_out (0.98), the trail, and the layer-1 asserted checks: not a CPU bridge; gates rel
+  <= 0.01, per-column rel <= 0.01 on all 8 columns, post worst row <= 0.015; attn_x rel <= 0.005 / row 0.02; h_mid rel
+  <= 0.005 / worst (row, stream) 0.02; router overlap >= 0.98; out rel <= 0.01.
+- CPU block-level mutation study in /tmp/hy4_ss1/{study,s2}.py (outside the repo; the layer-1 /tmp/hy4_sm1 script
+  with L = 2, the shared topk and extra layer-2 mutations). The table is in the test docstring.
+
+Decisions
+- Per-stream h_mid check: at layer 2, stream 3 (norm 340) dominates h_mid, so the whole-tensor rel L2 is 0.0009 on the
+  reference and only 0.0042 for post x 1.02. The per-stream check (reference max 0.0029, bf16-rounded gates 0.0032)
+  catches post x 1.005 (stream 1 at 0.0060), which every other check misses.
+- The out worst (row, stream) rel L2 is recorded, not asserted (0.024 on the fp32 reference, 0.063 with bf16 gates:
+  near-tie expert flips).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999995, rel 0.0030, gates col rel max 0.0018, h_mid stream max 0.0029,
+  router 0.9973, topk match 1.0).
+- BRINGUP_IMPL=stub: FAIL on every check (out PCC 0.852).
+- Gate (device TtHcGates): PASS. pcc_swap_out 0.999994, gates rel 0.00136, col rel [0.0045, 0.0012, 0.0018, 0.0021,
+  0.0018, 0.0017, 0.0019, 0.0034], post row 0.0048, attn_x 0.00226 / 0.0025, h_mid 0.00089 / row 0.0038 / stream max
+  0.00295, router 0.9966, out rel 0.00345.
+
+Gotchas
+- Every later moe_shared swap test (02..) renders from the same template and needs the shared_topk fix too.
+- Tightest margins: gate column 0 (device 0.0045 vs 0.01) and h_mid stream 0 (0.00295 vs 0.005).
+- Not caught: nothing in the mutation table except bf16-rounded gates (not a bug).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
