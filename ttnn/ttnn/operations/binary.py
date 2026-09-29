@@ -252,6 +252,8 @@ def apply_activations(tensor, activations, reference_tensor=None):
         ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
         ttnn.UnaryOpType.GELU_TANH: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ttnn.UnaryOpType.SQRT: torch.sqrt,
+        ttnn.UnaryOpType.EXP: torch.exp,
+        ttnn.UnaryOpType.RECIP: torch.reciprocal,
         ttnn.UnaryOpType.EQZ: lambda x: x == 0,
         ttnn.UnaryOpType.NEZ: lambda x: x != 0,
         ttnn.UnaryOpType.GTZ: lambda x: compare_zero(x, torch.gt),

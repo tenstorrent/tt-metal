@@ -12,9 +12,14 @@ class Gemma4ServiceConfig:
     NUM_LAYERS = 60
     FABRIC_PAYLOAD_SIZE = 8192
     MESH_SHAPE = (8, 4)
-    CHUNK_SIZE = 8192
+    # Validation runs may set GEMMA4_TEST_CHUNK_SIZE to test another chunk size.
+    CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
+
+
+def is_global_layer_by_index(layer_idx):
+    return layer_idx % 6 == 5
 
 
 def validate_params(params):
@@ -43,7 +48,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     model_config = Gemma4ServiceConfig
     hf_model_default = "google/gemma-4-31B-it"
     ttnn_cache_default = ""
-    prefill_trace_default = ""
+    prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"
     pipeline_activation_emb_tp_sharded = False
 
     @property
@@ -73,6 +78,16 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             dtype=ttnn.bfloat16,
             mesh_shape=mesh_shape,
         )
+
+    def cache_layer_rows(self, config_id, num_layers):
+        if not 0 <= config_id < 36:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return {layer: layer for layer in range(num_layers) if is_global_layer_by_index(layer) == (config_id < 4)}
+
+    def cache_head_dim(self, config_id):
+        if not 0 <= config_id < 36:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return 640 if config_id < 4 else 256
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)

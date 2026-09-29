@@ -17,7 +17,6 @@
 #include "hostdev/streaming_profiler_common.h"
 #include "internal/tt-1xx/risc_common.h"
 
-#include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
@@ -71,7 +70,7 @@ constexpr uint32_t kStageBase = get_named_compile_time_arg_val("stage_base");
 constexpr uint32_t kNStage = get_named_compile_time_arg_val("n_stage");
 constexpr uint32_t kCoreRecords = get_named_compile_time_arg_val("core_records");
 constexpr uint32_t kDoneAddr = get_named_compile_time_arg_val("done_addr");
-// 1 = quiesce; 2 = the host has read everything it needs from this L1, restore the NIU.
+// Nonzero = quiesce: drain everything with every wait still holding, then exit.
 constexpr uint32_t kStopAddr = get_named_compile_time_arg_val("stop_addr");
 constexpr uint32_t kSocketConfigAddr = get_named_compile_time_arg_val("socket_config_addr");
 constexpr uint32_t kMaxCores = get_named_compile_time_arg_val("max_cores");
@@ -661,7 +660,7 @@ static FORCE_INLINE void seed_heads(uint32_t num_cores, volatile tt_l1_ptr uint3
 
 // The spool drains, then the socket barrier holds until the host has acked every byte: done means nothing of the
 // capture is in flight anywhere.
-static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender, volatile tt_l1_ptr uint32_t* stop) {
+static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) {
     if constexpr (kSpool) {
         while (!pump.drained()) {
             pump.pass_cold();
@@ -681,12 +680,6 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender, 
     update_socket_config(sender);
     // After the socket barrier, so the host only sees `done` once every page is out.
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr) = kernel_profiler::kRelayDoneWord;
-    // NIU_CFG_0 persists until chip reset, so whoever set stream mode restores it; NOC2AXI takes this L1 out of the
-    // host's view, so it waits for the host to say it has read everything.
-    do {
-        invalidate_l1_cache();
-    } while (*stop != kernel_profiler::kRelayStopRelease);
-    experimental::drisc_set_noc2axi_mode_all();
 }
 
 // Every core is on exactly one list. The ship list persists across sweeps and is gathered in order off the
@@ -1087,5 +1080,5 @@ void kernel_main() {
         }
     }
 
-    finish(pump, sender, stop);
+    finish(pump, sender);
 }
