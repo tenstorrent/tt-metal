@@ -1070,15 +1070,21 @@ class LTXPipeline:
         )
         self.transformer = state.model
 
-    def _device_embed_cache_path(self, prompts: list[str]) -> str:
+    def _device_embed_cache_path(self, prompts: list[str]) -> str | None:
         """Reuse embeddings only for the same prompt, weights and encoder policy.
 
         The old prompt-only namespace cannot establish source identity. Leave it
         intact, but make the first request under each verified policy encode.
+        None when the cache directory cannot be created (a read-only cache root for the
+        serving user): the prompt is then encoded without the cache, never failed.
         """
         cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
         embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings-v2")
-        os.makedirs(embed_cache_dir, exist_ok=True)
+        try:
+            os.makedirs(embed_cache_dir, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"prompt-embedding cache unavailable ({e}); encoding without it")
+            return None
         identity = {"prompts": prompts, "encoder": self.gemma_encoder_pair.embedding_cache_identity()}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")

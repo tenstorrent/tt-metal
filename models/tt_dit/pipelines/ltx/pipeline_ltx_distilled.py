@@ -1654,7 +1654,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
         # cache: there the encoder is coresident-excluded from the DiT, so re-encoding every request
         # would reload it and evict the captured model state.
-        cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
+        _embed_path = self._device_embed_cache_path([prompt]) if self.dynamic_load else None
+        cached = _embed_path is not None and os.path.exists(_embed_path)
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
         if self._device_prompt_handoff:
