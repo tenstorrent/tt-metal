@@ -5,6 +5,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from vllm_tt_plugin.logger import init_tt_logger
+
 from vllm.entrypoints.chat_utils import make_tool_call_id
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
 from vllm.entrypoints.openai.engine.protocol import (
@@ -17,7 +19,6 @@ from vllm.entrypoints.openai.engine.protocol import (
 )
 from vllm.tokenizers import TokenizerLike
 from vllm.tool_parsers.abstract_tool_parser import ToolParser
-from vllm_tt_plugin.logger import init_tt_logger
 
 logger = init_tt_logger(__name__)
 
@@ -42,7 +43,10 @@ class Gemma4ToolParser(ToolParser):
     and normalizes arguments into a JSON string for the OpenAI tool-call schema.
     """
 
-    def __init__(self, tokenizer: TokenizerLike):
+    def __init__(self, tokenizer: TokenizerLike, *args, **kwargs):
+        # vLLM releases disagree on whether parser factories pass only the
+        # tokenizer or also the model config. Gemma4 does not need the latter,
+        # but accepting it keeps this plugin compatible with both contracts.
         super().__init__(tokenizer)
 
         # Streaming state.
