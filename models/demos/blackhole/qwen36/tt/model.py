@@ -180,12 +180,20 @@ class Qwen36Model:
             cache_file_name=lm_cache,
             **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
         )
-        # I-3 LM head "A3" (QWEN36_I3_LMHEAD=A3, M4; single device, 13x10 grid): the 10 DRAM width-sharded
-        # column chunks are built ONCE here from the weight just loaded, and the unsplit weight is freed
-        # (see _a3_build_lm_chunks). None = every other LMHEAD value (lm_head_weight stays).
+        # I-3 LM head "A3" (QWEN36_I3_LMHEAD=A3, M4; single device, any grid tpc.i3_a3_lm_plan accepts --
+        # 13x10 P150 and 11x10 p300c die): the 10 DRAM width-sharded column chunks are built ONCE here from
+        # the weight just loaded, and the unsplit weight is freed (see _a3_build_lm_chunks): every
+        # single-device LM-head site then runs on the chunks. None = every other LMHEAD value, or a device
+        # the plan rejects (warning logged; lm_head_weight stays and the pre-A3 LM head runs).
         self._a3_lm_chunks = None
-        if self._single_device and tpc.i3_value("LMHEAD") == "A3" and tpc.i3_grid_ok(mesh_device):
-            self._a3_lm_chunks = self._a3_build_lm_chunks(mesh_device)
+        if self._single_device and tpc.i3_value("LMHEAD") == "A3":
+            plan, why = tpc.i3_a3_lm_plan(
+                mesh_device, int(self.lm_head_weight.shape[0]), int(self.lm_head_weight.shape[1])
+            )
+            if plan is None:
+                logger.warning(f"[M4] QWEN36_I3_LMHEAD=A3 disabled on this device ({why}); pre-A3 LM head kept")
+            else:
+                self._a3_lm_chunks = self._a3_build_lm_chunks(mesh_device, plan)
 
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
@@ -821,26 +829,33 @@ class Qwen36Model:
         concat + untilize + argmax). The unsplit path (QWEN36_LMHEAD_SPLIT <= 1) + want_token raises
         NotImplementedError (untested; see _check_greedy_token_lm_head_split).
 
-        QWEN36_I3_LMHEAD (I-3, single device; tp_common I-3 table): A / B / C replace the path above
-        for a one-tile-row input on the 13x10 grid (see _lm_head_i3); QWEN36_LMHEAD_SPLIT is then
-        ignored. "0" keeps the path above.
+        QWEN36_I3_LMHEAD (I-3, single device; tp_common I-3 table): A / A2 / B / C replace the path
+        above for a one-tile-row input on the 13x10 grid (see _lm_head_i3); A3 for a one-tile-row input
+        on any grid its chunks were built on at load (tpc.i3_a3_lm_plan; 13x10 and 11x10);
+        QWEN36_LMHEAD_SPLIT is then ignored. "0" keeps the path above.
         """
         _split_n = int(os.environ.get("QWEN36_LMHEAD_SPLIT", "8") or "0")
         if want_token:
             assert self.num_devices == 1, "want_token (greedy token output) is single-device (1x1) only"
             self._check_greedy_token_lm_head_split()
         _i3 = tpc.i3_value("LMHEAD") if self._single_device else "0"
-        if _i3 != "0" and tpc.i3_one_tile_row(x) and tpc.i3_grid_ok(self.mesh_device):
+        # A3 runs wherever its chunks were built at load (any grid i3_a3_lm_plan accepted); on 13x10 it is
+        # taken even without them, as before (_lm_head_a3 then asserts the flag was set at load).
+        if (
+            _i3 != "0"
+            and tpc.i3_one_tile_row(x)
+            and ((_i3 == "A3" and self._a3_lm_chunks is not None) or tpc.i3_grid_ok(self.mesh_device))
+        ):
             return self._lm_head_i3(x, _i3, want_token)
         if want_token and _i3 != "0":
             raise NotImplementedError(
                 f"QWEN36_I3_LMHEAD={_i3} + want_token needs a one-tile-row input on the 13x10 grid "
-                f"(got shape {list(x.shape)})"
+                f"(A3: on a grid its chunks were built on at load) (got shape {list(x.shape)})"
             )
         if self.lm_head_weight is None:
             # I-3 A3 freed the unsplit weight at load (_a3_build_lm_chunks): only its one-tile-row path exists.
             raise NotImplementedError(
-                f"QWEN36_I3_LMHEAD=A3 (set at model load) serves one-tile-row inputs on the 13x10 grid only "
+                f"QWEN36_I3_LMHEAD=A3 (set at model load) serves one-tile-row inputs only "
                 f"(the unsplit LM-head weight was freed); got shape {list(x.shape)} with QWEN36_I3_LMHEAD={_i3}"
             )
         if self._single_device and _split_n > 1:
@@ -935,27 +950,23 @@ class Qwen36Model:
         except Exception:  # noqa: BLE001
             return None
 
-    def _a3_build_lm_chunks(self, device):
-        """I-3 LM head A3 (M4): build the 10 column chunks of lm_head_weight ([2048, 248320] bfp8), each
-        DRAM WIDTH_SHARDED over the 8 banks (shard [2048, 98 * 32]; 8 x 98 = 784 >= 776 tiles, the last
-        bank holds 90 valid tiles), with ttnn.slice + to_memory_config on device (the same bfp8 tiles as
-        the loaded weight), then free the unsplit weight: the model keeps one copy (+1% shard padding).
+    def _a3_build_lm_chunks(self, device, plan):
+        """I-3 LM head A3 (M4): build the plan's column chunks of lm_head_weight ([2048, 248320] bfp8; plan =
+        tpc.i3_a3_lm_plan for this device), each DRAM WIDTH_SHARDED over the device's DRAM banks (8 banks:
+        10 chunks of 776 tiles, shard [2048, 98 * 32]; 8 x 98 = 784 >= 776 tiles, the last bank holds 90
+        valid tiles), with ttnn.slice + to_memory_config on device (the same bfp8 tiles as the loaded
+        weight), then free the unsplit weight: the model keeps one copy (+1% shard padding).
         Called once from __init__ (eager, before any trace). Logs the build time and the DRAM use."""
         import time
 
-        c = tpc.I3_A3_LM_CFG
         rows, vocab = int(self.lm_head_weight.shape[0]), int(self.lm_head_weight.shape[1])
-        vt = vocab // 32
-        assert vocab % 32 == 0 and vt % c["split"] == 0, f"A3: vocab {vocab} is not {c['split']} whole-tile chunks"
-        nt = vt // c["split"]
-        shard_w = tpc.i3_a3_shard_w_tiles(vt)
-        assert nt <= tpc.DRAM_CORES * shard_w and tpc.DRAM_CORES * shard_w - nt < shard_w, (nt, shard_w)
-        cols = nt * 32
-        mc = tpc.i3_dram_width_memcfg(rows, shard_w)
+        split, nt, cols, shard_w, banks = (plan[k] for k in ("split", "nt", "cols", "shard_w", "banks"))
+        assert split * cols == vocab and nt <= banks * shard_w, (vocab, plan)
+        mc = tpc.i3_dram_width_memcfg(rows, shard_w, num_banks=banks)
         dram0 = self._dram_allocated_per_bank(device)
         t0 = time.perf_counter()
         chunks = []
-        for i in range(c["split"]):
+        for i in range(split):
             s = ttnn.slice(self.lm_head_weight, (0, i * cols), (rows, (i + 1) * cols))
             chunks.append(ttnn.to_memory_config(s, mc))
             ttnn.deallocate(s)
@@ -965,16 +976,19 @@ class Qwen36Model:
         ttnn.deallocate(self.lm_head_weight)
         self.lm_head_weight = None
         dram2 = self._dram_allocated_per_bank(device)
-        mb = lambda b: None if b is None else round(b * tpc.DRAM_CORES / 2**20, 1)  # noqa: E731
+        mb = lambda b: None if b is None else round(b * banks / 2**20, 1)  # noqa: E731
+        gx, gy = plan["grid"]
         logger.info(
-            f"[M4] QWEN36_I3_LMHEAD=A3: built {c['split']} DRAM width-sharded LM-head chunks [{rows}, {cols}] "
-            f"({nt} tiles, {shard_w} tiles/bank) from the loaded weight in {dt:.3f} s; unsplit weight freed. "
+            f"[M4] QWEN36_I3_LMHEAD=A3 ({gx}x{gy} grid, {banks} DRAM banks): built {split} DRAM width-sharded "
+            f"LM-head chunks [{rows}, {cols}] ({nt} tiles, {shard_w} tiles/bank) from the loaded weight in "
+            f"{dt:.3f} s; unsplit weight freed. "
             f"DRAM allocated (all banks, MiB): {mb(dram0)} before -> {mb(dram1)} with chunks -> {mb(dram2)} after free"
         )
         return chunks
 
     def _lm_head_a3(self, x, want_token):
-        """I-3 LM head A3 (M4; single device, one tile row, 13x10 grid). x: the final-norm output, either
+        """I-3 LM head A3 (M4; single device, one tile row, the grid its chunks were planned for at load --
+        tpc.i3_a3_lm_plan: 13x10 and 11x10 give the same plan). x: the final-norm output, either
         interleaved (prefill, the non-traced decode paths) or the D3 8-core width-sharded decode norm
         output (_forward_decode). One to_memory_config puts it in the 8x8 in0 layout (I2S or reshard).
         Per chunk: DRAM-sharded linear (tp_common.i3_a3_lm_progcfg, HiFi2 / fp32 dest / packer L1 acc) into
@@ -1013,7 +1027,8 @@ class Qwen36Model:
         return token
 
     def _lm_head_i3(self, x, mode, want_token):
-        """I-3 LM head (QWEN36_I3_LMHEAD; single device, one tile row, 13x10 grid). Returns the logits
+        """I-3 LM head (QWEN36_I3_LMHEAD; single device, one tile row, 13x10 grid; A3: the grid its chunks
+        were planned for at load). Returns the logits
         (DRAM, TILE, [..., vocab]) or, with want_token, the greedy uint32 token [..., 1] (first max index).
         A: 4 x DRAM-sharded linear (in0 resharded to L1 width 8x8, LoFi, fp32 dest off) -> S2I.
         A2: A with the current path's compute config (HiFi2, fp32 dest), 8 splits (per_core_N 16).
@@ -1548,8 +1563,10 @@ class Qwen36Model:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
         x = self._final_norm_decode(x)
-        if self._ondev_argmax:
+        if self._ondev_argmax and self._a3_lm_chunks is None:
             # Pre-gather vocab-sharded logits; caller argmaxes shards, skips all-gather + readback.
+            # (I-3 A3, single device: the unsplit weight was freed and the "shard" is the full logits
+            # row, so _lm_head runs the A3 chunks below instead.)
             logits = ttnn.linear(x, self.lm_head_weight)
         else:
             logits = self._lm_head(x)
@@ -1589,9 +1606,11 @@ class Qwen36Model:
             else:
                 x = layer.forward(x, mode="decode")
         # M4 (I-3 LM head A3): the final norm hands its 8-core width-sharded output straight to the A3 LM head.
-        _a3_in0 = self._a3_lm_chunks is not None and not (sharded_lm_head or self._ondev_argmax)
+        # A3 is single-device only, where the pre-gather "vocab-sharded" logits (sharded_lm_head /
+        # _ondev_argmax) are the full logits: those run the A3 chunks too (the unsplit weight was freed).
+        _a3_in0 = self._a3_lm_chunks is not None
         x = self._final_norm_decode(x, lm_in0_sharded=_a3_in0)
-        if sharded_lm_head or self._ondev_argmax:
+        if (sharded_lm_head or self._ondev_argmax) and not _a3_in0:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
             logits = ttnn.linear(x, self.lm_head_weight)
         elif want_token:
@@ -1629,9 +1648,9 @@ class Qwen36Model:
         if not self._m2_nowhere:
             x = self._apply_vision_merge(x, length=x.shape[1])
         last = len(self.layers) - 1
-        # M5 ADDNORM (fixed at prepare; T == M5_ADDNORM_T chunks): every layer but the last defers its MLP residual
+        # M5 ADDNORM (fixed at prepare; T in M5_ADDNORM_T_SET chunks): every layer but the last defers its MLP residual
         # add (returns (h, mlp_out)); the next layer fuses it with its attention_norm (pending) and owns that x.
-        _m5 = self._m5_addnorm and self.num_devices == 1 and x.shape[1] == tpc.M5_ADDNORM_T
+        _m5 = self._m5_addnorm and self.num_devices == 1 and x.shape[1] in tpc.M5_ADDNORM_T_SET
         pending = None
         for li, layer in enumerate(self.layers):
             _m5_kw = dict(m5_addnorm=True, pending=pending, defer_out=li < last) if _m5 else {}
@@ -1940,7 +1959,7 @@ class Qwen36Model:
         if tpc.m5_enabled("TAIL_TRACE") or self._m5_addnorm:
             logger.info(
                 f"[M5] traced chunk: TAIL_TRACE={int(self._m5_tail)} (prepared order only) "
-                f"ADDNORM={int(self._m5_addnorm)} (T == {tpc.M5_ADDNORM_T} chunks)"
+                f"ADDNORM={int(self._m5_addnorm)} (T in {sorted(tpc.M5_ADDNORM_T_SET)} chunks)"
             )
 
         # Allocate the vision-splice buffers BEFORE warmup so the fixed-shape ttnn.where in
@@ -4133,7 +4152,11 @@ class Qwen36Model:
                 xn_b = ttnn.reshape(xn, (1, Bg, bucket, xn.shape[-1]))
                 for i, u in enumerate(grp):
                     x_last = xn_b[:, i : i + 1, vlens[u] - 1 : vlens[u], :]  # [1,1,1,full] (slice copy)
-                    lg = ttnn.linear(x_last, self.lm_head_weight)
+                    # I-3 A3 (single device) freed the unsplit weight: the one-row x_last runs the A3 chunks.
+                    if self._a3_lm_chunks is not None:
+                        lg = self._lm_head(x_last)
+                    else:
+                        lg = ttnn.linear(x_last, self.lm_head_weight)
                     ttnn.deallocate(x_last)
                     host_logits[u] = (
                         ttnn.to_torch(lg, mesh_composer=comp).reshape(1, 1, -1)[:, :, : self.args.vocab_size].clone()

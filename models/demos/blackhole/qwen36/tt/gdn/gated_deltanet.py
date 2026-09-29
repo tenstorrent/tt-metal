@@ -22,11 +22,16 @@ from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 #   "nv1np5"       -> NV=1, NP=5, row-local (the cost-model pick on P150 13x10 at BH=16, NC=64).
 #   "nv2np4"       -> NV=2, NP=4, row-local.
 #   "nv2np6"       -> NV=2, NP=6, row-major.
+#   "nv1np4"       -> NV=1, NP=4, row-local (11x10 grids, e.g. p300c dies in SP prefill).
+#   "nv2np3"       -> NV=2, NP=3, row-local (11x10 grids).
 _GDN_PCFG_GEOMETRIES = {
     "nv1np6": dict(num_producers=6, num_receivers=1, row_local=False),
     "nv1np5": dict(num_producers=5, num_receivers=1, row_local=True),
     "nv2np4": dict(num_producers=4, num_receivers=2, row_local=True),
     "nv2np6": dict(num_producers=6, num_receivers=2, row_local=False),
+    # 11x10 grids (p300c dies under sequence-parallel prefill, tt/sp_prefill_sc.py): fewer producer columns.
+    "nv1np4": dict(num_producers=4, num_receivers=1, row_local=True),
+    "nv2np3": dict(num_producers=3, num_receivers=2, row_local=True),
 }
 
 

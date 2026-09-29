@@ -267,9 +267,9 @@ def make_kda_conv1d_fn(
         # in-place ttnn.copy into the persistent fused_conv_state (traced prefill) stays race free.
         if _tiled_enabled and _tiled_accepts(x, conv_state, C, K):
             _PATH_COUNTS["tiled"] += 1
-            # R3 FLA_IN_L1 (tp_common R3 table): q/k/v stay L1 (glue_mc) on T == R3_T chunks. This fn only
+            # R3 FLA_IN_L1 (tp_common R3 table): q/k/v stay L1 (glue_mc) on T in R3_T_SET chunks. This fn only
             # sees unmasked chunks (the caller routes valid_len calls elsewhere); the fallback above keeps DRAM.
-            if tpc.r3_enabled("FLA_IN_L1") and T == tpc.R3_T and glue_mc is _L1:
+            if tpc.r3_enabled("FLA_IN_L1") and T in tpc.R3_T_SET and glue_mc is _L1:
                 _tiled_out_mc = _L1
                 if "FLA_IN_L1" not in _R3_LOGGED:
                     _R3_LOGGED.add("FLA_IN_L1")

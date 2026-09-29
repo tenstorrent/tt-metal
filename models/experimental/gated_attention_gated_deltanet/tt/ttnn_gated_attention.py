@@ -290,14 +290,14 @@ def _get_flexible_sdpa_program_config(device):
     """
     if i4_sdpa_q64_value() == "1":
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=_prefill_sdpa_grid(device),
             q_chunk_size=I4_FLEX_Q_CHUNK,
             k_chunk_size=I4_FLEX_K_CHUNK,
             exp_approx_mode=True,
         )
     qk = flexible_sdpa_q_chunk()
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=_prefill_sdpa_grid(device),
         q_chunk_size=qk,
         k_chunk_size=qk,
         exp_approx_mode=_sdpa_exp_approx_pre_pr_false(),
@@ -327,6 +327,31 @@ def _get_sdpa_compute_kernel_config():
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
+
+
+def _get_prefill_sdpa_compute_kernel_config():
+    """Compute kernel config for the paged-prefill chunked SDPA calls only (flexible + static
+    chunk_start). Defaults == _get_sdpa_compute_kernel_config(). Env knobs (read per call, cheap):
+      QWEN36_SDPA_FP32ACC   "1" (default) fp32_dest_acc_en=True; "0" -> False.
+      QWEN36_SDPA_PACKER_L1 unset/"" (default) keeps packer_l1_acc=False; "1"/"0" overrides.
+    Decode / non-paged SDPA keep _get_sdpa_compute_kernel_config()."""
+    _pl1 = _os.environ.get("QWEN36_SDPA_PACKER_L1", "")
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=_os.environ.get("QWEN36_SDPA_FP32ACC", "1") != "0",
+        packer_l1_acc=(_pl1 == "1") if _pl1 != "" else False,
+    )
+
+
+def _prefill_sdpa_grid(device):
+    """QWEN36_SDPA_GRID: "" (default) -> device.compute_with_storage_grid_size(); "XxY" (e.g. "11x8")
+    -> ttnn.CoreCoord(X, Y). Flexible chunked prefill SDPA only."""
+    g = _os.environ.get("QWEN36_SDPA_GRID", "").strip().lower()
+    if not g:
+        return device.compute_with_storage_grid_size()
+    x, y = g.split("x")
+    return ttnn.CoreCoord(int(x), int(y))
 
 
 def _get_qknorm_compute_kernel_config(device):
@@ -529,9 +554,11 @@ def gated_attention_forward_ttnn(
     if _r4a or _r4b:
         assert prefill_last_row_only and T >= 32, "M4 R4A / R4B need prefill_last_row_only (M2 LASTROW)"
     if _r4b:
+        # QWEN36_ATTN_KV_BF8=1 is fine with R4B: the decode SDPA takes the bf16 RoPE'd q row (GQA decode SDPA
+        # requires bf16 Q) against the bf8 paged K/V cache (bf8 K/V are accepted), output bf16.
         assert (
-            _os.environ.get("QWEN36_ROPE_LEGACY") != "1" and _os.environ.get("QWEN36_ATTN_KV_BF8", "0") != "1"
-        ), "M4 R4B: needs the fused prefill RoPE (QWEN36_ROPE_LEGACY != 1) and bf16 Q (QWEN36_ATTN_KV_BF8 != 1)"
+            _os.environ.get("QWEN36_ROPE_LEGACY") != "1"
+        ), "M4 R4B: needs the fused prefill RoPE (QWEN36_ROPE_LEGACY != 1)"
     if (
         gate_deint_weight is not None
         and (_fused_qkv or (q_deint_weight is not None and kv_packed_weight is not None))
@@ -820,7 +847,9 @@ def gated_attention_forward_ttnn(
         # tt_transformers/tt/attention.py ~1218: `ttnn.typecast(q_heads, dtype=... or
         # ttnn.bfloat8_b)`). query_states itself is left unmodified -- it's deallocated
         # unconditionally further below -- so this is a separate tensor used only here.
-        _q_for_sdpa = ttnn.typecast(query_states, dtype=ttnn.bfloat8_b) if _kv_bf8 else query_states
+        # M4 R4B: the decode SDPA below reads the bf16 query_states directly (GQA decode SDPA needs bf16 Q),
+        # so the bf8 Q typecast is skipped there.
+        _q_for_sdpa = ttnn.typecast(query_states, dtype=ttnn.bfloat8_b) if (_kv_bf8 and not _r4b) else query_states
 
         if _r4b:
             # M4 R4B: row 31 of the RoPE'd q block ([1, H, 32, Dh] -> head-transpose [1, 32, H, Dh] -> dim-1
@@ -860,7 +889,7 @@ def gated_attention_forward_ttnn(
                 scale=scaling,
                 memory_config=_prefill_mc,
                 program_config=_get_flexible_sdpa_program_config(device),
-                compute_kernel_config=_get_sdpa_compute_kernel_config(),
+                compute_kernel_config=_get_prefill_sdpa_compute_kernel_config(),
             )
         else:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -872,8 +901,10 @@ def gated_attention_forward_ttnn(
                 scale=scaling,
                 memory_config=_prefill_mc,
                 program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
-                compute_kernel_config=_get_sdpa_compute_kernel_config(),
+                compute_kernel_config=_get_prefill_sdpa_compute_kernel_config(),
             )
+        if _q_for_sdpa is not query_states:
+            ttnn.deallocate(_q_for_sdpa)  # the QWEN36_ATTN_KV_BF8 bf8 Q copy
 
         new_key = paged_kv_cache_key
         new_value = paged_kv_cache_value
@@ -1146,6 +1177,14 @@ def gated_attention_forward_ttnn(
     # there) always takes the legacy two-op path unchanged. QWEN36_ATTN_GATE_FUSED=0 restores the
     # legacy two-op path at any T.
     if T > 1 and _os.environ.get("QWEN36_ATTN_GATE_FUSED", "1") != "0":
+        # The fused b-activation multiply is inaccurate for mixed a/b dtypes (bf8 x bf16: PCC ~0.66
+        # standalone). QWEN36_ATTN_KV_BF8=1 makes the SDPA output (attn_output) bf8 while the gate is bf16:
+        # QWEN36_ATTN_GATE_CAST (default "1") typecasts the gate to attn_output's dtype first. No-op when the
+        # dtypes already match.
+        if attn_output.dtype != gate.dtype and _os.environ.get("QWEN36_ATTN_GATE_CAST", "1") != "0":
+            _gate_c = ttnn.typecast(gate, dtype=attn_output.dtype, memory_config=_prefill_mc)
+            ttnn.deallocate(gate)
+            gate = _gate_c
         attn_output = ttnn.multiply(
             attn_output, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_prefill_mc
         )
@@ -1160,9 +1199,9 @@ def gated_attention_forward_ttnn(
         o_proj_weight,
         compute_kernel_config=ckc,
         memory_config=memory_config,
-        program_config=_pc_row(attn_output, o_proj_weight)
-        if prefill_last_row_only
-        else _pc(attn_output, o_proj_weight),
+        program_config=(
+            _pc_row(attn_output, o_proj_weight) if prefill_last_row_only else _pc(attn_output, o_proj_weight)
+        ),
     )
 
     return attn_output, new_key, new_value

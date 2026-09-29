@@ -28,6 +28,11 @@ how many opens preceded it, so the SPPrefill phase must be the only mesh its pro
   pytest models/demos/blackhole/qwen36/tests/test_sp_prefill.py::test_sp_prefill_then_tp_decode_a_reference -q -s
   pytest models/demos/blackhole/qwen36/tests/test_sp_prefill.py::test_sp_prefill_then_tp_decode_b_sp_export -q -s
   pytest models/demos/blackhole/qwen36/tests/test_sp_prefill.py::test_sp_prefill_then_tp_decode -q -s
+
+QWEN36_SP_FABRIC_PAYLOAD: fabric router max packet payload (bytes) for every SP (1,4) mesh open
+(sp_mesh fixture, test_sp_prefill_matches_tp4 phase (b), test_sp_prefill_then_tp_decode_b_sp_export);
+"0" -> fabric default (4352). Unset -> 8704 if QWEN36_SP_IMPL=sc, else fabric default. TP-mesh opens
+(phase (a)/(c), test_tp4_traced_ttft_baseline) are unaffected. See _sp_set_fabric.
 """
 import gc
 import math
@@ -44,7 +49,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import model_path
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE, Qwen36ModelArgs
-from models.demos.blackhole.qwen36.tt.sp_handoff import inject_into_tp_model
+from models.demos.blackhole.qwen36.tt.sp_handoff import inject_into_tp_model, snapshot_tp_model_to_full_host
 from models.demos.blackhole.qwen36.tt.sp_prefill import BLOCK_SIZE, SPPrefill, _sp
 
 os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-2B")
@@ -67,6 +72,130 @@ def _e2e_decode_steps():
     return int(os.environ.get("QWEN36_E2E_DECODE_STEPS", "4"))
 
 
+def _sp_impl_name():
+    return os.environ.get("QWEN36_SP_IMPL", "tp").strip().lower()
+
+
+def _sp_trace_region_size():
+    """trace_region_size for a mesh an SP engine (_sp_impl_cls) is built on: the SC path's per-die trace
+    (the full single-chip layer program of one span) needs more than the TP path's 64 MiB."""
+    return (256 if _sp_impl_name() == "sc" else 64) * 1024 * 1024
+
+
+def _sp_impl_cls():
+    """QWEN36_SP_IMPL env var: "sc" -> SPPrefillSC (tt/sp_prefill_sc.py: each die runs the single-chip
+    model classes); unset / "tp" (default) -> SPPrefill (the TP-path classes at tp=1), unchanged. Used by
+    test_sp_prefill_matches_single_device, test_sp_prefill_matches_tp4, test_sp_prefill_traced_ttft and the
+    e2e phase (b). Both implement capture / prefill_traced."""
+    impl = _sp_impl_name()
+    if impl in ("", "tp"):
+        return SPPrefill
+    if impl == "sc":
+        from models.demos.blackhole.qwen36.tt.sp_prefill_sc import SPPrefillSC
+
+        return SPPrefillSC
+    raise ValueError(f"QWEN36_SP_IMPL={impl!r}: expected 'tp' (default) or 'sc'")
+
+
+# Default fabric max packet payload for the SC path: 8704 B = 8 bf8 tiles (fabric default is 4352 = 4).
+_SP_SC_DEFAULT_FABRIC_PAYLOAD = 8704
+_sp_fabric_payload_logged = False
+
+
+def _sp_fabric_payload():
+    """QWEN36_SP_FABRIC_PAYLOAD env var: fabric router max packet payload (bytes) for the SP (1,4) mesh.
+    "0" -> fabric default (no router_config); a positive integer -> that payload. Unset -> 8704 when
+    QWEN36_SP_IMPL=sc, else fabric default (the old TP-path behavior, unchanged). Returns 0 for default."""
+    raw = os.environ.get("QWEN36_SP_FABRIC_PAYLOAD")
+    if raw is None or raw.strip() == "":
+        return _SP_SC_DEFAULT_FABRIC_PAYLOAD if _sp_impl_name() == "sc" else 0
+    return int(raw)
+
+
+def _sp_set_fabric():
+    """ttnn.set_fabric_config(FABRIC_1D) for an SP (1,4) mesh open, with the router max packet payload
+    from _sp_fabric_payload() (router_config only when non-default). Teardown is unchanged:
+    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)."""
+    global _sp_fabric_payload_logged
+    payload = _sp_fabric_payload()
+    if not _sp_fabric_payload_logged:
+        logger.info(
+            f"[sp] fabric max_packet_payload_size_bytes={payload or 'default(4352)'} "
+            f"(QWEN36_SP_FABRIC_PAYLOAD={os.environ.get('QWEN36_SP_FABRIC_PAYLOAD')!r}, impl={_sp_impl_name()!r})"
+        )
+        _sp_fabric_payload_logged = True
+    if payload > 0:
+        rc = ttnn.FabricRouterConfig()
+        rc.max_packet_payload_size_bytes = payload
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, router_config=rc)
+    else:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+
+
+def _e2e_real_prompt():
+    """QWEN36_E2E_REAL_PROMPT=1: the e2e test trio prefills a real chat-templated text prompt
+    (see _real_prompt_tokens) instead of torch.randint tokens, and phases (a)/(c) log the
+    greedy continuation decoded as text. Unset (default) -> random tokens, unchanged behavior."""
+    return os.environ.get("QWEN36_E2E_REAL_PROMPT") == "1"
+
+
+def _e2e_tokenizer():
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(model_path(), trust_remote_code=True)
+
+
+_REAL_PROMPT_JSON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo", "sample_prompts", "input_data_long_4k.json"
+)
+_REAL_PROMPT_SENTINEL = "<<<QWEN36_E2E_BODY>>>"
+
+
+def _real_prompt_tokens(T, tokenizer=None):
+    """Chat-templated real-text prompt of EXACTLY T tokens, as a (1, T) long tensor.
+
+    The user message is instructions + <body> + question, with add_generation_prompt=True and
+    enable_thinking=False. The templated text is split around a sentinel body, prefix
+    (template start + instructions) and suffix (question + assistant header) are tokenized
+    separately and kept intact, and the body (input_data_long_4k.json's prompt, repeated if
+    too short) is truncated at the token level to fill exactly T - len(prefix) - len(suffix)."""
+    import json
+
+    if tokenizer is None:
+        tokenizer = _e2e_tokenizer()
+    with open(_REAL_PROMPT_JSON) as f:
+        body = json.load(f)[0]["prompt"]
+    user = (
+        "Read the following text and then answer the question at the end.\n\n"
+        + _REAL_PROMPT_SENTINEL
+        + "\n\nQuestion: In two or three sentences, summarize what this text is about."
+    )
+    messages = [{"role": "user", "content": user}]
+    try:
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+    except TypeError:
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prefix_text, suffix_text = text.split(_REAL_PROMPT_SENTINEL)
+    prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
+    suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
+    n_body = T - len(prefix_ids) - len(suffix_ids)
+    assert n_body > 0, f"T={T} too small for the prompt template ({len(prefix_ids) + len(suffix_ids)} tokens)"
+    body_ids = tokenizer.encode(body, add_special_tokens=False)
+    reps = 1
+    while len(body_ids) < n_body:
+        reps += 1
+        body_ids = tokenizer.encode("\n\n".join([body] * reps), add_special_tokens=False)
+    ids = prefix_ids + body_ids[:n_body] + suffix_ids
+    assert len(ids) == T, f"real prompt has {len(ids)} tokens, expected {T}"
+    decoded = tokenizer.decode(ids)
+    logger.info(f"[e2e] real prompt: {len(ids)} tokens (body {n_body} tokens, {reps}x source text)")
+    logger.info(f"[e2e] real prompt head: {decoded[:200]!r}")
+    logger.info(f"[e2e] real prompt tail: {decoded[-200:]!r}")
+    return torch.tensor([ids], dtype=torch.long)
+
+
 @pytest.fixture
 def sp_mesh():
     """Open a (1,4) mesh with FABRIC_1D, one 1x1 submesh per die.
@@ -80,10 +209,10 @@ def sp_mesh():
     (see model_config.py); the framework default is too small and the op TT_THROWs with a
     circular-buffer/L1 clash (reproduces even with no SPPrefill/sockets involved at all).
     """
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    _sp_set_fabric()
     mesh = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 4),
-        trace_region_size=64 * 1024 * 1024,
+        trace_region_size=_sp_trace_region_size(),
         l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
     )
     try:
@@ -178,8 +307,9 @@ def test_sp_prefill_matches_single_device(sp_mesh, T):
     gc.collect()
 
     t0 = time.perf_counter()
-    sp = SPPrefill(sp_mesh, n_spans=4, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
-    logger.info(f"[test] SPPrefill build time: {time.perf_counter() - t0:.1f}s")
+    sp_cls = _sp_impl_cls()
+    sp = sp_cls(sp_mesh, n_spans=4, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
+    logger.info(f"[test] {sp_cls.__name__} build time: {time.perf_counter() - t0:.1f}s")
 
     try:
         t0 = time.perf_counter()
@@ -245,12 +375,14 @@ def test_sp_prefill_matches_tp4(T):
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
     # ---- phase (b): SPPrefill on the SAME tokens ----
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    _sp_set_fabric()
     mesh2 = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 4), trace_region_size=64 * 1024 * 1024, l1_small_size=GDN_CONV1D_L1_SMALL_SIZE
+        mesh_shape=ttnn.MeshShape(1, 4),
+        trace_region_size=_sp_trace_region_size(),
+        l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
     )
     try:
-        sp = SPPrefill(mesh2, n_spans=4, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
+        sp = _sp_impl_cls()(mesh2, n_spans=4, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
         try:
             sp_logits = sp.prefill(tokens).float()
         finally:
@@ -286,7 +418,7 @@ def test_sp_prefill_traced_ttft(sp_mesh):
     torch.manual_seed(1)
     tokens_b = torch.randint(1000, 100000, (1, T), dtype=torch.long)
 
-    sp = SPPrefill(sp_mesh, n_spans=4, span_len=span_len, max_seq_len=T, hf_model=hf_model)
+    sp = _sp_impl_cls()(sp_mesh, n_spans=4, span_len=span_len, max_seq_len=T, hf_model=hf_model)
 
     try:
         ref_a = sp.prefill(tokens_a).float()
@@ -402,6 +534,9 @@ def test_tp4_traced_ttft_baseline():
 # hands off between phases via .pt files in the system temp dir (see _E2E_REF_PT/_E2E_SP_PT).
 _E2E_REF_PT = os.path.join(tempfile.gettempdir(), "qwen36_sp_prefill_then_tp_decode_ref.pt")
 _E2E_SP_PT = os.path.join(tempfile.gettempdir(), "qwen36_sp_prefill_then_tp_decode_sp.pt")
+# Optional (QWEN36_E2E_DUMP_STATE=1): phase (a)'s post-prefill TP=4 state, for offline comparison
+# against phase (b)'s SP export (same full-host layout).
+_E2E_TP4_STATE_PT = "/tmp/qwen36_e2e_tp4_state.pt"
 
 
 def test_sp_prefill_then_tp_decode_a_reference():
@@ -412,7 +547,11 @@ def test_sp_prefill_then_tp_decode_a_reference():
     hf_model = model_path()
     N_DEC = _e2e_decode_steps()
     torch.manual_seed(0)
-    tokens = torch.randint(1000, 100000, (1, T), dtype=torch.long)
+    tok = _e2e_tokenizer() if _e2e_real_prompt() else None
+    if tok is not None:
+        tokens = _real_prompt_tokens(T, tok)
+    else:
+        tokens = torch.randint(1000, 100000, (1, T), dtype=torch.long)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(
@@ -424,6 +563,13 @@ def test_sp_prefill_then_tp_decode_a_reference():
         )
         model.reset_tp()
         logits_ref = model.prefill_tp(tokens, valid_len=T).float()
+        if os.environ.get("QWEN36_E2E_DUMP_STATE") == "1":
+            # Snapshot the post-prefill TP=4 caches in the same full-host layout as
+            # SPPrefill.export_state_host() (phase b's kv/gdn), BEFORE decode_tp mutates them.
+            kv_tp4, gdn_tp4 = snapshot_tp_model_to_full_host(model)
+            torch.save({"kv": kv_tp4, "gdn": gdn_tp4}, _E2E_TP4_STATE_PT)
+            logger.info(f"[e2e-a] saved post-prefill TP=4 state to {_E2E_TP4_STATE_PT}")
+            del kv_tp4, gdn_tp4
         nxt_ref = int(torch.argmax(logits_ref))
         tokens_ref, logits_ref_steps = [nxt_ref], []
         pos = T
@@ -443,6 +589,8 @@ def test_sp_prefill_then_tp_decode_a_reference():
         _E2E_REF_PT,
     )
     logger.info(f"[e2e-a] reference tokens: {tokens_ref}")
+    if tok is not None:
+        logger.info(f"[e2e-a] reference text: {tok.decode(tokens_ref)!r}")
     logger.info(f"[e2e-a] saved reference to {_E2E_REF_PT}")
 
 
@@ -457,13 +605,15 @@ def test_sp_prefill_then_tp_decode_b_sp_export():
     span_len = T // 4
     hf_model = model_path()
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    _sp_set_fabric()
     mesh = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 4), trace_region_size=64 * 1024 * 1024, l1_small_size=GDN_CONV1D_L1_SMALL_SIZE
+        mesh_shape=ttnn.MeshShape(1, 4),
+        trace_region_size=_sp_trace_region_size(),
+        l1_small_size=GDN_CONV1D_L1_SMALL_SIZE,
     )
     sp = None
     try:
-        sp = SPPrefill(
+        sp = _sp_impl_cls()(
             mesh, n_spans=4, span_len=span_len, max_seq_len=T, hf_model=hf_model, layer_indices=_e2e_layer_indices()
         )
         warmup = os.environ.get("QWEN36_E2E_WARMUP") == "1"
@@ -543,6 +693,15 @@ def test_sp_prefill_then_tp_decode():
     nxt_sp, kv, gdn = sp_state["nxt_sp"], sp_state["kv"], sp_state["gdn"]
     wave_s, ttft_s, export_s = sp_state["wave_s"], sp_state["ttft_s"], sp_state["export_s"]
     hf_model = model_path()
+    # QWEN36_E2E_TEACHER_FORCE=1: feed the REFERENCE token at every decode step instead of the SP
+    # run's own greedy token. Phase (a) is free-running greedy on the reference, so step i's input
+    # there is tokens_ref[i] (tokens_ref[0] = prefill argmax) -- teacher-forcing with tokens_ref[i]
+    # gives the SP-injected model exactly the reference's inputs, so per-step PCC isolates state
+    # error from token-fork effects. SP argmax is still recorded per step.
+    teacher_force = os.environ.get("QWEN36_E2E_TEACHER_FORCE") == "1"
+    if teacher_force:
+        assert len(tokens_ref) >= N_DEC, f"tokens_ref has {len(tokens_ref)} entries, need >= {N_DEC}"
+        logger.info(f"[e2e-c] QWEN36_E2E_TEACHER_FORCE=1: decode step i input = tokens_ref[i]")
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(
@@ -578,7 +737,8 @@ def test_sp_prefill_then_tp_decode():
         for i in range(N_DEC):
             _sp(f"decode step {i}")
             t_step = time.perf_counter()
-            lg = model.decode_tp(tokens_sp[-1], pos).float()
+            step_in = tokens_ref[i] if teacher_force else tokens_sp[-1]
+            lg = model.decode_tp(step_in, pos).float()
             logger.info(f"[e2e] decode_step_{i}_ms={(time.perf_counter() - t_step) * 1000:.2f}")
             logits_sp_steps.append(lg)
             tokens_sp.append(int(torch.argmax(lg)))
@@ -591,8 +751,26 @@ def test_sp_prefill_then_tp_decode():
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
+    if teacher_force:
+        # Dump per-step logits for an offline HF CPU oracle comparison (tp4 ref vs SP-injected vs HF).
+        c_logits_pt = "/tmp/qwen36_sp_prefill_then_tp_decode_c_logits.pt"
+        torch.save(
+            {
+                "tokens_ref": tokens_ref,
+                "tokens_sp": tokens_sp,
+                "logits_sp_steps": [t.float().cpu() for t in logits_sp_steps],
+                "logits_ref_steps": logits_ref_steps,
+            },
+            c_logits_pt,
+        )
+        logger.info(f"[e2e-c] saved teacher-forced per-step logits to {c_logits_pt}")
+
     logger.info(f"[e2e-c] reference tokens: {tokens_ref}")
     logger.info(f"[e2e-c] SP-injected tokens: {tokens_sp}")
+    if _e2e_real_prompt():
+        tok = _e2e_tokenizer()
+        logger.info(f"[e2e] reference text: {tok.decode(tokens_ref)!r}")
+        logger.info(f"[e2e] SP text: {tok.decode(tokens_sp)!r}")
     tokens_match = tokens_ref[1:] == tokens_sp[1:]
     logger.info(f"[e2e-c] greedy tokens match reference: {tokens_match}")
 
@@ -609,13 +787,30 @@ def test_sp_prefill_then_tp_decode():
             f"using relaxed per-step PCC threshold {pcc_threshold} (full-model bar is 0.99)"
         )
     worst_pcc = 1.0
+    pcc_failures, n_agree = [], 0
     for i in range(N_DEC):
         _, step_pcc = comp_pcc(logits_ref_steps[i], logits_sp_steps[i], pcc_threshold)
         worst_pcc = min(worst_pcc, float(step_pcc))
         logger.info(f"[e2e-c] decode step {i} PCC={step_pcc}")
-        assert float(step_pcc) >= pcc_threshold, f"decode step {i} PCC {step_pcc} < {pcc_threshold}"
+        if teacher_force:
+            # tokens_ref[i + 1] is the reference argmax of step i (same inputs as this SP step).
+            ref_tok, sp_argmax = tokens_ref[i + 1], tokens_sp[i + 1]
+            match = ref_tok == sp_argmax
+            n_agree += int(match)
+            top2_sp = torch.topk(logits_sp_steps[i].flatten(), 2)
+            top2_gap = float(top2_sp.values[0] - top2_sp.values[1])
+            logger.info(
+                f"[e2e-c] step {i} ref_tok={ref_tok} sp_argmax={sp_argmax} match={match} top2_gap={top2_gap:.4f}"
+            )
+            if float(step_pcc) < pcc_threshold:
+                pcc_failures.append(f"decode step {i} PCC {step_pcc} < {pcc_threshold}")
+        else:
+            assert float(step_pcc) >= pcc_threshold, f"decode step {i} PCC {step_pcc} < {pcc_threshold}"
+    if teacher_force:
+        logger.info(f"[e2e-c] teacher-forced argmax agreement: {n_agree}/{N_DEC}")
+        assert not pcc_failures, "; ".join(pcc_failures)
 
-    if not tokens_match:
+    if not tokens_match and not teacher_force:
         # A mismatch with per-step PCC still >= 0.99 (asserted above) is a near-tie fork, not a
         # correctness bug -- log the top-2 gap at the first divergence and move on.
         for i in range(N_DEC):

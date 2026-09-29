@@ -427,9 +427,29 @@ class Qwen36MLP:
                             M_block_size=8, K_block_size=8, N_block_size=8, compute_with_storage_grid_size=self._mm_grid
                         )
                 else:
+                    # P300 A (QWEN36_P300_MM=1, 11x10 grid, T == 1024; tp_common P300 table): minimal_matmul
+                    # 11x8 mb4 kb4 nb18 sb1x6, swept with the L1 output (l1_out_ab). None -> the config below.
+                    p300 = (
+                        tpc.p300_prefill_mm(
+                            "A",
+                            self._mm_grid,
+                            T,
+                            x.shape[-1],
+                            w.w_gate_up.shape[-1],
+                            in1_dtype=w.w_gate_up.dtype,
+                            ckc=self.compute_kernel_config,
+                        )
+                        if l1_out_ab
+                        else None
+                    )
                     # I-2 S1 (QWEN36_I2_S1=1): T2 S1-M085 blocking; None -> the pre-I-2 config.
-                    cfg = tpc.i2_swiglu_minimal_config(T, self._mm_grid) or tpc.prefill_minimal_matmul_config(
-                        T, x.shape[-1], w.w_gate_up.shape[-1], self._mm_grid
+                    cfg = (
+                        p300[0]
+                        if p300 is not None
+                        else (
+                            tpc.i2_swiglu_minimal_config(T, self._mm_grid)
+                            or tpc.prefill_minimal_matmul_config(T, x.shape[-1], w.w_gate_up.shape[-1], self._mm_grid)
+                        )
                     )
                 hidden = ttnn.experimental.minimal_matmul(
                     x,
@@ -491,7 +511,38 @@ class Qwen36MLP:
                 if self._mm_grid is not None and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
                 else None
             )
-            if m1_pc is not None and self._m3_zero_bias is not None:
+            # P300 B (QWEN36_P300_MM=1, 11x10 grid, T == 1024; tp_common P300 table): 2D-mcast ttnn.linear
+            # 11x10 bw16 pcM4 pcN6 1x6 instead of minimal_matmul(config=None). Swept with in0 (the SwiGLU
+            # output) and the output both L1 (l1_out_ab); same weight w2 [K, N] as minimal_matmul. The grid
+            # guard makes it disjoint from M1 S2 / I-2 S2 (13x10 only).
+            p300 = (
+                tpc.p300_prefill_mm(
+                    "B",
+                    self._mm_grid,
+                    T,
+                    hidden.shape[-1],
+                    w.w2.shape[-1],
+                    in1_dtype=w.w2.dtype,
+                    ckc=self.compute_kernel_config,
+                )
+                if (
+                    self._mm_grid is not None
+                    and l1_out_ab
+                    and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
+                    and hidden.memory_config().buffer_type == ttnn.BufferType.L1
+                )
+                else None
+            )
+            if p300 is not None:
+                output = ttnn.linear(
+                    hidden,
+                    w.w2,
+                    program_config=p300[0],
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=p300[1],
+                    dtype=ttnn.bfloat16,
+                )
+            elif m1_pc is not None and self._m3_zero_bias is not None:
                 # M3 ZB (QWEN36_M3_ZB=1): the same M1 S2 program via ttnn.linear + the shared zero bias
                 # (FUSE_BIAS path; N1 N-f: bit-identical to minimal_matmul). Allocated at model load.
                 output = ttnn.linear(

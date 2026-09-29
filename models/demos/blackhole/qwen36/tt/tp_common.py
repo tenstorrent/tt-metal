@@ -263,6 +263,181 @@ def m1_gdn_norm_l1(T, grid):
     return _m1_applies("S3", T, grid) or _m1_applies("S4", T, grid)
 
 
+# --- P300 prefill-matmul configs (2026-09-29; single device, 11x10 grid = p300c die, M == 1024 swept) ---
+# Source: the one-die mmsweep (scratchpad mmsweep/mmsweep.py, results_<kind>.csv) of the SC per-die SP
+# prefill shapes (sequence-parallel prefill on the single-chip model classes, tt/sp_prefill_sc.py, span 1024).
+# QWEN36_P300_MM (default "0") enables the table; "0" keeps every call exactly as before. Each kind applies
+# only on the 11x10 worker grid, at M == 1024 tokens (or, unswept, 768 <= M <= 1280 with M % 128 == 0; see
+# _p300_m_layout below), with the exact (K, N) and weight dtype below, fp32 dest acc off and packer_l1_acc on
+# (the swept ckc: LoFi, approx, fp32 dest off, packer L1 acc on; B without packer_l1_acc fails PCC 0.99887);
+# otherwise the current call runs. Swept numbers are trace medians (us).
+#   A   MLP gate|up fused SwiGLU (mlp.py forward(), T < 4096): minimal_matmul(fuse_swiglu=True) with
+#       MinimalMatmulConfig(M_block 4, K_block 4, N_block 18, subblock 1x6, grid 11x8) instead of
+#       4/8/16 2x4 on 11x10. K 2048, N = the packed [gate|up] weight width 12288; out L1. 328.5 -> 261.8 us
+#       (bfp8 weight; bfp4: 299.9 -> 242.9 us, same config).
+#   B   MLP down (mlp.py; K 6144, N 2048): ttnn.linear 2D mcast 11x10 bw16 pcM4 pcN6 1x6 instead of
+#       minimal_matmul(config=None). in0 (the SwiGLU output) L1, out L1. 141.1 -> 84.1 us.
+#   C   GDN q|k|v in-proj (ttnn_gated_deltanet.py split projection; K 2048, N 6144): ttnn.linear 2D mcast
+#       11x10 bw16 pcM4 pcN18 1x6 instead of minimal_matmul 4/8/16 2x4. Output L1 interleaved (read by the
+#       tiled KDA conv and freed right after it, as M1 S3): 172.4 -> 90.0 us. QWEN36_P300_MM_C_L1=0: output
+#       DRAM (today's placement): 116.9 us.
+#   D1  GDN z|a|0|b|0 in-proj (K 2048, N 2112 = I1_P5 padded): 2D mcast bw16 pcM4 pcN6 1x6 instead of the
+#       picker's bw8. Output L1 (the gate/a/b slices go to DRAM, today's placement; gab freed right after):
+#       49.8 -> 37.7 us. QWEN36_P300_MM_D1_L1=0: output keeps today's placement (DRAM): 47.5 us.
+#   D2  attention fused q|k|v (K 2048, N 3072): bw16 pcM4 pcN9 2x3 instead of the picker's bw8 1x3.
+#       Output unchanged (L1 via QWEN36_ATTN_L1_MAX_T). 49.8 -> 48.6 us.
+#   D3  attention o_proj / attention gate / GDN o_proj (K 2048, N 2048): bw16 pcM4 pcN6 1x6 instead of the
+#       picker's bw8. Each call keeps its output placement. 33.4 -> 30.9 us (in0 L1, out L1).
+# Every 2D-mcast kind: MatmulMultiCoreReuseMultiCastProgramConfig(grid (11, 10), transpose_mcast False,
+# fused_activation None, fuse_batch True), per_core_M 4 (8 of the 10 rows), output dtype bf16. D2 / D3 are
+# returned by make_prefill_progcfg_fn's picker (every call site that asks it for these shapes); A, B, C, D1
+# are applied at their call sites. None of them is bit-identical to the current call (K blocking changes).
+P300_FLAG_DEFAULTS = {"MM": "0", "MM_C_L1": "1", "MM_D1_L1": "1"}
+_P300_GRID = (11, 10)
+_P300_M = 1024
+# kind -> (K, N, allowed weight dtypes)
+_P300_SHAPES = {
+    "A": (2048, 12288, (ttnn.bfloat8_b, ttnn.bfloat4_b)),
+    "B": (6144, 2048, (ttnn.bfloat8_b,)),
+    "C": (2048, 6144, (ttnn.bfloat8_b,)),
+    "D1": (2048, 2112, (ttnn.bfloat8_b,)),
+    "D2": (2048, 3072, (ttnn.bfloat8_b,)),
+    "D3": (2048, 2048, (ttnn.bfloat8_b,)),
+}
+# 2D-mcast kinds: (in0_block_w, per_core_M, per_core_N, out_subblock_h, out_subblock_w)
+_P300_MCAST = {
+    "B": (16, 4, 6, 1, 6),
+    "C": (16, 4, 18, 1, 6),
+    "D1": (16, 4, 6, 1, 6),
+    "D2": (16, 4, 9, 2, 3),
+    "D3": (16, 4, 6, 1, 6),
+}
+# (K, N) -> kind for the picker (make_prefill_progcfg_fn); D1 is applied at its call site (output placement).
+_P300_PICKER_KINDS = {(2048, 3072): "D2", (2048, 2048): "D3"}
+_P300_LOGGED = set()
+# Uneven SP spans (QWEN36_SP_SPANS, tt/sp_prefill_sc.py): the table also applies at M != 1024 with M % 128 == 0
+# and _P300_M_MIN <= M <= _P300_M_MAX. UNSWEPT EXTRAPOLATION (only M == 1024 was swept): _p300_m_layout keeps
+# the swept PER-CORE shape (per_core_M / M_block 4 tiles) and changes the number of grid rows used instead
+# (Mt / 4 rows: 896 -> 7, 1024 -> 8 (swept), 1152 -> 9, 1280 -> 10 of the 10 rows), so each core runs the swept
+# block; only if Mt / 4 rows do not fit the grid does per_core_M grow (ceil(Mt / rows)) with a subblock_h /
+# M_block that divides it.
+_P300_M_MIN, _P300_M_MAX = 768, 1280
+_P300_PCM = 4  # swept per_core_M (2D mcast) / M_block_size (A), in tiles
+
+
+def _p300_m_ok(M):
+    """True if the P300 table applies at M tokens: the swept M == 1024 or an (unswept) M % 128 == 0 in range."""
+    M = int(M)
+    return M == _P300_M or (M % 128 == 0 and _P300_M_MIN <= M <= _P300_M_MAX)
+
+
+def _p300_m_layout(M, grid_rows, sub_h):
+    """(rows used, per-core M tiles, out_subblock_h) for M tokens on grid_rows rows: the swept per-core M (4
+    tiles) on Mt / 4 rows when that fits; else per-core M = ceil(Mt / grid_rows) and the largest subblock_h in
+    (sub_h, 2, 1) that divides it (so sub_h is kept whenever possible)."""
+    Mt = int(M) // 32
+    rows = math.ceil(Mt / _P300_PCM)
+    if rows <= grid_rows:
+        return rows, _P300_PCM, sub_h
+    pcm = math.ceil(Mt / grid_rows)
+    h = next(v for v in (sub_h, 2, 1) if v <= pcm and pcm % v == 0)
+    return math.ceil(Mt / pcm), pcm, h
+
+
+def p300_value(item):
+    """Raw value of the P300 flag (a key of P300_FLAG_DEFAULTS): env QWEN36_P300_<item>."""
+    return os.environ.get("QWEN36_P300_" + item, P300_FLAG_DEFAULTS[item])
+
+
+def p300_enabled(item="MM"):
+    """True if the P300 flag is enabled: env QWEN36_P300_<item> != "0"."""
+    return p300_value(item) != "0"
+
+
+def _grid_xy(device_or_grid):
+    """(x, y) worker grid of a device (compute_with_storage_grid_size), a ttnn.CoreCoord or an (x, y) tuple."""
+    if device_or_grid is None:
+        return None
+    if hasattr(device_or_grid, "compute_with_storage_grid_size"):
+        g = device_or_grid.compute_with_storage_grid_size()
+        return int(g.x), int(g.y)
+    if hasattr(device_or_grid, "x"):
+        return int(device_or_grid.x), int(device_or_grid.y)
+    gx, gy = device_or_grid
+    return int(gx), int(gy)
+
+
+def p300_prefill_mm(kind, device, M, K, N, in1_dtype=None, ckc=None, fp32_acc=None):
+    """P300 item `kind` (A, B, C, D1, D2, D3; see the table above): (config, memory_config) or None to keep the
+    current call.
+
+    device: the device, or its worker grid (ttnn.CoreCoord / (x, y)). M: tokens (rows of in0). K, N: the
+    weight's [K, N] (A: N = the packed [gate|up] width). in1_dtype: the weight dtype, checked if given.
+    ckc / fp32_acc: the call's compute kernel config (fp32_dest_acc_en / packer_l1_acc read off it) or just
+    its fp32 dest flag; unset -> the module-level QWEN36_PREFILL_MM_* values (prefill_matmul_ckc()).
+    config: ttnn.MinimalMatmulConfig (A) or ttnn.MatmulMultiCoreReuseMultiCastProgramConfig (others).
+    memory_config: the swept output placement (A, B: L1; C: L1, or DRAM with QWEN36_P300_MM_C_L1=0; D1: L1,
+    or None with QWEN36_P300_MM_D1_L1=0) or None = keep the call's own output placement (D2, D3)."""
+    if not p300_enabled("MM"):
+        return None
+    if ckc is not None:
+        fp32 = bool(getattr(ckc, "fp32_dest_acc_en", PREFILL_MM_FP32_ACC))
+        pl1 = bool(getattr(ckc, "packer_l1_acc", PREFILL_MM_PACKER_L1_ACC))
+    else:
+        fp32 = PREFILL_MM_FP32_ACC if fp32_acc is None else bool(fp32_acc)
+        pl1 = PREFILL_MM_PACKER_L1_ACC
+    if fp32 or not pl1:
+        return None
+    if _grid_xy(device) != _P300_GRID or not _p300_m_ok(M):
+        return None
+    k, n, dtypes = _P300_SHAPES[kind]
+    if (int(K), int(N)) != (k, n) or (in1_dtype is not None and in1_dtype not in dtypes):
+        return None
+    extrap = int(M) != _P300_M
+    if kind == "A":
+        # M < N here, so minimal_matmul splits M over the grid rows (M tiles per core = round_up(Mt, rows) / rows).
+        rows, mpc, _ = _p300_m_layout(M, _P300_GRID[1], 1)
+        mb = next(v for v in (_P300_PCM, 2, 1) if mpc % v == 0)
+        cfg = ttnn.MinimalMatmulConfig(
+            M_block_size=mb,
+            K_block_size=4,
+            N_block_size=18,
+            subblock_h=1,
+            subblock_w=6,
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, rows),
+        )
+        desc, mem = f"minimal_matmul(fuse_swiglu) 11x{rows} mb{mb} kb4 nb18 sb1x6", ttnn.L1_MEMORY_CONFIG
+    else:
+        bw, pcm, pcn, sh, sw = _P300_MCAST[kind]
+        _, pcm, sh = _p300_m_layout(M, _P300_GRID[1], sh)
+        cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=_P300_GRID,
+            in0_block_w=bw,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            per_core_M=pcm,
+            per_core_N=pcn,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+        desc = f"2D mcast 11x10 bw{bw} pcM{pcm} pcN{pcn} sb{sh}x{sw} fuse_batch=True"
+        if kind == "B":
+            mem = ttnn.L1_MEMORY_CONFIG
+        elif kind == "C":
+            mem = ttnn.L1_MEMORY_CONFIG if p300_enabled("MM_C_L1") else ttnn.DRAM_MEMORY_CONFIG
+        elif kind == "D1":
+            mem = ttnn.L1_MEMORY_CONFIG if p300_enabled("MM_D1_L1") else None
+        else:
+            mem = None
+    if (kind, int(M)) not in _P300_LOGGED:
+        _P300_LOGGED.add((kind, int(M)))
+        where = "keep" if mem is None else ("L1" if mem.buffer_type == ttnn.BufferType.L1 else "DRAM")
+        note = " (UNSWEPT M: extrapolated from the M=1024 sweep)" if extrap else ""
+        print(f"[P300] QWEN36_P300_MM=1 {kind} active: M={M} K={K} N={N} {desc}, out {where}{note}", flush=True)
+    return cfg, mem
+
+
 # --- M2 traced-prefill flags (2026-09-26; single device, traced chunked prefill only) ----------------
 # Source: qwen35_2b_handoff/analysis_50ms (D_prefill_op_map.md, F_last_layer_skip.md). Each item has its
 # own env flag QWEN36_M2_<ITEM>; "0" (default) keeps the current code path exactly. model.py reads them
@@ -387,7 +562,7 @@ def c2_sgrn_gab_dram():
 # --- R3 L1 placement flags (2026-09-26; analysis_50ms/R3_fla_cb_spec.md sec 4 items 5-7) --------------
 # They need the Ct == 1 ChunkGdnFused CB shrink (R3 op patch: producer CB region ends at 480,256 B instead of
 # 1,217,536 B); without it these L1 tensors clash with the fused FLA op's static CBs. Each flag applies only to
-# unmasked T == R3_T GDN prefill chunks on the fused FLA path; masked / other buckets keep DRAM. Placement
+# unmasked T in R3_T_SET GDN prefill chunks on the fused FLA path; masked / other buckets keep DRAM. Placement
 # only (bit-exact). Env QWEN36_R3_<item>, values 0|1, default 0 = the current path.
 #   FLA_IN_L1   : the tiled KDA conv writes q/k/v to L1 and the beta/g chain stays L1 (mc_small), i.e. the
 #                 QWEN36_GDN_FLA_INPUTS_DRAM behavior is switched off for these chunks.
@@ -395,7 +570,21 @@ def c2_sgrn_gab_dram():
 #                 C4 variant b (DRAM): c2_sgrn_gab_dram() returns False.
 #   O_L1        : the FLA op writes o and the final state to L1 (memory_config=L1_MEMORY_CONFIG).
 R3_FLAG_DEFAULTS = {"FLA_IN_L1": "0", "SGRN_GAB_L1": "0", "O_L1": "0"}
-R3_T = 2048
+# Env QWEN36_R3_T (default 2048): the chunk length(s) the R3 flags apply to (1024 = SP per-die spans). A comma
+# list ("896,1024,1152") applies them to each listed length (SP with uneven per-die spans, QWEN36_SP_SPANS).
+# Read at import; users test `T in tpc.R3_T_SET` at call time (a single value keeps the old `T == R3_T`
+# semantics). R3_T is the first listed value (kept for logging / compatibility).
+
+
+def _parse_t_set(env_name, default):
+    """Env `env_name` as a comma list of positive token counts -> (first value, frozenset of all values)."""
+    raw = os.environ.get(env_name, default)
+    vals = [int(v) for v in raw.replace(" ", "").split(",") if v != ""]
+    assert vals and all(v > 0 for v in vals), f"{env_name}={raw!r}: expected a comma list of positive ints"
+    return vals[0], frozenset(vals)
+
+
+R3_T, R3_T_SET = _parse_t_set("QWEN36_R3_T", "2048")
 
 
 def r3_value(item):
@@ -453,7 +642,7 @@ def m4_enabled(item):
 #               persistent DRAM buffer allocated in prepare, before the decode trace is primed; the request reads
 #               that buffer. The same code (Qwen36Model._exact_multiple_tail_device) runs in the prepare warm-up,
 #               the capture warm-up, the capture and (flag off) the eager tail: bit-exact.
-#   ADDNORM     Unmasked T == M5_ADDNORM_T chunk of the traced chunk forward (_forward_prefill_chunk): each
+#   ADDNORM     Unmasked T in M5_ADDNORM_T_SET chunk of the traced chunk forward (_forward_prefill_chunk): each
 #               residual add + the RMSNorm that reads its sum become one ttnn.rms_norm(a,
 #               residual_input_tensor=b, residual_output_tensor=h) (R6 stage-1 op: writes h = a + b and
 #               n = rmsnorm(h) * gamma). h is allocated by the caller with the memory config the residual add
@@ -464,7 +653,10 @@ def m4_enabled(item):
 #               layer's attention residual add, ffn_norm and MLP residual add) stay unfused. Bit-exact by the R6
 #               op tests (fused h == ttnn.add, fused n == ttnn.rms_norm(ttnn.add)).
 M5_FLAG_DEFAULTS = {"TAIL_TRACE": "0", "ADDNORM": "0"}
-M5_ADDNORM_T = 2048
+# Env QWEN36_M5_ADDNORM_T (default 2048): the chunk length(s) ADDNORM applies to (1024 = SP per-die spans); a
+# comma list as QWEN36_R3_T. Read at import; users test `T in tpc.M5_ADDNORM_T_SET` at call time (M5_ADDNORM_T
+# = the first listed value, for logging / compatibility).
+M5_ADDNORM_T, M5_ADDNORM_T_SET = _parse_t_set("QWEN36_M5_ADDNORM_T", "2048")
 
 
 def m5_value(item):
@@ -575,6 +767,11 @@ def n_enabled(item):
 #                      row) right after its matmul, then RM concat + argmax. Logits: S2I (DRAM) per split
 #                      + TILE concat. R9 microbench (token): 1.26 ms vs 2.55 ms. NOT bit-identical (A2
 #                      class: ~8% of logits differ by <= 1 bf16 ulp in R9; argmax 16/16 there).
+#                      A3 is the one LMHEAD value NOT tied to the 13x10 grid: i3_a3_lm_plan derives the
+#                      chunk shard spec from the device's DRAM bank count and checks the config against its
+#                      grid (13x10 P150 and 11x10 p300c die, 8 banks: the same 10 x [2048, 24832] plan).
+#                      Every single-device LM-head call then uses the chunks (want_token, logits, the
+#                      _ondev_argmax / per-user prefill ttnn.linear sites); only a > 1 tile-row input raises.
 #                +540 MB DRAM for the A/C column chunks (built on device on the first call, eager).
 #                Greedy token output (set_greedy_token_output) works with every value.
 # Defaults (2026-09-25, plan_0925/I3 gates): FA_PROGCFG and MLP_PROGCFG are ON -- both bit-identical to
@@ -593,11 +790,62 @@ I3_FLAG_VALUES = {
 I3_A3_LM_CFG = {"split": 10, "wpb": 2, "bw": 2, "pcn": 13, "in0_grid": (8, 8)}
 
 
-def i3_a3_shard_w_tiles(vocab_tiles):
-    """A3 chunk shard width (tiles per DRAM bank): wpb * ceil(chunk_tiles / (8 * wpb)) (776 -> 98)."""
+def i3_a3_shard_w_tiles(vocab_tiles, num_banks=DRAM_CORES):
+    """A3 chunk shard width (tiles per DRAM bank): wpb * ceil(chunk_tiles / (banks * wpb)) (776, 8 -> 98)."""
     c = I3_A3_LM_CFG
     nt = vocab_tiles // c["split"]
-    return c["wpb"] * math.ceil(nt / (DRAM_CORES * c["wpb"]))
+    return c["wpb"] * math.ceil(nt / (num_banks * c["wpb"]))
+
+
+def i3_dram_banks(device):
+    """DRAM bank count the DRAM-sharded matmul assigns readers to (dram_grid_size = (num DRAM views, 1));
+    DRAM_CORES if the query is unavailable."""
+    try:
+        g = device.dram_grid_size()
+        return int(g.x) * int(g.y)
+    except Exception:  # noqa: BLE001
+        return DRAM_CORES
+
+
+def i3_a3_lm_plan(device, k, vocab):
+    """I-3 LM head A3 (M4) layout for this device: the chunking / DRAM shard spec from the device's DRAM
+    bank count, and the config checked against its compute_with_storage_grid_size (the grid-dependent parts
+    of A3: the 8x8 in0 L1 grid, the wpb x banks reader cores and the ceil(chunk / per_core_N) output storage
+    cores must fit in it). Unlike the other I-3 items A3 is not tied to the swept 13x10 grid; with 8 DRAM
+    banks the plan is the same on 13x10 (P150) and 11x10 (p300c die): 10 x [2048, 24832], 98 tiles/bank.
+    Returns (plan, None), plan = dict(split, nt, cols, shard_w, banks, grid), or (None, reason) if A3
+    cannot run on this device (the caller then keeps the pre-A3 LM head)."""
+    c = I3_A3_LM_CFG
+    g = device.compute_with_storage_grid_size()
+    gx, gy = int(g.x), int(g.y)
+    banks = i3_dram_banks(device)
+    ix, iy = c["in0_grid"]
+    if k % TILE_SIZE or vocab % TILE_SIZE:
+        return None, f"weight [{k}, {vocab}] is not whole tiles"
+    kt, vt = k // TILE_SIZE, vocab // TILE_SIZE
+    if vt % c["split"]:
+        return None, f"vocab {vt} tiles is not {c['split']} whole-tile chunks"
+    nt = vt // c["split"]
+    shard_w = i3_a3_shard_w_tiles(vt, banks)
+    # The op drops banks that hold only padding; multi-reader needs shard width == wpb * ceil(N / readers).
+    used_banks = banks - (banks * shard_w - nt) // shard_w
+    in0_shard = kt // (ix * iy) if kt % (ix * iy) == 0 else 0
+    n_out = math.ceil(nt / c["pcn"])
+    checks = (
+        (ix <= gx and iy <= gy, f"in0 grid {ix}x{iy} does not fit the {gx}x{gy} grid"),
+        (in0_shard > 0, f"K = {kt} tiles does not shard evenly over the {ix}x{iy} in0 grid"),
+        (in0_shard > 0 and (in0_shard % c["bw"] == 0 or c["bw"] % in0_shard == 0), "in0_block_w vs in0 shard"),
+        (kt % c["bw"] == 0, f"K = {kt} tiles is not divisible by in0_block_w {c['bw']}"),
+        (c["wpb"] * banks <= gx * gy, f"{c['wpb']} x {banks} DRAM readers exceed the {gx}x{gy} grid"),
+        (shard_w == c["wpb"] * math.ceil(nt / (c["wpb"] * used_banks)), f"shard {shard_w} != wpb x reader width"),
+        (n_out <= gx * gy, f"{n_out} output storage cores exceed the {gx}x{gy} grid"),
+    )
+    for ok, why in checks:
+        if not ok:
+            return None, why
+    plan = {"split": c["split"], "nt": nt, "cols": nt * TILE_SIZE, "shard_w": shard_w, "banks": banks}
+    plan["grid"] = (gx, gy)
+    return plan, None
 
 
 @functools.lru_cache(maxsize=None)
@@ -639,7 +887,7 @@ def i3_enabled(item):
 
 
 def i3_grid_ok(device):
-    """I-3 items apply only on the swept 13x10 worker grid."""
+    """I-3 items apply only on the swept 13x10 worker grid (except LMHEAD=A3: see i3_a3_lm_plan)."""
     g = device.compute_with_storage_grid_size()
     return (int(g.x), int(g.y)) == _I3_GRID
 
@@ -1140,6 +1388,12 @@ def make_prefill_progcfg_fn(device):
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
 
     def fn(m, k, n, in0_dtype, in1_dtype, fp32_acc=True):
+        # P300 D2 / D3 (QWEN36_P300_MM=1, 11x10 grid, m == 1024; see the P300 table): swept 2D mcast config.
+        p300_kind = _P300_PICKER_KINDS.get((int(k), int(n)))
+        if p300_kind is not None and in0_dtype == ttnn.bfloat16:
+            p300 = p300_prefill_mm(p300_kind, grid, m, k, n, in1_dtype=in1_dtype, fp32_acc=fp32_acc)
+            if p300 is not None:
+                return p300[0]
         sub_area = 8 if (not fp32_acc and i2_enabled("PICKER")) else 4
         return _pick_prefill_progcfg(
             int(m),

@@ -75,6 +75,80 @@ def _build_socket_pair(sub_a, sub_b, send_cores, recv_cores, storage, fifo_bytes
     return ttnn.create_socket_pair(sub_a, sub_b, cfg)
 
 
+def _resolve_socket_config(state_socket_mode, kv_socket_mode, state_fifo_bytes, kv_fifo_bytes):
+    """Socket transport config shared by SPPrefill and SPPrefillSC (sp_prefill_sc.py).
+    Returns (state_socket_mode, kv_socket_mode, state_fifo_bytes, kv_fifo_bytes, socket_storage).
+
+    fifo_bytes overrides the per-mode default (128 direct / 64KiB async) -- e.g. a smaller async
+    FIFO if 64KiB clashes with other L1 users (see the SPPrefill class docstring).
+
+    QWEN36_SP_SOCKET_FIFO_MB experiment (opt-in; unset/0 leaves everything byte-identical to before
+    this flag existed). Goal: give each socket a receiver-side FIFO at least as large as one layer's
+    payload (GDN state 1MB + conv 36KB; KV prefix up to 6MB on the die2->die3 edge) so a send can
+    drain into the FIFO without blocking on the receiver's matching recv -- unlike today's
+    direct-mode rendezvous (128B FIFO, send blocks device-side until recv is issued; see the class
+    docstring and send_direct_async_op_device_operation.cpp). That requires "async" mode:
+    direct-mode's send_direct_async/recv_direct_async hard-require L1 storage (TT_FATAL
+    "send_direct_async requires an L1 socket storage type" / same for recv) and only ever push a 64B
+    handshake page through the FIFO, not the tensor itself -- send_async/recv_async are the ops that
+    actually stream tensor data through the FIFO (fifo_size need only be >= one tensor page, per
+    validate_fifo_size in send_recv_utils.cpp; N MB here is deliberately oversized to cover a whole
+    layer's payload, not the streaming minimum). Storage moves to DRAM (socket_storage_type=DRAM)
+    instead of L1 so a multi-MB FIFO doesn't reserve L1 address space on every worker core (the
+    collision the direct-mode default was chosen to avoid)."""
+    _fifo_mb = float(os.environ.get("QWEN36_SP_SOCKET_FIFO_MB", "0") or "0")
+    socket_storage = ttnn.BufferType.L1
+    if _fifo_mb > 0:
+        state_socket_mode = "async"
+        kv_socket_mode = "async"
+        state_fifo_bytes = max(2 * 1024 * 1024, int(_fifo_mb * 1024 * 1024))
+        kv_fifo_bytes = int(_fifo_mb * 1024 * 1024)
+        socket_storage = ttnn.BufferType.DRAM
+        logger.info(
+            f"[sp] socket FIFO experiment: mode=async, state_fifo={state_fifo_bytes}B, "
+            f"kv_fifo={kv_fifo_bytes}B, storage=DRAM"
+        )
+
+    assert state_socket_mode in ("direct", "async") and kv_socket_mode in ("direct", "async")
+    _default_fifo = {"direct": 128, "async": 64 * 1024}
+    state_fifo_bytes = state_fifo_bytes or _default_fifo[state_socket_mode]
+    kv_fifo_bytes = kv_fifo_bytes or _default_fifo[kv_socket_mode]
+    return state_socket_mode, kv_socket_mode, state_fifo_bytes, kv_fifo_bytes, socket_storage
+
+
+def _build_hop_sockets(subs, socket_storage, state_fifo_bytes, kv_fifo_bytes, state_sockets, kv_sockets):
+    """Two socket pairs per hop d -> d+1 (both forward), reused for every transfer on that hop: STATE
+    (GDN) and KV (attention), on disjoint cores (see the core constants above). Appends to the given
+    lists in place, so a caller's close() still sees the pairs built before a mid-build failure."""
+    for d in range(len(subs) - 1):
+        state_sockets.append(
+            _build_socket_pair(
+                subs[d], subs[d + 1], _STATE_SEND_CORES, _STATE_RECV_CORES, socket_storage, state_fifo_bytes
+            )
+        )
+        kv_sockets.append(
+            _build_socket_pair(subs[d], subs[d + 1], _KV_SEND_CORES, _KV_RECV_CORES, socket_storage, kv_fifo_bytes)
+        )
+
+
+def _socket_send_op(mode):
+    return ttnn.experimental.send_async if mode == "async" else ttnn.experimental.send_direct_async
+
+
+def _socket_recv_op(mode):
+    return ttnn.experimental.recv_async if mode == "async" else ttnn.experimental.recv_direct_async
+
+
+def _kv_paged_to_seq(paged, blocks, S, nkv, hd):
+    """[num_blocks, nkv, BLOCK_SIZE, hd] paged cache -> [1, nkv, S, hd] sequence layout
+    (blocks * BLOCK_SIZE == S): the first `blocks` blocks, in block (== position) order."""
+    sl = ttnn.slice(paged, (0, 0, 0, 0), (blocks, nkv, BLOCK_SIZE, hd))
+    pm = ttnn.permute(sl, (1, 0, 2, 3))
+    rs = ttnn.reshape(pm, (1, nkv, S, hd))
+    ttnn.deallocate(sl)
+    return rs
+
+
 def _sp_layer_mixer(layer, x, *, cos, sin, d, span_len, page_table, chunk_page_table, gdn_in):
     """Mirror Qwen36DecoderLayer.forward's TP prefill branch through attn_norm -> token
     mixer -> residual add ONLY (split out of the old `_sp_layer_prefill` so the cross-die
@@ -170,43 +244,17 @@ class SPPrefill:
         state_fifo_bytes=None,
         kv_fifo_bytes=None,
     ):
-        # fifo_bytes overrides the per-mode default (128 direct / 64KiB async) -- e.g. a smaller
-        # async FIFO if 64KiB clashes with other L1 users (see the class docstring).
-
-        # ---- QWEN36_SP_SOCKET_FIFO_MB experiment (opt-in; unset/0 leaves everything below
-        # byte-identical to before this flag existed). Goal: give each socket a receiver-side
-        # FIFO at least as large as one layer's payload (GDN state 1MB + conv 36KB; KV prefix up
-        # to 6MB on the die2->die3 edge) so a send can drain into the FIFO without blocking on
-        # the receiver's matching recv -- unlike today's direct-mode rendezvous (128B FIFO, send
-        # blocks device-side until recv is issued; see the class docstring and
-        # send_direct_async_op_device_operation.cpp). That requires "async" mode: direct-mode's
-        # send_direct_async/recv_direct_async hard-require L1 storage (TT_FATAL "send_direct_async
-        # requires an L1 socket storage type" / same for recv) and only ever push a 64B handshake
-        # page through the FIFO, not the tensor itself -- send_async/recv_async are the ops that
-        # actually stream tensor data through the FIFO (fifo_size need only be >= one tensor page,
-        # per validate_fifo_size in send_recv_utils.cpp; N MB here is deliberately oversized to
-        # cover a whole layer's payload, not the streaming minimum). Storage moves to DRAM
-        # (socket_storage_type=DRAM) instead of L1 so a multi-MB FIFO doesn't reserve L1 address
-        # space on every worker core (the collision the direct-mode default was chosen to avoid).
-        _fifo_mb = float(os.environ.get("QWEN36_SP_SOCKET_FIFO_MB", "0") or "0")
-        socket_storage = ttnn.BufferType.L1
-        if _fifo_mb > 0:
-            state_socket_mode = "async"
-            kv_socket_mode = "async"
-            state_fifo_bytes = max(2 * 1024 * 1024, int(_fifo_mb * 1024 * 1024))
-            kv_fifo_bytes = int(_fifo_mb * 1024 * 1024)
-            socket_storage = ttnn.BufferType.DRAM
-            logger.info(
-                f"[sp] socket FIFO experiment: mode=async, state_fifo={state_fifo_bytes}B, "
-                f"kv_fifo={kv_fifo_bytes}B, storage=DRAM"
-            )
-
-        assert state_socket_mode in ("direct", "async") and kv_socket_mode in ("direct", "async")
+        # Socket transport (mode / FIFO size / storage; QWEN36_SP_SOCKET_FIFO_MB experiment): see
+        # _resolve_socket_config.
+        (
+            state_socket_mode,
+            kv_socket_mode,
+            state_fifo_bytes,
+            kv_fifo_bytes,
+            socket_storage,
+        ) = _resolve_socket_config(state_socket_mode, kv_socket_mode, state_fifo_bytes, kv_fifo_bytes)
         self.state_socket_mode = state_socket_mode
         self.kv_socket_mode = kv_socket_mode
-        _default_fifo = {"direct": 128, "async": 64 * 1024}
-        state_fifo_bytes = state_fifo_bytes or _default_fifo[state_socket_mode]
-        kv_fifo_bytes = kv_fifo_bytes or _default_fifo[kv_socket_mode]
 
         assert max_seq_len % BLOCK_SIZE == 0, "max_seq_len must be a multiple of the paged-KV block size (64)"
         assert span_len % BLOCK_SIZE == 0, "span_len must be a multiple of the paged-KV block size (64)"
@@ -287,27 +335,9 @@ class SPPrefill:
 
             # ---- two socket pairs per hop d -> d+1 (both forward), reused for every transfer on
             # that hop: STATE (GDN) and KV (attention); mode/FIFO size per the constructor args above ----
-            for d in range(n_spans - 1):
-                self.state_sockets.append(
-                    _build_socket_pair(
-                        self.subs[d],
-                        self.subs[d + 1],
-                        _STATE_SEND_CORES,
-                        _STATE_RECV_CORES,
-                        socket_storage,
-                        state_fifo_bytes,
-                    )
-                )
-                self.kv_sockets.append(
-                    _build_socket_pair(
-                        self.subs[d],
-                        self.subs[d + 1],
-                        _KV_SEND_CORES,
-                        _KV_RECV_CORES,
-                        socket_storage,
-                        kv_fifo_bytes,
-                    )
-                )
+            _build_hop_sockets(
+                self.subs, socket_storage, state_fifo_bytes, kv_fifo_bytes, self.state_sockets, self.kv_sockets
+            )
 
             # Last die's post-layer (final_state, conv_new_state) per GDN layer_idx -- retained
             # (never sent onward, since there is no die n_spans) for export_state_host. In the
@@ -392,11 +422,7 @@ class SPPrefill:
         """[num_blocks, nkv, BLOCK_SIZE, hd] paged cache -> [1, nkv, S, hd] sequence layout
         (blocks * BLOCK_SIZE == S). Shared by _send_kv (this die's cumulative prefix, forwarded
         to die d+1) and export_state_host (the last die's full sequence, read to host)."""
-        sl = ttnn.slice(paged, (0, 0, 0, 0), (blocks, self.nkv, BLOCK_SIZE, self.hd))
-        pm = ttnn.permute(sl, (1, 0, 2, 3))
-        rs = ttnn.reshape(pm, (1, self.nkv, S, self.hd))
-        ttnn.deallocate(sl)
-        return rs
+        return _kv_paged_to_seq(paged, blocks, S, self.nkv, self.hd)
 
     def _send_kv(self, d, li):
         """Die d, AFTER its own layer li ran: forward the K/V prefix [0, span_len*(d+1)) to die

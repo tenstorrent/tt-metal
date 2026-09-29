@@ -647,6 +647,28 @@ def gated_deltanet_forward_ttnn(
             _i2_qkv_pc = tpc.i2_prefill_2d_progcfg(
                 "S3", T, hidden_states.shape[-1], w_qkv.shape[-1], _get_mm_grid(device)
             )
+            # P300 C / D1 (QWEN36_P300_MM=1, 11x10 grid, T == 1024; tp_common P300 table): (progcfg, out mc)
+            # for the q|k|v and z|a|0|b|0 in-projs, or None. Same guards as M1 S3 / S4 (13x10 only, so
+            # disjoint): C needs the native / KDA conv (it frees an L1 q|k|v output right after the conv),
+            # D1 the padded [g | a | 0 | b | 0] weight (tile-aligned slices).
+            _p300_qkv = (
+                tpc.p300_prefill_mm(
+                    "C", _m1_grid, T, hidden_states.shape[-1], w_qkv.shape[-1], in1_dtype=w_qkv.dtype, ckc=ckc
+                )
+                if _m1_ok and native_conv1d_fn is not None and _m1_qkv_pc is None
+                else None
+            )
+            _p300_gab = (
+                tpc.p300_prefill_mm(
+                    "D1", _m1_grid, T, hidden_states.shape[-1], w_gab.shape[-1], in1_dtype=w_gab.dtype, ckc=ckc
+                )
+                if _m1_ok and _gab_pad and _m1_gab_pc is None
+                else None
+            )
+            # P300 D1 with an L1 output: gate/a/b are then sliced to DRAM (their placement without P300) and
+            # gab freed right away, as the M1 S4 branch below does, so no L1 gab slice stays alive through
+            # ChunkGdnFused (C4: an L1 gab alive there clashes with its static CBs). C2 SGRN stays M1-only.
+            _p300_gab_l1 = _p300_gab is not None and _p300_gab[1] is not None
             if _m1_qkv_pc is not None and m3_qkv_zero_bias is not None:
                 # M3 ZB (QWEN36_M3_ZB=1): the same M1 S3 program via ttnn.linear + the shared zero bias
                 # (FUSE_BIAS path; N1 N-f: bit-identical to minimal_matmul). Allocated at model load.
@@ -677,6 +699,19 @@ def gated_deltanet_forward_ttnn(
                     dtype=ttnn.bfloat16,
                 )
                 _m1_qkv_l1 = True
+            elif _p300_qkv is not None:
+                # P300 C: 2D-mcast ttnn.linear 11x10 bw16 pcM4 pcN18 1x6 (same [K, N] weight as the
+                # minimal_matmul). L1 output (QWEN36_P300_MM_C_L1=1): read by the tiled KDA conv and freed
+                # right after it (the M1 S3 handling, _m1_qkv_l1); DRAM (=0): today's placement.
+                qkv = ttnn.linear(
+                    hidden_states,
+                    w_qkv,
+                    program_config=_p300_qkv[0],
+                    compute_kernel_config=ckc,
+                    memory_config=_p300_qkv[1],
+                    dtype=ttnn.bfloat16,
+                )
+                _m1_qkv_l1 = _p300_qkv[1].buffer_type == ttnn.BufferType.L1
             elif _i2_qkv_pc is not None:
                 qkv = ttnn.linear(
                     hidden_states,
@@ -725,6 +760,16 @@ def gated_deltanet_forward_ttnn(
                     memory_config=ttnn.DRAM_MEMORY_CONFIG if _c2_gab_dram else ttnn.L1_MEMORY_CONFIG,
                     dtype=ttnn.bfloat16,
                 )
+            elif _p300_gab is not None:
+                # P300 D1: 2D-mcast 11x10 bw16 pcM4 pcN6 1x6; L1 output (QWEN36_P300_MM_D1_L1=1) or mc (=0).
+                gab = ttnn.linear(
+                    hidden_states,
+                    w_gab,
+                    memory_config=_p300_gab[1] if _p300_gab_l1 else mc,
+                    compute_kernel_config=ckc,
+                    program_config=_p300_gab[0],
+                    dtype=ttnn.bfloat16,
+                )
             else:
                 gab = ttnn.linear(
                     hidden_states,
@@ -736,10 +781,10 @@ def gated_deltanet_forward_ttnn(
             if _m1_x_l1:
                 # M1: last consumer of the L1 norm output -> free it now (not after the layer).
                 ttnn.deallocate(hidden_states)
-            if _m1_gab_pc is not None:
+            if _m1_gab_pc is not None or _p300_gab_l1:
                 # M1 S4: gab is L1 ([g | a | 0 | b | 0], _gab_pad is True here; DRAM in C2 SGRN variant b);
                 # the three slices go to DRAM, the placement they have without M1 (gab DRAM, slices
-                # inherit it).
+                # inherit it). P300 D1 with an L1 gab takes the same branch (_c2_sgrn is False then).
                 _gs = list(gab.shape)
                 _dram = ttnn.DRAM_MEMORY_CONFIG
                 if _c2_sgrn:
@@ -1083,8 +1128,8 @@ def gated_deltanet_forward_ttnn(
     # it to DRAM alongside q/k/v removes it from that budget entirely. Scoped to `_use_chunk_fn`
     # only -- decode (T==1) and the seq-adapter path keep beta/g in L1 (mc_small), unaffected,
     # since their own kernel CBs are smaller and don't clash (see conv1d_kda.py's flag docstring).
-    # R3 FLA_IN_L1 (qwen36 tp_common R3 table): unmasked T == R3_T chunks keep the chain in mc_small (L1).
-    _r3_fla_in_l1 = _use_chunk_fn and valid_len is None and T == tpc.R3_T and tpc.r3_enabled("FLA_IN_L1")
+    # R3 FLA_IN_L1 (qwen36 tp_common R3 table): unmasked T in R3_T_SET chunks keep the chain in mc_small (L1).
+    _r3_fla_in_l1 = _use_chunk_fn and valid_len is None and T in tpc.R3_T_SET and tpc.r3_enabled("FLA_IN_L1")
     if (
         _use_chunk_fn
         and os.environ.get("QWEN36_GDN_FLA_INPUTS_DRAM", "1" if os.environ.get("QWEN_GDN_PATH") == "fused" else "0")

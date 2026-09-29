@@ -10,10 +10,10 @@ import os
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
-from models.demos.blackhole.qwen36.tt.tp_common import M5_ADDNORM_T
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
@@ -292,6 +292,7 @@ class Qwen36DecoderLayer:
         m5_addnorm=False,
         pending=None,
         defer_out=False,
+        post_mixer_hook=None,
     ):
         # last_row_tile_slices (M4 R4A) / last_row_pos_tensor (M4 R4B), with last_row_only only (tp_common M4
         # table): R4A = the one-row reads (residual row here; gate input + SDPA output in the attention) are a
@@ -301,7 +302,7 @@ class Qwen36DecoderLayer:
             not last_row_tile_slices and last_row_pos_tensor is None
         ), "last_row_tile_slices / last_row_pos_tensor (M4) need last_row_only (M2 LASTROW)"
         # M5 ADDNORM (tp_common M5 table; Qwen36Model._forward_prefill_chunk passes m5_addnorm=True for its
-        # T == M5_ADDNORM_T chunks): fused residual add + RMSNorm (_m5_add_norm) for full-T pairs.
+        # T in M5_ADDNORM_T_SET chunks): fused residual add + RMSNorm (_m5_add_norm) for full-T pairs.
         #   pending=(h_prev, mlp_prev): x is None; this layer makes its input x = h_prev + mlp_prev (the previous
         #     layer's MLP residual add, which that layer deferred) together with its attention_norm, frees
         #     h_prev and mlp_prev, owns x and frees it after its last reader (the attention residual add).
@@ -309,6 +310,11 @@ class Qwen36DecoderLayer:
         assert m5_addnorm or (pending is None and not defer_out), "pending / defer_out need m5_addnorm (M5 ADDNORM)"
         assert (x is None) == (pending is not None), "M5 ADDNORM: pass exactly one of x and pending"
         assert not (defer_out and last_row_only), "M5 ADDNORM: a last_row_only layer cannot defer its output"
+        # post_mixer_hook (sequence-parallel prefill, tt/sp_prefill_sc.py): a no-arg callable run once, right
+        # after the token mixer (attention / GDN) and its residual add, before ffn_norm (with the M5 ADDNORM
+        # intra-layer fused add + ffn_norm, right before that fused op). SP uses it to enqueue the cross-die
+        # send of the state the mixer just wrote (paged K/V or GDN recurrent + conv state) before the MLP.
+        # None (default) = no call, identical behavior.
         own_x = pending is not None
         xs = x if x is not None else pending[0]  # shape / memory reference until x exists
         # last_row_only (M2 LASTROW, tp_common; single device, full-attention layer, paged prefill with a
@@ -416,7 +422,7 @@ class Qwen36DecoderLayer:
             and len(xs.shape) == 3
             and self._m1_norm_l1_fn(xs.shape[1], self._m1_grid)
         )
-        # M5 ADDNORM: the fused op applies to a full-T (M5_ADDNORM_T rows) single-device prefill pair whose norm has
+        # M5 ADDNORM: the fused op applies to a full-T (T in M5_ADDNORM_T_SET rows) single-device prefill pair whose norm has
         # no extra output config (the norm output then lands where the plain norm writes it); else the plain ops.
         _m5 = (
             m5_addnorm
@@ -425,7 +431,7 @@ class Qwen36DecoderLayer:
             and valid_len is None
             and not gdn_collect
             and len(xs.shape) == 3
-            and xs.shape[1] == M5_ADDNORM_T
+            and xs.shape[1] in tpc.M5_ADDNORM_T_SET
             and xs.dtype == ttnn.bfloat16
         )
         attn_input = None
@@ -540,11 +546,16 @@ class Qwen36DecoderLayer:
             # M5 ADDNORM intra-layer pair: h = x + attn_output (where the residual add writes today) + ffn_norm
             # (the plain ffn_norm writes h's placement, as here).
             h_mc = _residual_mc if _residual_mc is not None else x.memory_config()
+            if post_mixer_hook is not None:
+                post_mixer_hook()  # before the fused add + ffn_norm (the mixer state is complete here)
+                post_mixer_hook = None
             h, ff_input = _m5_add_norm(self.ffn_norm, x, attn_output, h_mc, h_mc)
         else:
             h = ttnn.add(x, attn_output, memory_config=_residual_mc)
             ff_input = None
         ttnn.deallocate(attn_output)
+        if post_mixer_hook is not None:
+            post_mixer_hook()
         if own_x:
             # M5 ADDNORM: this layer made x (pending); the residual add above was its last reader.
             ttnn.deallocate(x)

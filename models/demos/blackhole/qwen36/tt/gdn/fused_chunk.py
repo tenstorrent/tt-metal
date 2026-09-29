@@ -204,10 +204,10 @@ def chunk_gated_delta_rule_fused_adapter(
         if s0.dtype != ttnn.float32:
             s0 = ttnn.typecast(s0, ttnn.float32)
 
-    # R3 O_L1 (tp_common R3 table): o and the final state in L1 on unmasked T == R3_T calls (masked / other
+    # R3 O_L1 (tp_common R3 table): o and the final state in L1 on unmasked T in R3_T_SET calls (masked / other
     # buckets keep the op default, DRAM). Not passed at all when off (call unchanged).
     _r3_o_kw = {}
-    if tpc.r3_enabled("O_L1") and not _is_per_row and (valid_len is None or valid_len >= T) and T == tpc.R3_T:
+    if tpc.r3_enabled("O_L1") and not _is_per_row and (valid_len is None or valid_len >= T) and T in tpc.R3_T_SET:
         _r3_o_kw = {"memory_config": ttnn.L1_MEMORY_CONFIG}
         if not _r3_logged_o[0]:
             _r3_logged_o[0] = True
