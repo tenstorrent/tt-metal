@@ -19,9 +19,6 @@
 
 #pragma once
 
-// Increment when public API changes require callers to update their code.
-#define MCAST_PIPE_API_VERSION 27
-
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_semaphore.hpp"
 
