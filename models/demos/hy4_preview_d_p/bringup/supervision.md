@@ -46,3 +46,29 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
 - 06:30 framework gap: the gate commit staged only task paths, so the fork and 19 agent knowledge entries stayed
   uncommitted. Committed them (5da28095718, 7e800161e3d); paused before C.dense_full.attention; F48 (720bb5b8881):
   stage_paths adds changed files under ttnn/ttnn/bringup and the shared knowledge files; 199 selftests. Resumed.
+  intermediates), ffn_residual and S.06-S.12 PASS, all first attempt; reviewed, no CPU work in forwards. Layer 0
+  (dense_full) fully on device: S.dense_full.12 pcc_swap_out 0.999984 (6a766c047ed). Next: moe_full (layer 1).
+- 09:50-16:20 moe_full (layer 1) all 15 components + 15 swaps PASS, first attempt. Attention side reused layer 0 code
+  (several on the precheck). Indexer L1 overlap 0.9959 / worst row 0.9888. Router: expert selection overlap 0.998,
+  matched weights rel 0.17%. Experts: existing forks unchanged (dispatch, combine, offset_cumsum, unified MoE with
+  ClampedSiluGlu + high_precision), bfp8, HiFi4, rel 0.8%; INDEX users rows only. Shared expert reused the dense MLP.
+  S.moe_full.15 pcc_swap_out 0.99997 (13197b4b76f). Next: moe_shared (layers 2-4).
+- 17:35 C.moe_shared.topk_shared PASS efedf6b9bc8: tt/topk_shared.py is an identity on the source layer's device top-k
+  (no op, no copy). Component/swap tests feed L1's golden top-k through ctx.extra["shared_topk"] in hooks.py (test
+  adapter only, the step's input comes from another layer). CHECK AT ASSEMBLY (M.1): the device model must pass layer
+  1's device top-k tensor to layers 2-4, never the golden.
+- 16:20-22:45 moe_shared (layer 2) all components + 15 swaps PASS, first attempt, on existing code (router overlap
+  0.998, experts rel 0.8%). S.moe_shared.15 0.99997 (2be476bf6e6). All C/S tasks done, 0 deferrals. 22:45 M.1 started.
+- 22:35 owner asked for the agent time breakdown: hy4_bringup_time_study.html (repo root, c6ef3c7411e), published
+  https://claude.ai/artifact/X452m5Ba6dWBkoXdPLE6qJ. Owner: continue the framework as-is for now.
+- 23:00 M.1 PASS 41c95e736ad (attempt 1): layer PCC 0.99998 (L0) .. 0.99989 (L5), state min 0.99997, host transfers per
+  layer 0. Checked the open item: tt/model.py stores each full layer's device top-k in state.topk and layers 2-4 read
+  layer 1's device tensor (KeyError if missing); golden only for the prefix load (harness boundary). Accepted.
+- 23:10 L.s4096/s16384/last/s56320 PASS (min layer PCC 0.99989 at L5, state >= 0.99996, 0 host transfers, 0 CPU
+  steps). K.1 PASS b1f0ff82e1c: bind_cache option in attention/indexer (default = unchanged behaviour), one registry
+  line in models/demos/common/prefill/adapter.py; accepted. X.1: 50k->55k chunk 519.0 ms device / 521.1 ms wall
+  (attention 212.8, experts 166.2, indexer 31.5). X.2 waiting for picks.
+- 23:15 perf picks (owner delegated 03:40): P.1 attention, P.2 routed experts, both without a precision change (rule 7);
+  gates = frozen attention / experts component tests + the three full-block swap tests + rung last + profile, with
+  device_ms_attention < 190 / device_ms_experts < 150 and total < 500 / 505. X.3 now depends on P.2. Marked rows 1-2 in
+  opportunities.md.
