@@ -12,9 +12,12 @@ See ttnn/ttnn/operations/examples/fabric_all_gather/README.md.
 
 import os
 
-os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
-os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
-os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
+# Under tt-emule (TT_METAL_EMULE_MODE) there is no timing: run correctness only, without the device profiler.
+EMULE = bool(os.environ.get("TT_METAL_EMULE_MODE"))
+if not EMULE:
+    os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
+    os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
+    os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 os.environ.setdefault("TT_METAL_LOGGER_LEVEL", "error")
 
 import socket
@@ -25,7 +28,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from ttnn.operations.examples.fabric_all_gather import build_groups, fabric_all_gather
+from ttnn.operations.examples.fabric_all_gather import build_groups, fabric_all_gather, link_load, plan
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 SHAPE = tuple(int(x) for x in os.environ.get("FAG_SHAPE", "2048,4096").split(","))  # per-chip shard (H, W), bf16
@@ -45,7 +48,7 @@ _FABRICS = {
     "2d_torus_xy": "FABRIC_2D_TORUS_XY",
 }
 FABRICS = tuple(os.environ.get("FAG_FABRICS", ",".join(_FABRICS)).split(","))
-# (mesh shape, cluster_axis, topology); cluster_axis None = one snake over the whole mesh
+# (mesh shape, cluster_axis, topology[, scheme]); cluster_axis None = one group over the whole mesh
 _TOPOS = {
     "2x2_axis0_line": ((2, 2), 0, "Linear"),
     "2x2_axis1_line": ((2, 2), 1, "Linear"),
@@ -55,8 +58,14 @@ _TOPOS = {
     "4x1_ring": ((4, 1), 0, "Ring"),
     "1x4_line": ((1, 4), 1, "Linear"),
     "1x4_ring": ((1, 4), 1, "Ring"),
+    # 32-chip Galaxy (4 x 8 torus): per-axis rings, one snake ring, and two edge-disjoint Hamiltonian cycles
+    "4x8_axis0_ring": ((4, 8), 0, "Ring"),
+    "4x8_axis1_ring": ((4, 8), 1, "Ring"),
+    "4x8_snake_ring": ((4, 8), None, "Ring"),
+    "4x8_dual_cycles": ((4, 8), None, "Ring", "dual_cycles"),
 }
-TOPOS = tuple(os.environ.get("FAG_TOPOS", ",".join(_TOPOS)).split(","))
+_QB_TOPOS = [t for t, v in _TOPOS.items() if v[0][0] * v[0][1] == 4]
+TOPOS = tuple(os.environ.get("FAG_TOPOS", ",".join(_QB_TOPOS)).split(","))
 MESH_SHAPES = sorted({_TOPOS[t][0] for t in TOPOS})
 _REPORT = []
 
@@ -124,16 +133,22 @@ def test_fabric_all_gather(mesh_device):
     shard_bytes = (H // 32) * (W // 32) * int(inp.buffer_aligned_page_size())
     fabric = str(ttnn.get_fabric_config()).split(".")[-1]
     for topo_name in TOPOS:
-        shape, cluster_axis, topo = _TOPOS[topo_name]
+        shape, cluster_axis, topo = _TOPOS[topo_name][:3]
+        scheme = _TOPOS[topo_name][3] if len(_TOPOS[topo_name]) > 3 else "ring"
         if shape != (rows, cols):
             continue
         topology = getattr(ttnn.Topology, topo)
-        groups = build_groups((rows, cols), cluster_axis)
+        if scheme == "dual_cycles":  # one group over the whole mesh, output in row-major chip order
+            groups = [[(r, c) for r in range(rows) for c in range(cols)]]
+        else:
+            groups = build_groups((rows, cols), cluster_axis)
         G = len(groups[0])
         for num_links in LINKS:
             tag = f"    {fabric:<27} {topo_name:<15} G={G} links={num_links}"
             try:
-                out = fabric_all_gather(inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM)
+                out = fabric_all_gather(
+                    inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM, scheme=scheme
+                )
             except (ValueError, RuntimeError) as e:
                 msg = str(e).splitlines()[0][:110]
                 _REPORT.append(f"{tag}  unsupported: {msg}")
@@ -147,16 +162,32 @@ def test_fabric_all_gather(mesh_device):
                     assert torch.equal(
                         got[r * cols + c].reshape(expected.shape).to(expected.dtype), expected
                     ), f"{fabric}/{topo_name}/links={num_links}: chip ({r},{c}) output != gathered shards"
+            chips, _ = plan(
+                mesh_device, cluster_axis=cluster_axis, topology=topology, num_links=num_links, scheme=scheme
+            )
+            load = link_load(chips)
+            nbrs = max(len({p for (a, p) in load if a == coord}) for coord in chips)
+            busiest = max(load.values())
+            geo = f"busiest hop carries {busiest:.1f} shards, {nbrs} neighbours used per chip"
+            if EMULE or TRIALS == 0:
+                _REPORT.append(f"{tag}  bit-exact on all {rows * cols} chips  ✓  {geo}  (no timing)")
+                continue
             samples = []
             for _ in range(TRIALS):
                 ttnn.ReadDeviceProfiler(mesh_device)
                 fabric_all_gather(
-                    inp, cluster_axis=cluster_axis, topology=topology, num_links=num_links, dim=DIM, output=out
+                    inp,
+                    cluster_axis=cluster_axis,
+                    topology=topology,
+                    num_links=num_links,
+                    dim=DIM,
+                    scheme=scheme,
+                    output=out,
                 )
                 samples.append(_slowest_chip_ns(mesh_device))
             ns = statistics.median(samples)
             _REPORT.append(
-                f"{tag}  {ns:>10.0f} ns  effective receive {shard_bytes * (G - 1) / ns:6.2f} GB/s per chip  ✓"
+                f"{tag}  {ns:>10.0f} ns  effective receive {shard_bytes * (G - 1) / ns:6.2f} GB/s per chip  ✓  {geo}"
             )
     _REPORT.insert(
         0,

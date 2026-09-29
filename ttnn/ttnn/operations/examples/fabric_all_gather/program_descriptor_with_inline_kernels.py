@@ -129,7 +129,7 @@ using namespace tt::tt_fabric;
 
 // One hop: 2D fabrics route by destination fabric node, 1D fabrics by hop count (ROUTING_MODE from the build).
 inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
-#if defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)
+#if (defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)) || defined(EMULE_FABRIC_2D)
     (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
 #else
     (void)chip_id;
@@ -464,71 +464,171 @@ def _worker_below(mesh_device, coord, noc_x, taken, grid):
     return best[1]
 
 
-def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto"):
-    """Group positions, per-port shard schedules and core placement for every chip."""
+def hamiltonian_decomposition(R, C, seed=1, tries=20000):
+    """Two edge-disjoint Hamiltonian cycles covering every edge of an R x C torus (R, C >= 3), as coord lists.
+
+    Randomized Warnsdorff search for cycle A, accepted when the complementary edges form one cycle B."""
+    import random
+    import sys
+
+    sys.setrecursionlimit(max(10000, 4 * R * C))
+    rng = random.Random(seed)
+    nodes = [(r, c) for r in range(R) for c in range(C)]
+    nb = {
+        n: [((n[0] + 1) % R, n[1]), ((n[0] - 1) % R, n[1]), (n[0], (n[1] + 1) % C), (n[0], (n[1] - 1) % C)]
+        for n in nodes
+    }
+    N = len(nodes)
+    for _ in range(tries):
+        path, used = [nodes[0]], {nodes[0]}
+
+        def dfs():
+            if len(path) == N:
+                return path[0] in nb[path[-1]]
+            cand = [n for n in nb[path[-1]] if n not in used]
+            rng.shuffle(cand)
+            cand.sort(key=lambda n: sum(1 for m in nb[n] if m not in used))
+            for n in cand:
+                path.append(n)
+                used.add(n)
+                if dfs():
+                    return True
+                path.pop()
+                used.discard(n)
+            return False
+
+        if not dfs():
+            continue
+        a_edges = {frozenset((path[i], path[(i + 1) % N])) for i in range(N)}
+        comp = {n: [m for m in nb[n] if frozenset((n, m)) not in a_edges] for n in nodes}
+        if any(len(v) != 2 for v in comp.values()):
+            continue
+        cyc_b, prev, cur = [nodes[0]], None, nodes[0]
+        while True:
+            x, y = comp[cur]
+            nxt = x if x != prev else y
+            if nxt == nodes[0]:
+                break
+            cyc_b.append(nxt)
+            prev, cur = cur, nxt
+        if len(cyc_b) == N:
+            return path, cyc_b
+    raise ValueError(f"no Hamiltonian decomposition found for a {R}x{C} torus")
+
+
+def plan(mesh_device, *, cluster_axis, topology, num_links, placement="auto", scheme="ring"):
+    """Rings, per-port shard schedules and core placement for every chip.
+
+    scheme "ring":        one ring (or line) per group, in group order.
+    scheme "dual_cycles": one group over the whole mesh (a 2D torus, both sides >= 3) and two rings over it — two
+                          edge-disjoint Hamiltonian cycles — each carrying half of every shard (half the DRAM banks).
+    The output concatenates the group's shards in group order (row-major for "dual_cycles")."""
+    import os
+
     mesh_shape = tuple(mesh_device.shape)
-    ring = topology == ttnn.Topology.Ring
-    groups = build_groups(mesh_shape, cluster_axis)
+    R, C = mesh_shape
+    if scheme == "dual_cycles":
+        if cluster_axis is not None or topology != ttnn.Topology.Ring or R < 3 or C < 3:
+            raise ValueError(
+                "fabric_all_gather: dual_cycles needs cluster_axis=None, Ring, and a torus with both sides >= 3"
+            )
+        groups = [[(r, c) for r in range(R) for c in range(C)]]
+        a, b = hamiltonian_decomposition(R, C)
+        ring_lists = [[a, b]]
+        ring = True
+    elif scheme == "ring":
+        groups = build_groups(mesh_shape, cluster_axis)
+        ring_lists = [[grp] for grp in groups]
+        ring = topology == ttnn.Topology.Ring
+    else:
+        raise ValueError(f"fabric_all_gather: unknown scheme {scheme!r}")
     G = len(groups[0])
     assert G >= 2, "a group needs at least two chips"
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     chips = {}
-    for grp in groups:
-        for p, coord in enumerate(grp):
-            nxt = grp[(p + 1) % G] if (ring or p < G - 1) else None
-            prv = grp[(p - 1) % G] if (ring or p > 0) else None
-            fwd, bwd = _schedule(p, G, ring)
-            chips[coord] = dict(p=p, G=G, next=nxt, prev=prv, fwd=fwd, bwd=bwd)
+    for grp, rings in zip(groups, ring_lists):
+        out_idx = {coord: i for i, coord in enumerate(grp)}
+        for coord in grp:
+            chips[coord] = dict(out=out_idx[coord], G=G, rings=[])
+        for cyc in rings:
+            for p, coord in enumerate(cyc):
+                nxt = cyc[(p + 1) % G] if (ring or p < G - 1) else None
+                prv = cyc[(p - 1) % G] if (ring or p > 0) else None
+                fwd, bwd = _schedule(p, G, ring)  # positions along this ring, own first
+                chips[coord]["rings"].append(
+                    dict(
+                        p=p, next=nxt, prev=prv, fwd=[out_idx[cyc[q]] for q in fwd], bwd=[out_idx[cyc[q]] for q in bwd]
+                    )
+                )
+    n_rings = len(ring_lists[0])
     # links for every neighbour this chip sends to; every hop must be direct
     connections = {}
     for coord, ch in chips.items():
         conns = []
-        for d, peer in (("fwd", ch["next"]), ("bwd", ch["prev"])):
-            if peer is None or not ch[d]:
-                continue
-            links = ttnn.get_forwarding_link_indices(node(coord), node(peer))
-            if len(links) < num_links:
-                raise ValueError(
-                    f"fabric_all_gather: {coord} -> {peer} has {len(links)} usable link(s), {num_links} requested "
-                    f"(topology={topology}, fabric={ttnn.get_fabric_config()})"
-                )
-            ch[f"{d}_links"] = links[:num_links]
-            conns += [(peer, links[l]) for l in range(num_links)]
+        for rg in ch["rings"]:
+            for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
+                if peer is None or not rg[d]:
+                    continue
+                links = ttnn.get_forwarding_link_indices(node(coord), node(peer))
+                if len(links) < num_links:
+                    raise ValueError(
+                        f"fabric_all_gather: {coord} -> {peer} has {len(links)} usable link(s), {num_links} requested "
+                        f"(topology={topology}, fabric={ttnn.get_fabric_config()})"
+                    )
+                rg[f"{d}_links"] = links[:num_links]
+                conns += [(peer, links[l]) for l in range(num_links)]
         connections[coord] = conns
     grid = mesh_device.compute_with_storage_grid_size()
+    if placement == "auto" and os.environ.get("TT_METAL_EMULE_MODE"):
+        placement = "simple"  # the emulator runs no Ethernet cores (nothing to probe) and has no NoC timing
     eth = probe_ethernet_cores(mesh_device, connections) if placement == "auto" else None
-    # Port cores: one per (direction, link) on every chip, including receive-only ends of a line (they only wait).
-    # The logical core of a (direction, link) port must be the same on sender and receiver chips only through the
-    # args we pass, so each chip places its own ports.
+    # Port cores: one per (ring, direction, link) on every chip, including receive-only ends of a line.
     for coord, ch in chips.items():
         taken = set()
         ports = {}
-        for d, peer in (("fwd", ch["next"]), ("bwd", ch["prev"])):
-            for l in range(num_links):
-                if eth is not None and ch[d] and peer is not None:
-                    ex = eth_noc_column(mesh_device, coord, eth[(coord, peer, ch[f"{d}_links"][l])])
-                    core = _worker_below(mesh_device, coord, ex, taken, grid)
-                    ch.setdefault("eth_cols", {})[(d, l)] = ex
-                else:
-                    core = placement[(d, l)] if isinstance(placement, dict) else None
-                ports[(d, l)] = core
-                if core is not None:
-                    taken.add((core.x, core.y))
-        # receive-only ports (line ends): any free core
-        for key, core in ports.items():
+        for j, rg in enumerate(ch["rings"]):
+            for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
+                for l in range(num_links):
+                    core = None
+                    if eth is not None and rg[d] and peer is not None:
+                        ex = eth_noc_column(mesh_device, coord, eth[(coord, peer, rg[f"{d}_links"][l])])
+                        core = _worker_below(mesh_device, coord, ex, taken, grid)
+                        ch.setdefault("eth_cols", {})[(j, d, l)] = ex
+                    elif isinstance(placement, dict):
+                        core = placement.get((j, d, l))
+                    ports[(j, d, l)] = core
+                    if core is not None:
+                        taken.add((core.x, core.y))
+        for key, core in ports.items():  # receive-only ports, or simple placement: any free core
             if core is None:
                 ports[key] = _worker_below(mesh_device, coord, 0, taken, grid)
                 taken.add((ports[key].x, ports[key].y))
         copy = []
         for l in range(num_links):
-            y = grid.y // 2
-            for x in range(grid.x):
-                if (x, y) not in taken:
-                    copy.append(ttnn.CoreCoord(x, y))
-                    taken.add((x, y))
+            for y in list(range(grid.y // 2, grid.y)) + list(range(grid.y // 2)):
+                free = [x for x in range(grid.x) if (x, y) not in taken]
+                if free:
+                    copy.append(ttnn.CoreCoord(free[0], y))
+                    taken.add((free[0], y))
                     break
         ch["ports"], ch["copy"] = ports, copy
+    for ch in chips.values():
+        ch["n_rings"] = n_rings
     return chips, ring
+
+
+def link_load(chips):
+    """Shards carried by each directed chip-to-chip hop (per link used), from a plan.
+
+    A ring port sends len(sends) shards' worth of its (1 / n_rings) share of the banks. The busiest hop bounds the
+    call: time >= busiest * shard_bytes / (num_links * link_rate)."""
+    load = {}
+    for coord, ch in chips.items():
+        for rg in ch["rings"]:
+            for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
+                if peer is not None and rg[d]:
+                    load[(coord, peer)] = load.get((coord, peer), 0.0) + len(rg[d]) / ch["n_rings"]
+    return load
 
 
 def create_mesh_program_descriptor(
@@ -542,7 +642,6 @@ def create_mesh_program_descriptor(
     cb_bytes=112 * 1024,
     inc_every=8,
 ):
-    rows, cols = tuple(mesh_device.shape)
     page_bytes = int(input_tensor.buffer_aligned_page_size())
     num_banks = _num_banks(mesh_device)
     shape = list(input_tensor.padded_shape)
@@ -563,7 +662,9 @@ def create_mesh_program_descriptor(
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
-        p = ch["p"]
+        n_rings = ch["n_rings"]
+        stride = n_rings * num_links  # (ring j, link l) owns DRAM banks j*L + l, then every stride-th bank
+        assert stride <= num_banks, f"{n_rings} rings x {num_links} links need at least {stride} DRAM banks"
         program = ttnn.ProgramDescriptor()
         port_cores = list(ch["ports"].values())
         all_cores = port_cores + ch["copy"]
@@ -575,28 +676,38 @@ def create_mesh_program_descriptor(
             )
         ]
         reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for (d, l), core in ch["ports"].items():
-            peer = ch["next"] if d == "fwd" else ch["prev"]
-            sends = ch[d] if peer is not None else []
-            # what arrives at this port: the upstream chip's port of the same direction sends to me
-            up = ch["prev"] if d == "fwd" else ch["next"]
-            recv = len(chips[up][d]) if up is not None else 0
-            per_link = _chunks_per_shard(shard_pages, l, num_links, num_banks, run_pages)
-            reader_rt[core.x][core.y] = [in_addr, out_addr, shard_pages, l, num_links, arrival_addr, len(sends)] + sends
-            args = [out_addr, shard_pages, l, num_links, arrival_addr, -(-(recv * per_link) // inc_every)]
+        for (j, d, l), core in ch["ports"].items():
+            rg = ch["rings"][j]
+            peer = rg["next"] if d == "fwd" else rg["prev"]
+            sends = rg[d] if peer is not None else []
+            # what arrives at this port: the upstream chip's port of the same ring and direction sends to me
+            up = rg["prev"] if d == "fwd" else rg["next"]
+            recv = len(chips[up]["rings"][j][d]) if up is not None else 0
+            first = j * num_links + l
+            per_link = _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages)
+            reader_rt[core.x][core.y] = [
+                in_addr,
+                out_addr,
+                shard_pages,
+                first,
+                stride,
+                arrival_addr,
+                len(sends),
+            ] + sends
+            args = [out_addr, shard_pages, first, stride, arrival_addr, -(-(recv * per_link) // inc_every)]
             if sends:
-                pc = virt(chips[peer]["ports"][(d, l)])
+                pc = virt(chips[peer]["ports"][(j, d, l)])
                 pn = node(peer)
                 args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), len(sends)] + sends
-                args += list(ttnn.setup_fabric_connection(node(coord), pn, ch[f"{d}_links"][l], program, core))
+                args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], program, core))
             else:
                 args += [0, 0, 0, 0, 0]
             sender_rt[core.x][core.y] = args
         copy_reader_rt, copy_writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         J = len(ch["copy"])
-        for j, core in enumerate(ch["copy"]):
-            copy_reader_rt[core.x][core.y] = [in_addr, out_addr, shard_pages, j, J, arrival_addr, 1, p]
-            copy_writer_rt[core.x][core.y] = [out_addr, shard_pages, j, J, p]
+        for jj, core in enumerate(ch["copy"]):
+            copy_reader_rt[core.x][core.y] = [in_addr, out_addr, shard_pages, jj, J, arrival_addr, 1, ch["out"]]
+            copy_writer_rt[core.x][core.y] = [out_addr, shard_pages, jj, J, ch["out"]]
         port_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in port_cores])
         copy_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ch["copy"]])
         src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
@@ -652,12 +763,28 @@ def output_shape(input_tensor, G, dim):
 
 
 def fabric_all_gather(
-    input_tensor, *, cluster_axis=0, topology=ttnn.Topology.Linear, num_links=1, dim=0, placement="auto", output=None
+    input_tensor,
+    *,
+    cluster_axis=0,
+    topology=ttnn.Topology.Linear,
+    num_links=1,
+    dim=0,
+    placement="auto",
+    scheme="ring",
+    output=None,
 ):
-    """All-gather `input_tensor` (TILE, DRAM interleaved, one shard per chip) over each group; returns the output."""
+    """All-gather `input_tensor` (TILE, DRAM interleaved, one shard per chip) over each group; returns the output.
+
+    scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
+    topology=Ring); the output is then in row-major chip order."""
     mesh_device = input_tensor.device()
     chips, ring = plan(
-        mesh_device, cluster_axis=cluster_axis, topology=topology, num_links=num_links, placement=placement
+        mesh_device,
+        cluster_axis=cluster_axis,
+        topology=topology,
+        num_links=num_links,
+        placement=placement,
+        scheme=scheme,
     )
     G = next(iter(chips.values()))["G"]
     if output is None:
