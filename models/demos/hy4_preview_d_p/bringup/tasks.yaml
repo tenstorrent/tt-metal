@@ -2163,6 +2163,13 @@ tasks:
     kind: residual
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T18:30:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py: e89a84d917c655b3f1729a77323b59d526dad4f16230f6809d9801cef46dc363
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.07
   title: 'moe_shared block with steps 1-7 on device (last: attn_residual)'
   step: implement
