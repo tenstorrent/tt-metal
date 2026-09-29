@@ -2032,6 +2032,13 @@ tasks:
     kind: op
     layer: 4
     stateful: false
+  frozen:
+    at: '2026-09-29T16:31:25'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_collapse.py: 73f695be4c41bb5152b422797dcf321b04f73445f7bcdd9f3be9cff75f5654cc
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.kda_moe.07
   title: 'kda_moe block with steps 1-7 on device (last: ffn_collapse)'
   step: implement
