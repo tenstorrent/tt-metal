@@ -191,6 +191,13 @@ tasks:
     swapped:
     - attn_hc
     layer: 0
+  frozen:
+    at: '2026-09-29T05:05:58'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_01_attn_hc.py: 92c137b72ea7440d52e18ad0fac6258c9f911dfc4de51d1efee7280046014048
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.dense_full.attn_hc_pre
   title: dense_full attn_hc_pre (op) on device, layer 0
   step: implement
