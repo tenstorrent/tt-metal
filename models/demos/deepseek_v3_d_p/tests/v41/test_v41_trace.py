@@ -248,19 +248,20 @@ def test_v41_block_trace(mesh_device, device_params, weights, layer, monkeypatch
 
 
 # --- the transformer's chunk loop: V41PrefillTrace vs the untraced prefill -----------------------------------------
-# (weights, schedule or layers, chunk, prompt tokens); "engram" = the real sharing layers + a synthetic layer 1 (real
-# Engram tables are not downloaded), for the host Engram prepare pipelining (bead 8y7.17)
+# (weights, schedule, chunk, prompt tokens, scored positions); "engram" = the real sharing layers + a synthetic layer 1
+# (real Engram tables are not downloaded), for the host Engram prepare pipelining (bead 8y7.17). Perf cases score the
+# last position only (generation), so the 256-row logits readback (~130 MB) does not swamp the timings.
 PREFILL_CASES = {
-    "small-sharing": ("small", "sharing", SEQ // 2, SEQ - 12),
-    "small-engram": ("small", "engram", SEQ // 2, SEQ - 12),
-    "small-dspark": ("small", "dspark", SEQ // 2, SEQ - 12),
-    "real-one_chunk": ("real", "sharing", PRODUCTION_SEQ, PRODUCTION_SEQ),
-    "real-two_chunks": ("real", "sharing", PRODUCTION_SEQ // 2, PRODUCTION_SEQ),
-    "real-c5120": ("real", "sharing", 5120, 5120),
-    "engram-c2048": ("engram", "sharing", 2048, 8192),
-    "engram-c5120": ("engram", "sharing", 5120, 10240),
+    "small-sharing": ("small", "sharing", SEQ // 2, SEQ - 12, 256),
+    "small-engram": ("small", "engram", SEQ // 2, SEQ - 12, 256),
+    "small-dspark": ("small", "dspark", SEQ // 2, SEQ - 12, 256),
+    "real-one_chunk": ("real", "sharing", PRODUCTION_SEQ, PRODUCTION_SEQ, 256),
+    "real-two_chunks": ("real", "sharing", PRODUCTION_SEQ // 2, PRODUCTION_SEQ, 256),
+    "real-c2048": ("real", "sharing", 2048, 4096, 1),
+    "real-c5120": ("real", "sharing", 5120, 5120, 1),
+    "engram-c2048": ("engram", "sharing", 2048, 8192, 1),
+    "engram-c5120": ("engram", "sharing", 5120, 10240, 1),
 }
-PREFILL_SCORED = 256
 
 
 def _prompts(total: int) -> list[torch.Tensor]:
@@ -405,18 +406,17 @@ def _prefill_snapshot(mesh_device, logits, state) -> dict:
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
 def test_v41_prefill_trace(mesh_device, device_params, case, monkeypatch):
     """``V41PrefillTrace`` (per-chunk captures, per-chunk input copies into fixed buffers, the next chunk's host
-    Engram prepare overlapping the device) == ``TtV41Transformer.prefill`` bit-identically (logits of the last
-    PREFILL_SCORED positions, caches, carries, DSpark rings) for the captured prompt and another prompt of the same
+    Engram prepare overlapping the device) == ``TtV41Transformer.prefill`` bit-identically (logits of the scored
+    positions, caches, carries, DSpark rings) for the captured prompt and another prompt of the same
     length; the chunk forward makes no host transfers. Reports untraced / traced / serial / device-only times."""
     t0 = time.perf_counter()
-    weights, schedule, chunk, total = PREFILL_CASES[case]
+    weights, schedule, chunk, total, scored = PREFILL_CASES[case]
     prompts = _prompts(total)
     if weights == "small":
         model = _small_model(mesh_device, schedule, chunk, prompts)
     else:
         model = _real_model(mesh_device, chunk, total, prompts, with_engram=weights == "engram")
     logger.info(f"prefill trace {case}: model built {time.perf_counter() - t0:.1f}s")
-    scored = min(PREFILL_SCORED, total)
     tokens = [p[0] for p in prompts]
 
     t = time.perf_counter()
