@@ -17,6 +17,14 @@ Conversion is deliberately performed one layer at a time.  It is weight
 conversion, not CPU inference.  The first qualified device run creates the
 multi-device cache with an explicit two-dimensional mesh mapper; later runs
 load that exact topology and fail closed if any qualifier differs.
+
+Provisioned artifacts must remain immutable while readers use them. Publish
+new files through the existing temporary-file/atomic-replace transaction;
+never overwrite or truncate a live inode. Native tensor loads retain mapped
+storage, so this applies through host tensor/view lifetimes and pending
+device transfers. Hashes verify the observed payload and retained descriptors
+bind the selected inode; stat signatures detect identity/metadata changes,
+not every in-place write (writable mmap stores may leave them unchanged).
 """
 
 from __future__ import annotations
@@ -156,7 +164,7 @@ def _tensorbin_path(base: Path) -> Path:
 
 
 def _artifact_stat_signature(path: Path) -> tuple[int, int, int, int, int]:
-    """Detect post-verification replacement/writes without re-hashing payloads."""
+    """Track metadata changes for immutable artifacts without re-hashing payloads."""
 
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode):
