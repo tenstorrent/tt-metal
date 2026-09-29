@@ -107,6 +107,8 @@ template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
+    uint32_t beta_token_major,
+    uint32_t beta_width_tiles,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
     uint32_t sp_rank,
@@ -201,10 +203,34 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         enqueue_head_chunk_read(k_accessor, k, head_chunk_index, Kt);
         enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
         enqueue_head_chunk_read(g_accessor, g, head_chunk_index, Kt);
-        enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
+        const uint32_t head = head_chunk_index / num_chunks;
+        if constexpr (beta_token_major) {
+            // Token-major beta [1, T, H]: the chunk's tile holds every head as a column.
+            static_assert(Ct == 1, "token-major beta supports one tile row per chunk");
+            const uint32_t chunk = head_chunk_index % num_chunks;
+            enqueue_contiguous_read(
+                beta_accessor, beta, chunk * beta_width_tiles + head / tt::constants::TILE_WIDTH, 1);
+        } else {
+            enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
+        }
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
+        if constexpr (beta_token_major) {
+            // Compute broadcasts column 0; move this head's column there. Each row reads its source before
+            // overwriting column 0, so the in-place move is safe.
+            auto* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr());
+            const uint32_t column = head % tt::constants::TILE_WIDTH;
+            const uint32_t column_face = column / tt::constants::FACE_WIDTH;
+            const uint32_t column_offset = column % tt::constants::FACE_WIDTH;
+            for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
+                const uint32_t face_row = row / tt::constants::FACE_HEIGHT;
+                const uint32_t row_base = (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+                const uint32_t source =
+                    (face_row * 2 + column_face) * tt::constants::FACE_HW + row_base + column_offset;
+                tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
+            }
+        }
         q.push_back(chunk_key_tiles);
         k.push_back(chunk_key_tiles);
         v.push_back(chunk_value_tiles);

@@ -111,17 +111,13 @@ def _prepare_chunk_terms(
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
 ) -> _PreparedChunks:
-    beta_by_head = ttnn.permute(beta, (0, 2, 1))
-    beta_by_chunk = ttnn.reshape(
-        beta_by_head,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
-    )
+    # Chunk preparation reads each head's column straight from token-major [1, rows, heads] beta.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
         v,
         gate,
-        beta_by_chunk,
+        beta,
         geometry.heads,
         memory_config=KDA_PREPARATION_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,

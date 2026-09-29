@@ -452,6 +452,35 @@ def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(
         ttnn.deallocate(tensor)
 
 
+@pytest.mark.parametrize(
+    "case",
+    [_UNIT_TEST_CASE, _TestCase("h40-n2-k32-v32", 40, 2, 32, 32)],
+    ids=lambda case: case.case_id,
+)
+def test_prepare_chunk_recurrence_token_major_beta_matches_by_chunk_beta(device: ttnn.Device, case: _TestCase) -> None:
+    """Token-major [1, rows, heads] beta must give the same outputs as [heads, chunks, 32, 1] beta."""
+    host_inputs = _case_host_inputs(case, seed=1913)
+    beta_by_chunk = host_inputs[4]
+    beta_token_major = beta_by_chunk.reshape(case.num_heads, case.num_chunks * CHUNK_SIZE).T.unsqueeze(0).contiguous()
+    by_chunk_inputs = _device_inputs(host_inputs, device)
+    token_major_beta = _to_device(beta_token_major, device, ttnn.float32)
+    # Production always passes the start metadata, so bind it explicitly.
+    start = make_actual_start(device, 0)
+
+    def run(inputs: tuple[ttnn.Tensor, ...]) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs, case.num_heads, actual_start=start, output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK
+            )
+
+    by_chunk = run(by_chunk_inputs)
+    by_token = run((*by_chunk_inputs[:4], token_major_beta))
+    for name, expected, actual in zip(OUTPUT_NAMES, by_chunk, by_token, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} token-major beta")
+    for tensor in (*by_chunk, *by_token, *by_chunk_inputs, token_major_beta, start):
+        ttnn.deallocate(tensor)
+
+
 def test_prepare_chunk_recurrence_rejects_end_without_start(device, expect_error):
     inputs = _device_inputs(_host_inputs(2, 2, 32, 32), device)
     end = make_actual_start(device, 64)

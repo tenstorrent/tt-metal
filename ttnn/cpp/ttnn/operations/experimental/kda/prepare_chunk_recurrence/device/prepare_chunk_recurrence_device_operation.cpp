@@ -83,10 +83,17 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
             q_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT,
         "prepare_chunk_recurrence: flat input shapes must match operation attributes");
 
+    const bool beta_by_chunk = beta_shape.rank() == 4 && beta_shape[0] == attrs.num_heads &&
+                               beta_shape[1] == attrs.num_chunks && beta_shape[2] == tt::constants::TILE_HEIGHT &&
+                               beta_shape[3] == 1;
+    // Token-major beta keeps one column per head: [1, num_chunks * 32, num_heads].
+    const bool beta_token_major = beta_shape.rank() == 3 && beta_shape[0] == 1 &&
+                                  beta_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT &&
+                                  beta_shape[2] == attrs.num_heads;
     TT_FATAL(
-        beta_shape.rank() == 4 && beta_shape[0] == attrs.num_heads && beta_shape[1] == attrs.num_chunks &&
-            beta_shape[2] == tt::constants::TILE_HEIGHT && beta_shape[3] == 1,
-        "prepare_chunk_recurrence: beta shape must be [num_heads, num_chunks, 32, 1]");
+        beta_by_chunk || beta_token_major,
+        "prepare_chunk_recurrence: beta shape must be [num_heads, num_chunks, 32, 1] or [1, num_chunks * 32, "
+        "num_heads]");
     constexpr uint32_t allowed_bf16_mask = 0x37;
     TT_FATAL(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
