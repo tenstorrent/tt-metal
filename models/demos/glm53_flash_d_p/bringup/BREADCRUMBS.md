@@ -128,3 +128,19 @@ Result: pcc_attn_hc_L00 0.999999; rel L2 pre 0.0014 / post 0.0013 / comb 0.0016;
 sums [0.9974, 1.0009].
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_hc.py`
+
+## S.kda_dense.01 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc on device, layer 0). The gated pcc_swap_out is kept. Asserted extra checks added,
+because a CPU sensitivity run (attn_hc output perturbed, rest CPU) showed that block-out PCC passes real bugs: comb
+transposed 0.9985, comb rows normalized instead of columns 0.9985, post x1.05 0.9991, pre x1.05 0.99986, last row zeroed
+0.99993.
+- Block out: rel L2 <= 0.01 (those bugs give 0.070 / 0.070 / 0.045 / 0.017 / 0.012) and per-row norm ratio in [0.97, 1.03].
+- attn_hc's own output vs golden (its input is the golden `in`): the component test's per-part rel L2 and max abs, comb
+  column sums, and pre/post ranges.
+Results: reference passes (out PCC 0.999999, rel 0.0017). Stub fails (PCC 0). Device passes (out PCC 0.999998,
+rel 0.0023, row ratio [0.9966, 1.0029]; attn_hc part rel <= 0.0016).
+Gotcha: the run_safe_pytest precompile pass prints the whole metric set once with stub values (rel 1.0) before the real
+pass. Ignore that block.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_01_attn_hc.py`
+(prefix with `BRINGUP_IMPL=reference` or `BRINGUP_IMPL=stub` to check the other two modes).
