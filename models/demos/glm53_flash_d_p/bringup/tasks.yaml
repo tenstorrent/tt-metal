@@ -1043,6 +1043,13 @@ tasks:
     kind: attention
     layer: 3
     stateful: true
+  frozen:
+    at: '2026-09-29T08:11:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attention.py: d0b64116389eb80e324772bf590de806eb7ef8221c9a813bd7a05a3aec354588
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.06
   title: 'dsa_moe block with steps 1-6 on device (last: attention)'
   step: implement
