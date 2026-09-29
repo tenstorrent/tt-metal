@@ -67,3 +67,29 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   list BRINGUP_OPS / common_paths). Paused after S.dsa_moe.06 (0ffa7727e85, swap 0.99999); fix F49 a51e970a8ab
   (selftests 212 -> 214, new test fails on the old gate.py); committed the missing files 5fd4a4cfe2b (test_refusals
   moved to the repo's expect_error fixture to pass pre-commit). Resumed.
+- C.dsa_moe.attn_residual PASS (381fe013e2b).
+- S.dsa_moe.07 PASS (f4df333b14d); C.dsa_moe.ffn_hc PASS (525bcfbaa0b).
+- S.dsa_moe.08 PASS (fa65d62a85f); C.dsa_moe.ffn_collapse PASS (9910cb051bd).
+- S.dsa_moe.09 PASS (fd65fad2be0); C.dsa_moe.ffn_norm PASS (ef3af813154).
+- S.dsa_moe.10 PASS (7e93b122d0e). C.dsa_moe.router PASS (79db354f597) attempt 1: selection overlap 0.99683 (CPU fp32 on bf16 input 0.99695), worst row 7/8, matched weights rel 0.0012; fp32 logits + fp32 bias + ttnn.topk on fp32 keys (from MiMo TtRouter fp32 mode). Accepted.
+- S.dsa_moe.11 PASS (20276fd0050). C.dsa_moe.experts PASS (4582a981e4a) attempt 1: pcc 0.99997, rel 0.0077, coef 1.0005; clamp probe rel 0.009. Port of MiMo 2x2 TtExperts: bringup dispatch/offset_cumsum/combine (axis 0, group 2), unified_routed_expert_moe ClampedSiluGlu high_precision, bfp8 experts, HiFi4 fp32 dest; 72 local / 288 global worked with NO fork change (plan's unverified item confirmed). Accepted.
+- S.dsa_moe.12 PASS (20439999cac); C.dsa_moe.shared_expert PASS (9ce52e60715).
+- S.dsa_moe.13 PASS (6dda462ce0b); C.dsa_moe.moe_add PASS (35a2f14d3c2).
+- S.dsa_moe.14 PASS (03df6ae15e8); C.dsa_moe.ffn_residual PASS (f99b3ae029b).
+- S.dsa_moe.15 PASS (ca3a44d6854): layer 3 fully on device, all first attempt.
+- C.kda_moe.attn_hc PASS (929a584b7ac).
+- S.kda_moe.01 PASS (8bfcc9df126); C.kda_moe.attn_collapse PASS (acf2ae52cec).
+- S.kda_moe.02 PASS (bedf05af599); C.kda_moe.attn_norm PASS (c27b749a7a1).
+- S.kda_moe.03 PASS (3a1ada7086a). C.kda_moe.attention PASS (b50db8f94fb) reused TtKdaAttention: pcc 0.99998, rel 0.0073, state rec 0.0166, conv 0.0017, WORST HEAD 0.047 vs limit 0.05 (layer 0 was 0.024): thin margin, watch the KDA state metrics on the ladder (11 chunks at 56k); known cause = prepare_chunk_recurrence intra term (left for later in C.kda_dense.attention breadcrumbs).
+- S.kda_moe.04 PASS (292437b531c); C.kda_moe.attn_residual PASS (c9c58454a7d).
+- S.kda_moe.05 PASS (11af05d81f1).
+- C.kda_moe.ffn_hc PASS (ee0312edd46).
+- S.kda_moe.06 PASS (6cdb85d429b); C.kda_moe.ffn_collapse PASS (d3f1d4957a3).
+- S.kda_moe.07 PASS (8aad9b4b902); C.kda_moe.ffn_norm PASS (5aa0383a1f0).
+- S.kda_moe.08 PASS (22b812e28b2); C.kda_moe.router PASS (f5292b66485).
+- S.kda_moe.09 PASS (8942dae2332); C.kda_moe.experts PASS (18f4a929b23).
+- 19:3x S.kda_moe.10 gate PASS but its commit failed: pre-commit check-large-files refused state.json (506 KB > 500 KB);
+  orchestrator exited 1. Classified: FRAMEWORK (every recorded metric copied into state.json; swap tests record
+  300-400 each). Fix F50 091b5556d2f (state keeps gated metrics above 64; results/<task>.json keeps all; selftests
+  214 -> 216, new test fails on the old gate.py). Migrated state.json 518 KB -> 201 KB with the same rule; replayed the
+  S.kda_moe.10 gate commit (a8d385cd98d). Resumed.
