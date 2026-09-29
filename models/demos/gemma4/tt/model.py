@@ -279,6 +279,12 @@ class Gemma4Model:
         )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
+        # Lane-sharded serving folds all lanes' users into ONE model's batch;
+        # the shared prefill loop otherwise rewrites user_id -> 0 whenever a
+        # page table is present, which would send every user's KV to lane 0.
+        # users_row_sharded makes it forward the real slot as global_user_id.
+        if mesh_config is not None and getattr(mesh_config, "lane_sharded", False):
+            self.users_row_sharded = True
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
@@ -1791,7 +1797,7 @@ class Gemma4Model:
         """
         import torch.nn.functional as F
 
-        del start_pos, last_token_idx, global_user_id, batched_prefill, kwargs
+        del start_pos, last_token_idx, batched_prefill, kwargs
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
@@ -1826,7 +1832,8 @@ class Gemma4Model:
 
         def _lane_stack(table):
             lanes = self.mesh_config.lanes
-            owner = 0 if user_id is None else (int(user_id) // 32) % lanes
+            gid = global_user_id if global_user_id is not None else user_id
+            owner = 0 if gid is None else int(gid) % lanes  # slot -> lane by modulo
             stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
             stacked[owner] = table
             return stacked

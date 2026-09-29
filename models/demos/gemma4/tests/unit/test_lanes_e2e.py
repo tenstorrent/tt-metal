@@ -17,7 +17,6 @@ import os
 
 import torch
 
-
 from ...tests.test_factory import parametrize_mesh_with_fabric
 
 USERS = [
@@ -37,7 +36,7 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
     os.environ.setdefault("GEMMA4_CP_PREFILL", "1")
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
-    from models.tt_transformers.tt.model_config import PagedAttentionConfig
+    from models.tt_transformers.tt.common import PagedAttentionConfig
 
     model_path = os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
 
@@ -47,12 +46,11 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
     paged_cfg = PagedAttentionConfig(block_size=64, max_num_blocks=pool_blocks)
 
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device,
         model_path,
-        mesh_device=mesh_device,
         max_batch_size=SLOTS_PER_LANE,
         max_seq_len=4096,
         paged_attention_config=paged_cfg,
-        instruct=True,
     )
     mesh_cfg = generator.model[0].mesh_config
     assert getattr(mesh_cfg, "lane_sharded", False), "lanes gate did not engage"
@@ -64,7 +62,12 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
     # degenerate by construction — see gemma4-probe-coherence-correctly).
     prompts_tok = []
     for q, _ in USERS:
-        ids = tokenizer.apply_chat_template([{"role": "user", "content": q}], add_generation_prompt=True, tokenize=True)
+        text = tokenizer.apply_chat_template(
+            [{"role": "user", "content": q}], add_generation_prompt=True, tokenize=False
+        )
+        ids = tokenizer.encode(text, add_special_tokens=False)
+        if ids and isinstance(ids[0], str):  # some wrappers return tokens, not ids
+            ids = tokenizer.convert_tokens_to_ids(ids)
         prompts_tok.append(torch.tensor(ids, dtype=torch.long))
 
     # One user per lane, slot 0: global row = lane * 32.
@@ -74,29 +77,31 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
         ids = torch.arange(1, 1 + blocks_per_user, dtype=torch.int32)  # slot 0 of this lane's pool
         page_rows[row] = ids
 
-    # ── Per-user prefill on the owner lane ────────────────────────────────
+    # ── Prefill each user into its lane slot (B=1 batched path per call) ──
     positions = {}
-    for (lane, row), toks in zip(enumerate(rows), prompts_tok):
-        plen = toks.shape[-1]
+    cur_tok = {}
+    for i, row in enumerate(rows):
+        t = prompts_tok[i]
+        plen = int(t.shape[-1])
         padded = 1 << max(int(plen - 1).bit_length(), 7)
-        toks_padded = torch.nn.functional.pad(toks, (0, padded - plen), value=0).unsqueeze(0)
-        logits = generator.prefill_forward_single_user_text(
-            toks_padded,
+        tok1 = torch.zeros(1, padded, dtype=torch.long)
+        tok1[0, :plen] = t
+        out = generator.prefill_forward_text(
+            tok1,
             page_table=page_rows[row].unsqueeze(0),
-            user_id=row,
-            last_token_idx=plen - 1,
             kv_cache=tt_kv_cache,
+            prompt_lens=torch.tensor([plen]),
+            empty_slots=[i],  # local slot; lane = slot % lanes (modulo convention)
+            enable_trace=False,
+            sampling_params=None,
+            warmup_prefill=False,
         )
+        lg = out[0] if isinstance(out, (list, tuple)) else out
         positions[row] = plen
-
-    # Prefill logits handling differs per path; take the safe route and start
-    # decode from the last prompt token's argmax computed in the first decode
-    # step instead: seed decode with the final prompt token.
-    seeds = {row: int(prompts_tok[i][-1]) for i, row in enumerate(rows)}
+        cur_tok[row] = int(torch.argmax(lg.reshape(-1)).item())
 
     # ── Lane-major decode loop (host greedy) ──────────────────────────────
     outputs = {row: [] for row in rows}
-    cur_tok = dict(seeds)
     for _step in range(GEN_TOKENS):
         tokens_g = torch.zeros(B_g, dtype=torch.long)
         pos_g = torch.full((B_g,), -1, dtype=torch.long)
