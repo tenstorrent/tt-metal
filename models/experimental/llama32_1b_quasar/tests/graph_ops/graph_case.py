@@ -480,6 +480,35 @@ def _host_tensor_bytes(spec):
     return math.prod(spec["shape"]) * _DTYPE_BYTES.get(spec["dtype"], 4)
 
 
+# Float dtypes we materialize into TILE layout via quasar.tilize on Quasar (see _quasar_tilize_build).
+_QUASAR_TILE_REROUTE_DTYPES = {"BFLOAT16", "FLOAT32"}
+
+
+def _quasar_tilize_build(data, tt_dtype, memory_config, mesh_device):
+    """Build a TILE tensor on Quasar via a ROW_MAJOR upload + quasar.tilize, then place it in the target
+    memory config.
+
+    ttnn.from_torch(layout=TILE) routes to the MAINLINE device tilize on Quasar, which faults
+    (Neo0TRISC2 MEM_READ_NO_RESPONSE in tilize_metal2.cpp) on wide-short (1-tile-tall) tensors AND leaks
+    state that faults a later tilize in the same run (seen when graph_ops tests are batched). quasar.tilize
+    is the Quasar-safe tilize the model itself uses. We tilize to DRAM interleaved and then resh/re-place
+    into the captured memory config (a no-op when that is already DRAM interleaved).
+    """
+    rm = ttnn.from_torch(
+        data,
+        dtype=tt_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+    )
+    quasar_tilize = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+    tt = (quasar_tilize or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=tt_dtype)
+    if memory_config is not None and memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        tt = ttnn.to_memory_config(tt, memory_config)
+    return tt
+
+
 def build_tensor(spec, mesh_device, case, op_name, key):
     """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
     nbytes = _host_tensor_bytes(spec)
@@ -494,6 +523,20 @@ def build_tensor(spec, mesh_device, case, op_name, key):
 
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
     partial = _is_partial_shard(spec)
+
+    # Quasar: from_torch(layout=TILE) routes to the mainline device tilize, which faults on wide-short
+    # tensors (MEM_READ_NO_RESPONSE) and leaks state into later ops. Build TILE floats via quasar.tilize
+    # instead (the model's path). Partial shards keep the from_torch two-step (their logical->shard padding
+    # is a from_torch behavior); non-float dtypes and ROW_MAJOR inputs are unaffected.
+    if (
+        _is_quasar(mesh_device)
+        and spec["layout"] == "TILE"
+        and spec["dtype"] in _QUASAR_TILE_REROUTE_DTYPES
+        and not partial
+    ):
+        tt = _quasar_tilize_build(data, DTYPE[spec["dtype"]], memory_config, mesh_device)
+        return tt, data
+
     tt = ttnn.from_torch(
         data,
         dtype=DTYPE[spec["dtype"]],
