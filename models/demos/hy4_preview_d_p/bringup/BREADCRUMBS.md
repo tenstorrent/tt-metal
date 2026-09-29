@@ -61,3 +61,47 @@ Gotchas
 Re-run
     PYTHONPATH=$PWD python -m models.demos.common.bringup.intake.check_hf_sanity && \
     PYTHONPATH=$PWD python -m models.demos.common.bringup.reference.check_hf --seq 4096
+
+## PL.1 plan (attempt 1)
+
+What was done
+- `plan.yaml`: placements for every checkpoint tensor (2006 in the trim map). Layers 6-77 and `model.mtp_layers.*` are
+  skipped. There are two state entries (the MLA latent cache on layers 0-5, the index-key cache on 0, 1 and 5) and
+  extras (KV gather scratch and buffers 0.35 GiB, contract KV reserve 0.10 GiB). Activations are estimated at
+  5.0 GiB for an 8192-token chunk.
+- `plan.md`: scheme, one table per block type, model level, per-chip total, collectives, activation estimate,
+  departures, open items.
+- `components.yaml`: 45 entries (dense_full 12 steps, moe_full 15, moe_shared 15, plus embed, final_norm and
+  lm_head). No CPU and no OPGEN steps.
+- Gate (hand run): per chip 20.60 of 27.20 GiB, plan_errors 0, unplaced 0, component_errors 0, ledger_errors 0,
+  plan_approved 0 (the overseer approves). tasks.yaml is unchanged: the orchestrator always allows `ttnn/ttnn/bringup`,
+  so the implement tasks need no extra paths.
+
+Decisions and why
+- **Layout: SP=2 over rows (axis 0) x TP=2 over columns (axis 1)**, with the residual as `[S/2, 4 x 3072]` fp32 per
+  chip. Why: the MLA cache is one 576-wide latent that cannot be split by head, `sparse_sdpa` needs 32 heads per chip
+  (64 / 2), and ttMLA / TtIndexer / tests/sparse_mla are built for SP x TP on 2x2 FABRIC_2D. MiMo 2x2's flat TP=4
+  would give 16 heads per chip and need the head->sequence all_to_all.
+- iHC: fn is split by column; the only collective is one `[S/2, 32]` fp32 all_reduce over axis 1 per gate.
+  mhc_split_sinkhorn is not used (Hy4 has no comb matrix).
+- attn_norm is a distributed RMSNorm (the output stays K-split for q_a / kv_a / gate / indexer). ffn_norm
+  all_gathers ffn_x over axis 1 once, because the dense MLP, the router, dispatch and the shared expert all need the
+  full hidden.
+- Experts are EP=4 bfp8 with the DeepSeek 2D dispatch along axis 0, as in mimo_v2_6_d_p_2x2. The group sum is a
+  reduce_scatter over axis 1 (the residual is column-split), not MiMo's all_reduce + all_gather.
+- bf16 attention and indexer weights (not ttMLA's bfp8), a bf16 index-key cache (not bfp8), fp32 router and iHC.
+  Every matmul and sparse_sdpa runs at HiFi4 + fp32 acc.
+- Sink: pass sink x 16 with an explicit scale of 1/16 to sparse_sdpa.
+
+Gotchas for the component steps
+- TtIndexer ropes dims 0-63 but Hy4 ropes 64-127: permute wq_b / wk rows and k_norm to [64..127 | 0..63] on the host.
+  k_norm eps is 1e-5 (TtIndexer hard-codes 1e-6). q_a / kv_a norm eps is 1e-6 (ttMLA passes rms_norm_eps). See the
+  known-issues proposal.
+- No host RoPE permutation in the MLA (interleaved, R.2).
+- The device top-k is unsorted with a 0xFFFFFFFF tail; the golden is ascending and -1 padded.
+- ttMLA's persistent CCL buffers are sized for one local chunk length; the ladder uses 1024, 4096 and 2560 rows per
+  chip.
+- In plan.yaml flow mappings, quote any value that contains a comma (known-issues proposal).
+
+Re-run
+    PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan

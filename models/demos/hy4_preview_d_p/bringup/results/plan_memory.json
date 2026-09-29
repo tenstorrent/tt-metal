@@ -1,0 +1,77 @@
+{
+ "errors": [],
+ "rows": [
+  {
+   "group": "routed experts",
+   "gb": 11.953125
+  },
+  {
+   "group": "activations (planner estimate)",
+   "gb": 5.0
+  },
+  {
+   "group": "attention",
+   "gb": 1.484619140625
+  },
+  {
+   "group": "embedding (hidden split over columns)",
+   "gb": 0.69140625
+  },
+  {
+   "group": "extra: KV gather scratch, indexer ring buffer, RoPE and dispatch tables, CCL buffers",
+   "gb": 0.35
+  },
+  {
+   "group": "lm_head (vocab-sharded)",
+   "gb": 0.345703125
+  },
+  {
+   "group": "dense mlp (layer 0)",
+   "gb": 0.31640625
+  },
+  {
+   "group": "shared expert",
+   "gb": 0.17578125
+  },
+  {
+   "group": "extra: contract KV copy (reserve)",
+   "gb": 0.1
+  },
+  {
+   "group": "state: MLA latent cache (576) layers 0-5",
+   "gb": 0.09063720703125
+  },
+  {
+   "group": "indexer",
+   "gb": 0.04962301254272461
+  },
+  {
+   "group": "router",
+   "gb": 0.02930164337158203
+  },
+  {
+   "group": "state: indexer key cache (128) layers [0, 1, 5]",
+   "gb": 0.01007080078125
+  },
+  {
+   "group": "iHC",
+   "gb": 0.00457763671875
+  },
+  {
+   "group": "norms, sinks, iHC scalars",
+   "gb": 0.00014387443661689758
+  }
+ ],
+ "total_gb": 20.601395190507173,
+ "capacity_gb": 32.0,
+ "budget_gb": 27.2,
+ "headroom_frac": 0.15,
+ "fits": true,
+ "tensors": 2006,
+ "mesh": [
+  2,
+  2
+ ],
+ "seq": 56320,
+ "users": 1
+}

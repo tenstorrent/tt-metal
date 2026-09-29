@@ -1,0 +1,100 @@
+# Hy4 Preview text prefill, layers 0-5, on the 2x2 Blackhole mesh (4x p150b, 32 GB each, FABRIC_2D).
+# Reasoning in plan.md; step-to-op mapping in components.yaml.
+#
+# Scheme: SP=2 over mesh rows (axis 0) x TP=2 over mesh columns (axis 1), the (2, 2) layout ttMLA / TtIndexer and
+# tests/sparse_mla were built and tested for (sparse_mla_mesh.py: QuietBox SP2xTP2, FABRIC_2D).
+#   - chip (r, c) holds chunk rows [r*S/2, (r+1)*S/2) of every activation (the engine's uint32 input is already
+#     [sp=2, 1, chunk/2] over axis 0) and hidden columns [c*H/2, (c+1)*H/2) of every stream.
+#   - residual: the 4 iHC streams, [S/2, 4 x 3072] fp32 per chip (each stream split by column).
+#   - attention: 64 heads over TP=2 -> 32 heads per chip, which is exactly what sparse_sdpa needs (H % 32 == 0), so
+#     no head->sequence reshard. Weights split over the 2 columns and replicated over the 2 rows (shard_cols).
+#   - routed experts: EP=4 (DeepSeek 2D dispatch: dispatch along axis 0, one dispatch group per column, chip (r, c)
+#     holds experts 128c + 64r .. +63), bfp8 (checkpoint is bf16; bfp4 is not allowed).
+#   - dense MLP (layer 0), shared expert: TP=2 over columns (gate/up column-parallel, down row-parallel).
+# Layers 6-77 and the MTP layer are skipped: the spec runs layers 0-5; the full model needs ~104 GiB per chip.
+headroom_frac: 0.15
+users: 1
+placements:
+  # --- not part of the text decoder, and the layer subset (spec layers 0-5)
+  - {pattern: "model.mtp_layers.*", placement: skip, why: text decoder only (owner rule; MTP is not part of prefill)}
+  - {pattern: "model.layers.[6-9].*", placement: skip, why: layer subset 0-5 (spec layers)}
+  - {pattern: "model.layers.[1-7][0-9].*", placement: skip, why: layer subset 0-5 (spec layers)}
+
+  # --- embedding: hidden split over the 2 columns (each chip embeds its row's tokens into its 3072 columns, the
+  #     residual layout directly); untied LM head vocab-sharded over all 4 chips (30208 rows per chip), last token only
+  - {pattern: "model.embed_tokens.weight", placement: shard_cols, dtype: bf16, group: embedding (hidden split over columns)}
+  - {pattern: "lm_head.weight", placement: shard, dtype: bf16, group: lm_head (vocab-sharded)}
+  - {pattern: "model.norm.weight", placement: replicate, dtype: bf16, group: "norms, sinks, iHC scalars"}
+
+  # --- iHC (fp32 as in HF). fn columns follow the residual's column split ([8, 4 x 3072] per chip); the partial
+  #     mixes and the partial sum of squares are all_reduced over axis 1 ([S/2, 32] fp32, tiny).
+  - {pattern: "model.hc_head.hc_head_fn", placement: shard_cols, dtype: fp32, group: iHC}
+  - {pattern: "model.hc_head.*", placement: replicate, dtype: fp32, group: "norms, sinks, iHC scalars"}
+  - {pattern: "model.layers.*.hc_*_layer.hc_pre.hc_fn", placement: shard_cols, dtype: fp32, group: iHC}
+  - {pattern: "model.layers.*.hc_*_layer.hc_pre.*", placement: replicate, dtype: fp32, group: "norms, sinks, iHC scalars"}
+
+  # --- per-layer norms. input_layernorm is a distributed RMSNorm on the column-split attn_x (weight split by column);
+  #     post_attention_layernorm runs after an all_gather over axis 1 (full weight); q_a / kv_a norms are local.
+  - {pattern: "model.layers.*.input_layernorm.weight", placement: shard_cols, dtype: bf16, group: "norms, sinks, iHC scalars"}
+  - {pattern: "model.layers.*layernorm.weight", placement: replicate, dtype: bf16, group: "norms, sinks, iHC scalars"}
+
+  # --- MLA attention, bf16 (as stored), TP=2 by head over columns, replicated over rows.
+  #     q_a_proj / kv_a_proj_with_mqa: K (hidden) split, reduce_scatter + all_gather over axis 1 (ttMLA _q_a_latent).
+  #     q_b_proj, kv_b_proj (-> wkv_b1 / wkv_b2), linear_gate: split by head (32 heads per chip).
+  #     o_proj: row-parallel (K = 32 x 256 per chip), reduce_scatter over axis 1 -> [S/2, 3072].
+  - {pattern: "model.layers.*.self_attn.q_a_proj.weight", placement: shard_cols, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.q_b_proj.weight", placement: shard_cols, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.kv_a_proj_with_mqa.weight", placement: shard_cols, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.kv_b_proj.weight", placement: shard_cols, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.o_proj.weight", placement: shard_cols, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.linear_gate.weight", placement: shard_cols, dtype: bf16, group: attention}
+  #     sink [64] fp32 -> bf16 [1, 1, 1, 32] per chip, pre-multiplied by 16 (sparse_sdpa multiplies the sink by the
+  #     scale 1/16; x16 is exact in bf16)
+  - {pattern: "model.layers.*.self_attn.learnable_sink_param", placement: shard_cols, dtype: bf16, group: "norms, sinks, iHC scalars"}
+
+  # --- indexer (full layers 0, 1, 5), TtIndexer layout: wq_b replicated (all 32 index heads on every chip, so the
+  #     head-summed score is complete per chip); wk / weights_proj K-split over columns + reduce over axis 1.
+  - {pattern: "model.layers.*.self_attn.indexer.wq_b.weight", placement: replicate, dtype: bf16, group: indexer}
+  - {pattern: "model.layers.*.self_attn.indexer.wk.weight", placement: shard_cols, dtype: bf16, group: indexer}
+  - {pattern: "model.layers.*.self_attn.indexer.weights_proj.weight", placement: shard_cols, dtype: bf16, group: indexer}
+  - {pattern: "model.layers.*.self_attn.indexer.k_norm.*", placement: replicate, dtype: bf16, group: indexer}
+
+  # --- router: replicated, fp32 (sigmoid + correction bias; top-8 selection is precision-bound, known issues)
+  - {pattern: "model.layers.*.mlp.gate.weight", placement: replicate, dtype: fp32, group: router}
+  - {pattern: "model.layers.*.mlp.gate.e_score_correction_bias", placement: replicate, dtype: fp32, group: router}
+
+  # --- routed experts (layers 1-5): EP=4, 64 experts per chip, bf16 checkpoint -> bfp8 on device (never bfp4).
+  #     gate_up_proj [256, 4096, 6144] is split into gate / up on the host.
+  - {pattern: "model.layers.*.mlp.experts.gate_up_proj", placement: expert, dtype: bfp8, group: routed experts}
+  - {pattern: "model.layers.*.mlp.experts.down_proj", placement: expert, dtype: bfp8, group: routed experts}
+
+  # --- shared expert (SwiGLU 2048, no clamp) and dense MLP (layer 0, SwiGLU 18432): TP=2 over columns, bf16
+  - {pattern: "model.layers.*.mlp.shared_experts.*", placement: shard_cols, dtype: bf16, group: shared expert}
+  - {pattern: "model.layers.*.mlp.*_proj.weight", placement: shard_cols, dtype: bf16, group: dense mlp (layer 0)}
+
+state:
+  # MLA latent cache, full length, one 576-wide row per token (kv_a_layernorm(latent 512) | RoPE(k_rope 64)), bf16.
+  # ttMLA's sparse layout stripes it block-cyclic over all SP x TP = 4 chips (each chip holds a quarter of the
+  # rows; the sparse attention gathers the prefix into one replicated scratch, under extra_gb_per_chip). MLA has
+  # one latent "head", so the quarter is entered as heads_per_chip 0.25 of kv_heads 1.
+  - {layers: "0-5", what: MLA latent cache (576), heads_per_chip: 0.25, head_dim: 576, tensors: 1, dtype: bf16, kv_heads: 1}
+  # Indexer key cache (full layers only), [seq, 128], striped the same way. bf16, not TtIndexer's bfp8 (top-k
+  # stability; the cost is 7 MB per chip).
+  - {layers: [0, 1, 5], what: indexer key cache (128), heads_per_chip: 0.25, head_dim: 128, tensors: 1, dtype: bf16, kv_heads: 1}
+
+extra_gb_per_chip:
+  # Replicated gathered KV prefix for sparse_sdpa ([1, 1, 56320, 576] bf16, 65 MB, one buffer shared by all layers),
+  # indexer ring K buffer ([56320, 128] bf16, 14 MB), block-cyclic RoPE cos/sin/trans tables (theta 1e7, 64 dims),
+  # dispatch tables, sink tensors, persistent CCL gather buffers, program-cache slack.
+  KV gather scratch, indexer ring buffer, RoPE and dispatch tables, CCL buffers: 0.35
+  # Reserve for the serving contract's KV copy if the engine format differs from the working cache
+  # (MLA latent 6 layers x 56320 x 576 bf16 / 4 chips = 0.09 GB).
+  contract KV copy (reserve): 0.10
+
+# Peak transient for one 8192-token chunk (the s16384 rung; the target chunk is 5120), per chip = 4096 tokens:
+# residual streams fp32 [4096, 12288] (201 MB each; in, h_mid, out alive together: 0.6 GB); MoE: dispatch buffer
+# 8 x (2 x 4096) rows x 6144 bf16 = 0.81 GB, combine output [4096, 8, 6144] bf16 = 0.40 GB, reduce output; attention:
+# absorbed q [32, 4096, 576] bf16 tile + row-major copies (0.15 GB each), sparse_sdpa out [32, 4096, 512] (0.13 GB),
+# gate / q_b outputs (67 MB each); indexer logits [1280 query rows, 56320] fp32 at the target (0.29 GB); dense MLP layer 0
+# gate/up/h [4096, 9216] fp32 (151 MB each). About 2.4 GB at the MoE peak; x2 for fragmentation.
+activations_gb_per_chip: 5.0
