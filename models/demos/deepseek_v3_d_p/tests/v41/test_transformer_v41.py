@@ -10,8 +10,8 @@ test_demo_teacher_forced). Device vs the reference's single-shot prefill of the 
 agreement, top-5 recall of the reference's top-1, and logits PCC over those positions; repeats are bit-identical.
 
 Bars (user decisions 2026-09-29): the reference's agreement with itself when every attention and MoE output
-carries the error its component bar allows and every attention input the error that flips selection like the
-device's (``NOISE``, ``NOISE_SEEDS`` seeds), worst seed, minus ``MARGIN``:
+carries the error its component bar allows and every attention and MoE input the error that flips selection and
+routing like the device's (``NOISE``, ``NOISE_SEEDS`` seeds), worst seed, minus ``MARGIN``:
 the stack must compose its components' errors no worse than that (a state or composition bug fails it).
 Free-running V4.1 stacks are chaotic (top-k selection and MoE routing flips: real layer 20's MoE keeps the same
 experts on 77% of rows at input PCC 0.9987), so an absolute bar on one token's logits measures the flips.
@@ -33,7 +33,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.v41.prototype_oracle import device_weights
+from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
@@ -49,10 +49,11 @@ from tests.ttnn.utils_for_testing import comp_pcc
 SCHEDULES = {"sharing": (0, 2, 3, 20, 21, 24), "engram": (0, 1, 2, 3), "dspark": (20, 36, 37, 38, 39)}
 SEQ = 512
 SCORED = 256  # scored prompt positions (the last ones)
-# floor noise (user decisions 2026-09-29; evidence/F9-drift-diagnosis): on every attention and MoE output, the
-# relative error a component PCC bar of 0.999 allows (sqrt(2 * (1 - 0.999)) = 0.045; device components measure
-# 3-5%); on every attention input, the level at which the reference's own layer-20 attention matches the device's
-# (0.993 text / 0.988 random at 0.4%): the input-level sensitivity that flips top-k selection
+# floor noise (user decisions 2026-09-29; playbook ~/knowledge/wiki/playbooks/Acceptance bars.md; evidence
+# evidence/F9-drift-diagnosis): on every attention and MoE output, the relative error a component PCC bar of
+# 0.999 allows (sqrt(2 * (1 - 0.999)) = 0.045; device components measure 3-5%); on every attention and MoE input,
+# the level at which the reference's component matches the device's on oracle inputs (selection and routing
+# flips): layer-20 attention 0.993 text / 0.988 random at 0.4% (small), real layer-20 MoE 0.9977 vs 0.9974 at 0.5%
 NOISE = (0.045, 4e-3)
 NOISE_SEEDS = 5
 # below the worst reference self-agreement: ~1 binomial SD of an agreement rate at 256 positions; PCC is smooth
@@ -60,7 +61,6 @@ MARGIN = {"top1": 0.02, "top5": 0.02, "pcc": 0.002}
 PRODUCTION_SEQ = 2048
 PRODUCTION_CANDIDATE_BLOCKS = 96  # of 128 visible blocks at S=2048 (2048 would make every block a candidate)
 WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
-MOE_KEYS = ("routed_expert_weights", "shared_expert_weights", "gate_weights")
 MESH = [
     pytest.param(
         (2, 4),
@@ -112,11 +112,7 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
             mesh_device,
             SmallV41Config,
             list(layers),
-            lambda layer, include_moe: {
-                k: v
-                for k, v in device_weights(reference, layers.index(layer)).items()
-                if include_moe or k not in MOE_KEYS
-            },
+            lambda layer, include_moe: device_weights(reference, layers.index(layer), include_moe),
             reference.embed.weight.detach(),
             reference.norm.weight.detach(),
             reference.head.weight.detach(),
@@ -214,9 +210,7 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
         asdict(spec.args), spec.seed, str(spec.checkpoint), orc._reference_digest(synthetic=ckpt is None)
     )
     if ckpt is None:
-        layer_weights = lambda layer, include_moe: {
-            k: v for k, v in device_weights(reference, layers.index(layer)).items() if include_moe or k not in MOE_KEYS
-        }
+        layer_weights = lambda layer, include_moe: device_weights(reference, layers.index(layer), include_moe)
         embed, norm, head = (
             reference.embed.weight.detach(),
             reference.norm.weight.detach(),

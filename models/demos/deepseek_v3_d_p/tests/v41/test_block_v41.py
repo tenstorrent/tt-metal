@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.deepseek_v3_d_p.tests.v41.prototype_oracle import device_weights
+from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
@@ -152,13 +152,7 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         if ckpt is not None:
             w = load_layer_dense(ckpt, layer) if marker.exists() else load_layer(ckpt, layer)
         else:
-            w = device_weights(reference, i)
-        if marker.exists():
-            w = {
-                k: v
-                for k, v in w.items()
-                if k not in ("routed_expert_weights", "shared_expert_weights", "gate_weights")
-            }
+            w = device_weights(reference, i, include_moe=not marker.exists())
         blocks[layer] = TtV41Block(
             mesh_device, cfg, layer, w, seq // chunks, topology=topology, weight_cache_path=cache_root
         )

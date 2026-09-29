@@ -589,15 +589,15 @@ def tail_logits(
 ) -> torch.Tensor:
     """fp32 logits ``[count, vocab]`` of the last ``count`` positions of a single-shot prefill of ``tokens``
     [1, S]: a prompt is teacher-forced by construction, so these are next-token predictions at ``count``
-    positions. ``noise = (output_rel, attention_input_rel, seed)`` adds Gaussian noise of RMS ``output_rel`` x the
-    output's RMS to the output of every backbone attention and MoE (component-level error) and of RMS
-    ``attention_input_rel`` x the input's RMS to every attention input (the input-level sensitivity that flips
-    top-k selection): the floor an implementation whose components meet their bars is gated against. Cached next
+    positions. ``noise = (output_rel, input_rel, seed)`` adds Gaussian noise of RMS ``output_rel`` x the output's
+    RMS to the output of every backbone attention and MoE (component-level error) and of RMS ``input_rel`` x the
+    input's RMS to every attention and MoE input (the input-level sensitivity that flips top-k selection and
+    expert routing): the floor an implementation whose components meet their bars is gated against. Cached next
     to the ``oracle`` result of the same (spec, tokens), keyed additionally by ``count`` and ``noise``."""
     if not 0 < count <= tokens.size(1):
         raise ValueError(f"count must be in (0, {tokens.size(1)}], got {count}")
     base = cache_path(spec, tokens)
-    tag = f"-tail{count}" + (f"-noise-out{noise[0]:g}-attn-in{noise[1]:g}-{noise[2]}" if noise else "")
+    tag = f"-tail{count}" + (f"-noise-out{noise[0]:g}-in{noise[1]:g}-{noise[2]}" if noise else "")
     path = base.with_name(base.stem + tag + ".pt")
     if path.is_file():
         return torch.load(path)
@@ -625,8 +625,8 @@ def tail_logits(
             return (perturbed(args[0], input_rel), *args[1:])
 
         for layer in model.layers:
-            hooks += [layer.attn.register_forward_pre_hook(perturb_input)]
-            hooks += [m.register_forward_hook(perturb_output) for m in (layer.attn, layer.ffn)]
+            for m in (layer.attn, layer.ffn):
+                hooks += [m.register_forward_pre_hook(perturb_input), m.register_forward_hook(perturb_output)]
     try:
         prefill(model, tokens)
     finally:
