@@ -14,6 +14,7 @@ and 1 link per N150x4 hop. The Blackhole-measured layouts are kept bit-identical
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -45,13 +46,20 @@ def ccl_num_links(mesh_device, cluster_axis=1):
     """Ethernet links usable per CCL hop along `cluster_axis` (2 on P150x4, 1 on N150x4/T3K).
 
     The fused-CCL ops size their worker/mux core budget off this, so it must be the real link
-    count: asking for 2 links on a 1-link mesh fails in fabric setup. Falls back to 1 for a
-    cluster the shared link table doesn't know."""
+    count: asking for 2 links on a 1-link mesh fails in fabric setup. Falls back to 1 for a cluster
+    the shared link table doesn't know -- 1 is the safe direction (under-using links costs
+    bandwidth; over-stating them fails in fabric setup), but it is a guess, so say so loudly rather
+    than letting a missing table entry look like a legitimate 1-link mesh."""
     from models.common.modules.tt_ccl import get_num_links
 
     try:
         return max(1, get_num_links(mesh_device, cluster_axis))
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f"ccl_num_links: get_num_links failed for this cluster ({type(e).__name__}: {e}); "
+            f"assuming 1 link per CCL hop. If this mesh really has more, add it to tt_ccl.link_dict "
+            f"-- the fused-CCL ops will otherwise run under-provisioned."
+        )
         return 1
 
 
