@@ -1531,11 +1531,11 @@ def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat
     }
 
 
-def _make_mcast_in0_pipes(device, bank_to_receivers, entry_size, num_entries):
+def _make_mcast_in0_pipes(device, bank_to_receivers, ring_size):
     """A PrefetcherPipeSpace over the matmul's workers and the Tensor-prefetcher pipes carved from it.
 
-    The ring holds ``num_entries`` blocks of ``entry_size`` bytes. Returns (space, pipes): the space
-    must outlive the pipes, so callers keep both.
+    Every ring is ``ring_size`` bytes. Returns (space, pipes): the space must outlive the pipes, so
+    callers keep both.
     """
     receiver_domain = ttnn.CoreRangeSet(
         {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
@@ -1544,7 +1544,7 @@ def _make_mcast_in0_pipes(device, bank_to_receivers, entry_size, num_entries):
         device,
         sender_cores=ttnn.CoreRangeSet(set()),
         receiver_domain=receiver_domain,
-        ring_size=entry_size * num_entries,
+        ring_size=ring_size,
         max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
         num_dram_senders=2 * len(bank_to_receivers),
     )
@@ -1565,18 +1565,20 @@ def _linear_over_pipes(setup, pipes, weight=None):
 
 @pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
 @pytest.mark.parametrize(
-    "num_entries,per_core_N",
-    [(2, 2), (3, 1), (4, 2)],
-    ids=["depth2_2tile", "depth3_1tile", "depth4_2tile"],
+    "ring_half_blocks,per_core_N",
+    [(4, 2), (6, 1), (8, 2), (5, 1), (5, 2)],
+    ids=["depth2_2tile", "depth3_1tile", "depth4_2tile", "depth2p5_1tile", "depth2p5_2tile"],
 )
-def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, num_entries, per_core_N):
+def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, ring_half_blocks, per_core_N):
     """Mcast-in0 consuming in1 K-blocks from DRAM-sender PrefetcherPipes instead of a GCB.
 
     The in1 buffer is a relay over each pipe's ring, one K-block per entry, so compute reads the
     delivered K-blocks in place and addresses the tiles inside one. ``per_core_N`` > 1 puts several
     tiles side by side in an entry, which is what the unpacker's tile stride has to follow.
-    ``num_entries`` is the ring depth in K-blocks: a run streams 2 * receiver_count blocks through it,
-    and depth 3 does not divide that, so the second run resumes mid-ring.
+    ``ring_half_blocks`` is the ring depth in half K-blocks: a run streams 2 * receiver_count blocks
+    through it, and depth 3 does not divide that, so the second run resumes mid-ring. Depth 2.5 is not
+    a whole number of K-blocks (nor, at one tile per block, of tiles): the pipe uses two K-blocks of it
+    and skips the trailing half block at every wrap.
     """
     dtype = ttnn.bfloat16
     setup = _mcast_in0_pipe_setup(device, weight_layout, per_core_N=per_core_N, dtype=dtype)
@@ -1586,7 +1588,9 @@ def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, num_entries, p
 
     # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
     # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
-    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"], num_entries)
+    _space, pipes = _make_mcast_in0_pipes(
+        device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
+    )
 
     compute_kernel_config = _hifi4_compute_kernel_config(device)
     expected = setup["pt_act"].float() @ setup["pt_weight"].float()
@@ -1615,7 +1619,7 @@ def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, num_entries, p
             out_torch = ttnn.to_torch(tt_out)
             passing, output_str = comp_pcc(expected, out_torch, 0.999)
             logger.info(
-                f"[mcast_in0_pipes {weight_layout} depth={num_entries} per_core_N={per_core_N} run={run}] "
+                f"[mcast_in0_pipes {weight_layout} half_blocks={ring_half_blocks} per_core_N={per_core_N} run={run}] "
                 f"{output_str}"
             )
             assert passing, f"mcast_in0_pipes {weight_layout} run={run} PCC failed: {output_str}"
@@ -1636,25 +1640,15 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_krow_major_weight(device, exp
         num_dram_banks=setup["num_dram_banks"],
         dtype=ttnn.bfloat16,
     )
-    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"], 2)
+    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
     with expect_error(RuntimeError, "receiver-contiguous"):
         _linear_over_pipes(setup, pipes, weight=krow_weight)
-
-
-def test_tensor_prefetcher_mcast_in0_pipes_rejects_ring_not_multiple_of_block(device, expect_error):
-    """The DRAM sender addresses its ring in whole K-blocks, so a ring with a remainder is rejected."""
-    setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
-    # Three half-blocks of ring: L1-aligned and a legal pipe geometry, but 1.5 of this matmul's
-    # K-blocks.
-    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"] // 2, 3)
-    with expect_error(RuntimeError, "whole number of this matmul's in1 K-blocks"):
-        _linear_over_pipes(setup, pipes)
 
 
 def test_tensor_prefetcher_mcast_in0_pipes_rejects_ring_without_lookahead(device, expect_error):
     """The reader publishes one block while the previous one drains, so one block of ring deadlocks."""
     setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
-    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"], 1)
+    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"])
     with expect_error(RuntimeError, "at least 2 in1 K-blocks"):
         _linear_over_pipes(setup, pipes)
 
@@ -1664,7 +1658,7 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_bank_pairing_of_other_distrib
     each worker another worker's shard, which would permute the output columns."""
     setup = _mcast_in0_pipe_setup(device, "recv_contig_strided")
     contiguous_pairing = _bank_to_receivers(True, setup["num_dram_banks"], setup["recv_per_bank"], setup["ring_cols"])
-    _space, pipes = _make_mcast_in0_pipes(device, contiguous_pairing, setup["entry_size"], 2)
+    _space, pipes = _make_mcast_in0_pipes(device, contiguous_pairing, 2 * setup["entry_size"])
     with expect_error(RuntimeError, "Pair each bank with the workers whose shards it holds"):
         _linear_over_pipes(setup, pipes)
 
@@ -1672,7 +1666,7 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_bank_pairing_of_other_distrib
 def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device, expect_error):
     """Only the 1D mcast factory reads in1 from the pipes; any other config would leave them undrained."""
     setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
-    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], setup["entry_size"], 2)
+    _space, pipes = _make_mcast_in0_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
     # A 2D grid over the same workers that covers N; the output is interleaved because the output
     # tensor is allocated from the program config before validation runs.
     program_config_2d = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1695,13 +1689,15 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device,
         )
 
 
-def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device):
+@pytest.mark.parametrize("ring_narrow_blocks", [6, 5], ids=["ring_divides_both", "ring_gap_for_wide"])
+def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device, ring_narrow_blocks):
     """Two matmuls with different in1 K-block sizes, back to back on one pipe set.
 
     The ring is fixed when the pipes are created; each matmul Attaches at its own K-block size, so
     the receivers resize onto that grid and the DRAM sender snaps its derived write cursor to match
-    before delivering. The ring here is three of the wider blocks and does not divide the weight, so
-    the second matmul starts from a mid-ring cursor rather than from the ring base.
+    before delivering. The ring does not divide the weight, so the second matmul starts from a
+    mid-ring cursor rather than from the ring base. A ring of five narrow blocks is two and a half
+    wide ones, so the wide matmul also skips a trailing gap at every wrap.
 
     The pair runs twice so each config's second invocation has to hit the program cache.
     """
@@ -1712,13 +1708,13 @@ def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device):
         narrow["ring_cols"], narrow["recv_per_bank"], in0_block_w=2, per_core_N=1
     )
 
-    # A whole number of both block sizes, at least two of the wider one, and not a divisor of the
-    # per-receiver weight -- so a matmul leaves the cursor mid-ring for the next one.
-    ring_blocks_of_wide = 3
-    num_entries = ring_blocks_of_wide * wide_block_bytes // narrow["entry_size"]
-    _space, pipes = _make_mcast_in0_pipes(device, narrow["bank_to_receivers"], narrow["entry_size"], num_entries)
+    # At least two of the wider block, and not a divisor of the per-receiver weight -- so a matmul
+    # leaves the cursor mid-ring for the next one.
+    ring_size = ring_narrow_blocks * narrow["entry_size"]
+    assert ring_size >= 2 * wide_block_bytes
+    _space, pipes = _make_mcast_in0_pipes(device, narrow["bank_to_receivers"], ring_size)
     weight_bytes_per_receiver = narrow["k_tiles"] * _bytes_per_tile(dtype)
-    assert weight_bytes_per_receiver % (num_entries * narrow["entry_size"]) != 0
+    assert weight_bytes_per_receiver % ring_size != 0
 
     compute_kernel_config = _hifi4_compute_kernel_config(device)
     expected = narrow["pt_act"].float() @ narrow["pt_weight"].float()

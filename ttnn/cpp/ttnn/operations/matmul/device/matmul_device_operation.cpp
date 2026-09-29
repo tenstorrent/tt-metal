@@ -1194,16 +1194,21 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
     const Tensor& input_tensor_b,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    using tt::tt_metal::experimental::SenderCoreType;
     const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
-    const uint32_t ring_size = pipes.front().get().ring_size();
+    const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
+    const uint32_t ring_size = first_pipe.ring_size();
     for (size_t p = 0; p < pipes.size(); ++p) {
         const tt::tt_metal::experimental::PrefetcherPipe& pipe = pipes[p];
         TT_FATAL(
-            pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram,
-            "mcast_in0 prefetcher_pipes requires programmable DRAM senders, but pipe {} (sender {}) has a worker "
-            "sender. Build them with create_prefetcher_pipes_for_tensor_prefetcher.",
+            pipe.sender_core_type() == first_pipe.sender_core_type(),
+            "mcast_in0 prefetcher_pipes must all be DRAM-sender (Tensor prefetcher) pipes or all worker-sender pipes, "
+            "but pipe {} (sender {}) has a {} sender and pipe 0 (sender {}) a {} sender",
             p,
-            pipe.sender_core().str());
+            pipe.sender_core().str(),
+            pipe.sender_core_type(),
+            first_pipe.sender_core().str(),
+            first_pipe.sender_core_type());
         TT_FATAL(
             pipe.ring_size() == ring_size,
             "mcast_in0 prefetcher_pipes requires one ring size across every pipe: pipe {} has {} B, pipe 0 has {} B",
@@ -1213,26 +1218,21 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
     }
     validate_mcast_in0_one_output_block_per_worker(program_config, "prefetcher_pipes");
 
-    // Shared weight <-> matmul cross-checks (per-receiver shard geometry, K % in0_block_w == 0,
-    // per_core_N == per-receiver N, stream_in1 == false), plus the receiver-contiguous-only rule
-    // this transport adds.
-    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(
-        program_config, input_tensor_b, prefetcher_pipes);
+    // Only the Tensor prefetcher makes DRAM-sender pipes, so they carry its weight <-> matmul
+    // contract. A worker-sender pipe's producer is the caller's: it delivers receiver i the
+    // K-blocks of output column block i, in K order, and the matmul cannot check what it sends.
+    if (first_pipe.sender_core_type() == SenderCoreType::Dram) {
+        // Shared weight <-> matmul cross-checks (per-receiver shard geometry, K % in0_block_w == 0,
+        // per_core_N == per-receiver N, stream_in1 == false), plus the receiver-contiguous-only rule
+        // this transport adds.
+        ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(
+            program_config, input_tensor_b, prefetcher_pipes);
+    }
 
-    // The pipes deliver one in1 K-block per entry and this matmul Attaches at that size, so the
-    // ring has to be a whole number of its blocks: the DRAM sender addresses the ring in whole
-    // entries and would otherwise land on a different grid than the receivers after the first wrap.
-    // The pipes' creation entry_size does not have to match -- the sender snaps onto this one.
+    // The pipes deliver one in1 K-block per entry, the size this matmul Attaches at; the pipe's ring
+    // needs no particular size, since the pipe re-grids it to whole K-blocks and skips any trailing
+    // gap at the wrap. It only has to hold the reader's window.
     const uint32_t in1_block_size_bytes = mcast_in0_in1_block_size_bytes(input_tensor_b, in1_tile, program_config);
-    TT_FATAL(
-        ring_size % in1_block_size_bytes == 0,
-        "mcast_in0 prefetcher_pipes ring size {} B must be a whole number of this matmul's in1 K-blocks of {} B "
-        "(in0_block_w {} * per_core_N {} tiles), but {} B are left over",
-        ring_size,
-        in1_block_size_bytes,
-        program_config.in0_block_w,
-        program_config.per_core_N,
-        ring_size % in1_block_size_bytes);
     TT_FATAL(
         ring_size >= kMcastIn0MinResidentBlocks * in1_block_size_bytes,
         "mcast_in0 prefetcher_pipes ring size {} B must hold at least {} in1 K-blocks of {} B for the reader's "

@@ -3182,11 +3182,11 @@ void override_program_parameters(
     }
 }
 
-// Output block i, which is weight shard i, is computed by workers[i], so the pipes have to deliver
-// shard i to workers[i]. Which receiver a shard reaches is set jointly by the pipes (the bank and
-// bank-local shard each receiver is sent) and by the weight's shard distribution (where shard i sits);
-// pairing banks with the workers in any other order still covers exactly the workers, and returns the
-// output blocks permuted.
+// Tensor prefetcher (DRAM-sender) pipes only. Output block i, which is weight shard i, is computed by
+// workers[i], so the pipes have to deliver shard i to workers[i]. Which receiver a shard reaches is
+// set jointly by the pipes (the bank and bank-local shard each receiver is sent) and by the weight's
+// shard distribution (where shard i sits); pairing banks with the workers in any other order still
+// covers exactly the workers, and returns the output blocks permuted.
 static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const MeshTensor& in1_tensor,
@@ -3286,13 +3286,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
     bool fuse_op = fused_op_signaler.has_value();
 
-    // PrefetcherPipe delivery: the Tensor prefetcher writes each worker's in1 K-blocks straight into a
-    // PrefetcherPipe ring on that worker, and cb_in1 is a relay laid over the rings, so in1 is neither
-    // read from DRAM nor multicast here.
+    // PrefetcherPipe delivery: a producer (the Tensor prefetcher, or any worker-sender pipe's) writes
+    // each worker's in1 K-blocks straight into a PrefetcherPipe ring on that worker, and cb_in1 is a
+    // relay laid over the rings, so in1 is neither read from DRAM nor multicast here.
     const bool use_prefetcher_pipes = !prefetcher_pipes.empty();
     if (use_prefetcher_pipes) {
-        // The weight is DRAM-sharded for the prefetcher, but this program never reads it: in1 comes
-        // from the pipes, so none of the sharded-in1 handling below applies.
+        // This program never reads the weight, whatever its layout: in1 comes from the pipes, so none of
+        // the sharded-in1 handling below applies.
         in1_is_sharded = false;
         TT_FATAL(
             !transpose_b,
@@ -3751,10 +3751,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         dataflow_buffers.front().unique_id.get());
 
     // in1. Under PrefetcherPipe delivery it is a relay over the pipes' rings. The pipes carry one
-    // K-block per entry, which is what the prefetcher writes; the relay pages each entry as its
-    // tiles, so compute consumes in1 exactly as it does from DRAM. The ring is a whole number of
-    // K-blocks, so a block's tiles never wrap. Every pipe is declared as a parameter and bound by the
-    // in1 reader under one accessor; each worker holds exactly one pipe's receiver.
+    // K-block per entry, which is what the producer writes; the relay pages each entry as its tiles,
+    // so compute consumes in1 exactly as it does from DRAM. The relay covers the ring's whole
+    // K-blocks, and a block's tiles never wrap: the pipe skips any trailing gap. Every pipe is
+    // declared as a parameter and bound by the in1 reader under one accessor; each worker holds
+    // exactly one pipe's receiver.
     Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
     Group<PrefetcherPipeParamName> prefetcher_pipe_names;
     const uint32_t in1_pipe_entry_size = in1_block_tiles * in1_single_tile_size;
@@ -3770,10 +3771,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             all_cores_with_work.num_cores(),
             all_cores_with_work.str(),
             pipe_receivers.str());
-        validate_prefetcher_pipes_deliver_each_worker_its_shard(
-            prefetcher_pipes, in1_tensor, corerange_to_cores(all_cores, num_cores_with_work, row_major));
-        // Validation has checked the ring is a whole number of these K-blocks, and at least two.
+        if (prefetcher_pipes.front()->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram) {
+            validate_prefetcher_pipes_deliver_each_worker_its_shard(
+                prefetcher_pipes, in1_tensor, corerange_to_cores(all_cores, num_cores_with_work, row_major));
+        }
+        // Validation has checked the ring holds at least two K-blocks.
         const uint32_t ring_size = prefetcher_pipes.front()->ring_size();
+        const uint32_t in1_relay_size = ring_size - ring_size % in1_pipe_entry_size;
         for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
             const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
             prefetcher_pipe_names.push_back(name);
@@ -3787,7 +3791,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN1_DFB,
             .entry_size = in1_single_tile_size,
-            .num_entries = ring_size / in1_single_tile_size,
+            .num_entries = in1_relay_size / in1_single_tile_size,
             .data_format_metadata = in1_data_format,
             .tile_format_metadata = in1_tile,
             .advanced_options = {.prefetcher_pipe_relays = prefetcher_pipe_names},

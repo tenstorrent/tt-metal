@@ -41,7 +41,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayEntrySizeMismatchFails) {
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNotCoveringRingFails) {
     ProgramSpec spec = MakeFullPipeSpec();
     spec.dataflow_buffers[0].num_entries = pipe_num_entries - 1;
-    EXPECT_SPEC_REJECTED(spec, "must exactly cover relayed PrefetcherPipeParameter 'weights' ring_size");
+    EXPECT_SPEC_REJECTED(spec, "bytes of whole entries in relayed PrefetcherPipeParameter 'weights'");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNodesNotReceiversFails) {

@@ -915,8 +915,9 @@ bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_config, c
 // Rules per relay DFB:
 //  5. Not also borrowed_from. Every relayed pipe shares ring_size / entry_size; the DFB's
 //     entry_size divides that entry_size (the relay may page one pipe entry as several pages, e.g.
-//     a K-block as tiles; Quasar requires them equal) and entry_size * num_entries == ring_size
-//     (the DFB is exactly the ring).
+//     a K-block as tiles; Quasar requires them equal) and entry_size * num_entries is the pipe's
+//     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
+//     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
 //  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
 //     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
 //     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
@@ -1156,16 +1157,19 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
                 first->unique_id,
                 first->entry_size);
         }
+        const uint32_t usable_ring_size = first->ring_size - first->ring_size % first->entry_size;
         TT_FATAL(
-            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == first->ring_size,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover relayed "
-            "PrefetcherPipeParameter '{}' ring_size {}",
+            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == usable_ring_size,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover the {} bytes of whole entries in "
+            "relayed PrefetcherPipeParameter '{}' (ring_size {}, entry_size {})",
             dfb.unique_id,
             dfb.entry_size,
             dfb.num_entries,
             static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries,
+            usable_ring_size,
             first->unique_id,
-            first->ring_size);
+            first->ring_size,
+            first->entry_size);
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(

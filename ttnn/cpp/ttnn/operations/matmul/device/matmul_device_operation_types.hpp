@@ -29,11 +29,12 @@ struct MatmulParams {
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
-    // Alternative in1 transport to `global_cb`: the DRAM-sender PrefetcherPipes the Tensor prefetcher
-    // delivers weight K-blocks into, every pipe of one create_prefetcher_pipes_for_tensor_prefetcher
-    // call. Empty means none; at most one of the two transports may be set. Keep the pipes alive for
-    // as long as the program cache may hold a program built against them: the Program binds each
-    // pipe, and cb_in1 is laid over its ring.
+    // Alternative in1 transport to `global_cb`: PrefetcherPipes whose receivers are this matmul's workers
+    // and that deliver receiver i the in1 K-blocks of output column block i, in K order. Either every
+    // pipe of one create_prefetcher_pipes_for_tensor_prefetcher call (DRAM senders), or worker-sender
+    // pipes fed by the caller's own producer. Empty means none; at most one of the two transports may
+    // be set. Keep the pipes alive for as long as the program cache may hold a program built against
+    // them: the Program binds each pipe, and cb_in1 is laid over its ring.
     ttnn::PrefetcherPipeList prefetcher_pipes;
 };
 

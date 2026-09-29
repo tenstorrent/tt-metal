@@ -1754,6 +1754,24 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
     }
 
     {
+        // A pipe entry the ring does not divide leaves a trailing gap the pipe skips at the wrap
+        // (two 384 B entries of the 1024 B ring); the relay covers only those whole entries.
+        m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 384, .with_relay = true});
+        EXPECT_NO_THROW(m2::MakeProgramFromSpec(*mesh_device, spec));
+    }
+
+    if (!is_quasar_arch()) {
+        // The same whole entries paged finer: six 128 B relay entries cover them, and eight, which
+        // would also cover the gap, are rejected.
+        m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 384, .with_relay = true});
+        spec.dataflow_buffers[0].entry_size = 128;
+        spec.dataflow_buffers[0].num_entries = 6;
+        EXPECT_NO_THROW(m2::MakeProgramFromSpec(*mesh_device, spec));
+        spec.dataflow_buffers[0].num_entries = 8;
+        EXPECT_THROW(m2::MakeProgramFromSpec(*mesh_device, spec), std::exception);
+    }
+
+    {
         // A relay whose producer does not bind the relayed pipe is rejected.
         m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 256, .with_relay = true});
         spec.kernels[0].advanced_options.prefetcher_pipe_bindings.clear();
