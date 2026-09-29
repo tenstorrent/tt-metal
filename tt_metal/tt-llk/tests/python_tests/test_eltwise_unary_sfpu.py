@@ -53,6 +53,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
@@ -939,6 +940,41 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+# Cat F: the polygamma order. The unary sweep drives Polygamma at order 1 (trigamma); the
+# kernel takes the order at runtime and reads its Euler-Maclaurin tail coefficients from a
+# table indexed by it, so every order ttnn can issue (1..11 -- 11 through polygamma_bw's
+# n + 1) is built and checked once, over the op's registered domain, on both dest formats.
+_POLYGAMMA_ORDERS = list(range(1, 12))
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=STANDARD_FORMATS,
+    polygamma_order=_POLYGAMMA_ORDERS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=STANDARD_DIMENSIONS,
+)
+def test_eltwise_unary_sfpu_polygamma_order(
+    formats: list[InputOutputFormat],
+    polygamma_order: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Polygamma at every order ttnn can issue; the scale (-1)^(n+1) n! travels with it."""
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Polygamma,
+        FastMode.No,
+        input_dimensions,
+        polygamma_order=polygamma_order,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1137,6 +1173,7 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
+    polygamma_order=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1179,6 +1216,7 @@ def eltwise_unary_sfpu(
             if relu_min_int_threshold is None
             else {"relu_min_int_threshold": relu_min_int_threshold}
         ),
+        **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1206,6 +1244,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_min_int_threshold is None
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if polygamma_order is None
+                else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
         ],
         runtimes=[

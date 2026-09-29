@@ -136,6 +136,56 @@ inline __attribute__((always_inline)) void calculate_exponential_const_scale()
 
 namespace test_utils
 {
+
+// Order of the unary Polygamma op. The unary sweep runs order 1 (trigamma); the order sweep in
+// test_eltwise_unary_sfpu.py defines SFPU_POLYGAMMA_ORDER to reach every order ttnn can issue (1..11).
+#ifdef SFPU_POLYGAMMA_ORDER
+constexpr int POLYGAMMA_ORDER = SFPU_POLYGAMMA_ORDER;
+#else
+constexpr int POLYGAMMA_ORDER = 1;
+#endif
+
+// fp32 bit pattern of an integer. Exact while the magnitude has at most 24 significant bits once its
+// trailing zero bits are dropped, which holds for every n! with n <= 11 (11! = 2^8 * 155925).
+constexpr std::uint32_t float_bits_of_int(const std::int32_t value)
+{
+    const std::uint32_t sign      = value < 0 ? 0x80000000u : 0u;
+    const std::uint32_t magnitude = value < 0 ? static_cast<std::uint32_t>(-value) : static_cast<std::uint32_t>(value);
+    if (magnitude == 0)
+    {
+        return sign;
+    }
+    int exponent = 0;
+    while ((magnitude >> exponent) > 1u)
+    {
+        ++exponent;
+    }
+    const std::uint32_t mantissa = exponent >= 23 ? (magnitude >> (exponent - 23)) : (magnitude << (23 - exponent));
+    return sign | (static_cast<std::uint32_t>(exponent + 127) << 23) | (mantissa & 0x7fffffu);
+}
+
+// polygamma_tile's two parameters, formed the way ttnn::polygamma forms them: the order as float bits and
+// the scale (-1)^(n+1) * n! as float bits.
+constexpr std::uint32_t polygamma_order_bits(const int n)
+{
+    return float_bits_of_int(n);
+}
+
+constexpr std::uint32_t polygamma_scale_bits(const int n)
+{
+    std::int32_t factorial = 1;
+    for (int i = 2; i <= n; ++i)
+    {
+        factorial *= i;
+    }
+    return float_bits_of_int((n % 2 == 0) ? -factorial : factorial);
+}
+
+static_assert(polygamma_order_bits(1) == 0x3f800000u && polygamma_scale_bits(1) == 0x3f800000u);
+static_assert(polygamma_order_bits(11) == 0x41300000u);
+static_assert(polygamma_scale_bits(2) == 0xc0000000u);  // -2!
+static_assert(polygamma_scale_bits(10) == 0xca5d7c00u); // -10!
+static_assert(polygamma_scale_bits(11) == 0x4c184540u); // 11!
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
@@ -1533,7 +1583,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
-        // order n = 1 (trigamma); scale = (-1)^(n+1) * n! = 1.0f.
+        // Order n (1 = trigamma unless SFPU_POLYGAMMA_ORDER is defined) and scale (-1)^(n+1) * n!, both as
+        // float bit patterns, exactly as ttnn passes them.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1541,8 +1592,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000u /* n = 1.0f */,
-            0x3f800000u /* scale = 1.0f */);
+            polygamma_order_bits(POLYGAMMA_ORDER),
+            polygamma_scale_bits(POLYGAMMA_ORDER));
     }
     else if constexpr (OPERATION == SfpuType::xielu)
     {

@@ -345,6 +345,21 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 
 @dataclass
+class SFPU_POLYGAMMA_ORDER(TemplateParameter):
+    """Order n of the unary Polygamma op.
+
+    A macro for the same reason as SFPU_SHIFT_AMOUNT: sfpu_operations.h defaults the order to 1
+    (trigamma) under ``#ifndef``, so only the order sweep in test_eltwise_unary_sfpu.py emits it
+    and every other unary test keeps compiling without it. ttnn issues orders 1..11.
+    """
+
+    polygamma_order: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_POLYGAMMA_ORDER {self.polygamma_order}"
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 
