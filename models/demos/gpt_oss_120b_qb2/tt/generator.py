@@ -30,7 +30,7 @@ import torch
 import ttnn
 from models.common.sampling.generator import SamplingParams
 from models.demos.gpt_oss_120b_qb2.tt.model import HF_CONTEXT_LENGTH, MODEL_LAYERS, PAGE_SIZE, Model, build_model
-from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len
+from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import Generator as _TTGenerator
 
 GREEDY = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
@@ -583,12 +583,10 @@ class Generator:
         path = "host_all_logits" if return_all_logits else "host_last_logits"
         new_variants = self._prepare_prefill_variants(prompt_lens, path=path)
         layer_cache = self._layer_cache(kv_cache)
+        block_sizes = None if page_tables_per_layer is None else [cache[0].shape[2] for cache in layer_cache]
         rows = []
         for user, prompt_len in enumerate(prompt_lens):
             prompt_len = int(prompt_len)
-            block_sizes = None
-            if page_tables_per_layer is not None:
-                block_sizes = [get_block_size(cache) for cache in layer_cache]
             user_page_tables = None
             if page_tables_per_layer is not None:
                 user_page_tables = [

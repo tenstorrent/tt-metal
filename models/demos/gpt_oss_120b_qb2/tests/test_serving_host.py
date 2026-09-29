@@ -95,3 +95,28 @@ def test_selected_buckets_exclude_historically_corrupt_sixteen_row_trace():
     # Requests 9 through 16 therefore select the 32-row device graph.
     for active in (9, 15, 16, 17, 31, 32):
         assert next(width for width in decode_trace_buckets(32) if width >= active) == 32
+
+
+def test_host_prefill_trims_each_layer_table_using_its_cache_block_axis():
+    generator = object.__new__(Generator)
+    generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)
+    generator.model = SimpleNamespace(n_layers=2)
+    generator._inner = SimpleNamespace(mode=None)
+    generator._prepare_prefill_variants = Mock(return_value=set())
+    generator._record_compiled_prefill_variants = Mock()
+    generator._prefill_one = Mock(return_value=torch.zeros(1, 128))
+    # Individual caches are [K, V], each [physical_pages, kv_heads, block, head].
+    caches = [[SimpleNamespace(shape=(64, 2, block, 64))] * 2 for block in (64, 128)]
+    tables = [torch.arange(16).reshape(2, 8), torch.arange(32, 48).reshape(2, 8)]
+    output = generator.prefill_forward(
+        torch.zeros(2, 129, dtype=torch.int64),
+        page_table=tables[0],
+        kv_cache=caches,
+        prompt_lens=[65, 129],
+        page_tables_per_layer=tables,
+    )
+    assert output.shape == (2, 1, 128)
+    for row, (first_width, second_width) in enumerate([(2, 1), (3, 2)]):
+        passed = generator._prefill_one.call_args_list[row].kwargs["page_tables_per_layer"]
+        assert torch.equal(passed[0], tables[0][row : row + 1, :first_width])
+        assert torch.equal(passed[1], tables[1][row : row + 1, :second_width])
