@@ -61,6 +61,12 @@ class Gemma4Router:
             cache_file_name=get_cache_file_name(tensor_cache_path, "scale"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Fold the constant hidden_size**-0.5 into the scale once, so forward runs one mul instead of two.
+        _scale_f32 = ttnn.typecast(self.scale, ttnn.float32)
+        _scale_folded = ttnn.mul(_scale_f32, self.scalar_root_size, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _scale_f32.deallocate(True)
+        self.scale.deallocate(True)
+        self.scale = _scale_folded
 
         self.proj_weight = ttnn.as_tensor(
             proj_weight,
@@ -100,9 +106,8 @@ class Gemma4Router:
         normed = self.norm.forward(hidden_states)
 
         # 2. Scale — on device
-        scaled = ttnn.mul(normed, self.scale)
+        scaled = ttnn.mul(normed, self.scale, dtype=ttnn.bfloat16)
         normed.deallocate(True)
-        scaled = ttnn.mul(scaled, self.scalar_root_size)
 
         # 3. Linear projection → [1, 1, seq_len, num_experts] — on device
         if scaled.shape[-2] <= 32 and scaled.shape[-1] == 2816 and self.proj_weight.shape[-1] == 128:

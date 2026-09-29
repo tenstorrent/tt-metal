@@ -299,6 +299,41 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
+    # Decode fold: land the gather directly in the consumer RMSNorm's width-
+    # sharded L1 layout (11x1 grid, 32x256 shards at hidden 2816, same cfg as
+    # RMSNorm._build_sharded_cfg), so the norm skips its interleaved_to_sharded.
+    shp = tensor.shape
+    if (
+        len(shp) == 4
+        and int(tensor.padded_shape[-2]) == 32
+        and int(shp[-1]) == 2816
+        and not tensor.is_sharded()
+        and memory_config == ttnn.DRAM_MEMORY_CONFIG
+        and tensor.device().compute_with_storage_grid_size().x >= 11
+    ):
+        sharded_cfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, 256),
+            core_grid=ttnn.CoreGrid(x=11, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=3,
+            cluster_axis=tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tensor.deallocate(True)
+        gathered = ttnn.all_gather(
+            scattered,
+            dim=3,
+            cluster_axis=tp_axis,
+            memory_config=sharded_cfg,
+        )
+        scattered.deallocate(True)
+        return gathered
+
     # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
     # Fabric / cluster_axis supply those defaults (same as sync all_gather).
     result = ttnn.all_reduce(
