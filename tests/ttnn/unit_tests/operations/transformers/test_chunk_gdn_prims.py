@@ -196,6 +196,20 @@ def test_prep_outputs_vs_torch(device, bh, nc):
 # ---------------------------------------------------------------------------
 
 
+def test_scan_requires_initial_state(device, expect_error):
+    """The scan reader streams the initial state unconditionally (there is no in-kernel zeroing), so the
+    private prim refuses to launch without one instead of reading a null buffer. The public op builds
+    a zero state itself when its own initial_state is omitted."""
+    q, k, v, g, beta, _ = _make_inputs(1, 2, seed=20260929, scale=KDIM**-0.5)
+    dev_seven = [_dev(device, t, ttnn.float32) for t in _prep_reference(q.float(), k.float(), v.float(), g, beta)]
+    with expect_error(TypeError, "initial_state"):
+        _t.chunk_gdn_scan(*dev_seven, chunk_size=CHUNK, output_final_state=True)
+    with expect_error(TypeError, "initial_state"):
+        _t.chunk_gdn_scan(*dev_seven, initial_state=None, chunk_size=CHUNK, output_final_state=True)
+    for t in dev_seven:
+        ttnn.deallocate(t)
+
+
 def test_scan_vs_torch(device):
     bh, nc = 4, 4
     q, k, v, g, beta, s0 = _make_inputs(bh, nc, seed=20260821, scale=KDIM**-0.5)

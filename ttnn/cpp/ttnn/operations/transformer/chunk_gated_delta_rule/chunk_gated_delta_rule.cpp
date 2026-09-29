@@ -254,7 +254,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
     // always reads S (no in-kernel zeroing). Traced callers pass a persistent state buffer (never
     // absent); the zeros() fallback here is eager-only (device-side fill, uncached).
-    std::optional<ttnn::Tensor> s0;
+    ttnn::Tensor s0;
     if (initial_state.has_value()) {
         ttnn::Tensor s = *initial_state;
         if (s.dtype() != DataType::FLOAT32) {

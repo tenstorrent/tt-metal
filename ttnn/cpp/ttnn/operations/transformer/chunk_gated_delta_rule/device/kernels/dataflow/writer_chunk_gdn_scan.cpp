@@ -15,12 +15,10 @@ constexpr uint32_t cb_out = 16, cb_final = 27;
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);  // per-core V-block width (tiles)
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
-    constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
-    (void)has_s0;
+    constexpr uint32_t Vt = get_compile_time_arg_val(2);       // per-core V-block width (tiles)
+    constexpr uint32_t Vt_full = get_compile_time_arg_val(3);  // full V (tiles) for row stride
 
-    constexpr auto o_a = TensorAccessorArgs<5>();
+    constexpr auto o_a = TensorAccessorArgs<4>();
     constexpr auto fs_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);

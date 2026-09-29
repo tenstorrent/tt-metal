@@ -384,7 +384,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt_full = attrs.val_dim / TILE_WIDTH;
-    const uint32_t has_s0 = attrs.has_initial_state ? 1u : 0u;
 
     // o output is fp32 (matches the scan op's compute_output_specs; a bf16 o degraded full-model
     // quality and was removed). cb_out format must match, else the writer strides wrong.
@@ -473,7 +472,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     // ct arg 2 = per-core Vt(=Vtl); arg 4 = Vt_full (full V in tiles) for the readers'/writer's
     // V-slice row stride. Compute reads only args 0..2 (Ct, Kt, Vt) so the extra arg is harmless.
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, has_s0, Vt_full};
+    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, Vt_full};
 
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);
@@ -483,7 +482,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.k_dec_t.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.dl.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.t_inv.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    TensorAccessorArgs(*in.initial_state.buffer()).append_to(reader_ct);
     // Trailing compile-time args AFTER the accessor chain: the handshake semaphore ids. Appended
     // unconditionally — the plain (no-mcast) reader has no semaphores and ignores them — so the
     // trailing-arg offsets stay uniform across all three reader compile variants.
@@ -496,7 +495,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     if (do_mcast) {
         receiver_ct = ct_args;
         TensorAccessorArgs(*in.v_beta.buffer()).append_to(receiver_ct);
-        TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(receiver_ct);
+        TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
         receiver_ct.push_back(sem_ready_id);
         receiver_ct.push_back(sem_valid_id);
     }
@@ -551,7 +550,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     auto* kdec_buf = in.k_dec_t.buffer();
     auto* dl_buf = in.dl.buffer();
     auto* ti_buf = in.t_inv.buffer();
-    auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
+    auto* s0_buf = in.initial_state.buffer();
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 

@@ -115,7 +115,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;  // full V (tiles): the producer's v_beta width
-    const uint32_t has_s0 = attrs.has_initial_state ? 1u : 0u;
 
     const uint32_t NP = attrs.np;  // producers per head (the op host clamps it to NC)
     const uint32_t NV = attrs.nv;  // receivers per head (validated: divides Vt, rectangles fit)
@@ -285,12 +284,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         attrs.posted ? 1u : 0u};
 
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
-    const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, has_s0, Vt};
+    const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, Vt};
 
     // Fused-receiver reader: s0 is its ONLY DRAM tensor (chain of one accessor, starting at CT
     // index 5), then the semaphore ids and the credit-word location as trailing args.
     std::vector<uint32_t> receiver_ct = ct_scan;
-    TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(receiver_ct);
+    TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
     receiver_ct.push_back(sem_ready_id);
     receiver_ct.push_back(sem_valid_id);
     receiver_ct.push_back(sem_init_id);
@@ -377,7 +376,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     auto* tril_buf = in.tril_c.buffer();
     auto* ones_buf = in.ones_c.buffer();
     auto* masks_buf = in.masks_c.buffer();
-    auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
+    auto* s0_buf = in.initial_state.buffer();
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 

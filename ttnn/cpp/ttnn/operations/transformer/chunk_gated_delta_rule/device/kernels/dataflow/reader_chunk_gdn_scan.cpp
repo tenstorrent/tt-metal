@@ -57,20 +57,18 @@ constexpr uint32_t cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20, cb
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);  // per-core V-block width (tiles)
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
-    constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
-    (void)has_s0;
+    constexpr uint32_t Vt = get_compile_time_arg_val(2);       // per-core V-block width (tiles)
+    constexpr uint32_t Vt_full = get_compile_time_arg_val(3);  // full V (tiles) for row stride
 
 #if defined(GDN_FUSED_RECEIVER)
     // Fused receivers touch DRAM only for s0; the accessor chain is a single block.
-    constexpr auto s0_a = TensorAccessorArgs<5>();
+    constexpr auto s0_a = TensorAccessorArgs<4>();
 #elif defined(GDN_MCAST_RECEIVER)
     // Receivers only access their private V-sliced tensors; the accessor chain has two blocks.
-    constexpr auto vb_a = TensorAccessorArgs<5>();
+    constexpr auto vb_a = TensorAccessorArgs<4>();
     constexpr auto s0_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
 #else
-    constexpr auto vb_a = TensorAccessorArgs<5>();
+    constexpr auto vb_a = TensorAccessorArgs<4>();
     constexpr auto nkd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
     constexpr auto qd_a = TensorAccessorArgs<nkd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();
@@ -190,7 +188,7 @@ void kernel_main() {
         cb.push_back(R * Vt);
     };
 
-    // initial state S [K, V] (once) — host always provides it (zeros if none). V-sliced
+    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced
     // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
 

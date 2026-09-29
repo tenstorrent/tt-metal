@@ -84,7 +84,6 @@ struct ChunkGdnParams {
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
     // share NoC links. The config's row_local, or row-local whenever it is feasible.
     uint32_t placement = 0;
-    bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -100,7 +99,8 @@ struct ChunkGdnInputs {
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
     Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10); Fused only
-    std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    Tensor
+        initial_state;  // [BH, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh sequence)
 };
 
 // One core per head, all chunks in sequence (chunk_gdn_mono_program_factory.cpp).
@@ -189,7 +189,7 @@ std::vector<Tensor> chunk_gdn(
     const Tensor& tril_c,
     const Tensor& ones_c,
     const Tensor& masks_c,
-    const std::optional<Tensor>& initial_state,
+    const Tensor& initial_state,
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,

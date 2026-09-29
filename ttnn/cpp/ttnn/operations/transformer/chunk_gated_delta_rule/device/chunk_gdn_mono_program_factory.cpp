@@ -66,7 +66,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
-    const uint32_t has_s0 = attrs.has_initial_state ? 1u : 0u;
 
     const uint32_t cc = Ct * Ct;
     const uint32_t ck = Ct * Kt;
@@ -140,9 +139,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
     add_cb(cb::s3, kv, 2);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, has_s0};
+    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
 
-    // Reader compile args: {Ct,Kt,Vt,has_s0} + TensorAccessorArgs for each input (in order).
+    // Reader compile args: {Ct,Kt,Vt} + TensorAccessorArgs for each input (in order).
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
@@ -152,7 +151,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.eye_c.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tril_c.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.ones_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    TensorAccessorArgs(*in.initial_state.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = ct_args;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
@@ -190,7 +189,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
     auto* eye_buf = in.eye_c.buffer();
     auto* tril_buf = in.tril_c.buffer();
     auto* ones_buf = in.ones_c.buffer();
-    auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
+    auto* s0_buf = in.initial_state.buffer();
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 

@@ -61,9 +61,9 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     check_gdn_tensor(in.tril_c, "tril_c", DataType::FLOAT32);
     check_gdn_tensor(in.ones_c, "ones_c", DataType::FLOAT32);
     check_gdn_tensor(in.masks_c, "masks_c", DataType::FLOAT32);
-    if (in.initial_state.has_value()) {
-        check_gdn_tensor(*in.initial_state, "initial_state", DataType::FLOAT32);
-    }
+    // Required: the mono reader and the fused receivers stream S from this buffer unconditionally (no
+    // in-kernel zeroing); the public op builds a zero state when its own initial_state is omitted.
+    check_gdn_tensor(in.initial_state, "initial_state", DataType::FLOAT32);
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
@@ -394,7 +394,7 @@ std::vector<Tensor> chunk_gdn(
     const Tensor& tril_c,
     const Tensor& ones_c,
     const Tensor& masks_c,
-    const std::optional<Tensor>& initial_state,
+    const Tensor& initial_state,
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
@@ -427,7 +427,6 @@ std::vector<Tensor> chunk_gdn(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
-        .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,

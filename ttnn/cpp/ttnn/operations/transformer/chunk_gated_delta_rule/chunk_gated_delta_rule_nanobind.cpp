@@ -123,7 +123,7 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
     const ttnn::Tensor& k_dec_t,
     const ttnn::Tensor& dl,
     const ttnn::Tensor& t_inv,
-    const std::optional<ttnn::Tensor>& initial_state,
+    const ttnn::Tensor& initial_state,
     uint32_t chunk_size,
     bool output_final_state,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -454,7 +454,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             t_inv (ttnn.Tensor):   [BH, NC, C, C] fp32 (WY inverse)
 
         Keyword Args:
-            initial_state (ttnn.Tensor, optional): [BH, K, V] fp32; absent means zeros.
+            initial_state (ttnn.Tensor): [BH, K, V] fp32, required. The scan reader streams it
+                unconditionally (no in-kernel zeroing): pass a zero state for a fresh sequence, or a
+                persistent state buffer from a trace. The public op builds the zeros itself when its
+                own initial_state is omitted.
             chunk_size (int): default 32 (C).
             output_final_state (bool): default True; when False the final_state slot's
                 contents are unspecified.
@@ -482,7 +485,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("dl").noconvert(),
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
-        nb::arg("initial_state") = nb::none(),
+        nb::arg("initial_state").noconvert(),
         nb::arg("chunk_size") = 32,
         nb::arg("output_final_state") = true,
         nb::arg("memory_config") = nb::none(),

@@ -116,7 +116,6 @@ struct ChunkGdnScanParams {
     uint32_t chunk_size;
     uint32_t key_dim;
     uint32_t val_dim;
-    bool has_initial_state;
     bool output_final_state;
     // ChunkGdnPhasedProgramConfig::use_mcast / scan_serial (see chunk_gated_delta_rule_config.hpp).
     bool use_mcast = true;
@@ -128,12 +127,12 @@ struct ChunkGdnScanParams {
 struct ChunkGdnScanInputs {
     Tensor v_beta;  // [BH, NC, C, V] fp32  (= v * beta)
     Tensor nkd;  // [BH, NC, C, K] fp32  (= -(k_beta * decay_exp): negated, the scan accumulates v_beta + nkd@S in DST)
-    Tensor q_decay;                       // [BH, NC, C, K] fp32
-    Tensor intra;                         // [BH, NC, C, C] fp32
-    Tensor k_dec_t;                       // [BH, NC, K, C] fp32
-    Tensor dl;                            // [BH, NC, 32, 32] fp32: dl*I, dl = exp(g_sum) of the chunk on the diagonal
-    Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
-    std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
+    Tensor q_decay;        // [BH, NC, C, K] fp32
+    Tensor intra;          // [BH, NC, C, C] fp32
+    Tensor k_dec_t;        // [BH, NC, K, C] fp32
+    Tensor dl;             // [BH, NC, 32, 32] fp32: dl*I, dl = exp(g_sum) of the chunk on the diagonal
+    Tensor t_inv;          // [BH, NC, C, C] fp32  (WY inverse)
+    Tensor initial_state;  // [BH, K, V] fp32, REQUIRED: the scan reader always reads it (zeros for a fresh sequence)
 };
 
 struct ChunkGdnScanProgramFactory {
@@ -165,7 +164,7 @@ std::vector<Tensor> chunk_gdn_scan(
     const Tensor& k_dec_t,
     const Tensor& dl,
     const Tensor& t_inv,
-    const std::optional<Tensor>& initial_state,
+    const Tensor& initial_state,
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
