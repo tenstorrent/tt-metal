@@ -206,21 +206,8 @@ void kernel_main() {
     ring_buffer->terminate = 0;
 
     // record_wr_idx on this core is written only by dispatch_s (host zeroes it before launch).
-#ifdef RT_PROFILER_TEST_BRISC_DELAY_MASK
-    // Test only (TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK): a random busy-wait before each drain slows this
-    // reader down so dispatch_s has to wait for record slots.
-    uint32_t test_delay_lfsr = 0xACE1u;
-#endif
     while (true) {
         invalidate_l1_cache();
-
-#ifdef RT_PROFILER_TEST_BRISC_DELAY_MASK
-        if ((rt_profiler_msg->record_wr_idx & REALTIME_PROFILER_RECORD_WR_IDX_MASK) != record_rd_idx) {
-            test_delay_lfsr = test_delay_lfsr * 1103515245u + 12345u;
-            for (volatile uint32_t d = 0, n = (test_delay_lfsr >> 16) & RT_PROFILER_TEST_BRISC_DELAY_MASK; d < n; d++) {
-            }
-        }
-#endif
 
         if (realtime_profiler_drain_records()) {
             if (pending_stall_cycles != 0) {

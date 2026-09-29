@@ -26,7 +26,6 @@
 #endif
 
 #include <enchantum/enchantum.hpp>
-#include <env_lib.hpp>
 #include <fmt/core.h>
 #include <tt-logger/tt-logger.hpp>
 
@@ -739,12 +738,6 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             brisc_config.defines["DISPATCH_RECORD_RD_IDX_ADDR"] = std::to_string(dispatch_record_rd_idx_addr);
             brisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             brisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
-            // Test only: slow the BRISC reader with a random busy-wait of up to this many iterations per drain, so
-            // dispatch_s has to wait for record slots (exercises the dispatch-stall path).
-            if (const uint32_t delay_mask = tt::parse_env<uint32_t>("TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK", 0);
-                delay_mask != 0) {
-                brisc_config.defines["RT_PROFILER_TEST_BRISC_DELAY_MASK"] = std::to_string(delay_mask) + "u";
-            }
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_kernel_path, realtime_profiler_core, brisc_config);
 
@@ -1013,7 +1006,9 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
         dev_state.fifo_reached_capacity = true;
         log_warning(
             tt::LogMetal,
-            "[Real-time profiler] Device {} D2H FIFO reached capacity ({} pages); profiler data may be dropped",
+            "[Real-time profiler] Device {} D2H FIFO reached capacity ({} pages); the host is reading profiler "
+            "data slower than the device produces it, so the device holds records back (delayed, not dropped) and "
+            "dispatch can stall if this persists",
             dev_state.chip_id,
             available);
     }
@@ -1063,6 +1058,10 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     uint64_t num_pages_received = 0;
     auto last_fifo_plot = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
+        if (receiver_paused_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(kReceiverMaxBackoff);
+            continue;
+        }
         const bool scan_sync_marker = finish_sync_busy_.load(std::memory_order_acquire);
         const uint32_t num_pages = drain_all_devices(scan_sync_marker, page_buf, record_buf);
         num_pages_received += num_pages;
@@ -1244,6 +1243,8 @@ void RealtimeProfilerManager::shutdown() {
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
     constexpr auto kShutdownKernelExitPollBackoff = std::chrono::microseconds(50);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
+    // The push kernel can only finish once the receiver reads again.
+    receiver_paused_.store(false, std::memory_order_release);
 
     // Re-write ring_buffer->terminate as a safety net, then let the push kernel deliver the last PCIe page.
     for (auto& dev_state : devices_) {
@@ -1347,8 +1348,8 @@ void RealtimeProfilerManager::shutdown() {
             if (full_wait[0] != 0) {
                 log_warning(
                     tt::LogMetal,
-                    "[Real-time profiler] Device {} L1 ring hit capacity {} time(s); profiler records may have been "
-                    "dropped",
+                    "[Real-time profiler] Device {} L1 ring hit capacity {} time(s): the path to the host backed up "
+                    "and profiler records were delayed (not dropped)",
                     dev_state.chip_id,
                     full_wait[0]);
             }

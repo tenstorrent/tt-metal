@@ -108,10 +108,10 @@ on the fast path:
    Tracy plus an error-level Tracy message (rate-limited to one per 100 ms per device).
 
 The markers travel through the same lossless path as records, so they can be late
-but are never lost. To exercise this path, set
-`TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK` (for example `0x3FFF`) before opening the
-device; it slows the BRISC reader with a random busy-wait of up to that many
-iterations per drain (`RealtimeProfilerStress.DispatchStallIsReportedAndLossless`).
+but are never lost. `RealtimeProfilerStress.DispatchStallIsReportedAndLossless`
+exercises this path with `RealtimeProfilerManager::pause_receiver_for_testing()`:
+while the host receiver is paused, the host FIFO, the BRISC ring and the record ring
+fill (about 37k records) until dispatch_s waits.
 
 ## Measured Timing
 
