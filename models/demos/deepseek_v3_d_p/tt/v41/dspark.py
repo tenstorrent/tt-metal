@@ -25,6 +25,10 @@ row-parallel over TP (each chip holds the rows of its hidden slice of every tap)
 main_norm and the DSpark projections then run replicated. Rings are replicated ``[1, 1, window, head_dim]``
 bf16 row-major tensors holding the reference's quantize-dequantized values (KV format stage 1).
 
+RoPE tables are device tensors per chunk (``seed_rope``; the transformer uploads every chunk's before the chunk loop,
+so a chunk's seeding writes nothing from the host) and cover the rope channels only: the nope channels pass
+through unchanged, as the full-width identity (cos 1, sin 0) would give them.
+
 Weights are the exact bf16 dequantization of the FP8 checkpoint tensors (bf16 rather than bfp8: the GEMMs see
 at most window + 32 rows once per chunk, so weight precision costs little and keeps them exact).
 """
@@ -84,10 +88,9 @@ class TtV41DSpark(LightweightModule):
             }
             for l in weights["layers"]
         ]
-        # (x @ pair_swap)[2i] = -x[2i+1], [2i+1] = x[2i] on the rope channels; nope channels map to 0
-        swap = torch.zeros(self.head_dim, self.head_dim)
-        first = self.head_dim - self.rope_dim
-        for i in range(first, self.head_dim, 2):
+        # (x @ pair_swap)[2i] = -x[2i+1], [2i+1] = x[2i] on the rope channels
+        swap = torch.zeros(self.rope_dim, self.rope_dim)
+        for i in range(0, self.rope_dim, 2):
             swap[i + 1, i], swap[i, i + 1] = -1.0, 1.0
         self.pair_swap = upload(swap[None, None])
 
@@ -136,13 +139,15 @@ class TtV41DSpark(LightweightModule):
             for _ in self.layers
         ]
 
-    def seed(self, taps: list, start: int, length: int, rings: list) -> None:
+    def seed(self, taps: list, start: int, length: int, rings: list, rope: tuple | None = None) -> None:
         """Write the DSpark window KV of the chunk's last ``min(length, window)`` real positions (absolute
-        ``start + p``) into ``rings`` slot ``(start + p) % window``, in place. Call once per chunk, in order."""
+        ``start + p``) into ``rings`` slot ``(start + p) % window``, in place. Call once per chunk, in order.
+        ``rope``: this chunk's ``seed_rope(start, length)``, uploaded ahead (uploaded here when None)."""
         assert len(rings) == len(self.layers)
         main_x, a = self.project(taps, length)
         lo, _, b = self._seed_rows(length)
-        cos, sin = self._rope_tables(torch.arange(start + a, start + b))
+        cos, sin = rope if rope is not None else self.seed_rope(start, length)
+        assert cos.shape[2] == b - a, f"RoPE table of {cos.shape[2]} rows for seed rows [{a}, {b})"
         x = fp8_qdq(main_x)
         for layer, ring in zip(self.layers, rings):
             kv = ttnn.linear(x, layer["wkv"], compute_kernel_config=self.compute_kernel_config)
@@ -150,28 +155,30 @@ class TtV41DSpark(LightweightModule):
             kv = ttnn.to_layout(fp8_qdq(kv), ttnn.ROW_MAJOR_LAYOUT)
             self._write_ring(ring, ttnn.slice(kv, [0, 0, lo - a, 0], [1, 1, length - a, self.head_dim]), start + lo)
 
-    def _rope_tables(self, positions: torch.Tensor):
-        """Full-width fp32 cos/sin ``[1, 1, n, head_dim]``: the ratio-0 table on the rope channels, identity on nope."""
-        cos, sin = cos_sin(self.config, False, positions)
-        nope = self.head_dim - self.rope_dim
-        ones, zeros = torch.ones(1, 1, len(positions), nope), torch.zeros(1, 1, len(positions), nope)
+    def seed_rope(self, start: int, length: int) -> tuple:
+        """Replicated fp32 cos/sin ``[1, 1, b - a, rope_dim]`` (ratio-0 table) of the seed rows [a, b) of the chunk
+        at ``start`` with ``length`` valid tokens (``_seed_rows``); depends on the chunk's position only."""
+        _, a, b = self._seed_rows(length)
         return tuple(
             ttnn.from_torch(
-                torch.cat([pad, t], dim=-1),
+                t,
                 device=self.mesh_device,
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            for pad, t in ((ones, cos), (zeros, sin))
+            for t in cos_sin(self.config, False, torch.arange(start + a, start + b))
         )
 
     def _rope(self, kv, cos, sin):
-        """Interleaved RoPE in fp32 like the reference (``x * cos + swap(x) * sin``), rounded once to bf16. The
-        pair swap is a ±1 permutation GEMM of bf16 values into fp32, hence exact."""
-        swapped = ttnn.linear(kv, self.pair_swap, dtype=ttnn.float32, compute_kernel_config=self.compute_kernel_config)
-        out = ttnn.add(ttnn.multiply(ttnn.typecast(kv, ttnn.float32), cos), ttnn.multiply(swapped, sin))
-        return ttnn.typecast(out, ttnn.bfloat16)
+        """Interleaved RoPE of the rope channels in fp32 like the reference (``x * cos + swap(x) * sin``), rounded
+        once to bf16; the nope channels pass through. The pair swap is a ±1 permutation GEMM of bf16 values into
+        fp32, hence exact."""
+        rows, nope = kv.shape[2], self.head_dim - self.rope_dim
+        pe = ttnn.slice(kv, [0, 0, 0, nope], [1, 1, rows, self.head_dim])
+        swapped = ttnn.linear(pe, self.pair_swap, dtype=ttnn.float32, compute_kernel_config=self.compute_kernel_config)
+        out = ttnn.add(ttnn.multiply(ttnn.typecast(pe, ttnn.float32), cos), ttnn.multiply(swapped, sin))
+        return ttnn.concat([ttnn.slice(kv, [0, 0, 0, 0], [1, 1, rows, nope]), ttnn.typecast(out, ttnn.bfloat16)], dim=3)
 
     def _write_ring(self, ring, rows, first_position: int) -> None:
         """Write ``rows`` [1, 1, n, head_dim] (n <= window) of consecutive positions from ``first_position`` into

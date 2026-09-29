@@ -131,8 +131,10 @@ class SubDeviceTraceController:
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
 
     # ------------------------------------------------------------------ replay
-    def replay(self):
+    def replay(self, blocking=True):
         """Run the whole segmented forward: execute each trace, load/clear between segments.
+        ``blocking=False`` skips the final device sync (the caller synchronizes before reading results), so the
+        host can work while the device runs; per-layer acks still sync before firing.
 
         Segments are enqueued NON-blocking on one CQ: the device runs them in enqueue order, and the
         load/clear between them are host-side registry switches (they pick which manager's trace the next
@@ -156,7 +158,8 @@ class SubDeviceTraceController:
                 ttnn.synchronize_device(self.mesh_device)
                 self._on_layer_complete(payload)
 
-        ttnn.synchronize_device(self.mesh_device)
+        if blocking:
+            ttnn.synchronize_device(self.mesh_device)
 
     # ------------------------------------------------------------------ stats / cleanup
     @property
