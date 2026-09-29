@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "trim_done": {
+   "t": "2026-09-29T01:45:42",
+   "value": 1
+  },
+  "trim_dropped_tensors": {
+   "t": "2026-09-29T01:45:42",
+   "value": 72497
+  },
+  "trim_freed_gb": {
+   "t": "2026-09-29T01:45:42",
+   "value": 309.53
+  },
+  "trim_kept_tensors": {
+   "t": "2026-09-29T01:45:42",
+   "value": 3611
+  },
+  "trim_verify_errors": {
+   "t": "2026-09-29T01:45:42",
+   "value": 0
+  }
+ },
+ "task": "R.4"
+}
