@@ -396,9 +396,23 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
+        warm_encoders = os.environ.get("LTX_WARMUP_ENCODERS", "1") in ("1", "true", "True")
+        image_encoder_warmed_early = False
         if self._traced and not self.dynamic_load:
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
+            # The VAE image encoder too. On a static mesh it is loaded once and never reloaded
+            # (load_model returns early once loaded), so where its weights land is where they stay.
+            # Warmed last — after the audio trace capture below — they landed in that trace's
+            # activation region: the first audio replay (gen #0's audio decode) overwrote them, and
+            # every later I2V gen encoded its image to garbage (latent PCC 0.03 vs gen #0), pinning a
+            # grey frame 0 and ignoring the image. Loading and running it here, before any capture,
+            # puts its weights and anything its first forward allocates below every trace.
+            if self.vae_encoder is not None and warm_encoders:
+                logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
+                self._warmup_encode(height // 2, width // 2)
+                self._warmup_encode(height, width)
+                image_encoder_warmed_early = True
 
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
         # Drop the schedule's terminal 0.0 before slicing: a short schedule (len-1 <= warmup_steps,
@@ -610,8 +624,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # embeddings are disk-cached never runs the Gemma encoder in generate(). Neither encoder is
         # loaded after capture in that loop, so skipping their warmup compiles is safe there; leave it
         # at the default (warm) for I2V or uncached-prompt runs that load an encoder post-capture.
-        if os.environ.get("LTX_WARMUP_ENCODERS", "1") in ("1", "true", "True"):
-            if self.vae_encoder is not None:
+        if warm_encoders:
+            if self.vae_encoder is not None and not image_encoder_warmed_early:
                 logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
