@@ -453,7 +453,20 @@ def run_formal(op, man_row, out_dir, flags, timeout):
             text=True,
             timeout=timeout + 120,
         )
-        if r.returncode != 0 or not vj.exists():
+        # formal_equiv EXITS NON-ZERO for every verdict but
+        # PROVEN-EQUIV-ALL-INPUTS (rc=1 for the SEMANTICS-UNVALIDATED / NO-Z3 /
+        # SCOPE-REFUSED early returns, rc=2 for any other prove_row verdict),
+        # and always writes the verdict JSON first.  So a reached verdict is
+        # "the file parses and carries a verdict", NOT "rc == 0"; a genuine
+        # prover failure (crash, kill, timeout) leaves no usable file -- the
+        # driver unlinked any stale one above.
+        d = None
+        if vj.exists():
+            try:
+                d = json.loads(vj.read_text())
+            except json.JSONDecodeError:
+                d = None
+        if not isinstance(d, dict) or not d.get("verdict"):
             return {
                 "op": op,
                 "engine": "formal_equiv",
@@ -462,7 +475,6 @@ def run_formal(op, man_row, out_dir, flags, timeout):
                 "reason": (r.stderr or r.stdout)[-300:],
                 "wall_s": round(time.time() - t0, 1),
             }
-        d = json.loads(vj.read_text())
         v = d["verdict"]
         cls = {
             "PROVEN-EQUIV-ALL-INPUTS": "SMT-PROVEN-ALL-INPUTS",
@@ -470,6 +482,7 @@ def run_formal(op, man_row, out_dir, flags, timeout):
             "DIVERGENT": "DIVERGENCE-CERTIFIED",
             "UNDECIDED": "UNDECIDED-Z3-TIMEOUT",
             "SEMANTICS-UNVALIDATED": "SCOPE-REFUSED",
+            "SCOPE-REFUSED": "SCOPE-REFUSED",
         }.get(v, "UNSWEPT")
         det = d.get("details", {})
         return {
@@ -775,11 +788,12 @@ def write_summary(out_dir, rows, prov, wall, fast_ops):
     by_op = {r["op"]: r for r in rows}
     fast_cen = Counter(by_op[o]["provability_class"] for o in fast_ops if o in by_op)
     fast_div = fast_cen.get("DIVERGENCE-CERTIFIED", 0)
-    fast_cert = (
-        len(fast_ops)
-        - fast_div
-        - fast_cen.get("UNDECIDED-Z3-TIMEOUT", 0)
-        - fast_cen.get("NOT-EXHAUSTIBLE", 0)
+    # certified-or-domain = the top of CLASS_ORDER: the MACHINE_CERTIFIED pair
+    # plus SMT-PROVEN-DOMAIN.  Counted, not subtracted -- subtracting a hand
+    # list silently counted INFEASIBLE-2^32 / SCOPE-REFUSED / UNSWEPT ops as
+    # certified, and drifts whenever CLASS_ORDER grows.
+    fast_cert = sum(
+        fast_cen.get(c, 0) for c in CLASS_ORDER[: RANK["SMT-PROVEN-DOMAIN"] + 1]
     )
     L = []
     L.append("=" * 78)
@@ -817,9 +831,7 @@ def write_summary(out_dir, rows, prov, wall, fast_ops):
         % unreached
     )
     L.append("")
-    L.append(
-        "RECONCILIATION vs paper '36 fast ops -> 25 certified / 11 accuracy-gated':"
-    )
+    L.append("FAST-SET RECONCILIATION (recomputed from prove_all_fast_ops.tsv):")
     L.append(
         "   Fast set = %d laneJO-covered distinct-hand-leg (optimized sem!=hand) ops. Of these:"
         % len(fast_ops)
@@ -828,8 +840,7 @@ def write_summary(out_dir, rows, prov, wall, fast_ops):
         if fast_cen.get(c):
             L.append("       %-24s %d" % (c, fast_cen[c]))
     L.append(
-        "   => DIVERGENCE-CERTIFIED in fast set = %d  (paper's 11 accuracy-gated)"
-        % fast_div
+        "   => DIVERGENCE-CERTIFIED in fast set = %d  (accuracy-gated)" % fast_div
     )
     L.append("   => certified-or-domain in fast set  = %d" % fast_cert)
     L.append("=" * 78)

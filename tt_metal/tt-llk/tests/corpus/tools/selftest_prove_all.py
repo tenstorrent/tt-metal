@@ -13,6 +13,7 @@
 #
 # Exit 0 = PASS.
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -119,6 +120,106 @@ def part_a_unit():
     print("PART A (unit precedence + census): PASS")
 
 
+def _run_formal_fake(rc, payload):
+    """Drive PA.run_formal with both sim legs and the formal engine FAKED, so
+    only the exit-code/verdict plumbing under test executes (no sim, no z3).
+    `payload` is the verdict JSON the fake engine writes (dict), a raw string
+    to write verbatim, or None for "the prover produced no output file"."""
+    tmp = Path(tempfile.mkdtemp(prefix="prove_all_formal_"))
+    real_leg, real_run = PA._run_leg, PA.subprocess.run
+
+    def fake_leg(op, leg, node, out_dir, flags, timeout):
+        t = Path(out_dir) / f"trace-{op}-{leg}.log"
+        t.write_text("SFPUJO I\n")
+        # distinct .text hashes so the REFUSED-IDENTITY short-circuit is not hit
+        return t, {"path": str(t), "text_sha256": ("a" if leg == "sem" else "b") * 64}, None
+
+    def fake_run(cmd, **kw):
+        out = Path(cmd[cmd.index("--out") + 1])
+        row = cmd[cmd.index("--row") + 1]
+        if payload is not None:
+            body = payload if isinstance(payload, str) else json.dumps(payload)
+            (out / f"{row}-verdict.json").write_text(body)
+        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="engine stderr")
+
+    PA._run_leg, PA.subprocess.run = fake_leg, fake_run
+    try:
+        return PA.run_formal(
+            "op",
+            {"sem_node": "s.py::a", "hand_node": "h.py::b", "reason": "-"},
+            tmp,
+            "-flags",
+            60,
+        )
+    finally:
+        PA._run_leg, PA.subprocess.run = real_leg, real_run
+
+
+def part_a_formal_routing():
+    """formal_equiv encodes its verdict in the EXIT CODE:
+        rc=0  PROVEN-EQUIV-ALL-INPUTS
+        rc=2  PROVEN-EQUIV-ON-DOCUMENTED-DOMAIN / DIVERGENT / UNDECIDED
+        rc=1  SEMANTICS-UNVALIDATED / NO-Z3 / SCOPE-REFUSED (early returns)
+    A non-zero rc that still wrote a well-formed verdict JSON is a REACHED
+    VERDICT and must be classified; only a crash / missing / unparsable
+    verdict file is a genuine prover failure (UNSWEPT)."""
+    reached = [
+        (0, "PROVEN-EQUIV-ALL-INPUTS", "SMT-PROVEN-ALL-INPUTS"),
+        (2, "PROVEN-EQUIV-ON-DOCUMENTED-DOMAIN", "SMT-PROVEN-DOMAIN"),
+        (2, "DIVERGENT", "DIVERGENCE-CERTIFIED"),
+        (2, "UNDECIDED", "UNDECIDED-Z3-TIMEOUT"),
+        (1, "SEMANTICS-UNVALIDATED", "SCOPE-REFUSED"),
+        (1, "SCOPE-REFUSED", "SCOPE-REFUSED"),
+    ]
+    for rc, verdict, want in reached:
+        got = _run_formal_fake(rc, {"row": "op", "verdict": verdict, "details": {}})
+        assert got["verdict"] == verdict, (rc, verdict, got)
+        assert got["class"] == want, (rc, verdict, got["class"], want)
+    # NO-Z3 reached the emitter but is not a proof verdict: stays UNSWEPT
+    got = _run_formal_fake(1, {"row": "op", "verdict": "NO-Z3"})
+    assert got["class"] == "UNSWEPT" and got["verdict"] == "NO-Z3", got
+    # genuine prover failures keep the UNSWEPT / PROVER-FAILED path
+    for rc, payload in ((0, None), (1, None), (2, None), (2, "{ not json"),
+                        (2, {"row": "op"})):
+        got = _run_formal_fake(rc, payload)
+        assert got["class"] == "UNSWEPT" and got["verdict"] == "PROVER-FAILED", (
+            rc, payload, got
+        )
+    print("PART A (formal_equiv exit-code/verdict routing): PASS")
+
+
+def part_a_fast_census():
+    """The fast-set 'certified' count must count only the certified classes
+    (the MACHINE_CERTIFIED pair plus SMT-PROVEN-DOMAIN, i.e. the top of
+    CLASS_ORDER) — never infeasible / scope-refused / unswept ops."""
+    fast = ["c1", "c2", "d1", "g1", "g2", "g3"]
+    rows = [
+        {"op": "c1", "provability_class": "SMT-PROVEN-ALL-INPUTS",
+         "machine_certified_equal": "YES"},
+        {"op": "c2", "provability_class": "SMT-PROVEN-DOMAIN",
+         "machine_certified_equal": "no"},
+        {"op": "d1", "provability_class": "DIVERGENCE-CERTIFIED",
+         "machine_certified_equal": "no"},
+        {"op": "g1", "provability_class": "INFEASIBLE-2^32",
+         "machine_certified_equal": "no"},
+        {"op": "g2", "provability_class": "SCOPE-REFUSED",
+         "machine_certified_equal": "no"},
+        {"op": "g3", "provability_class": "UNSWEPT",
+         "machine_certified_equal": "no"},
+    ]
+    tmp = Path(tempfile.mkdtemp(prefix="prove_all_census_"))
+    txt = PA.write_summary(tmp, rows, {"shas": {}, "timestamp": "t"}, "0s", fast)
+    hit = [ln for ln in txt.splitlines() if "certified-or-domain in fast set" in ln]
+    assert hit, txt
+    n = int(hit[0].rsplit("=", 1)[1])
+    assert n == 2, ("refused/infeasible/unswept ops counted as certified", n, txt)
+    assert "36 fast ops" not in txt, (
+        "stale hardcoded paper reconciliation ('36 fast ops -> 25/11') still "
+        "printed; prove_all_fast_ops.tsv has %d rows" % len(PA.read_tsv(PA.FAST_OPS))
+    )
+    print("PART A (fast-set certified census): PASS")
+
+
 def part_a_manifest():
     """Routing sanity: the 3 selftest ops route to the expected engines."""
     board = PA.load_board()
@@ -182,6 +283,8 @@ def part_b_live():
 
 if __name__ == "__main__":
     part_a_unit()
+    part_a_formal_routing()
+    part_a_fast_census()
     part_a_manifest()
     part_b_live()
     print("\nSELFTEST: ALL PASS")
