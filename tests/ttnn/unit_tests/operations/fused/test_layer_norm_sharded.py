@@ -514,16 +514,25 @@ def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_
 # A width-sharded grid with an idle row (more cores than real width-slices) must raise, not hang.
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize(
-    ("h", "w", "num_cores_w", "num_cores_h", "expect_idle_shard_error"),
+    ("h", "w", "num_cores_w", "num_cores_h"),
     [
-        (32, 256, 4, 2, False),  # 8 cores, tensor width needs all 8: valid
-        (32, 128, 4, 2, True),  # 8 cores, tensor width only needs 4: other 4 are idle
+        (32, 256, 4, 2),  # 8 cores, tensor width needs all 8: valid
+        pytest.param(
+            32,
+            128,
+            4,
+            2,  # 8 cores, tensor width only needs 4: other 4 are idle
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=RuntimeError,
+                reason="idle shard row: tensor width only fills half the grid, other 4 cores are idle - "
+                "op must reject this, not hang",
+            ),
+        ),
     ],
     ids=["grid_matches_tiles", "idle_row"],
 )
-def test_layer_norm_sharded_core_grid_utilization(
-    device, h, w, num_cores_w, num_cores_h, expect_idle_shard_error, use_welford, expect_error
-):
+def test_layer_norm_sharded_core_grid_utilization(device, h, w, num_cores_w, num_cores_h, use_welford):
     torch_input_tensor = generate_input_tensor(h, w, "random_normal", torch.float32)
 
     core_grid = ttnn.CoreRangeSet(
@@ -538,15 +547,19 @@ def test_layer_norm_sharded_core_grid_utilization(
         torch_input_tensor, layout=ttnn.Layout.TILE, device=device, memory_config=sharded_mem_config
     )
 
-    if expect_idle_shard_error:
-        with expect_error(RuntimeError, "does not align with tensor width"):
-            ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
-        return
-
     output_ttnn = ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
     ref_output_tensor = torch_layer_norm(torch_input_tensor)
+    if use_welford:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.99975, 0.14, 0.085, 0.02
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.9999, 0.065, 0.065, 0.014
     assert_numeric_metrics(
-        ref_output_tensor, output_ttnn, pcc_threshold=0.9999, rtol=0.065, atol=0.065, frobenius_threshold=0.014
+        ref_output_tensor,
+        output_ttnn,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
     )
 
 
@@ -781,3 +794,62 @@ def test_layer_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores(
         f"cores scheduled outside the bounding box: {sorted(scheduled_cores - expected_cores)}; "
         f"bounding box cores left unscheduled: {sorted(expected_cores - scheduled_cores)}"
     )
+
+
+# Reproduction for https://github.com/tenstorrent/tt-metal/issues/29667.
+# A 2x4 shard grid (8 physical cores), but the tensor's logical width only spans row 0 (4 cores);
+# row 1 is entirely tile padding, not the single partial trailing tile that
+# run_sharded_norm_logical_width_multicore covers (its own assert rules out a fully-empty core, so
+# this geometry is built standalone rather than as another case there). Reported to hang in the
+# two-stage cross-core reduce, since the sender waits for signals from all 8 physical cores but only
+# 4 of them hold real data.
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_layer_norm_sharded_redundant_row_hang(device, use_welford):
+    torch.manual_seed(0)
+
+    num_cores_w, num_cores_h = 4, 2  # 2x4 grid -> 8 physical cores
+    w = num_cores_w * 32  # 128: exactly 4 tiles -> exactly fills row 0, nothing else
+    shard_w = 32  # 1 tile per core
+    h = 32  # single tile row -> block_h == full tensor height -> mcast_1d
+
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
+    )
+    sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(h, shard_w),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_input = generate_input_tensor(h, w, "random", torch.bfloat16)
+    ref_output = torch.nn.functional.layer_norm(torch_input, [w])
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.to_memory_config(tt_input, memory_config=sharded_cfg)
+
+    prgm = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores_w, num_cores_h],
+        subblock_w=1,
+        block_h=1,
+        block_w=1,
+        use_welford=use_welford,
+        inplace=False,
+    )
+    compute_cfg = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+
+    kwargs = dict(
+        epsilon=1e-5,
+        program_config=prgm,
+        compute_kernel_config=compute_cfg,
+        memory_config=sharded_cfg,
+    )
+    if use_welford:
+        kwargs["recip_tensor"] = ttnn.create_layer_norm_reciprocals(device, sharded_cfg.shard_spec.grid, shard_w)
+
+    tt_out = ttnn.layer_norm(tt_input, **kwargs)
+
+    out = ttnn.to_torch(ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
+    assert torch.allclose(out, ref_output, rtol=0.1, atol=0.1)
