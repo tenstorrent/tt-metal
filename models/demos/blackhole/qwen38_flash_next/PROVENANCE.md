@@ -15,6 +15,25 @@ to that original prerequisite. The publication stack carries its six commits
 with their original author attribution; it does not present that work as an
 independent new contribution.
 
+The MoE ancestry also retains Samuel Jett's original
+[PR #57448](https://github.com/tenstorrent/tt-metal/pull/57448), head
+`ae0691f1cf3fc4c227bc0a0f48a43959589b09fc`: four source-ring and LocalOutput
+commits, separate from the six compact-packing commits. Both original PRs
+remain prerequisites. The additional packed-token, streaming and replay work
+is scoped after them; their existing contributions are not duplicated in a
+new prerequisite review. The source's explicit local-combine and idle-expert
+handling remains part of the additional port.
+
+The public GDN operation reuses Izajasz Wrosz's merged upstream
+[PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440), commit
+`96cc4a7937f19ee205717577fcf4d10269d043b4`. The port does not add another public
+prep/scan binding. Its fused producers retain their normalized, scaled query
+and key bytes; the model adapter restores the public rank-four token-major
+layout and passes `scale=1.0`. Existing unfused inputs keep their original
+scale contract. This upstream dependency changes phase arithmetic, so its
+numerical, source-regression, reuse and task results must be identified
+separately from measurements on the earlier native implementation.
+
 Port adaptations preserve the model's numerical policy while using current
 trace-allocation APIs and the current native build. The shared MoE streaming
 pipeline is an explicit model opt-in, so existing operation callers keep their

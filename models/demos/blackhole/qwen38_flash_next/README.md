@@ -2,8 +2,8 @@
 
 This model port originates from **Samuel Jett** ([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com),
 source commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`. See [PROVENANCE.md](PROVENANCE.md) for the source,
-target base, original compact-packing prerequisite [#57564](https://github.com/tenstorrent/tt-metal/pull/57564),
-and current-upstream adaptations.
+target base, original MoE prerequisites [#57448](https://github.com/tenstorrent/tt-metal/pull/57448) and
+[#57564](https://github.com/tenstorrent/tt-metal/pull/57564), and the merged public GDN prerequisite.
 
 The implementation uses four Blackhole devices as a 1x4 mesh, BF4 routed experts, BF8 dense weights, and a host
 PLE table mapped from the checkpoint. The publication validation targets one request at a time and a 32,768-token
@@ -41,6 +41,17 @@ device transfers still use it. Hash verification and retained descriptors do not
 stat checks cannot detect every writable-mmap modification. The model validates its cache identity and hashes
 before upload and releases loaded tensors on validation failure. Generic `ttnn.load_tensor` preserves ordinary
 pathname behavior and owns a duplicate only for a canonical `/proc/self/fd/<positive-int>` input.
+
+For a shared read-only checkpoint, verify every file without network or cache writes:
+
+```bash
+python -m models.demos.blackhole.qwen38_flash_next.tools.verify_release \
+  --checkpoint "$CHECKPOINT" --manifest "$CHECKPOINT_MANIFEST" \
+  --output "$RESULTS/checkpoint-verification.json" --workers 2
+```
+
+The manifest must have SHA256 `2618cf53db8e04d539d96bb03d3f5c6e08f8ad3dddd0a54252d5d1b739d84ded`;
+write the report outside the checkpoint. Include this verification cost in the complete weekly recipe timing.
 
 ## Standalone validation and serving
 
@@ -88,7 +99,7 @@ export EXTRA_MODELS_DIR="$PWD/$MODEL/tools/vllm_bundle"
 export TT_MESH_GRAPH_DESC_PATH="$PWD/$MODEL/tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto"
 python "$PLUGIN_ROOT/examples/server_example_tt.py" \
   --model "$CHECKPOINT" --served-model-name Qwen/Qwen3.8-Flash-Next \
-  --host 127.0.0.1 --port 8000 --max_num_seqs 1 --block_size 64 --max-model-len 32704 \
+  --host 127.0.0.1 --port 8000 --shutdown-timeout 30 --max_num_seqs 1 --block_size 64 --max-model-len 32704 \
   --hf-overrides '{"architectures":["TTQwen4ExpForConditionalGeneration"]}' \
   --default-chat-template-kwargs '{"enable_thinking":false}' \
   --additional-config '{"tt":{"l1_small_size":24576,"trace_region_size":0,"sample_on_device_mode":"decode_only"}}'
@@ -120,15 +131,16 @@ aggregate `tokens/s` measurements. The shared target validator needs the corresp
 weekly registration. Its legacy `save_partial_run_json` API writes a benchmark pickle under
 `generated/benchmark_data`; this is the standard collector input.
 
-## Port validation status
+## Qualification records
 
-On 2026-09-29, the current clang-20/SFPI 7.83 build passed direct native API controls, real-checkpoint component
-comparisons, 29 full-model reuse requests with no program-cache growth, and live vLLM request/parameter tests.
-All four standalone configurations passed JSON 96/96; both MTP handoff orders passed.
+Attach measured qualification records to the publication review with the exact model commit, native library
+identity, compiler, hardware topology, checkpoint revision, command, and saved responses. Keep source regression,
+independent reference accuracy, task quality, and runtime reuse verdicts separate. Preserve failures and first
+stderr alongside corrected runs. The public GDN prerequisite changes phase arithmetic; measurements made on the
+older private-binding implementation do not qualify the new implementation automatically.
 
-**Exact source regression remains failing:** chunk 5/12, plain slab 5/12 short matching-policy records, MTP 6/12,
-and slab+MTP 6/13 token hashes match their frozen source proposals. The plain-slab document ran, but its historical
-baseline predates the default numerical policy. No proposal was promoted or numerical gate relaxed. A selected
-independent HF diagnostic covered 3/36 corpus items and 768 continuation positions, with 95.18% top-1 and 100%
-top-5 agreement. It does not establish full-corpus task accuracy. Complete task scores and timings must accompany
-publication; source equivalence requires further diagnosis with the source owner.
+`tests/test_gdn_public_device.py` checks forced phased, forced fused and automatic public dispatch against an
+independent recurrence, including masked MTP commits, replicas, input-state ownership, fresh input addresses,
+program-cache reuse and trace replay. Set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh. Optional
+`QWEN38_GDN_BASELINE_OUTPUT` points to saved old-arithmetic tensors for an additional exact/PCC diagnostic;
+it does not replace the recurrence gate or establish full-model equivalence.
