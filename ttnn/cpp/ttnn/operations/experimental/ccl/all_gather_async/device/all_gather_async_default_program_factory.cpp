@@ -222,7 +222,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    bool /* using_persistent_buffers */,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -745,12 +745,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                           // output_tensor_address
-                    virtual_core.x,                                              // out_ready_sem_noc0_x
-                    virtual_core.y,                                              // out_ready_sem_noc0_y
-                    semaphore.at(dir).address(),                                 // out_ready_sem
-                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
+                    output_tensor.buffer()->address(),  // output_tensor_address
+                    virtual_core.x,                     // out_ready_sem_noc0_x
+                    virtual_core.y,                     // out_ready_sem_noc0_y
+                    semaphore.at(dir).address(),        // out_ready_sem
+                    // Persistent output ownership does not order reused ready-semaphore resets across ranks.
+                    // Honor the caller's barrier before sending the next invocation's ready increments.
+                    barrier_semaphore.has_value(),  // use synchronize barrier semaphore
+                    barrier_semaphore.has_value()   // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
                         : 0,
                     opposite_core_coord.x,    // opposite_core_sem_noc0_x

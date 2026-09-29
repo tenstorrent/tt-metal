@@ -109,6 +109,7 @@ void kernel_main() {
     const uint32_t in3_addr = get_common_arg_val<uint32_t>(cargidx++);
     size_t out_ready_sem_backward = get_common_arg_val<uint32_t>(cargidx++);
     size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t barrier_sem = get_common_arg_val<uint32_t>(cargidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
@@ -285,6 +286,30 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+
+    // A following gather may reuse DRAM owned by the preceding collective. Its
+    // remote writes must wait until every rank has entered this program. Data
+    // readiness semaphores protect reads within this gather, not prior owners.
+    // This barrier covers the Ring activation gather; Linear and FSDP are unchanged.
+    if constexpr (topology == Topology::Ring && num_devices > 1) {
+        if (barrier_sem != 0) {
+            auto* barrier_connection =
+                mux_backward.connection_valid ? mux_connection_handle_backward : mux_connection_handle_forward;
+            auto* barrier_header = PacketHeaderPool::allocate_header();
+            const uint64_t barrier_noc_addr =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+            fabric_multicast_noc_unicast_atomic_inc(
+                barrier_connection,
+                barrier_header,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_noc_addr, 1},
+                static_cast<uint8_t>(1),
+                static_cast<uint8_t>(num_devices - 1));
+            noc_obj.async_writes_flushed();
+            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            noc_semaphore_wait_min(barrier_ptr, num_devices - 1);
+            noc_semaphore_set(barrier_ptr, 0);
+        }
+    }
 #endif
 
     /**

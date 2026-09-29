@@ -188,7 +188,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
-    //    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     //    bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
@@ -1163,7 +1163,7 @@ all_gather_minimal_matmul_async_factory_helper(
     }
 
     // Set common runtime args (same for all cores, updated in override_runtime_arguments)
-    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary_a, ternary_b],
+    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, [ternary_a, ternary_b],
     // output_addrs...]
     {
         std::vector<uint32_t> in0_common_args = {
@@ -1172,6 +1172,7 @@ all_gather_minimal_matmul_async_factory_helper(
             in3_addr,
             semaphore.at(0).address(),
             semaphore.at(1).address(),
+            barrier_semaphore.has_value() ? barrier_semaphore->address() : 0,
         };
         if (use_fused_ternary) {
             in0_common_args.push_back(fused_ternary_input_a.value().buffer()->address());
@@ -1599,13 +1600,15 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     // Output layout: [0]=ag_output, [1]=persistent_weight_buffer (if FSDP), then chunk outputs
     const size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
 
-    // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, [ternary], output_addrs...]
+    // Build in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, [ternary],
+    // output_addrs...]
     std::vector<uint32_t> in0_common = {
         output_tensor.at(0).buffer()->address(),
         tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0,
         tensor_args.input_tensor.buffer()->address(),
         attributes.semaphore.at(0).address(),
         attributes.semaphore.at(1).address(),
+        attributes.barrier_semaphore.has_value() ? attributes.barrier_semaphore->address() : 0,
     };
     if (has_fused_ternary) {
         in0_common.push_back(tensor_args.fused_ternary_input_a.value().buffer()->address());
@@ -1706,7 +1709,7 @@ all_gather_minimal_matmul_async_factory(
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
-    // const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     // bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
@@ -1746,7 +1749,7 @@ all_gather_minimal_matmul_async_factory(
             ring_index,
             topology,
             semaphore,
-            // barrier_semaphore,
+            barrier_semaphore,
             // using_persistent_buffers,
             force_transpose,
             num_workers_per_link,
@@ -1824,7 +1827,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         device_index,
         attributes.topology,
         attributes.semaphore,
-        // attributes.barrier_semaphore,
+        attributes.barrier_semaphore,
         // attributes.using_persistent_buffers,
         attributes.force_transpose,
         attributes.num_workers_per_link,
