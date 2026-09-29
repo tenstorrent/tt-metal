@@ -167,6 +167,76 @@
   "started": "2026-09-29T06:14:35",
   "status": "PASS"
  },
+ "C.dsa_moe.attn_norm": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ed3ffb78-4c94-458a-a6b5-0318e5071ee6"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.dsa_moe.attn_norm.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.dsa_moe.attn_norm.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 191.9,
+    "session_id": "ed3ffb78-4c94-458a-a6b5-0318e5071ee6",
+    "t": "2026-09-29T06:45:36"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 19.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T06:46:35"
+   }
+  ],
+  "last_run": "2026-09-29T06:46:35",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/C.dsa_moe.attn_norm.log",
+  "metrics": {
+   "max_row_rel_l2_attn_norm_L03": 0.003096736501902342,
+   "pcc_attn_norm_L03": 0.9999960057061041,
+   "rel_l2_attn_norm_L03": 0.0028289388865232468,
+   "row_norm_ratio_max_attn_norm_L03": 1.0005463361740112,
+   "row_norm_ratio_min_attn_norm_L03": 0.9990455508232117
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T06:46:15",
+  "status": "PASS"
+ },
  "C.kda_dense.attention": {
   "agent": {
    "defs": {
