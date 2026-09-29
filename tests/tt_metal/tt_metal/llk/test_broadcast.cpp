@@ -559,13 +559,20 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
 
     // srcA and the output are total_tile_rows x ct_dim grids; srcB is rt_dim tiles, each reused by
     // its row in every block.
-    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    //
+    // One page per buffer rather than one per tile, because the reader and writer kernels walk a
+    // single DRAM bank linearly (bank_id 0, the address advancing by one tile per transfer). A
+    // page-per-tile buffer is interleaved, so page k lands in bank k % num_banks -- two banks on
+    // Quasar -- and a linear walk of bank 0 would read page 2k for tile k and run off the end of
+    // that bank's share of the buffer once k passes half the tile count. Giving the allocator one
+    // page puts the whole buffer in one bank, which is what these kernels address.
+    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
 
-    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, test_config.rt_dim);
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * test_config.rt_dim, 1);
     std::uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
 
-    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
