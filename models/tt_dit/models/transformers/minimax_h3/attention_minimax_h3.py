@@ -208,6 +208,9 @@ class MiniMaxH3Attention(Module):
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
 
         # Opt-in tuning knobs for the ring path; unset means the measured defaults below.
+        # fixed-offset softmax: only for blocks whose q/k norm gains bound the scaled logits (the transformer
+        # sets it per block from MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS; the plain env turns it on everywhere).
+        self.sdpa_fixed_offset = self.use_ring and os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX") == "1"
         sdpa_fidelity = ttnn.MathFidelity.HiFi2
         self.sdpa_chunks_override: tuple[int, int] | None = None
         if self.use_ring:
@@ -306,7 +309,7 @@ class MiniMaxH3Attention(Module):
 
         `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
-        key = (seq_local, ring, windowed)
+        key = (seq_local, ring, windowed, self.sdpa_fixed_offset)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
@@ -336,6 +339,7 @@ class MiniMaxH3Attention(Module):
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                fixed_offset_softmax=ring and self.sdpa_fixed_offset,
                 **phase_fidelity,
             )
         return self._sdpa_program_configs[key]

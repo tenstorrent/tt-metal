@@ -291,6 +291,9 @@ class MiniMaxH3Transformer3DModel(Module):
                 for _ in range(num_layers)
             ]
         )
+        # MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS="0-35,39,41,42": ring SDPA without a running max on these blocks
+        # (their q/k norm gains bound |scale * logit| well below the bf16 exp range); "all" selects every block.
+        self._set_fixed_softmax_blocks(os.environ.get("MINIMAX_H3_SDPA_FIXED_SOFTMAX_BLOCKS"))
 
         # 5. Shared output norm and the two per-modality heads. The heads are replicated: their output
         # widths (96 and 32) are too narrow to fracture across TP at tile granularity.
@@ -472,6 +475,19 @@ class MiniMaxH3Transformer3DModel(Module):
                 tables=tables[i] if tables is not None else None,
             )
         return hidden
+
+    def _set_fixed_softmax_blocks(self, spec: str | None) -> None:
+        if not spec:
+            return
+        chosen: set[int] = set()
+        if spec.strip() == "all":
+            chosen = set(range(len(self.transformer_blocks)))
+        else:
+            for part in spec.split(","):
+                lo, _, hi = part.partition("-")
+                chosen.update(range(int(lo), int(hi or lo) + 1))
+        for i, block in enumerate(self.transformer_blocks):
+            block.attn.sdpa_fixed_offset = block.attn.use_ring and i in chosen
 
     def modulation_tables(self, temb: ttnn.Tensor, timestep_key: tuple) -> list[list[ttnn.Tensor]] | None:
         """Per-block modulation tables for this timestep vector from the cache, building them on a miss.
