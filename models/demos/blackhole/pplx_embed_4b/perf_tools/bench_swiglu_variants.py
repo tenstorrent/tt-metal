@@ -7,7 +7,8 @@
 # Usage: bench_swiglu_variants.py <batch> [xscale ...]   blocks default to the model's (bs8 8,40,6 1x6, else 4,40,8 1x8);
 #        MM_BLOCKS=M,K,N,sh,sw overrides; SW_ONLY="landed|silu_tile + mul" picks variants; xscale scales the activation (gate std
 #        ~xscale with the 0.02-scaled weight) to probe the tails; SW_REPEAT=3 runs the SFPU pass 3 times (timing only) so
-#        a variant's cost shows although one pass is mostly hidden.
+#        a variant's cost shows although one pass is mostly hidden; SW_SKIP=first|last|all skips the pass on the first /
+#        last subblock of every output block, or on all of them (timing only; errors meaningless).
 import os
 import statistics
 import subprocess
@@ -20,6 +21,11 @@ KDIR = os.path.join(REPO, "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/
 HDR = os.path.join(KDIR, "swiglu_sfpu.hpp")
 COMPUTE = os.path.join(KDIR, "compute_metal2.cpp")
 SFPU_CALL = "PACK((llk_minimal_matmul_swiglu(gate, gate + 1, gate)));"
+SKIP = {  # SW_SKIP: which subblocks of each output block run without the pass
+    "first": "!(M_start == 0 && N_start == 0)",
+    "last": "!(M_start + subblock_h >= M_block_tiles && N_start + subblock_w >= N_block_tiles)",
+    "all": "false",
+}
 # a variant's body replaces everything after the up load up to the DST store
 BODY_START = "        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];\n"
 BODY_END = "        sfpi::dst_reg[out_tile_idx * dst_tile_size] = "
@@ -115,12 +121,16 @@ def main():
     B = int(sys.argv[1])
     scales = [float(s) for s in sys.argv[2:]] or [1.0]
     blocks = os.getenv("MM_BLOCKS") or ("8,40,6,1,6" if B == 8 else "4,40,8,1,8")
-    print(f"RES swiglu variants B{B} blocks={blocks} xscale={scales} repeat={os.getenv('SW_REPEAT', '1')}", flush=True)
+    print(
+        f"RES swiglu variants B{B} blocks={blocks} xscale={scales} repeat={os.getenv('SW_REPEAT', '1')} skip={os.getenv('SW_SKIP')}",
+        flush=True,
+    )
     orig, orig_c = open(HDR).read(), open(COMPUTE).read()
-    rep = int(os.getenv("SW_REPEAT", "1"))
-    if rep != 1:  # timing only: repeated passes overwrite the gate slot, so the errors are meaningless
+    rep, skip = int(os.getenv("SW_REPEAT", "1")), os.getenv("SW_SKIP")
+    if rep != 1 or skip:  # timing only: repeated or skipped passes leave wrong values, so the errors are meaningless
         assert orig_c.count(SFPU_CALL) == 1
-        open(COMPUTE, "w").write(orig_c.replace(SFPU_CALL, " ".join([SFPU_CALL] * rep)))
+        call = " ".join([SFPU_CALL] * rep)
+        open(COMPUTE, "w").write(orig_c.replace(SFPU_CALL, f"if ({SKIP[skip]}) {{ {call} }}" if skip else call))
     try:
         for vname, body in VARIANTS.items():
             open(HDR, "w").write(patch(orig, body))

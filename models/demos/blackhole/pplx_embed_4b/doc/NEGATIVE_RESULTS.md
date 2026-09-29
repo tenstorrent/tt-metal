@@ -1359,7 +1359,23 @@ sigmoid.
 **Where the exposed time is not.** The landed pass cuts the pack-thread work by 71% but the exposed time only from 58
 to ~45 µs (bs16 1700 → 1687 against 1642 with no SFPU). Every binary SFPU call opens with `STALLWAIT(STALL_SFPU,
 MATH)` (`_llk_math_eltwise_sfpu_start_`), redundant on the pack thread after the MATH_PACK semaphore wait; calling
-the pass without it: 1703.2 → 1700.6 (bs16), 3271.3 → 3267.8 (bs32). Not the stall; open.
+the pass without it: 1703.2 → 1700.6 (bs16), 3271.3 → 3267.8 (bs32). Not the stall.
+
+**Half of it is each output block's last subblock.** Skipping the pass on one subblock per output block
+(`SW_SKIP=first|last|all`, 4 subblocks per block at 4,40,8 1×8, so each skip removes 25% of the work), µs:
+
+| | full | skip first | skip last | skip all | exposed | saved by first / last |
+|---|---|---|---|---|---|---|
+| bs16 landed | 1688.0 | 1685.0 | 1668.2 | 1646.2 | 41.8 | 3.0 / 19.8 (7 / 47%) |
+| bs16 silu_tile + mul | 1702.6 | 1699.7 | 1671.3 | 1646.2 | 56.4 | 2.9 / 31.3 (5 / 55%) |
+| bs32 landed | 3225.8 | 3210.6 | 3182.3 | 3127.4 | 98.4 | 15.2 / 43.5 (15 / 44%) |
+| bs32 silu_tile + mul | 3267.1 | 3246.9 | 3177.2 | 3128.6 | 138.5 | 20.2 / 89.9 (15 / 65%) |
+
+The first subblock's pass hides behind the next subblock's math; the last one's, which should hide behind the next
+output block's K block 0 in the other DST half, half does not (~0.45 µs per block at bs16, about half of one
+subblock's pass). Why is open: the pack thread's next-block setup (intermediate reserve, L1-acc / format reconfig)
+queued behind the tail, or a CB handoff at the block boundary; device-profiler zones on the math and pack threads
+around the boundary would say which.
 
 **e2e**, sustained_run.sh, 3 alternating rounds per batch, chips 2 / 0 / 1 concurrently, medians of 3, cold /
 sustained ms: bs8 78.5 / 101.2 → 78.3 / 99.4 (−0.3 / −1.8%), bs16 148.9 / 194.9 → 148.1 / 194.4 (−0.5 / −0.3%),
