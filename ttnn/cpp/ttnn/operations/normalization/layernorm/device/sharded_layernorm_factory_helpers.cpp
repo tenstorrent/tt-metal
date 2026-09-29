@@ -1237,6 +1237,11 @@ void add_kernel_and_work_unit_specs(
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
+    // Only config_1xx is set: it carries the WH/BH placement (explicit RISC-V core + the mcast-specific
+    // reader/writer NOCs) and is ignored on Quasar (Gen2), where the framework places the kernel and
+    // picks the NOC; config_2xx stays unset so every bound DFB keeps implicit sync ON. That is what the
+    // mcast reduction needs: the reader_sender's remote mcast write posts the receivers' input DFB via
+    // implicit-sync txn tracking (a receiver cannot explicitly push data it did not produce).
     const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementHardwareConfig{
         .config_1xx =
             m2::DataMovementHardwareConfig::DataMovement1XXConfig{
