@@ -9,6 +9,31 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+void validate_q_head_split(
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args) {
+    using namespace tt::constants;
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    if (operation_attributes.q_head_split.has_value()) {
+        const auto split = operation_attributes.q_head_split.value();
+        TT_FATAL(!input_tensor.is_sharded(), "Q head split requires interleaved input");
+        const auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(tile_shape[0] == TILE_HEIGHT && tile_shape[1] == TILE_WIDTH, "Q head split requires standard tiles");
+        TT_FATAL(
+            operation_attributes.num_kv_heads == 0 && !tensor_args.input_tensor_kv.has_value() &&
+                !operation_attributes.transpose_k_heads && !operation_attributes.kv_tied,
+            "Q head split supports Q-only head creation");
+        TT_FATAL(
+            split > 0 && split < operation_attributes.head_dim && split % TILE_WIDTH == 0 &&
+                operation_attributes.head_dim % TILE_WIDTH == 0,
+            "Q head split requires two nonempty tile-aligned channel regions");
+        TT_FATAL(tensor_args.optional_output_tensors.empty(), "Q head split does not accept preallocated outputs");
+    }
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 // Generic NLP CreateHeads op
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
@@ -33,6 +58,41 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
+
+    CMAKE_UNIQUE_NAMESPACE::validate_q_head_split(operation_attributes, tensor_args);
+    if (operation_attributes.kv_tied) {
+        // Every path reaches V from K's own columns rather than the section after them: the
+        // interleaved reader rewinds its running tile id, and the sharded path points the writer's
+        // V base address at K's. transpose_k_heads only selects which CB K lands in, so it is
+        // orthogonal to both.
+        const uint32_t num_q_heads = operation_attributes.num_q_heads;
+        const uint32_t num_kv_heads = operation_attributes.num_kv_heads;
+        const uint32_t head_dim = operation_attributes.head_dim;
+        if (tensor_args.input_tensor_kv.has_value()) {
+            // The single K/V section lives in the KV tensor, so this one carries Q alone.
+            TT_FATAL(
+                input_shape[3] == num_q_heads * head_dim,
+                "kv_tied input width ({}) must be num_q_heads {} * head_dim {} when a KV tensor is given",
+                input_shape[3],
+                num_q_heads,
+                head_dim);
+            const auto kv_shape = tensor_args.input_tensor_kv.value().padded_shape();
+            TT_FATAL(
+                kv_shape[3] == num_kv_heads * head_dim,
+                "kv_tied KV width ({}) must be num_kv_heads {} * head_dim {} -- one K/V section, not two",
+                kv_shape[3],
+                num_kv_heads,
+                head_dim);
+        } else {
+            TT_FATAL(
+                input_shape[3] == (num_q_heads + num_kv_heads) * head_dim,
+                "kv_tied input width ({}) must be (num_q_heads {} + num_kv_heads {}) * head_dim {}",
+                input_shape[3],
+                num_q_heads,
+                num_kv_heads,
+                head_dim);
+        }
+    }
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] ==
@@ -94,13 +154,16 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
                 "Number of KV heads ({}) must be divisible by number of cores ({})",
                 operation_attributes.num_kv_heads,
                 input_tensor.shard_spec().value().num_cores());
+            // One K/V section per core when tied, two otherwise.
+            const uint32_t kv_sections = operation_attributes.kv_tied ? 1 : 2;
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] ==
-                    (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + 2) *
+                    (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + kv_sections) *
                         operation_attributes.head_dim,
-                "Shard spec shape[1] ({}) must equal (num_q_heads / num_kv_heads + 2) * head_dim ({})",
+                "Shard spec shape[1] ({}) must equal (num_q_heads / num_kv_heads + {}) * head_dim ({})",
                 input_tensor.shard_spec().value().shape[1],
-                (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + 2) *
+                kv_sections,
+                (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + kv_sections) *
                     operation_attributes.head_dim);
         }
         TT_FATAL(!operation_attributes.transpose_k_heads, "Transpose K heads must be false");
@@ -138,11 +201,14 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "KV tensor shard orientation must be ROW_MAJOR but got {}",
                 input_tensor_kv.shard_spec().value().orientation);
+            // One K/V section per core when tied, two otherwise.
+            const uint32_t kv_sections = operation_attributes.kv_tied ? 1 : 2;
             TT_FATAL(
-                input_tensor_kv.shard_spec().value().shape[1] == 2 * operation_attributes.head_dim,
-                "KV tensor shard spec shape[1] ({}) must equal 2 * head_dim ({})",
+                input_tensor_kv.shard_spec().value().shape[1] == kv_sections * operation_attributes.head_dim,
+                "KV tensor shard spec shape[1] ({}) must equal {} * head_dim ({})",
                 input_tensor_kv.shard_spec().value().shape[1],
-                2 * operation_attributes.head_dim);
+                kv_sections,
+                kv_sections * operation_attributes.head_dim);
             TT_FATAL(
                 operation_attributes.num_kv_heads % input_tensor_kv.shard_spec().value().num_cores() == 0,
                 "Number of KV heads ({}) must be divisible by KV tensor number of cores ({})",
@@ -157,6 +223,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
 
 NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    CMAKE_UNIQUE_NAMESPACE::validate_q_head_split(operation_attributes, tensor_args);
     using namespace tt::constants;
     if (tensor_args.optional_output_tensors.size() == 3) {
         const auto& output_tensors = tensor_args.optional_output_tensors;
@@ -176,10 +243,14 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
         head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
     }
 
-    const Shape q_output_shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim});
+    const auto split = operation_attributes.q_head_split;
+    const Shape q_output_shape(
+        {input_shape[0], operation_attributes.num_q_heads, sequence_length, split.value_or(head_dim)});
     const Shape v_output_shape({input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim});
     const Shape k_output_shape =
-        operation_attributes.transpose_k_heads
+        split.has_value()
+            ? Shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim - split.value()})
+        : operation_attributes.transpose_k_heads
             ? Shape({input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length})
             : v_output_shape;
 
@@ -264,8 +335,10 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     std::optional<uint32_t> num_kv_heads,
     uint32_t head_dim,
     bool transpose_k_heads,
+    bool kv_tied,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors,
+    std::optional<uint32_t> q_head_split) {
     using OperationType = ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -273,7 +346,9 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
         .num_kv_heads = num_kv_heads.value_or(num_q_heads),
         .head_dim = head_dim,
         .transpose_k_heads = transpose_k_heads,
-        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())};
+        .kv_tied = kv_tied,
+        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config()),
+        .q_head_split = q_head_split};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_q = input_tensor_q,
         .input_tensor_kv = input_tensor_kv,

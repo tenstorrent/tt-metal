@@ -51,7 +51,8 @@ void kernel_main() {
 
     // Tell the SFPU that we will be using circular buffers c_in0 and c_out0
     // to perform the computation.
-    init_sfpu(cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_out0);
+    copy_init(cb_in0);
 
     // Loop over all the tiles and perform the computation
     for (uint32_t i = 0; i < n_tiles; i++) {

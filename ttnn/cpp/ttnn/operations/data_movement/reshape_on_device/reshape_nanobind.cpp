@@ -49,7 +49,7 @@ void bind_reshape(nb::module_& mod) {
 
 
         Args:
-            * :attr:`input_tensor`: Input Tensor.
+            * :attr:`input_tensor`: Input Tensor. A TILE layout tensor must use the standard 32x32 tile.
             * :attr:`W`: W dim of tensor.
             * :attr:`Z`: Z dim of tensor.
             * :attr:`Y`: Y dim of tensor.

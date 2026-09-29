@@ -10,6 +10,13 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
+// BCAST_LLK is only emitted by the host for the TTT variant; TTS/TST always take the
+// software fill path. Default it here so the guards below do not rely on an undefined
+// macro evaluating to 0.
+#ifndef BCAST_LLK
+#define BCAST_LLK 0
+#endif
+
 void kernel_main() {
     // Standard first 5 arguments
     const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address

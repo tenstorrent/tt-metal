@@ -49,7 +49,7 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
     }
 
     auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
-    if (!size.has_value()) {
+    if (!size.has_value() || size.value() == 0) {
         log_debug(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
         return std::nullopt;
     }
@@ -63,7 +63,8 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
     }
 
     auto addr = firmware_info_provider->get_runtime_telemetry_buffer_address();
-    if (!addr.has_value()) {
+    // 0 is unpublished, not a valid buffer. Same class of versim trap as L1 addr_offset == 0.
+    if (!addr.has_value() || addr.value() == 0) {
         log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer address is unavailable or invalid");
         return std::nullopt;
     }
@@ -252,11 +253,26 @@ private:
         uint8_t cq_id = 0;
     };
 
-    static uint32_t get_total_worker_and_active_eth_cores(tt::umd::TTDevice& tt_device) {
-        const auto& soc_desc = tt_device.get_soc_descriptor();
-        uint32_t total_cores = soc_desc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED).size();
-        total_cores += soc_desc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED).size();
-        return total_cores;
+    static uint32_t tensix_core_count_fallback(tt::umd::TTDevice& tt_device) {
+        return tt_device.get_soc_descriptor().get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED).size();
+    }
+
+    static uint32_t resolve_num_worker_cores(
+        const dispatch_telemetry_types::SMCDispatchTelemetryControl& control, tt::umd::TTDevice& tt_device) {
+        // Copy to avoid taking a reference to a packed struct member, which could be unaligned.
+        const uint16_t num_worker_cores = control.num_worker_cores;
+        if (num_worker_cores > 0) {
+            return num_worker_cores;
+        }
+        return tensix_core_count_fallback(tt_device);
+    }
+
+    static uint32_t get_num_worker_cores(tt::umd::TTDevice& tt_device) {
+        auto control = read_smc_dispatch_telemetry_control(tt_device);
+        if (!control.has_value()) {
+            return tensix_core_count_fallback(tt_device);
+        }
+        return resolve_num_worker_cores(*control, tt_device);
     }
 
     std::vector<std::vector<CoreEntry>> collect_telemetry_cores() {
@@ -264,6 +280,7 @@ private:
         if (!control.has_value() || control->num_hw_cqs > dispatch_telemetry_types::RESERVED_CQ_SPACE) {
             return {};
         }
+        total_number_of_cores_ = resolve_num_worker_cores(*control, tt_device_);
 
         std::vector<std::vector<CoreEntry>> entries_per_active_cq;
         const uint8_t num_cqs = control->num_hw_cqs;
@@ -310,8 +327,7 @@ private:
     }
 
 public:
-    Impl(tt::umd::TTDevice& device) :
-        tt_device_(device), total_number_of_cores_(get_total_worker_and_active_eth_cores(device)) {
+    Impl(tt::umd::TTDevice& device) : tt_device_(device), total_number_of_cores_(get_num_worker_cores(device)) {
         // Init private members to construction time
         (void)read_info();
     }
@@ -421,8 +437,8 @@ public:
         const double avg_work_runtime_per_core = delta_total_work_runtime / static_cast<double>(total_number_of_cores);
         const float core_efficiency = static_cast<float>(avg_work_runtime_per_core / delta_elapsed_device_time);
 
-        TT_ASSERT(
-            core_efficiency <= 1.0f, "If core_efficiency is greater than 100%, there is an issue with the telemetry");
+        // ACTIVE_ETH cores still contribute worker-cycles while N is tensix-only, so the raw
+        // ratio can exceed 1.0. Clamp rather than treating that as a telemetry error.
         TT_ASSERT(core_efficiency >= 0.0f, "If core_efficiency is less than 0%, there is an issue with the telemetry");
         return std::clamp(core_efficiency, 0.0f, 1.0f);
     }

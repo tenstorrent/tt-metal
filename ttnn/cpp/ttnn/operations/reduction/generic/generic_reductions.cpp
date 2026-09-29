@@ -181,10 +181,9 @@ static Tensor reduce_impl(
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
-        // Multi-axis reduces run one axis at a time. Max of maxes is exact, so Max keeps the
-        // caller's fast_and_approximate_mode; Mean scales each axis by 1/N, so it stays on FPU.
-        const bool sub_step_fast_mode =
-            reduce_type == reduction_common::ReduceType::Max ? fast_and_approximate_mode : true;
+        // Multi-axis reduces run one axis at a time. Every decomposition here is exact (a sum of
+        // partial sums, a max of maxes, a min of mins) and the intermediates stay fp32, so each
+        // sub-step carries the caller's fast_and_approximate_mode rather than being pinned.
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
             bool first = true;
@@ -224,7 +223,7 @@ static Tensor reduce_impl(
                             sub_core_grids,
                             chain_active,
                             sub_is_last,
-                            /*fast_and_approximate_mode=*/sub_step_fast_mode);
+                            /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     } else {
                         output_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
                             output_tensor,
@@ -236,7 +235,8 @@ static Tensor reduce_impl(
                             non_height_width_dims,
                             sub_core_grids,
                             chain_active,
-                            sub_is_last);
+                            sub_is_last,
+                            /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     }
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
@@ -298,7 +298,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*fast_and_approximate_mode=*/false,
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
@@ -334,7 +334,9 @@ static Tensor reduce_impl(
                 memory_config,
                 std::nullopt,
                 compute_kernel_config,
-                sub_core_grids);
+                sub_core_grids,
+                /*negate=*/false,
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -678,6 +680,7 @@ Tensor sum(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
     return operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Sum>(
@@ -689,7 +692,7 @@ Tensor sum(
             scalar,
             correction,
             sub_core_grids,
-            /*fast_and_approximate_mode=*/false,
+            fast_and_approximate_mode,
             output_layout),
         output_layout);
 }
@@ -741,7 +744,8 @@ Tensor max(
             compute_kernel_config,
             scalar,
             correction,
-            sub_core_grids);
+            sub_core_grids,
+            fast_and_approximate_mode);
     }
     return operations::reduction::reduce<reduction_common::ReduceType::Max>(
         input_tensor_arg,
@@ -763,7 +767,8 @@ Tensor min(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode) {
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {
@@ -775,7 +780,8 @@ Tensor min(
             compute_kernel_config,
             scalar,
             correction,
-            sub_core_grids);
+            sub_core_grids,
+            fast_and_approximate_mode);
     }
     return operations::reduction::reduce<reduction_common::ReduceType::Min>(
         input_tensor_arg,
@@ -785,7 +791,8 @@ Tensor min(
         compute_kernel_config,
         scalar,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        fast_and_approximate_mode);
 }
 
 Tensor std(

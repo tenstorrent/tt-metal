@@ -122,9 +122,9 @@ void verify_cb_config(
     MeshWorkload& workload,
     std::vector<CBConfig>& golden_cb_config,
     CoreRangeSet& crs) {
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
-    std::vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t max_dfbs = MetalContext::instance().hal().get_num_dataflow_buffers();
+    std::vector<uint32_t> dfb_config_vector;
+    uint32_t dfb_config_buffer_size = max_dfbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
@@ -139,23 +139,55 @@ void verify_cb_config(
                         device,
                         core_coord,
                         workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        dfb_config_buffer_size,
+                        dfb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
                     for (const auto& config : golden_cb_config) {
                         const uint32_t index = config.cb_id * sizeof(uint32_t);
                         const uint32_t cb_num_pages = config.num_pages;
                         const uint32_t cb_size = cb_num_pages * config.page_size;
-                        const bool addr_match = cb_config_vector.at(index) == cb_addr;
-                        const bool size_match = cb_config_vector.at(index + 1) == cb_size;
-                        const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
+                        const bool addr_match = dfb_config_vector.at(index) == cb_addr;
+                        const bool size_match = dfb_config_vector.at(index + 1) == cb_size;
+                        const bool num_pages_match = dfb_config_vector.at(index + 2) == cb_num_pages;
+                        const bool page_size_match = dfb_config_vector.at(index + 3) == config.page_size;
                         EXPECT_TRUE(addr_match);
                         EXPECT_TRUE(size_match);
                         EXPECT_TRUE(num_pages_match);
+                        EXPECT_TRUE(page_size_match);
                         cb_addr += cb_size;
                     }
                 }
+            }
+        }
+    }
+}
+
+void clear_cb_config_report(
+    const std::shared_ptr<MeshDevice>& mesh_device, const CoreRangeSet& crs, uint32_t report_addr) {
+    std::vector<uint32_t> cleared_report = {0, 0};
+    for (auto* device : mesh_device->get_devices()) {
+        for (const auto& core_range : crs.ranges()) {
+            for (const auto& core : core_range) {
+                ::tt::tt_metal::detail::WriteToDeviceL1(device, core, report_addr, cleared_report);
+            }
+        }
+    }
+}
+
+void verify_cb_config_report(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const CoreRangeSet& crs,
+    uint32_t report_addr,
+    const CBConfig& expected_config) {
+    for (auto* device : mesh_device->get_devices()) {
+        for (const auto& core_range : crs.ranges()) {
+            for (const auto& core : core_range) {
+                std::vector<uint32_t> report;
+                ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, report_addr, 2 * sizeof(uint32_t), report);
+                ASSERT_EQ(report.size(), 2);
+                EXPECT_EQ(report[0], expected_config.page_size);
+                EXPECT_EQ(report[1], expected_config.num_pages);
             }
         }
     }
@@ -920,6 +952,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     CoreRange cr = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
+    constexpr uint8_t updated_cb_index = 1;
 
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
@@ -928,7 +961,21 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     std::vector<CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(*program, cr_set, cb_config_vector);
-    initialize_dummy_kernels(*program, cr_set);
+    const KernelHandle report_kernel = CreateKernel(
+        *program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/report_cb_config.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {updated_cb_index}});
+    uint32_t max_cb_region_size = 0;
+    for (const auto& cb_config : cb_config_vector) {
+        max_cb_region_size += 2 * cb_config.num_pages * cb_config.page_size;
+    }
+    const uint32_t report_addr =
+        mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1) + max_cb_region_size;
+    SetRuntimeArgs(*program, report_kernel, cr_set, {report_addr});
 
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
@@ -937,6 +984,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, cb_config_vector, cr_set);
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, cb_config_vector[updated_cb_index]);
 
     std::vector<CBConfig> updated_cb_config_vector = cb_config_vector;
     for (uint32_t cb_id = 0; cb_id < cb_config_vector.size(); cb_id++) {
@@ -948,6 +996,34 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config_vector[updated_cb_index]);
+
+    // Populate the trace command cache before updating page size so the update must refresh both command caches.
+    const MeshTraceId initial_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(), initial_trace_id);
+    mesh_device_->release_mesh_trace(initial_trace_id);
+
+    CBConfig& updated_cb_config = updated_cb_config_vector[updated_cb_index];
+    updated_cb_config.page_size /= 2;
+    updated_cb_config.num_pages *= 2;
+    Program& workload_program = mesh_workload.get_programs().at(devices);
+    UpdateCircularBufferPageSize(
+        workload_program, cb_handles[updated_cb_index], updated_cb_config.cb_id, updated_cb_config.page_size);
+
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+    verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
+
+    const MeshTraceId updated_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(), updated_trace_id);
+    clear_cb_config_report(mesh_device_, cr_set, report_addr);
+    mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(), updated_trace_id, false);
+    Finish(mesh_device_->mesh_command_queue());
+    verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
+    mesh_device_->release_mesh_trace(updated_trace_id);
 }
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
