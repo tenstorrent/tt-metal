@@ -975,10 +975,11 @@ def test_eltwise_unary_sfpu_relu_max_threshold(
         else torch.tensor(golden_tensor, dtype=torch_format).view(int_format)
     )
     mismatch = torch.nonzero(res_bits != golden_bits).flatten()
+    mask = 0xFFFFFFFF if int_format == torch.int32 else 0xFFFF
     assert mismatch.numel() == 0, (
         f"{mismatch.numel()} lane(s) differ from sfpu_relu_max bit for bit; first: "
         + ", ".join(
-            f"[{i}] got {int(res_bits[i]) & 0xFFFFFFFF:#x} want {int(golden_bits[i]) & 0xFFFFFFFF:#x}"
+            f"[{i}] got {int(res_bits[i]) & mask:#x} want {int(golden_bits[i]) & mask:#x}"
             for i in mismatch[:8].tolist()
         )
     )

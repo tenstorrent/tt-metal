@@ -44,6 +44,7 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
+from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
 
 # Base parameter classes
 
@@ -340,12 +341,17 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     Takes a Python float and emits its IEEE-754 single bits, which is the encoding
     ``relu_max_tile`` takes (relu6 passes ``0x40c00000u``), so 0.0, -0.0 and a negative
     threshold are all expressible.
+
+    The field is ``relu_max_threshold``, not ``threshold``: parameter field names become
+    perf-CSV headers and must be unique across classes (test_perf_header_gate.py), and
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD` already owns ``threshold``. The default is the
+    golden's RELU_MAX_THRESHOLD, so only the C++ fallback in sfpu_operations.h is a copy.
     """
 
-    threshold: float = 5.0
+    relu_max_threshold: float = RELU_MAX_THRESHOLD
 
     def convert_to_cpp(self) -> str:
-        bits = struct.unpack("<I", struct.pack("<f", self.threshold))[0]
+        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
         return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
 
 
