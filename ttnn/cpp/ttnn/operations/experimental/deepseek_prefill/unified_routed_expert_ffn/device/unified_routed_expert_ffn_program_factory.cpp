@@ -84,6 +84,69 @@ uint32_t nd_shard_n_tiles(const ttnn::Tensor& w) {
     }
     return static_cast<uint32_t>(spec->shard_shape[-1]) / TILE;
 }
+
+// create_descriptor pushes kernels in this order. override_runtime_arguments indexes them.
+constexpr uint32_t kReaderKernelIdx = 0;
+constexpr uint32_t kWriterKernelIdx = 1;
+
+template <typename Fn>
+void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, Fn&& fn) {
+    for (const auto& tensor : tensors) {
+        auto* buffer = tensor.buffer();
+        TT_FATAL(buffer != nullptr, "weight buffer must be allocated on device");
+        fn(buffer);
+    }
+}
+
+// Reader common args: x, counts, index table, region offsets, gate/up/down weights, optional biases.
+template <typename Fn>
+void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, Fn&& fn) {
+    auto* x_buffer = t.x.buffer();
+    auto* counts_buffer = t.counts.buffer();
+    auto* idx_buffer = t.global_expert_idx_table.buffer();
+    TT_FATAL(t.expert_region_offsets.has_value(), "expert_region_offsets is required");
+    auto* start_buffer = t.expert_region_offsets->buffer();
+    TT_FATAL(x_buffer != nullptr, "x buffer must be allocated on device");
+    TT_FATAL(counts_buffer != nullptr, "counts buffer must be allocated on device");
+    TT_FATAL(idx_buffer != nullptr, "global_expert_idx_table buffer must be allocated on device");
+    TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
+    fn(x_buffer);
+    fn(counts_buffer);
+    fn(idx_buffer);
+    fn(start_buffer);
+    visit_weight_buffers(t.gate_projs, fn);
+    visit_weight_buffers(t.up_projs, fn);
+    visit_weight_buffers(t.down_projs, fn);
+    if (fuse_bias) {
+        visit_weight_buffers(t.gate_biases, fn);
+        visit_weight_buffers(t.up_biases, fn);
+        visit_weight_buffers(t.down_biases, fn);
+    }
+}
+
+// Writer common args: output, region offsets, up/down weights.
+template <typename Fn>
+void visit_writer_common_buffers(const UnifiedRoutedExpertFfnInputs& t, tt::tt_metal::Buffer* out_buffer, Fn&& fn) {
+    TT_FATAL(out_buffer != nullptr, "output buffer must be allocated on device");
+    TT_FATAL(t.expert_region_offsets.has_value(), "expert_region_offsets is required");
+    auto* start_buffer = t.expert_region_offsets->buffer();
+    TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
+    fn(out_buffer);
+    fn(start_buffer);
+    visit_weight_buffers(t.up_projs, fn);
+    visit_weight_buffers(t.down_projs, fn);
+}
+
+template <typename Visit>
+void patch_common_buffer_addresses(tt::tt_metal::RuntimeArgsData& args, Visit&& visit) {
+    uint32_t slot = 0;
+    visit([&](tt::tt_metal::Buffer* buffer) {
+        TT_FATAL(slot < args.size(), "common runtime arg slot {} is past the cached program", slot);
+        args[slot] = buffer->address();
+        ++slot;
+    });
+    TT_FATAL(slot == args.size(), "patched {} common runtime args, cached program has {}", slot, args.size());
+}
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
@@ -1295,41 +1358,43 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     // Reader: x, counts, index table, region offsets, gate/up/down weights, optional biases.
     // Writer: output, region offsets, up/down weights. Both tables are uniform across workers.
-    auto append_weight_buffers = [](tt::tt_metal::KernelDescriptor::RTArgList& args,
-                                    const std::vector<Tensor>& tensors) {
-        for (const auto& tensor : tensors) {
-            auto* buffer = tensor.buffer();
-            TT_FATAL(buffer != nullptr, "weight buffer must be allocated on device");
-            args.push_back(buffer);
-        }
-    };
+    // visit_*_common_buffers is also what override_runtime_arguments walks, so the slot order
+    // cannot drift between the miss path and the cache-hit patch.
     tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
-    reader_common_args.push_back(x_buffer);
-    reader_common_args.push_back(counts_buffer);
-    reader_common_args.push_back(idx_buffer);
-    reader_common_args.push_back(start_buffer);
-    append_weight_buffers(reader_common_args, t.gate_projs);
-    append_weight_buffers(reader_common_args, t.up_projs);
-    append_weight_buffers(reader_common_args, t.down_projs);
-    if (fuse_bias) {
-        append_weight_buffers(reader_common_args, t.gate_biases);
-        append_weight_buffers(reader_common_args, t.up_biases);
-        append_weight_buffers(reader_common_args, t.down_biases);
-    }
+    visit_reader_common_buffers(
+        t, fuse_bias, [&](tt::tt_metal::Buffer* buffer) { reader_common_args.push_back(buffer); });
     reader_kernel_desc.emplace_common_runtime_args(reader_common_args);
 
     tt::tt_metal::KernelDescriptor::RTArgList writer_common_args;
-    writer_common_args.push_back(out_buffer);
-    writer_common_args.push_back(start_buffer);
-    // Reuse the up/down addresses already collected for the reader.
-    append_weight_buffers(writer_common_args, t.up_projs);
-    append_weight_buffers(writer_common_args, t.down_projs);
+    visit_writer_common_buffers(
+        t, out_buffer, [&](tt::tt_metal::Buffer* buffer) { writer_common_args.push_back(buffer); });
     writer_kernel_desc.emplace_common_runtime_args(writer_common_args);
 
+    // Kernel index order is pinned for override_runtime_arguments: reader, writer, compute.
     desc.kernels.push_back(std::move(reader_kernel_desc));
     desc.kernels.push_back(std::move(writer_kernel_desc));
     desc.kernels.push_back(std::move(compute_kernel_desc));
     return desc;
+}
+
+void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const UnifiedRoutedExpertFfnParams& op,
+    const UnifiedRoutedExpertFfnInputs& t,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>&) {
+    // TILE calls pass output == x. That buffer is then both an input and the returned tensor, so
+    // it shows up twice in the input region and resolve_bindings returns no bindings. The adapter
+    // would rebuild this factory on every hit. Per-core args depend only on hashed attributes.
+    // These common-arg addresses are the values that change between two calls of the same spec.
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
+    patch_common_buffer_addresses(
+        reader_args, [&](auto&& consume) { visit_reader_common_buffers(t, op.fuse_bias, consume); });
+
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIdx);
+    auto* out_buffer = tensor_return_value.buffer();
+    patch_common_buffer_addresses(
+        writer_args, [&](auto&& consume) { visit_writer_common_buffers(t, out_buffer, consume); });
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
