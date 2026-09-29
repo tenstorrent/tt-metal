@@ -195,7 +195,9 @@ class default_setup(metaclass=MergeMetaclass):
         "perf_counter_data": {
             "across": "device",
             "type": "event",
-            "marker": {"risc": "BRISC"},
+            # BRISC reads the counters on tt-1xx; on Quasar DM0 reads every NEO and spills the records into
+            # the four TRISC profiler buffers of that NEO, so any TRISC of any NEO may carry them.
+            "marker": {"risc": ["BRISC"] + [f"QUASAR_NEO{neo}_TRISC{t}" for neo in range(4) for t in range(4)]},
         },
     }
 

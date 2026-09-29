@@ -14,9 +14,9 @@
 #elif defined(ARCH_WORMHOLE) || defined(ARCH_WORMHOLE_B0)
 #include "perf_counters/wormhole.h"
 #elif defined(ARCH_QUASAR)
-#error "Quasar counter tables are not in tt-llk yet"
+#include "perf_counters/quasar.h"
 #else
-#error "perf_counters/inventory.h needs ARCH_BLACKHOLE, ARCH_WORMHOLE or ARCH_WORMHOLE_B0"
+#error "perf_counters/inventory.h needs ARCH_BLACKHOLE, ARCH_WORMHOLE, ARCH_WORMHOLE_B0 or ARCH_QUASAR"
 #endif
 
 namespace llk::perf
@@ -39,7 +39,7 @@ constexpr Table as_table(const std::array<Entry, N>& entries)
 
 } // namespace detail
 
-constexpr Table table_for(Bank bank, std::uint8_t l1_mux = 0)
+constexpr Table table_for(Bank bank, [[maybe_unused]] std::uint8_t l1_mux = 0)
 {
     switch (bank)
     {
@@ -52,6 +52,9 @@ constexpr Table table_for(Bank bank, std::uint8_t l1_mux = 0)
         case Bank::TDMA_PACK:
             return detail::as_table(pack_counters);
         case Bank::L1:
+#if defined(ARCH_QUASAR)
+            return Table {nullptr, 0};
+#else
             switch (l1_mux)
             {
                 case 0:
@@ -69,6 +72,7 @@ constexpr Table table_for(Bank bank, std::uint8_t l1_mux = 0)
                 default:
                     return Table {nullptr, 0};
             }
+#endif
     }
     return Table {nullptr, 0};
 }

@@ -52,7 +52,13 @@ class _DfCounterView:
 def _compute_single(df: pd.DataFrame) -> dict:
     if df.empty:
         return {}
-    return _mc.compute_metrics(_DfCounterView(df))
+    view = _DfCounterView(df)
+    metrics = _mc.compute_metrics(view)
+    # The l1_client counter is named after the run selection, so its metric cannot live in the static table.
+    l1_client = df.loc[df["bank"] == "L1_CLIENT", "counter_name"]
+    if not l1_client.empty:
+        metrics.update(_mc.compute_l1_client_metrics(view, l1_client))
+    return metrics
 
 
 def compute_metrics(df: pd.DataFrame) -> list[dict]:

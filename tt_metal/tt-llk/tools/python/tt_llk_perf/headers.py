@@ -26,8 +26,10 @@ _ARCH_HEADER = {
     "blackhole": "blackhole.h",
     "wormhole": "wormhole.h",
     "wormhole_b0": "wormhole.h",
+    "quasar": "quasar.h",
 }
-_ARCHES_WITHOUT_TABLES = ("quasar",)
+# Quasar has no L1 counter bank (its l1_client CSR is not a select table).
+_ARCHES_WITHOUT_L1 = ("quasar",)
 
 
 class CounterEntry(NamedTuple):
@@ -124,6 +126,15 @@ def parse_enum(text: str, enum_name: str = "PerfCounterType") -> Dict[int, str]:
     return names
 
 
+def num_neos(include_dir=None) -> int:
+    """NUM_NEOS from registers.h: the NEO execution units a Quasar core carries."""
+    header = find_include_dir(include_dir) / "registers.h"
+    match = re.search(r"NUM_NEOS\s*=\s*(\d+)", _strip_comments(header.read_text()))
+    if match is None:
+        raise ValueError(f"NUM_NEOS not found in {header}")
+    return int(match.group(1))
+
+
 def counter_type_names(include_dir=None) -> Dict[int, str]:
     """Ordinal -> name table of PerfCounterType, parsed from types.h."""
     header = find_include_dir(include_dir) / "types.h"
@@ -133,6 +144,7 @@ def counter_type_names(include_dir=None) -> Dict[int, str]:
     return names
 
 
+# LLK_PERF_TABLE_SECTION (quasar.h) may sit between the array name and =
 _TABLE_DECL = re.compile(
     r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(\w+_counters)\b[^=;]*="
 )
@@ -185,18 +197,16 @@ def normalize_arch(arch) -> str:
 
 
 def bank_tables(arch, include_dir=None) -> Dict[str, List[CounterEntry]]:
-    """Bank -> [CounterEntry] for one arch; quasar has no tables yet and returns {}."""
+    """Bank -> [CounterEntry] for one arch; every bank key is present, Quasar's L1 is empty."""
     arch = normalize_arch(arch)
-    if arch in _ARCHES_WITHOUT_TABLES:
-        return {}
     if arch not in _ARCH_HEADER:
         raise ValueError(
-            f"unknown arch {arch!r}; expected one of "
-            f"{sorted(_ARCH_HEADER) + list(_ARCHES_WITHOUT_TABLES)}"
+            f"unknown arch {arch!r}; expected one of {sorted(_ARCH_HEADER)}"
         )
     header = find_include_dir(include_dir) / _ARCH_HEADER[arch]
     banks = parse_tables(header.read_text())
-    empty = [bank for bank in BANK_KEYS if not banks[bank]]
+    optional = ("L1",) if arch in _ARCHES_WITHOUT_L1 else ()
+    empty = [bank for bank in BANK_KEYS if not banks[bank] and bank not in optional]
     if empty:
         raise ValueError(
             f"{header}: banks {empty} parsed empty. The table syntax probably changed; "

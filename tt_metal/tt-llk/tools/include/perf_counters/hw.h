@@ -24,15 +24,16 @@ inline std::uint32_t read(std::uint32_t addr)
 }
 
 // Read-modify-write: the low bits of MUX_CTRL hold the INSTRN_THREAD debug-bus select.
-inline void set_l1_mux(std::uint8_t position)
+inline void set_l1_mux(std::uint8_t position, std::uint32_t window = DEFAULT_WINDOW)
 {
+    const std::uint32_t reg   = perf_cnt_mux_ctrl(window);
     const std::uint32_t field = (static_cast<std::uint32_t>(position) << L1_MUX_SHIFT) & L1_MUX_MASK;
-    write(PERF_CNT_MUX_CTRL, (read(PERF_CNT_MUX_CTRL) & ~L1_MUX_MASK) | field);
+    write(reg, (read(reg) & ~L1_MUX_MASK) | field);
 }
 
-inline void clear_debug_feature_disable()
+inline void clear_debug_feature_disable(std::uint32_t window = DEFAULT_WINDOW)
 {
-    write(DBG_FEATURE_DISABLE, 0);
+    write(dbg_feature_disable(window), 0);
 }
 
 inline void configure(const BankRegs& regs)
@@ -56,15 +57,40 @@ inline void stop(const BankRegs& regs)
     write(control, STOP);
 }
 
-inline void start_all()
+inline void start_all(std::uint32_t window = DEFAULT_WINDOW)
 {
-    write(PERF_CNT_ALL, START);
+    write(perf_cnt_all(window), START);
 }
 
-inline void stop_all()
+inline void stop_all(std::uint32_t window = DEFAULT_WINDOW)
 {
-    write(PERF_CNT_ALL, STOP);
+    write(perf_cnt_all(window), STOP);
 }
+
+#if defined(ARCH_QUASAR)
+// l1_client CSR: sel = subport*8 + event, validated by l1_client_selection_is_valid().
+constexpr std::uint32_t l1_client_ctrl_word(std::uint32_t sel)
+{
+    return ((sel / QUASAR_L1_CLIENT_NUM_EVENTS) << L1_CLIENT_SUBPORT_SHIFT) | ((sel % QUASAR_L1_CLIENT_NUM_EVENTS) << L1_CLIENT_EVENT_SHIFT) | L1_CLIENT_ENABLE;
+}
+
+// Route the selection, then read once: the counter is clear-on-read, so the window starts at zero.
+inline void l1_client_start(const L1ClientRegs& regs, std::uint32_t sel)
+{
+    write(regs.ctrl, l1_client_ctrl_word(sel));
+    (void)read(regs.cnt);
+}
+
+inline void l1_client_stop(const L1ClientRegs& regs)
+{
+    write(regs.ctrl, 0);
+}
+
+inline std::uint32_t l1_client_read(const L1ClientRegs& regs)
+{
+    return read(regs.cnt);
+}
+#endif
 
 // Polls the mode register back so the next readout sees the new select. PollLimit 0 spins without a bound and
 // always returns true (the BRISC firmware is a few bytes from its size limit); otherwise false if no read matched.
