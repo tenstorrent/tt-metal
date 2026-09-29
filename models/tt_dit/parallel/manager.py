@@ -801,6 +801,29 @@ class CCLManager:
             t_front_pad=t_front_pad,
         )
 
+    def release_buffers(self) -> None:
+        """Deallocate every cached persistent buffer (ping-pong all-gather / reduce-scatter outputs, halo and
+        fused-norm scratch). Semaphores and the small counter buffers are kept.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+
+        def deallocate(obj) -> None:
+            if isinstance(obj, ttnn.Tensor):
+                ttnn.deallocate(obj, force=True)
+            elif isinstance(obj, (list, tuple)):
+                for item in obj:
+                    deallocate(item)
+            elif isinstance(obj, dict):
+                for item in obj.values():
+                    deallocate(item)
+
+        deallocate(list(self._ping_pong_buffer_cache.values()))
+        deallocate([entry["bufs"] for entry in self._fused_norm_stats_buffer_cache.values()])
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
+        self._fused_norm_stats_buffer_cache.clear()
+        ttnn.synchronize_device(self.mesh_device)
+
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
         for axis in [0, 1]:
