@@ -337,7 +337,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
         pytest.skip(geometry_error)
 
     hf_model_id = _hf_model_id()
@@ -394,7 +394,9 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 
     with _shared_device_weights():
         for chunk_size in chunk_sizes:
-            if geometry_error := prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, context_len):
+            if geometry_error := prefill_chunk_geometry_error(
+                chunk_size, mesh_config.cp_degree, context_len, tp_degree=mesh_config.tp_degree
+            ):
                 logger.warning(f"[sweep] skipping chunk {chunk_size}: {geometry_error}")
                 continue
             logger.info(f"[sweep] ===== chunk_size={chunk_size} context_len={context_len} =====")
@@ -450,7 +452,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
         pytest.skip(geometry_error)
     n_chunks = context_len // chunk_size
     if chunk_idx != "all" and not 0 <= int(chunk_idx) < n_chunks:
