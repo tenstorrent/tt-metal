@@ -13,9 +13,11 @@ The prompt's first ``T0 = floor((len - 1) / 128) * 128`` tokens are prefilled; t
 ``decode_traced``, whose last step gives the first generated token. Like the hand-off of this directory's own prefill, the
 whole conversation must stay below 2048 tokens (no lightning-indexer state is handed over yet).
 
-``DEEPSEEK_V4_E2E_COMPARE=1`` additionally builds this directory's prefill (``DeepSeekV4PrefillModel``) on rows 2-3, prefills the
+``DEEPSEEK_V4_E2E_COMPARE=sankar`` (or ``1``) additionally builds this directory's prefill (``DeepSeekV4PrefillModel``) on rows 2-3, prefills the
 same ``T0`` tokens and compares the two hand-offs layer by layer (ring, entries, CSA prev_kv / prev_gate, PCC) -- the check that
-both prefills describe the same decode state -- before decoding from ours.
+both prefills describe the same decode state -- before decoding from ours. ``DEEPSEEK_V4_E2E_COMPARE=decode`` instead replays the
+same ``T0`` tokens through the DECODE itself, reads its caches back and compares our hand-off against the decode's own state, then
+rewinds the session -- a check of our prefill + hand-off against the decode's own arithmetic, independent of any other prefill.
 
 Knobs: ``DEEPSEEK_V4_E2E_PROMPT_LEN`` (1000), ``DEEPSEEK_V4_E2E_TEXT``, ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (128),
 ``DEEPSEEK_V4_E2E_CHUNK`` (our prefill's chunk, default 2048: one chunk covers the 2048-token limit),
@@ -208,6 +210,38 @@ def _sankar_handoff(mesh_device, config, loader, rope, ids: list[int], decode, p
     return out
 
 
+def _decode_replay_handoff(decode, sid: int, ids: list[int], config) -> list[LayerHandoff]:
+    """Replay ``ids`` through the decode from position 0 and read its per-layer state back as LayerHandoffs."""
+    from models.experimental.deepseek_v4_flash.tt.prefill.handoff_ttnn_prefill import _one_replica
+
+    for pos, tok in enumerate(ids):
+        decode.decode_traced(int(tok), pos)
+    T, window = len(ids), config.sliding_window
+    out: dict[int, LayerHandoff] = {}
+    for sm in decode.submeshes_io:
+        for li in sm["layers"]:
+            kind = config.layer_types[li]
+            scache = sm["scaches"][li]
+            entries = prev_kv = prev_gate = None
+            if kind in ("sliding_attention", "compressed_sparse_attention"):
+                kv = _one_replica(scache.kv)[0, 0]
+                ring = kv[:window]
+                if kind == "compressed_sparse_attention":
+                    entries = kv[window : window + T // config.compress_rates[kind]]
+                    hd = config.head_dim
+                    prev_kv = _one_replica(scache.prev_kv)[:, 0, 0, :hd]
+                    prev_gate = _one_replica(scache.prev_gate)[:, 0, 0, :hd]
+            else:
+                pool = _one_replica(sm["pools"][li])  # [blocks, 1, 32, Dh]
+                page_row = decode._require_paged().page_row(sid, kind)[0].tolist()
+                rows = window + T // config.compress_rates[kind]
+                block = pool.shape[2]
+                axis = torch.cat([pool[page_row[b], 0] for b in range(-(-rows // block))], 0)[:rows]
+                ring, entries = axis[:window], axis[window:rows]
+            out[li] = LayerHandoff(kind=kind, ring=ring, entries=entries, prev_kv=prev_kv, prev_gate=prev_gate)
+    return [out[li] for li in range(decode.num_layers)]
+
+
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a, b = a.flatten().double(), b.flatten().double()
     if a.numel() != b.numel():
@@ -229,8 +263,7 @@ def _compare(ours: list[LayerHandoff], ref: list[LayerHandoff]) -> float:
             parts["prev_gate"] = _pcc(o.prev_gate, r.prev_gate)
         worst = min([worst] + [v for v in parts.values() if not math.isnan(v)])
         logger.info(
-            f"hand-off vs this directory's prefill, layer {li:>2} ({o.kind}): "
-            + " ".join(f"{k} {v:.5f}" for k, v in parts.items())
+            f"hand-off vs reference, layer {li:>2} ({o.kind}): " + " ".join(f"{k} {v:.5f}" for k, v in parts.items())
         )
     return worst
 
@@ -239,7 +272,10 @@ def _run(mesh_device, progress: _Progress, prefetcher: contextlib.ExitStack, Aut
     max_new = _env_int("DEEPSEEK_V4_MAX_NEW_TOKENS", 128)
     prompt_len = _env_int("DEEPSEEK_V4_E2E_PROMPT_LEN", 1000)
     chunk = _env_int("DEEPSEEK_V4_E2E_CHUNK", 2048)
-    compare = os.environ.get("DEEPSEEK_V4_E2E_COMPARE", "0") == "1"
+    compare = os.environ.get("DEEPSEEK_V4_E2E_COMPARE", "0")
+    compare = {"1": "sankar"}.get(compare, compare)
+    if compare not in ("0", "sankar", "decode"):
+        raise ValueError(f"DEEPSEEK_V4_E2E_COMPARE={compare!r}: expected 0 | sankar | decode")
 
     # --- prompt ----------------------------------------------------------------------------------- #
     progress.step("[1/8] tokenizer and prompt")
@@ -310,11 +346,20 @@ def _run(mesh_device, progress: _Progress, prefetcher: contextlib.ExitStack, Aut
     t0 = time.perf_counter()
     layers = extract_prefill_handoff(rt, 0, aligned)
     t_extract = time.perf_counter() - t0
-    if compare:
+    if compare == "sankar":
         progress.step("[6b] reference: this directory's prefill on rows 2-3 over the same tokens")
         ref = _sankar_handoff(mesh_device, config, loader, rope, prompt_ids[:aligned], decode, progress)
         worst = _compare(layers, ref)
-        logger.info(f"hand-off comparison: worst PCC {worst:.5f} over {len(layers)} layers")
+        logger.info(f"hand-off comparison vs this directory's prefill: worst PCC {worst:.5f} over {len(layers)} layers")
+    elif compare == "decode":
+        progress.step(f"[6b] reference: the decode's own state after replaying the same {aligned} tokens")
+        t_ref = time.perf_counter()
+        ref = _decode_replay_handoff(decode, sid, prompt_ids[:aligned], config)
+        logger.info(f"decode replay of {aligned} tokens: {time.perf_counter() - t_ref:.1f}s")
+        worst = _compare(layers, ref)
+        logger.info(f"hand-off comparison vs the decode's own state: worst PCC {worst:.5f} over {len(layers)} layers")
+        decode.reset_session(sid)  # rewind: the hand-off below must land on a clean session
+        decode.reset_static_caches()
     t0 = time.perf_counter()
     handed = load_ttnn_prefill_into_decode(
         decode, layers, aligned, sid, progress=lambda m: progress(m, important=False)
