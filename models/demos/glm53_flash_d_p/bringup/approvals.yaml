@@ -13,3 +13,9 @@ plan:
     models/demos/glm53_flash_d_p/bringup/components.yaml: f4f4514e5cb1f28bb89c517f0dc65c4ca9047462d3ec70330e24263627544013
   note: ''
   ledger: ef3d2c5edd980d21bb7d49e4308f2eb643408e8db15e5320646405387df2cbb4
+perf:
+  by: dnijemcevic
+  at: '2026-09-29T21:38:35'
+  files:
+    models/demos/glm53_flash_d_p/bringup/opportunities.md: d7f7708a886db0574f81d52f879b4825cde91f350b5759eaf4d40e521be84ec8
+  note: ''
