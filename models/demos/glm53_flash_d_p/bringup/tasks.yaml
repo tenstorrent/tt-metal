@@ -1827,6 +1827,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 4
+  frozen:
+    at: '2026-09-29T14:18:29'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_03_attn_norm.py: 7434b95fb7e927aac44e774df58c4335282455580b6233a735a57de1dd7adbc8
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_moe.attention
   title: kda_moe attention (attention) on device, layer 4
   step: implement
