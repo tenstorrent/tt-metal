@@ -1397,6 +1397,7 @@ bool auto_enable_kernel_folding(
     std::array<uint32_t, 2>& stride,
     std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4) {
+    TT_FATAL(stride[0] > 0 && stride[1] > 0, "stride must be greater than 0, got ({}, {})", stride[0], stride[1]);
     if (!enable_folding_.has_value()) {
         if (stride[0] != kernel_size[0] || stride[1] != kernel_size[1]) {
             return false;
