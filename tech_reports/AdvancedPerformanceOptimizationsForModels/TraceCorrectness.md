@@ -230,7 +230,6 @@ source test's model tier, SKU and owner:
 | Qwen 3.6-27B | BH QuietBox 2 | |
 | Gemma 4-26B-A4B | BH QuietBox 2 | WH T3K |
 | GPT-OSS 120B | WH Galaxy, BH QuietBox 2, BH Galaxy | |
-| DeepSeek V3 | WH Galaxy | |
 
 The **LLM Trace Allocation Audit** workflow runs on the first day of each month at 06:00 UTC.
 It reads the same e2e registry and selects all entries in the Llama, Qwen, Gemma, Mistral,

@@ -24,4 +24,3 @@ sweeps:
   qwen3.6-27b: [bh_quietbox_2]
   gemma-4-26b-a4b: [wh_llmbox_perf, bh_quietbox_2]
   gpt-oss-120b: [wh_galaxy_perf, bh_quietbox_2, bh_galaxy]
-  deepseek-v3-tg: [wh_galaxy_perf]

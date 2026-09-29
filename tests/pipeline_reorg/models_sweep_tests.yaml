@@ -459,16 +459,4 @@
   owner_id: U08TJ70UFRT
   team: models
   budget_type: sweep
-- name: Trace allocation - DeepSeek-V3 decode stress e2e tests (Galaxy)
-  cmd: python .github/scripts/utils/model_trace_tests.py run --test-name 'DeepSeek-V3 decode stress e2e tests (Galaxy)'
-    --sku {sku}
-  model: deepseek-v3-tg
-  model_family: DeepSeek
-  skus:
-    wh_galaxy_perf:
-      timeout: 30
-      tier: 1
-  owner_id: U08H32XUS9W
-  team: models
-  budget_type: sweep
 # END GENERATED TRACE ALLOCATION SWEEPS
