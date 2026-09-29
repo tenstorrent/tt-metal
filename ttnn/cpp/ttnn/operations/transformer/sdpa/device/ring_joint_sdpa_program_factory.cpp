@@ -1940,18 +1940,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
 
-    // Two-level softmax accumulation (prototype, opt-in via TT_METAL_SDPA_RING_TWO_LEVEL=1). The bf16 running
+    // Two-level softmax accumulation (prototype, program_config.ring_two_level). The bf16 running
     // (max, sum, out) state loses small per-K-chunk contributions once the running sum is ~2^9 x larger than
     // them (long contexts: output inflation/deflation). With two levels each ring iteration -- and optionally
-    // every TT_METAL_SDPA_RING_TWO_LEVEL_FOLD K chunks -- accumulates into a fresh block that is merged into the
+    // every program_config.ring_two_level_fold K chunks -- accumulates into a fresh block that is merged into the
     // total at its end. Compute-only change: reader/writer staging is unchanged. Multi-Q-chunk cores keep the
     // total in the existing DRAM-staging CBs (no extra L1); an L1 total (tl_* CBs, one extra accumulator) is
     // allocated only when a core can own a single Q chunk (no staging) or intra-ring folds are requested.
-    // NOTE: read at program-build time only; the env is not part of the program hash.
-    const bool two_level_requested = [] {
-        const char* env = std::getenv("TT_METAL_SDPA_RING_TWO_LEVEL");
-        return env != nullptr && std::string(env) == "1";
-    }();
+    const bool two_level_requested = args.program_config.has_value() && args.program_config->ring_two_level;
     // All CBs the merge touches must share one format (bf16): the kernel then needs no unpack/pack reconfig
     // around the merge, which keeps it inside the kernel-config (binary size) budget.
     const bool two_level_formats_ok = out_df == tt::DataFormat::Float16_b && im_df == tt::DataFormat::Float16_b &&
@@ -1960,8 +1956,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool two_level = two_level_requested && two_level_formats_ok && use_streaming_compute &&
                            !has_sliding_window && !use_attention_sink && !args.is_balanced && K_SPLIT == 1;
     if (two_level) {
-        const char* fold_env = std::getenv("TT_METAL_SDPA_RING_TWO_LEVEL_FOLD");
-        const uint32_t fold_every = fold_env != nullptr ? static_cast<uint32_t>(std::stoul(fold_env)) : 0;
+        const uint32_t fold_every = args.program_config->ring_two_level_fold;
         const bool single_q_core_possible = all_heads_num_q_chunks / num_cores <= 1;
         const bool l1_total = fold_every > 0 || single_q_core_possible;
         if (l1_total) {

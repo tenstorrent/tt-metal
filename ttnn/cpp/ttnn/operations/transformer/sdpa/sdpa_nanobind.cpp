@@ -711,6 +711,12 @@ void bind_sdpa(nb::module_& mod) {
         callers discard padded outputs. Causality protects real query rows from future padding. One
         program and one trace serve aligned and rotated chunks at every depth.
 
+        K split (program_config.ring_k_split = s, 2..6): every (head, Q chunk) is split over s key partitions on
+        separate cores (chunked-prefill KV-cache path, causal, streaming compute; no sliding window, sink, joint,
+        balanced, latent V or metadata tensors); the partitions are merged by sdpa_k_split_merge before returning, so
+        the output is the normal one. The third return value is then the raw per-partition statistics
+        [b x s * nh x 2 * N/num_devices x 32].
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
@@ -813,6 +819,38 @@ void bind_sdpa(nb::module_& mod) {
               - Attention output [b x nqh x N/num_devices x head_dim_v].
               - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].
         )doc";
+
+    ttnn::bind_function<"sdpa_k_split_merge", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Merges the raw K-split partitions of ring joint SDPA (program_config.ring_k_split > 1) into the normalized
+        attention output. ring_joint_scaled_dot_product_attention already does this; exposed for testing and for
+        callers that produce the partitions themselves.
+
+        With partition p's running row max m_p, running sum l_p and unnormalized output O_p:
+        M = max_p m_p, a_p = exp(scale (m_p - M)), output = sum_p a_p O_p / sum_p a_p l_p (fp32 DEST).
+
+        Args:
+            partial_output (ttnn.Tensor): [b x k_split * nh x s x dv] bf16 tiles, virtual head p * nh + h.
+            partial_stats (ttnn.Tensor): [b x k_split * nh x 2 * s' x 32] bf16 tiles (s' >= s): row max in rows
+                [0, s') (column 0), running sum as 32 per-column partials in rows [s', 2 s').
+            k_split (int): number of partitions, 1 to 6.
+            scale (float): the attention scale the partitions were computed with.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): output memory config (interleaved). Defaults to the
+                partial output's.
+
+        Returns:
+            ttnn.Tensor: [b x nh x s x dv] bf16.
+        )doc",
+        &ttnn::transformer::sdpa_k_split_merge,
+        nb::arg("partial_output").noconvert(),
+        nb::arg("partial_stats").noconvert(),
+        nb::arg("k_split"),
+        nb::arg("scale"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 
     ttnn::bind_function<"ring_mla", "ttnn.transformer.">(
         mod,

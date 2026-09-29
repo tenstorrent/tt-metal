@@ -12,6 +12,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_ksplit_merge_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -259,6 +260,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const auto [logical_l_scalar, logical_l_tensor] = split_logical_length(logical_l, padded_ring_l);
 
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
+    const uint32_t k_split = program_config.ring_k_split > 1 ? program_config.ring_k_split : 1;
+    const float merge_scale =
+        scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));  // the op's default
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -302,10 +306,28 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         circular_kv_cache,
         logical_n_tensor,
         logical_l_tensor);
+    if (k_split > 1) {
+        // K split: the op leaves one raw (unnormalized) partition per virtual head; merge them into the normal
+        // [B, NH, N, DV] output. The returned stats stay the raw per-partition ones.
+        auto& partial = output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX];
+        auto merged = ttnn::prim::sdpa_k_split_merge(
+            partial, output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX], k_split, merge_scale);
+        partial.deallocate();
+        partial = std::move(merged);
+    }
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
+}
+
+ttnn::Tensor sdpa_k_split_merge(
+    const ttnn::Tensor& partial_output,
+    const ttnn::Tensor& partial_stats,
+    uint32_t k_split,
+    float scale,
+    const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::prim::sdpa_k_split_merge(partial_output, partial_stats, k_split, scale, memory_config);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(

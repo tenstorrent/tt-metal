@@ -225,7 +225,7 @@ class TtAttention:
             ccl_manager=self.ccl,
             sp_axis=self.sp_axis,
             scale=self.scale,
-            k_split=default_k_split(self.window, S_local, kv_actual, sp),
+            k_split=default_k_split(self.window, S_local, kv_actual, sp, forced=self.sdpa_k_split),
         )
         qr.deallocate(True)
         vd = self.spec.v_head_dim

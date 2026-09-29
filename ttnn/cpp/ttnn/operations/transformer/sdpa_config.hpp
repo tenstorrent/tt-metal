@@ -19,11 +19,17 @@ struct SDPAProgramConfig {
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
     // Ring joint SDPA only: split every (head, Q chunk) over this many key partitions (K chunk k belongs to
-    // partition k % ring_k_split), each on its own core, so the work divides evenly over the grid. With > 1 the op
-    // returns per-partition raw state instead of the normalized output: output [B, NH * ring_k_split, S, DV] holds
-    // the unnormalized O of partition p at virtual head p * NH + h, stats the matching running max / sum; the caller
-    // merges them (see ttnn.transformer.ring_joint_sdpa_merge_k_split).
+    // partition k % ring_k_split, 1 to 6), each on its own core, so the work divides evenly over the grid. The
+    // partitions are merged exactly (ttnn.transformer.sdpa_k_split_merge) before the op returns, so the output is
+    // the normal one; the returned stats are then the raw per-partition [B, NH * ring_k_split, 2 S, 32].
     uint32_t ring_k_split = 1;
+    // Ring joint SDPA only (prototype): two-level softmax accumulation. The bf16 running (max, sum, out) state loses
+    // small per-K-chunk contributions once the running sum is ~2^9 x larger than them (long contexts); with two levels
+    // every ring iteration -- and, with ring_two_level_fold = F > 0, every F K chunks -- accumulates into a fresh block
+    // merged into the total at its end. Streaming compute, bf16 intermediates, no sliding window / sink / balanced /
+    // K split; ignored (with a warning) otherwise.
+    bool ring_two_level = false;
+    uint32_t ring_two_level_fold = 0;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

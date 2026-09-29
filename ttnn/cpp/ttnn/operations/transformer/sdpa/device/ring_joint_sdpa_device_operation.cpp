@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_ksplit_merge_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -378,10 +379,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args);
 
-    // K split (program_config.ring_k_split > 1): per-partition raw state out, merged by the caller. Implemented for the
-    // chunked-prefill KV-cache path with the streaming compute only (see ring_joint_sdpa_program_factory.cpp).
+    // K split (program_config.ring_k_split > 1): per-partition raw state out, merged by the composite
+    // (ttnn::prim::sdpa_k_split_merge). Implemented for the chunked-prefill KV-cache path with the streaming compute
+    // only (see ring_joint_sdpa_program_factory.cpp).
     if (const uint32_t k_split = args.k_split(); k_split > 1) {
-        TT_FATAL(k_split <= 8, "RingJointSDPA ring_k_split must be <= 8, got {}", k_split);
+        TT_FATAL(
+            k_split <= SDPA_KSPLIT_MERGE_MAX_SPLIT,
+            "RingJointSDPA ring_k_split must be <= {} (the merge), got {}",
+            SDPA_KSPLIT_MERGE_MAX_SPLIT,
+            k_split);
         TT_FATAL(
             !get_fp32_dest_acc_en(args.compute_kernel_config),
             "RingJointSDPA ring_k_split needs the streaming compute (fp32_dest_acc_en=false)");

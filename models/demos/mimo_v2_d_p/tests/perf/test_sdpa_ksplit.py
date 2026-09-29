@@ -61,7 +61,7 @@ class _Setup:
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(self.sp, self.tp), dims=(2, 1)),
         )
 
-    def run(self, k_split, q_chunk=None, k_chunk=None):
+    def run(self, k_split, q_chunk=None, k_chunk=None, two_level=False, two_level_fold=0):
         pc = ring_program_config(
             self.mesh,
             q_chunk=q_chunk,
@@ -69,6 +69,8 @@ class _Setup:
             q_local=self.chunk_local,
             kv_local=self.kv.max_seq_len // self.sp,
             k_split=k_split,
+            two_level=two_level,
+            two_level_fold=two_level_fold,
         )
         return ring_attention(
             self.q,
@@ -122,9 +124,9 @@ def _stats(a, b):
         (640, 32768, (3,), None, None),  # Galaxy-sized slab (split 3)
         (2048, 65536, (2, 4), None, None),
         (2048, 32768, (2, 5), 64, 512),  # other chunk sizes; 5 partitions: the merge's row-sum path
-        (1024, 16384, (2, 6), 256, 1024),
+        (1024, 16384, (2, 6), 256, 512),
     ],
-    ids=["C2048-32K", "C640-32K", "C2048-64K", "C2048-32K-q64k512", "C1024-16K-q256"],
+    ids=["C2048-32K", "C640-32K", "C2048-64K", "C2048-32K-q64k512", "C1024-16K-q256k512"],
 )
 def test_sdpa_ksplit_accuracy(mesh_device, device_params, chunk_local, ctx, splits, q_chunk, k_chunk):
     st = _Setup(mesh_device, device_params, chunk_local, ctx)
@@ -144,6 +146,23 @@ def test_sdpa_ksplit_accuracy(mesh_device, device_params, chunk_local, ctx, spli
         assert pu > 0.999, (s, pu)
         assert rel <= rel0 * 1.1 + 1e-3, (s, rel, rel0)  # the split must not be less accurate than the unsplit op
         assert abs(nr - 1) < 5e-3, (s, nr)
+
+
+@pytest.mark.timeout(1800)
+@MESH_PARAMS
+@pytest.mark.parametrize("fold", [0, 4], ids=["per-iteration", "fold4"])
+def test_sdpa_two_level_accuracy(mesh_device, device_params, fold):
+    """program_config.ring_two_level (unsplit op) runs and stays close to the one-level op vs fp32. Random scores do
+    not show the long-context bf16 row-sum drift two levels exist for (on them it is ~5% worse in relative error)."""
+    st = _Setup(mesh_device, device_params, 2048, 65536)
+    ref = st.reference_chip0()
+    chip0 = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()[0]
+    _, rel1, _ = _stats(chip0(st.run(1)), ref)
+    p, rel, nr = _stats(chip0(st.run(1, two_level=True, two_level_fold=fold)), ref)
+    logger.info(
+        f"two-level (fold {fold}) vs fp32: PCC {p:.6f} rel {rel:.2e} norm ratio {nr:.5f}; one-level rel {rel1:.2e}"
+    )
+    assert p > 0.999 and rel <= rel1 * 1.15 and abs(nr - 1) < 5e-3, (p, rel, rel1, nr)
 
 
 def _mismatch_marker(reference, actual):
@@ -171,7 +190,14 @@ def test_sdpa_ksplit_determinism(mesh_device, device_params, chunk_local, split)
 
 # Device ns (max over chips) of the ring op and of the merge, median of 3; BH QuietBox 2x2.
 # (chunk_local, ctx, split) -> (ring ns, merge ns). Recalibrate from the "RT-CAL" lines.
-_PERF_EXPECTED_NS = {}
+_PERF_EXPECTED_NS = {  # 2026-09-29
+    (2048, 32768, 1): (8_115_081, None),
+    (2048, 32768, 2): (7_443_270, 181_670),
+    (2048, 131072, 1): (31_928_165, None),
+    (2048, 131072, 2): (29_293_972, 184_332),
+    (640, 32768, 1): (2_893_136, None),
+    (640, 32768, 3): (2_591_908, 88_367),
+}
 _PERF_MARGIN = 0.03
 
 
@@ -192,7 +218,7 @@ def test_sdpa_ksplit_perf(mesh_device, device_params, chunk_local, ctx, split):
     run = lambda: st.run(split).deallocate(True)
     parts = [("ring", "compute/ring_joint_sdpa.cpp")] + ([("merge", "compute/ksplit_merge.cpp")] if split > 1 else [])
     for i, (name, kernel) in enumerate(parts):
-        exp = expected[i] if expected else None
+        exp = expected[i] if expected else None  # (ring ns, merge ns)
         assert_op_duration_merged(
             mesh_device,
             run,

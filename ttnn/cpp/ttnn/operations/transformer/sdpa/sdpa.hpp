@@ -128,6 +128,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
 
+// Merge the raw K-split partitions of ring_joint_scaled_dot_product_attention (program_config.ring_k_split > 1; the
+// composite already calls this): partial_output [B, k_split * NH, N, DV], partial_stats [B, k_split * NH, 2 N, 32]
+// -> [B, NH, N, DV].
+ttnn::Tensor sdpa_k_split_merge(
+    const ttnn::Tensor& partial_output,
+    const ttnn::Tensor& partial_stats,
+    uint32_t k_split,
+    float scale,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_kv,
