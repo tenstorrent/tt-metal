@@ -24,23 +24,25 @@ tt-ember collects and analyzes power metrics (voltage, current, power) from Tens
 
 ## Overview
 
-tt-ember runs a measured application (by default the `long_matmul` programming example) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. Everything is driven by six Python scripts and a set of diagnostic utilities — no build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
+tt-ember runs a measured application (by default a high-power matmul benchmark) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. One driver, `run_sweep.py`, runs any sweep described by a YAML config under `sweeps/`; `auto.py` is the single-measurement building block it calls. No build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
 
 ## Repository Structure
 
 ```
 tt-ember/
+  run_sweep.py         Sweep driver — reset + auto.py per run + analyses, from a YAML config
+  sweeps/              One config per result: paper_fig1_stage_breakdown, paper_fig2_blocked,
+                       crossop, decoder_block, prefill
   auto.py              Orchestrator — runs telemetry + app + parser in sequence
   parser.py            Analysis engine — metrics, CSV, figures
-  run_all.py           Sweep runner — calls auto.py for multiple configurations
   compare_runs.py      Cross-run comparison — overlays metrics across runs
   compare_runs2.py     Named use-case comparison — grouped bar charts per grid
-  run_power_cases.py   POWER_CASE sweep runner — reset + auto.py per case + compare
-  diagnostics/
-    test.py            Inspect tt_umd API structure
-    test2.py           Direct device polling via tt_umd
-    test3.py           Live real-time power visualization
-    tt_telem_diag.py   Periodic polling via tt-smi JSON snapshots
+  analysis/
+    power_cases.py     Per-engine energy ablation and cross-op charts (run_sweep.py steps)
+    make_pj_per_flop.py, make_pj_per_flop_by_engine.py,
+    make_pj_per_flop_naive_vs_blocked.py, crossop_corrected_flops.py
+  aiclk/               Pin Blackhole's AICLK for iso-clock sweeps (set_aiclk.py)
+  op_power_breakdown/  ttnn decoder-block workload and its per-op breakdown
   docs/
     device-side-instrumentation.md   Per-kernel (reader/compute/writer) analysis
 ```
@@ -65,10 +67,42 @@ export TT_METAL_HOME=/path/to/tt-metal
 
 ```
 $TT_METAL_HOME/build_Release/tools/umd/telemetry
-$TT_METAL_HOME/build_Release/programming_examples/metal_example_long_matmul
+$TT_METAL_HOME/build_Release/programming_examples/metal_example_high_power_matmul
 ```
 
 ## Quick Start
+
+Reproduce one result of the Wormhole-vs-Blackhole energy paper with one command. Each config
+under `sweeps/` lists the runs (which `POWER_CASE`, op and block size) and the analyses that
+turn them into the figure:
+
+```bash
+python3 run_sweep.py --config sweeps/paper_fig1_stage_breakdown.yaml \
+  --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
+  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_high_power_matmul \
+  --tt-venv-activate /path/to/venv/bin/activate \
+  --tt-metal-root "$TT_METAL_HOME" \
+  --output-root ./out_fig1
+```
+
+`run_sweep.py` resets the board (`tt-smi -r`) and waits before every run, skips runs whose
+output directory already exists (so an interrupted multi-hour sweep resumes; `--force` re-runs),
+prints every command with `--dry-run`, logs every command and environment variable to
+`<output-root>/sweep.log`, and records the config, tt-metal commit and board list in
+`<output-root>/PROVENANCE.md`. `--analyses-only` regenerates the charts from existing runs.
+
+| Config | Paper result | Runs |
+|---|---|---|
+| `paper_fig1_stage_breakdown.yaml` | Table 2, Table 3, Fig. 1 | `POWER_CASE` 1, 2, 4, 5 on matmul |
+| `paper_fig2_blocked.yaml` | Fig. 2 | `POWER_CASE` 0, block 1x1 vs 2x4 |
+| `crossop.yaml` | cross-op sweep (not in the paper) | cases 5, 1, 2, 4 × seven ops |
+| `decoder_block.yaml` | Table 4, Figs. 3–4 | `op_power_breakdown/ttnn_ops_workload.py` |
+| `prefill.yaml` | the original `run_all.py` prefill measurement | `POWER_CASE` 0 |
+
+Runs land in `<output-root>/<op>/<case>[_b<M>x<N>]/` (or `<output-root>/<subdir>/` for the
+ttnn workload), so every analysis script also works on output produced by hand with `auto.py`.
+
+### One measurement by hand
 
 Run one full measurement — telemetry capture, application, and analysis — in a single command:
 
@@ -76,7 +110,7 @@ Run one full measurement — telemetry capture, application, and analysis — in
 python3 auto.py \
   --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
   --telemetry-freq 50 \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
+  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_high_power_matmul \
   --parser-script ./parser.py \
   --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \
@@ -113,19 +147,34 @@ python3 parser.py \
   --trim-ms 6.0
 ```
 
-### `run_all.py` — Sweep Orchestrator
+### `run_sweep.py` — Sweep Driver
 
-Runs a predefined sequence of measurements by invoking `auto.py` once per configuration. Before each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize, ensuring a clean thermal and electrical baseline. Stops immediately if any reset or run fails.
+Runs every measurement of a sweep by invoking `auto.py` once per run, then the analyses. Before
+each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize,
+ensuring a clean thermal and electrical baseline; with `aiclk_mhz` set in the config it re-pins
+the Blackhole clock after every reset (see `aiclk/`). Stops immediately if any reset or run fails.
 
-```bash
-python3 run_all.py \
-  --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
-  --parser-script ./parser.py \
-  --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
-  --tt-metal-root "$TT_METAL_HOME" \
-  --output-root ./out
+A config is a YAML mapping:
+
+```yaml
+name: paper_fig1_stage_breakdown
+workload: high_power_matmul        # or ttnn_ops
+app_args: [1024, 2048, 2048, 160]  # M N K iters [fixed_tiles_per_core]
+telemetry_freq_hz: 50
+trim_ms: 1.0
+aiclk_mhz: null                    # e.g. 1000 for an iso-clock Blackhole sweep
+runs:
+  power_cases: [1, 2, 4, 5]        # one run per (op, case, block) combination
+  ops: [matmul]
+  blocks: [[1, 1]]
+analyses: [compare_runs2, energy_by_engine, energy_per_flop_by_engine, pj_per_flop]
 ```
+
+Analysis steps: `compare_runs2` (grouped bar charts per case), `energy_by_engine` and
+`energy_per_flop_by_engine` (reader/writer/compute ablation against `writer_amp`),
+`cross_op` and `cross_op_corrected` (ops side by side, shared or per-op FLOP denominator),
+`pj_per_flop`, `naive_vs_blocked`, `compare_runs`, `op_breakdown`. Options go in a nested
+mapping, e.g. `- naive_vs_blocked: {naive: matmul/regular, blocked: matmul/regular_b2x4}`.
 
 ### `compare_runs.py` — Cross-Run Comparison
 
@@ -142,7 +191,7 @@ python3 compare_runs.py --out-root ./out --filter prefill_2048 fixed_power_sweep
 ### `compare_runs2.py` — Named Use-Case Comparison
 
 Compares a small, explicitly-named set of runs (e.g. the `POWER_CASE` power-experiment
-scenarios — see [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-long_matmul-itself))
+scenarios — see [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-high_power_matmul-itself))
 against each other, grouped by grid (core combination), as grouped bar charts. Unlike
 `compare_runs.py` — which auto-discovers and overlays *all* runs under a root as line plots —
 `compare_runs2.py` takes an explicit, ordered list of run subdirectories from a small text
@@ -180,42 +229,16 @@ Each chart groups grids (sorted by ascending core count) on the x-axis, with one
 case per grid. Grids missing from a given case's CSV are left as a gap — with a warning printed
 to stderr — rather than failing the whole comparison.
 
-### `run_power_cases.py` — POWER_CASE Sweep + Comparison
+### `POWER_CASE` scenarios
 
-Automates the full `POWER_CASE` power-experiment workflow. For each requested `POWER_CASE`
-value it resets the hardware (`tt-smi -r`), runs `auto.py` with `POWER_CASE` exported into the
-application's environment and `--subdir` set to that case's canonical name, and — once every
-case has finished — writes a `compare_runs2.py` cases file and calls it to produce the
-comparison charts. This is the single-command equivalent of running the manual
-reset/export/`auto.py` sequence once per case and then invoking `compare_runs2.py` by hand.
-
-```bash
-python3 run_power_cases.py \
-  --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
-  --parser-script ./parser.py \
-  --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
-  --tt-metal-root "$TT_METAL_HOME" \
-  --output-root ./out_new \
-  --trim-ms 1.0 \
-  --app-args 1024 2048 2048 160
-```
-
-Notes:
-- `--app-args` must be last (same `argparse.REMAINDER` caveat as `auto.py`/`run_all.py`).
-- Defaults to `POWER_CASE` values `0 1 2 4` — the four single-variable comparisons against
-  baseline. Pass `--power-cases 0 1 2 3 4` to include case 3 (reader **and** compute both idle)
-  as well.
-- A case is skipped if `<output-root>/<subdir-for-that-case>` already exists; pass `--force` to
-  re-run it anyway.
-- Pass `--dry-run` to print every `tt-smi -r` / `auto.py` / `compare_runs2.py` command that
-  would run, without touching the hardware — useful for checking the plan before committing to
-  a multi-hour sweep.
-- Writes `<output-root>/power_cases.txt` (overridable with `--cases-file-name`), then calls
-  `compare_runs2.py -i <output-root> -c <output-root>/power_cases.txt`.
-
-See [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-long_matmul-itself)
-for what each `POWER_CASE` actually disables or amplifies in the kernels.
+The `POWER_CASE` sweep (`sweeps/paper_fig1_stage_breakdown.yaml`, `sweeps/crossop.yaml`) runs
+`auto.py` once per case with `POWER_CASE` and `HIGH_POWER_OP` exported into the application's
+environment and `--subdir` set to the case's canonical name (`writer_amp`, `compute_idle`,
+`reader_idle2`, `writer_idle`, `regular`), then `compare_runs2.py` and the per-engine ablation
+charts in `analysis/power_cases.py` against them. See
+[§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-high_power_matmul-itself)
+and `tt_metal/programming_examples/high_power_matmul/README.md` for what each `POWER_CASE`
+actually disables or amplifies in the kernels.
 
 ### Diagnostic Utilities (`diagnostics/`)
 
@@ -270,12 +293,12 @@ The application runs a sequence of matrix multiplications across a predefined sw
 ### Arguments
 
 ```
-metal_example_long_matmul  M  N  K  num_iterations  [fixed_blocks_per_core]
+metal_example_high_power_matmul  M  N  K  num_iterations  [fixed_tiles_per_core]
 ```
 
 The first four arguments define the matrix dimensions and workload intensity. **M** is the number of rows of matrix A and the output matrix C, **N** is the number of columns of matrix B and the output C, and **K** is the shared inner dimension. All three must be divisible by 32, since the hardware processes data exclusively in 32×32 BFloat16 tiles. **`num_iterations`** controls how many times the full matmul is repeated per grid configuration, directly setting the duration of each measurement window.
 
-The optional fifth argument, **`fixed_blocks_per_core`**, selects the operating mode. When omitted or set to zero, the application runs in **split mode**: total output tiles are divided equally across all active cores, so adding more cores reduces per-core work while keeping total computation constant — useful for measuring execution time scaling and efficiency. When set to a positive integer, every core computes exactly that many output blocks (single tiles unless `LONG_MATMUL_BLOCK_M/N` are set) per iteration regardless of grid size (**fixed-per-core mode**), meaning total work and power scale linearly with core count — useful for exposing how power delivery scales with the number of active compute units.
+The optional fifth argument, **`fixed_tiles_per_core`**, selects the operating mode. When omitted or set to zero, the application runs in **split mode**: total output tiles are divided equally across all active cores, so adding more cores reduces per-core work while keeping total computation constant — useful for measuring execution time scaling and efficiency. When set to a positive integer, every core computes exactly that many tiles per iteration regardless of grid size (**fixed-per-core mode**), meaning total work and power scale linearly with core count — useful for exposing how power delivery scales with the number of active compute units.
 
 ## Power Metrics
 
