@@ -158,11 +158,13 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
 Warmed, prompt 128 and generate 128, the shape the serving profile uses, at the shipping
 `ccl_dtype`, now bfloat8_b:
 
-| metric | bfloat8_b (shipping) | bfloat16 (previous) |
+| metric | shipping | all bfloat16 |
 | --- | ---: | ---: |
-| TTFT | 260.2 ms | 247.0 ms |
-| decode, token out | 60.216 ms, 16.61 t/s/u | 72.321 ms, 13.83 t/s/u |
-| decode, no readback | 59.558 ms, 16.79 t/s/u | 71.522 ms, 13.98 t/s/u |
+| TTFT | 244.9 ms | 247.0 ms |
+| decode, token out | 60.338 ms, 16.57 t/s/u | 72.321 ms, 13.83 t/s/u |
+| decode, no readback | 59.531 ms, 16.80 t/s/u | 71.522 ms, 13.98 t/s/u |
+
+The collective dtype is split by phase: bfloat8_b for decode, bfloat16 for prefill.
 
 Both decode boundaries are reported because they answer different questions: the no-readback
 figure is the logits-side comparison, and token out adds the final norm, LM head, sampling and
@@ -228,17 +230,23 @@ fallback so that selecting `baseline` does not quietly give back the saving. The
 policy is the only level that can own it, because `decoder_policy` supplies `ccl_dtype` after
 the platform overlay is merged.
 
-Prefill pays for it. Re-measured with the new default, TTFT moves from 247.03 ms to 260.22 ms,
-5.3% worse, with both sample tails settled and tight. Prefill collectives carry the whole
-sequence rather than the tile-padded 32-row decode workspace, so the typecast in `_linear`
-costs more there than the halved payload saves. Break-even is 1.1 generated tokens, and only a
-single-token request is worse:
+Applying it to both phases made prefill 5.3% slower, 247.03 ms to 260.22 ms, because a prefill
+collective carries the whole sequence rather than the tile-padded 32-row decode workspace and
+the typecast then costs more than the halved payload saves. Splitting the dtype by phase
+recovers that without giving up the decode win, so `ccl_dtype_prefill` holds bfloat16 in the
+platform overlay while the precision policy keeps bfloat8_b for decode. The two live prefill
+collective sites, the general reduce-scatter in `_linear` and the distributed norm gather in
+`_norm`, select on sequence length:
 
-| workload | bfloat16 | bfloat8_b | |
-| --- | ---: | ---: | ---: |
-| 128 in, 1 out | 319 ms | 320 ms | +0.3% |
-| 128 in, 8 out | 826 ms | 742 ms | -10.1% |
-| 128 in, 128 out | 9504 ms | 7968 ms | -16.2% |
-| 128 in, 1024 out | 74.3 s | 61.9 s | -16.7% |
+| config | TTFT | decode token out | 128 in, 1 out | 128 in, 128 out |
+| --- | ---: | ---: | ---: | ---: |
+| bfloat16 both | 247.03 ms | 72.321 ms | baseline | baseline |
+| bfloat8_b both | 260.22 ms | 60.216 ms | +0.3% | -16.2% |
+| split | 244.85 ms | 60.338 ms | -4.4% | -16.2% |
 
-Splitting the dtype by phase would recover the prefill loss and has not been measured.
+The split is the better configuration at every workload length: TTFT returns to baseline within
+noise, decode holds to 0.12 ms of the all-bfloat8_b figure, which is inside the p10 to p90
+spread of either, and the single-token request that the uniform policy slightly lost now gains.
+
+`ccl_dtype_prefill` can live in the platform overlay because `decoder_policy` supplies only
+`ccl_dtype`, so unlike the decode value it is not overwritten by the caller.

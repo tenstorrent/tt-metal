@@ -37,6 +37,9 @@ _TP_POLICY = {
         "rectangular_working": False,
         # The second ethernet link of each chip pair carries the dispatch datapath.
         "num_links": 1,
+        # Prefill collectives move the whole sequence, where the narrower dtype costs more in
+        # typecast than it saves in payload; decode keeps the value the precision policy sets.
+        "ccl_dtype_prefill": "bfloat16",
         # DRAM-sharded matmul rejects num_workers_per_dram_bank > 1 outside Blackhole, so every
         # projection and the LM head fall back to a single reader per bank.
         "attention_readers": 1,
@@ -582,6 +585,16 @@ class Qwen38TPDecoder(Qwen38Decoder):
             dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")),
         )
 
+    def _ccl_dtype(self, decode):
+        """Collective dtype for the phase.
+
+        A decode collective carries the tile-padded 32-row workspace whatever the batch, so its
+        payload is fixed and a narrower dtype is pure saving. A prefill collective carries the
+        whole sequence, where the typecast costs more than the halved payload returns.
+        """
+        key = "ccl_dtype" if decode else "ccl_dtype_prefill"
+        return getattr(ttnn, self.policy.get(key) or self.policy["ccl_dtype"])
+
     def _linear(self, x, name, activation=None, keep_sharded=False):
         if (
             self.policy.get("fused_input", False)
@@ -771,7 +784,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
         collective_memory = self._collective_memory(output)
         output = ttnn.to_memory_config(output, collective_memory)
         output = ttnn.reshape(output, [1, *shape] if len(shape) == 3 else shape)
-        dtype = getattr(ttnn, self.policy["ccl_dtype"])
+        dtype = self._ccl_dtype(x.shape[1] == 1)
         if output.dtype != dtype:
             output = ttnn.typecast(output, dtype)
         buffers = self.ccl_buffers.get((tuple(output.shape), output.dtype))
@@ -867,7 +880,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                 memory_config=memory,
                 **grid_options,
             )
-        ccl_dtype = getattr(ttnn, self.policy["ccl_dtype"])
+        ccl_dtype = self._ccl_dtype(shape[1] == 1)
         if self.policy.get("fused_input", False) and shape[1] == 1:
             return ttnn.reshape(normalized, shape)
         if normalized.dtype != ccl_dtype:
