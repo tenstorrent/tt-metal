@@ -123,8 +123,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const uint32_t Vtl = Vt / NV;  // per-receiver V-slice width (tiles)
 
     // Producer-side (full-V) tile counts — the phased prep factory's.
-    const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
-    const uint32_t scr = std::max({cc, ck, cv, kv, kc});
+    const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
+    // Prep scratch sizes, as in the phased prep factory (see the comment there and qwen36-gdn-cb-inventory.md).
+    const uint32_t scr1_tiles = ck, scr2_tiles = 1, scr3_tiles = cc, qk_tiles = ck, one_tile = 1;
     // Receiver-side (V-sliced) tile counts — the phased scan factory's at Vt = Vtl.
     const uint32_t cvl = Ct * Vtl, kvl = Kt * Vtl;
 
@@ -178,14 +179,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // (1b) The u/mask CB, ALSO on the union: 3 mask tiles (prep reads them once) + 1 credit tile whose
     // BH x nbuf leading words are the producer-side credit counters credit[h][slot].
     // Union-declared so the receivers can address a producer's credit word from their own CB base.
-    const uint32_t u_tiles = std::max<uint32_t>(cv, 3) + 1;
+    const uint32_t u_tiles = 3 + 1;
     const uint32_t credit_off_bytes = (u_tiles - 1) * tile_f32;
     add_cb(union_set, fcb::u, u_tiles);
 
-    // (2) The remaining 24 prep CBs on the PRODUCER cores only — same sizes/formats as the phased
-    // prep factory (which mirrors the monolithic op's layout). The absolute L1 layout necessarily
-    // shifts (the hand-off CBs above allocate first), which prior measurement showed to be
-    // perf-neutral for prep; the math is layout-independent.
+    // (2) The remaining prep CBs on the PRODUCER cores only — the phased prep factory's sizes (scratch
+    // sized to prep's use, not the mono op's state). The absolute L1 layout shifts against the phased
+    // prep (the hand-off CBs above allocate first), which measurement showed to be perf-neutral; the
+    // math is layout-independent.
     // Producer input CBs are double-buffered: the producer has no DRAM writes, so its reader
     // prefetching item i+1's ~32KB while compute works item i directly shortens the per-chunk
     // critical path. (The phased prep keeps nbuf=1 — there this prefetch measured harmful in the
@@ -198,22 +199,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(prod_set, fcb::eye, cc);
     add_cb(prod_set, fcb::tril, cc);
     add_cb(prod_set, fcb::ones, cc);
-    add_cb(prod_set, fcb::S, kv, 2);
+    add_cb(prod_set, fcb::S, one_tile);  // invert_block scratch A
     add_cb(prod_set, fcb::decay, Ct);
     add_cb(prod_set, fcb::decay_exp, Ct);
     add_cb(prod_set, fcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
     add_cb(prod_set, fcb::lmask, cc);
     add_cb(prod_set, fcb::kbeta, ck);
-    add_cb(prod_set, fcb::out, cv, 2, df_qkv);
-    add_cb(prod_set, fcb::s2, kv, 2);
-    add_cb(prod_set, fcb::ointer, cv);
-    add_cb(prod_set, fcb::supd, kv);
-    add_cb(prod_set, fcb::stmp, kv);
-    add_cb(prod_set, fcb::final_s, kv);
-    add_cb(prod_set, fcb::scr1, scr);
-    add_cb(prod_set, fcb::scr2, scr);
-    add_cb(prod_set, fcb::scr3, scr);
-    add_cb(prod_set, fcb::s3, kv, 2);
+    add_cb(prod_set, fcb::s2, one_tile);      // invert_block scratch C
+    add_cb(prod_set, fcb::ointer, one_tile);  // Ct == 2: the off-diagonal inverse block
+    add_cb(prod_set, fcb::supd, qk_tiles);
+    add_cb(prod_set, fcb::stmp, qk_tiles);
+    add_cb(prod_set, fcb::final_s, one_tile);  // invert_block scratch B
+    add_cb(prod_set, fcb::scr1, scr1_tiles);
+    add_cb(prod_set, fcb::scr2, scr2_tiles);
+    add_cb(prod_set, fcb::scr3, scr3_tiles);
+    add_cb(prod_set, fcb::s3, one_tile);  // invert_block scratch D
 
     // (3) The remaining 10 scan CBs on the RECEIVER cores only, at the per-receiver V-slice width
     // Vtl (exactly the phased scan factory's sizes at Vt = Vtl) and the post-renumber indices

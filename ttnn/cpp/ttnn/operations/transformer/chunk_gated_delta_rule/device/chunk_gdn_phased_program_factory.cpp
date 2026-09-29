@@ -194,10 +194,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
 
-    const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
+    const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
     // Packed WY-inverse quadrant masks the prep reader always loads into the cb_u/cb_mask slot.
     constexpr uint32_t kPrepMaskTiles = 3;
-    uint32_t scr = std::max({cc, ck, cv, kv, kc});
+    // Scratch, sized to what prep_chunk holds (qwen36-gdn-cb-inventory.md): scr1 carries decay_row (Ct), the
+    // WY inverse's tmpN (1) and k_dec (ck); scr2 the inverse's tmpT (1); scr3 negN (cc) and the qk-norm's
+    // diagonal tile (Ct <= cc). supd/stmp hold the normalized q/k (ck) or, at Ct == 2, one diagonal inverse
+    // each; S/final_s/s2/s3 are invert_block's single-tile private scratch A..D; ointer is the Ct == 2
+    // off-diagonal block; the vnew slot carries the one dl*I tile. Prep holds no [K,V] state, so nothing
+    // here is kv-sized (the mono op's plan was, and prep inherited it: ~750 KB of idle L1 at K = V = 128).
+    const uint32_t scr1_tiles = ck, scr2_tiles = 1, scr3_tiles = cc, qk_tiles = ck, one_tile = 1;
 
     const tt::DataFormat df_io = tt::DataFormat::Float16_b;  // bf16 q/k/v
 
@@ -221,8 +227,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Allocate the full CB set in the SAME order/sizes as the monolithic op, so the prep phase's
-    // L1 layout is byte-identical (the Horner's matmul L1 access pattern is layout-sensitive).
+    // The mono op's CB indices (the prep and scan kernels share its math header), in its declaration
+    // order; sizes are prep's own (measured layout-neutral: the fused producers already run this plan
+    // behind the hand-off ring). cb_out is the scan's and is not declared here.
     add_cb(pcb::q, ck, 1, df_io);
     add_cb(pcb::k, ck, 1, df_io);
     add_cb(pcb::v, cv, 1, df_io);
@@ -231,7 +238,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::eye, cc);
     add_cb(pcb::tril, cc);
     add_cb(pcb::ones, cc);
-    add_cb(pcb::S, kv, 2);
+    add_cb(pcb::S, one_tile);  // invert_block scratch A
     add_cb(pcb::decay, Ct);
     add_cb(pcb::decay_exp, Ct);
     add_cb(pcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
@@ -239,23 +246,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::Tinv, cc);
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
-    add_cb(pcb::out, cv, 2, df_io);
-    // Take the max so the aliased cb_u always fits both users: v_beta or masks_c.
-    add_cb(pcb::u, std::max(cv, kPrepMaskTiles));
+    add_cb(pcb::u, kPrepMaskTiles);  // the three WY quadrant masks (cb_mask in the kernel)
     add_cb(pcb::w, ck);
     add_cb(pcb::qdecay, ck);
     add_cb(pcb::intra, cc);
-    add_cb(pcb::s2, kv, 2);
-    add_cb(pcb::vnew, cv);  // aliased as cb_dl in the prep kernel (1 tile used)
-    add_cb(pcb::ointer, cv);
+    add_cb(pcb::s2, one_tile);      // invert_block scratch C
+    add_cb(pcb::vnew, one_tile);    // cb_dl in the prep kernel: the dl*I tile
+    add_cb(pcb::ointer, one_tile);  // Ct == 2: the off-diagonal inverse block
     add_cb(pcb::kdec_t, kc);
-    add_cb(pcb::supd, kv);
-    add_cb(pcb::stmp, kv);
-    add_cb(pcb::final_s, kv);
-    add_cb(pcb::scr1, scr);
-    add_cb(pcb::scr2, scr);
-    add_cb(pcb::scr3, scr);
-    add_cb(pcb::s3, kv, 2);
+    add_cb(pcb::supd, qk_tiles);
+    add_cb(pcb::stmp, qk_tiles);
+    add_cb(pcb::final_s, one_tile);  // invert_block scratch B
+    add_cb(pcb::scr1, scr1_tiles);
+    add_cb(pcb::scr2, scr2_tiles);
+    add_cb(pcb::scr3, scr3_tiles);
+    add_cb(pcb::s3, one_tile);  // invert_block scratch D
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
