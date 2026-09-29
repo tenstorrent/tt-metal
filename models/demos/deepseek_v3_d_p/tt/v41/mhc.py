@@ -47,6 +47,16 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
     )
 
 
+class _V41Site(TtMHCWrap):
+    """``TtMHCWrap`` with its collapse and hc_post as one fused op each (bit-identical, one pass over the streams)."""
+
+    def collapse(self, x, pre):
+        return fused_collapse(x, pre, self.n)
+
+    def hc_post(self, x, residual, post, comb):
+        return fused_hc_post(x, residual, post, comb, self.n)
+
+
 class TtV41HyperConnections(LightweightModule):
     """The two hyper-connection sites of one block, applied around caller-provided sublayers."""
 
@@ -54,8 +64,8 @@ class TtV41HyperConnections(LightweightModule):
         """``hc_attn`` / ``hc_ffn``: the checkpoint's ``(fn [24, 4*dim], base [24], scale [3])`` per site."""
         cfg = mhc_config(config)
         topology = per_axis_topology()[1]  # the TP axis (tp_axis=1) of the opened fabric
-        self.attn_site = TtMHCWrap(mesh_device, cfg, *hc_attn, tp_axis=1, topology=topology)
-        self.ffn_site = TtMHCWrap(mesh_device, cfg, *hc_ffn, tp_axis=1, topology=topology)
+        self.attn_site = _V41Site(mesh_device, cfg, *hc_attn, tp_axis=1, topology=topology)
+        self.ffn_site = _V41Site(mesh_device, cfg, *hc_ffn, tp_axis=1, topology=topology)
 
     @staticmethod
     def _sublayer(fn, h):
