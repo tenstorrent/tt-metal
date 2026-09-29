@@ -317,6 +317,7 @@ public:
 
         auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
+        core_ = thread_binding::physical_core_of_cpu(static_cast<int>(cpu_core_for_worker));
     }
 
     // Delete copy and move operations as this class manages a thread and should not be copied or moved
@@ -348,6 +349,9 @@ public:
             futex_wake_one(parked_);
         }
     }
+
+    // The physical core the worker is pinned to, if sysfs says.
+    const std::optional<std::pair<int, int>>& core() const { return core_; }
 
     // Returns the first exception thrown by a task since the last call, once the pool has joined.
     std::exception_ptr take_exception() { return std::exchange(stored_exception_, nullptr); }
@@ -405,6 +409,7 @@ private:
     std::chrono::nanoseconds spin_window_;
     std::chrono::steady_clock::time_point last_work_;
     std::exception_ptr stored_exception_;
+    std::optional<std::pair<int, int>> core_;
 };
 
 // State of one parallel_for call, shared by the caller and the participating workers. Workers can still hold
@@ -426,7 +431,11 @@ public:
     ParallelJob& operator=(ParallelJob&&) = delete;
     ~ParallelJob() = default;
 
+    // A call with no executor is left to the caller.
     void assign(size_t call, NumaAwareExecutor* executor) {
+        if (executor == nullptr) {
+            return;
+        }
         executor_of_call_[call] = executor;
         if (std::find(participants_.begin(), participants_.end(), executor) == participants_.end()) {
             participants_.push_back(executor);
@@ -615,6 +624,7 @@ public:
                 std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id(), completion_, active_spin));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
         }
+        record_worker_cores();
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
     // core but they are not guaranteed to be "close" to any physical device.
@@ -625,6 +635,7 @@ public:
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, i, completion_));
             phys_device_to_thread_id_[i] = i;
         }
+        record_worker_cores();
     }
 
     DeviceBoundThreadPool(const DeviceBoundThreadPool&) = delete;
@@ -660,15 +671,24 @@ public:
             return;
         }
         auto* job = new ParallelJob(fn, device_ids.size());
+        // A worker pinned to the caller's physical core would take CPU time from the caller, so the caller runs its
+        // calls instead. An unpinned caller can land on a pool core, for example when woken by a pinned thread.
+        const auto* caller_core = core_of_calling_thread();
         for (size_t call = 0; call < device_ids.size(); call++) {
-            job->assign(call, workers_[phys_device_to_thread_id_.at(device_ids[call])].get());
+            const uint32_t thread_id = phys_device_to_thread_id_.at(device_ids[call]);
+            const bool shares_core = caller_core != nullptr && worker_cores_[thread_id] == *caller_core;
+            job->assign(call, shares_core ? nullptr : workers_[thread_id].get());
         }
         job->start();
         const auto& participants = job->participants();
-        // The first participant hands the job on to the others as it starts, so that the caller touches one
-        // worker's state rather than every worker's.
-        participants[0]->offer(job);
-        participants[0]->wake();
+        if (participants.empty()) {
+            job->release();  // the first participant's reference
+        } else {
+            // The first participant hands the job on to the others as it starts, so that the caller touches one
+            // worker's state rather than every worker's.
+            participants[0]->offer(job);
+            participants[0]->wake();
+        }
         // The workers are woken first to last, so take calls from the back. The caller runs every call no worker
         // has claimed, so the job finishes even if some workers are never woken.
         int64_t ran = 0;
@@ -700,10 +720,38 @@ public:
     }
 
 private:
+    const std::pair<int, int>* core_of_calling_thread() const {
+        const int cpu = sched_getcpu();
+        if (cpu < 0 || static_cast<size_t>(cpu) >= core_of_cpu_.size() || !core_of_cpu_[cpu]) {
+            return nullptr;
+        }
+        return &*core_of_cpu_[cpu];
+    }
+
+    // Kept apart from the executors, whose cache lines their workers write.
+    void record_worker_cores() {
+        worker_cores_.reserve(workers_.size());
+        for (const auto& worker : workers_) {
+            worker_cores_.push_back(worker->core());
+        }
+    }
+
+    static std::vector<std::optional<std::pair<int, int>>> cores_of_cpus() {
+        std::vector<std::optional<std::pair<int, int>>> cores(std::max<long>(sysconf(_SC_NPROCESSORS_CONF), 0));
+        for (size_t cpu = 0; cpu < cores.size(); cpu++) {
+            cores[cpu] = thread_binding::physical_core_of_cpu(static_cast<int>(cpu));
+        }
+        return cores;
+    }
+
     // Declared before the executors so that it outlives them.
     Completion completion_;
+    // Physical core of each logical CPU, indexed by CPU.
+    const std::vector<std::optional<std::pair<int, int>>> core_of_cpu_ = cores_of_cpus();
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
+    // Physical core of each executor's worker, by thread id.
+    std::vector<std::optional<std::pair<int, int>>> worker_cores_;
     // Used to pick threads when device_idx is not specified in the enqueue API
     uint32_t thread_idx_ = 0;
     // Store the number of workers to repeated lookups
