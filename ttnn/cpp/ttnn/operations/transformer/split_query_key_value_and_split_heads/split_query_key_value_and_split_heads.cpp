@@ -73,6 +73,8 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
+    TT_FATAL(num_heads > 0, "num_heads must be greater than 0");
+    TT_FATAL(!num_kv_heads.has_value() || num_kv_heads.value() > 0, "num_kv_heads must be greater than 0");
 
     TT_FATAL(
         input_tensor.layout() == tt::tt_metal::Layout::TILE,

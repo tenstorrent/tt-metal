@@ -42,6 +42,7 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
+    TT_FATAL(args.num_kv_heads > 0, "num_kv_heads must be greater than 0");
     TT_FATAL(
         args.num_q_heads % args.num_kv_heads == 0,
         "Number of q heads {} must fit evenly into number of kv heads {}",
