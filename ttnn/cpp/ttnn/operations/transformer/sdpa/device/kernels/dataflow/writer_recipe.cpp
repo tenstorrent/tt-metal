@@ -32,5 +32,10 @@ void kernel_main() {
             noc.async_write_barrier();
             cb.pop_front(SDPA_RECIPE_DHT);
         }
+        // Drop the padding rows of a paired recipe's odd chunk (host: recipe_compute_q_tiles).
+        for (uint32_t row = 0; row < SDPA_RECIPE_Q_PAD_TILES; ++row) {
+            cb.wait_front(SDPA_RECIPE_DHT);
+            cb.pop_front(SDPA_RECIPE_DHT);
+        }
     }
 }

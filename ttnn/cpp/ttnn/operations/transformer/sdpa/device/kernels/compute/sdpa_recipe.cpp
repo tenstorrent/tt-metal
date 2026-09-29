@@ -6,13 +6,13 @@
 // recipe with SDPA_RECIPE_BASELINE / _FP32 / _ACCURATE / _LOFI; the two loops define the same names, so
 // exactly one is included.
 //
-// Optimization: FAST keeps the legacy kernel's default. B-E compile unpack/math at -O2 and pack at -Os, which
-// keeps every geometry inside the kernel config buffer. Watcher builds are size-optimized on every thread.
-#if defined(WATCHER_ENABLED) || (!defined(SDPA_RECIPE_BASELINE) && defined(TRISC_PACK))
+// Optimization: the default level (-O3), except ACCURATE at -O2 (2% faster, measured). The host disables the
+// SFPI compiler's replay optimization for B-E (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
+#if defined(WATCHER_ENABLED)
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("Os")
-#elif !defined(SDPA_RECIPE_BASELINE)
+#elif defined(SDPA_RECIPE_ACCURATE)
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("O2")
@@ -67,7 +67,7 @@ void recipe_run(uint32_t jobs) {
         /*use_provided_mask=*/has_mask>(jobs, k_chunks, cb_out_a, cb_out_b, cb_max_a, cb_max_b, cb_sum_a, cb_sum_b);
 }
 #else
-// B-E: FP32 recipes process one Q tile row per group; paired BF16 recipes two (an odd chunk ends with one).
+// B-E: FP32 recipes process one Q tile row per group; paired BF16 recipes two (the host pads odd chunks).
 void recipe_run(uint32_t jobs) {
 #ifdef SDPA_RECIPE_FP32
     constexpr uint32_t subblock_h = 1;
