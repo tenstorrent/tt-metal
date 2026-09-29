@@ -10,11 +10,12 @@
 Suites (the fast ones take a few minutes each on Wormhole):
   gist             the #57884 gist sweeps (gist/): 116 2D-routed + 64 1D-routed Llama shapes, wall time, with PCC
   gist-fast        the same without the PCC check
+  gist-device      the gist sweeps' 180 shapes as benchmark cases (device kernel time, PCC), like validation
   validation       every case in cases.csv (device kernel time, PCC)
   validation-fast  the cases in cases_fast.csv (41 cases across the tiers)
   pytest           the matmul pytest directory, flag off and on (outcome and device time per test)
   pytest-fast      every 10th test of it
-  all              gist, validation and pytest
+  all              validation, gist-device and pytest (every suite that reports device kernel time)
 
 Results go to generated/matmul_oob/<arch>_<git rev>/<suite>/, with a summary.txt. Rerunning a suite skips the
 parts that finished. Run from the repo root with python_env active. Environment variables such as MM_KCAP are
@@ -30,7 +31,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SUITES = ["gist", "gist-fast", "validation", "validation-fast", "pytest", "pytest-fast", "all"]
+SUITES = ["gist", "gist-fast", "gist-device", "validation", "validation-fast", "pytest", "pytest-fast", "all"]
 
 
 def geomean(xs):
@@ -89,13 +90,16 @@ def gist(out, fast):
 
 def validation(out, fast):
     cases = f"{HERE}/cases_fast.csv" if fast else f"{HERE}/cases.csv"
+    return run_cases(out, ["--cases-csv", cases])
+
+
+def run_cases(out, selection):
     csv_path = f"{out}/suite.csv"
     rc = run(
         [
             sys.executable,
             f"{HERE}/run_suite.py",
-            "--cases-csv",
-            cases,
+            *selection,
             "--modes",
             "oob",
             "v2",
@@ -160,12 +164,13 @@ def main():
     parts = {
         "gist": lambda o: gist(o, False),
         "gist-fast": lambda o: gist(o, True),
+        "gist-device": lambda o: run_cases(o, ["--tiers", "gist"]),
         "validation": lambda o: validation(o, False),
         "validation-fast": lambda o: validation(o, True),
         "pytest": lambda o: pytest(o, False),
         "pytest-fast": lambda o: pytest(o, True),
     }
-    names = ["gist", "validation", "pytest"] if args.suite == "all" else [args.suite]
+    names = ["validation", "gist-device", "pytest"] if args.suite == "all" else [args.suite]
     for name in names:
         out = f"{base}/{name}"
         os.makedirs(out, exist_ok=True)

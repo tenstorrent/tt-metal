@@ -27,11 +27,12 @@ default selection (`oob`) with the new one (`v2`) on the same inputs.
 |---|---|---|
 | `gist` | The #57884 gist sweeps (`gist/`): 116 2D-routed and 64 1D-routed Llama shapes, bf16, HiFi4, fp32 dest acc; mean wall time over 20 calls; PCC | about 20 min |
 | `gist-fast` | The same without the PCC check | about 10 min |
+| `gist-device` | The gist sweeps' 180 shapes as benchmark cases (`suite.py` tier `gist`): device kernel time and PCC, like `validation`. Use this one to compare against other suites; the gist harness's wall time includes host dispatch | about 30 min |
 | `validation` | Every case in `cases.csv` (device kernel time, PCC against torch) | about 1.5 h |
 | `validation-fast` | `cases_fast.csv`: 41 cases across the tiers, including block-float and fp32-accumulation cases | about 5 min |
 | `pytest` | The matmul pytest directory, flag off and on (outcome and device time per test) | about 50 min |
 | `pytest-fast` | Every 10th test of it (`DEVICE_TIME_SAMPLE=10`) | about 5 min |
-| `all` | `gist`, `validation` and `pytest` | |
+| `all` | `validation`, `gist-device` and `pytest` (the suites that report device kernel time) | |
 
 ```bash
 tests/ttnn/unit_tests/benchmarks/matmul_oob/run.py --suite gist-fast

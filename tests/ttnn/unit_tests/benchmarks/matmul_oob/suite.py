@@ -328,16 +328,48 @@ def _sharded_cases():
     ]
 
 
+def _gist_cases():
+    """The #57884 gist sweeps' Llama shapes (gist/matmul_sweep_2d.py and _1d.py), timed like every other case:
+    bf16 in DRAM, HiFi4, fp32 accumulation, packer L1 accumulation off, as the gist harness runs them."""
+    import importlib
+    import sys
+
+    sys.path.insert(0, f"{__import__('os').path.dirname(__file__)}/gist")
+    cases = []
+    for kind in ("2d", "1d"):
+        sweep = importlib.import_module(f"matmul_sweep_{kind}")
+        for s in sweep.llama_shapes(sweep.DEFAULT_MODELS, sweep.TOKENS, sweep.DEFAULT_PASSES):
+            if sweep.route(s) not in sweep.KERNELS:
+                continue
+            cases.append(
+                Case(
+                    s.name,
+                    (s.K, s.M) if s.transpose_a else (s.M, s.K),
+                    (s.N, s.K) if s.transpose_b else (s.K, s.N),
+                    "gist",
+                    source="#57884 gist",
+                    out_dtype="bf16",
+                    transpose_a=s.transpose_a,
+                    transpose_b=s.transpose_b,
+                    fidelity="HiFi4",
+                    fp32_acc=True,
+                    packer_l1_acc=False,
+                )
+            )
+    return cases
+
+
 TIERS = {
     "issues": _issue_cases,
     "models": _model_cases,
     "generic": _generic_cases,
     "sharded": _sharded_cases,
+    "gist": _gist_cases,
 }
 
 
 def get_cases(tiers=None):
-    tiers = tiers or [t for t in TIERS if t != "traced"]
+    tiers = tiers or [t for t in TIERS if t not in ("traced", "gist")]
     cases = [c for t in tiers for c in TIERS[t]()]
     names = [c.name for c in cases]
     dupes = {n for n in names if names.count(n) > 1}
