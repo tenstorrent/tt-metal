@@ -273,6 +273,41 @@ async function run({ github, context, core }) {
       const comments = (await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       const afterBaseline = (c) => new Date(c.created_at).getTime() > nudgeBaseline;
+
+      // Memoized: the silent-session check below (Filter 4) may need review threads before an
+      // eligible PR otherwise would, but must not fetch them twice. Cursor-paginated -- a PR
+      // with more threads than one page must not silently lose the older ones: an old,
+      // still-unanswered thread is exactly what a nudge exists for.
+      let threadNodesCache = null;
+      const fetchThreadNodes = async () => {
+        if (threadNodesCache) return threadNodesCache;
+        const nodes = [];
+        let cursor = null;
+        let pageGuard = 0;
+        do {
+          const res = await github.graphql(`
+            query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100, after: $after) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { id isResolved isOutdated path
+                      comments { totalCount }
+                      firstComment: comments(first: 1) { nodes { author { login __typename } body createdAt url } }
+                      lastComment: comments(last: 1) { nodes { author { login __typename } body createdAt } } }
+                  }
+                }
+              }
+            }`, { owner, repo, number, after: cursor });
+          const conn = res?.repository?.pullRequest?.reviewThreads;
+          if (!conn) throw new Error('GraphQL response has no reviewThreads connection');
+          nodes.push(...(conn.nodes || []));
+          cursor = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+        } while (cursor && pageGuard++ < MAX_THREAD_PAGES);
+        if (cursor) throw new Error(`review threads exceed ${MAX_THREAD_PAGES * 100}; refusing to decide on a partial list`);
+        threadNodesCache = nodes;
+        return nodes;
+      };
       // Filter 3 (new) — handed off to humans after the nudge cap: label OR trusted marker
       // comment newer than the baseline (either alone is enough; both are written together
       // below). A hand-off comment from BEFORE the label was removed is the previous cycle's
@@ -315,12 +350,31 @@ async function run({ github, context, core }) {
       // wait" and blocked forever: Filter 4 never lets a second nudge through, so a silently
       // failed nudge could never progress toward a working retry OR the nudge cap. A silent
       // session is evidence the last nudge already failed, not a reason to keep waiting on it.
-      const silentSessionSinceNudge = noPushSinceLastNudge && sessionAt !== null &&
-        (session === 'copilot_work_finished' || session === 'copilot_work_finished_failure') &&
-        new Date(sessionAt).getTime() > new Date(comments[0].created_at).getTime();
-      if (silentSessionSinceNudge) {
-        counters.silent_session_since_nudge = (counters.silent_session_since_nudge || 0) + 1;
-        core.info(`#${number}: Copilot's session (${lastStartedAt || '?'} → ${sessionAt}, ${session}) after the last nudge produced no push and no reply; not blocking on it`);
+      //
+      // "No reply" here must mean no reply ANYWHERE, not just no top-level issue comment:
+      // `comments` (from `issues.listComments`) does not include inline review-thread replies,
+      // and Copilot answering a review thread without pushing is a real, non-silent outcome
+      // (review round below already defines "Copilot replied" as the thread's last comment
+      // being Copilot's -- mirrored here, not reinvented). `fetchThreadNodes()` is memoized so
+      // this check and the later, unconditional review-thread section never fetch it twice.
+      let silentSessionSinceNudge = false;
+      if (noPushSinceLastNudge && sessionAt !== null &&
+          (session === 'copilot_work_finished' || session === 'copilot_work_finished_failure') &&
+          new Date(sessionAt).getTime() > new Date(comments[0].created_at).getTime()) {
+        const nudgeTime = new Date(comments[0].created_at).getTime();
+        const threadsForSilenceCheck = await fetchThreadNodes();
+        const repliedInThread = threadsForSilenceCheck.some(t => {
+          const last = t.lastComment?.nodes?.[0];
+          const total = t.comments?.totalCount ?? 0;
+          return total > 1 && isCopilotCodingAgent(last?.author?.login) && new Date(last?.createdAt || 0).getTime() > nudgeTime;
+        });
+        if (repliedInThread) {
+          core.info(`#${number}: Copilot's session (${lastStartedAt || '?'} → ${sessionAt}, ${session}) replied in a review thread; not treating as silent`);
+        } else {
+          silentSessionSinceNudge = true;
+          counters.silent_session_since_nudge = (counters.silent_session_since_nudge || 0) + 1;
+          core.info(`#${number}: Copilot's session (${lastStartedAt || '?'} → ${sessionAt}, ${session}) after the last nudge produced no push and no reply anywhere; not blocking on it`);
+        }
       }
       if (!nudgeCapped && noPushSinceLastNudge && !conflicting && !silentSessionSinceNudge) {
         counters.filtered_last_comment_from_sous_chef++; reasons[number] = 'last comment is an unanswered sous-chef nudge (no push since)'; continue;
@@ -344,33 +398,9 @@ async function run({ github, context, core }) {
         }
       }
 
-      // ALL review threads, cursor-paginated. A PR with more threads than one page must not
-      // silently lose the older ones: an old, still-unanswered thread is exactly what a
-      // nudge exists for.
-      const threadNodes = [];
-      let threadCursor = null;
-      guard = 0;
-      do {
-        const res = await github.graphql(`
-          query($owner: String!, $repo: String!, $number: Int!, $after: String) {
-            repository(owner: $owner, name: $repo) {
-              pullRequest(number: $number) {
-                reviewThreads(first: 100, after: $after) {
-                  pageInfo { hasNextPage endCursor }
-                  nodes { id isResolved isOutdated path
-                    comments { totalCount }
-                    firstComment: comments(first: 1) { nodes { author { login __typename } body createdAt url } }
-                    lastComment: comments(last: 1) { nodes { author { login __typename } body createdAt } } }
-                }
-              }
-            }
-          }`, { owner, repo, number, after: threadCursor });
-        const conn = res?.repository?.pullRequest?.reviewThreads;
-        if (!conn) throw new Error('GraphQL response has no reviewThreads connection');
-        threadNodes.push(...(conn.nodes || []));
-        threadCursor = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
-      } while (threadCursor && guard++ < MAX_THREAD_PAGES);
-      if (threadCursor) throw new Error(`review threads exceed ${MAX_THREAD_PAGES * 100}; refusing to decide on a partial list`);
+      // ALL review threads. Reuses the Filter 4 silent-session check's fetch when it already
+      // ran one (memoized in fetchThreadNodes above); otherwise this is the first fetch.
+      const threadNodes = await fetchThreadNodes();
 
       // Commits of the PR (sha -> commit date) for `verifyFix`. Fetched only when a bot
       // thread could be resolvable, to spare API calls on simple PRs.

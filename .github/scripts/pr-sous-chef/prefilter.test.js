@@ -299,6 +299,22 @@ test('run() finding 4: a silent 6th (capped) session reaches the hand-off, not a
   assert.equal(r.counters.filtered_last_comment_from_sous_chef, 0);
 });
 
+test('run() finding 4: a session that replied in a review thread (no push) is NOT treated as silent -- ordinary Filter 4 blocking applies', async () => {
+  const r = await runPrefilter([scenario({
+    comments: [nudgeAt(70)],
+    timeline: [workEvent('started', 30), workEvent('finished', 20)],
+    threads: [{
+      isResolved: false, isOutdated: false, path: 'x.hpp',
+      comments: { totalCount: 2 },
+      firstComment: { nodes: [{ author: { login: 'copilot-pull-request-reviewer', __typename: 'Bot' }, body: 'concern', createdAt: ago(200) }] },
+      lastComment: { nodes: [{ author: { login: 'copilot-swe-agent' }, createdAt: ago(15) }] }
+    }]
+  })]);
+  assert.equal(r.counters.silent_session_since_nudge, undefined, 'a thread reply means the session was not silent');
+  assert.equal(r.counters.filtered_last_comment_from_sous_chef, 1, 'no push and no top-level reply still blocks a second nudge normally');
+  assert.equal(r.counters.eligible, 0);
+});
+
 test('run() finding 4: unchanged behavior when there is NO session since the last nudge (plain unanswered nudge still blocks)', async () => {
   const r = await runPrefilter([scenario({ comments: [nudgeAt(70)] })]);
   assert.equal(r.counters.filtered_last_comment_from_sous_chef, 1);
