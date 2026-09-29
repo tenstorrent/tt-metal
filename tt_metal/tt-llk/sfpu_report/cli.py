@@ -157,9 +157,12 @@ def _harness_compiles(side, arch, log, jobs):
 
 def cmd_run(args):
     t0 = time.time()
+    formats = [f.strip() for f in (args.formats or "").split(",") if f.strip()]
     if args.simulator:
         args.no_perf = True
         runner.SIMULATOR = True
+        # ttsim aborts on Int32 and fp32 binary SFPU inputs (its unpacker model).
+        formats = formats or ["Float16_b", "Float16"]
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     log = work / "run.log"
@@ -240,10 +243,22 @@ def cmd_run(args):
     acc = []
     if acc_ops:
         accuracy.measure(
-            base, args.arch, acc_ops, work / "accuracy" / "base", log, jobs=args.jobs
+            base,
+            args.arch,
+            acc_ops,
+            work / "accuracy" / "base",
+            log,
+            jobs=args.jobs,
+            formats=formats,
         )
         accuracy.measure(
-            head, args.arch, acc_ops, work / "accuracy" / "head", log, jobs=args.jobs
+            head,
+            args.arch,
+            acc_ops,
+            work / "accuracy" / "head",
+            log,
+            jobs=args.jobs,
+            formats=formats,
         )
         acc = accuracy.compare(work / "accuracy" / "base", work / "accuracy" / "head")
         measured = {r["key"][0] for r in acc}
@@ -342,6 +357,9 @@ def main(argv=None):
     )
     run.add_argument("--iterations", type=int, default=3)
     run.add_argument("--no-perf", action="store_true", help="accuracy only")
+    run.add_argument(
+        "--formats", help="accuracy: only these input formats, e.g. Float16_b,Float32"
+    )
     run.add_argument(
         "--simulator",
         action="store_true",
