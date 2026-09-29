@@ -6,13 +6,6 @@ import math
 
 import ttnn
 
-# Width slices for convs whose activation is kept in DRAM, capped per conv by what the
-# output width allows. Sized for the strided 1x1 conv that opens stage 2 at 928x1600:
-# each slice's halo buffer holds 1/num_slices of its 6 x 232 x 400 x 256 bf16 input,
-# 3.25 MB per L1 bank in total against 576 KB free, so it needs at least 6 slices. Its
-# 200-wide output caps it at 7.
-DRAM_CONV_SLICES = 8
-
 
 class TtnnConv2D:
     def __init__(
@@ -21,34 +14,40 @@ class TtnnConv2D:
         conv_pth,
         device=None,
         activation=None,
-        activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_blk=False,
         dealloc_act=False,
         act_block_h=None,
-        is_fpn=False,
-        is_wdth=False,
-        config_override=None,
+        fp32_dest_acc_en=False,
         dram_activation=False,
+        dram_conv_slices=None,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        output_dtype=None,
     ):
-        """``input_dtype`` and ``input_layout`` describe the interleaved DRAM tensor every call
-        receives. conv2d lays its weights out for the input it will see, so they are prepared
-        here against that description and a forward does no host work; a call with a
-        different input fails instead of running on mismatched weights."""
+        """``conv`` carries the conv's geometry and its input's batch, height and width.
+
+        Most convs run through conv2d. ``input_dtype`` and ``input_layout`` describe the
+        interleaved DRAM tensor every call receives; conv2d lays its weights out for that
+        input, so they are prepared here against it and a forward does no host work, and a
+        call with a different input fails instead of running on mismatched weights.
+        With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
+        takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``;
+        a spatial conv keeps conv2d and runs in ``dram_conv_slices`` width slices.
+
+        ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
+        halo has read it; the DRAM input itself is never freed.
+
+        ``output_dtype`` is the dtype the conv emits, None for its input's. conv2d keeps its
+        partial sums in the output dtype, so a bfloat8_b output also accumulates in bfloat8_b."""
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
-        if is_wdth:
-            shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        self.output_dtype = output_dtype
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
-        self.conv = conv
-        self.conv_pth = conv_pth
-        self.is_fpn = is_fpn
         self.device = device
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
@@ -56,14 +55,6 @@ class TtnnConv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         self.groups = conv.groups
-        self.activation_dtype = activation_dtype
-        if self.is_fpn:
-            fp32_dest_acc_en = True
-        else:
-            fp32_dest_acc_en = False
-        # Blackhole's LoFi accumulation is less accurate than Wormhole's; UniAD's
-        # ResNet-101 backbone PCC drops to ~0.16 with LoFi on BH. Use HiFi2 on BH
-        # to recover PCC ≥ 0.99. Wormhole keeps LoFi for performance.
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -80,19 +71,13 @@ class TtnnConv2D:
             reshard_if_not_optimal=True,
             activation=activation,
         )
-        if config_override and "act_block_h" in config_override:
-            self.conv_config.act_block_h_override = config_override["act_block_h"]
-        elif act_block_h is not None:
+        if act_block_h is not None:
             self.conv_config.act_block_h_override = act_block_h
 
-        if conv_pth.bias is not None:
-            self.bias = conv_pth.bias
-        else:
-            self.bias = None
+        self.bias = conv_pth.bias
 
         self.weight = conv_pth.weight
 
-        self.activation = activation
         self.weights_dtype = weights_dtype
         self.is_pointwise = (
             tuple(self.kernel_size) == (1, 1)
@@ -100,24 +85,18 @@ class TtnnConv2D:
             and tuple(self.padding) == (0, 0)
             and self.groups == 1
         )
-        if self.is_fpn:
-            self.input_height = conv_pth["height"]
-            self.input_width = conv_pth["width"]
-            self.batch_size = conv_pth["batch"]
-        else:
-            self.input_height = conv.input_height
-            self.input_width = conv.input_width
-            self.batch_size = conv.batch_size
+        self.input_height = conv.input_height
+        self.input_width = conv.input_width
+        self.batch_size = conv.batch_size
 
         self.slice_config = None
         if self.dram_activation and not self.is_pointwise:
-            # An interleaved DRAM input sends conv2d down its DRAM path, which computes the
-            # output in slices that each fit in L1. Its automatic slice count overflows L1
-            # on the strided 1x1 conv that opens stage 2, so the count is fixed here. Width
-            # slices of a TILE output are whole tiles wide, so a conv whose output is W wide
-            # takes at most ceil(W / TILE_SIZE) of them.
+            # conv2d's automatic slice count can overflow L1 on large activations, so the
+            # count is fixed here. Width slices of a TILE output are whole tiles wide, so a
+            # conv whose output is W wide takes at most ceil(W / TILE_SIZE) of them.
+            assert dram_conv_slices is not None, "a spatial conv with dram_activation needs dram_conv_slices"
             output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
-            num_slices = min(DRAM_CONV_SLICES, math.ceil(output_width / ttnn.TILE_SIZE))
+            num_slices = min(dram_conv_slices, math.ceil(output_width / ttnn.TILE_SIZE))
             self.slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=num_slices)
 
         self.linear_weight = None
@@ -174,6 +153,7 @@ class TtnnConv2D:
             self.linear_weight,
             bias=self.linear_bias,
             activation=self.linear_activation,
+            dtype=self.output_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
         )
@@ -211,6 +191,7 @@ class TtnnConv2D:
             padding=self.padding,
             conv_config=self.conv_config,
             groups=self.groups,
+            dtype=self.output_dtype,
             compute_config=self.compute_config,
             slice_config=self.slice_config,
             return_output_dim=True,
