@@ -126,7 +126,7 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
             dspark_weights=dspark,
             engram=engram,
             engram_hash=engram_hash,
-            weight_cache_path=WEIGHT_CACHE / f"small-{identity}",
+            weight_cache_path=WEIGHT_CACHE / f"small-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
             topology=topology,
         )
     state = _check(model, spec, tokens, reference, f"{schedule} {case}")
@@ -252,7 +252,7 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
             head,
             max_seq_len=PRODUCTION_SEQ,
             chunk=PRODUCTION_SEQ // chunks,
-            weight_cache_path=WEIGHT_CACHE / f"{weights}-{identity}",
+            weight_cache_path=WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
             topology=topology,
         )
     _check(model, spec, tokens, reference, f"production {weights} chunks={chunks}")

@@ -139,11 +139,12 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
 
     # MoE device tensors are cached on disk: the first build converts 1152 expert matrices per layer on the
     # host (minutes); later builds load them. A marker records a completed layer.
-    # keyed by weight identity (dims, seed, checkpoint revision / synthetic init), not by the oracle result
+    # keyed by weight identity (dims, seed, checkpoint revision / synthetic init) and mesh shape (device tensors are
+    # per-chip shards), not by the oracle result
     identity = orc._digest(
         asdict(spec.args), spec.seed, str(spec.checkpoint), orc._reference_digest(synthetic=ckpt is None)
     )
-    cache_root = WEIGHT_CACHE / f"{weights}-{identity}"
+    cache_root = WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     cache_root.mkdir(parents=True, exist_ok=True)
     init_checker(cache_root)
     blocks = {}
