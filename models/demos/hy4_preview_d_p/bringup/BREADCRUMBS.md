@@ -3106,3 +3106,33 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
+
+## S.moe_shared.13 test (attempt 1)
+
+What
+- Replaced the rendered 34-line test with test_swap_moe_shared_12_experts.py (all checks and limits kept), plus the
+  shared_expert block and SE_* constants of test_swap_moe_full_13_shared_expert.py. "shared_expert" added to SWAPPED.
+  New checks on shared_out: vs the CPU step on the device ffn_norm (rel 0.008, ratio [0.99, 1.01], row 0.015, coef
+  within 0.003); the module on device ffn_norm x 3 vs CPU (0.006 / [0.99, 1.01] / 0.012 / 0.003); vs golden (0.01 /
+  [0.985, 1.015] / 0.02 / 0.004).
+- CPU mutation study on the layer-2 golden (/tmp/hy4_ss13/study.py, study.log, outside the repo). The table is in
+  the test docstring. 20 of 27 mutations pass the 0.98 out gate. The vs-CPU checks catch all of them, except rounding
+  and bfp8 weights, which should pass.
+
+Decisions
+- SE_SYN_SCALE 3, not 2. This matches the layer-2 component test: at x 2 the clamp barely fires (rel 0.0069). At x 3
+  the clamp scores 0.068 / worst row 0.40.
+- Limits are the same as layer 1. The tightest margin is bfp8 weights at x 3, worst row 0.0110 of 0.012. The plan
+  says bf16 weights, so this does not affect the device module.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999995; shared vs CPU 0, x3 0; vs golden 0.00217 row 0.0036).
+- BRINGUP_IMPL=stub: FAIL (pcc_swap_out below 0.98 plus every check).
+- Gate (device): PASS, pcc_swap_out 0.999974. Shared vs CPU 0.00073 [0.99916, 0.99963] row 0.0010 coef 0.99945.
+  x3 0.00074. vs golden 0.00377 [0.99520, 1.00482] row 0.0115. Tail 0.0035, out rel 0.00717.
+- The first "FAIL pcc_swap_out: pcc=0.000000" line is the precompile collect pass. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
