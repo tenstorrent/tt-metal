@@ -24,8 +24,9 @@ through model capabilities before device creation, using the existing
 `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c`.
 
 The serving adapter has one resident slot and no MTP. Its `decode_only` sampling
-route draws on the CPU from reduced model outputs; requests needing full logits
-use the plugin's host sampler. Standalone MTP measurements describe a separate
+route samples the full-vocabulary row on the CPU and returns only the selected
+token ID to the plugin; requests needing full logits return that row to the
+plugin's host sampler. Standalone MTP measurements describe a separate
 execution mode and are not vLLM throughput.
 
 Historical measurements and proposal pins shipped with the source are source

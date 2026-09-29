@@ -117,6 +117,9 @@ def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
     assert slab.returncode == 0, slab.stderr
     args = [line[len("arg=") :] for line in slab.stdout.splitlines()[1:]]
     assert args[args.index("--prefill-slab") + 1] == "256" and args[args.index("--mtp") + 1] == "4"
+    acceptance = run_launcher(tmp_path, *common, "--acceptance", "--acceptance-only", "--require-json-96")
+    assert acceptance.returncode == 0, acceptance.stderr
+    assert "arg=--acceptance-only" in acceptance.stdout and "arg=--acceptance-prompts" in acceptance.stdout
     launcher = LAUNCHER.read_text(encoding="utf-8")
     assert "--long-chunks and --mtp are alternatives" not in launcher
     assert "--prefill-slab and --mtp are alternatives" not in launcher
