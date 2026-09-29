@@ -132,9 +132,19 @@ class MLP:
         mc = extract_mesh_config(mesh_device)
         dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
         E = hf_config.num_local_experts
+        # Size the dispatch buffer for the worst case (all top-k picks of every column token on one
+        # chip) so dispatch can never drop rows; TtMiniMaxMoE relies on that to run combine with
+        # init_zeros=False. compute_constants' base capacity is dgs*seq, hence factor = top-k.
+        # DRAM cost vs the previous factor 2 (+2*dgs*seq = 16384 rows x emb 6144 per chip): the bf16
+        # ROW_MAJOR dispatch buffer grows ~192 MiB, and the fused routed-expert op allocates a fresh
+        # bfp8 TILE output of the same row count (~102 MiB) while the dispatch buffer is still alive,
+        # so the peak growth during experts_mm is ~294 MiB per chip. Combine output is seq*topk rows
+        # and does not scale with this factor.
+        topk = hf_config.num_experts_per_tok
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(
-            ep_seq_len_per_chip, E, hf_config.num_experts_per_tok, mesh_device.get_num_devices(), dgs, 2
+            ep_seq_len_per_chip, E, topk, mesh_device.get_num_devices(), dgs, topk
         )
+        assert max_buf >= dgs * ep_seq_len_per_chip * topk, "dispatch buffer below worst case; rows could drop"
         # MiniMax experts: w1=gate, w3=up, w2=down (direct map, no transpose). None in cache-only mode —
         # TtRoutedExpert then loads the tilized per-expert weights straight from the cache.
         routed_w = (
@@ -194,12 +204,14 @@ class MLP:
         )
         self.ep_num_links = ccl_manager.num_links
 
-    def __call__(self, hidden_states, actual_isl=None):
+    def __call__(self, hidden_states, actual_isl=None, actual_start=0):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
         actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, or None for a full
         chunk. Drives the padding config below; a wrong value silently drops real tokens, so a caller
         that does not track it must pass None (correct, it just does the padded work).
+        actual_start: the chunk's global start (the cache offset); decides which rows of each SP chip are
+        real when the chunk starts mid-slab (see TopKRouter.build_padding_config).
 
         hidden_states: per-device [1,1,S,H] at FULL emb (the prompts/seq-shards live in the mesh rows).
         Under a sharded residual that full width comes from the layer's single pre-MLP all-gather, and
@@ -218,7 +230,7 @@ class MLP:
         # ONE padding config per chunk, shared by the gate and the EP dispatch. Built (and memoized) by
         # the router; None for a full chunk. Both consumers must see the SAME tensor — the gate
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
-        padding_config = self.router.build_padding_config(actual_isl)
+        padding_config = self.router.build_padding_config(actual_isl, actual_start)
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device

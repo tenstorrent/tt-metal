@@ -61,7 +61,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
         _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
             srcA_format, srcB_format);
     }
-    _llk_math_reduce_init_<pool_type, reduce_dim, math_fidelity, is_int_fpu_en>(tensor_shape);
+    _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity, is_int_fpu_en>(tensor_shape);
 }
 
 /**

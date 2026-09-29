@@ -42,9 +42,14 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
  * @param enable True to enable FP32 dest accumulation, false to disable.
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.
  */
-inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(enable); }
+inline void llk_math_set_fp32_dest_acc(bool enable) {
+    SAN_HOOK(unsupported());
+    _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(enable);
+}
 
-inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
+inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {
+    SAN_HOOK(unsupported());
+}
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");

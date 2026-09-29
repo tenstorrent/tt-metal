@@ -41,10 +41,10 @@ void kernel_main() {
     constexpr uint32_t red_dim_units = get_compile_time_arg_val(6);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(7);
+    constexpr bool reduce_all = get_compile_time_arg_val(7) == 1;
 
     constexpr auto s_src_args = TensorAccessorArgs<8>();
-    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
+    constexpr auto s_dst_args = TensorAccessorArgs<decltype(s_src_args)::next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
     const auto s_src = TensorAccessor(s_src_args, src_base_addr);

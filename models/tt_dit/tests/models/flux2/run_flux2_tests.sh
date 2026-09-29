@@ -5,24 +5,23 @@
 #
 # Run the FLUX.2 unit + e2e test suites on a single host.
 #
-# Unlike Wan2.2, FLUX.2 has NO CI legs in tests/pipeline_reorg/*.yaml, so the
-# legs below are derived from the test files themselves rather than mirrored
-# from a pipeline. Two consequences worth knowing:
+# The FLUX.2 CI legs in tests/pipeline_reorg/*.yaml cover only 1024x1024 -- one
+# quietbox config and one galaxy config -- so the legs below are derived from the
+# test files themselves to sweep wider. Two things worth knowing:
 #
-#  * The flux2 device_params do NOT set require_exact_physical_num_devices, so a
-#    (2,2) or (1,8) parametrization does NOT self-skip on a 32-chip galaxy -- it
-#    opens a submesh and really runs. Legs therefore pin the mesh id matching the
-#    host instead of relying on self-skip. Use --mesh/-k to widen.
+#  * Every flux2 test sets require_exact_physical_num_devices, so a (2,2) or (1,8)
+#    parametrization self-skips on a 32-chip galaxy. Legs still pin a mesh id where
+#    a file offers more than one row matching the host. Use --mesh/-k to widen.
 #  * black-forest-labs/FLUX.2-dev is a manually gated HF repo (CI is blocked on
 #    it, see #54499) and is not staged under /mnt/models. You need an HF token
 #    on its allowlist; see PREREQUISITES below.
 #
-# All resolutions run by default (1024 -> 8192 for perf); cap with --max-res.
+# All resolutions run by default (1024 -> 4096 for perf); cap with --max-res.
 #
 # Usage:
 #   ./run_flux2_tests.sh                       # everything, arch auto-detected
 #   ./run_flux2_tests.sh --suite unit
-#   ./run_flux2_tests.sh --max-res 2048        # skip the 4096/8192 perf legs
+#   ./run_flux2_tests.sh --max-res 2048        # skip the 4096 perf leg
 #   ./run_flux2_tests.sh --list                # collect only, run nothing
 #   ./run_flux2_tests.sh -- -x                 # trailing args go to pytest
 
@@ -32,7 +31,7 @@ SUITE=all
 ARCH=auto
 MESH=auto
 EXTRA_K=""
-MAX_RES=8192
+MAX_RES=4096
 WITH_PROFILE=0
 LIST_ONLY=0
 DRY_RUN=0
@@ -52,7 +51,7 @@ Options:
                            prefer -k)
   -k EXPR                  Extra pytest -k expression, ANDed into every leg
   --max-res N              Skip perf/profile resolutions above N
-                           (N in 1024 2048 4096 8192; default 8192)
+                           (N in 1024 2048 4096; default 4096)
   --with-profile           Also run test_transformer_profile (72 heavy cases,
                            a profiling sweep, not a correctness test)
   --list                   pytest --collect-only -q for each leg
@@ -93,7 +92,7 @@ done
 
 case "$SUITE"   in unit|e2e|all) ;; *) echo "--suite must be unit|e2e|all" >&2; exit 2 ;; esac
 case "$ARCH"    in bh|wh|auto)   ;; *) echo "--arch must be bh|wh|auto" >&2; exit 2 ;; esac
-case "$MAX_RES" in 1024|2048|4096|8192) ;; *) echo "--max-res must be 1024|2048|4096|8192" >&2; exit 2 ;; esac
+case "$MAX_RES" in 1024|2048|4096) ;; *) echo "--max-res must be 1024|2048|4096" >&2; exit 2 ;; esac
 
 # ---------------------------------------------------------------------------
 # Repo / arch discovery
@@ -118,14 +117,13 @@ fi
 # variable per test rather than a single global mesh filter.
 VAE_ID="4x8"            # test_vae_flux2.py         also has 1x1, 1x8
 ENC_ID="4x8"            # test_prompt_encoder.py    only 4x8 exists
+PIPE_ID="4x8"           # test_pipeline_flux2.py    both 4x8 rows; the 4-link one self-skips on BH
 if [[ "$ARCH" == bh ]]; then
     XF_ID="bh_4x8_ring"     # test_transformer_flux2.py::test_transformer
-    PIPE_ID="bh_4x8"        # test_pipeline_flux2.py
     PERF_IDS="bh_glx_linear or bh_glx_ring_sp0tp1_nofsdp or bh_glx_ring_sp1tp0 or bh_glx_ring_sp0tp1_fsdp"
     PROFILE_IDS="bh_4x8_ring_nofsdp or bh_4x8_ring_sp1tp0_nofsdp or bh_4x8_ring_fsdp"
 else
     XF_ID="wh_2x4_linear"
-    PIPE_ID="wh_4x8"
     PERF_IDS=""             # test_performance_flux2.py parametrizes BH meshes only
     PROFILE_IDS=""          # test_transformer_profile is BH-only too
 fi
@@ -135,7 +133,7 @@ if [[ "$MESH" != auto ]]; then
 fi
 
 # Resolutions, capped by --max-res.
-ALL_RES=(1024 2048 4096 8192)
+ALL_RES=(1024 2048 4096)
 RES=()
 for r in "${ALL_RES[@]}"; do (( r <= MAX_RES )) && RES+=("$r"); done
 

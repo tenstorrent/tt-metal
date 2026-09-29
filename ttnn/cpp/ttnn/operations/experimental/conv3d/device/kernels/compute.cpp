@@ -37,14 +37,15 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
+    // Restore matmul formats before init validates them; the fp32 tail may have changed them.
+    // Matmul maps input 0 to SrcB and input 1 to SrcA.
+    reconfig_data_format(in1_cb, in0_cb);
     matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_cb, in0_cb);
 
     CircularBuffer out_cb_obj(out_cb);
 

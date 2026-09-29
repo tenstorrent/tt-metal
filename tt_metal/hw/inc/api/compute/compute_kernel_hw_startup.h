@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/compute/common.h"
+#include "api/compute/common_globals.h"
 #include "sanitizer/api.h"
 #include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"

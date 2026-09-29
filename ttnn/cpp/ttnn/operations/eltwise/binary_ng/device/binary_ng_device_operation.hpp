@@ -49,6 +49,10 @@ struct BinaryNgDeviceOperation {
         std::optional<CoreRangeSet> sub_core_grids;
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
+        // The scalar operand is the mathematical left-hand side, so the compute kernel
+        // evaluates op(scalar, tensor). Only ever set on the scalar path, where the tensor
+        // occupies slot a and the scalar slot b regardless of operand order.
+        bool scalar_is_lhs = false;
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
@@ -64,6 +68,8 @@ struct BinaryNgDeviceOperation {
         // Sharded output's shape in pages on the accessor path. The inputs' equivalent rides in
         // tensor_args_t::to_hash(); the output has no Tensor at hash time, so it is carried here.
         std::optional<tt::tt_metal::Shape> c_tensor_shape_in_pages;
+        // Parameters of the op being run, for ops that take any; empty for ops that do not.
+        std::optional<binary::BinaryOpParams> op_params;
 
         DataType get_dtype() const;
 
@@ -82,6 +88,7 @@ struct BinaryNgDeviceOperation {
             // single sub-device, so no extra entries there.
             "worker_grid",
             "subtile_broadcast_type",
+            "scalar_is_lhs",
             "is_sfpu",
             "is_quant_op",
             "is_where_op",
@@ -92,7 +99,8 @@ struct BinaryNgDeviceOperation {
             "a_shard_volume",
             "b_shard_volume",
             "c_shard_volume",
-            "c_tensor_shape_in_pages");
+            "c_tensor_shape_in_pages",
+            "op_params");
 
         auto attribute_values() const {
             return std::make_tuple(
@@ -106,6 +114,7 @@ struct BinaryNgDeviceOperation {
                 sub_core_grids,
                 worker_grid,
                 subtile_broadcast_type,
+                scalar_is_lhs,
                 is_sfpu,
                 is_quant_op,
                 is_where_op,
@@ -116,7 +125,8 @@ struct BinaryNgDeviceOperation {
                 a_shard_volume,
                 b_shard_volume,
                 c_shard_volume,
-                c_tensor_shape_in_pages);
+                c_tensor_shape_in_pages,
+                binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{});
         }
     };
 
@@ -125,8 +135,8 @@ struct BinaryNgDeviceOperation {
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
 
-        // Operand dtypes and memory configs, plus each sharded operand's shape in pages. Omits logical
-        // shape by design, so differently-shaped interleaved calls share one cache entry.
+        // Operand dtypes, memory configs, Alignment, and Tile, plus each sharded operand's shape in
+        // pages. Omits logical shape by design, so differently-shaped interleaved calls share one cache entry.
         ttsl::hash::hash_t to_hash() const;
     };
 
@@ -190,6 +200,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    bool scalar_is_lhs = false);
 
 }  // namespace ttnn::prim

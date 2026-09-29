@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -371,7 +372,7 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
 
     // Unclaimed, it is just a core the allocator knows nothing about.
     auto create_buffer = [&] {
-        return Buffer::create(
+        return BufferImpl::create(
             config.device,
             config.size,
             config.page_size,

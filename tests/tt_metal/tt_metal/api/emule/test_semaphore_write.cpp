@@ -45,7 +45,7 @@ TEST_F(UnitMeshFixture, Semaphore_Direct_Write_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Illegal Semaphore Access: Offset 0x.*is inside the reserved Semaphore region.*");
 }
 
@@ -83,7 +83,7 @@ TEST_F(UnitMeshFixture, Semaphore_OutsideRegion_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr});
 
     // Must NOT abort.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -127,7 +127,7 @@ TEST_F(UnitMeshFixture, Semaphore_RawGetSemaphoreCast_NoViolation) {
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {sem_id}});
 
     // Must NOT abort.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -187,7 +187,7 @@ TEST_F(UnitMeshFixture, Semaphore_RelayUnicast_NoViolation) {
     SetRuntimeArgs(program, sender_kernel, sender_core, {rx_virtual.x, rx_virtual.y});
 
     // Must NOT abort (and must not hang: the relay's value wakes the waiter).
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -226,8 +226,7 @@ TEST_F(UnitMeshFixture, Semaphore_SemDerivedOutsideRegion_StillChecked) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {sem_id}});
 
-    EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true), ".*Out-of-Bounds Write.*");
+    EXPECT_DEATH(LaunchProgram(this->device(), std::move(program)), ".*Out-of-Bounds Write.*");
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 

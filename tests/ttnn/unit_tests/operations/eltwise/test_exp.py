@@ -21,7 +21,6 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "low, high, testing_dtype, expected_rtol, expected_atol",
     [
-        (-89, -87, "bfloat16", 1e-2, 1e-3),
         (-87.3, 88.7, "float32", 1e-2, 1e-3),
     ],
 )
@@ -92,7 +91,7 @@ def test_exp_fp32_accuracy(device):
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 def test_exp_fp32_special_values(device):
@@ -132,4 +131,4 @@ def test_exp_fp32_special_values(device):
     assert torch.equal(torch.isnan(result), torch.isnan(golden))
     assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
     assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)

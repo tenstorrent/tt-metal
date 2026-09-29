@@ -77,11 +77,8 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 /**
  * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
  *
- * Face count and face row dimension are derived from the operand's CB metadata (mirroring
- * llk_unpack_tilize_init) so the canonical Tile_x_dim / SrcA stride restore matches the operand's
- * tile geometry. Deriving face_r_dim (rather than defaulting it to FACE_R_DIM) is what lets the
- * tiny-tile (face_r_dim < 16) restore reach the Compute API, whose tilize_uninit /
- * tilize_uninit_with_dt call this with the operand only.
+ * Tile geometry comes from the operand's CB metadata, so the restore matches the operand rather
+ * than a hardcoded 16x16, 4-face tile.
  *
  * @param operand Input circular buffer / operand index.
  */
@@ -161,6 +158,7 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    SAN_HOOK(unsupported());
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
@@ -182,6 +180,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
@@ -230,6 +229,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
 
@@ -288,6 +288,7 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
     std::uint32_t tile_idx_b) {
+    SAN_HOOK(unsupported());
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
             operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
@@ -298,9 +299,13 @@ inline void llk_unpack_tilizeA_B_block(
  * Tear down the combined tilize-A / unpack-B configuration so a subsequent operation can reprogram
  * the unpacker.
  *
+ * Reverts the SrcA Y stride its init wrote. Tile_x_dim_cntx0 is left alone, since its init never
+ * programs it.
+ *
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     _llk_unpack_tilizeA_B_uninit_((std::uint32_t)unpack_dst_format[operand_id]);
 }

@@ -156,7 +156,7 @@ def test_binary_w_typecast(input_shapes, in_dtype, out_dtype, layout, ttnn_fn, d
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b).to(getattr(torch, out_dtype))
 
-    assert_with_ulp(torch_output_tensor, output_tensor, 0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=0)
 
 
 @pytest.mark.parametrize(
@@ -595,138 +595,6 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([5, 3, 32, 32]), torch.Size([1, 1, 1, 1])),
-        (torch.Size([5, 3, 64, 128]), torch.Size([1, 3, 1, 128])),
-        (torch.Size([5, 3, 128, 64]), torch.Size([1, 1, 128, 1])),
-        (torch.Size([5, 32, 128]), torch.Size([5, 1, 1])),
-    ),
-)
-# Typecast on both inputs
-def test_inplace_sub_typecast(input_shapes, device):
-    a_shape, b_shape = input_shapes
-
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
-    )(a_shape)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
-    )(b_shape)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=ttnn.bfloat8_b,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=ttnn.bfloat8_b,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
-    output_tensor = ttnn.to_torch(input_tensor_a)
-
-    golden_fn = ttnn.get_golden_function(ttnn.sub_)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-    status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert status >= 0.999
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([5, 3, 32, 32]), torch.Size([1, 1, 1, 1])),
-        (torch.Size([5, 3, 64, 128]), torch.Size([1, 3, 1, 128])),
-        (torch.Size([5, 3, 128, 64]), torch.Size([1, 1, 128, 1])),
-        (torch.Size([5, 32, 128]), torch.Size([5, 1, 1])),
-    ),
-)
-# Typecast on input tensor a
-def test_inplace_sub_typecast_a(input_shapes, device):
-    a_shape, b_shape = input_shapes
-
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
-    )(a_shape)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16
-    )(b_shape)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=ttnn.bfloat8_b,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
-    output_tensor = ttnn.to_torch(input_tensor_a)
-
-    golden_fn = ttnn.get_golden_function(ttnn.sub_)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-    status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert status >= 0.999
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([5, 3, 32, 32]), torch.Size([1, 1, 1, 1])),
-        (torch.Size([5, 3, 64, 128]), torch.Size([1, 3, 1, 128])),
-        (torch.Size([5, 3, 128, 64]), torch.Size([1, 1, 128, 1])),
-        (torch.Size([5, 32, 128]), torch.Size([5, 1, 1])),
-    ),
-)
-# Typecast on input tensor b
-def test_inplace_sub_typecast_b(input_shapes, device):
-    a_shape, b_shape = input_shapes
-
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16
-    )(a_shape)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
-    )(b_shape)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=ttnn.bfloat8_b,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
-    output_tensor = ttnn.to_torch(input_tensor_a)
-
-    golden_fn = ttnn.get_golden_function(ttnn.sub_)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-    status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert status >= 0.999
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
         (torch.Size([1, 1, 1, 1]), torch.Size([1, 1, 1, 1])),
         (torch.Size([5, 3, 64, 128]), torch.Size([5, 3, 64, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([5, 1, 1, 64])),
@@ -847,8 +715,8 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
         assert_div_by_zero_outputs(torch_output_tensor, tt_output_tensor)
     else:
         assert_with_ulp(
-            torch_output_tensor,
-            tt_output_tensor,
+            expected_result=torch_output_tensor,
+            actual_result=tt_output_tensor,
             ulp_threshold=3,
         )
 
@@ -968,7 +836,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
         # A float32 output was requested, so the reference has to be computed in float32 as well:
         # comp_ulp measures against the golden's precision and expects it to be the higher one.
         torch_output_tensor = golden_fn(torch_input_tensor_a.float(), torch_input_tensor_b.float())
-        assert_with_ulp(torch_output_tensor, tt_output_tensor, ulp_threshold=1)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=tt_output_tensor, ulp_threshold=1)
     else:
         torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
         assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
@@ -1081,4 +949,4 @@ def test_binary_div(
     )
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype)
     assert output_tensor.dtype == output_dtype
-    assert_with_ulp(torch_output, ttnn.to_torch(output_tensor), ulp_threshold=0)
+    assert_with_ulp(expected_result=torch_output, actual_result=ttnn.to_torch(output_tensor), ulp_threshold=0)

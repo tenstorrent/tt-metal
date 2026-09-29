@@ -28,6 +28,8 @@ class FDMeshCQTestAccessor;
 
 namespace tt::tt_metal::distributed {
 
+class SubDeviceSetupCacheTestAccessor;
+
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshCoreDataReadDescriptor;
@@ -40,6 +42,7 @@ private:
     // This class can now access private members of FDMeshCommandQueue
     // This is used to access the system memory manager from cq test fixtures
     friend class tt_dispatch_tests::Common::FDMeshCQTestAccessor;
+    friend class SubDeviceSetupCacheTestAccessor;
 
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
@@ -86,6 +89,20 @@ private:
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
+
+    // Value keys avoid retaining manager pointers/IDs after removal. Device-specific command bytes
+    // live with this CQ and runtime context. Include device order to handle mesh reshaping.
+    struct SubDeviceSetupCommands {
+        std::vector<IDevice*> devices;
+        std::vector<uint32_t> workers;
+        vector_aligned<uint32_t> noc_data;
+        std::vector<std::pair<CoreRangeSet, uint32_t>> core_mapping;
+        bool reset_launch_msg_state;
+        std::vector<std::vector<vector_aligned<uint32_t>>> device_batches;
+    };
+    // Most recently used first. Bound retained per-chip blobs and linear lookup cost.
+    static constexpr size_t max_sub_device_setup_cache_entries = 8;
+    std::vector<SubDeviceSetupCommands> sub_device_setup_commands_;
 
     DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;

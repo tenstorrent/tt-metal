@@ -79,7 +79,6 @@ ALWI void process_tile(
     tile_regs_release();
 
     pack_reconfig_data_format(cb_llk_post, cb_out);
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
     PREPROCESS(
         BCAST_OP,
@@ -104,7 +103,7 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
+        // Startup and preprocessing preserve the physical-LHS SrcA format.
         copy_init(cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
@@ -124,6 +123,7 @@ ALWI void process_tile(
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
         tile_regs_commit();
 
         tile_regs_wait();

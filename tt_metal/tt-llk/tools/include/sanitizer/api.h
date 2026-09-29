@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include <utility>
-
-#include "sanitizer/operation.h"
 #include "sanitizer/settings.h"
-#include "sanitizer/types.h"
 
 #if defined(LLK_SAN_ENABLE)
 
+#include <utility>
+
 #include "sanitizer/impl.h"
+#include "sanitizer/operation.h"
+#include "sanitizer/types.h"
 
 namespace llk::san
 {
@@ -50,7 +50,7 @@ constexpr Thread get_thread()
 } // namespace detail
 
 template <Thread T = detail::get_thread()>
-static inline void thread_init()
+SAN_FUNC static inline void thread_init()
 {
     detail::exu_dispatch([](auto exu) { detail::exu_init<exu.value, T>(*state); });
 }
@@ -60,31 +60,31 @@ static inline void thread_init()
 // ------------
 
 template <Thread T = detail::get_thread(), typename... Vs>
-static inline void configure(Vs&&... values)
+SAN_FUNC static inline void configure(Vs&&... values)
 {
     detail::configure<T>(*state, std::forward<Vs>(values)...);
 }
 
 template <Thread T = detail::get_thread(), typename... Vs>
-static inline void reconfigure(Vs&&... values)
+SAN_FUNC static inline void reconfigure(Vs&&... values)
 {
     detail::reconfigure<T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
-static inline void init(Vs&&... values)
+SAN_FUNC static inline void init(Vs&&... values)
 {
     detail::init<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
-static inline void execute(Vs&&... values)
+SAN_FUNC static inline void execute(Vs&&... values)
 {
     detail::execute<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
-static inline void uninit(Vs&&... values)
+SAN_FUNC static inline void uninit(Vs&&... values)
 {
     detail::uninit<Op, T>(*state, std::forward<Vs>(values)...);
 }
@@ -100,7 +100,7 @@ namespace detail
 
 } // namespace detail
 
-static inline void unsupported()
+SAN_FUNC static inline void unsupported()
 {
     detail::unsupported_operation();
 }
@@ -159,56 +159,12 @@ public:
 
 #else
 
-namespace llk::san
-{
-
-template <Thread T = Thread::TRISC0>
-static inline void thread_init()
-{
-}
-
-template <Thread T = Thread::TRISC0, typename... Vs>
-static inline void configure([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <Thread T = Thread::TRISC0, typename... Vs>
-static inline void reconfigure([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
-static inline void init([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
-static inline void execute([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
-static inline void uninit([[maybe_unused]] Vs&&... values)
-{
-}
-
-static inline void unsupported()
-{
-}
-
-} // namespace llk::san
-
-#define LLK_SAN_FUNCTION() \
-    do                     \
-    {                      \
-    } while (false)
-
-#define LLK_SAN_SILENT_ZONE() \
-    do                        \
-    {                         \
-    } while (false)
+#define LLK_SAN_FUNCTION()    ((void)0)
+#define LLK_SAN_SILENT_ZONE() ((void)0)
 
 #endif
+
+#if defined(LLK_SAN_ENABLE)
 
 #define SAN_HOOK(...)             \
     do                            \
@@ -217,3 +173,9 @@ static inline void unsupported()
         using llk::san::Operand;  \
         __VA_ARGS__;              \
     } while (false)
+
+#else
+
+#define SAN_HOOK(...) ((void)0)
+
+#endif
