@@ -1267,6 +1267,13 @@ tasks:
     - attention
     - attn_residual
     layer: 1
+  frozen:
+    at: '2026-09-29T12:12:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py: 8b291c39677910587190016f09a88faacd2322f9175d95deceb05f8d5f7e5e21
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_full.ffn_hc
   title: moe_full ffn_hc (op) on device, layer 1
   step: implement
