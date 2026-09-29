@@ -43,8 +43,11 @@ enqueued. Asking for a precision other than the native one will be a `TT_FATAL`.
 the version it was cast from. When a read of it finds an older version, it will be refreshed in place with
 `ttnn::typecast(native, dtype, std::nullopt, derived)`, which writes into the existing buffer.
 `get_value(NATIVE)` will keep returning the native slot as stored, and `set_value` will install a new native
-tensor and reset the derived one. The fused `AdamW` and `SGD` steps will take a `MutableTensorView` for the
-parameter and their state. Composite optimizers already go through `set_value` and will not change.
+tensor and reset the derived one. `FULL` keeps its current meaning, fp32 with a cast when the tensor is bf16;
+readers that mean "the value as stored" use `NATIVE`. The three in-place writers will take a `MutableTensorView`
+for the parameter and their state: the fused `AdamW` and `SGD` steps, and `AdamWFullPrecision`, which updates
+its fp32 master weights and moments in place through the same kernel. Composite optimizers already go through
+`set_value` and will not change.
 
 Two optimizer contracts have to move with it. `AdamW` creates its moments from the `HALF` view
 (`optimizers/adamw.cpp`), while its device op requires the moments to have the parameter's dtype
@@ -65,7 +68,8 @@ Option A reallocates the compute copy on every step under the fp32-master policy
 bookkeeping anyway. Option B casts and allocates on every read and cannot return a `const&`. Letting both
 slots be written was also rejected, because rounding fp32 to bf16 would erase the master's sub-ulp progress.
 The limit of C is that it cannot see writes that bypass the accessor. That is mitigated by migrating every
-known in-place writer (the fused `AdamW` and `SGD` steps), the private constructor of `MutableTensorView`,
+known in-place writer (the fused `AdamW` and `SGD` steps and `AdamWFullPrecision`), the private constructor of
+`MutableTensorView`,
 the `TT_FATAL`, a behavioural test per in-place optimizer and storage class, and a line in the review
 instructions. The counter is hidden behind one private query, so a future buffer-level version in ttnn can
 replace it.
