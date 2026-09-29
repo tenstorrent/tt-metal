@@ -199,6 +199,12 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     paths += [p for p in task.get("paths", []) if _files_under(repo, [p])]  # an empty folder is no pathspec for git
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
+    # Shared paths every step may change (orchestrator.BRINGUP_OPS and common_paths): fork edits and knowledge entries.
+    paths += [
+        "ttnn/ttnn/bringup",
+        "models/demos/common/bringup/knowledge/known_issues.md",
+        "models/demos/common/bringup/knowledge/repo_map.md",
+    ]
     return [p for p in paths if (repo / p).exists() or _tracked(repo, p)]
 
 
