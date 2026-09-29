@@ -67,11 +67,10 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
             if (current_count != last_counts[i]) {
                 DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
-                // KNOWN ISSUE (unfixed, rare): this helper writes the end timestamp into dispatch_s's open record
-                // slot with no handshake. dispatch_s can publish that slot between our slot pick and our two
-                // 32-bit stores, so the BRISC may read the slot mid-write (new time_lo, old time_hi: wrong only if
-                // the low word wrapped, ~every 3.2 s at 1.35 GHz) or before this write lands (end a few cycles
-                // early). Separate from the lost-record bug (#57632); fix it if it shows up in practice.
+                // Not synchronized with dispatch_s publishing this slot, which is benign in practice: these stores
+                // finish within a few cycles, long before the BRISC can fetch a published slot (a NOC round trip).
+                // Only a stall of hundreds of cycles here could leave the end a few cycles early. A torn value would
+                // also need time_lo to wrap during that stall (~s/2^32), and the BRISC clamps it anyway.
                 record_realtime_timestamp(rt_profiler_msg, false);
             }
         }
