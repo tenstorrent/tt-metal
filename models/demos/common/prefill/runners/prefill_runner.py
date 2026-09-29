@@ -96,6 +96,14 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
+# PREFILL_PP_TIMING=1: one PP_TIMING log line per chunk with the host-side split of the stage cycle (lease waits,
+# input wait, prefill_chunk enqueue, send push, wall stamps for the hop). Off by default; timing only.
+PP_TIMING = os.environ.get("PREFILL_PP_TIMING", "0") == "1"
+# PREFILL_D2D_SHARE_FABRIC_LINKS=0: D2D services in OWN mode (hold their fabric links; no host lease, so the
+# boundary send overlaps the next chunk's compute). Experimental: only safe when the model's CCLs do not use
+# the boundary links' router channels, and there is no back-pressure on the sender backing tensor.
+D2D_SHARE_FABRIC_LINKS = os.environ.get("PREFILL_D2D_SHARE_FABRIC_LINKS", "1") != "0"
+_pp_t: dict = {}
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
@@ -243,7 +251,7 @@ def build_d2d_pipeline_endpoints(
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
             metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
-            share_fabric_links=True,
+            share_fabric_links=D2D_SHARE_FABRIC_LINKS,
             socket_buffer_type=ttnn.BufferType.L1,
         )
 
@@ -262,7 +270,7 @@ def build_d2d_pipeline_endpoints(
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
         f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={SYNC_WORKER_CORES}, "
-        f"fifo={D2D_FIFO_SIZE_BYTES}B)"
+        f"fifo={D2D_FIFO_SIZE_BYTES}B, share_fabric_links={D2D_SHARE_FABRIC_LINKS})"
     )
     return inbound, outbound
 
@@ -329,15 +337,23 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
         "provided_levels": 0,
     }
     _d2d_send(d2d_out, dummy, rank, sentinel)
-    d2d_out.release_fabric_links()
+    if D2D_SHARE_FABRIC_LINKS:
+        d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
 
 def _lease_reclaim(d2d_in, d2d_out) -> None:
+    if not D2D_SHARE_FABRIC_LINKS:
+        return
+    t0 = time.perf_counter() if PP_TIMING else 0.0
     if d2d_in is not None:
         d2d_in.wait_for_fabric_links()
+    t1 = time.perf_counter() if PP_TIMING else 0.0
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
+    if PP_TIMING:
+        _pp_t["lease_in_ms"] = (t1 - t0) * 1000.0
+        _pp_t["lease_out_ms"] = (time.perf_counter() - t1) * 1000.0
     if d2d_in is not None:
         d2d_in.release_fabric_links()
 
@@ -372,7 +388,10 @@ def _compute_and_send(
     mtp_tokens=None,
 ) -> float:
     if SYNC_PER_CHUNK:
+        t_sync = time.perf_counter() if PP_TIMING else 0.0
         ttnn.synchronize_device(runtime.mesh_device)
+        if PP_TIMING:
+            _pp_t["pre_sync_ms"] = (time.perf_counter() - t_sync) * 1000.0
     t_start = time.time()
     t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
@@ -393,11 +412,16 @@ def _compute_and_send(
         metadata_msg=metadata_msg,
         **mtp_kwargs,
     )
+    if PP_TIMING:
+        _pp_t["enqueue_ms"] = (time.perf_counter() - t_perf) * 1000.0
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
+        if PP_TIMING:
+            _pp_t["compute_ms"] = compute_ms
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
         _record_chunk_timing(rank, c, t_start, compute_ms)
+    t_send = time.perf_counter() if PP_TIMING else 0.0
     if not runtime.config.is_last_rank:
         forward_md = None
         if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
@@ -411,13 +435,17 @@ def _compute_and_send(
             deallocate=(not runtime.config.use_trace) or runtime.config.dflash_enabled,
             metadata_msg=forward_md,
         )
-    if d2d_out is not None:
+    if d2d_out is not None and D2D_SHARE_FABRIC_LINKS:
         d2d_out.release_fabric_links()
+    if PP_TIMING:
+        _pp_t["send_ms"] = (time.perf_counter() - t_send) * 1000.0
+        _pp_t["t_sent"] = time.time()
+        _pp_t["t_start"] = t_start
     return t_start
 
 
 def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
-    if d2d_out is not None:
+    if d2d_out is not None and D2D_SHARE_FABRIC_LINKS:
         d2d_out.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
@@ -450,13 +478,20 @@ def run_request_loop(
     c = 0
     first = None
     while not _shutdown:
+        if PP_TIMING:
+            _pp_t.clear()
+            _pp_t["t_top"] = time.time()
         _lease_reclaim(d2d_in, d2d_out)
+        t_recv = time.perf_counter() if PP_TIMING else 0.0
         if cfg.is_first_rank:
             inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
             mtp_tokens = None
+        if PP_TIMING:
+            _pp_t["recv_ms"] = (time.perf_counter() - t_recv) * 1000.0
+            _pp_t["t_recv"] = time.time()
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
@@ -480,6 +515,11 @@ def run_request_loop(
         )
         if first is None:
             first = t
+        if PP_TIMING:
+            logger.info(
+                f"[pp rank {rank}] PP_TIMING c={c} "
+                + " ".join(f"{k}={v:.6f}" if k.startswith("t_") else f"{k}={v:.3f}" for k, v in sorted(_pp_t.items()))
+            )
         c += 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 

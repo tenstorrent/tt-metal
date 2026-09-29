@@ -1,0 +1,104 @@
+misc breakdown (device ms per layer, mean over the 8 chips; worst chip in brackets). Source: P0-A zone
+profiles, (2,4) SP=2 TP=4, layers 0-6 (dense 0-2, sparse 3-6). Groups: heads, kv_write, norm, qk_norm, residual, rope, routing_setup, segment_glue, tp_allgather
+
+## p0a_w4096_h0_code  W=4096 B=1 h=0 input=code
+  sparse misc 1.914 ms/layer: routing_setup 1.087 [2.113] (57%, 5 ops); norm 0.316 [0.318] (17%, 2 ops); rope 0.180 [0.182] (9%, 8 ops); residual 0.148 [0.149] (8%, 3 ops); heads 0.101 [0.103] (5%, 2 ops); qk_norm 0.061 [0.061] (3%, 2 ops); kv_write 0.021 [0.021] (1%, 6 ops)
+  dense  misc 0.765 ms/layer: norm 0.315 [0.319] (41%, 2 ops); rope 0.181 [0.184] (24%, 8 ops); heads 0.099 [0.101] (13%, 2 ops); residual 0.096 [0.098] (13%, 2 ops); qk_norm 0.061 [0.061] (8%, 2 ops); kv_write 0.014 [0.014] (2%, 4 ops)
+
+## p0a_w4096_h0_prose  W=4096 B=1 h=0 input=prose
+  sparse misc 1.923 ms/layer: routing_setup 1.095 [2.128] (57%, 5 ops); norm 0.317 [0.319] (16%, 2 ops); rope 0.180 [0.182] (9%, 8 ops); residual 0.148 [0.149] (8%, 3 ops); heads 0.100 [0.102] (5%, 2 ops); qk_norm 0.061 [0.061] (3%, 2 ops); kv_write 0.021 [0.022] (1%, 6 ops)
+  dense  misc 0.765 ms/layer: norm 0.316 [0.319] (41%, 2 ops); rope 0.180 [0.182] (24%, 8 ops); heads 0.098 [0.101] (13%, 2 ops); residual 0.096 [0.098] (13%, 2 ops); qk_norm 0.061 [0.062] (8%, 2 ops); kv_write 0.014 [0.014] (2%, 4 ops)
+
+## p0a_w4096_h141312_code  W=4096 B=1 h=139264 input=code
+  sparse misc 0.889 ms/layer: norm 0.313 [0.316] (35%, 2 ops); rope 0.176 [0.179] (20%, 8 ops); residual 0.146 [0.147] (16%, 3 ops); heads 0.098 [0.100] (11%, 2 ops); routing_setup 0.074 [0.086] (8%, 5 ops); qk_norm 0.060 [0.061] (7%, 2 ops); kv_write 0.021 [0.021] (2%, 6 ops)
+  dense  misc 0.747 ms/layer: norm 0.309 [0.313] (41%, 2 ops); rope 0.177 [0.181] (24%, 8 ops); heads 0.095 [0.098] (13%, 2 ops); residual 0.092 [0.093] (12%, 2 ops); qk_norm 0.060 [0.061] (8%, 2 ops); kv_write 0.014 [0.014] (2%, 4 ops)
+
+## p0a_w4096_h141312_prose  W=4096 B=1 h=139264 input=prose
+  sparse misc 0.893 ms/layer: norm 0.313 [0.316] (35%, 2 ops); rope 0.177 [0.179] (20%, 8 ops); residual 0.146 [0.147] (16%, 3 ops); heads 0.099 [0.100] (11%, 2 ops); routing_setup 0.077 [0.094] (9%, 5 ops); qk_norm 0.060 [0.061] (7%, 2 ops); kv_write 0.021 [0.021] (2%, 6 ops)
+  dense  misc 0.749 ms/layer: norm 0.310 [0.316] (41%, 2 ops); rope 0.177 [0.181] (24%, 8 ops); heads 0.095 [0.097] (13%, 2 ops); residual 0.092 [0.095] (12%, 2 ops); qk_norm 0.060 [0.061] (8%, 2 ops); kv_write 0.014 [0.014] (2%, 4 ops)
+
+## p0a_w4096_h548864_code  W=4096 B=1 h=548864 input=code
+  sparse misc 0.890 ms/layer: norm 0.310 [0.314] (35%, 2 ops); rope 0.174 [0.177] (20%, 8 ops); residual 0.145 [0.147] (16%, 3 ops); heads 0.096 [0.098] (11%, 2 ops); routing_setup 0.085 [0.126] (10%, 5 ops); qk_norm 0.059 [0.060] (7%, 2 ops); kv_write 0.021 [0.021] (2%, 6 ops)
+  dense  misc 0.732 ms/layer: norm 0.304 [0.307] (42%, 2 ops); rope 0.174 [0.176] (24%, 8 ops); heads 0.092 [0.094] (13%, 2 ops); residual 0.089 [0.092] (12%, 2 ops); qk_norm 0.059 [0.060] (8%, 2 ops); kv_write 0.014 [0.014] (2%, 4 ops)
+
+## p0a_w4096_h548864_prose  W=4096 B=1 h=548864 input=prose
+  sparse misc 0.903 ms/layer: norm 0.310 [0.314] (34%, 2 ops); rope 0.175 [0.179] (19%, 8 ops); residual 0.145 [0.147] (16%, 3 ops); heads 0.097 [0.100] (11%, 2 ops); routing_setup 0.096 [0.143] (11%, 5 ops); qk_norm 0.060 [0.061] (7%, 2 ops); kv_write 0.021 [0.021] (2%, 6 ops)
+  dense  misc 0.734 ms/layer: norm 0.305 [0.308] (42%, 2 ops); rope 0.174 [0.179] (24%, 8 ops); heads 0.092 [0.095] (13%, 2 ops); residual 0.090 [0.091] (12%, 2 ops); qk_norm 0.060 [0.060] (8%, 2 ops); kv_write 0.014 [0.014] (2%, 4 ops)
+
+## p0a_w4096_packed  W=4096 B=2 h=141312+0 input=prose+code
+  sparse misc 1.817 ms/layer: routing_setup 0.686 [1.316] (38%, 5 ops); norm 0.316 [0.319] (17%, 2 ops); segment_glue 0.241 [0.243] (13%, 5 ops); rope 0.192 [0.194] (11%, 16 ops); residual 0.147 [0.148] (8%, 3 ops); heads 0.137 [0.138] (8%, 4 ops); qk_norm 0.065 [0.065] (4%, 4 ops); kv_write 0.033 [0.033] (2%, 12 ops)
+  dense  misc 0.927 ms/layer: norm 0.316 [0.318] (34%, 2 ops); rope 0.192 [0.195] (21%, 16 ops); heads 0.137 [0.138] (15%, 4 ops); segment_glue 0.100 [0.102] (11%, 3 ops); residual 0.096 [0.097] (10%, 2 ops); qk_norm 0.065 [0.066] (7%, 4 ops); kv_write 0.021 [0.022] (2%, 8 ops)
+
+## p0a_w8192_h0_code  W=8192 B=1 h=0 input=code
+  sparse misc 2.891 ms/layer: routing_setup 1.260 [2.444] (44%, 5 ops); norm 0.626 [0.629] (22%, 2 ops); rope 0.343 [0.349] (12%, 8 ops); residual 0.288 [0.290] (10%, 3 ops); heads 0.221 [0.223] (8%, 2 ops); qk_norm 0.114 [0.116] (4%, 2 ops); kv_write 0.039 [0.040] (1%, 6 ops)
+  dense  misc 1.516 ms/layer: norm 0.625 [0.629] (41%, 2 ops); rope 0.342 [0.348] (23%, 8 ops); heads 0.219 [0.223] (14%, 2 ops); residual 0.191 [0.195] (13%, 2 ops); qk_norm 0.114 [0.116] (8%, 2 ops); kv_write 0.026 [0.027] (2%, 4 ops)
+
+## p0a_w8192_h0_prose  W=8192 B=1 h=0 input=prose
+  sparse misc 2.890 ms/layer: routing_setup 1.260 [2.438] (44%, 5 ops); norm 0.627 [0.631] (22%, 2 ops); rope 0.341 [0.348] (12%, 8 ops); residual 0.289 [0.292] (10%, 3 ops); heads 0.221 [0.224] (8%, 2 ops); qk_norm 0.114 [0.115] (4%, 2 ops); kv_write 0.039 [0.040] (1%, 6 ops)
+  dense  misc 1.515 ms/layer: norm 0.626 [0.631] (41%, 2 ops); rope 0.340 [0.348] (22%, 8 ops); heads 0.219 [0.222] (14%, 2 ops); residual 0.191 [0.195] (13%, 2 ops); qk_norm 0.114 [0.115] (8%, 2 ops); kv_write 0.026 [0.026] (2%, 4 ops)
+
+## p0a_w8192_h141312_code  W=8192 B=1 h=139264 input=code
+  sparse misc 1.723 ms/layer: norm 0.619 [0.626] (36%, 2 ops); rope 0.339 [0.346] (20%, 8 ops); residual 0.287 [0.292] (17%, 3 ops); heads 0.218 [0.221] (13%, 2 ops); qk_norm 0.113 [0.114] (7%, 2 ops); routing_setup 0.108 [0.137] (6%, 5 ops); kv_write 0.038 [0.040] (2%, 6 ops)
+  dense  misc 1.471 ms/layer: norm 0.604 [0.611] (41%, 2 ops); rope 0.336 [0.345] (23%, 8 ops); heads 0.211 [0.216] (14%, 2 ops); residual 0.181 [0.187] (12%, 2 ops); qk_norm 0.113 [0.115] (8%, 2 ops); kv_write 0.026 [0.027] (2%, 4 ops)
+
+## p0a_w8192_h141312_prose  W=8192 B=1 h=139264 input=prose
+  sparse misc 1.733 ms/layer: norm 0.620 [0.625] (36%, 2 ops); rope 0.341 [0.346] (20%, 8 ops); residual 0.288 [0.292] (17%, 3 ops); heads 0.218 [0.221] (13%, 2 ops); routing_setup 0.114 [0.159] (7%, 5 ops); qk_norm 0.114 [0.115] (7%, 2 ops); kv_write 0.038 [0.040] (2%, 6 ops)
+  dense  misc 1.472 ms/layer: norm 0.604 [0.613] (41%, 2 ops); rope 0.337 [0.349] (23%, 8 ops); heads 0.212 [0.215] (14%, 2 ops); residual 0.181 [0.187] (12%, 2 ops); qk_norm 0.112 [0.115] (8%, 2 ops); kv_write 0.026 [0.027] (2%, 4 ops)
+
+## p0a_w8192_h548864_code  W=8192 B=1 h=548864 input=code
+  sparse misc 1.756 ms/layer: norm 0.620 [0.627] (35%, 2 ops); rope 0.340 [0.348] (19%, 8 ops); residual 0.286 [0.289] (16%, 3 ops); heads 0.218 [0.221] (12%, 2 ops); routing_setup 0.141 [0.211] (8%, 5 ops); qk_norm 0.113 [0.115] (6%, 2 ops); kv_write 0.038 [0.039] (2%, 6 ops)
+  dense  misc 1.467 ms/layer: norm 0.602 [0.614] (41%, 2 ops); rope 0.339 [0.349] (23%, 8 ops); heads 0.209 [0.213] (14%, 2 ops); residual 0.178 [0.185] (12%, 2 ops); qk_norm 0.113 [0.114] (8%, 2 ops); kv_write 0.026 [0.027] (2%, 4 ops)
+
+## p0a_w8192_h548864_prose  W=8192 B=1 h=548864 input=prose
+  sparse misc 1.773 ms/layer: norm 0.620 [0.628] (35%, 2 ops); rope 0.341 [0.349] (19%, 8 ops); residual 0.286 [0.289] (16%, 3 ops); heads 0.219 [0.223] (12%, 2 ops); routing_setup 0.157 [0.281] (9%, 5 ops); qk_norm 0.113 [0.115] (6%, 2 ops); kv_write 0.038 [0.039] (2%, 6 ops)
+  dense  misc 1.465 ms/layer: norm 0.602 [0.615] (41%, 2 ops); rope 0.337 [0.345] (23%, 8 ops); heads 0.209 [0.214] (14%, 2 ops); residual 0.179 [0.186] (12%, 2 ops); qk_norm 0.113 [0.115] (8%, 2 ops); kv_write 0.026 [0.026] (2%, 4 ops)
+
+## p0a_w8192_packed  W=8192 B=4 h=548864+141312+16384+0 input=prose+code+prose+code
+  sparse misc 2.980 ms/layer: routing_setup 0.738 [1.408] (25%, 5 ops); norm 0.623 [0.627] (21%, 2 ops); segment_glue 0.481 [0.485] (16%, 9 ops); rope 0.382 [0.385] (13%, 32 ops); residual 0.287 [0.290] (10%, 3 ops); heads 0.274 [0.275] (9%, 8 ops); qk_norm 0.129 [0.130] (4%, 8 ops); kv_write 0.065 [0.066] (2%, 24 ops)
+  dense  misc 1.811 ms/layer: norm 0.614 [0.621] (34%, 2 ops); rope 0.374 [0.379] (21%, 32 ops); heads 0.271 [0.272] (15%, 8 ops); segment_glue 0.196 [0.200] (11%, 5 ops); residual 0.186 [0.190] (10%, 2 ops); qk_norm 0.127 [0.128] (7%, 8 ops); kv_write 0.043 [0.044] (2%, 16 ops)
+
+Per-segment vs whole-tensor (packed calls / single calls per layer at the same W; run: tag ratio):
+  dense  concat_heads                 NLPConcatHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  input_norm                   LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  dense  k_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  kv_typecast                  Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  kv_write                     UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  post_attn_norm               LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  dense  q_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  residual_attn                BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  dense  residual_mlp                 BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  dense  rope_k_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  rope_k_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  rope_k_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  rope_q_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  rope_q_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  rope_q_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  dense  seg_concat_out               Concat                   p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
+  dense  seg_slice_qkv                Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
+  dense  split_heads                  NlpCreateHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse add_shared                   BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse concat_heads                 NLPConcatHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse index_k_typecast             Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse index_k_write                UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse input_norm                   LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse k_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse kv_typecast                  Typecast                 p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse kv_write                     UpdatePaddedKvCache      p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse post_attn_norm               LayerNorm                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse q_norm                       LayerNorm                p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse residual_attn                BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse residual_mlp                 BinaryNg                 p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse rope_k_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse rope_k_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse rope_k_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse rope_q_concat                Concat                   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse rope_q_rotary                RotaryEmbeddingIndexed   p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse rope_q_slice                 Slice                    p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
+  sparse routing_setup_AllGather      AllGather                p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse routing_setup_MaskedBincount MaskedBincount           p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse routing_setup_OffsetCumsum   OffsetCumsum             p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse routing_setup_UntilizeWithUnpadding UntilizeWithUnpadding    p0a_w4096_packed: whole-tensor 1.0  p0a_w8192_packed: whole-tensor 1.0
+  sparse seg_concat_out               Concat                   p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
+  sparse seg_slice_qkv                Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
+  sparse seg_slice_x                  Slice                    p0a_w4096_packed: packed-only  p0a_w8192_packed: packed-only
+  sparse split_heads                  NlpCreateHeads           p0a_w4096_packed: per-segment 2.0  p0a_w8192_packed: per-segment 4.0
