@@ -26,7 +26,6 @@ namespace {
 
 using test_helpers::MakeBorrowedDFBProgramSpecForRunArgs;
 using test_helpers::MakeKernelRunArgs;
-using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::ProgramRunArgsTestQuasar;
 
 // These tests cover the runtime attach path for DataflowBuffers that borrow their L1 storage
