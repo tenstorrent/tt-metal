@@ -1229,3 +1229,38 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
+
+## S.moe_full.02 test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line swap test (moe_full layer 1, attn_hc + attn_hc_pre on device, rest CPU). It keeps the
+  gated pcc_swap_out (0.98) and the trail. It adds asserted checks (informational metrics): not a CPU bridge; the
+  gates vs golden as in swap 01 (rel <= 0.01, per-column rel <= 0.01, post worst row <= 0.015); attn_x vs golden
+  (rel <= 0.005, row norm ratio in [0.996, 1.004], worst row <= 0.01); attn_x vs the CPU hc_pre on the block input +
+  device gates (0.003 / 0.006); the module again with the device gates' pre columns rotated by row mod 4 vs the CPU
+  step (0.004 / 0.01); h_mid rel <= 0.005 / worst (row, stream) <= 0.02; router overlap >= 0.98; out rel <= 0.01.
+- CPU block-level mutation study in /tmp/hy4_sm2/study.py (outside the repo). The table is in the test docstring.
+  14 of 20 attn_hc_pre mutations pass the 0.98 out gate. Every mutation fails at least one of the added checks.
+
+Decisions
+- Limits for the step are the component test's. The row norm ratio is tighter than there ([0.996, 1.004] vs [0.994,
+  1.006]) because here the fp32 CPU step is [0.9998, 1.0003] vs golden (the gates come from the fp32 attn_hc on the
+  block input); this catches pre x 1.005 (1.0048).
+- No synthetic streams: the layer-1 streams are distinct; the rotated-gates run covers stream order (0 / 1 swapped
+  0.105).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999997, rel 0.0024, attn_x 0.0022 / ratio [0.9998, 1.0003]).
+- BRINGUP_IMPL=stub: FAIL on every check (out PCC 0.871).
+- Gate (device TtHcGates + TtHcPre): PASS. pcc_swap_out 0.999996, gates col rel max 0.00536 (post 4), attn_x
+  0.00223 / ratio [0.9992, 1.0002] / row 0.0028, vs CPU 0 / 0 (fp32, bit-identical), rotated 0 / 0, h_mid 0.00218 /
+  0.0037, router 0.9978, out rel 0.00277.
+
+Gotchas
+- The tightest margin is still post column 4 of the gates (0.0054 vs 0.01), from swap 01.
+- The first block of printed metrics comes from the precompile collect pass; the second is the real run.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
