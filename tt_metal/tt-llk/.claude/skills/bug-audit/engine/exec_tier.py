@@ -9,13 +9,17 @@ Nothing here decides a bug: a warning or a failing test is a lead, and the norma
 
   exec_tier.py [--run DIR] configure [--build NAME=CMD ...] [--analyze NAME=CMD ...]
                                      [--test-cmd 'CMD with {tests}'] [--test-root DIR ...] [--max-tests 8]
-                                     [--timeout SECONDS] [--reset-cmd 'tt-smi -r 0']
+                                     [--timeout SECONDS] [--devices IDS] [--reset-cmd 'tt-smi -r {devices}']
   exec_tier.py [--run DIR] run [--steps build,analyze,tests]
   exec_tier.py [--run DIR] status
 
 Traps from earlier audits, handled here:
 - A hung test WEDGES the device, and every later test then fails for no code reason. --reset-cmd runs before each
   test group and after any timeout.
+- On a shared machine, other people's cards must never be touched. --devices takes the cards the user confirmed
+  (UMD chip ids or PCI BDFs, comma-separated, one kind only) and is required with --test-cmd or --reset-cmd. Every
+  command runs with TT_VISIBLE_DEVICES set to them, and {devices} in the reset command expands to them, so the reset
+  must name {devices} rather than a card number.
 - A failing test is re-run once. Only a failure that reproduces becomes a signal; a pass on rerun is logged as flaky.
 - A build from a different base commit makes unrelated tests fail. Build in the audited tree itself (the commands
   run there), from a clean build directory, never reusing another checkout's build.
@@ -47,6 +51,8 @@ argv = sys.argv[1:]
 if not argv:
     sys.exit(__doc__)
 EXEC = os.path.join(out, "exec")
+DEVICES = ((st.get("execution") or {}).get("devices")) or []
+BDF = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$")
 os.makedirs(os.path.join(EXEC, "signals"), exist_ok=True)
 
 
@@ -161,7 +167,10 @@ def run_cmd(name, cmd, tree, timeout):
     process group, and a timeout kills the whole group -- killing only the shell would leave a hung build or test
     running on the device while the reset and the rerun start.
     """
-    cmd = cmd.replace("{tree}", tree)
+    cmd = cmd.replace("{tree}", tree).replace(
+        "{devices}", " ".join(map(shlex.quote, DEVICES))
+    )
+    env = dict(os.environ, TT_VISIBLE_DEVICES=",".join(DEVICES)) if DEVICES else None
     logp = os.path.join(EXEC, f"{name}.log")
     t0 = time.time()
     with open(logp, "w") as fh:
@@ -171,6 +180,7 @@ def run_cmd(name, cmd, tree, timeout):
             stdout=fh,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
         try:
             rc = p.wait(timeout=timeout)
@@ -200,10 +210,28 @@ if argv[0] == "configure":
         },
         "timeout": int((opts("--timeout") or ["7200"])[0]),
         "reset_cmd": (opts("--reset-cmd") or [None])[0],
+        "devices": [
+            d.strip() for d in (opts("--devices") or [""])[0].split(",") if d.strip()
+        ],
     }
     if not (ex["build"] or ex["analyze"] or ex["tests"]["cmd"]):
         sys.exit(
             "nothing to configure: give at least one --build, --analyze or --test-cmd"
+        )
+    devs = ex["devices"]
+    if (ex["tests"]["cmd"] or ex["reset_cmd"]) and not devs:
+        sys.exit(
+            "--devices is required with --test-cmd or --reset-cmd: name the cards the user confirmed, so no other "
+            "card on the machine is opened or reset"
+        )
+    kinds = {"id" if d.isdigit() else "bdf" if BDF.match(d) else "bad" for d in devs}
+    if "bad" in kinds or len(kinds) > 1:
+        sys.exit(
+            f"--devices {','.join(devs)}: give UMD chip ids or PCI BDFs (0000:0a:00.0), one kind, comma-separated"
+        )
+    if ex["reset_cmd"] and "{devices}" not in ex["reset_cmd"]:
+        sys.exit(
+            "--reset-cmd must name its cards as {devices} (e.g. 'tt-smi -r {devices}'), never a fixed card number"
         )
     st["execution"] = ex
     save(os.path.join(out, "state.json"), st)
@@ -215,6 +243,13 @@ elif argv[0] == "run":
             "execution tier not enabled for this run (it is opt-in: configure it after asking the user)"
         )
     steps = (opts("--steps") or ["build,analyze,tests"])[0].split(",")
+    # a run configured before --devices existed may carry a reset of a fixed card: never run it
+    if (
+        "tests" in steps and (ex.get("tests") or {}).get("cmd") or ex.get("reset_cmd")
+    ) and not DEVICES:
+        sys.exit(
+            "this run's execution tier names no --devices: re-run `configure` with the cards the user confirmed"
+        )
     tree = st["root"]
     fmap = file_to_batch()
     sigs, runs = [], load(os.path.join(EXEC, "runs.json"), [])

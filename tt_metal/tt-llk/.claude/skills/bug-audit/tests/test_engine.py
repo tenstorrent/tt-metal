@@ -1027,10 +1027,85 @@ def test_exec_tier_quotes_test_paths_for_the_shell(tmp_path):
         "printf '%s\\n' {tests} > {tree}/picked.txt",
         "--test-root",
         "tests",
+        "--devices",
+        "0",
     )
     assert code == 0, out
     picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
     assert picked == [odd], picked
+
+
+def _configure(tmp_path, *configure):
+    tree = _git_tree(tmp_path, ["src/widget.c"])
+    out = tmp_path / "run"
+    code, o, e = run(
+        os.path.join(ENGINE, "init_run.py"),
+        "--root",
+        tree,
+        "--out",
+        out,
+        "--repo",
+        "o/r",
+        "--ext",
+        ".c",
+    )
+    assert code == 0, o + e
+    code, o, e = run(
+        os.path.join(ENGINE, "exec_tier.py"), "--run", out, "configure", *configure
+    )
+    return code, o + e
+
+
+@pytest.mark.parametrize(
+    "args, why",
+    [
+        (["--test-cmd", "true {tests}"], "required"),
+        (["--build", "b=true", "--reset-cmd", "tt-smi -r {devices}"], "required"),
+        (
+            ["--test-cmd", "true", "--devices", "0", "--reset-cmd", "tt-smi -r 0"],
+            "{devices}",
+        ),
+        (["--test-cmd", "true", "--devices", "0,0000:0a:00.0"], "one kind"),
+        (["--test-cmd", "true", "--devices", "card0"], "one kind"),
+    ],
+)
+def test_exec_tier_refuses_tests_or_resets_without_confirmed_cards(tmp_path, args, why):
+    code, out = _configure(tmp_path, *args)
+    assert code != 0 and why in out, out
+
+
+def test_exec_tier_pins_tests_and_resets_to_the_confirmed_cards(tmp_path):
+    code, out, _, tree = _exec_run(
+        tmp_path,
+        {"tests/test_widget.py": "import widget\n"},
+        ["src/widget.c"],
+        "--test-cmd",
+        'echo "$TT_VISIBLE_DEVICES" > {tree}/env.txt',
+        "--test-root",
+        "tests",
+        "--devices",
+        "2,3",
+        "--reset-cmd",
+        "echo {devices} >> {tree}/reset.txt",
+    )
+    assert code == 0, out
+    assert open(os.path.join(tree, "env.txt")).read().strip() == "2,3"
+    assert open(os.path.join(tree, "reset.txt")).read().splitlines()[0] == "2 3"
+
+
+def test_exec_tier_run_refuses_an_old_config_without_cards(tmp_path):
+    code, out = _configure(tmp_path, "--build", "b=true")
+    assert code == 0, out
+    st_path = tmp_path / "run" / "state.json"
+    st = json.load(open(st_path))
+    st["execution"][
+        "reset_cmd"
+    ] = "tt-smi -r 0"  # as configured before --devices existed
+    json.dump(st, open(st_path, "w"))
+    code, o, e = run(
+        os.path.join(ENGINE, "exec_tier.py"), "--run", tmp_path / "run", "run"
+    )
+    assert code != 0 and "--devices" in o + e, o + e
 
 
 def test_every_spawn_user_imports_it_before_first_use():

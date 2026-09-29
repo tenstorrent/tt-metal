@@ -75,7 +75,8 @@ through `exec_tier.py configure`), and never assume a default for the execution 
      leads. A non-default flavour exposes bugs the default build hides.
    - **Static analyzers and sanitizers:** clang-tidy with the repo's own config, and ASan/UBSan/TSan builds.
    - **Existing tests:** runs the tests that reference each batch's files. This needs the target hardware, and the
-     user must confirm which machine and card can be used.
+     user must confirm which machine and card(s) can be used; the cards go to `exec_tier.py configure --devices`,
+     which pins every test to them (`TT_VISIBLE_DEVICES`) and resets only them.
    If yes, ask for the exact commands (or confirm the presets below), the machine, and a time budget. The tier runs
    the repo's code with those commands, so confirm it is acceptable on this machine.
 3. **Budget:** tokens and wall-clock. State the calibration (about 50k tokens per file hunted, plus about 40% for
@@ -97,7 +98,7 @@ exec_tier.py --run <run> configure \
   --build 'asan=./build_metal.sh -b ASan --build-tests' \
   --analyze 'clang-tidy=run-clang-tidy -p build_Release -quiet $(git ls-files "*.cpp" | grep -E "^(tt_metal|ttnn)/")' \
   --test-cmd 'pytest -x -q {tests}' --test-root tests/ttnn --test-root tests/tt_metal --max-tests 6 --timeout 7200 \
-  --reset-cmd 'tt-smi -r 0'   # a hung test wedges the board; reset between test groups
+  --devices <confirmed ids> --reset-cmd 'tt-smi -r {devices}'   # a hung test wedges the board; reset between groups
 exec_tier.py --run <run> run        # before the first wave; re-run after re-pointing the tree
 ```
 The signals land in `<run>/exec/signals/<batch>.json`, and `next_wave.py` hands them to the hunters automatically.
