@@ -96,7 +96,7 @@ def generate(model: Qwen38ForCausalLM, prompt_ids: list[int], max_generated_toke
         pytest.param(128, 50, 2, id="determinism_128"),
     ],
 )
-def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs):
+def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs, tmp_path, record_property):
     if os.environ.get("MODEL_WEIGHTS_DIR"):
         checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
     elif os.environ.get("HF_MODEL"):  # the snapshot in the local Hugging Face cache, offline
@@ -128,6 +128,26 @@ def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs):
         model.release_persistent_capture()
     profiler.end("run")
 
+    report_path = tmp_path / "fixed-length-generation.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": "qwen38-fixed-length-demo/v1",
+                "route": "full logits to host greedy argmax",
+                "ignore_eos": True,
+                "prompt_token_ids": prompt_ids,
+                "warmup": "model construction and resident trace warmup",
+                "runs": [
+                    {"generated_token_ids": tokens, "ttft_s": ttft, "decode_step_seconds": steps}
+                    for tokens, ttft, steps in runs
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    record_property("fixed_length_generation_report", str(report_path))
     generated, ttft, step_seconds = runs[0]
     decode_ms = 1000.0 * sum(step_seconds) / len(step_seconds)
     decode_tok_s = 1000.0 / decode_ms
