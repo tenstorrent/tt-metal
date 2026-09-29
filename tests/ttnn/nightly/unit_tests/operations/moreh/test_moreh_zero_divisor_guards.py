@@ -45,11 +45,19 @@ def test_moreh_fold_stride_zero(device, expect_error):
         )
 
 
-def test_moreh_fold_kernel_size_zero(device, expect_error):
+# Without an output tensor, compute_output_specs rejects the zero kernel; with one, it returns early
+# and only the validate_inputs check stands before the modulo.
+@pytest.mark.parametrize("preallocated_output", [False, True], ids=["no_output", "preallocated_output"])
+def test_moreh_fold_kernel_size_zero(device, expect_error, preallocated_output):
     x = ttnn.from_torch(torch.randn(1, 36, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output = (
+        ttnn.from_torch(torch.zeros(1, 4, 8, 8).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if preallocated_output
+        else None
+    )
     with expect_error(RuntimeError, "kernel_size must be greater than 0"):
         ttnn.operations.moreh.fold(
-            x, None, output_size=[8, 8], kernel_size=[0, 3], dilation=[1, 1], padding=[1, 1], stride=[1, 1]
+            x, output, output_size=[8, 8], kernel_size=[0, 3], dilation=[1, 1], padding=[1, 1], stride=[1, 1]
         )
 
 
