@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import tt
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import torch.nn.functional as F
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 
 # Tolerances in this file are hard coded, derived based on the number formats used.
 # numeric_tolerances.py records the error budget the hard coded values came from
@@ -1113,3 +1113,64 @@ def test_matmul_1d_gather_with_activations(
         pcc_threshold=pcc_threshold,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
+def test_matmul_gelu_tanh_fast_matches_accurate(device, fp32_dest_acc_en, function_level_defaults):
+    """GELU_TANH with param 1 (fast) against the accurate GELU_TANH; both runs share the same matmul.
+
+    The accurate path computes 0.5 * x * (1 + tanh(u)), which cancels for x below about -4 (tanh(u) is within a
+    few FP32 ULP of -1): at x = -5.16 it returns -1.54e-7 for a true -7.77e-8. The fast path, x / (1 + exp(-2u)),
+    does not cancel there. So require BF16-ULP agreement only where |GELU| >= 1e-3, and a small absolute
+    difference in the tail, plus a tight PCC against torch.
+    """
+    torch.manual_seed(0)
+    M, K, N = 256, 256, 512
+    in0 = torch.randn([1, 1, M, K]).bfloat16()
+    in1 = torch.randn([1, 1, K, N]).bfloat16() * 0.25  # outputs span about +-30: both tails and the core
+    in0_t = torch2tt_tensor(in0.float(), device, tt_memory_config=ttnn.DRAM_MEMORY_CONFIG, tt_dtype=ttnn.bfloat16)
+    in1_t = torch2tt_tensor(in1.float(), device, tt_memory_config=ttnn.DRAM_MEMORY_CONFIG, tt_dtype=ttnn.bfloat16)
+    grid = (8, 1)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+
+    def run(activation):
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+            in0_block_w=K // 32,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=M // 32,
+            per_core_N=N // grid[0] // 32,
+            fuse_batch=True,
+            fused_activation=activation,
+            mcast_in0=True,
+        )
+        out = ttnn_matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
+        return tt2torch_tensor(out).bfloat16()
+
+    accurate = run(ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH))
+    fast = run(ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0))
+
+    # BF16 ULP distance where the accurate path is trustworthy (|GELU| >= 1e-3).
+    big = accurate.float().abs() >= 1e-3
+    ulps = (accurate.view(torch.int16).int() - fast.view(torch.int16).int()).abs()[big]
+    assert big.float().mean() > 0.5, "test inputs should mostly land outside the tail"
+    assert ulps.max().item() <= 1, f"fast GELU_TANH is {ulps.max().item()} BF16 ULP from accurate"
+    # In the tail both are tiny: one BF16 ULP at 1e-3 is ~4e-6.
+    assert (accurate.float() - fast.float()).abs()[~big].max().item() <= 1e-5
+    # And the fast result is close to torch.
+    ref = torch.nn.functional.gelu(in0.float() @ in1.float(), approximate="tanh")
+    assert_with_pcc(ref, fast.float(), 0.9999)
