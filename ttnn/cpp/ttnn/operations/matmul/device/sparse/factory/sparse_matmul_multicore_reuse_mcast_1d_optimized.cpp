@@ -157,8 +157,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
     const MeshTensor& in1_sparsity_mesh_tensor = in1_sparsity_tensor.mesh_tensor();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
+    auto [fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args_subset(device->arch(), operation_attributes.compute_kernel_config.value());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
