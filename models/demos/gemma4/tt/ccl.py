@@ -241,25 +241,29 @@ class CCLManager:
         return [inter, out]
 
 
-def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
+def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=None, group_size=None):
     """All-reduce across TP devices.
 
     Sync ``ttnn.all_reduce`` by default. With ``GEMMA4_CCL_ASYNC=1``, uses
     reduce_scatter_minimal_async + all_gather_async (tt_transformers composite
     pattern) on ``ccl_manager.topology`` (Ring on P150x8).
+
+    ``axis``/``group_size`` generalize the collective to either mesh axis
+    (galaxy one-instance completions); the defaults keep the historical
+    tp-axis behavior for every existing caller.
     """
-    if mesh_config is None or mesh_config.tp <= 1:
+    if mesh_config is None or (axis is None and mesh_config.tp <= 1):
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    tp_axis = mesh_config.tp_axis
+    tp_axis = mesh_config.tp_axis if axis is None else axis
     topology = ccl_manager.topology
 
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
     if ccl_async_enabled():
-        tp = mesh_config.tp
+        tp = mesh_config.tp if group_size is None else group_size
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
@@ -326,7 +330,18 @@ def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     out = tensor
     for axis in (0, 1):
-        if mesh_config.mesh_shape[axis] > 1:
+        if mesh_config.mesh_shape[axis] <= 1:
+            continue
+        if ccl_manager is not None and ccl_async_enabled():
+            out = ccl_allreduce(
+                out,
+                mesh_config,
+                ccl_manager,
+                memory_config,
+                axis=axis,
+                group_size=mesh_config.mesh_shape[axis],
+            )
+        else:
             reduced = ttnn.all_reduce(out, cluster_axis=axis, memory_config=memory_config)
             out.deallocate(True)
             out = reduced
