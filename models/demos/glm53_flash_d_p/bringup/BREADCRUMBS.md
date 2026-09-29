@@ -911,3 +911,30 @@ Next (attention): consume the per-chip uint32 [1, 1, S/4, 2176] directly (same r
 heads.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_indexer.py`
 (`GLM_INDEXER_SCORE=op` for the fused score op).
+
+## S.dsa_moe.05 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc, attn_collapse, attn_norm, q_a and indexer on the
+device, and rewrote it from swap 04's test. Gated metric unchanged: pcc_swap_out (PCC >= 0.98).
+- Kept every swap 04 check. The collapse, norm and q_a shares now also run the device indexer (`dev_idx`), so each
+  share still isolates one step (limits unchanged; q_a share topk overlap is now device vs device indexer, 0.99967).
+- Indexer vs golden: the component test's exact structure checks and overlap limits (>= 0.9975, worst row >= 0.98).
+- Indexer vs the CPU indexer of the same device attn_norm and q_resid: overlap >= 0.9985, worst row >= 0.988.
+- Pooled keys: captured from `dctx.extra["state_out"]` right after the main run (every share run overwrites it; in
+  reference mode from `ref.state_tensors(rctx.state, ...)`). Checked vs the golden state (component limits) and vs the
+  CPU keys of the same attn_norm (rel <= 0.005, ratio [0.996, 1.004], worst row <= 0.01).
+- Indexer share: the CPU block with the device attn_hc, attn_in, attn_norm and q_resid and the CPU indexer. attn_out
+  rel <= 0.0025, ratio [0.993, 1.007], worst row <= 0.1; block out flips <= 12, same-routing rel <= 0.0004, ratio
+  [0.998, 1.002].
+- Inherited `x > lim` checks rewritten as `not x <= lim` (NaN fails).
+Sensitivity (CPU host script /tmp/dsas05/sens.py, not kept; numbers in the test docstring). The all-CPU block runs in
+5 s, so each perturbation got a full block. Causal / tail bugs keep overlap >= 0.9993 but move attn_out 0.13..0.24
+(the structure checks catch them). Score bugs (no ape, ape reversed) fail the same-input overlap, the attn_out share
+and the block share. bf16 and 1% score noise pass every limit.
+Results: device passes (PCC 0.999995; indexer vs CPU same input 0.999194 / 0.9941; keys vs CPU 0.00203; attn_out
+share 0.00156; block share 8 flips / 0.00026 / [0.9987, 1.0005]; 41 s call). Reference passes (same-input and share
+checks exact). Stub fails (PCC 0 and every check).
+Next (attention swap): the attention reads the topk; add the device attention to every earlier share, and keep the
+indexer share at attn_out through the device attention (CPU topk vs device topk into the same device attention).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_05_indexer.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
