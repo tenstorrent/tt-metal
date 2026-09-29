@@ -685,7 +685,7 @@ $PY $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py --tcp-interface $NIC \
 
 The last four flags arm the golden check. `$GOLDEN` is a golden trace directory of 5120 tokens
 (`longbook_5120`; its `metadata.json` holds the prompt's `token_ids`), listed once per served slot.
-At teardown blaze PCCs the migrated KV of layers 0 and 3 over `[0, 5056)`. The decode worker prefills
+At teardown blaze PCCs the KV of its layers (0 and 3) over `[0, 5056)` against the golden. The decode worker prefills
 the 64-token block that holds the last prompt token itself, so migration covers
 `floor((5120 - 1) / 64) * 64` positions. Drop the four flags to run without the check.
 
@@ -827,9 +827,12 @@ grep -aE '\[kv-golden\]|Pod pipeline complete' $RUN/blaze.log     # up to 30 min
 # [kv-golden] mesh1/layer0 k_h1 slot0 layer0 head0 [0,5056): PASS pcc=0.9999...
 ```
 
-Every K/V head of layers 0 and 3 in the golden request's slot must `PASS`. blaze compares **every**
-served slot against the same golden, so a slot that held a different prompt reports `FAIL` at PCC ≈ 0.
-That is not a migration failure.
+Every K/V head of **layer 0** in the golden request's slot must `PASS`. Two kinds of `FAIL` are
+expected:
+- **Layer 3 fails in every slot.** The workers migrate layers `[0, layers_per_chunk)`, which is just
+  layer 0; layer 3 is never migrated in this pair.
+- **Other slots fail at PCC ≈ 0.** blaze compares every served slot against the same golden, so a
+  slot that held a different prompt fails.
 
 ### 4.6 Teardown
 
