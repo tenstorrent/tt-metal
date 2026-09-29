@@ -26,7 +26,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     tp_composer,
 )
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE, Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
@@ -709,3 +709,79 @@ def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, T, reset_seeds, e
         f"T={T}: fused layer output differs from phased (max|d|={d.max().item():.3e}, "
         f"first differing row {int(torch.nonzero(d.sum(-1))[0])})"
     )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+            "trace_region_size": 268435456,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+def test_gdn_tp_prefill_trace_replay(mesh_device, reset_seeds, ensure_gc, request):
+    """Chunk-outer prefill through ONE captured trace equals the eager chunks, bit for bit.
+
+    Three 2048-token chunks with the persistent carry (_stable_state), first eagerly, then as the
+    model's chunked prefill runs them: state zeroed in place, one forward_prefill captured, the trace
+    replayed three times with each chunk ttnn.copy'd into the persistent input buffer and the baked
+    output read back. Catches anything on the prefill path that allocates or writes from the host
+    inside the trace (constants must be built by reset_state) or whose programs differ per chunk.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    T, n_chunks = 2048, 3
+    mesh = mesh_device
+    args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=T * n_chunks)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh)
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gdn = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    logger.info(f"conv impl={gdn._conv_impl} kda={gdn._gdn_kda_conv} layer={li}")
+    gdn._stable_state = True
+    gdn.reset_state()  # persistent state and the prefill constants, before any capture
+    x = torch.randn(1, 1, T * n_chunks, args.dim, dtype=torch.bfloat16)
+    chunks = [x[:, :, c * T : (c + 1) * T, :] for c in range(n_chunks)]
+    comp = tp_composer(mesh)
+
+    # Persistent K-sharded input buffer (its address is baked into the trace); chunks are copied in.
+    x_buf = shard_to_device(mesh, chunks[0], dim=-1)
+
+    def load_chunk(c):
+        src = shard_to_device(mesh, chunks[c], dim=-1)
+        ttnn.copy(src, x_buf)
+        ttnn.deallocate(src)
+
+    eager = []
+    for c in range(n_chunks):
+        load_chunk(c)
+        out = gdn.forward_prefill(x_buf, chunk_size=args.gdn_chunk_size)
+        eager.append(ttnn.to_torch(out, mesh_composer=comp).float())
+        ttnn.deallocate(out)
+    ttnn.synchronize_device(mesh)
+
+    gdn.reset_state_inplace()
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out_t = gdn.forward_prefill(x_buf, chunk_size=args.gdn_chunk_size)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    replay = []
+    for c in range(n_chunks):
+        load_chunk(c)
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        replay.append(ttnn.to_torch(out_t, mesh_composer=comp).float())
+    ttnn.release_trace(mesh, tid)
+
+    for c in range(n_chunks):
+        eq = torch.equal(eager[c], replay[c])
+        _, pcc = comp_pcc(eager[c], replay[c])
+        logger.info(f"chunk {c}: trace replay == eager: {eq}; pcc {pcc}")
+        assert eq, f"chunk {c}: trace replay differs from eager (pcc {pcc})"
+    logger.info("PASSED: traced chunk-outer GDN prefill matches eager on every chunk")
