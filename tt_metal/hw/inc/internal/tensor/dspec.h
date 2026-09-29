@@ -39,8 +39,8 @@ namespace tensor_accessor {
  * shapes or detail::ArrayDynamicWrapper for dynamic shapes.
  */
 // Sentinel BindingId meaning "no op-to-op binding id tracked" for this accessor. Real ids are small
-// per-binding compile-time-arg offsets, so 0xFFFFFFFF never collides. See binding_id below and the
-// op-to-op R/W inference note emit (api/dataflow/buf_rw_note.h).
+// per-binding CRTA byte offsets (the binding's base-address word), so 0xFFFFFFFF never collides. See
+// binding_id below and the op-to-op R/W inference note emit (api/dataflow/buf_rw_note.h).
 inline constexpr uint32_t NO_BINDING_ID = 0xFFFFFFFFu;
 
 template <
@@ -52,8 +52,8 @@ template <
     bool IsInterleaved = false,
     bool IsDram = false,
     bool IsShardContiguous = false,
-    // Op-to-op R/W inference: the accessor's tensor-binding identity (a per-binding compile-time-arg
-    // offset), threaded in by the TensorAccessor deduction guide so it survives to the NoC call site.
+    // Op-to-op R/W inference: the accessor's tensor-binding identity (the binding's base-address CRTA
+    // byte offset), threaded in by the TensorAccessor deduction guide so it survives to the NoC call site.
     // Purely a type tag -- no runtime state, no effect on distribution behavior. NO_BINDING_ID when the
     // accessor was not built from a Metal 2.0 binding token.
     uint32_t BindingId = NO_BINDING_ID>
