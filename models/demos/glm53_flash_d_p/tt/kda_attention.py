@@ -14,6 +14,9 @@ group count comes from the device grid. actual_start is a device uint32 scalar s
 64-aligned start up to max_seq built at load. For a chunk-aligned start (start a multiple of S), ttKDA's chronology
 puts SP rank 0 first (first_rank = (start / (S/2)) % 2 = 0, no split): the contiguous halves above.
 The carries live in address-stable buffers (kimi_k3/kda_state.py pattern); a chunk at start 0 reads a zeroed state.
+An optional actual_end (exclusive valid end, 32-aligned; the serving contract pads the last chunk) is sliced from a
+second load-time table (every 32-aligned end up to max_seq) and passed to ttKDA, so the carries stop at the valid end.
+bind_state points the module at another address-stable state (one per serving slot, tt/runners).
 Precision departures from ttKDA: the decay gate in fp32, and prepare_chunk_recurrence's k_dec_t recomputed without
 its TF32 cancellation (_PreciseDecayRecurrence; GLM_KDA_DECAY=kernel keeps the kernel's own term for comparison).
 """
@@ -41,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 SP_AXIS, TP_AXIS = 0, 1
 PRECISE_DECAY = os.environ.get("GLM_KDA_DECAY", "precise") == "precise"  # "kernel": prepare's own k_dec_t
 START_ALIGN = 64
+END_ALIGN = 32
 _KDA_NAMES = (
     "q_proj.weight",
     "k_proj.weight",
@@ -240,27 +244,25 @@ class TtKdaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+        m = max_seq // END_ALIGN + 1
+        ends = torch.arange(m, dtype=torch.int64).mul(END_ALIGN).reshape(m, 1)
+        self.ends = ttnn.from_torch(
+            ends,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
         self.state = self._zeros()
         self.zero_state = self._zeros()
 
     def _zeros(self) -> KdaState:
-        k = self.kcfg
-        return KdaState(
-            recurrent=ttnn.zeros(
-                (1, self.local_heads, k.head_k_dim, k.head_v_dim),
-                dtype=KDA_RECURRENT_STATE_DTYPE,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            convolution=ttnn.zeros(
-                (1, k.conv_kernel_size - 1, self.conv_width),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-        )
+        return kda_state_zeros(self.mesh, self.kcfg)
+
+    def bind_state(self, state: KdaState) -> None:
+        """Carry the state in another address-stable buffer pair (kda_state_zeros); the forward copies into it."""
+        self.state = state
 
     def _program_config(self, local_rows: int) -> KDAProgramConfig:
         chunks = local_rows // ttnn.TILE_SIZE
@@ -295,19 +297,28 @@ class TtKdaAttention(LightweightModule):
             )
         return self._layers[s]
 
-    def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, start: int, end: int | None = None) -> ttnn.Tensor:
         """x [1, 1, S, H] replicated bf16, start the chunk's absolute position (a multiple of S) ->
-        attn_out [1, 1, S, H] replicated bf16. Advances the carried state."""
+        attn_out [1, 1, S, H] replicated bf16. Advances the carried state. end (optional): the exclusive valid end,
+        32-aligned, in (start, start + S]; rows past it are pad (their output is unspecified, the state skips them)."""
         s = x.shape[-2]
         assert start % s == 0 and start % START_ALIGN == 0, f"chunk start {start} must be a multiple of S={s}"
+        if end is not None:
+            assert start < end <= start + s and end % END_ALIGN == 0, f"actual_end {end} for chunk [{start}, +{s})"
         kda = self._kda(s)
         xs = ttnn.mesh_partition(x, dim=-2, cluster_axis=SP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         h = ttnn.reshape(xs, (1, s // self.sp, self.hidden))
         i = start // START_ALIGN
         actual_start = ttnn.slice(self.starts, (i, 0), (i + 1, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        actual_end = None
+        if end is not None:
+            j = end // END_ALIGN
+            actual_end = ttnn.slice(self.ends, (j, 0), (j + 1, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         state = self.zero_state if start == 0 else self.state
-        out, new = kda.forward(h, state, actual_start=actual_start)
+        out, new = kda.forward(h, state, actual_start=actual_start, actual_end=actual_end)
         ttnn.deallocate(actual_start)
+        if actual_end is not None:
+            ttnn.deallocate(actual_end)
         ttnn.deallocate(xs)
         ttnn.copy(new.recurrent, self.state.recurrent)
         ttnn.copy(new.convolution, self.state.convolution)
@@ -361,14 +372,38 @@ class TtKdaAttention(LightweightModule):
         ttnn.deallocate(rd)
         ttnn.deallocate(cd)
 
-    def state_torch(self) -> dict:
-        """The carried state in the reference layout (mesh row 0's copy; rows are replicated)."""
+    def state_torch(self, state: KdaState | None = None) -> dict:
+        """The carried state (or ``state``, e.g. a serving slot's) in the reference layout (mesh row 0's copy; rows
+        are replicated)."""
+        state = self.state if state is None else state
         cols = tuple(self.mesh.shape)[1]
-        rec = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(self.state.recurrent)[:cols]]
-        conv = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(self.state.convolution)[:cols]]
+        rec = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(state.recurrent)[:cols]]
+        conv = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(state.convolution)[:cols]]
         rec = torch.cat(rec, dim=1).reshape(self.kcfg.num_heads, self.kcfg.head_k_dim, -1).float()
         conv = self._conv_to_ref_order(torch.cat(conv, dim=-1).reshape(self.kcfg.conv_kernel_size - 1, -1).float())
         return {"kda_recurrent": rec, "kda_conv": conv}
+
+
+def kda_state_zeros(mesh, kcfg: KDAConfig) -> KdaState:
+    """A zeroed per-chip carry pair: recurrent [1, H / tp, K, V] (TP shard of the heads), conv [1, 3, 3 H / tp K]."""
+    tp = tuple(mesh.shape)[TP_AXIS]
+    local_heads = kcfg.num_heads // tp
+    return KdaState(
+        recurrent=ttnn.zeros(
+            (1, local_heads, kcfg.head_k_dim, kcfg.head_v_dim),
+            dtype=KDA_RECURRENT_STATE_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        convolution=ttnn.zeros(
+            (1, kcfg.conv_kernel_size - 1, 3 * local_heads * kcfg.head_k_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+    )
 
 
 def build_kda_attention(mesh, loader, cfg, layer: int, max_seq: int) -> TtKdaAttention:
