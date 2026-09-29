@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "api/dataflow/dfb_access.h"
+
 // Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_OVERLAY_TRID_STATIC (untagged).
 // Quasar-only pool split:
 //   user / kernel : [0, USER_TXN_ID_MAX]
@@ -19,13 +21,6 @@ static_assert(USER_TXN_ID_MAX >= 1);
 static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
 
 namespace dfb {
-
-enum AccessPattern : uint8_t {
-    STRIDED,
-    ALL,
-    BLOCKED,
-    UNKNOWN,
-};
 
 constexpr uint8_t NUM_DFBS = 32;
 // Pack TRISC stores only active logical DFBs in a compact local array. Its TC state is allocated

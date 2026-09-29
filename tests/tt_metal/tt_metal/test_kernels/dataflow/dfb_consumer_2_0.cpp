@@ -41,13 +41,8 @@ void kernel_main() {
 #endif
     } else {
         // Explicit sync: one wait/pop covers share entries, spaced stride_bytes apart in the ring.
-#ifdef ARCH_QUASAR
-        const uint32_t share = dfb.get_consume_share();
-        const uint32_t stride_bytes = entry_size * dfb.get_consume_stride_tiles();
-#else
-        const uint32_t share = 1;
-        const uint32_t stride_bytes = entry_size;
-#endif
+        const uint32_t share = dfb.get_consumer_share();
+        const uint32_t stride_bytes = entry_size * dfb.get_consumer_stride_tiles();
         const uint32_t page_step = blocked_consumer ? 1u : num_consumers;
         for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id += share) {
             const uint32_t page_id =
