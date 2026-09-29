@@ -1778,3 +1778,24 @@ Watch: the worst-head margin is small (0.048 of 0.05, the component test's limit
 58 of 96.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_04_attention.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.attn_residual test (attempt 1)
+Reviewed the rendered component test for `h_mid = post * attn_out + comb^T @ in` at layer 4. The rendered file was the
+bare `run_component_test`. I rebuilt it from the frozen dsa_moe layer-3 test (same weightless module). LAYER = 4, and
+every check and limit is the same except one: the post-term rel limit is 0.10 (was 0.08).
+New at layer 4: post is in [0, 0.455], but the post term is only 2.6% of the output (row norms: in 2.10,
+attn_out 0.83, post term 0.042, out 2.00). So bf16 output rounding alone gives a post-term rel of 0.063 (layer 3:
+0.034). The streams differ (stream 0 vs 1 rel 0.996), so comb bugs show without a second-layer run.
+Sensitivity (CPU host script /tmp/kmoeres/sens.py, not kept; the numbers are in the test docstring):
+- Every listed bug except stream-major rows passes PCC 0.99.
+- Caught: post x1.01 (golden ratio 1.0116, CPU ratio 1.0096), comb x1.005 (CPU rel 0.0050, comb coefficient 1.005),
+  a truncating bf16 output (CPU ratio 0.9969, comb coefficient 0.9972), and every coarser bug.
+- Not caught: comb x1.002 (coefficient 1.0020, at the edge).
+Results:
+- Device passes already, because `_device_step` builds tt/residual.py for any layer. PCC 0.999995. Vs golden 0.00309 /
+  [0.9964, 1.0035] / worst row 0.0067. Vs CPU 0.00165 / [0.9996, 1.0002] / 0.0018. Post coefficient 1.00000 / rel
+  0.0626. Comb coefficient 1.00001 / rel 0.00165. These are the same as the CPU bf16-output model.
+- Reference passes (vs CPU 0). Stub fails (PCC 0).
+Next step: implement only needs to add attn_residual to `DEVICE_STEPS["kda_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
