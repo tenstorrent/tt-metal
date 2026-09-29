@@ -358,7 +358,14 @@ def main():
     wall = time.time() - t_all
     if covered != args.total:
         raise RuntimeError(f"coverage gap: {covered} != {args.total}")
-    verdict = "BIT-EXACT-ALL-INPUTS" if all_equal else "DIVERGENT"
+    # A reduced sweep must not certify itself as exhaustive: covered==args.total
+    # only proves internal consistency, not that the whole space was swept.
+    if not all_equal:
+        verdict = "DIVERGENT"
+    elif covered == TWO32:
+        verdict = "BIT-EXACT-ALL-INPUTS"
+    else:
+        verdict = "BIT-EXACT-PARTIAL-%d-OF-2^32" % covered
     summary = (
         f"OP={args.op} VERDICT={verdict} start={args.start_bit} "
         f"total={args.total} bands={n_bands} covered={covered} "
@@ -372,7 +379,7 @@ def main():
         numeric_ok = write_correctness_ledger(
             out, args.op, verdict, corr_legs, covered
         )
-    return 0 if verdict == "BIT-EXACT-ALL-INPUTS" and numeric_ok else 1
+    return 0 if all_equal and numeric_ok else 1
 
 
 def _new_leg():
@@ -426,7 +433,7 @@ def _fold_leg(acc, corr):
 def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
     """Emit the tolerance ledger; max ULP is diagnostic, not a certified bound."""
     sem, hand = corr_legs["sem"], corr_legs["hand"]
-    equiv = equiv_verdict == "BIT-EXACT-ALL-INPUTS"
+    equiv = equiv_verdict.startswith("BIT-EXACT")
 
     def leg_complete(a):
         return a["checked"] and a["patterns"] == covered

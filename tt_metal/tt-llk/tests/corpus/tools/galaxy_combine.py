@@ -72,7 +72,7 @@ def combine(
             invalid.add(chip)
             all_equal = False
             numeric_ok = False
-        if tokens.get("VERDICT") != "BIT-EXACT-ALL-INPUTS":
+        if not (tokens.get("VERDICT") or "").startswith("BIT-EXACT"):
             all_equal = False
             bands = re.search(r"witness_bands=(\[.*\])", verdict_text)
             witness.append((chip, bands.group(1) if bands else "?"))
@@ -105,7 +105,7 @@ def combine(
         "numeric_contract=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
         "NOT-ABSOLUTE-ULP-CERTIFIED"
     )
-    return summary, verdict == "BIT-EXACT-ALL-INPUTS" and numeric_ok
+    return summary, verdict.startswith("BIT-EXACT") and numeric_ok
 
 
 def main() -> int:
