@@ -164,14 +164,26 @@ class MiMoPrefillRuntime:
         if c.is_first_rank:
             ttnn.deallocate(input_tensor)
         cb = None
+        pending = []  # (layer_idx, event) of the enqueued layer whose ack is outstanding
         if self._on_layer_complete is not None:
 
             def cb(layer_idx, _rid=request_id):
-                if self._ack_sync:
-                    ttnn.synchronize_device(self.mesh_device)
-                self._on_layer_complete(layer_idx, _rid)
+                if not self._ack_sync:
+                    self._on_layer_complete(layer_idx, _rid)
+                    return
+                # Ack layer L - 1 only after layer L is enqueued: the device runs L while the host waits for L - 1's
+                # event, so the queue never drains (a synchronize per layer exposed the whole host dispatch time of
+                # every layer: ~0.3-0.4 ms / layer at 640 tokens per chip).
+                pending.append((layer_idx, ttnn.record_event(self.mesh_device, 0)))
+                if len(pending) > 1:
+                    done, ev = pending.pop(0)
+                    ttnn.event_synchronize(ev)
+                    self._on_layer_complete(done, _rid)
 
         out = self.model.forward_device(x, actual_start, user=slot_id, valid_end=actual_end, on_layer_complete=cb)
+        for done, ev in pending:  # the last layer
+            ttnn.event_synchronize(ev)
+            self._on_layer_complete(done, request_id)
         if c.is_last_rank:
             out.deallocate(True)
             return None
