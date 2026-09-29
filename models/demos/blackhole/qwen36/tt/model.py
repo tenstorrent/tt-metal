@@ -2935,7 +2935,7 @@ class Qwen36Model:
         """Compile every tile-aligned GDN conv-carry window slice."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        if tpc.is_blackhole() or not any(not layer.is_full_attention for layer in self.layers):
+        if not any(not layer.is_full_attention for layer in self.layers):
             return
         TS = tpc.TILE_SIZE
         K = self.args.linear_conv_kernel_dim
