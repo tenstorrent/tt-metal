@@ -876,7 +876,7 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
         assert "ambiguous" in str(exc)
 
 
-@pytest.mark.parametrize("metric", ["ifeval", "gpqa"])
+@pytest.mark.parametrize("metric", ["ifeval", "gpqa", "gsm8k"])
 def test_task_accuracy_and_performance_from_the_same_run(tmp_path, metric):
     _vision_scaffold(tmp_path, "task-demo")
     accuracy_target, tolerance = (100, 0.2) if metric == "gpqa" else (80, 0.05)
@@ -916,3 +916,50 @@ def test_task_accuracy_and_performance_from_the_same_run(tmp_path, metric):
         result = _run_validator(tmp_path)
         assert result.returncode == expected_code, result.stdout + result.stderr
         assert metric in result.stdout and "decode_t/s/u" in result.stdout
+
+
+@pytest.mark.parametrize("metric", ["text_image_pcc", "edit_image_pcc"])
+@pytest.mark.parametrize("score,success", [(0.99, True), (0.96, False), (None, False)])
+def test_image_agreement_targets_and_throughput(tmp_path, metric, score, success):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir()
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+    _write_single_target(tmp_path, perf={"fps": 0.04}, accuracy={metric: 1.0, f"{metric}_tolerance": 0.03})
+    measurements = [{"step_name": "inference", "name": "fps", "value": 0.04}]
+    if score is not None:
+        measurements.append({"step_name": "inference", "name": metric, "value": score})
+    else:
+        # Another image metric makes this an image run but cannot satisfy the missing metric.
+        other = "edit_image_pcc" if metric == "text_image_pcc" else "text_image_pcc"
+        measurements.append({"step_name": "inference", "name": other, "value": 0.99})
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_image.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=0,
+        extra_measurements=measurements,
+    )
+    result = _run_validator(tmp_path)
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    assert metric in result.stdout
+    assert "fps" in result.stdout
+
+
+def test_missing_gsm8k_accuracy_fails(tmp_path):
+    _vision_scaffold(tmp_path, "demo-model")
+    _write_single_target(tmp_path, perf={"fps": 0.04}, accuracy={"gsm8k": 80, "gsm8k_tolerance": 0.05})
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_missing_gsm8k.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=0,
+        extra_measurements=[
+            {"step_name": "inference", "name": "fps", "value": 0.04},
+            {"step_name": "inference", "name": "ifeval_accuracy", "value": 90},
+        ],
+    )
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "gsm8k" in result.stdout

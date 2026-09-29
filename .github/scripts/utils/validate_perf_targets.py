@@ -52,6 +52,9 @@ METRIC_NAME_MAP = {
     "top5": ("inference_decode", "top5_token_accuracy"),
     "ifeval": ("inference", "ifeval_accuracy"),
     "gpqa": ("inference", "gpqa_accuracy"),
+    "gsm8k": ("inference", "gsm8k_accuracy"),
+    "text_image_pcc": ("inference", "text_image_pcc"),
+    "edit_image_pcc": ("inference", "edit_image_pcc"),
     # Vision classifiers. Reported from a plain "inference" step rather than
     # inference_decode, since there is no decode phase to attribute them to.
     "fps": ("inference", "fps"),
@@ -79,6 +82,9 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "top5",
     "ifeval",
     "gpqa",
+    "gsm8k",
+    "text_image_pcc",
+    "edit_image_pcc",
     "fps",
 }
 
@@ -90,12 +96,20 @@ PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 # measurements; otherwise it is a perf (eval) run. This lets us validate only the
 # relevant metric family per run: perf numbers from token-matching runs are teacher-
 # forcing artifacts (not real perf), and eval runs do not measure token accuracy.
-ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5", "ifeval", "gpqa"}
+ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5", "ifeval", "gpqa", "gsm8k", "text_image_pcc", "edit_image_pcc"}
 ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
-# Classifiers, IFEval, and GPQA report accuracy and throughput from the SAME run, unlike
+# Classifiers, scored language tasks and image comparisons report accuracy and throughput from the SAME run, unlike
 # separate LLM token-matching and performance runs. These names do not mark a run as
 # accuracy-only -- see _is_accuracy_run.
-SINGLE_PASS_ACCURACY_MEASUREMENT_NAMES = {"top1_accuracy", "top5_accuracy", "ifeval_accuracy", "gpqa_accuracy"}
+SINGLE_PASS_ACCURACY_MEASUREMENT_NAMES = {
+    "top1_accuracy",
+    "top5_accuracy",
+    "ifeval_accuracy",
+    "gpqa_accuracy",
+    "gsm8k_accuracy",
+    "text_image_pcc",
+    "edit_image_pcc",
+}
 
 # Reverse lookup from a benchmark (step_name, measurement_name) pair back to a canonical
 # target metric name. Used to report measured values that have no matching target entry so
