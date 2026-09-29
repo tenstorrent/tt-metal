@@ -391,5 +391,5 @@ from child start/finish timestamps when available:
 
 All image-build jobs were skipped and the immutable image was reused. The run
 was left in progress by explicit user direction; its eventual result does not
-trigger further eval fixes. Branch head
+trigger further eval fixes. Revision
 `bfc2ee9bd5bda291f7b58f2f8d978e151b70b3a4` restores normal eval routing.
