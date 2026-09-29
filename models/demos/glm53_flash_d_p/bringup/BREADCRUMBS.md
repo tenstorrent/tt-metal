@@ -656,3 +656,27 @@ Watch: the worst-column margin is about 2x (0.034 of 0.07). The next step, imple
 `DEVICE_STEPS["dsa_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.01 test (attempt 1)
+
+Reviewed the rendered swap test (dsa_moe layer 3, attn_hc on device). I rewrote it from swap kda_dense 01. It keeps
+the gated pcc_swap_out and takes the attn_hc part checks from the layer-3 component test (part rel 0.01; max abs
+0.02 / 5e-4 / 0.02; worst column 0.07; column sums; ranges). The attn_hc input here is the golden `in`.
+New at layer 3: the MoE is in the block, and near-tie top-8 flips break per-row checks against the golden. The fp32
+CPU reference flips 36 tokens against the golden, with ratio up to 1.033 on those rows. Checks:
+- block out vs golden: rel L2 <= 0.01; per-row ratio [0.975, 1.025] on rows with the golden's top-8, [0.9, 1.1] on
+  flipped rows (selection taken from the nonzero pattern of `router`).
+- block out vs the all-CPU block of the same golden `in` (a second CPU run, 5 s; it differs only in attn_hc): router
+  flips <= 64 tokens; rel L2 <= 0.005 and ratio [0.98, 1.02] on same-routing rows.
+- `_f32` wraps the override output (known issue: device step feeding a CPU step).
+Sensitivity (CPU host script /tmp/dsas01/sens2.py, not kept; the numbers are in the test docstring). Caught: comb
+transposed, comb x1.01 / x1.02, post x1.02 / x1.05, 10 iterations, rms eps 1e-6, last row zeroed, hc_eps 1e-5 (CPU
+ratio 0.985). The attn_hc part checks catch hc_eps 0 and 19 iterations. Not caught in block out: a pre scale (attn_norm
+removes it; the part checks catch x1.02) and rms eps 1.2e-5.
+Results: device passes (PCC 0.999994, rel 0.0038; golden same-routing rows [0.9922, 1.0071], 46 flips; vs CPU 29
+flips, rel 0.0020, [0.9924, 1.0075]; attn_hc parts 0.0021 / 0.0030 / 0.0019, worst column 0.034). Reference passes
+(rel 0.0028, vs CPU 0). Stub fails (PCC 0 and every check).
+Watch: the worst-column margin is 2x (0.034 of 0.07). Later dsa_moe swaps should keep the CPU-block comparison, but
+run the CPU tail from the device inputs of the step they add (see the kda_dense swaps 06-10).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_01_attn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
