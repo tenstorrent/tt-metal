@@ -8,7 +8,8 @@ Each block runs on device with the oracle's inputs (teacher-forced streams and p
 device-produced and device-held: window KV, compressed KV and index keys written by the KV sources, top-k
 published by the index sources and reused by consumers, candidates of layer 20 constraining layer 24.
 Checks per layer: block output and next pre_mix vs the oracle, compressed-KV and index-K rows vs the oracle's
-shared state, determinism (a second pass over a fresh state is bit-identical); selection recall is reported.
+shared state, the window-KV carry vs the oracle's window KV, determinism (a second pass over a fresh state is
+bit-identical); selection recall is reported.
 Bars (G1): block >= 0.99 synthetic / >= 0.98 real; caches >= 0.998.
 """
 
@@ -28,7 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.v41.prototype_oracle import device_weigh
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
-from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -194,6 +195,11 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
             "pre_mix": _pcc(rec["pre_out"], pre_out),
             "deterministic": torch.equal(x_out, second[layer][0]) and torch.equal(pre_out, second[layer][1]),
         }
+        # window KV contents: the carry holds the last WINDOW_SLOT positions' post-RoPE FP8-QDQ rows, right-aligned
+        tail = rec["window_kv"][max(0, valid - WINDOW_SLOT) : valid].float()
+        expected_carry = torch.zeros(WINDOW_SLOT, tail.shape[-1])
+        expected_carry[WINDOW_SLOT - tail.shape[0] :] = tail
+        entry["window_kv"] = _pcc(expected_carry, host(state.window_carry[layer]))
         if layer in C.KV_SOURCE_LAYERS:
             pub = result["shared"][layer]
             rows = pub["compress_kv"].shape[0]
@@ -213,6 +219,6 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         if weights == "synthetic" and layer in C.INDEX_SOURCE_LAYERS:
             bar = SYNTHETIC_INDEX_SOURCE_PCC
         assert entry["block_out"] >= bar, (layer, bar, entry)
-        for key in ("compressed_kv", "index_k"):
+        for key in ("compressed_kv", "index_k", "window_kv"):
             if key in entry:
                 assert entry[key] >= CACHE_PCC, (layer, key, entry)
