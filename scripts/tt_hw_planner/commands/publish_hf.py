@@ -1246,7 +1246,7 @@ def cmd_publish_hf(args) -> int:
             return 2
         slug = slug or run_slug(run_dir)
         state_root = repo_root_for_run(run_dir, repo_root)
-        state = collect_state(run_dir, state_dir_candidates(state_root, slug), slug)
+        state = collect_state(run_dir, state_dir_candidates(state_root, slug), slug, requested_batch=getattr(args, "batch", None))
     if not slug:
         print("  [publish-hf] could not determine the model slug. Pass a target.")
         return 2

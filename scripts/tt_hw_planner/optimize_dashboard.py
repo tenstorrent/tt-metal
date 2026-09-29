@@ -241,7 +241,7 @@ def _load_attempts(dirs: list, slug: str | None) -> list:
     return out
 
 
-def _parse_batch(run_dir: Path) -> int | None:
+def _parse_batch(run_dir: Path, requested: int | None = None) -> int | None:
     """The resolved batch / concurrent-user count for the perf run.
 
     The perf harness reports the batch it actually ran (perf_adapter.batch_report_line, after
@@ -251,7 +251,7 @@ def _parse_batch(run_dir: Path) -> int | None:
 
     prof = run_dir / "profiles"
     if not prof.is_dir():
-        return None
+        return int(requested) if requested else None
     logs = sorted(prof.glob("*.log"), key=lambda p: (p.stat().st_mtime if p.exists() else 0.0), reverse=True)
     for lg in logs:
         try:
@@ -261,7 +261,9 @@ def _parse_batch(run_dir: Path) -> int | None:
         served = parse_batch_report(txt)
         if served is not None:
             return served
-    return None
+    # No harness batch report (e.g. a non-decode model that never prints one): fall back to the batch
+    # the run was ASKED to drive (--batch). Batch is a property of the run, not of the LLM decode path.
+    return int(requested) if requested else None
 
 
 def _serving_metrics(
@@ -355,7 +357,7 @@ def _roofline_points(buckets: list) -> list:
 # --------------------------------------------------------------------------- the snapshot
 
 
-def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None) -> dict:
+def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None, requested_batch: int | None = None) -> dict:
     """Assemble the one JSON snapshot the dashboard renders. Every section is best-effort: a file
     that does not exist yet (baseline still measuring) simply omits its section, never fails."""
     run_dir = Path(run_dir)
@@ -538,7 +540,7 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None) -> d
             if config.get(k) is not None
         },
         "metric": state.get("metric"),
-        "batch": _parse_batch(run_dir),
+        "batch": _parse_batch(run_dir, requested_batch),
         "stages": stages,
         "serving": serving,
         "headroom": headroom,

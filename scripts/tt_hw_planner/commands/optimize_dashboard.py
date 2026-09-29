@@ -43,6 +43,6 @@ def cmd_optimize_dashboard(args) -> int:
     return serve(
         args.host,
         args.port,
-        lambda: collect_state(run_dir, state_dir_candidates(state_root, slug), slug),
+        lambda: collect_state(run_dir, state_dir_candidates(state_root, slug), slug, requested_batch=getattr(args, "batch", None)),
         decision_fn=lambda action: post_hitl_decision(run_dir, action),
     )

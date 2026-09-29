@@ -850,7 +850,7 @@ def cmd_optimize(args) -> int:
                 rd = find_run_dir(run_root, slug=_dash_slug)
                 if rd is None:
                     return {"run": {"id": None, "live": False}, "model": {"slug": _dash_slug}}
-                return collect_state(rd, state_dir_candidates(run_root, _dash_slug), _dash_slug)
+                return collect_state(rd, state_dir_candidates(run_root, _dash_slug), _dash_slug, requested_batch=getattr(args, "batch", None))
 
             def _dash_decision(action):
                 rd = find_run_dir(run_root, slug=_dash_slug)
