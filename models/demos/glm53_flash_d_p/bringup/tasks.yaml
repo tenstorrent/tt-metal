@@ -2190,6 +2190,13 @@ tasks:
     - ffn_norm
     - router
     layer: 4
+  frozen:
+    at: '2026-09-29T17:56:02'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_09_router.py: a082858cd516caa39a61479abebbd5a6e975c69f4f7b327309aa4ecc2b62dc7c
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_moe.experts
   title: kda_moe experts (moe) on device, layer 4
   step: implement
