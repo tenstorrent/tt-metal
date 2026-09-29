@@ -34,7 +34,12 @@ from models.demos.common.bringup.testing.templates import component_test_path, s
 
 SAFE = "scripts/run_safe_pytest.sh --run-all"
 PY = "python -m models.demos.common.bringup"
-PROFILE_ENV = "TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1"
+# PROGRAM_SUPPORT_COUNT: the pipelined timeline reads the device profiler once per chunk; the default 1000 programs per
+# core drops markers on large models (GLM-5.3, 5 layers: 1319 programs per chip per chunk).
+PROFILE_ENV = (
+    "TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1"
+    " TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000"
+)
 
 
 def thr(spec, key: str) -> str:
