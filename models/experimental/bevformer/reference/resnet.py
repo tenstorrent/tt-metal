@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
+
 import torch
 import torch.nn as nn
 import torchvision.ops
@@ -105,9 +107,10 @@ class ModulatedDeformConv2dPack(nn.Module):
 
 
 def build_conv_layer(cfg: Optional[Dict], *args, **kwargs) -> nn.Module:
-    if cfg == None:
+    if cfg is None:
         layer = nn.Conv2d(*args, **kwargs)
     else:
+        assert cfg["type"] == "DCNv2", f"only DCNv2 convs are supported, got {cfg}"
         layer = ModulatedDeformConv2dPack(*args, **kwargs)
 
     return layer
@@ -244,6 +247,7 @@ class Bottleneck(nn.Module):
         self.add_module(self.norm1_name, norm1)
         fallback_on_stride = False
         if self.with_dcn:
+            dcn = dict(dcn)
             fallback_on_stride = dcn.pop("fallback_on_stride", False)
         if not self.with_dcn or fallback_on_stride:
             self.conv2 = build_conv_layer(
@@ -321,8 +325,6 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
     arch_settings = {
-        # 18: (BasicBlock, (2, 2, 2, 2)),
-        # 34: (BasicBlock, (3, 4, 6, 3)),
         50: (Bottleneck, (3, 4, 6, 3)),
         101: (Bottleneck, (3, 4, 23, 3)),
         152: (Bottleneck, (3, 8, 36, 3)),

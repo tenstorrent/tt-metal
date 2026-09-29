@@ -4,8 +4,8 @@
 
 """Device-side modulated deformable conv 2D, composed from ttnn.grid_sample and matmul.
 
-The ResNet101 backbone has 26 modulated deformable convs per inference (stages 3 and
-4, `stage_with_dcn=(False, False, True, True)`). This module decomposes modulated
+The ResNet101 backbone has 26 modulated deformable convs per inference (layer3 and
+layer4, `stage_with_dcn=(False, False, True, True)`). This module decomposes modulated
 deformable conv (Dai et al. 2018) into K*K (= 9 for K=3) sample positions per output
 pixel, one `ttnn.grid_sample` over all of them and a matmul over K*K*C_in, so the
 whole op stays on device.
@@ -26,25 +26,38 @@ Math (per output (h_o, w_o), output channel c_out):
 `ttnn.grid_sample` expects:
   - input NHWC, shape (N, H_in, W_in, C)
   - grid (N, H_out, W_out, 2) in (x, y) order normalized to [-1, 1]
-  - mode="bilinear", align_corners=False (paired with the matching base
-    grid formula; equivalent to align_corners=True for the DCNv2
-    reference since both invert to the same pixel-space sample location)
+  - mode="bilinear", align_corners=False. The base grid and the offset scales
+    use the align_corners=False normalization, gy = (2*sy + 1)/H - 1; switching
+    to align_corners=True needs (H - 1) in both formulas.
 
-ttnn.grid_sample's input is bounded to C_in <= TILE_WIDTH * 8 = 256
-channels. The stage-4 DCNs have C_in = 512, so this module slices x along
-C_in into <=256-channel chunks, runs the grid_sample / mask / matmul
-pipeline per chunk, and adds the partial C_out outputs. The summed result
-is mathematically identical to a single matmul over the full K*K*C_in
-reduction axis.
+The offsets reach this module in pixels but already in grid_sample's (x, y)
+channel order: `grid_offset_order` gives the reorder from DCNv2's (y, x), which
+the preprocessor folds into the offset conv. The forward scales them to [-1, 1] units
+with one multiply and adds the base grid.
+
+x is split along C_in into chunks of at most 256 channels (one chunk for the
+layer3 DCNs, C_in = 256; two for layer4, C_in = 512). Each chunk runs the
+grid_sample / mask / matmul pipeline and the partial C_out outputs are added,
+which equals a single matmul over the full K*K*C_in reduction axis.
+ttnn.grid_sample does not need the split, since it tiles wide channel dims
+internally; the chunk size bounds the K*K*c_chunk width of the sampled tensor
+the matmul reads.
 """
 
 import torch
 import ttnn
 
-# ttnn.grid_sample's wide-reduction cap (TILE_WIDTH * max_tiles_per_reduction
-# = 32 * 8) on the input channel dimension. Inputs wider than this must be
-# split along C before sampling.
+# Largest C_in chunk sampled at once; see the module docstring.
 _GRID_SAMPLE_C_CAP = 256
+
+
+def grid_offset_order(kernel_positions):
+    """The reorder from DCNv2's offset channels (y0, x0, y1, x1, ...) to the (x0, y0, x1, y1, ...)
+    the device DCN takes: channel c of its input is DCNv2 channel ``source[c]``."""
+    source = []
+    for kk in range(kernel_positions):
+        source += [2 * kk + 1, 2 * kk]
+    return source
 
 
 class TtModulatedDeformConv2dDevice:
@@ -69,8 +82,8 @@ class TtModulatedDeformConv2dDevice:
         """``input_shape`` is the (batch, height, width) of the NHWC input every call will see.
         It fixes the sampling base grid, which is built and uploaded here so a forward does
         no host work."""
-        assert groups == 1, "device DCN prototype only supports groups=1"
-        assert deform_groups == 1, "device DCN prototype only supports deform_groups=1"
+        assert groups == 1, f"device DCN supports groups=1 only, got {groups}"
+        assert deform_groups == 1, f"device DCN supports deform_groups=1 only, got {deform_groups}"
 
         self.device = device
         self.stride = stride
@@ -79,11 +92,9 @@ class TtModulatedDeformConv2dDevice:
         self.C_out, self.C_in, self.K, _ = weight.shape
         assert weight.shape[2] == weight.shape[3], "kernel must be square"
 
-        # Pick a chunk size that divides C_in cleanly and is ≤ grid_sample's
-        # wide-reduction cap. UniAD's C_in values (256, 512, 1024, 2048) all
-        # divide _GRID_SAMPLE_C_CAP, so a single chunk size works for every
-        # instance; the assert flags any future shape that would need a more
-        # general (ragged) chunking.
+        # The DCN C_in values here (256, 512) are multiples of _GRID_SAMPLE_C_CAP,
+        # so one chunk size fits every instance; the assert flags a shape that
+        # would need ragged chunking.
         self.c_chunk = min(self.C_in, _GRID_SAMPLE_C_CAP)
         assert (
             self.C_in % self.c_chunk == 0
@@ -115,8 +126,8 @@ class TtModulatedDeformConv2dDevice:
         # HiFi4 + fp32 accumulator + no math approx. ttnn.grid_sample
         # bilinear reads bf16 corner sticks and would normally accumulate
         # in bf16; fp32_dest_acc_en lifts the bilinear pool reduction to
-        # fp32. The downstream fused matmul reuses this config so the
-        # K*K*C_in -> C_out reduction also stays in fp32.
+        # fp32. The matmul reuses this config so the K*K*C_in -> C_out
+        # reduction also accumulates in fp32.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -129,36 +140,33 @@ class TtModulatedDeformConv2dDevice:
         H_out = (H_in + 2 * self.padding[0] - self.dilation[0] * (self.K - 1) - 1) // self.stride[0] + 1
         W_out = (W_in + 2 * self.padding[1] - self.dilation[1] * (self.K - 1) - 1) // self.stride[1] + 1
         self.io_shape = (batch, H_in, W_in, H_out, W_out)
-        base_grids, self.gy_scale, self.gx_scale = self._build_base_grid(H_in, W_in, H_out, W_out, batch)
-        # ttnn.grid_sample wants grid as (B, H_out, W_out, 2) with (x, y) order.
-        self.base_grids_dev = [
-            ttnn.from_torch(
-                torch.stack([gx_base_b, gy_base_b], dim=-1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-            )
-            for gx_base_b, gy_base_b in base_grids
-        ]
+        # Pixel offsets in (x, y) order times these give grid offsets.
+        self.grid_scale = ttnn.from_torch(
+            torch.tensor([2.0 / W_in, 2.0 / H_in] * (self.K * self.K)).reshape(1, 1, 1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        self.base_grid = ttnn.from_torch(
+            self._build_base_grid(H_in, W_in, H_out, W_out, batch),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
 
     def _build_base_grid(self, H_in, W_in, H_out, W_out, batch):
-        """Build the per-kernel-position normalized base grids.
+        """Build the normalized base grid of every kernel position.
 
-        For each kp (kh, kw), the base sample position in input space is:
+        For each kernel position (kh, kw), the base sample position in input space is:
             sy_base = h_o * stride[0] - padding[0] + kh * dilation[0]
             sx_base = w_o * stride[1] - padding[1] + kw * dilation[1]
 
-        Normalizing for ttnn.grid_sample with `align_corners=False`
-        (image_coord = (grid + 1) * H / 2 - 0.5):
+        grid_sample with `align_corners=False` maps grid g to image coordinate
+        (g + 1) * H / 2 - 0.5, so DCNv2's pixel-space sy is reached at:
             gy = (2 * sy + 1) / H - 1
 
-        DCNv2 samples at pixel-space `sy` directly; align_corners=False and
-        align_corners=True both invert to that same sy, so the two are
-        equivalent for the reference. We use False because the formula
-        avoids the H=1 edge case and the grid_sample call below mirrors it.
-
-        Returns a list of K*K tuples (gx_base, gy_base), each a torch
-        tensor of shape (batch, H_out, W_out) ready for upload.
+        Returns a torch tensor of shape (batch, H_out, W_out, 2*K*K) holding
+        (gx, gy) for each kernel position in kk order.
         """
         sh, sw = self.stride
         ph, pw = self.padding
@@ -168,34 +176,24 @@ class TtModulatedDeformConv2dDevice:
         w_o_coords = torch.arange(W_out, dtype=torch.float32)
         h_grid, w_grid = torch.meshgrid(h_o_coords, w_o_coords, indexing="ij")
 
-        base_grids = []
+        channels = []
         for kh in range(self.K):
             for kw in range(self.K):
                 sy_base = h_grid * sh - ph + kh * dh
                 sx_base = w_grid * sw - pw + kw * dw
+                channels.append((2.0 * sx_base + 1.0) / W_in - 1.0)
+                channels.append((2.0 * sy_base + 1.0) / H_in - 1.0)
+        grid = torch.stack(channels, dim=-1)  # (H_out, W_out, 2*K*K)
+        return grid.unsqueeze(0).expand(batch, H_out, W_out, 2 * self.K * self.K).contiguous()
 
-                gy_base = (2.0 * sy_base + 1.0) / H_in - 1.0
-                gx_base = (2.0 * sx_base + 1.0) / W_in - 1.0
-
-                gy_base_b = gy_base.unsqueeze(0).expand(batch, H_out, W_out).contiguous()
-                gx_base_b = gx_base.unsqueeze(0).expand(batch, H_out, W_out).contiguous()
-                base_grids.append((gx_base_b, gy_base_b))
-
-        gy_scale = 2.0 / H_in
-        gx_scale = 2.0 / W_in
-        return base_grids, gy_scale, gx_scale
-
-    def __call__(self, x_nhwc, offset_yx_nhwc, mask_nhwc):
+    def __call__(self, x_nhwc, offset_xy_nhwc, mask_nhwc):
         """Forward.
 
         Args:
-          x_nhwc: (B, H_in, W_in, C_in) bfloat16 NHWC on device
-          offset_yx_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC, in the
-              DCNv2 interleaved channel order — channel `2*kk` is the
-              y-offset for kernel position kk and channel `2*kk + 1` is x.
-              This is the layout torchvision/mmcv `deform_conv2d` reads
-              directly, so the production wrapper's existing `concat(o1, o2)`
-              output can be passed through without permutation.
+          x_nhwc: (B, H_in, W_in, C_in) NHWC TILE on device, bfloat16 or bfloat8_b;
+              it is sampled as bfloat16 ROW_MAJOR.
+          offset_xy_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC TILE pixel offsets in
+              (x, y) order per kernel position, see `grid_offset_order`.
           mask_nhwc: (B, H_out, W_out, K*K) bfloat16 NHWC — modulation masks
               after sigmoid.
 
@@ -210,46 +208,23 @@ class TtModulatedDeformConv2dDevice:
             f"DCN built for (B, H_in, W_in, H_out, W_out) = {self.io_shape}, "
             f"called with {(B, H_in, W_in, H_out, W_out)}"
         )
-        base_grids_dev, gy_scale, gx_scale = self.base_grids_dev, self.gy_scale, self.gx_scale
-
-        # grid_sample's reader expects ROW_MAJOR for both input and grid;
-        # convert x, offsets, and mask up front so the per-kp slice + add +
-        # concat below stays in row-major layout.
+        # grid_sample's reader expects ROW_MAJOR for both input and grid.
         x_rm = ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT)
-        if offset_yx_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
-            offset_yx_nhwc = ttnn.to_layout(offset_yx_nhwc, ttnn.ROW_MAJOR_LAYOUT)
+        grid_offset = ttnn.to_layout(ttnn.multiply(offset_xy_nhwc, self.grid_scale), ttnn.ROW_MAJOR_LAYOUT)
         if mask_nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             mask_nhwc = ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Pre-build a single packed grid of shape (B, H_out, W_out, 2*K*K)
-        # and a packed mask of shape (B, H_out, W_out, K*K). With
-        # `batch_output_channels=True`, one ttnn.grid_sample call replaces
-        # the K*K per-channel-chunk inner loop the original code ran. The
-        # output shape (B, H_out, W_out, c_chunk*K*K) matches the previous
-        # concat-of-K*K-blocks shape so the downstream matmul weights are
-        # unchanged. offset_yx_nhwc is in the DCNv2 interleaved layout
-        # (y0, x0, y1, x1, …) so per kp we slice (2*kk, 2*kk+1) for (y, x).
-        packed_grid_parts = []
-        packed_mask_parts = []
-        for kk in range(K * K):
-            oy = offset_yx_nhwc[..., 2 * kk : 2 * kk + 1]
-            ox = offset_yx_nhwc[..., 2 * kk + 1 : 2 * kk + 2]
-            oy_norm = ttnn.multiply(oy, gy_scale)
-            ox_norm = ttnn.multiply(ox, gx_scale)
-            gx_base_full = base_grids_dev[kk][..., 0:1]
-            gy_base_full = base_grids_dev[kk][..., 1:2]
-            gx = ttnn.add(gx_base_full, ox_norm)
-            gy = ttnn.add(gy_base_full, oy_norm)
-            packed_grid_parts.append(ttnn.concat([gx, gy], dim=-1))  # (B, H_out, W_out, 2)
-            packed_mask_parts.append(mask_nhwc[..., kk : kk + 1])  # (B, H_out, W_out, 1)
-        # Concat along the last dim: (B, H_out, W_out, 2*K*K) and (B, H_out, W_out, K*K).
-        packed_grid = ttnn.concat(packed_grid_parts, dim=-1)
-        packed_mask = ttnn.concat(packed_mask_parts, dim=-1)
+        # One (B, H_out, W_out, 2*K*K) grid for all K*K kernel positions. With
+        # `batch_output_channels=True`, a single ttnn.grid_sample call samples all of
+        # them and returns (B, H_out, W_out, K*K*c_chunk) in kk-major channel order,
+        # the row order weight_cat_chunks is built in.
+        packed_grid = ttnn.add(self.base_grid, grid_offset)
+        mask_b = ttnn.reshape(mask_nhwc, (B, H_out, W_out, K * K, 1))
 
-        # For each channel chunk: one grid_sample call with K coordinate
-        # sets, multiply by the mask (broadcast across c_chunk), matmul
+        # For each channel chunk: one grid_sample call over the K*K kernel
+        # positions, multiply by the mask (broadcast across c_chunk), matmul
         # into C_out, accumulate. The matmul's fp32 accumulator covers the
-        # K*K*c_chunk reduction; only c_chunk-wide bf16 partials are summed
+        # K*K*c_chunk reduction; only the C_out-wide bf16 partials are summed
         # across channel chunks.
         output_acc = None
         for q in range(self.n_c_chunks):
@@ -265,12 +240,11 @@ class TtModulatedDeformConv2dDevice:
                 align_corners=False,
                 batch_output_channels=True,
                 compute_kernel_config=self.compute_kernel_config,
-            )  # (B, H_out, W_out, c_chunk*K*K)
+            )  # (B, H_out, W_out, K*K*c_chunk), kk-major
             # Apply per-kk mask. Reshape sampled to expose the kk dim,
             # broadcast-multiply by the (B, H_out, W_out, K*K, 1) mask, then
             # reshape back to flatten kk into the channel axis.
             sampled = ttnn.reshape(sampled, (B, H_out, W_out, K * K, self.c_chunk))
-            mask_b = ttnn.reshape(packed_mask, (B, H_out, W_out, K * K, 1))
             weighted = ttnn.multiply(sampled, mask_b)
             weighted = ttnn.reshape(weighted, (B, H_out, W_out, K * K * self.c_chunk))
 

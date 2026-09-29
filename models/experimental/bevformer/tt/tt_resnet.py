@@ -2,103 +2,63 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
-
-import torch.nn as nn
-from typing import Tuple, Union
-from torch.nn.modules.utils import _pair, _single
 
 from models.experimental.bevformer.tt.tt_common import TtnnConv2D
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TtModulatedDeformConv2dDevice
 
 
 class TtModulatedDeformConv2dPack:
-    _version = 2
+    """DCNv2 conv together with the conv that predicts its offsets and mask.
 
-    def __init__(
-        self,
-        conv_args,
-        conv_pth,
-        device,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: Union[int, Tuple[int]],
-        stride: int = 1,
-        padding: int = 0,
-        dilation: int = 1,
-        groups: int = 1,
-        deform_groups: int = 1,
-        bias: Union[bool, str] = True,
-        input_dtype=ttnn.bfloat16,
-    ):
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = _pair(kernel_size)
-        self.stride = _pair(stride)
-        self.padding = _pair(padding)
-        self.dilation = _pair(dilation)
-        self.groups = groups
-        self.deform_groups = deform_groups
-        self.device = device
-        # The device DCN samples x at the output grid and reshapes x to (B, out_h, out_w,
-        # C_in), which only holds at stride 1. ResNet101 puts every stride on conv1 or the
-        # downsample shortcut, never on the DCN conv2.
-        assert self.stride == (1, 1), f"device DCN supports stride 1 only, got {self.stride}"
-        # enable compatibility with nn.Conv2d
-        self.transposed = False
-        self.output_padding = _single(0)
+    The geometry (stride, padding, dilation, input shape) comes from ``conv_args.conv_offset``,
+    which shares it with the deformable conv.
+    """
 
-        self.weight = conv_pth.weight  # torch weight
-        self.bias = conv_pth.bias  # torch bias, None
+    def __init__(self, conv_args, conv_pth, device, input_dtype=ttnn.bfloat16):
+        offset_args = conv_args.conv_offset
+        # __call__ reshapes the input to the output's (B, H, W), which holds only at stride 1.
+        # BEVFormer's caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
+        assert tuple(offset_args.stride) == (1, 1), f"DCN supports stride 1 only, got {offset_args.stride}"
+        self.batch_size = offset_args.batch_size
 
-        self.conv_offset = TtnnConv2D(
-            conv_args.conv_offset, conv_pth.conv_offset, device=device, input_dtype=input_dtype
-        )
-
+        weight = conv_pth.weight  # torch (C_out, C_in / groups, K, K)
+        kernel_positions = weight.shape[2] * weight.shape[3]
         self.device_dcn = TtModulatedDeformConv2dDevice(
-            weight=self.weight,
-            bias=self.bias,
-            stride=self.stride,
-            padding=self.padding,
-            dilation=self.dilation,
-            groups=self.groups,
-            deform_groups=self.deform_groups,
+            weight=weight,
+            bias=conv_pth.bias,
+            stride=tuple(offset_args.stride),
+            padding=tuple(offset_args.padding),
+            dilation=tuple(offset_args.dilation),
+            groups=offset_args.in_channels // weight.shape[1],
+            deform_groups=offset_args.out_channels // (3 * kernel_positions),
             device=device,
-            input_shape=(
-                conv_args.conv_offset.batch_size,
-                conv_args.conv_offset.input_height,
-                conv_args.conv_offset.input_width,
-            ),
+            input_shape=(offset_args.batch_size, offset_args.input_height, offset_args.input_width),
         )
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-        out, out_h, out_w = self.conv_offset(x)
-        out = ttnn.sharded_to_interleaved(out)
-        # conv_offset reports logical shape (1, 1, B*H*W, C); recover B from
-        # the total volume so this path doesn't pin the batch dimension.
-        last = out.shape[-1]
-        out_volume = out.shape[0] * out.shape[1] * out.shape[2] * out.shape[3]
-        B = out_volume // (out_h * out_w * last)
-        out = ttnn.reshape(out, (B, out_h, out_w, last))
-        o1, o2, mask = ttnn.chunk(out, 3, dim=3)
-        ttnn.deallocate(out)
-        offset = ttnn.concat((o1, o2), dim=3)  # NHWC (B, H_out, W_out, 2*K*K), DCNv2 (y,x) interleaved layout
-        ttnn.deallocate(o1)
-        ttnn.deallocate(o2)
-        mask = ttnn.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
+        # conv_offset emits the pixel offsets, already in the device DCN's (x, y) order (see
+        # create_resnet_parameters), then the mask logits. Its output is bfloat16 whatever the
+        # input dtype, since the offsets set the sampling positions.
+        self.num_offset_channels = 2 * kernel_positions
+        self.conv_offset = TtnnConv2D(
+            offset_args, conv_pth.conv_offset, device=device, input_dtype=input_dtype, output_dtype=ttnn.bfloat16
+        )
 
-        # The caller's reshape to (B, H, W, C) doesn't always make x.shape[0] == B (the
-        # underlying tile-layout tensor can still report logical shape (1, 1, B*H*W, C));
-        # reshape unconditionally so the device DCN sees a proper 4D NHWC tensor.
-        C_in = x.shape[-1]
-        x_nhwc = ttnn.reshape(x, (B, out_h, out_w, C_in))
-        out_nhwc = self.device_dcn(x_nhwc, offset, mask)  # (B, H_out, W_out, C_out) tile
-        ttnn.deallocate(offset)
+    def __call__(self, x):
+        """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
+        (B, H_out, W_out, C_out) NHWC output and its height and width."""
+        out, out_h, out_w = self.conv_offset(x)
+        out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
+        offset_xy = out[:, :, :, : self.num_offset_channels]
+        mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
+        ttnn.deallocate(out)
+
+        # At stride 1 the input has the output's height and width.
+        x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
+        out_nhwc = self.device_dcn(x_nhwc, offset_xy, mask)
+        ttnn.deallocate(offset_xy)
         ttnn.deallocate(mask)
-        C_out = out_nhwc.shape[-1]
-        return ttnn.reshape(out_nhwc, (1, 1, B * out_h * out_w, C_out)), out_h, out_w
+        return out_nhwc, out_h, out_w
 
 
 class TtResLayer:
@@ -107,144 +67,78 @@ class TtResLayer:
         conv_args,
         conv_pth,
         device,
-        inplanes,
-        num_blocks,
-        is_downsample=False,
-        blk_sharded=False,
-        activation_dtype=ttnn.bfloat16,
-        conv3_blk_sharded=False,
-        planes=None,
-        stride=1,
-        dilation=1,
-        style="pytorch",
-        conv_cfg=None,
-        dcn=None,
         dram_activation=False,
         dram_input=False,
+        dram_conv_slices=None,
+        block_sharded_downsample=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         output_dtype=None,
     ):
-        """``output_dtype`` is the dtype the last block emits; None keeps the one its convs produce."""
-        expansion = 4
-
-        if stride != 1 or inplanes != planes * expansion:
-            is_downsample = True
-
-        layers = []
-
-        layers.append(
-            TtBottleneck(
-                conv_args[0],
-                conv_pth[0],
-                device,
-                is_downsample=is_downsample,
-                blk_sharded=False,
-                activation_dtype=activation_dtype,
-                conv3_blk_sharded=conv3_blk_sharded,
-                planes=planes,
-                stride=stride,
-                dilation=dilation,
-                style=style,
-                conv_cfg=None,
-                dcn=dcn,
-                dram_activation=dram_activation,
-                dram_input=dram_input,
-                input_dtype=input_dtype,
-                input_layout=input_layout,
-                output_dtype=output_dtype if num_blocks == 1 else None,
-            )
-        )
-        inplanes = planes * expansion
-        for j in range(1, num_blocks):
-            layers.append(
+        """One ResNet layer (layer1 .. layer4), one bottleneck per block in ``conv_pth``.
+        ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
+        only the first block reads. ``output_dtype`` is the dtype the last block emits; None
+        keeps the one its convs produce. The other arguments go to every block."""
+        num_blocks = len(conv_pth)
+        self.layer = []
+        for j in range(num_blocks):
+            first, last = j == 0, j == num_blocks - 1
+            self.layer.append(
                 TtBottleneck(
                     conv_args[j],
                     conv_pth[j],
                     device,
-                    is_downsample=False,
-                    blk_sharded=False,
-                    activation_dtype=activation_dtype,
-                    conv3_blk_sharded=conv3_blk_sharded,
-                    planes=planes,
-                    stride=stride,
-                    dilation=dilation,
-                    style=style,
-                    conv_cfg=None,
-                    dcn=dcn,
                     dram_activation=dram_activation,
-                    input_dtype=layers[-1].output_dtype,
-                    output_dtype=output_dtype if j == num_blocks - 1 else None,
+                    dram_input=dram_input and first,
+                    dram_conv_slices=dram_conv_slices,
+                    block_sharded_downsample=block_sharded_downsample,
+                    input_dtype=input_dtype if first else self.layer[-1].output_dtype,
+                    input_layout=input_layout if first else ttnn.TILE_LAYOUT,
+                    output_dtype=output_dtype if last else None,
                 )
             )
-        self.layer = layers
-        self.output_dtype = layers[-1].output_dtype
+        self.output_dtype = self.layer[-1].output_dtype
 
     def __call__(self, x):
-        for i in self.layer:
-            x = i(x)
+        for block in self.layer:
+            x = block(x)
         return x
 
 
 class TtBottleneck:
-    expansion = 4
-
     def __init__(
         self,
         conv_args,
         conv_pth,
         device,
-        is_downsample=False,
-        blk_sharded=False,
-        activation_dtype=ttnn.bfloat16,
-        conv3_blk_sharded=False,
-        planes=None,
-        stride=1,
-        dilation=1,
-        style="pytorch",
-        conv_cfg=None,
-        dcn=None,
         dram_activation=False,
         dram_input=False,
+        dram_conv_slices=None,
+        block_sharded_downsample=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         output_dtype=None,
     ):
-        """``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
-        each conv sees follow from them. ``dram_activation`` keeps the activations of conv1, conv3 and the downsample in
-        DRAM; a DCN conv2 is unaffected. ``dram_input`` only covers the convs that read the
-        block input, for a block fed by a DRAM stage whose own activations fit in L1."""
-        assert style in ["pytorch", "caffe"]
-        self.device = device
+        """Every conv's shape and stride come from ``conv_args``, recorded from one forward of
+        the reference model. The block's conv2 is DCNv2 when ``conv_pth.conv2`` has an offset
+        conv, and the block has a downsample shortcut when ``conv_pth`` has one.
 
-        self.planes = planes
-        self.stride = stride
-        self.dilation = dilation
-        self.style = style
-        self.conv_cfg = conv_cfg
-        self.dcn = dcn
-        self.with_dcn = dcn is not None
-        self.activation_dtype = activation_dtype
-        self.is_downsample = is_downsample
+        ``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
+        each conv sees follow from them. ``dram_activation`` keeps the activations of conv1,
+        a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
+        ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
+        covers the convs that read the block input, for a block fed by a DRAM layer whose own
+        activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv."""
+        self.with_dcn = "conv_offset" in conv_pth.conv2
+        self.is_downsample = "downsample" in conv_pth
 
-        if self.style == "pytorch":
-            self.conv1_stride = 1
-            self.conv2_stride = stride
-        else:
-            self.conv1_stride = stride
-            self.conv2_stride = 1
-
-        # conv2d and ttnn.linear keep their input's dtype and emit TILE, the DCN branch emits
-        # bfloat16, and a bfloat8_b block casts its identity before the downsample.
+        # conv2d and ttnn.linear keep their input's dtype and emit TILE, and the DCN branch
+        # emits bfloat16.
         conv2_dtype = input_dtype
         conv3_dtype = ttnn.bfloat16 if self.with_dcn else input_dtype
-        downsample_dtype = ttnn.bfloat8_b if activation_dtype == ttnn.bfloat8_b else input_dtype
-        downsample_layout = ttnn.TILE_LAYOUT if activation_dtype == ttnn.bfloat8_b else input_layout
-        # The residual add emits ``output_dtype``, so a cast the next stage needs costs no
+        # The residual add emits ``output_dtype``, so a cast the next layer needs costs no
         # separate pass over the tensor.
         self.output_dtype = conv3_dtype if output_dtype is None else output_dtype
-        # The identity is cast only when the block input is not bfloat8_b already.
-        self.cast_identity = activation_dtype == ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b
 
         self.conv1 = TtnnConv2D(
             conv_args.conv1,
@@ -252,6 +146,7 @@ class TtBottleneck:
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             dram_activation=dram_activation or dram_input,
+            dram_conv_slices=dram_conv_slices,
             input_dtype=input_dtype,
             input_layout=input_layout,
         )
@@ -262,26 +157,16 @@ class TtBottleneck:
                 conv_pth.conv2,
                 device=device,
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                # act_block_h here and in the stem comes from the UniAD port and is not
+                # re-tuned for 928x1600.
                 act_block_h=32,
                 dealloc_act=True,
                 dram_activation=dram_activation,
+                dram_conv_slices=dram_conv_slices,
                 input_dtype=conv2_dtype,
             )
         else:
-            assert self.conv_cfg is None, "conv_cfg must be None for DCN"
-            self.conv2 = TtModulatedDeformConv2dPack(
-                conv_args.conv2,
-                conv_pth.conv2,
-                device,
-                planes,
-                planes,
-                kernel_size=3,
-                stride=self.conv2_stride,
-                padding=dilation,
-                dilation=dilation,
-                bias=False,
-                input_dtype=conv2_dtype,
-            )
+            self.conv2 = TtModulatedDeformConv2dPack(conv_args.conv2, conv_pth.conv2, device, input_dtype=conv2_dtype)
             # The DCN branch runs its BatchNorm as a separate op. Its parameters go to the
             # device once here, so a forward writes nothing from the host.
             bn = conv_pth.bn2
@@ -296,37 +181,31 @@ class TtBottleneck:
             conv_pth.conv3,
             device=device,
             activation=None,
-            is_blk=conv3_blk_sharded,
             dealloc_act=True,
             dram_activation=dram_activation,
+            dram_conv_slices=dram_conv_slices,
             input_dtype=conv3_dtype,
         )
 
-        if is_downsample:
+        if self.is_downsample:
             self.downsample = TtnnConv2D(
                 conv_args.downsample[0],
                 conv_pth.downsample,
                 device=device,
                 activation=None,
-                is_blk=True if self.dcn else False,
-                activation_dtype=activation_dtype,
+                is_blk=block_sharded_downsample,
                 dram_activation=dram_activation or dram_input,
-                input_dtype=downsample_dtype,
-                input_layout=downsample_layout,
+                dram_conv_slices=dram_conv_slices,
+                input_dtype=input_dtype,
+                input_layout=input_layout,
             )
 
     def __call__(self, x_identity):
-        x, out_h, out_w = self.conv1(x_identity)
-        if self.cast_identity:
-            x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        x, _, _ = self.conv1(x_identity)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        if self.dcn == True:
-            x = ttnn.sharded_to_interleaved(x)
-            batch_size = self.conv1.conv.batch_size
-            x = ttnn.reshape(x, (batch_size, out_h, out_w, x.shape[3]))
-            x, out_h, out_w = self.conv2(x)
-            x = ttnn.reshape(x, (batch_size, out_h, out_w, x.shape[3]))
+        if self.with_dcn:
+            x, _, _ = self.conv2(x)
             x = ttnn.permute(x, (0, 3, 1, 2))
             x = ttnn.batch_norm(
                 x,
@@ -353,150 +232,101 @@ class TtBottleneck:
 
 
 class TtResNet:
-    arch_settings = {
-        # 18: (BasicBlock, (2, 2, 2, 2)),
-        # 34: (BasicBlock, (3, 4, 6, 3)),
-        50: (TtBottleneck, (3, 4, 6, 3)),
-        101: (TtBottleneck, (3, 4, 23, 3)),
-        152: (TtBottleneck, (3, 8, 36, 3)),
-    }
+    num_layers = 4
 
     def __init__(
         self,
         conv_args,
         conv_pth,
         device,
-        depth,
-        in_channels=3,
-        stem_channels=None,
-        base_channels=64,
-        num_stages=4,
-        strides=(1, 2, 2, 2),
-        dilations=(1, 1, 1, 1),
         out_indices=(0, 1, 2, 3),
-        style="pytorch",
-        deep_stem=False,
-        avg_down=False,
-        frozen_stages=-1,
-        conv_cfg=None,
-        dcn=None,
-        stage_with_dcn=(False, False, False, False),
-        pretrained=None,
-        init_cfg=None,
         dram_activation_stages=(),
+        dram_conv_slices=None,
+        block_sharded_downsample_stages=(),
     ):
-        """``dram_activation_stages`` lists the stage indices whose activations are kept in
-        DRAM and computed in pieces, for stages whose convs do not fit in L1. A stage that
-        follows one of them and is not listed itself reads its input from DRAM the same way."""
-        self.conv_args = conv_args
-        self.device = device
-        if depth not in self.arch_settings:
-            raise KeyError(f"invalid depth {depth} for resnet")
+        """Bottleneck ResNet built from ``conv_args`` and ``conv_pth``, which
+        ``create_resnet_parameters`` records from one forward of the reference model: the conv
+        shapes and strides, the max pool, each layer's block count and which blocks are DCNv2.
 
-        assert not (init_cfg and pretrained), "init_cfg and pretrained cannot be specified at the same time"
-
-        self.depth = depth
-        if stem_channels is None:
-            stem_channels = base_channels
-        self.stem_channels = stem_channels
-        self.base_channels = base_channels
-        self.num_stages = num_stages
-        assert num_stages >= 1 and num_stages <= 4
-        self.strides = strides
-        self.dilations = dilations
-        assert len(strides) == len(dilations) == num_stages
+        ``out_indices``, ``dram_activation_stages`` and ``block_sharded_downsample_stages``
+        index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
+        whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
+        spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
+        matmul. A layer that follows one of them and is not listed itself reads its input from
+        DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
+        conv is block sharded."""
         self.out_indices = out_indices
-        assert max(out_indices) < num_stages
-        self.style = style
-        self.deep_stem = deep_stem
-        self.avg_down = avg_down
-        self.frozen_stages = frozen_stages
-        self.conv_cfg = conv_cfg
-        self.dcn = dcn
-        self.stage_with_dcn = stage_with_dcn
-        if dcn is not None:
-            assert len(stage_with_dcn) == num_stages
-        self.block, stage_blocks = self.arch_settings[depth]
-        self.stage_blocks = stage_blocks[:num_stages]
-        self.inplanes = stem_channels
+        self.maxpool_args = conv_args.maxpool
+        memory_config = dict(
+            dram_activation_stages=dram_activation_stages,
+            dram_conv_slices=dram_conv_slices,
+            block_sharded_downsample_stages=block_sharded_downsample_stages,
+        )
 
         self.conv1 = TtnnConv2D(
             conv_args.conv1,
             conv_pth.conv1,
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            activation_dtype=ttnn.bfloat16,
             act_block_h=64,
             dealloc_act=True,
             input_dtype=ttnn.bfloat16,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-
-        # The max pool emits a bfloat16 ROW_MAJOR tensor, stage 1 emits bfloat8_b, and every
-        # stage emits TILE.
-        stage_input_dtype = ttnn.bfloat16
-        stage_input_layout = ttnn.ROW_MAJOR_LAYOUT
+        # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits TILE. layer1
+        # emits bfloat8_b, so layer2 runs in bfloat8_b; the DCN layers emit bfloat16.
+        layer_input_dtype = ttnn.bfloat16
+        layer_input_layout = ttnn.ROW_MAJOR_LAYOUT
         self.output_dtypes = []
         self.res_layers = []
-        for i, num_blocks in enumerate(self.stage_blocks):
-            stride = strides[i]
-            dilation = dilations[i]
-            dcn = self.dcn if self.stage_with_dcn[i] else None
-            planes = base_channels * 2**i
+        for i in range(self.num_layers):
             res_layer = TtResLayer(
                 conv_args=conv_args[f"layer{i+1}"],
                 conv_pth=conv_pth[f"layer{i+1}"],
                 device=device,
-                inplanes=self.inplanes,
-                num_blocks=num_blocks,
-                is_downsample=False,
-                blk_sharded=False,
-                activation_dtype=ttnn.bfloat8_b if i == 1 else ttnn.bfloat16,
-                conv3_blk_sharded=False,
-                planes=planes,
-                stride=stride,
-                dilation=dilation,
-                style=self.style,
-                conv_cfg=None,
-                dcn=dcn,
-                dram_activation=i in dram_activation_stages,
-                dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
-                input_dtype=stage_input_dtype,
-                input_layout=stage_input_layout,
+                **self.layer_kwargs(i, **memory_config),
+                input_dtype=layer_input_dtype,
+                input_layout=layer_input_layout,
                 output_dtype=ttnn.bfloat8_b if i == 0 else None,
             )
-            self.inplanes = planes * self.block.expansion
             self.res_layers.append(res_layer)
-            stage_input_dtype = res_layer.output_dtype
-            stage_input_layout = ttnn.TILE_LAYOUT
+            layer_input_dtype = res_layer.output_dtype
+            layer_input_layout = ttnn.TILE_LAYOUT
             if i in out_indices:
-                self.output_dtypes.append(stage_input_dtype)
+                self.output_dtypes.append(layer_input_dtype)
 
-        self.feat_dim = self.block.expansion * base_channels * 2 ** (len(self.stage_blocks) - 1)
+    @staticmethod
+    def layer_kwargs(i, dram_activation_stages=(), dram_conv_slices=None, block_sharded_downsample_stages=()):
+        """The memory arguments of layer ``i`` (0 is layer1); a layer after a DRAM layer reads
+        its input from DRAM."""
+        return dict(
+            dram_activation=i in dram_activation_stages,
+            dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
+            dram_conv_slices=dram_conv_slices,
+            block_sharded_downsample=i in block_sharded_downsample_stages,
+        )
 
     def __call__(self, x):
-        """Forward function."""
         x, out_h, out_w = self.conv1(x)
-        x = ttnn.sharded_to_interleaved(x)
+        pool = self.maxpool_args
         x = ttnn.max_pool2d(
             input_tensor=x,
-            batch_size=self.conv1.conv.batch_size,
+            batch_size=self.conv1.batch_size,
             input_h=out_h,
             input_w=out_w,
             channels=x.shape[3],
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
+            kernel_size=[pool.kernel_size, pool.kernel_size],
+            stride=[pool.stride, pool.stride],
+            padding=[pool.padding, pool.padding],
+            dilation=[pool.dilation, pool.dilation],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
         )
 
         outs = []
-        for i, layer_name in enumerate(self.res_layers):
-            x = layer_name(x)
+        for i, res_layer in enumerate(self.res_layers):
+            x = res_layer(x)
             if i in self.out_indices:
                 outs.append(x)
         return tuple(outs)
