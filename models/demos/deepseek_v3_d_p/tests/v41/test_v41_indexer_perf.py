@@ -33,6 +33,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer
 from models.demos.deepseek_v3_d_p.utils import v41_perf_model as M
 
@@ -169,7 +170,7 @@ def _model_ms(layer: int, start: int) -> dict:
     }
 
 
-def _run(indexer, x, qr, index_k, start, candidate_mask, timer=None):
+def _run(indexer, x, qr, index_k, tables, start, candidate_mask, timer=None):
     """Indexer forward split into its stages (same calls as ``TtV41Indexer.forward``) -> (idx, published, ms)."""
     ms = {}
 
@@ -183,11 +184,11 @@ def _run(indexer, x, qr, index_k, start, candidate_mask, timer=None):
         ms[name] = (time.perf_counter() - t0) * 1e3
         return out
 
-    score, visible = stage("scores", indexer.scores, x, qr, index_k, start, CHUNK)
+    score, visible = stage("scores", indexer.scores, x, qr, index_k, tables, start, CHUNK)
     q_rows = score.shape[2]
     published = None
     if indexer.is_candidate_source:
-        published = stage("candidates", indexer.candidates, score, start, q_rows, visible)
+        published = stage("candidates", indexer.candidates, score, tables, start, q_rows, visible)
     elif indexer.uses_candidates:
         score = stage(
             "candidate_mask",
@@ -252,23 +253,24 @@ def test_v41_indexer_perf(mesh_device, device_params, start):
 
 def _measure(mesh_device, sp, tp, x, qr, weights, index_k, start, t0):
     candidate_mask = None
+    tables = V41ChunkTables(mesh_device, C, start + CHUNK, CHUNK, list(LAYERS))  # position tables up to this chunk
     for layer in LAYERS:
         _log(f"P={start} L{layer}: start")
         ratio = C.compress_ratio(layer)
         indexer = TtV41Indexer(mesh_device, C, layer, weights)
         mask = candidate_mask if indexer.uses_candidates else None
         t1 = time.perf_counter()
-        _, published, warm_ms, _, _ = _run(indexer, x, qr, index_k[ratio], start, mask)
+        _, published, warm_ms, _, _ = _run(indexer, x, qr, index_k[ratio], tables, start, mask)
         _log(f"P={start} L{layer}: warm-up {time.perf_counter() - t1:.1f}s {warm_ms}")
         stage_ms = defaultdict(list)
         for _ in range(TIMED_ITERS):
-            _, _, ms, _, _ = _run(indexer, x, qr, index_k[ratio], start, mask)
+            _, _, ms, _, _ = _run(indexer, x, qr, index_k[ratio], tables, start, mask)
             for key, value in ms.items():
                 stage_ms[key].append(value)
         _log(f"P={start} L{layer}: stages {dict(stage_ms)}")
 
         with _OpProfiler(mesh_device) as prof:
-            _, _, _, score, visible = _run(indexer, x, qr, index_k[ratio], start, mask, timer=prof)
+            _, _, _, score, visible = _run(indexer, x, qr, index_k[ratio], tables, start, mask, timer=prof)
         q_rows = CHUNK // (sp * tp)
         width = score.shape[-1]
         per_op = defaultdict(lambda: {"calls": 0, "ms": 0.0, "bytes": 0.0})

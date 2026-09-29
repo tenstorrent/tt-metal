@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import fp4_a
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
+from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, TtV41Indexer, TtV41IndexKeys
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -80,6 +81,7 @@ def test_v41_indexer(mesh_device, device_params):
         )
 
     results, ref_candidates, real_candidates, synthetic_candidates = {}, None, None, None
+    tables = V41ChunkTables(mesh_device, cfg, seq, seq, list(LAYERS))  # the forward's position tables
     for layer in (2, 20, 24):
         attn = reference.layers[LAYERS.index(layer)].attn
         x = result["blocks"][layer]["attn_in"][None]
@@ -103,7 +105,7 @@ def test_v41_indexer(mesh_device, device_params):
             )
             with v41.set_dtype(torch.bfloat16):
                 latent = attn.compressor(x, 0)[0]
-            dev_k = down(keys(up(latent[None, None]), 0))[0, 0, :, : cfg.INDEX_HEAD_DIM]
+            dev_k = down(keys(up(latent[None, None]), tables.rope(True, ratio, 0)))[0, 0, :, : cfg.INDEX_HEAD_DIM]
             results[f"L{layer}_index_keys"] = comp_pcc(ref_k, dev_k.float(), 0.0)[1]
         index_k = ttnn.from_torch(
             ref_k.to(torch.bfloat16)[None, None],
@@ -114,7 +116,7 @@ def test_v41_indexer(mesh_device, device_params):
         )
         tt_x, tt_qr = up(x[0][None, None], dims=(2, 3)), up(qr[0][None, None])
 
-        score, visible = indexer.scores(tt_x, tt_qr, index_k, 0, seq)
+        score, visible = indexer.scores(tt_x, tt_qr, index_k, tables, 0, seq)
         dev_score = per_query(score)[0, 0, :, :visible].float()
         with v41.set_dtype(torch.bfloat16):
             ref_score = _reference_scores(attn, x, qr)
@@ -142,10 +144,10 @@ def test_v41_indexer(mesh_device, device_params):
             ref_candidates = v41.select_candidate_blocks(
                 ref_scores_sel, compress_lens, cfg.CANDIDATE_TOPK_BLOCKS, cfg.CANDIDATE_BLOCK_SIZE
             )
-            dev_mask = per_query(indexer.candidates(feed, 0, seq // (sp * tp), visible))[0, 0, :, :visible]
+            dev_mask = per_query(indexer.candidates(feed, tables, 0, seq // (sp * tp), visible))[0, 0, :, :visible]
             assert torch.equal(ref_candidates, torch.isfinite(dev_mask)), "candidate blocks differ"
-            real_candidates = indexer.candidates(score, 0, seq // (sp * tp), visible)
-            synthetic_candidates = indexer.candidates(feed, 0, seq // (sp * tp), visible)
+            real_candidates = indexer.candidates(score, tables, 0, seq // (sp * tp), visible)
+            synthetic_candidates = indexer.candidates(feed, tables, 0, seq // (sp * tp), visible)
         elif layer > cfg.CANDIDATE_SOURCE_LAYER:
             ref_scores_sel = ref_scores_sel.masked_fill(~ref_candidates, float("-inf"))
             feed = ttnn.to_layout(
@@ -160,8 +162,12 @@ def test_v41_indexer(mesh_device, device_params):
         results[f"L{layer}_selection_exact"] = same
 
         # determinism of the full indexer on real scores
-        idx1, _ = indexer(tt_x, tt_qr, index_k, 0, seq, real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None)
-        idx2, _ = indexer(tt_x, tt_qr, index_k, 0, seq, real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None)
+        idx1, _ = indexer(
+            tt_x, tt_qr, index_k, tables, 0, seq, real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None
+        )
+        idx2, _ = indexer(
+            tt_x, tt_qr, index_k, tables, 0, seq, real_candidates if layer > cfg.CANDIDATE_SOURCE_LAYER else None
+        )
         a, b = per_query(idx1)[0, 0], per_query(idx2)[0, 0]
         results[f"L{layer}_deterministic"] = bool(torch.equal(a, b))
         dev_rows = torch.where(a[:, :k].long() == SENTINEL, -1, a[:, :k].long())

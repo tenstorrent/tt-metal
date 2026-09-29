@@ -37,6 +37,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
+from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheFormat,
     MlaKvCacheGeometry,
@@ -86,9 +87,112 @@ class V41CacheGeometry:
         return WINDOW_SLOT + (position - start)
 
 
+class V41ChunkTables:
+    """Device-resident position tables of one cache geometry, uploaded once outside the chunk loop, so a chunk's
+    forward uploads and writes nothing from the host (trace capture; dev-spec D-G (b)). Per chunk the forward
+    only slices them on device.
+
+    * RoPE cos/sin of every position (``rope``), one replicated ``[1, 1, max_seq / stride, 64]`` table per kind:
+      ratio-0 or compressed frequencies, rows at token positions (stride 1) or at ratio-r group-first positions
+      (stride r: compressed KV, index keys).
+    * Window rows (``window_rows``): the per-chip query rows' 128-row causal windows into the KV tensor's window
+      region; they depend on the chunk start only through ``min(start, window - 1)``.
+    * The indexer's start-relative constants for chunks starting at a multiple of the ratio: the visibility of the
+      chunk's own compressed rows (``visibility_tail``; rows before the chunk are visible to every query) and the
+      candidate source's pinned newest block (``pin_tail``).
+
+    Per-chip query layout (window rows, indexer tails): chip (a, b) holds the chunk's contiguous query rows
+    ``(a * tp + b) * S/(sp*tp)`` onwards, as after the head->sequence all-to-all."""
+
+    def __init__(self, mesh_device, config, max_seq_len: int, chunk: int, layers: list[int]):
+        self.mesh_device, self.config = mesh_device, config
+        self.sp, self.tp = tuple(mesh_device.shape)
+        self.max_seq_len, self.chunk = max_seq_len, chunk
+        ratios = {config.compress_ratio(l) for l in layers}
+        kinds = {(r > 0, 1) for r in ratios} | {(True, r) for r in ratios if r > 1}
+        self._rope = {kind: self._rope_table(*kind) for kind in sorted(kinds)}
+        window = config.SLIDING_WINDOW
+        self._window = {w: self._window_table(w) for w in {min(s, window - 1) for s in range(0, max_seq_len, chunk)}}
+        # ratio 1 needs no visibility table: the score kernel's causal mask is exactly t <= p there
+        self._visibility = {r: self._visibility_table(r) for r in ratios if r > 1}
+        self._pin = None
+        if config.CANDIDATE_SOURCE_LAYER in layers:
+            assert config.compress_ratio(config.CANDIDATE_SOURCE_LAYER) == 1, "pin_tail assumes a ratio-1 source"
+            self._pin = self._pin_table(config.CANDIDATE_BLOCK_SIZE)
+
+    def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(
+            host,
+            device=self.mesh_device,
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _per_query_chip(self, host: torch.Tensor, dtype):
+        """[chunk, W] query-order rows -> each chip its contiguous chunk/(sp*tp) rows ((sp, tp) chip order)."""
+        rows, width = host.shape
+        return ttnn.from_torch(
+            host.reshape(self.sp, self.tp, rows // (self.sp * self.tp), width),
+            device=self.mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+        )
+
+    def _rope_table(self, compressed: bool, stride: int):
+        positions = torch.arange(0, self.max_seq_len, stride)
+        return tuple(self._replicated(t, ttnn.bfloat16) for t in cos_sin(self.config, compressed, positions))
+
+    def _window_table(self, before: int):
+        """Rows ``WINDOW_SLOT + i + o`` (o in (-window, 0]) of query i, -1 where i + o < -before (no token)."""
+        window = self.config.SLIDING_WINDOW
+        i = torch.arange(self.chunk).view(-1, 1)
+        offset = torch.arange(-(window - 1), 1).view(1, -1)
+        rows = torch.where(before + i + offset >= 0, WINDOW_SLOT + i + offset, -1).to(torch.int32)
+        return self._per_query_chip(rows, ttnn.int32)
+
+    def _visibility_table(self, ratio: int):
+        """Additive [chunk, chunk / ratio]: query i sees the chunk's compressed row u iff u < (i + 1) // ratio."""
+        i = torch.arange(self.chunk).view(-1, 1)
+        u = torch.arange(self.chunk // ratio).view(1, -1)
+        return self._per_query_chip(torch.where(u >= (i + 1) // ratio, float("-inf"), 0.0), ttnn.bfloat16)
+
+    def _pin_table(self, block: int):
+        """Additive [chunk, chunk / block]: +inf at query i's newest block (the chunk's block i // block)."""
+        i = torch.arange(self.chunk).view(-1, 1)
+        u = torch.arange(-(-self.chunk // block)).view(1, -1)
+        return self._per_query_chip(torch.where(u == i // block, float("inf"), 0.0), ttnn.bfloat16)
+
+    def rope(self, compressed: bool, stride: int, start: int):
+        """cos, sin of the chunk at ``start``: rows at positions ``start + stride * j`` (j < chunk / stride), each SP
+        rank its contiguous share, replicated over TP (``[1, 1, chunk / (stride * sp), 64]`` bf16 tiled)."""
+        assert start % stride == 0 and start + self.chunk <= self.max_seq_len, (start, stride, self.max_seq_len)
+        first, rows = start // stride, self.chunk // stride
+        out = []
+        for t in self._rope[(compressed, stride)]:
+            t = ttnn.slice(t, [0, 0, first, 0], [1, 1, first + rows, t.shape[3]])
+            out.append(ttnn.mesh_partition(t, dim=2, cluster_axis=SP_AXIS) if self.sp > 1 else t)
+        return tuple(out)
+
+    def window_rows(self, start: int):
+        """Per-chip [1, 1, chunk/(sp*tp), window] int32 tiled rows of the chunk's causal windows (-1: none)."""
+        return self._window[min(start, self.config.SLIDING_WINDOW - 1)]
+
+    def visibility_tail(self, ratio: int, width: int):
+        """Per-chip additive [1, 1, chunk/(sp*tp), width] mask of the chunk's first ``width`` compressed rows."""
+        t = self._visibility[ratio]
+        return ttnn.slice(t, [0, 0, 0, 0], [1, 1, t.shape[2], width])
+
+    def pin_tail(self, width: int):
+        """Per-chip additive [1, 1, chunk/(sp*tp), width] +inf at each query's newest block among the chunk's
+        first ``width`` blocks (a padding query's newest block may lie past them: no pin, as it is unreachable)."""
+        return ttnn.slice(self._pin, [0, 0, 0, 0], [1, 1, self._pin.shape[2], width])
+
+
 class V41PrefillState:
     """Per-request device state: compressed KV / index-K caches per KV source, ratio-0 scratch, window carries,
-    DSpark window rings."""
+    DSpark window rings, and the geometry's position tables (``tables``)."""
 
     FORMATS = (MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8)
 
@@ -108,6 +212,7 @@ class V41PrefillState:
         self.geometry = V41CacheGeometry(config, max_seq_len, chunk, layout.sp)
         layout.check_chunk(chunk)
         self.layers = list(layers)
+        self.tables = V41ChunkTables(mesh_device, config, max_seq_len, chunk, self.layers)
         self.start = 0
         self.compressed_kv_format = kv_format
         # one 512-dim row with RoPE inside (V4.1 attends over all of it; no separate BF16 RoPE part)

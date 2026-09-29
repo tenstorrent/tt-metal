@@ -10,7 +10,9 @@ FORMAT; likewise the compressed KV's FP4 QDQ). Compressed layers attend over the
 a KV source runs its compressor, index keys and compressed-KV write; an index source runs its indexer
 (the candidate source publishes candidate blocks); consumers reuse the top-k their index source published
 this chunk. One ``sparse_sdpa`` over the layer's KV tensor (``cache.V41PrefillState``: window region + the
-source's compressed rows) with the per-head sink, inverse RoPE, grouped low-rank output projection.
+source's compressed rows) with the per-head sink, inverse RoPE, grouped low-rank output projection. Position-dependent
+inputs (RoPE, window rows) are device slices of ``state.tables`` (``cache.V41ChunkTables``): the forward uploads
+nothing, so it can be traced.
 
 Every quantized GEMM input gets the reference's FP8 activation QDQ (dev-spec D-I). Layout: input/output
 ``[1, 1, S/sp, hidden/tp]``; the attention itself runs on a sequence shard of all heads (head->sequence
@@ -22,12 +24,11 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
-from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chunks a multiple of 32
@@ -109,32 +110,6 @@ class TtV41Attention(LightweightModule):
         self.index_keys = TtV41IndexKeys(mesh_device, config, layer, weights["indexer"]) if self.is_kv_source else None
         self.indexer = TtV41Indexer(mesh_device, config, layer, weights["indexer"]) if self.is_index_source else None
 
-    # --- host-built per-chunk tables -----------------------------------------------------------------
-    def _sp_rows(self, host: torch.Tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-        """[S, W] token-order rows -> each SP rank its contiguous S/sp rows, replicated over TP."""
-        return ttnn.from_torch(
-            host[None, None],
-            device=self.mesh_device,
-            dtype=dtype,
-            layout=layout,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(2, None)),
-        )
-
-    def _query_rows(self, host: torch.Tensor, dtype, layout):
-        """[S, W] token-order rows -> each chip its contiguous S/(sp*tp) rows ((sp, tp) chip order)."""
-        rows, width = host.shape
-        return ttnn.from_torch(
-            host.reshape(self.sp, self.tp, rows // (self.sp * self.tp), width),
-            device=self.mesh_device,
-            dtype=dtype,
-            layout=layout,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(0, 1)),
-        )
-
-    def _rope_tables(self, positions: torch.Tensor):
-        cos, sin = cos_sin(self.config, self.ratio > 0, positions)
-        return self._sp_rows(cos[0, 0]), self._sp_rows(sin[0, 0])
-
     def _rope(self, t, cos, sin, inverse=False):
         b, h, s, d = t.shape
         nope = ttnn.slice(t, [0, 0, 0, 0], [b, h, s, d - self.rope_dim])
@@ -144,16 +119,9 @@ class TtV41Attention(LightweightModule):
         )
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _window_rows(self, start: int, chunk: int) -> torch.Tensor:
-        """[chunk, window] int32 KV rows of each query's causal window (-1 before the sequence start)."""
-        i = torch.arange(chunk).view(-1, 1)
-        offset = torch.arange(-(self.window - 1), 1).view(1, -1)
-        rows = WINDOW_SLOT + i + offset
-        return torch.where(start + i + offset >= 0, rows, -1).to(torch.int32)
-
-    def _index_rows(self, start: int, chunk: int, window_base: int, compressed):
-        """Per-chip [1, 1, S/(sp*tp), K] uint32 rows into the KV tensor, valid first, sentinel tail."""
-        window = self._query_rows(self._window_rows(start, chunk), ttnn.int32, ttnn.TILE_LAYOUT)
+    def _index_rows(self, window, window_base: int, compressed):
+        """``window``: the chunk's per-chip window rows (``V41ChunkTables.window_rows``) -> per-chip
+        [1, 1, S/(sp*tp), K] uint32 rows into the KV tensor, valid first, sentinel tail."""
         if compressed is None:
             rows = window
         else:
@@ -179,9 +147,9 @@ class TtV41Attention(LightweightModule):
         valid tokens -> [1, 1, S/sp, hidden/tp] bf16. Writes this layer's window carry and, for a KV source,
         its compressed rows and carry; an index source publishes its selection in ``state.selection``."""
         start, seq_local = state.start, x.shape[2]
-        chunk = seq_local * self.sp
         heads_local = self.heads // self.tp
-        cos, sin = self._rope_tables(start + torch.arange(chunk))
+        tables = state.tables
+        cos, sin = tables.rope(self.ratio > 0, 1, start)
         xq = fp8_qdq(x)
 
         qr = ttnn.rms_norm(
@@ -211,25 +179,21 @@ class TtV41Attention(LightweightModule):
             if self.is_kv_source:
                 latent, carry = self.compressor(x)
                 state.set_compressor_carry(self.layer, carry, length)
-                keys = self.index_keys(latent, start)
-                positions = torch.arange(start // self.ratio, (start + chunk) // self.ratio) * self.ratio
-                c_cos, c_sin = self.index_keys.rope.tables(
-                    positions,
-                    ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(2, None)),
-                )
-                comp_kv = self._rope(latent, c_cos, c_sin)
+                c_rope = tables.rope(True, self.ratio, start)  # the compressed rows' group-first positions
+                keys = self.index_keys(latent, c_rope)
+                comp_kv = self._rope(latent, *c_rope)
                 state.write_compressed(self.layer, fp4_e4m3_qdq(comp_kv) if reference_values else comp_kv, keys, length)
             if self.is_index_source:
                 src = self.config.kv_source(self.layer)
                 compressed, candidates = self.indexer(
-                    x, qr, state.index_k[src], start, length, state.selection.get("candidates")
+                    x, qr, state.index_k[src], tables, start, length, state.selection.get("candidates")
                 )
                 state.selection["topk"] = compressed
                 if candidates is not None:
                     state.selection["candidates"] = candidates
             else:
                 compressed = state.selection["topk"]
-        rows = self._index_rows(start, chunk, state.geometry.window_rows, compressed)
+        rows = self._index_rows(tables.window_rows(start), state.geometry.window_rows, compressed)
 
         # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence)
         head_to_seq = self.tp > 1

@@ -99,6 +99,12 @@ class TtV41Moe(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
+    def set_trace_controller(self, controller):
+        """Route ``TtMoe``'s sub-device load / clear (shared-expert and dispatch overlap) through a
+        ``SubDeviceTraceController`` while a trace is captured (None: direct calls). A trace cannot contain a
+        sub-device manager switch, so the controller splits the capture there."""
+        self.moe.set_trace_controller(controller)
+
     def forward(self, x: ttnn.Tensor, return_intermediates: bool = False, image_mask: ttnn.Tensor | None = None):
         """x ``[1, 1, S/sp, hidden/tp]`` bf16, the sequence a contiguous SP shard -> same shape. ``image_mask``
         ``[1, 1, S/sp, 1]`` (1 = image token, same sharding; None = text only) selects ``bias_vl`` per token.
