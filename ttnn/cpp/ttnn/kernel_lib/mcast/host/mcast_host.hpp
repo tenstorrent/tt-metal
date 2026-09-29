@@ -78,9 +78,9 @@ struct McastArgumentOffsets {
 
 void attach_absent(tt::tt_metal::KernelDescriptor& kernel, std::string_view prefix);
 void attach_absent(
-    tt::tt_metal::experimental::ProgramSpec&,
+    tt::tt_metal::experimental::ProgramSpec& spec,
     std::string_view prefix,
-    std::span<const tt::tt_metal::experimental::KernelSpecName> kernels);
+    std::span<const tt::tt_metal::experimental::KernelSpecName> targets);
 
 namespace detail {
 
