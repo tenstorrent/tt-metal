@@ -1,0 +1,17 @@
+{
+ "metrics": {
+  "chunk0_worst_row_overlap_topk_shared_L02": {
+   "t": "2026-09-29T17:33:39",
+   "value": 1.0
+  },
+  "pcc_topk_shared_L02": {
+   "t": "2026-09-29T17:33:38",
+   "value": 1.0
+  },
+  "worst_row_overlap_topk_shared_L02": {
+   "t": "2026-09-29T17:33:39",
+   "value": 1.0
+  }
+ },
+ "task": "C.moe_shared.topk_shared"
+}
