@@ -2254,6 +2254,13 @@ tasks:
     - router
     - experts
     layer: 4
+  frozen:
+    at: '2026-09-29T18:41:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_10_experts.py: eae66f72a24ebe98c27144ab0baa8599942e8e3f3df1a68cce74988d0946ea35
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_moe.shared_expert
   title: kda_moe shared_expert (mlp) on device, layer 4
   step: implement
