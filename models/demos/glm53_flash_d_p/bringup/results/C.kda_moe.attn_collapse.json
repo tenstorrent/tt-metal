@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "norm_ratio_max_attn_collapse_L04": {
+   "t": "2026-09-29T13:34:44",
+   "value": 1.0033942461013794
+  },
+  "norm_ratio_min_attn_collapse_L04": {
+   "t": "2026-09-29T13:34:44",
+   "value": 0.9965790510177612
+  },
+  "pcc_attn_collapse_L04": {
+   "t": "2026-09-29T13:34:44",
+   "value": 0.9999953446373058
+  },
+  "rel_l2_attn_collapse_L04": {
+   "t": "2026-09-29T13:34:44",
+   "value": 0.003053146181628108
+  },
+  "row_rel_l2_max_attn_collapse_L04": {
+   "t": "2026-09-29T13:34:44",
+   "value": 0.004589428193867207
+  }
+ },
+ "task": "C.kda_moe.attn_collapse"
+}
