@@ -271,6 +271,57 @@ def test_sibling_leads_merge_by_location_and_never_collide(rundir, tmp_path):
     )
 
 
+def test_sibling_leads_in_scope_keep_only_the_runs_files(rundir, tmp_path):
+    write(
+        str(rundir / "batches" / "manifest.json"),
+        [{"batch": "A-0000", "prio": "A", "files": ["a/b.cpp"], "lines": 1}],
+    )
+    deep = tmp_path / "x_deep.jsonl"
+    sib = lambda loc: {"location": loc, "status": "unfixed", "why": "w"}  # noqa: E731
+    write(
+        str(deep),
+        [
+            {
+                "id": "I1",
+                "siblings": [sib("a/b.cpp:10"), sib("z/q.cpp:5"), sib("in words")],
+            }
+        ],
+    )
+    code, out, _ = run(
+        os.path.join(ENGINE, "siblings.py"),
+        "--run",
+        rundir,
+        "from-deep",
+        f"{deep}=x",
+        "--in-scope",
+    )
+    assert code == 0, out
+    leads = [
+        f
+        for fn in os.listdir(rundir / "verdicts")
+        for f in json.load(open(rundir / "verdicts" / fn))["findings"]
+    ]
+    assert [f["file"] for f in leads] == ["a/b.cpp"], leads
+    assert "1 of 3 leads" in out and "1 unlocated" in out, out
+
+
+def test_sibling_leads_in_scope_refuses_a_run_without_batches(rundir, tmp_path):
+    deep = tmp_path / "x_deep.jsonl"
+    write(
+        str(deep),
+        [{"id": "I1", "siblings": [{"location": "a.c:1", "status": "unfixed"}]}],
+    )
+    code, out, err = run(
+        os.path.join(ENGINE, "siblings.py"),
+        "--run",
+        rundir,
+        "from-deep",
+        f"{deep}=x",
+        "--in-scope",
+    )
+    assert code != 0 and "manifest is empty" in out + err, out + err
+
+
 # ---- select.py: the holdout pick is reproducible -----------------------------------------------------------------
 
 
@@ -871,6 +922,70 @@ def test_init_run_refuses_a_missing_knowledge_file_before_writing(tmp_path):
     )
     assert code != 0 and "nope.md" in out, out
     assert not run_dir.exists() or not os.listdir(run_dir), os.listdir(run_dir)
+
+
+def _init_prio(tmp_path, *extra, repo="o/r"):
+    tree = _git_tree(tmp_path, ["hot/x.c", "hot/sub/y.c", "cold/z.c", "mine/w.c"])
+    out = tmp_path / "run"
+    code, o, e = run(
+        os.path.join(ENGINE, "init_run.py"),
+        "--root",
+        tree,
+        "--out",
+        out,
+        "--repo",
+        repo,
+        "--ext",
+        ".c",
+        *extra,
+    )
+    if code:
+        return code, o + e, {}, {}
+    prio = {
+        f: b["prio"]
+        for b in json.load(open(out / "batches" / "manifest.json"))
+        for f in b["files"]
+    }
+    return code, o + e, prio, json.load(open(out / "state.json"))
+
+
+def _pack(tmp_path, body="`hot` (9); `mine` (4)"):
+    p = tmp_path / "pack.md"
+    p.write_text(
+        f"# pack\n\n## Hot areas\n\nDirectories:\n\n{body}\n\n## Classes, by weight\n"
+    )
+    return p
+
+
+def test_init_run_pack_hot_areas_lift_only_unclaimed_files_in_that_exact_dir(tmp_path):
+    code, out, prio, st = _init_prio(
+        tmp_path, "--pack", _pack(tmp_path), "--prio", "C=mine/*"
+    )
+    assert code == 0, out
+    assert prio == {
+        "hot/x.c": "A",  # in a hot area, no --prio glob
+        "hot/sub/y.c": "C",  # a subdirectory is not the hot area itself
+        "cold/z.c": "C",
+        "mine/w.c": "C",  # an explicit --prio glob wins over the pack
+    }, prio
+    assert st["hot_promoted"] == 1 and "1 file(s) in 1 hot area(s)" in out, out
+
+
+def test_init_run_pack_none_and_no_pack_leave_priorities_alone(tmp_path):
+    code, out, prio, st = _init_prio(tmp_path, "--pack", "none")
+    assert code == 0 and set(prio.values()) == {"C"} and st["pack"] is None, out
+
+
+def test_init_run_finds_the_repo_pack_by_default(tmp_path):
+    code, out, _, st = _init_prio(tmp_path, repo="tenstorrent/tt-metal")
+    assert code == 0 and st["pack"] == "packs/tt-metal.md", out
+
+
+def test_init_run_refuses_a_pack_without_hot_areas(tmp_path):
+    p = tmp_path / "pack.md"
+    p.write_text("# pack\n\n## Classes, by weight\n")
+    code, out, _, _ = _init_prio(tmp_path, "--pack", p)
+    assert code != 0 and "Hot areas" in out, out
 
 
 def test_every_spawn_user_imports_it_before_first_use():

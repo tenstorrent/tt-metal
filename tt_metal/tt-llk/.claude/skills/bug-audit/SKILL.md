@@ -32,7 +32,9 @@ Not handed to hunters by default:
    showed **no measurable recall benefit** in either benchmark run (see *Measured recall*), so it costs tokens on every
    batch for no measured gain. Add it only to re-measure it, with
    `--knowledge references/classes-universal.md,<domain>,packs/<repo>.md`: an explicit list replaces the default,
-   so name the class lists too. Its hot areas still inform the `--prio` globs.
+   so name the class lists too. Its hot areas still set the batch order: `init_run.py` finds the pack for `--repo`
+   and moves files in those directories, if no `--prio` glob claimed them, to priority A (`--pack none` turns
+   this off).
 4. An optional private overlay: a `packs-private/<repo>.md` next to the run directory, for internal-only material
    that must never be committed to a public repo.
 
@@ -62,7 +64,8 @@ multi-agent orchestration. Get it, and state the cost first. Calibration from ea
 file audited, and about 70M tokens per 120-batch wave. Verification is most of the agent count.
 
 ## Start of every audit: ask the user
-Before `init_run.py`, ask these in one AskUserQuestion call. Record the answers in the run's state (the execution tier
+Before `init_run.py`, ask questions 1-4 in one AskUserQuestion call, then question 5 in a second call: its cost
+depends on the scope answer, and one call takes at most four questions. Record the answers in the run's state (the execution tier
 through `exec_tier.py configure`), and never assume a default for the execution tier.
 1. **Scope:** full repo, an area (globs), or a diff since a commit.
 2. **Execution tier (OPTIONAL, off unless the user says yes).** Should the audit also build, analyse and test, to
@@ -81,6 +84,11 @@ through `exec_tier.py configure`), and never assume a default for the execution 
    only) and report what closed since the watermark. If there is any, offer the refresh (*Refreshing the mined
    history*): it costs agents only for the new cases, and it gives the sibling sweep new leads and the recall
    measurement a fresh holdout.
+5. **Sibling sweep** (ask whenever the repo has mined deep reads, `<mine>/<repo>_deep.jsonl`; recommend yes). Should
+   the audit also verify the unfixed copies of past fixes that fall inside its scope? This is the part of the mined
+   history with a measured payoff (536 of 776 leads confirmed on tt-metal), and it finds bugs the hunt does not.
+   Cost: three verifiers per in-scope lead. With the question, give the rough size: count the `unfixed` sibling
+   locations under the chosen scope's paths in the deep reads. After init, `--in-scope` prints the exact count.
 
 tt-metal presets for the execution tier (confirm with the user; they take a clean build dir and many minutes each):
 ```
@@ -126,6 +134,9 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    nothing is pending. Re-run the same command to resume after a crash. It never loses a finished agent.
 4. **Repeat until `status.py` shows 0 pending and 0 in flight.** Batches the read check sent back are re-issued
    first, automatically.
+   **Sibling sweep, if the user said yes:** `engine/siblings.py --run <run> from-deep <mine>/<repo>_deep.jsonl
+   --in-scope`. The in-scope leads enter the run as uncertain `history-sibling` findings, so step 5 verifies them with
+   the rest. Their severity is a placeholder: re-rate the confirmed ones with `engine/severity-wave.js` in step 6.
 5. **Close the verification gaps:** run `engine/recheck.py --run <run> queue`, then `engine/recheck-wave.js`, then
    `recheck.py persist`, then `recheck.py report`. This rechecks every uncertain or needs-recheck candidate, and a
    10% seeded sample of the refuted ones. If the sample's reversal rate is material (more than about 1 in 10),

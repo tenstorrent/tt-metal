@@ -8,6 +8,7 @@
       [--knowledge references/classes-universal.md,references/classes-<domain>.md]   # a repo pack only to re-measure it
 
 --knowledge defaults to the universal classes, plus the Tenstorrent classes for a tenstorrent/ repo.
+--pack defaults to packs/<repo name>.md when it exists: files in its hot areas that no --prio glob matched go to A.
 
 --root must be a git checkout pinned at the commit you mean to audit (a dedicated worktree is best), so
 recorded file:line findings stay valid for the life of the run. The commit is recorded in state.json.
@@ -21,6 +22,7 @@ import argparse
 import datetime
 import fnmatch
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,6 +76,12 @@ p.add_argument(
     "references/classes-tenstorrent.md when --repo is a tenstorrent/ repo. 'none' hands hunters no class list",
 )
 p.add_argument(
+    "--pack",
+    default=None,
+    help="repo pack whose 'Hot areas' promote files no --prio glob matched to priority A. Default: "
+    "packs/<repo name>.md when it exists; 'none' disables",
+)
+p.add_argument(
     "--recurse-submodules",
     action="store_true",
     help="audit files inside submodules too (git ls-files lists a submodule as ONE entry, so without this "
@@ -119,6 +127,26 @@ else:
         "WARNING: hunters get NO bug-class list, only the generic hunt prompt",
         file=sys.stderr,
     )
+
+
+def hot_areas(path):
+    """The directories listed under the pack's '## Hot areas' heading (each counted by a fixed file's parent dir)."""
+    m = re.search(r"^## Hot areas\n(.*?)(?=^## |\Z)", open(path).read(), re.M | re.S)
+    return re.findall(r"`([^`]+)`", m.group(1)) if m else []
+
+
+if a.pack is None:
+    auto = os.path.join(skill, "packs", a.repo.split("/")[-1] + ".md")
+    pack = auto if os.path.isfile(auto) else None
+elif a.pack.strip().lower() == "none":
+    pack = None
+else:
+    pack = a.pack if os.path.isabs(a.pack) else os.path.join(skill, a.pack)
+    if not os.path.isfile(pack):
+        sys.exit(f"--pack not found: {pack}")
+hot = set(hot_areas(pack)) if pack else set()
+if pack and not hot:
+    sys.exit(f"{pack} has no '## Hot areas' list; pass --pack none to run without one")
 
 
 def git(*args):
@@ -179,10 +207,17 @@ for spec in a.prio:
     )
 
 
+promoted = set()
+
+
 def prio_of(f):
     for letter, globs in prio_rules:
         if any(fnmatch.fnmatch(f, g) for g in globs):
             return letter
+    # an explicit --prio glob always wins; the pack only lifts files the user left at the default
+    if os.path.dirname(f) in hot:
+        promoted.add(f)
+        return "A"
     return a.default_prio
 
 
@@ -195,6 +230,16 @@ def nlines(f):
 
 
 rows = sorted(((prio_of(f), f, nlines(f)) for f in files), key=lambda r: (r[0], r[1]))
+if pack:
+    dirs = sorted({os.path.dirname(f) for f in promoted})
+    print(
+        f"pack {os.path.relpath(pack, skill)}: {len(promoted)} file(s) in {len(dirs)} hot area(s) promoted to A"
+        + (
+            ": " + ", ".join(dirs[:6]) + (" ..." if len(dirs) > 6 else "")
+            if dirs
+            else ""
+        )
+    )
 budget = {
     k.strip(): int(v)
     for k, _, v in (x.partition("=") for x in a.batch_lines.split(",") if "=" in x)
@@ -277,6 +322,8 @@ save(
             "%Y-%m-%d %H:%M:%S UTC"
         ),
         "knowledge": knowledge,
+        "pack": os.path.relpath(pack, skill) if pack else None,
+        "hot_promoted": len(promoted),
         "submodules": {"found": submodules, "included": bool(a.recurse_submodules)},
         "prior_runs": [os.path.abspath(x) for x in a.prior_run],
         "corpus": {"files": len(files), "lines": sum(r[2] for r in rows)},

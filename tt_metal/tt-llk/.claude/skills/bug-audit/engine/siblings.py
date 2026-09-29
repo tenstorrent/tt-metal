@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn the unfixed siblings named by mined deep reads into leads for an audit run to verify.
 
-  siblings.py [--run DIR] from-deep DEEP.jsonl[=REPO] [DEEP.jsonl[=REPO] ...] [--include-unsure] [--batch 20]
+  siblings.py [--run DIR] from-deep DEEP.jsonl[=REPO] [DEEP.jsonl[=REPO] ...] [--include-unsure] [--in-scope] [--batch 20]
   siblings.py [--run DIR] show
 
 A deep read of a past fix (mining/deep-wave.js) lists the fix's siblings in the CURRENT tree, each with a status:
@@ -14,6 +14,9 @@ writes them into the run as uncertain findings (source `history-sibling`, batche
 verifies them exactly like an audit's own unsettled candidates. A lead is never filed as it stands: only a verified one.
 A location the analyst gave in words ("the trisc kernel entry") has no file:line; it keeps a unique key built from its
 text, so two such leads never collide on one key.
+
+--in-scope keeps only the leads whose file is in the run's manifest, so an area or diff audit sweeps the siblings that
+fall inside its own scope. Leads given in words cannot be placed and are dropped (the summary counts them).
 
 REPO labels the source repo in each lead's text (default: the deep file's name). Re-running replaces the leads.
 """
@@ -115,6 +118,21 @@ if argv[0] == "from-deep":
     if not paths:
         sys.exit("from-deep needs at least one deep-read JSONL")
     leads, n_entries = leads_from(paths, "--include-unsure" in argv)
+    scope_note = ""
+    if "--in-scope" in argv:
+        manifest = load(os.path.join(out, "batches", "manifest.json"), [])
+        in_scope = {f for b in manifest for f in b["files"]}
+        if not in_scope:
+            sys.exit(
+                "--in-scope needs an audit run with batches (init_run.py first); this run's manifest is empty"
+            )
+        before = len(leads)
+        unlocated = sum(1 for k in leads if leads[k]["file"].startswith("(unlocated)"))
+        leads = {k: v for k, v in leads.items() if v["file"] in in_scope}
+        scope_note = (
+            f" In scope: {len(leads)} of {before} leads "
+            f"({before - len(leads) - unlocated} outside the run's files, {unlocated} unlocated, dropped)."
+        )
     vdir = os.path.join(out, "verdicts")
     # a sweep can be its own run (no hunt): give it the layout the rest of the engine reads
     for sub in ("verdicts", "findings", "batches"):
@@ -145,7 +163,7 @@ if argv[0] == "from-deep":
     )
     print(
         f"{n_entries} sibling entries -> {len(leads)} leads ({located} at a file:line, {len(leads) - located} in words) "
-        f"in {(len(keys) + size - 1) // size} batch(es); by first source: {dict(by_repo)}.\n"
+        f"in {(len(keys) + size - 1) // size} batch(es); by first source: {dict(by_repo)}.{scope_note}\n"
         "Next: recheck.py queue --to-dir DIR [--max 330], then recheck-wave.js, recheck.py persist, consolidate.py."
     )
 elif argv[0] == "show":
