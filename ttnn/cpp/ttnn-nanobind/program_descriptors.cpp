@@ -690,7 +690,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "enable_trisc2_rvv",
             &tt::tt_metal::ComputeConfigDescriptor::enable_trisc2_rvv,
-            "Compile the TRISC2 (pack) binary with the RISC-V Vector (Zve32f) extension (Blackhole only)");
+            "Compile the TRISC2 (pack) binary with the RISC-V Vector (Zve32f) extension (Blackhole only)")
+        .def_rw(
+            "disable_sfpu_replay_optimization",
+            &tt::tt_metal::ComputeConfigDescriptor::disable_sfpu_replay_optimization,
+            "Compile the TRISC binaries without the SFPI compiler's replay optimization (tt-metal#58433)");
 
     // TODO_NANOBIND: do we still need this?
     // export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");
