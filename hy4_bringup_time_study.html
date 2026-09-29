@@ -1,0 +1,243 @@
+<title>Hy4 Bring-up Time Study</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (about 72ch) with wider figures and tables; a lab-notebook report, not a dashboard. */
+:root{
+  --bg:#f7f8f6; --paper:#ffffff; --ink:#1c2120; --ink2:#4a524f; --muted:#6c7571; --line:#dde1dc; --soft:#eef1ed;
+  --accent:#2a6f5a;
+  --s1:#2a78d6; --s2:#eb6834;
+  --good:#1e7a4f; --warn:#a0620c;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#141716; --paper:#1b1f1d; --ink:#e6eae7; --ink2:#bac2bd; --muted:#8d9691; --line:#2e3431; --soft:#222725;
+    --accent:#6cc7a6; --s1:#3987e5; --s2:#d95926; --good:#5cc893; --warn:#e3a24a;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#141716; --paper:#1b1f1d; --ink:#e6eae7; --ink2:#bac2bd; --muted:#8d9691; --line:#2e3431; --soft:#222725;
+  --accent:#6cc7a6; --s1:#3987e5; --s2:#d95926; --good:#5cc893; --warn:#e3a24a;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 var(--f-body);padding-inline:16px;padding-block:32px 72px}
+.page{max-width:980px;margin:0 auto;display:grid;gap:44px}
+.col{max-width:72ch}
+h1,h2,h3{font-family:var(--f-display);line-height:1.15;margin:0;text-wrap:balance}
+h1{font-size:clamp(28px,4vw,38px)}
+h2{font-size:23px}
+h3{font-size:17px}
+p{margin:0}
+section{display:grid;gap:14px}
+.eyebrow{font:500 12px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:18px;color:var(--ink2)}
+.meta{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:14px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:500}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--soft);padding:1px 5px;border-radius:4px}
+.figures{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.fig-n{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:grid;gap:4px}
+.fig-n .v{font:600 26px/1.1 var(--f-display);font-variant-numeric:tabular-nums}
+.fig-n .k{font-size:13.5px;color:var(--ink2)}
+@media (max-width:760px){.figures{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.gloss{display:grid;gap:0;border-top:1px solid var(--line)}
+.gloss>div{display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}
+.gloss dt{font:500 13px/1.5 var(--f-mono);color:var(--accent)}
+.gloss dd{margin:0;min-width:0}
+.gloss .who{font-size:13px;color:var(--muted)}
+@media (max-width:620px){.gloss>div{grid-template-columns:minmax(0,1fr);gap:4px}}
+.chart{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:18px 18px 14px;display:grid;gap:12px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13.5px;color:var(--ink2)}
+.sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.bars{display:grid;gap:10px}
+.bar-row{display:grid;grid-template-columns:190px minmax(0,1fr) 64px;gap:12px;align-items:center}
+.bar-row .lab{font-size:14px;color:var(--ink)}
+.bar-row .lab small{display:block;color:var(--muted);font-size:12.5px}
+.track{position:relative;height:22px;display:flex;gap:2px}
+.seg{height:100%;border-radius:0}
+.seg:first-child{border-radius:4px 0 0 4px}
+.seg:last-child{border-radius:0 4px 4px 0}
+.seg:only-child{border-radius:4px}
+.seg.m{background:var(--s1)} .seg.t{background:var(--s2)}
+.bar-row .val{font:500 14px/1 var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;color:var(--ink)}
+.axis{display:grid;grid-template-columns:190px minmax(0,1fr) 64px;gap:12px;font:12px/1 var(--f-mono);color:var(--muted)}
+.ticks{position:relative;height:14px}
+.ticks span{position:absolute;transform:translateX(-50%)}
+.ticks span:first-child{transform:none}
+@media (max-width:620px){.bar-row,.axis{grid-template-columns:110px minmax(0,1fr) 52px}.bar-row .lab small{display:none}}
+.tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--bg);font-size:13px;padding:6px 9px;border-radius:6px;max-width:260px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:640px}
+th{font:500 11.5px/1.3 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tr.total td{font-weight:600}
+.findings{margin:0;padding-left:1.2em;display:grid;gap:10px}
+.recs{display:grid;gap:14px}
+.rec{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px 18px;display:grid;gap:8px}
+.rec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px 14px}
+.save{font:500 12.5px/1 var(--f-mono);padding:5px 8px;border-radius:999px;background:var(--soft);color:var(--good);white-space:nowrap}
+.rec p{color:var(--ink2);font-size:15px}
+.rec .risk{font-size:14px;color:var(--muted)}
+.note{font-size:14px;color:var(--muted)}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+
+<div class="page">
+
+<header class="col" style="display:grid;gap:12px">
+  <div class="eyebrow">Gated bring-up framework · Hy4 Preview run1</div>
+  <h1>Where the agents' time goes</h1>
+  <p class="lede">A time breakdown of the Hy4 Preview (layers 0-5, mesh 2x2) bring-up so far, what each kind of step does, and where the process could be faster.</p>
+  <div class="meta">
+    <span>Snapshot <b>2026-09-29 22:30 UTC</b></span>
+    <span>Run started <b>01:33 UTC</b></span>
+    <span>Tasks passed <b>92 of 104</b></span>
+    <span>Run still in progress</span>
+  </div>
+</header>
+
+<section>
+  <div class="figures">
+    <div class="fig-n"><span class="v">20.5 h</span><span class="k">run time so far</span></div>
+    <div class="fig-n"><span class="v">15.4 h</span><span class="k">spent inside agents (101 agent runs)</span></div>
+    <div class="fig-n"><span class="v">380</span><span class="k">device test runs started by agents</span></div>
+    <div class="fig-n"><span class="v">$137</span><span class="k">agent cost so far</span></div>
+  </div>
+</section>
+
+<section class="col">
+  <h2>What the steps are</h2>
+  <p>The framework brings a model up one small step at a time. A test decides whether each step passed. The test is written and frozen before any device code exists, so an agent cannot tune the test to its own code. These are the step types in this run, in the order they happen:</p>
+  <dl class="gloss">
+    <div><dt>R.* reference</dt><dd>A CPU version of the model, checked against Hugging Face. Everything later is compared with it. <span class="who">One agent.</span></dd></div>
+    <div><dt>G.* goldens</dt><dd>The reference is run on the book text at 4k, 16k and 56k tokens, and every layer's output is saved. These saved outputs are the "golden" answers. <span class="who">Script, no agent.</span></dd></div>
+    <div><dt>PL.* plan</dt><dd>How the model is split over the 4 chips, and a check that it fits in memory. <span class="who">One agent, then an approval.</span></dd></div>
+    <div><dt>C.* component</dt><dd>One piece of one layer, for example the router or the attention. It runs on the device alone, fed from the golden, and its output is compared with the golden. <span class="who">Two agents: a test agent first, then an implement agent.</span></dd></div>
+    <div><dt>test agent</dt><dd>Reviews the automatically generated test for the step and makes it stricter if needed. For example, the indexer test got a set-overlap metric instead of plain PCC. It runs the test on the device several times, with the CPU reference and with deliberate mistakes, to show the test catches them.</dd></div>
+    <div><dt>freeze</dt><dd>The test is locked. It must pass with the CPU reference plugged in and fail with a module that returns zeros. From then on no agent may change it. <span class="who">Script.</span></dd></div>
+    <div><dt>implement agent</dt><dd>Writes the device code for the step until the frozen test passes. If existing code already passes, no agent is started.</dd></div>
+    <div><dt>S.* swap test</dt><dd>The whole layer runs with steps 1 to n on the device and the remaining steps on the CPU. The layer's output is compared with the golden. It catches problems that only show when steps are chained, such as a wrong layout handed from one step to the next. Swap tests come from one template. <span class="who">One test agent, then the freeze.</span></dd></div>
+    <div><dt>M.1, L.* ladder</dt><dd>The full device model, run at growing lengths up to 56k tokens and checked layer by layer against the goldens. <span class="who">Not reached yet.</span></dd></div>
+    <div><dt>K.1, X.*, O.1</dt><dd>Serving contract, performance profile and picks, and tests for the forked ops. <span class="who">Not reached yet.</span></dd></div>
+  </dl>
+</section>
+
+<section>
+  <div class="col" style="display:grid;gap:8px">
+    <h2>Agent time by kind of work</h2>
+    <p>Each agent run records its wall time and how much of it the model spent thinking. The rest is time spent running tools, almost all of it device test runs.</p>
+  </div>
+  <figure class="chart" role="img" aria-label="Horizontal bar chart of agent hours by kind of work, split into model thinking and running tools">
+    <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Model thinking</span><span><i class="sw" style="background:var(--s2)"></i>Running tools (mostly device tests)</span></div>
+    <div class="bars" id="bars"></div>
+    <div class="axis" aria-hidden="true"><span></span><div class="ticks" id="ticks"></div><span></span></div>
+  </figure>
+</section>
+
+<section>
+  <h2>The numbers</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Kind of agent run</th><th class="n">Runs</th><th class="n">Hours</th><th class="n">Avg min</th><th class="n">Device test runs</th><th class="n">Changed the test</th><th class="n">Cost</th></tr></thead>
+      <tbody>
+        <tr><td>Swap-test review (test agent, S.*)</td><td class="n">41</td><td class="n">7.8</td><td class="n">11.4</td><td class="n">186</td><td class="n">4 of 41</td><td class="n">$55</td></tr>
+        <tr><td>Component-test review (test agent, C.*)</td><td class="n">41</td><td class="n">4.0</td><td class="n">5.9</td><td class="n">149</td><td class="n">14 of 41</td><td class="n">$41</td></tr>
+        <tr><td>CPU reference (R.2)</td><td class="n">1</td><td class="n">1.9</td><td class="n">114</td><td class="n">0</td><td class="n">n/a</td><td class="n">$9</td></tr>
+        <tr><td>Implement (device code, C.*)</td><td class="n">17</td><td class="n">1.5</td><td class="n">5.1</td><td class="n">45 (+21 probes)</td><td class="n">n/a</td><td class="n">$29</td></tr>
+        <tr><td>Plan (PL.1)</td><td class="n">1</td><td class="n">0.2</td><td class="n">12.8</td><td class="n">0</td><td class="n">n/a</td><td class="n">$4</td></tr>
+        <tr class="total"><td>All agents</td><td class="n">101</td><td class="n">15.4</td><td class="n">9.1</td><td class="n">380</td><td class="n"></td><td class="n">$137</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Outside the agents: about 2.3 h of gate runs, the checks that decide pass or fail (goldens 0.5 h, swap-test gates 1.0 h, reference gates 0.5 h), and about 2.8 h of test freezing, pre-checks and orchestration. 24 of the 41 component steps passed on the pre-check with no implement agent, because the code from an earlier layer already covered them.</p>
+</section>
+
+<section class="col">
+  <h2>What the numbers say</h2>
+  <ol class="findings">
+    <li><b>Reviewing tests costs about 8× more than writing the code.</b> The test agents took 11.8 h and the implement agents 1.5 h. The code was quick because layers 1-4 mostly reuse layer 0's modules, but every test is still reviewed from scratch.</li>
+    <li><b>Swap-test review is half of all agent time and rarely changes anything.</b> Its 41 runs took 7.8 h (51%) and changed the test only 4 times, each time to add extra checks. All swap tests come from one template, and every freeze already requires a pass with the reference and a fail with the zero stub.</li>
+    <li><b>Component-test review earns its time.</b> It changed 14 of 41 tests. Some changes were important, such as the set-overlap metric for the indexer and the checks that catch a wrong norm epsilon. It is still repeated for layers whose component is identical to one already reviewed (layers 2-4 against layer 1).</li>
+    <li><b>Most agent time is device runs, not thinking</b>: 9.8 h running tools against 5.5 h thinking. Each test run opens the 2x2 mesh and loads the weights again, so a test agent spends several minutes per run waiting on the setup.</li>
+    <li><b>The one long agent run was a one-off.</b> The reference run (1.9 h) was mostly two full 78-layer CPU sanity passes, reading 1.5 TB of weights from disk. The second pass was needed after the agent found the RoPE bug in the HF code.</li>
+  </ol>
+</section>
+
+<section>
+  <h2 class="col">Ways to make it faster</h2>
+  <div class="recs">
+    <div class="rec">
+      <div class="rec-head"><h3>1. Freeze swap tests without a review agent</h3><span class="save">about 6-7 h per bring-up</span></div>
+      <p>Render the swap test from the template and freeze it right away. The freeze still requires a pass with the CPU reference and a fail with the zero stub. Fold the 4 kinds of extra checks the agents added into the template once, so every swap test gets them.</p>
+      <p class="risk">Risk: a model with an unusual block wiring could need a hand-written swap check. Keep an opt-in review for block types the plan flags as unusual.</p>
+    </div>
+    <div class="rec">
+      <div class="rec-head"><h3>2. Reuse a reviewed component test for a repeated component</h3><span class="save">about 1.5-2 h</span></div>
+      <p>When a block type repeats a component that already has a reviewed, frozen test (same module, same shapes, another layer), render the test from the reviewed one and freeze it without a new review. In this run that covers most of layers 2-4 and layer 1's attention side.</p>
+      <p class="risk">Risk: a layer that is subtly different (another eps, another expert count) would be missed. Only reuse when the module and the layer config match exactly.</p>
+    </div>
+    <div class="rec">
+      <div class="rec-head"><h3>3. Keep the mesh and weights loaded between test runs</h3><span class="save">large, spread over every step</span></div>
+      <p>A long-lived test worker that keeps the 2x2 mesh open and caches loaded weights would cut the setup from each of the 380 device runs. This is the largest change to build and needs care with device ownership and resets.</p>
+      <p class="risk">Risk: a hang or a bad kernel state leaks into the next test. The worker must reset itself after any failure.</p>
+    </div>
+    <div class="rec">
+      <div class="rec-head"><h3>4. Fewer deliberate-mistake runs per test review</h3><span class="save">about 1-2 h</span></div>
+      <p>The test agents run 4-6 device runs per review to show the test catches injected mistakes. Most of the mistakes they try could be checked on the CPU against the golden (a wrong sign, a missing scale) without the device. Ask the agents to run the sensitivity checks on the CPU and keep one device run.</p>
+      <p class="risk">Risk: small. Device-only failure modes, such as layouts across chips, still need the one device run.</p>
+    </div>
+    <div class="rec">
+      <div class="rec-head"><h3>5. A lighter whole-model sanity check</h3><span class="save">about 0.5-1 h, only when a bug forces a rerun</span></div>
+      <p>The 78-layer HF sanity check reads 1.5 TB from disk each time. A cached result per HF-code version, and a quick first check on 256 tokens before the 2048-token one, would make a rerun much cheaper.</p>
+    </div>
+  </div>
+  <p class="note col">Recommendations 1 and 2 together would have cut this run's agent time from about 15 h to about 7 h. They are framework changes and would go through the framework's own selftests. Run1 continues on the current rules.</p>
+</section>
+
+<section class="col">
+  <h2>How these numbers were made</h2>
+  <p class="note">Agent times come from each agent's own transcript: wall time, model time, cost, and the commands it ran. Device test runs count <code>run_safe_pytest.sh</code> calls. "Changed the test" counts runs that edited a file in <code>tests/bringup/</code>. Gate times come from the run's ledger (<code>state.json</code>). Files: <code>/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/*.jsonl</code> and <code>models/demos/hy4_preview_d_p/bringup/state.json</code>. The run is still going, so the totals will grow; the proportions should hold.</p>
+</section>
+
+</div>
+
+<script>
+(function(){
+  var data=[
+    {k:"Swap-test review",s:"41 runs, test agent",m:2.11,t:5.68},
+    {k:"Component-test review",s:"41 runs, test agent",m:1.81,t:2.19},
+    {k:"CPU reference",s:"1 run, R.2",m:0.39,t:1.51},
+    {k:"Implement",s:"17 runs, device code",m:1.00,t:0.45},
+    {k:"Plan",s:"1 run, PL.1",m:0.20,t:0.01}
+  ];
+  var max=8, bars=document.getElementById("bars"), ticks=document.getElementById("ticks");
+  var tip=document.createElement("div"); tip.className="tip"; tip.hidden=true; document.body.appendChild(tip);
+  data.forEach(function(d){
+    var row=document.createElement("div"); row.className="bar-row";
+    var tot=d.m+d.t;
+    row.innerHTML='<div class="lab">'+d.k+'<small>'+d.s+'</small></div><div class="track" tabindex="0"></div><div class="val">'+tot.toFixed(1)+' h</div>';
+    var tr=row.querySelector(".track");
+    [["m",d.m,"Model thinking"],["t",d.t,"Running tools"]].forEach(function(p){
+      if(p[1]<0.02) return;
+      var s=document.createElement("div"); s.className="seg "+p[0]; s.style.width=(p[1]/max*100)+"%";
+      tr.appendChild(s);
+    });
+    var text=d.k+": "+tot.toFixed(1)+" h (thinking "+d.m.toFixed(1)+" h, tools "+d.t.toFixed(1)+" h)";
+    tr.setAttribute("aria-label",text);
+    function show(e){tip.textContent=text; tip.hidden=false; var r=tr.getBoundingClientRect();
+      var x=e&&e.clientX?e.clientX:r.left+20, y=e&&e.clientY?e.clientY:r.top;
+      tip.style.left=Math.min(x+12, window.innerWidth-270)+"px"; tip.style.top=(y-40)+"px";}
+    tr.addEventListener("mousemove",show); tr.addEventListener("focus",function(){show(null)});
+    tr.addEventListener("mouseleave",function(){tip.hidden=true}); tr.addEventListener("blur",function(){tip.hidden=true});
+    bars.appendChild(row);
+  });
+  [0,2,4,6,8].forEach(function(v){var s=document.createElement("span"); s.style.left=(v/max*100)+"%"; s.textContent=v+" h"; ticks.appendChild(s);});
+})();
+</script>
