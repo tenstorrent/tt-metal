@@ -462,3 +462,39 @@ Watch: the block-out ratio minimum vs golden is unchanged from swap 06 (0.9797, 
 ffn_residual are still to come.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_07_ffn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.ffn_norm test (attempt 1)
+
+Reviewed the rendered component test for ffn_norm (post_attention_layernorm, layer 0, [2048, 4096] bf16). Rewrote it
+from the attn_norm test: kept the gated PCC, added asserted checks (informational metrics): finite, rel L2 <= 0.01,
+per-token norm ratio [0.99, 1.01], worst per-token rel L2 <= 0.015. The ratio and worst-row limits are tighter than
+attn_norm's because of the CPU mutation run on this golden (host script /tmp/ffn_norm_sens.py, not kept):
+- Input row RMS 0.0034..0.0236 (mean square 1.2e-5..5.6e-4, about eps 1e-5); w in [0.028, 0.157].
+- Hidden under PCC here: LayerNorm-style mean subtraction scores rel 0.0082 and worst row 0.029, so it passes
+  attn_norm's limits (0.01 / 0.03); the 0.015 worst-row limit catches it. x1.01: rel 0.0103, ratio [1.008, 1.012].
+  eps 1.2e-5: rel 0.0149, ratio [0.957, ..]; eps 8e-6: rel 0.0162, ratio [.., 1.050].
+- PCC already catches no weight / 1 + w / attn_norm's weight / w reversed (0.81..0.84), eps 1e-4 (0.983), and last 32
+  rows zeroed (0.992). Sum instead of mean passes PCC (0.9979) but gives rel 0.98.
+- Headroom: fp32 CPU rel 0.0024 / ratio [0.9982, 1.0019] / worst row 0.0038; bf16 output 0.0029 / 0.0052. Squares
+  accumulated in bf16 (rel 0.0062, ratio [0.983, 1.023], worst row 0.023) FAIL the new limits.
+Results: reference passes (PCC 0.999997, rel 0.0024, ratio [0.9982, 1.0019], worst row 0.0038). Stub fails (PCC 0).
+Device mode fails with NotImplementedError until the implement step adds the module.
+Implement: reuse `tt/rms_norm.py:build_norm(..., "post_attention_layernorm")` (add `ffn_norm` to `_NORM_STEPS` and
+`DEVICE_STEPS`), keeping eps 1e-5 and fp32 accumulation of the squares (fp32 dest acc). attn_norm's device module
+scored worst row 0.0037 there, so it should have margin here.
+Gotcha: the log shows `FAIL pcc_ffn_norm_L00: pcc=0.000000` before the real result. That line is from the runner's
+up-front compile collect pass, not from the test.
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_norm.py`
+(`BRINGUP_IMPL=stub` for the stub; no prefix for the device gate).
+
+## C.kda_dense.ffn_norm implement (attempt 1)
+
+- Reused `tt/rms_norm.py:TtRMSNorm` / `build_norm` unchanged: added `"ffn_norm": "post_attention_layernorm"` to
+  `_NORM_STEPS` in `hooks.py`. Same op as attn_norm: `ttnn.bringup.rms_norm`, replicated [1, 1, S, 4096], plain `w`
+  gamma, eps 1e-5 from `cfg.rms_norm_eps`, HiFi4 + fp32 dest acc. `GLM_NORM_IMPL=native` still selects `ttnn.rms_norm`.
+- `DEVICE_STEPS["kda_dense"]` now also lists `ffn_hc` and `ffn_collapse` (the earlier implement steps did not add
+  them, although both passed their component gates and swap 06/07) as well as `ffn_norm`, so the ladder's hybrid model
+  runs every validated step on the device. Swap tests do not read this set; they call `device_component` directly.
+- Gate results: PCC 0.999996, rel L2 0.0029, per-token norm ratio [0.9974, 1.0027], worst row rel L2 0.0052 (limits
+  0.01 / [0.99, 1.01] / 0.015).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_norm.py`
