@@ -10,6 +10,15 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, TP_AXIS
 
 
+def fabric_num_links() -> int:
+    """Fabric links per chip-to-chip connection V4.1 collectives use: 2 on Blackhole (LoudBox / Galaxy), else 1.
+
+    The one source for every V4.1 collective, including the ones the shared ``TtMoe`` (gate, dispatch, combine,
+    shared expert, routed reduce) and ``TtDistributedRmsNorm`` issue, so no module runs on fewer links than the
+    fabric has (G2 profile: the MoE and norms at 1 link reached 7-11 % of the 2-link bound)."""
+    return 2 if is_blackhole() else 1
+
+
 class V41Collectives:
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
@@ -17,7 +26,7 @@ class V41Collectives:
         # per mesh axis from the opened fabric: Ring only where it wraps the axis (Galaxy torus), else Linear
         topologies = per_axis_topology()
         self.sp_topology, self.tp_topology = topologies[SP_AXIS], topologies[TP_AXIS]
-        self.num_links = 2 if is_blackhole() else 1
+        self.num_links = fabric_num_links()
         self.tt_ccl = get_tt_ccl(mesh_device) if max(mesh_device.shape) > 1 else None
 
     def tp_reduce_scatter(self, t, dim=3):

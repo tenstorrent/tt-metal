@@ -16,6 +16,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TtV41Attention
+from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.tt.v41.mhc import TtV41HyperConnections
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
@@ -29,7 +30,6 @@ class TtV41Block(LightweightModule):
         layer: int,
         weights: dict,
         seq_len: int,
-        num_links: int = 1,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path=None,
     ):
@@ -45,7 +45,7 @@ class TtV41Block(LightweightModule):
             torch_weight=w,
             epsilon=config.RMS_NORM_EPS,
             cluster_axis=TP_AXIS,
-            num_links=num_links,
+            num_links=fabric_num_links(),
             topology=topology,
         )
         self.attn_norm = norm(weights["attn_norm"])
@@ -63,7 +63,6 @@ class TtV41Block(LightweightModule):
             layer,
             weights,
             seq_len,
-            num_links=num_links,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
         )
