@@ -9,7 +9,7 @@
 * ``dummy`` (default): seeded random weights, see ``init_dummy_backbone_weights`` and
   ``init_dummy_fpn_weights``.
 * ``uniad``: the ``img_backbone`` / ``img_neck`` of UniAD's checkpoint, which have the
-  same architecture (ResNet101, caffe style, DCNv2 in stages 3 and 4; FPN 512/1024/2048
+  same architecture (ResNet101, caffe style, DCNv2 in layer3 and layer4; FPN 512/1024/2048
   -> 4 x 256).
 """
 
@@ -65,7 +65,8 @@ def init_dummy_backbone_weights(torch_model, seed=0):
                 if module.bias is not None:
                     module.bias.zero_()
                 normal_(module.conv_offset.weight, DCN_OFFSET_STD)
-                # conv_offset emits (offset_y|offset_x|mask) thirds; the mask goes through sigmoid.
+                # conv_offset emits 3*K*K channels: two thirds of (y, x)-interleaved offsets, then the
+                # mask logits, which go through sigmoid.
                 module.conv_offset.bias.zero_()
                 module.conv_offset.bias[2 * module.conv_offset.bias.numel() // 3 :] = DCN_MASK_BIAS
             elif isinstance(module, nn.Conv2d):
@@ -126,6 +127,16 @@ def _weights_source():
     if source not in ("dummy", "uniad"):
         raise ValueError(f"BEVFORMER_BACKBONE_WEIGHTS must be 'dummy' or 'uniad', got {source!r}")
     return source
+
+
+def full_backbone_pcc():
+    """PCC the full backbone and the backbone+FPN tests assert for the selected weights.
+
+    The dummy weights are tuned so every layer output stays above 0.99. The trained UniAD weights
+    measure 0.985 / 0.980 / 0.961 at C3 / C4 / C5 and >= 0.969 at every FPN level on
+    Blackhole; their threshold is a regression floor below that, not an accuracy target.
+    """
+    return 0.99 if _weights_source() == "dummy" else 0.95
 
 
 def load_backbone_weights(torch_model):

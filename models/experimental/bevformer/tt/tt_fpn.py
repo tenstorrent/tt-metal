@@ -13,22 +13,23 @@ class TtConvModule:
         conv_pth,
         device=None,
         is_blk=False,
-        config_override=None,
+        act_block_h=None,
         dealloc_act=True,
         dram_activation=False,
+        dram_conv_slices=None,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
     ):
-        self.device = device
         self.conv = TtnnConv2D(
             conv_args.conv,
             conv_pth.conv,
-            device=self.device,
+            device=device,
             dealloc_act=dealloc_act,
-            is_fpn=True,
+            fp32_dest_acc_en=True,
             is_blk=is_blk,
-            config_override=config_override,
+            act_block_h=act_block_h,
             dram_activation=dram_activation,
+            dram_conv_slices=dram_conv_slices,
             input_dtype=input_dtype,
             input_layout=input_layout,
         )
@@ -46,16 +47,17 @@ class TtFPN:
         device,
         input_dtypes,
         dram_activation_levels=(),
+        dram_conv_slices=None,
+        block_sharded_levels=(),
     ):
         """``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
         ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
-        keep their activations in DRAM, for levels too large for L1."""
+        keep their activations in DRAM, for levels too large for L1; their 3x3 convs run in
+        ``dram_conv_slices`` width slices. ``block_sharded_levels`` lists the levels whose
+        output conv is block sharded with act_block_h 128."""
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
-        self.device = device
-        self.start_level = 0
         self.lateral_convs = []
         self.fpn_convs = []
-        self.conv_pth = conv_pth
         self.relu_before_extra_convs = conv_args.relu_before_extra_convs
         num_levels = len(conv_args.lateral_convs)
         assert len(input_dtypes) == num_levels, f"{num_levels} levels, got {len(input_dtypes)} input dtypes"
@@ -71,34 +73,26 @@ class TtFPN:
                     conv_pth.fpn.lateral_convs[str(i)],
                     device=device,
                     dram_activation=i in dram_activation_levels,
+                    dram_conv_slices=dram_conv_slices,
                     input_dtype=input_dtypes[i],
                 )
             )
         for i in range(num_levels):
-            if i == 0 or i == 1:
-                self.fpn_convs.append(
-                    TtConvModule(
-                        conv_args.fpn_convs[i],
-                        conv_pth.fpn.fpn_convs[str(i)],
-                        device=device,
-                        is_blk=True,
-                        config_override={"act_block_h": 128},
-                        dram_activation=i in dram_activation_levels,
-                        input_dtype=output_conv_dtypes[i],
-                        input_layout=output_conv_layouts[i],
-                    )
+            block_sharded = i in block_sharded_levels
+            self.fpn_convs.append(
+                TtConvModule(
+                    conv_args.fpn_convs[i],
+                    conv_pth.fpn.fpn_convs[str(i)],
+                    device=device,
+                    is_blk=block_sharded,
+                    # From the UniAD port, not re-tuned for 928x1600.
+                    act_block_h=128 if block_sharded else None,
+                    dram_activation=i in dram_activation_levels,
+                    dram_conv_slices=dram_conv_slices,
+                    input_dtype=output_conv_dtypes[i],
+                    input_layout=output_conv_layouts[i],
                 )
-            else:
-                self.fpn_convs.append(
-                    TtConvModule(
-                        conv_args.fpn_convs[i],
-                        conv_pth.fpn.fpn_convs[str(i)],
-                        device=device,
-                        dram_activation=i in dram_activation_levels,
-                        input_dtype=output_conv_dtypes[i],
-                        input_layout=output_conv_layouts[i],
-                    )
-                )
+            )
         for i in range(num_levels, len(conv_args.fpn_convs)):
             self.fpn_convs.append(
                 TtConvModule(
@@ -122,15 +116,16 @@ class TtFPN:
 
         for i in range(used_backbone_levels - 1, 0, -1):
             laterals[i] = ttnn.to_layout(laterals[i], ttnn.ROW_MAJOR_LAYOUT)
-            inp_dim = self.conv_pth.fpn.lateral_convs[str(i)].conv
-            prev_dim = self.conv_pth.fpn.lateral_convs[str(i - 1)].conv
+            # A lateral conv is 1x1, so its output has its input level's size.
+            level = self.lateral_convs[i].conv
+            lower_level = self.lateral_convs[i - 1].conv
             laterals_reshaped = ttnn.reshape(
-                laterals[i], (inp_dim.batch, inp_dim.height, inp_dim.width, laterals[i].shape[-1])
+                laterals[i], (level.batch_size, level.input_height, level.input_width, laterals[i].shape[-1])
             )
             laterals_upsample = ttnn.upsample(laterals_reshaped, 2)
             # The reference interpolates to the lower level's exact size; a 2x upsample
             # overshoots it by one row or column wherever that level's size is odd.
-            laterals_sliced = laterals_upsample[:, : prev_dim.height, : prev_dim.width, :]
+            laterals_sliced = laterals_upsample[:, : lower_level.input_height, : lower_level.input_width, :]
             laterals_sliced = ttnn.reshape(
                 laterals_sliced,
                 [

@@ -5,11 +5,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from functools import partial
 from typing import Dict, Optional, Tuple, Union
 
 
 class ConvModule(nn.Module):
+    """mmcv's ConvModule reduced to the case this FPN uses: a bare conv, no norm or activation."""
+
     def __init__(
         self,
         in_channels: int,
@@ -17,91 +18,19 @@ class ConvModule(nn.Module):
         kernel_size: Union[int, Tuple[int, int]],
         stride: Union[int, Tuple[int, int]] = 1,
         padding: Union[int, Tuple[int, int]] = 0,
-        dilation: Union[int, Tuple[int, int]] = 1,
-        groups: int = 1,
-        bias: Union[bool, str] = "auto",
         conv_cfg: Optional[Dict] = None,
         norm_cfg: Optional[Dict] = None,
-        act_cfg: Optional[Dict] = dict(type="ReLU"),
+        act_cfg: Optional[Dict] = None,
         inplace: bool = True,
-        with_spectral_norm: bool = False,
-        padding_mode: str = "zeros",
-        order: tuple = ("conv", "norm", "act"),
-        efficient_conv_bn_eval: bool = False,
     ):
         super().__init__()
-        assert conv_cfg is None or isinstance(conv_cfg, dict)
-        assert norm_cfg is None or isinstance(norm_cfg, dict)
-        assert act_cfg is None or isinstance(act_cfg, dict)
-        official_padding_mode = ["zeros", "circular"]
-        self.conv_cfg = conv_cfg
-        self.norm_cfg = norm_cfg
-        self.act_cfg = act_cfg
-        self.inplace = inplace
-        self.with_spectral_norm = with_spectral_norm
-        self.with_explicit_padding = padding_mode not in official_padding_mode
-        self.order = order
-        assert isinstance(self.order, tuple) and len(self.order) == 3
-        assert set(order) == {"conv", "norm", "act"}
+        assert conv_cfg is None, f"only a plain Conv2d is supported, got conv_cfg={conv_cfg}"
+        assert norm_cfg is None, f"norm layers are not supported, got norm_cfg={norm_cfg}"
+        assert act_cfg is None, f"activations are not supported, got act_cfg={act_cfg}"
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=True)
 
-        self.with_norm = norm_cfg is not None
-        self.with_activation = act_cfg is not None
-        # if the conv layer is before a norm layer, bias is unnecessary.
-        if bias == "auto":
-            bias = not self.with_norm
-        self.with_bias = bias
-
-        # reset padding to 0 for conv module
-        conv_padding = 0 if self.with_explicit_padding else padding
-
-        self.conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            stride=stride,
-            padding=conv_padding,
-            dilation=dilation,
-            groups=groups,
-            bias=bias,
-        )
-        # export the attributes of self.conv to a higher level for convenience
-        self.in_channels = self.conv.in_channels
-        self.out_channels = self.conv.out_channels
-        self.kernel_size = self.conv.kernel_size
-        self.stride = self.conv.stride
-        self.padding = padding
-        self.dilation = self.conv.dilation
-        self.transposed = self.conv.transposed
-        self.output_padding = self.conv.output_padding
-        self.groups = self.conv.groups
-
-        if self.with_spectral_norm:
-            self.conv = nn.utils.spectral_norm(self.conv)
-
-    def forward(self, x: torch.Tensor, activate: bool = True, norm: bool = True) -> torch.Tensor:
-        layer_index = 0
-        while layer_index < len(self.order):
-            layer = self.order[layer_index]
-            if layer == "conv":
-                if self.with_explicit_padding:
-                    x = self.padding_layer(x)
-
-                if (
-                    layer_index + 1 < len(self.order)
-                    and self.order[layer_index + 1] == "norm"
-                    and norm
-                    and self.with_norm
-                    and not self.norm.training
-                    and self.efficient_conv_bn_eval_forward is not None
-                ):
-                    self.conv.forward = partial(self.efficient_conv_bn_eval_forward, self.norm, self.conv)
-                    layer_index += 1
-                    x = self.conv(x)
-                    del self.conv.forward
-                else:
-                    x = self.conv(x)
-            layer_index += 1
-        return x
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)
 
 
 class FPN(nn.Module):
