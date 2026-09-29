@@ -58,6 +58,17 @@ class MeshConfig:
         self.weight_fracture = weight_fracture
         self.fracture_ways = self.total_devices if weight_fracture else decode.tp
 
+        # Lane-sharded activations (galaxy one-instance slice 3): the batch is
+        # split into ``lanes`` groups along the non-tp mesh axis (one lane per
+        # column), each with its own KV pool contents / page tables /
+        # positions. Weight-fractured matmuls then need the llama70b staged
+        # choreography: all-gather rows across lanes before a fractured matmul
+        # and reduce-scatter rows back after (see SharedMLP). Attention stays
+        # lane-local (weights replicated across lanes). Off by default; the
+        # replicated-residual regime keeps working unchanged.
+        self.lane_sharded = False
+        self.lanes = self.mesh_shape[self.sp_axis]
+
         self.decode = decode
         self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
 
