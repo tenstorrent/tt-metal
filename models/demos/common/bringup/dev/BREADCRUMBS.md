@@ -555,3 +555,12 @@ Owner (Hy4 intake): the whole checkpoint of a layer-subset bring-up is needed on
 - The MiMo checkpoint was trimmed by hand the same way before this existed (160 -> 20 GB, commit 023405b50b0).
 - Selftests: 192 -> 198 (test_trim.py adds 6; test_hf_sanity_records_revision_and_accuracy needed the marker lookup
   guarded like the revision lookup).
+
+## F48 (2026-09-29): gate commits stage changed forks and knowledge entries
+Hy4 run1: the C.dense_full.indexer agent made the `indexer_score` fork (ttnn/ttnn/bringup, INDEX.md, the nanobind
+registration) and agents from R.2 on added 19 known issues and repo-map entries. Agents may write both (allowed paths:
+BRINGUP_OPS and common_paths), but `stage_paths` staged only the task's own paths, so none of it was committed; the
+overseer committed them by hand (5da28095718, and the knowledge commit after it). `stage_paths` now adds every changed
+file under ttnn/ttnn/bringup and the two shared knowledge files (`_dirty_under`, git status, no __pycache__, no deletes):
+one agent runs at a time, so those changes are the task's. Only changed files, so the gate's formatting pass does not
+reformat other forks. Selftest test_fork_cases.py::test_gate_commit_stages_changed_forks_and_knowledge_only; 199 pass.

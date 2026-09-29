@@ -132,3 +132,43 @@ def test_source_outcomes_from_junit(tmp_path):
         "</testsuite></testsuites>"
     )
     assert S._outcomes(x) == {"m::a": "passed", "m::b": "failed", "m::c": "skipped"}
+
+
+def test_gate_commit_stages_changed_forks_and_knowledge_only(fx):
+    """F48: a fork the agent made (or changed) and its knowledge-file entries are committed with the gate; other
+    forks' files are not staged (the formatting pass must not touch them)."""
+    import subprocess
+
+    from models.demos.common.bringup.core.gate import stage_paths
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+
+    s = Spec.load(fx())
+    repo = s.repo
+    git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)  # noqa: E731
+    git("init", "-q")
+    kn = repo / "models/demos/common/bringup/knowledge"
+    kn.mkdir(parents=True)
+    (kn / "known_issues.md").write_text("# issues\n")
+    (kn / "repo_map.md").write_text("# map\n")
+    old = repo / "ttnn/ttnn/bringup/old_fork"
+    old.mkdir(parents=True)
+    (old / "op.cpp").write_text("int a;\n")
+    (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n")
+    git("add", "-A")
+    git("-c", "user.email=x@y", "-c", "user.name=x", "commit", "-qm", "base")
+    led = Ledger(s.bringup_dir)
+    task = {"id": "C.1", "step": "implement", "paths": []}
+    assert not [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
+    new = repo / "ttnn/ttnn/bringup/new_fork"
+    (new / "__pycache__").mkdir(parents=True)
+    (new / "op.cpp").write_text("int b;\n")
+    (new / "__pycache__" / "x.pyc").write_text("")
+    (repo / "ttnn/ttnn/bringup/INDEX.md").write_text("| Fork |\n| new_fork |\n")
+    (kn / "known_issues.md").write_text("# issues\n- new entry\n")
+    got = [p for p in stage_paths(s, led, task) if p.startswith(("ttnn/", "models/demos/common/"))]
+    assert got == [
+        "models/demos/common/bringup/knowledge/known_issues.md",
+        "ttnn/ttnn/bringup/INDEX.md",
+        "ttnn/ttnn/bringup/new_fork/op.cpp",
+    ]
