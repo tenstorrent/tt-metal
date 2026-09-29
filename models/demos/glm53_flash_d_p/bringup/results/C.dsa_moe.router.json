@@ -1,0 +1,61 @@
+{
+ "metrics": {
+  "matched_coef_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 1.0000500679016113
+  },
+  "matched_coef_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 1.000029444694519
+  },
+  "matched_rel_l2_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.0012446921318769455
+  },
+  "matched_rel_l2_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.0012520180316641927
+  },
+  "pcc_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.9998074232056292
+  },
+  "pcc_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.9998559920466249
+  },
+  "row_sum_max_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 2.5068359375
+  },
+  "row_sum_max_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 2.506591796875
+  },
+  "row_sum_min_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 2.493896484375
+  },
+  "row_sum_min_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 2.494140625
+  },
+  "selection_overlap_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.996826171875
+  },
+  "selection_overlap_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.99810791015625
+  },
+  "worst_row_overlap_router_L03": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.875
+  },
+  "worst_row_overlap_router_L03_c0": {
+   "t": "2026-09-29T11:03:39",
+   "value": 0.875
+  }
+ },
+ "task": "C.dsa_moe.router"
+}
