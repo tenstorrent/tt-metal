@@ -66,7 +66,7 @@ Accuracy criteria
   squared_difference : ULP <= 3; see test_squared_difference
   xlogy              : ULP <= 2 outside log's zero crossing, see test_xlogy
   hypot              : ULP <= 1 where neither square under/overflows
-  bias_gelu          : bitwise gelu(add(a, b)); allclose(rtol=.05, atol=.05)
+  bias_gelu          : bitwise accurate gelu(add(a, b)); allclose(rtol=.05, atol=.05)
   prelu              : exact, outside the product's underflow band
 
 The grids carry +0 but no -0/inf/NaN: these chains do not propagate non-finite
@@ -375,24 +375,76 @@ def test_xlogy(device):
         )
 
 
+def _assert_xlogy_class(result, mask, *, allow_nan, allow_pos_inf, allow_neg_inf, desc):
+    """Fail with a class count. assert_equal reports Max ATOL nan for any inf, because inf - inf is nan."""
+    values = result[mask]
+    ok = torch.zeros(values.shape, dtype=torch.bool)
+    if allow_nan:
+        ok |= torch.isnan(values)
+    if allow_pos_inf:
+        ok |= torch.isinf(values) & ~torch.signbit(values)
+    if allow_neg_inf:
+        ok |= torch.isinf(values) & torch.signbit(values)
+    if bool(ok.all()):
+        return
+    bad = ~ok
+    sample = values[bad].reshape(-1)[0]
+    raise AssertionError(
+        f"{desc}: {int(bad.sum())} of {values.numel()} elements are outside "
+        f"nan={allow_nan}, +inf={allow_pos_inf}, -inf={allow_neg_inf}; "
+        f"sample={sample.item()!r} "
+        f"(nan={int(torch.isnan(values).sum())}, "
+        f"+inf={int((torch.isinf(values) & ~torch.signbit(values)).sum())}, "
+        f"-inf={int((torch.isinf(values) & torch.signbit(values)).sum())}, "
+        f"finite={int(torch.isfinite(values).sum())})"
+    )
+
+
 def test_xlogy_nonpositive(device):
     """b <= 0, which the accuracy sweep drops.
 
-    b < 0 takes the kernel's NaN path. bfloat16 packing reads that NaN back as
-    +inf, for every a, where torch returns NaN (and 0 when a == 0).
+    b < 0 takes the kernel's NaN path. Torch returns NaN (and 0 when a == 0).
+    A bfloat16 destination reads that NaN back as +inf on Wormhole and as NaN
+    on Blackhole, so both are accepted and a finite value or a -inf is not.
 
     b == 0 matches torch's signed inf: +a gives -inf and -a gives +inf, because
-    log(0) is -inf. The one disagreement is a == 0, where torch returns 0 and
-    the device returns -inf.
+    log(0) is -inf. a == 0 is the exception. Torch returns 0, and 0 * log(0)
+    is the same NaN. Wormhole reads it back as -inf and Blackhole as +inf, so
+    any non-finite value is accepted and a finite one is not.
     """
     input_a, input_b = pairwise_from_values(binary_grid_values(), binary_grid_values(high=0.0))
     result = ttnn.to_torch(ttnn.xlogy(to_tt_tensor(input_a, device), to_tt_tensor(input_b, device)))
 
-    assert (input_b < 0).any() and (input_b == 0).any(), "expected both negative b and zero"
+    negative_b = input_b < 0
+    zero_b = input_b == 0
+    assert negative_b.any() and zero_b.any(), "expected both negative b and zero"
+    assert (zero_b & (input_a == 0)).any() and (zero_b & (input_a > 0)).any() and (zero_b & (input_a < 0)).any()
 
-    expected = torch.full_like(result, float("inf"))
-    expected = torch.where((input_b == 0) & (input_a >= 0), torch.full_like(result, float("-inf")), expected)
-    assert_equal(expected, result)
+    _assert_xlogy_class(result, negative_b, allow_nan=True, allow_pos_inf=True, allow_neg_inf=False, desc="xlogy b < 0")
+    _assert_xlogy_class(
+        result,
+        zero_b & (input_a > 0),
+        allow_nan=False,
+        allow_pos_inf=False,
+        allow_neg_inf=True,
+        desc="xlogy b == 0, a > 0",
+    )
+    _assert_xlogy_class(
+        result,
+        zero_b & (input_a < 0),
+        allow_nan=False,
+        allow_pos_inf=True,
+        allow_neg_inf=False,
+        desc="xlogy b == 0, a < 0",
+    )
+    _assert_xlogy_class(
+        result,
+        zero_b & (input_a == 0),
+        allow_nan=True,
+        allow_pos_inf=True,
+        allow_neg_inf=True,
+        desc="xlogy b == 0, a == 0",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -440,14 +492,9 @@ def test_hypot_outside_square_range(device):
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.bias_gelu, ttnn.bias_gelu_])
 def test_bias_gelu(device, ttnn_op):
-    """a, b over [-100, 100]; allclose matches what category 3 holds fast-mode
-    gelu to, because that is the post-op this lowers to.
-
-    ULP is not usable here even away from any boundary: gelu's fast path is a
-    LUT whose error is absolute, so wherever gelu is near zero the device
-    answer has the wrong exponent and often the wrong sign. bias_gelu(0, 0) is
-    -1.04e-4 rather than 0, and bias_gelu(-3, 0.0156) is 1.07e-4 where the true
-    value is -4.24e-3.
+    """a, b over [-100, 100]. fast_and_approximate_mode defaults to False, so
+    the post-op is the accurate gelu, the same default as ttnn.gelu. The
+    comparison is torch.nn.functional.gelu of the sum at rtol = atol = 0.05.
     """
     values = binary_grid_values(-100.0, 100.0)
     input_a, input_b = pairwise_from_values(values)
@@ -458,16 +505,17 @@ def test_bias_gelu(device, ttnn_op):
 
 
 def test_bias_gelu_matches_gelu_of_sum(device):
-    """bias_gelu must be bitwise identical to fast-mode gelu over ttnn.add, the
-    chain it compiles to. That pins the post-op's variant — an accurate-mode
-    gelu would silently change every result here — and lets the accuracy of the
-    gelu itself stay where it is measured, in the category 3 unary sweeps."""
+    """bias_gelu must be bitwise identical to accurate gelu over an FPU add,
+    the chain its default compiles to. fast_and_approximate_mode defaults to
+    False, matching ttnn.gelu. For bfloat16 the add stays on the FPU either way, so ttnn.add's
+    own default is the matching sum, so bias_gelu is the same as gelu(add(a, b)).
+    """
     values = binary_grid_values(-100.0, 100.0)
     input_a, input_b = pairwise_from_values(values)
 
     tt_a, tt_b = to_tt_tensor(input_a, device), to_tt_tensor(input_b, device)
     result = ttnn.to_torch(ttnn.bias_gelu(tt_a, tt_b))
-    expected = ttnn.to_torch(ttnn.gelu(ttnn.add(tt_a, tt_b), fast_and_approximate_mode=True))
+    expected = ttnn.to_torch(ttnn.gelu(ttnn.add(tt_a, tt_b), fast_and_approximate_mode=False))
 
     assert_equal(expected, result)
 
