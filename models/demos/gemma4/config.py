@@ -68,6 +68,10 @@ class MeshConfig:
         # replicated-residual regime keeps working unchanged.
         self.lane_sharded = False
         self.lanes = self.mesh_shape[self.sp_axis]
+        # CP prefill (slice 3c v1): split each prefill chunk's Q rows across
+        # the sp axis; per-column chunk_start offsets keep causality against
+        # the (replicated or striped) paged cache. Set by the model gate.
+        self.cp_prefill = False
 
         self.decode = decode
         self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
