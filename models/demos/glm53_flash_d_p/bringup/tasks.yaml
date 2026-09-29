@@ -898,6 +898,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 3
+  frozen:
+    at: '2026-09-29T06:57:02'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_03_attn_norm.py: e697953627acf277f15c37ed00a20d10ab481c05e46e048b0dcbcac2b6c7389e
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.dsa_moe.q_a
   title: dsa_moe q_a (op) on device, layer 3
   step: implement
