@@ -843,3 +843,71 @@ indexer on the same device attn_norm and q_resid, not by exact match: pcc_swap_t
 because of order and near-ties.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_04_q_a.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.indexer test (attempt 1)
+
+Reviewed the rendered indexer component test (dsa_moe layer 3; output topk int32 [2048, 2051], ids of the top 512 pools
+of 4 + up to 3 tail tokens, -1 = none) and rewrote it:
+- COMPARE = "topk_overlap" (the harness per-row set overlap), recorded as the gated `pcc_indexer_L03` on chunk 1. The
+  default exact match scores 0.525 with the CPU reference itself (order and near-ties, fp32 golden vs bf16 inputs).
+- Runs both dumped chunks: chunk 0 (start 0) first, then chunk 1 (golden prefix loaded). On chunk 0 at most 512 pools
+  are visible and all are selected, so the sets must be exact; every score bug scores 1.0 there.
+- Exact structure checks on both chunks: ids in [-1, start + S), id <= query position, no duplicates, per-row count
+  equal to the golden's, complete pools of 4 below the query's incomplete pool, exact sets on rows with <= 512 visible
+  pools.
+- Chunk 1: overlap >= 0.9975 and worst row >= 0.98 (reference 0.99903 / 0.9922; bf16 path + 1% score noise 0.99831 /
+  0.9902; no ape 0.99655, ape reversed 0.99589 / 0.9766 fail).
+- Pooled keys: the device module must put `{"index_key": [n >= (start+S)/4, 128]}` in `dctx.extra["state_out"]`
+  (as `_KdaHostFn` does for KDA); the test compares rows [start/4, (start+S)/4) with the golden state: rel L2 <= 0.008,
+  worst row <= 0.02, row norm ratio [0.995, 1.005] (reference 0.0017; bf16 k/gate/prob/key 0.0028 / 0.0038; bugs:
+  no ape 0.063, x1.01 0.0101, ape column 0 only 0.025, last pool zero worst row 1.0). In reference mode the check reads
+  `ref.state_tensors`.
+Sensitivity (CPU host scripts /tmp/dsaidx/{sens,keys,verify}.py, not kept; numbers in the test docstring). Every
+measured bug fails at least one check; only a per-pool key scale over the (golden) prefix and k_norm eps 1e-5 pass.
+Results: reference passes (overlap 0.999033, worst row 0.9922, keys rel 0.0017 on both chunks). Stub fails (overlap
+below threshold). The gate (device) fails with `NotImplementedError: no device module for indexer yet`, as expected
+before the implement step.
+Next (implement): return integer ids [S, 2051] (-1 padding; column order is free, the test is order-free, but the count
+per row must match: 512 pools x 4 + tail), expose the pooled keys in `state_out`, reset the pooled-key cache at start 0.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_indexer.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.indexer implement (attempt 1)
+
+Added `tt/indexer.py:TtIndexer` (`build_indexer`). hooks.py: `_device_step` handles `indexer` through `_IndexerHostFn`,
+and `indexer` is now in `DEVICE_STEPS["dsa_moe"]`.
+- Keys (all S rows, on every chip): `ttnn.linear` wk -> `ttnn.layer_norm` (w + b, eps 1e-6); gate linear + ape
+  ([1, 512] fp32 after the reshape [S, 128] -> [S/4, 512]); 4 slices; fp32 softmax over the 4 (maximum, exp, add,
+  div); sum p_j k_j -> bf16 -> `ttnn.fill_cache` at row start/4. The cache is replicated,
+  [1, 1, max_seq/4 + 32, 128] bf16.
+- Queries: chip d = 2r + c takes rows d*S/4 (`mesh_partition` on axis 0, then on axis 1). wq_b ->
+  `nlp_create_qkv_heads` [1, 32, S/4, 128]. weights_proj x 2^-6 (folded at load).
+- Scores (default `GLM_INDEXER_SCORE=heads`): per head, `ttnn.linear(q_h, k[:kv]^T, activation="relu")` (HiFi4, fp32
+  acc), then an fp32 `addcmul` with that head's weight column, then bf16. `GLM_INDEXER_SCORE=op` keeps
+  `indexer_score_dsa`. That path gives 0.99715 on the gate and fails the test's 0.9975 extra check: it sums the heads
+  in a bf16 DEST (known issue).
+- The op path cannot use `chunk_start_idx = kv_len - 1` (the value must be tile-aligned). It passes chunk_start_idx =
+  kv_len with no kv_len; the 32 spare cache rows keep kv_len < T.
+- The chunk's own pool columns get a constant mask (0 / -inf, pool j visible iff 4j + 3 <= row). Earlier pools are
+  unmasked. Then `topk_large_indices` (k 512) runs over [S/4, kv].
+- Ids in fp32 (exact): `[4p | 4p+1 | 4p+2 | 4p+3]`, so columns are not in pool order (the tests are order-free;
+  sparse_sdpa only needs the sentinel tail). Then a 128-wide tail block (rel + start * valid, -1 pad). At start 0, rows
+  with position < 2047 are replaced by the dense rows 0..q (`ttnn.where`, [S/4, 1] condition). Then typecast to int32 and
+  `ttnn.bitcast` to uint32. Module output: per chip [1, 1, S/4, 2176] uint32 ROW_MAJOR, 0xFFFFFFFF sentinels
+  (sparse_sdpa format).
+- Load-time constants per chunk size in the spec (2048, 5120, 8192): pool mask, tail tables, dense rows and selector,
+  each mesh-sharded to its chip's rows. There is no host transfer in the forward.
+- Harness boundary: bf16 upload of attn_norm / q_resid, and a read-back of the 4 per-chip shards, concatenated on the
+  host and sliced to 2051 int32. I dropped the brief's all_gather: an int32 ROW_MAJOR all_gather of [512, 2176] hung
+  (known issue). `state_prefix` loads rows [0, prefix_len/4) and zeros the rest. `state_out` = the cache
+  [max_seq/4 + 32, 128].
+- hooks `_RefState`: `to_torch` now merges the CPU state with the device-held tensors (a DSA layer keeps kv_latent on
+  the CPU and index_key on the device; index_key is trimmed to length/4). `load_prefix` passes the length to
+  `load_state` (`_KdaHostFn.load_state` ignores it).
+Result: c0 overlap 1.0 (exact sets), keys rel 0.0025. c1 (gated `pcc_indexer_L03`) 0.998657, worst row 0.9922, keys rel
+0.0025 / worst row 0.0035 / ratio [0.9979, 0.9998]. All structure checks pass. The call takes 7 s.
+Next (attention): consume the per-chip uint32 [1, 1, S/4, 2176] directly (same row split). The heads score path runs
+32 linears on [S/4, kv] fp32. Perf candidates: a fork of indexer_score_dsa with fp32 head accumulation, or batching the
+heads.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_indexer.py`
+(`GLM_INDEXER_SCORE=op` for the fused score op).
