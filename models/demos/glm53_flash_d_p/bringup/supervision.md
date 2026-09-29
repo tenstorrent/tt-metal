@@ -93,3 +93,15 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   300-400 each). Fix F50 091b5556d2f (state keeps gated metrics above 64; results/<task>.json keeps all; selftests
   214 -> 216, new test fails on the old gate.py). Migrated state.json 518 KB -> 201 KB with the same rule; replayed the
   S.kda_moe.10 gate commit (a8d385cd98d). Resumed.
+- C.kda_moe.shared_expert PASS (6f465aa7343).
+- S.kda_moe.11 PASS (2c4e6f1035d); C.kda_moe.moe_add PASS (302686016c0).
+- S.kda_moe.12 PASS (924a3824a5b); C.kda_moe.ffn_residual PASS (3610a4cccaa).
+- S.kda_moe.13 PASS (9e85460f086): layer 4 fully on device. All 5 layers / 3 block types on device, every component + swap gate first attempt.
+- M.1 PASS (8509e6ecad3): layers 0.99995+, host_transfers_per_layer 0. L.s4096 PASS (7a2eb951412) layers >= 0.99995, state min 0.99916. L.s16384 PASS (043b3c6e40e) layers >= 0.99993, state min 0.99269 = kda_recurrent L01 (4k 0.99916 -> 16k 0.99269; L02 0.99966 -> 0.99624): KDA recurrent state drifts with length (limit 0.97); watch L.last / L.s56320. Likely the prepare_chunk_recurrence TF32 intra/decay terms (C.kda_dense.attention breadcrumbs).
+- L.last PASS (d4c6d031d5b): layers >= 0.99994, state min 0.99836 (kda_recurrent L01, one chunk from the golden 50k prefix).
+- L.s56320 PASS (56638699400): all 11 chunks on device; layers >= 0.99955 (L01 worst); state min 0.98217 = kda_recurrent L01 (L02 0.98536). KDA recurrent-state drift with length confirmed: L01 0.99916 (4k) -> 0.99269 (16k) -> 0.98217 (56k); limit 0.97 passes with 1.2 pt margin. Candidate precision follow-up: fork prepare_chunk_recurrence (TF32 subtraction in k_dec_t / intra) - the agent's 'left for later'. K.1 started (first check FAIL expected: no adapter yet).
+- 21:3x K.1 failed attempts 1-2 on "hooks.contract_state_pcc is missing": the read-back was written in tt/runners/adapter.py
+  but hooks.py was outside K.1's allowed paths; the agent refused a runtime monkeypatch (correct). Classified:
+  FRAMEWORK. Killed attempt 3 (it would fail the same way), fix F51 79a61144519 (contract step may change and commits
+  hooks.py; selftests 216 -> 217). K.1 latent / index-key read-back via the engine already PCC 0.99997 / 0.99998.
+  Rerun from K.1.
