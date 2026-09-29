@@ -478,7 +478,7 @@ private:
     bool relaxed_inter_mesh_policy_ = false;
     bool unique_shapes_ = false;
 
-    std::unique_ptr<std::map<MeshId, CandidatePool>> pools_;
+    std::unique_ptr<std::map<MeshId, std::shared_ptr<CandidatePool>>> pools_;
     MappingConstraints<MeshId, const Candidate*> constraints_;
     std::size_t attempts_ = 0;
     std::size_t cycle_ = 0;

@@ -2355,7 +2355,7 @@ public:
     // Seat order matches master SAT seat_lit_by_mesh and AdjacencyMatrix row/column indices.
     const std::vector<Candidate>& candidates() const { return candidates_; }
 
-    // Index of `candidate` in candidates(); invalid if `candidate` is not an element of this pool.
+    // Index of `candidate` in candidates(); invalid if `candidate` is not an element of this pool->
     std::optional<std::size_t> seat_index(const Candidate& candidate) const {
         if (candidates_.empty()) {
             return std::nullopt;
@@ -2369,7 +2369,7 @@ public:
         return static_cast<std::size_t>(seat - begin);
     }
 
-    // Pull up to `batch_per_variant` more candidates from every non-exhausted variant in this pool.
+    // Pull up to `batch_per_variant` more candidates from every non-exhausted variant in this pool->
     std::size_t grow(std::size_t batch_per_variant) {
         if (batch_per_variant == 0) {
             return 0;
@@ -2410,7 +2410,7 @@ public:
 
 private:
     // Resumable enumeration state for one grouping variant. Map nodes are never moved -- the session keeps
-    // pointers into its own graph/constraint snapshots. Seatings live in candidates_ on the pool.
+    // pointers into its own graph/constraint snapshots. Seatings live in candidates_ on the pool->
     struct GroupingVariant {
         const GroupingInfo* grouping = nullptr;
         GroupingVariantEnumeration enumeration;
@@ -2496,6 +2496,8 @@ namespace {
 
 using Candidate = SatPlacementEnumerationSession::Candidate;
 using CandidatePool = SatPlacementEnumerationSession::CandidatePool;
+// Identical meshes (same shape, pinnings, groupings) share one pool, so entries can alias the same object.
+using CandidatePoolMap = std::map<GlobalMeshId, std::shared_ptr<CandidatePool>>;
 
 // Saturated fabric link counts between two mesh instances' candidate pools. Row `from_seat` is
 // pools.at(from_mesh).candidates()[from_seat]; column `to_seat` is the peer mesh's candidate at that index.
@@ -2575,15 +2577,15 @@ private:
 class AdjacencyMatrixCache {
 public:
     const AdjacencyMatrix& adjacency_matrix(
-        GlobalMeshId from_mesh, GlobalMeshId to_mesh, const std::map<GlobalMeshId, CandidatePool>& pools) {
+        GlobalMeshId from_mesh, GlobalMeshId to_mesh, const CandidatePoolMap& pools) {
         const auto key = std::make_pair(from_mesh, to_mesh);
         auto it = cache_.find(key);
         if (it != cache_.end()) {
             return it->second;
         }
-        const CandidatePool& from_pool = pools.at(from_mesh);
+        const CandidatePool& from_pool = *pools.at(from_mesh);
         AdjacencyMatrix built =
-            AdjacencyMatrix::build(from_pool.candidates(), pools.at(to_mesh).candidates(), from_pool.asic_count());
+            AdjacencyMatrix::build(from_pool.candidates(), pools.at(to_mesh)->candidates(), from_pool.asic_count());
         return cache_.emplace(key, std::move(built)).first->second;
     }
 
@@ -2591,13 +2593,86 @@ private:
     std::map<std::pair<GlobalMeshId, GlobalMeshId>, AdjacencyMatrix> cache_;
 };
 
-std::map<GlobalMeshId, CandidatePool> create_sat_placement_pools(
+inline void sat_hash_combine(std::size_t& h, std::size_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+}
+
+// Hash of everything the embedding search reads, EXCEPT the `id` handle (assigned in population order, so it
+// differs between instances of one definition). Equal hashes mean identical candidate footprints; a collision
+// only costs a missed sharing opportunity.
+std::size_t sat_grouping_hash(const GroupingInfo& g) {
+    std::size_t h = 0;
+    sat_hash_combine(h, std::hash<std::string>{}(g.name));
+    sat_hash_combine(h, std::hash<std::string>{}(g.type));
+    sat_hash_combine(h, g.asic_count);
+    for (int32_t d : g.instance_tile_layout_dims) {
+        sat_hash_combine(h, static_cast<std::size_t>(d));
+    }
+    for (int32_t d : g.flattened_node_grid_dims) {
+        sat_hash_combine(h, static_cast<std::size_t>(d));
+    }
+    for (const auto& node : g.adjacency_graph.get_nodes()) {
+        sat_hash_combine(h, static_cast<std::size_t>(static_cast<uint64_t>(node)));
+        std::vector<uint64_t> nbrs;
+        for (const auto& nb : g.adjacency_graph.get_neighbors(node)) {
+            nbrs.push_back(static_cast<uint64_t>(nb));
+        }
+        std::sort(nbrs.begin(), nbrs.end());
+        for (uint64_t nb : nbrs) {
+            sat_hash_combine(h, static_cast<std::size_t>(nb));
+        }
+    }
+    for (const GroupingItemInfo& it : g.items) {
+        sat_hash_combine(h, static_cast<std::size_t>(it.type));
+        sat_hash_combine(h, static_cast<std::size_t>(*it.tray_id));
+        sat_hash_combine(h, static_cast<std::size_t>(*it.asic_location));
+        sat_hash_combine(h, std::hash<std::string>{}(it.grouping_name));
+        for (const auto& p : it.grouping_path) {
+            sat_hash_combine(h, std::hash<std::string>{}(p));
+        }
+    }
+    for (const auto& [chip, pos] : g.mesh_node_to_asic_position) {
+        sat_hash_combine(h, static_cast<std::size_t>(static_cast<uint64_t>(chip)));
+        sat_hash_combine(h, static_cast<std::size_t>(*pos.first));
+        sat_hash_combine(h, static_cast<std::size_t>(*pos.second));
+    }
+    for (const auto& [chip, hg] : g.mesh_node_to_host_group) {
+        sat_hash_combine(h, static_cast<std::size_t>(static_cast<uint64_t>(chip)));
+        sat_hash_combine(h, static_cast<std::size_t>(hg));
+    }
+    for (const auto& [chip, hg] : g.mesh_node_to_pgd_host_group) {
+        sat_hash_combine(h, static_cast<std::size_t>(static_cast<uint64_t>(chip)));
+        sat_hash_combine(h, static_cast<std::size_t>(hg));
+    }
+    return h;
+}
+
+// Equivalence key for a mesh's pool: its grouping variants + intra-mesh validation mode + allowed-ASIC set.
+// Meshes with equal keys enumerate identical candidate pools and share one.
+std::size_t sat_mesh_pool_hash(
+    const std::vector<GroupingInfo>& groupings, ConnectionValidationMode mode, const std::set<AsicID>& allowed_asics) {
+    std::size_t h = 0;
+    sat_hash_combine(h, static_cast<std::size_t>(mode));
+    sat_hash_combine(h, groupings.size());
+    for (const GroupingInfo& g : groupings) {
+        sat_hash_combine(h, sat_grouping_hash(g));
+    }
+    for (const AsicID& a : allowed_asics) {
+        sat_hash_combine(h, static_cast<std::size_t>(*a));
+    }
+    return h;
+}
+
+CandidatePoolMap create_sat_placement_pools(
     const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<GlobalMeshId, ConnectionValidationMode>& sat_intra_mesh_mode_by_mesh,
     const std::map<GlobalMeshId, std::set<AsicID>>& allowed_asics_by_mesh) {
-    std::map<GlobalMeshId, CandidatePool> pools;
+    CandidatePoolMap pools;
+    // DEBUG-CLEANUP(remove): TT_METAL_SAT_NO_SHARE=1 disables pool sharing for A/B measurement.
+    const bool share = std::getenv("TT_METAL_SAT_NO_SHARE") == nullptr;
+    std::map<std::size_t, std::shared_ptr<CandidatePool>> pool_by_key;
     for (const auto& [mesh_id, groupings] : global_mesh_groupings) {
         const auto mode_it = sat_intra_mesh_mode_by_mesh.find(mesh_id);
         TT_FATAL(
@@ -2608,23 +2683,36 @@ std::map<GlobalMeshId, CandidatePool> create_sat_placement_pools(
         if (const auto asic_it = allowed_asics_by_mesh.find(mesh_id); asic_it != allowed_asics_by_mesh.end()) {
             allowed_asics = asic_it->second;
         }
-        pools.emplace(
-            mesh_id,
-            CandidatePool(
-                groupings, physical_graph, physical_system_descriptor, mode_it->second, std::move(allowed_asics)));
+        const std::size_t key = share ? sat_mesh_pool_hash(groupings, mode_it->second, allowed_asics) : 0;
+        std::shared_ptr<CandidatePool> pool;
+        if (share) {
+            if (const auto it = pool_by_key.find(key); it != pool_by_key.end()) {
+                pool = it->second;  // an identical mesh already built this pool; alias it
+            }
+        }
+        if (pool == nullptr) {
+            pool = std::make_shared<CandidatePool>(
+                groupings, physical_graph, physical_system_descriptor, mode_it->second, std::move(allowed_asics));
+            if (share) {
+                pool_by_key.emplace(key, pool);
+            }
+        }
+        pools.emplace(mesh_id, std::move(pool));
     }
     return pools;
 }
 
 std::size_t grow_sat_placement_pools(
-    std::map<GlobalMeshId, CandidatePool>& pools, std::size_t batch_per_variant, PlacementSolveStats* stats) {
+    CandidatePoolMap& pools, std::size_t batch_per_variant, PlacementSolveStats* stats) {
     const auto start = std::chrono::steady_clock::now();
     std::size_t grown = 0;
+    // Shared pools appear under several mesh ids; grow each object once per cycle.
+    std::set<CandidatePool*> grown_this_cycle;
     for (auto& [_, pool] : pools) {
-        if (pool.variants_exhausted()) {
+        if (!grown_this_cycle.insert(pool.get()).second) {
             continue;
         }
-        grown += pool.grow(batch_per_variant);
+        grown += pool->grow(batch_per_variant);
     }
     if (stats != nullptr) {
         stats->master_enumeration_elapsed +=
@@ -2633,24 +2721,25 @@ std::size_t grow_sat_placement_pools(
     return grown;
 }
 
-std::size_t count_sat_placement_candidates(const std::map<GlobalMeshId, CandidatePool>& pools) {
+std::size_t count_sat_placement_candidates(const CandidatePoolMap& pools) {
     std::size_t total = 0;
     for (const auto& [_, pool] : pools) {
-        total += pool.candidates().size();
+        total += pool->candidates().size();
     }
     return total;
 }
 
 // Inject MGD fallback variants only when PGD seats are exhausted or the grow cap is hit.
 bool inject_sat_placement_fallbacks(
-    std::map<GlobalMeshId, CandidatePool>& pools, const std::map<GlobalMeshId, GroupingInfo>& mgd_fallback_by_mesh) {
+    CandidatePoolMap& pools, const std::map<GlobalMeshId, GroupingInfo>& mgd_fallback_by_mesh) {
     bool added = false;
+    std::set<CandidatePool*> injected;  // shared pool: inject the fallback once
     for (const auto& [mesh_id, fallback] : mgd_fallback_by_mesh) {
         auto it = pools.find(mesh_id);
-        if (it == pools.end() || it->second.has_grouping(fallback)) {
+        if (it == pools.end() || !injected.insert(it->second.get()).second || it->second->has_grouping(fallback)) {
             continue;
         }
-        if (it->second.add_grouping(fallback)) {
+        if (it->second->add_grouping(fallback)) {
             added = true;
         }
     }
@@ -2691,7 +2780,7 @@ const Candidate* sat_footprint_canonical(
 }
 
 AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
-    const std::map<GlobalMeshId, CandidatePool>& pools, const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
+    const CandidatePoolMap& pools, const AdjacencyGraph<GlobalMeshId>& mesh_level_graph) {
     const bool dedup =
         // DEBUG-CLEANUP(remove; normal default when unset = footprint dedup ON): TT_METAL_SAT_NO_DEDUP
         std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
@@ -2710,8 +2799,8 @@ AdjacencyGraph<const Candidate*> build_sat_placement_seat_graph(
     std::map<GlobalMeshId, std::vector<const Candidate*>> mesh_seats;
     for (const auto& [mesh_id, pool] : pools) {
         auto& seats = mesh_seats[mesh_id];
-        seats.reserve(pool.candidates().size());
-        for (const Candidate& candidate : pool.candidates()) {
+        seats.reserve(pool->candidates().size());
+        for (const Candidate& candidate : pool->candidates()) {
             const Candidate* seat = sat_footprint_canonical(&candidate, dedup, canon);
             seats.push_back(seat);
             seat_adj[seat];  // ensure node present
@@ -2826,7 +2915,7 @@ static std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
 }
 
 bool build_sat_placement_constraints(
-    const std::map<GlobalMeshId, CandidatePool>& pools,
+    const CandidatePoolMap& pools,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<GlobalMeshId, const Candidate*>& constraints) {
     constraints = {};
@@ -2859,7 +2948,7 @@ bool build_sat_placement_constraints(
             pinned = (it != pin_solution.end()) ? &it->second : nullptr;
         }
         ++mesh_index;
-        for (const Candidate& candidate : pool.candidates()) {
+        for (const Candidate& candidate : pool->candidates()) {
             const Candidate* seat = sat_footprint_canonical(&candidate, dedup, canon);
             if (pinned != nullptr) {
                 std::vector<uint64_t> cand_asics;
@@ -2889,7 +2978,7 @@ bool build_sat_placement_constraints(
         std::size_t max_seats = 0, min_seats = SIZE_MAX;
         for (const auto& [mesh_id, pool] : pools) {
             (void)mesh_id;
-            const std::size_t n = pool.candidates().size();
+            const std::size_t n = pool->candidates().size();
             max_seats = std::max(max_seats, n);
             min_seats = std::min(min_seats, n);
         }
@@ -2911,7 +3000,7 @@ bool build_sat_placement_constraints(
         for (const auto& [mesh_id, pool] : pools) {
             std::map<std::string, std::size_t> per_mesh;
             std::set<std::string> distinct_asic_sets;  // same ASIC footprint, different orientation => duplicate set
-            for (const Candidate& candidate : pool.candidates()) {
+            for (const Candidate& candidate : pool->candidates()) {
                 const GroupingInfo* v = candidate.variant();
                 const std::string key = v != nullptr ? fmt::format("{}[{}]", v->name, v->type) : "<null>";
                 per_mesh[key]++;
@@ -2925,7 +3014,7 @@ bool build_sat_placement_constraints(
                 const std::string set_key = fmt::format("{}", fmt::join(sorted_asics, ","));
                 distinct_asic_sets.insert(set_key);
                 // TT_METAL_SAT_DUMP_CANDS=1: emit each candidate's sorted ASIC-id set so we can check whether
-                // the known-good greedy placement's per-mesh ASIC set is even present in the SAT candidate pool.
+                // the known-good greedy placement's per-mesh ASIC set is even present in the SAT candidate pool->
                 // DEBUG-CLEANUP(remove): TT_METAL_SAT_DUMP_CANDS diagnostic (DBGCAND dump)
                 if (std::getenv("TT_METAL_SAT_DUMP_CANDS") != nullptr) {
                     log_info(tt::LogFabric, "DBGCAND mesh={} asics={}", *mesh_id, set_key);
@@ -2939,11 +3028,11 @@ bool build_sat_placement_constraints(
                 tt::LogFabric,
                 "DBGVAR mesh={} candidates={} distinct_asic_sets={} orientations_per_set={:.2f} variants={} | {}",
                 *mesh_id,
-                pool.candidates().size(),
+                pool->candidates().size(),
                 distinct_asic_sets.size(),
                 distinct_asic_sets.empty()
                     ? 0.0
-                    : static_cast<double>(pool.candidates().size()) / static_cast<double>(distinct_asic_sets.size()),
+                    : static_cast<double>(pool->candidates().size()) / static_cast<double>(distinct_asic_sets.size()),
                 per_mesh.size(),
                 row);
         }
@@ -3360,7 +3449,7 @@ void SatPlacementEnumerationSession::finish_init(
         extra_required_.emplace_back(mesh_id, std::move(extra_asics));
         allowed_asics_by_mesh.emplace(mesh_id, std::move(asics));
     }
-    pools_ = std::make_unique<std::map<GlobalMeshId, CandidatePool>>(create_sat_placement_pools(
+    pools_ = std::make_unique<CandidatePoolMap>(create_sat_placement_pools(
         global_mesh_groupings_,
         physical_graph_,
         *physical_system_descriptor_,
@@ -3465,7 +3554,7 @@ std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerati
     if (pool_it == pools_->end()) {
         return seats;
     }
-    for (const Candidate& candidate : pool_it->second.candidates()) {
+    for (const Candidate& candidate : pool_it->second->candidates()) {
         if (candidate.asics().size() != asics.size()) {
             continue;
         }
@@ -3651,7 +3740,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         solved_ = true;
         bool complete = true;
         for (const auto& [_, pool] : *pools_) {
-            if (!pool.variants_exhausted()) {
+            if (!pool->variants_exhausted()) {
                 complete = false;
                 break;
             }
@@ -3680,7 +3769,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (stats_ != nullptr) {
         bool lists_complete = true;
         for (const auto& [_, pool] : *pools_) {
-            if (!pool.variants_exhausted()) {
+            if (!pool->variants_exhausted()) {
                 lists_complete = false;
                 break;
             }
