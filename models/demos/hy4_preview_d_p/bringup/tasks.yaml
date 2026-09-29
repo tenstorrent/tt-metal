@@ -2478,6 +2478,13 @@ tasks:
     kind: moe
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T20:52:49'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py: ac904e7dda071641b9bb8fc2577dd42fef6ed3b6c32aeca2652e7e8bf3dffbca
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.12
   title: 'moe_shared block with steps 1-12 on device (last: experts)'
   step: implement
