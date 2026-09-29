@@ -345,6 +345,24 @@ def _owned_positions(chunk_start, sp, chunk_local):
     return owned
 
 
+def _flat_positions(chunk_start, sp, chunk_local, S):
+    """Global positions of each rank's queries under the FLAT both-axes geometry (cluster_axis=None), written out
+    row by row rather than through the op's closed form: rank r's run starts at chunk_start + r*S, and a row whose
+    slab-local offset reaches chunk_local continues in the same rank's column of the NEXT slab, i.e. jumps by the
+    (sp-1)*chunk_local keys the other ranks own in between."""
+    owned = []
+    for r in range(sp):
+        run_start = chunk_start + r * S
+        slab_offset = run_start % chunk_local
+        owned.append(
+            [
+                run_start + row + ((sp - 1) * chunk_local if slab_offset and slab_offset + row >= chunk_local else 0)
+                for row in range(S)
+            ]
+        )
+    return owned
+
+
 def _causal_indices_at(positions, topk, gen):
     """Block ids for queries at the given global positions: visible blocks only, own block always selected."""
     idx = torch.full((1, 1, len(positions), topk), -1, dtype=torch.int32)
@@ -786,9 +804,12 @@ def test_msa_block_cyclic_sp_flat_linearization(mesh_device):
     1. On a SLAB-ALIGNED start the two branches must agree EXACTLY -- that is the PR's compatibility claim
        ("identical to before for slab-aligned starts, which covers every current caller"), and it is checked
        by running the same inputs with and without cluster_axis and comparing bit-for-bit.
-    2. On a mid-slab start, where the flat branch's straddle fields go nonzero on every rank, the metadata
-       path must still reproduce the host-int path bit-exactly. This is the only coverage of the kernel's
-       meta_rotation_exact=0 compile-time branch at sp>1; the rest of this file always sets cluster_axis.
+    2. On a mid-slab start, where the flat branch's straddle fields go nonzero on every rank, the host-int
+       path must match a golden at the flat positions written out independently (`_flat_positions`), and the
+       metadata path must reproduce the host-int path bit-exactly. Without the golden both paths run the same
+       shared branch, so a regression there (e.g. back to the linear chunk_start + rank*S) would pass. This is
+       the only coverage of the kernel's meta_rotation_exact=0 compile-time branch at sp>1; the rest of this
+       file always sets cluster_axis.
     """
     sp_axis, sp = _sp_or_skip(mesh_device)
     q_ranks, k, v, q_dev, k_dev, v_dev = _meta_inputs(mesh_device, sp, seed=83)
@@ -809,14 +830,31 @@ def test_msa_block_cyclic_sp_flat_linearization(mesh_device):
             flat[r], exact[r]
         ), f"sp={sp} start={aligned}: cluster_axis=None diverged from the rotation-exact geometry on a slab-aligned start"
 
-    # (2) mid-slab: the flat branch straddles on every rank (offset = start % S != 0), and the metadata path
-    # must derive the same geometry on device as the host patched in.
+    # (2) mid-slab: the flat branch straddles on every rank (offset = start % S != 0). The host-int path is
+    # anchored to the independently written flat positions, then the metadata path must derive the same
+    # geometry on device as the host patched in.
     mid = 2 * sp * META_S + 96
     assert mid % META_S != 0, "start must be mid-block for the flat branch to straddle"
-    _, _, idx_mid = _meta_indices(mesh_device, sp, mid, gen)
+    flat_owned = _flat_positions(mid, sp, META_S, META_S)
+    linear = [list(range(mid + r * META_S, mid + (r + 1) * META_S)) for r in range(sp)]
+    assert all(flat_owned[r] != linear[r] for r in range(sp)), "every rank must straddle, or the golden is weak"
+    idx_ranks = [_causal_indices_at(flat_owned[r], META_TOPK, gen) for r in range(sp)]
+    idx_mid = _mesh_tensor(
+        mesh_device,
+        torch.cat(idx_ranks, dim=2),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
     host = _meta_shards(
         _meta_dispatch(q_dev, k_dev, v_dev, idx_mid, sp_axis, flat=True, chunk_start_idx=mid, cache_batch_idx=slot)
     )
+    for r in range(sp):
+        gold = _ref_at_positions(
+            q_ranks[r], k[slot : slot + 1], v[slot : slot + 1], idx_ranks[r], META_SCALE, flat_owned[r]
+        )
+        p = pcc(host[r], gold)
+        assert p >= DEVICE_PCC, f"sp={sp} start={mid}: rank {r} flat host path vs flat golden pcc={p:.5f}"
     meta = _meta_shards(
         _meta_dispatch(
             q_dev,
@@ -862,11 +900,9 @@ def test_msa_block_cyclic_sp_rejects_wrong_cluster_axis(mesh_device, expect_erro
 def _system_mesh_is_2d():
     """Whether a (2,2) submesh can be opened at all. The mesh_device fixture only compares the device COUNT,
     so a 4-chip box exposed as a 1x4 mesh passes that check and then FATALs inside open_mesh_device; decide
-    from the system mesh shape instead and skip cleanly."""
-    try:
-        shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
-    except Exception:
-        return False
+    from the system mesh shape instead and skip cleanly. No try/except: only a real non-2D shape may skip --
+    swallowing a query failure would silently skip the only (2,2) reject coverage."""
+    shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
     return shape.dims() >= 2 and shape[0] >= 2 and shape[1] >= 2
 
 
