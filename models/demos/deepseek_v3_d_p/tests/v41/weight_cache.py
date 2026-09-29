@@ -32,6 +32,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.common import timing_events
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import kernel_cpu
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.oracle import OracleSpec
@@ -133,7 +134,9 @@ def host_weights(root: Path, name: str, compute):
     reference for the weights that stay on the host path (dense layer weights, embeddings)."""
     path = root / f"{name}.pt"
     if path.is_file():
+        timing_events.cache(True, "host_weights", f"{root.name}/{name}", path.stat().st_size)
         return torch.load(path)
+    timing_events.cache(False, "host_weights", f"{root.name}/{name}")
     value = compute()
     root.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".tmp{os.getpid()}")

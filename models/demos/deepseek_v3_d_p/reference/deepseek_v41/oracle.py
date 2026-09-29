@@ -66,6 +66,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from models.common import timing_events
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.engram import EngramLayout, compute_hash_multipliers
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.testing import (
@@ -439,7 +440,8 @@ class LazyReference:
     def __call__(self) -> v41.Transformer:
         if self._model is None:
             start = time.perf_counter()
-            self._model = build_reference(self.spec)
+            with timing_events.phase("reference", layers=list(self.spec.layer_ids)):
+                self._model = build_reference(self.spec)
             print(
                 f"oracle: reference built for layers {list(self.spec.layer_ids)} in {time.perf_counter() - start:.1f}s"
             )
@@ -599,8 +601,12 @@ def oracle(spec: OracleSpec, tokens: torch.Tensor, model: v41.Transformer | Lazy
         raise ValueError(f"tokens must be [1, S] with 0 < S <= {spec.args.max_seq_len}, got {list(tokens.shape)}")
     path = cache_path(spec, tokens)
     if path.is_file():
+        timing_events.cache(True, "oracle", path.stem, path.stat().st_size)
         return torch.load(path)
-    result = _run(_model(model, spec), spec, tokens)
+    timing_events.cache(False, "oracle", path.stem)
+    model = _model(model, spec)
+    with timing_events.phase("oracle", key=path.stem):
+        result = _run(model, spec, tokens)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     torch.save(result, tmp)
@@ -625,7 +631,9 @@ def tail_logits(
     to the ``oracle`` result of the same (spec, tokens), keyed additionally by ``count`` and ``noise``."""
     path = _noisy_path(spec, tokens, count, noise, "tail")
     if path.is_file():
+        timing_events.cache(True, "oracle.tail", path.stem, path.stat().st_size)
         return torch.load(path)
+    timing_events.cache(False, "oracle.tail", path.stem)
     return _noisy_run(spec, tokens, count, model, noise)[0]
 
 
@@ -642,7 +650,9 @@ def noise_drift(
     per-layer floor a free-running implementation's streams are gated against. Cached like ``tail_logits``."""
     path = _noisy_path(spec, tokens, count, noise, "drift")
     if path.is_file():
+        timing_events.cache(True, "oracle.drift", path.stem, path.stat().st_size)
         return torch.load(path)
+    timing_events.cache(False, "oracle.drift", path.stem)
     return _noisy_run(spec, tokens, count, model, noise)[1]
 
 
@@ -701,7 +711,8 @@ def _noisy_run(spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise)
 
             hooks.append(layer.register_forward_hook(block_out))
     try:
-        prefill(model, tokens)
+        with timing_events.phase("oracle", key=_noisy_path(spec, tokens, count, noise, "tail").stem):
+            prefill(model, tokens)
     finally:
         for h in hooks:
             h.remove()

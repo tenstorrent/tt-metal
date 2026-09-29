@@ -27,6 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common import timing_events
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import kernel_cpu
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
@@ -135,22 +136,23 @@ def setup_blocks(mesh_device, weights, chunks, schedule, prompt, kv_format):
     cache_root.mkdir(parents=True, exist_ok=True)
     init_checker(cache_root)
     blocks = {}
-    for i, layer in enumerate(LAYERS):
-        cached = begin_layer(cache_root, layer)
-        if ckpt is not None:
-            w = load_layer_dense(ckpt, layer) if cached else load_layer(ckpt, layer)
-        elif cached:
-            w = host_weights(
-                cache_root, f"layer_{layer}.dense", lambda i=i: device_weights(reference(), i, include_moe=False)
-            )
-        else:
-            w = device_weights(reference(), i)
-            host_weights(
-                cache_root, f"layer_{layer}.dense", lambda w=w: {k: v for k, v in w.items() if k not in MOE_KEYS}
-            )
-        blocks[layer] = TtV41Block(mesh_device, cfg, layer, w, seq // chunks, weight_cache_path=cache_root)
-        complete_layer(cache_root, layer)
-        del w
+    with timing_events.phase("weights", layers=list(LAYERS)):
+        for i, layer in enumerate(LAYERS):
+            cached = begin_layer(cache_root, layer)
+            if ckpt is not None:
+                w = load_layer_dense(ckpt, layer) if cached else load_layer(ckpt, layer)
+            elif cached:
+                w = host_weights(
+                    cache_root, f"layer_{layer}.dense", lambda i=i: device_weights(reference(), i, include_moe=False)
+                )
+            else:
+                w = device_weights(reference(), i)
+                host_weights(
+                    cache_root, f"layer_{layer}.dense", lambda w=w: {k: v for k, v in w.items() if k not in MOE_KEYS}
+                )
+            blocks[layer] = TtV41Block(mesh_device, cfg, layer, w, seq // chunks, weight_cache_path=cache_root)
+            complete_layer(cache_root, layer)
+            del w
     logger.info(f"reference model built: {reference.built}")
 
     return SimpleNamespace(
@@ -230,8 +232,9 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
             state.advance(length)
         return state, {layer: (torch.cat(a), torch.cat(b)) for layer, (a, b) in outs.items()}
 
-    state, first = run()
-    _, second = run()
+    with timing_events.phase("compute", runs=2):
+        state, first = run()
+        _, second = run()
     report = {}
     # the first layer's attention alone on the oracle's attention input (a KV source reads only its own rows)
     head = LAYERS[0]

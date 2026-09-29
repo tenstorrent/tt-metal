@@ -114,7 +114,7 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
     base = small_spec(layers, seq)
     tokens, prompt = vl_prompts.small_prompt(SmallV41Config.EMB_SIZE)
     spec = orc.vl_spec(base, prompt)
-    with _stage(f"vl {schedule} {case} reference"):
+    with _stage(f"vl {schedule} {case} reference", "reference"):
         reference = orc.build_vl_reference(spec, prompt)
         orc.load_engram_rows(reference, spec, tokens)  # the rows of the masked hash (image tokens are DEAD)
     engram, engram_hash = {}, None
@@ -138,7 +138,7 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
         return weights | {"gate_bias_vl": reference.layers[pos].ffn.gate.bias_vl.detach()}
 
     # the text weights are the text spec's: its device MoE tensors are reused
-    with _stage(f"vl {schedule} {case} build"):
+    with _stage(f"vl {schedule} {case} build", "weights"):
         model = TtV41Transformer(
             mesh_device,
             SmallV41Config,
@@ -155,7 +155,7 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
             weight_cache_path=weight_cache_dir(base, mesh_device.shape),
         )
     merged = _MergedPrompt(model, prompt)
-    with _stage(f"vl {schedule} {case} merge exactness"):
+    with _stage(f"vl {schedule} {case} merge exactness", "compute"):
         _check_merge(merged, tokens, orc.oracle(spec, tokens, reference), layers[0], f"vl {schedule} {case}")
     _check(merged, spec, tokens, reference, f"vl {schedule} {case}")
 
@@ -174,7 +174,7 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
         layers, seq, candidate_topk_blocks=PRODUCTION_CANDIDATE_BLOCKS, checkpoint=ckpt.root if ckpt else None
     )
     cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": PRODUCTION_CANDIDATE_BLOCKS})
-    with _stage(f"vl production {weights} prompt (vision oracle cached)"):
+    with _stage(f"vl production {weights} prompt (vision oracle cached)", "oracle"):
         tokens, prompt, _ = vl_prompts.production_prompt(ckpt.root if ckpt else None)
     spec = orc.vl_spec(base, prompt)
     if ckpt is None:
@@ -197,7 +197,7 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
         top = ckpt.read(["embed.weight", "norm.weight", "head.weight", *DELIMITERS])
         embed, norm, head = top["embed.weight"], top["norm.weight"], top["head.weight"]
         image_embeds = {k: top[k] for k in DELIMITERS}
-    with _stage(f"vl production {weights} build (MoE weights cached after the first build)"):
+    with _stage(f"vl production {weights} build (MoE weights cached after the first build)", "weights"):
         model = TtV41Transformer(
             mesh_device,
             cfg,
@@ -212,6 +212,6 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
             weight_cache_path=weight_cache_dir(base, mesh_device.shape),
         )
     merged = _MergedPrompt(model, prompt)
-    with _stage(f"vl production {weights} merge exactness"):
+    with _stage(f"vl production {weights} merge exactness", "compute"):
         _check_merge(merged, tokens, orc.oracle(spec, tokens, reference), layers[0], f"vl production {weights}")
     _check(merged, spec, tokens, reference, f"vl production {weights}")

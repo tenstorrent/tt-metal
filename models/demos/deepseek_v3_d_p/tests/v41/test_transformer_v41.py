@@ -27,6 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common import timing_events
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
@@ -83,7 +84,7 @@ def setup_small(mesh_device, case, schedule):
     chunk, total = {"one_chunk": (SEQ, SEQ), "two_chunks": (SEQ // 2, SEQ), "padded": (SEQ // 2, SEQ - 12)}[case]
     spec = small_spec(layers, SEQ, dspark=schedule == "dspark")
     tokens = orc.text_tokens(total)
-    reference = orc.build_reference(spec)
+    reference = orc.LazyReference(spec)()  # always needed here (Engram tables / DSpark weights); a phase event
     orc.load_engram_rows(reference, spec, tokens)  # synthetic Engram rows the prompt hashes to
     engram, engram_hash = {}, None
     if reference.engram_hash is not None:
@@ -108,7 +109,7 @@ def setup_small(mesh_device, case, schedule):
             "layers": [{"wkv": fp8(b.attn.wkv), "kv_norm": b.attn.kv_norm.weight.detach()} for b in reference.mtp],
         }
     # device MoE tensors converted once per weight identity (tests/v41/weight_cache.py)
-    with _stage(f"{schedule} {case} build"):
+    with _stage(f"{schedule} {case} build", "weights"):
         model = TtV41Transformer(
             mesh_device,
             SmallV41Config,
@@ -146,11 +147,13 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
 
 
 @contextmanager
-def _stage(name: str):
-    """Log a stage's start and elapsed time, so a run's progress is visible while it runs."""
+def _stage(name: str, kind: str):
+    """Log a stage's start and elapsed time (visible while the run runs) and emit it as a ``kind`` timing phase
+    (reference / oracle / weights / compute) for the lock-phase breakdown."""
     logger.info(f"stage {name}: start")
     t = time.perf_counter()
-    yield
+    with timing_events.phase(kind, name=name):
+        yield
     logger.info(f"stage {name}: {time.perf_counter() - t:.1f}s")
 
 
@@ -191,11 +194,11 @@ def _check(model, spec, tokens, reference, name):
         rows = ttnn.to_torch(x, mesh_composer=concat)[0, 0, :length]
         streams.setdefault(layer, []).append(_unpack(rows, model.config.HC_MULT, tp))
 
-    with _stage(f"{name} prefill (compile + run, observed)"):
+    with _stage(f"{name} prefill (compile + run, observed)", "compute"):
         logits, state = model.prefill(tokens[0], scored, observe)
-    with _stage(f"{name} prefill (repeat)"):
+    with _stage(f"{name} prefill (repeat)", "compute"):
         logits2, _ = model.prefill(tokens[0], scored)
-    with _stage(f"{name} reference (cached unless precomputed)"):
+    with _stage(f"{name} reference (cached unless precomputed)", "oracle"):
         clean, expected, drifts, token_floor = reference_data(spec, tokens, reference)
     assert torch.equal(logits, logits2), "prefill is not bit-identical across repeats"
     tokens_device = _agreement(expected, logits)
@@ -253,7 +256,7 @@ def setup_production(mesh_device, weights, chunks):
         layer_weights = lambda layer, include_moe: (load_layer if include_moe else load_layer_dense)(ckpt, layer)
         top = ckpt.read(["embed.weight", "norm.weight", "head.weight"])
         embed, norm, head = top["embed.weight"], top["norm.weight"], top["head.weight"]
-    with _stage(f"production {weights} build (MoE weights cached after the first build)"):
+    with _stage(f"production {weights} build (MoE weights cached after the first build)", "weights"):
         model = TtV41Transformer(
             mesh_device,
             cfg,

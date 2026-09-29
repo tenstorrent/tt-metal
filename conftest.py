@@ -17,6 +17,7 @@ import pytest
 import torch
 from loguru import logger
 
+from models.common import timing_events
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
 from models.tt_transformers.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
@@ -472,11 +473,13 @@ def device(request, device_params):
 
     device.cache_entries_counter = CacheEntriesCounter(device)
 
+    timing_events.emit("device.open", fixture="device", device_id=device_id, test=request.node.nodeid)
     yield device
 
     # Restore the original default device BEFORE closing the test-specific one
     ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
+    timing_events.emit("device.close", fixture="device", test=request.node.nodeid)
 
 
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
@@ -666,6 +669,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    timing_events.emit("device.open", fixture="mesh_device", shape=list(mesh_device.shape), test=request.node.nodeid)
     yield mesh_device
 
     for submesh in mesh_device.get_submeshes():
@@ -673,6 +677,7 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
+    timing_events.emit("device.close", fixture="mesh_device", test=request.node.nodeid)
     del mesh_device
 
 

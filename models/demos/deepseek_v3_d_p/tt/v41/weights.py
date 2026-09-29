@@ -30,6 +30,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from models.common import timing_events
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 
 CHECKPOINT_REPO = "deepseek-ai/DeepSeek-V4.1-Flash"
@@ -313,9 +314,12 @@ def begin_layer(root: Path, layer: int) -> bool:
     """Whether ``layer``'s device tensors in the weight-cache directory ``root`` are complete (its marker exists).
     If not, its files from an interrupted build are removed first, so a partial tensorbin is never loaded as a
     cache hit (ttnn.as_tensor loads any file present)."""
+    files = list(root.glob(f"layer_{layer}.*.tensorbin"))
     if (root / f"layer_{layer}.complete").exists():
+        timing_events.cache(True, "weights", f"{root.name}/layer_{layer}", sum(f.stat().st_size for f in files))
         return True
-    for stale in root.glob(f"layer_{layer}.*.tensorbin"):
+    timing_events.cache(False, "weights", f"{root.name}/layer_{layer}")
+    for stale in files:
         stale.unlink()
     return False
 
