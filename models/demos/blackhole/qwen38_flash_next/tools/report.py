@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Write one measured task run to the standard benchmark artifact format."""
 
+import argparse
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
-def report(summary):
+def report(summary, *, device_name):
+    if device_name not in ("P150x4", "QB2"):
+        raise ValueError("device_name must come from the qualified physical allocation: P150x4 or QB2")
     if summary["completed_samples"] != summary["requested_samples"]:
         raise ValueError("An incomplete task run cannot supply the CI accuracy gate")
     profiler = BenchmarkProfiler()
@@ -31,7 +33,7 @@ def report(summary):
         run_type="demo",
         ml_model_name="qwen38-flash-next",
         ml_model_type="LLM",
-        device_name="P150x4",
+        device_name=device_name,
         num_layers=48,
         batch_size=1,
         dataset_name=f"GSM8K: {summary['scope']}",
@@ -55,5 +57,18 @@ def report(summary):
     )
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("summary", type=Path)
+    parser.add_argument(
+        "--device-name",
+        required=True,
+        choices=("P150x4", "QB2"),
+        help="Physical hardware from allocation/qualification evidence; a logical 1x4 mesh does not identify the SKU",
+    )
+    args = parser.parse_args(argv)
+    report(json.loads(args.summary.read_text()), device_name=args.device_name)
+
+
 if __name__ == "__main__":
-    report(json.loads(Path(sys.argv[1]).read_text()))
+    main()

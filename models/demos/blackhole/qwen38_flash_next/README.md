@@ -123,8 +123,12 @@ Use `tools/report.py` with `CI=true` to emit the standard tt-metal benchmark art
 ```bash
 python -m models.demos.blackhole.qwen38_flash_next.tools.benchmark \
   --checkpoint "$CHECKPOINT" --dataset "$GSM8K_TEST_JSONL" --output-dir "$RESULTS"
-CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULTS/summary.json"
+CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULTS/summary.json" \
+  --device-name "$QUALIFIED_DEVICE_NAME"
 ```
+
+Set `QUALIFIED_DEVICE_NAME` to `P150x4` or `QB2` from the physical allocation and topology qualification record;
+four logical devices alone do not identify a QB2. The reporter requires this explicit identity.
 
 The reporter emits `gsm8k_accuracy` in percent, `time_to_token` in seconds, and separate `tokens/s/user` and
 aggregate `tokens/s` measurements. The shared target validator needs the corresponding GSM8K mapping before
