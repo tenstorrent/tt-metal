@@ -198,8 +198,46 @@ constexpr uint32_t kAllGatherReaderBackwardKernelIndex =
     kFirstAllGatherKernelIndex + ag_rt::kReaderBackwardKernelOffset;
 constexpr uint32_t kAllGatherWriterBackwardKernelIndex =
     kFirstAllGatherKernelIndex + ag_rt::kWriterBackwardKernelOffset;
+// Sliding halos append one reader/writer pair per exchange, in plan_halo_exchanges order.
 constexpr uint32_t kNeighborHaloReaderKernelIndex = 3;
 constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
+
+// Program creation and the per-dispatch patch both go through plan_halo_exchanges, since the exchange
+// list fixes the kernel count and order. Only a 1D fabric's line multicast takes a start distance.
+std::vector<ring_joint::ChunkedSlidingHaloExchange> plan_halo_exchanges(
+    const ttnn::prim::RingJointSDPAParams& args,
+    const ring_joint::ChunkedSlidingHaloLayout& layout,
+    uint32_t transport_rank) {
+    return ring_joint::plan_chunked_sliding_halo_exchanges(
+        layout,
+        transport_rank,
+        args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear,
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()));
+}
+
+// A one-hop or multicast halo spreads each exchange over every link; a unicast multi-hop halo gives each
+// hop one link.
+uint32_t halo_links_per_exchange(
+    const std::vector<ring_joint::ChunkedSlidingHaloExchange>& exchanges, uint32_t num_links) {
+    return exchanges.size() == 1 || exchanges.front().multicast ? num_links : 1;
+}
+
+// Source tile row each hop of a multicast exchange ships.
+std::vector<uint32_t> multicast_origin_rows(
+    const ring_joint::ChunkedSlidingHaloLayout& layout,
+    uint32_t transport_rank,
+    const ring_joint::ChunkedSlidingHaloExchange& exchange) {
+    std::vector<uint32_t> origin_rows;
+    if (!exchange.multicast) {
+        return origin_rows;
+    }
+    for (uint32_t i = 0; i < exchange.hop_count; ++i) {
+        const auto sources = layout.send_sources(transport_rank, exchange.hop + i);
+        TT_FATAL(sources.count == 1, "A multicast halo hop ships one tail, got {}", sources.count);
+        origin_rows.push_back(sources.first_start_tile);
+    }
+    return origin_rows;
+}
 
 // Runtime-arg offsets used by cache-hit patching. Descriptor construction appends the same slots through
 // CheckedRuntimeArgList, so future layout edits fail on program creation instead of corrupting cache hits.
@@ -625,7 +663,9 @@ void apply_ring_joint_scalar_runtime_args(
                                            : std::nullopt);
         TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
     }
-    const uint32_t halo_hop_count = runtime_halo_layout ? runtime_halo_layout->remote_hop_count() : 0;
+    const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
+        runtime_halo_layout ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
+                            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
     const uint32_t tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
@@ -659,9 +699,9 @@ void apply_ring_joint_scalar_runtime_args(
             }
         };
         if (uses_neighbor_halo) {
-            for (uint32_t hop = 1; hop <= halo_hop_count; ++hop) {
+            for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
                 patch_reader_batch_base(
-                    kNeighborHaloReaderKernelIndex + 2 * (hop - 1),
+                    kNeighborHaloReaderKernelIndex + 2 * exchange,
                     ag_rt::kNeighborReaderRuntimeArgHeaderCount,
                     neighbor_reader_tensor_descriptor_field_count,
                     ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
@@ -737,13 +777,22 @@ void apply_ring_joint_scalar_runtime_args(
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
         // compact chunked sliding they also choose which cache-group tail each hop reads.
         // Rewrite every per-link reader/writer slice for the current request.
-        // A one-hop halo spreads its exchange over every link; a multi-hop halo gives each hop one.
-        const uint32_t links_per_hop = halo_hop_count == 1 ? args.all_gather_operation_attributes.num_links : 1;
-        for (uint32_t hop = 1; hop <= halo_hop_count; ++hop) {
-            const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank, hop);
-            const uint32_t tail_rows = runtime_chunked_sliding_layout.hop_rows(hop);
-            auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex + 2 * (hop - 1));
-            auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex + 2 * (hop - 1));
+        const uint32_t links_per_exchange =
+            halo_links_per_exchange(halo_exchanges, args.all_gather_operation_attributes.num_links);
+        const uint32_t reader_origins_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
+                                             num_ag_inputs * neighbor_reader_tensor_descriptor_field_count +
+                                             ag_rt::kNeighborMulticastBlockOriginsOffset;
+        const uint32_t writer_origins_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
+                                             num_ag_inputs * ag_rt::kNeighborWriterTensorDescriptorFieldCount +
+                                             ag_rt::kNeighborMulticastBlockOriginsOffset;
+        for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
+            const auto& plan = halo_exchanges[exchange];
+            const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank, plan.hop);
+            const uint32_t tail_rows = runtime_chunked_sliding_layout.hop_rows(plan.hop);
+            const auto origin_rows =
+                multicast_origin_rows(runtime_chunked_sliding_layout, ring_write_plan.transport_rank, plan);
+            auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex + 2 * exchange);
+            auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex + 2 * exchange);
             TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
             for (uint32_t x = 0; x < reader_grid_args.size(); ++x) {
                 TT_FATAL(
@@ -770,9 +819,10 @@ void apply_ring_joint_scalar_runtime_args(
                         const uint32_t halo_pages = tail_rows * input_Wt;
                         const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
                         const uint32_t pages = sources.count * halo_pages;
-                        const uint32_t start = link * (pages / links_per_hop) + std::min(link, pages % links_per_hop);
+                        const uint32_t start =
+                            link * (pages / links_per_exchange) + std::min(link, pages % links_per_exchange);
                         const uint32_t end =
-                            (link + 1) * (pages / links_per_hop) + std::min(link + 1, pages % links_per_hop);
+                            (link + 1) * (pages / links_per_exchange) + std::min(link + 1, pages % links_per_exchange);
                         reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
                         reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
                         reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
@@ -782,6 +832,12 @@ void apply_ring_joint_scalar_runtime_args(
                         reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
                         writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
                         writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                    }
+                    for (uint32_t i = 0; i < origin_rows.size(); ++i) {
+                        write_runtime_arg(
+                            reader_args, reader_origins_base + i, origin_rows[i], "neighbor_halo_reader.origin");
+                        write_runtime_arg(
+                            writer_args, writer_origins_base + i, origin_rows[i], "neighbor_halo_writer.origin");
                     }
                 }
             }
@@ -3129,83 +3185,101 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
     }
     if (has_sliding_window) {
-        // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one is
-        // covered by one exchange per hop: hop d ships the tail of the slab d positions back into its
-        // own block of the receiver's compact buffer, and the SDPA reader waits for all of them
-        // before its K loop. A hop that lands back on this device (halo spanning the whole ring) is a
-        // local cache read and gets no exchange. validate_on_program_cache_miss bounds the hop count.
+        // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one reaches
+        // several predecessors, and hop d ships the tail of the slab d positions back into its own block
+        // of the receiver's compact buffer; the SDPA reader waits for all of them before its K loop. A
+        // hop that lands back on this device (halo spanning the whole ring) is a local cache read and
+        // gets no exchange. validate_on_program_cache_miss bounds the hop count.
+        // plan_chunked_sliding_halo_exchanges groups the hops into exchanges.
         const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
         const auto& ag_attrs = args.all_gather_operation_attributes;
-        // A one-hop halo spreads over every link. With more hops each hop takes one link, and hops
-        // beyond the link count time-share one (see RingAttentionNeighborHaloConfig).
-        const uint32_t halo_links_per_hop = halo_remote_hops == 1 ? ag_attrs.num_links : 1;
-        // Each hop needs its own workers. The CCL offset points at a reserved column (or row), so
+        const auto halo_exchanges = plan_halo_exchanges(args, chunked_sliding_halo_layout, transport_rank);
+        // The first exchange's workers collect every arrival (RingAttentionNeighborHaloConfig::collects_arrivals).
+        TT_FATAL(halo_exchanges.front().hop == 1, "The first sliding halo exchange must cover hop 1");
+        const bool halo_multicast = halo_exchanges.front().multicast;
+        const uint32_t halo_exchange_count = halo_exchanges.size();
+        // Unicast hops beyond the link count time-share a link (see RingAttentionNeighborHaloConfig).
+        const uint32_t links_per_exchange = halo_links_per_exchange(halo_exchanges, ag_attrs.num_links);
+        // Each exchange needs its own workers. The CCL offset points at a reserved column (or row), so
         // walk along it: allocation order is the same for every call, so the blocks are disjoint.
         const bool halo_column_major =
             ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR;
-        const auto halo_hop_core_grid_offset = [&](uint32_t hop) {
-            const uint32_t worker_stride = (hop - 1) * halo_links_per_hop;
+        const auto halo_exchange_core_grid_offset = [&](uint32_t exchange) {
+            const uint32_t worker_stride = exchange * links_per_exchange;
             return CoreCoord{
                 args.ccl_core_grid_offset.x + (halo_column_major ? 0 : worker_stride),
                 args.ccl_core_grid_offset.y + (halo_column_major ? worker_stride : 0)};
         };
-        // Same allocator the helper uses, so the two agree. hop_first_cores[h - 1] is hop h's first
-        // (and, when h > 1, only) worker.
-        std::vector<CoreCoord> hop_first_cores;
-        hop_first_cores.reserve(halo_remote_hops);
-        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
-            const auto [hop_core_range, hop_cores] = ttnn::ccl::choose_worker_cores(
-                halo_links_per_hop,
+        // Same allocator the helper uses, so the two agree.
+        std::vector<CoreCoord> first_exchange_link_cores;
+        // Each exchange's link-0 worker, which carries its link hand-off.
+        std::vector<CoreCoord> exchange_lead_cores;
+        exchange_lead_cores.reserve(halo_exchange_count);
+        for (uint32_t exchange = 0; exchange < halo_exchange_count; ++exchange) {
+            auto [exchange_core_range, cores] = ttnn::ccl::choose_worker_cores(
+                links_per_exchange,
                 1,
                 mesh_device,
                 ag_attrs.sub_device_id,
-                halo_hop_core_grid_offset(hop),
+                halo_exchange_core_grid_offset(exchange),
                 std::nullopt,
                 ag_attrs.core_allocation_strategy);
-            hop_first_cores.push_back(hop_cores.front());
+            exchange_lead_cores.push_back(cores.front());
+            if (exchange == 0) {
+                first_exchange_link_cores = std::move(cores);
+            }
         }
-        // Hop 1's worker is where every hop of this halo delivers its ready-increment, so one reader
-        // can gate on the whole halo.
-        const CoreCoord halo_rendezvous = mesh_device->worker_core_from_logical_core(hop_first_cores.front());
-        // A linear topology has no physical wrap link, so a hop whose destination wraps goes backward
-        // (at hop 1, the device N-1 -> 0 case). Forward and backward are separate fabric connections,
-        // so each direction time-shares only its own links: within a direction, hop k (0-based) runs
-        // on link k % span and, beyond the first span hops, waits for hop k - span to close its
-        // connection first. Queued hops still overlap their DRAM reads with the predecessor's send,
-        // so only the fabric transfer serialises.
-        const auto hop_sends_backward = [&](uint32_t hop) {
-            return ag_attrs.topology == ttnn::ccl::Topology::Linear && transport_rank + hop >= ring_size;
-        };
-        std::array<std::vector<uint32_t>, 2> direction_hops;  // [0] forward, [1] backward
-        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
-            direction_hops[hop_sends_backward(hop)].push_back(hop);
+        // Every exchange of a multi-hop halo increments the receiver's first-exchange workers, one per link;
+        // every device allocates its first exchange at the same offset, so the cores match.
+        std::vector<CoreCoord> halo_rendezvous;
+        if (halo_remote_hops > 1) {
+            for (const auto& core : first_exchange_link_cores) {
+                halo_rendezvous.push_back(mesh_device->worker_core_from_logical_core(core));
+            }
+        }
+        // Forward and backward are separate fabric connections, so each direction time-shares only its
+        // own links: within a direction, exchange k (0-based) runs on link k % span and, beyond the
+        // first span exchanges, waits for exchange k - span to close its connection first. Queued
+        // exchanges still overlap their DRAM reads with the predecessor's send, so only the fabric
+        // transfer serialises.
+        std::array<std::vector<uint32_t>, 2> direction_exchanges;  // [0] forward, [1] backward
+        for (uint32_t exchange = 0; exchange < halo_exchange_count; ++exchange) {
+            direction_exchanges[halo_exchanges[exchange].send_backward].push_back(exchange);
         }
         std::array<uint32_t, 2> direction_link_span{0, 0};
         for (uint32_t direction = 0; direction < 2; ++direction) {
-            if (direction_hops[direction].empty()) {
+            if (direction_exchanges[direction].empty()) {
                 continue;
             }
             const auto& neighbour = direction == 0 ? forward_coord : backward_coord;
             TT_FATAL(
-                neighbour.has_value(), "Sliding halo hop {} has no fabric neighbour", direction_hops[direction][0]);
+                neighbour.has_value(),
+                "Sliding halo hop {} has no fabric neighbour",
+                halo_exchanges[direction_exchanges[direction][0]].hop);
             const uint32_t links_available =
                 tt::tt_fabric::get_forwarding_link_indices(
                     mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(neighbour.value()))
                     .size();
             TT_FATAL(links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
+            // Every predecessor must use the same link count, or arrival counts would not match.
+            TT_FATAL(
+                !halo_multicast || links_available >= links_per_exchange,
+                "Sliding halo multicast needs {} fabric links but only {} are available",
+                links_per_exchange,
+                links_available);
             // Never use more links than the caller asked for.
             direction_link_span[direction] = std::min(
-                {static_cast<uint32_t>(direction_hops[direction].size()), ag_attrs.num_links, links_available});
+                {static_cast<uint32_t>(direction_exchanges[direction].size()), ag_attrs.num_links, links_available});
         }
-        const bool halo_links_shared =
-            direction_hops[0].size() > direction_link_span[0] || direction_hops[1].size() > direction_link_span[1];
-        // One local semaphore, same id on every hop worker, carries the hand-off. It is allocated
-        // before the helper's own per-core semaphores, so pick an id free on all hop workers.
+        const bool halo_links_shared = direction_exchanges[0].size() > direction_link_span[0] ||
+                                       direction_exchanges[1].size() > direction_link_span[1];
+        // One local semaphore, same id on every exchange's worker, carries the hand-off. It is allocated
+        // before the helper's own per-core semaphores, so pick an id free on all of them.
         uint32_t halo_chain_semaphore_id = 0;
         if (halo_links_shared) {
             // Per-core ids are handed out densely from 0, so the largest first-free id is free on
-            // every hop core; asserted below, since a taken id would silently alias a semaphore.
-            for (const auto& core : hop_first_cores) {
+            // every exchange core; asserted below, since a taken id would silently alias a semaphore.
+            for (const auto& core : exchange_lead_cores) {
                 const auto sem_id = desc.find_available_semaphore_id(core, tt::CoreType::WORKER);
                 TT_FATAL(
                     sem_id.has_value(),
@@ -3218,15 +3292,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 TT_FATAL(
                     sem.core_type != tt::CoreType::WORKER || sem.id != halo_chain_semaphore_id ||
                         std::none_of(
-                            hop_first_cores.begin(),
-                            hop_first_cores.end(),
+                            exchange_lead_cores.begin(),
+                            exchange_lead_cores.end(),
                             [&](const CoreCoord& core) { return sem.core_ranges.contains(core); }),
                     "Sliding-halo link hand-off semaphore id {} is already used on a hop worker core",
                     halo_chain_semaphore_id);
             }
             std::vector<CoreRange> chain_core_ranges;
-            chain_core_ranges.reserve(hop_first_cores.size());
-            for (const auto& core : hop_first_cores) {
+            chain_core_ranges.reserve(exchange_lead_cores.size());
+            for (const auto& core : exchange_lead_cores) {
                 chain_core_ranges.emplace_back(core, core);
             }
             desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
@@ -3236,59 +3310,59 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .initial_value = 0,
             });
         }
-        for (uint32_t hop = 1; hop <= halo_remote_hops; ++hop) {
-            const uint32_t destination_rank = (transport_rank + hop) % ring_size;
-            const bool send_backward = hop_sends_backward(hop);
-            const uint32_t unicast_hops = send_backward ? transport_rank - destination_rank : hop;
+        for (uint32_t exchange = 0; exchange < halo_exchange_count; ++exchange) {
+            const auto& plan = halo_exchanges[exchange];
+            const uint32_t destination_rank = (transport_rank + plan.hop) % ring_size;
             const int32_t signed_hops =
-                send_backward ? -static_cast<int32_t>(unicast_hops) : static_cast<int32_t>(unicast_hops);
+                plan.send_backward ? -static_cast<int32_t>(plan.distance) : static_cast<int32_t>(plan.distance);
+            // The nearest receiver; a multicast continues past it.
             const auto halo_destination_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
                 tensor_args.input_q, coord, signed_hops, ag_attrs.topology, ag_attrs.cluster_axis);
-            const auto halo_transport_coord = send_backward ? backward_coord : forward_coord;
+            const auto halo_transport_coord = plan.send_backward ? backward_coord : forward_coord;
             TT_FATAL(
                 halo_transport_coord.has_value() && halo_destination_coord.has_value(),
                 "Sliding attention hop {} requires a route to ring device {}",
-                hop,
+                plan.hop,
                 destination_rank);
-            const CoreCoord hop_core_grid_offset = halo_hop_core_grid_offset(hop);
-            // Hops beyond their direction's link count queue up behind the hop `span` earlier in the
-            // same direction, which shares their link, and hand it on to the hop `span` later.
-            const auto& lane = direction_hops[send_backward];
-            const uint32_t lane_span = direction_link_span[send_backward];
-            const uint32_t lane_index = std::find(lane.begin(), lane.end(), hop) - lane.begin();
-            const bool hop_waits = lane_index >= lane_span;
-            const bool hop_signals = lane_index + lane_span < lane.size();
-            const CoreCoord hop_successor =
-                hop_signals
-                    ? mesh_device->worker_core_from_logical_core(hop_first_cores[lane[lane_index + lane_span] - 1])
+            // Exchanges beyond their direction's link count queue up behind the one `span` earlier in
+            // the same direction, which shares their link, and hand it on to the one `span` later.
+            const auto& lane = direction_exchanges[plan.send_backward];
+            const uint32_t lane_span = direction_link_span[plan.send_backward];
+            const uint32_t lane_index = std::find(lane.begin(), lane.end(), exchange) - lane.begin();
+            const bool exchange_waits = lane_index >= lane_span;
+            const bool exchange_signals = lane_index + lane_span < lane.size();
+            const CoreCoord exchange_successor =
+                exchange_signals
+                    ? mesh_device->worker_core_from_logical_core(exchange_lead_cores[lane[lane_index + lane_span]])
                     : CoreCoord{0, 0};
             // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
             // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
             // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
             // rest of the op reads and let them derive the start themselves; the value here then serves as
             // the baked origin they shift away from.
-            // The tail(s) this hop ships follow from the receiver's Q mapping; a one-hop halo can ship
-            // two when block-cyclic Q wraps. Metadata kernels re-derive them on-device each replay.
-            const auto hop_sources = chunked_sliding_halo_layout.send_sources(transport_rank, hop);
-            const uint32_t hop_tail_rows = chunked_sliding_halo_layout.hop_rows(hop);
+            // The tail(s) this exchange ships follow from each receiver's Q mapping; a one-hop halo can
+            // ship two when block-cyclic Q wraps. A multicast lists every hop's origin so its kernels can
+            // group equal ones into runs. Metadata kernels re-derive them on-device each replay.
+            const auto hop_sources = chunked_sliding_halo_layout.send_sources(transport_rank, plan.hop);
+            const uint32_t hop_tail_rows = chunked_sliding_halo_layout.hop_rows(plan.hop);
             const RingAttentionNeighborHaloConfig neighbor_halo{
                 .send_to_next_start_Ht = hop_sources.first_start_tile,
                 .send_to_next_count_Ht = hop_sources.count * hop_tail_rows,
                 .send_second_start_Ht = hop_sources.second_start_tile,
-                .send_backward = send_backward,
-                .unicast_hops = unicast_hops,
-                .hop = hop,
+                .send_backward = plan.send_backward,
+                .distance = plan.distance,
+                .hop = plan.hop,
                 .tail_tile_rows = hop_tail_rows,
-                .dest_row_base = chunked_sliding_halo_layout.hop_dest_row(hop),
+                .dest_row_base = chunked_sliding_halo_layout.dest_row(transport_rank, plan.hop),
+                .hop_origin_rows = multicast_origin_rows(chunked_sliding_halo_layout, transport_rank, plan),
                 .link_base = lane_index % lane_span,
                 .arrivals_expected = halo_remote_hops,
-                .rendezvous_noc_x = static_cast<uint32_t>(halo_rendezvous.x),
-                .rendezvous_noc_y = static_cast<uint32_t>(halo_rendezvous.y),
-                .waits_for_predecessor = hop_waits,
-                .signals_successor = hop_signals,
+                .rendezvous_noc = halo_rendezvous,
+                .waits_for_predecessor = exchange_waits,
+                .signals_successor = exchange_signals,
                 .chain_semaphore_id = halo_chain_semaphore_id,
-                .successor_noc_x = static_cast<uint32_t>(hop_successor.x),
-                .successor_noc_y = static_cast<uint32_t>(hop_successor.y),
+                .successor_noc_x = static_cast<uint32_t>(exchange_successor.x),
+                .successor_noc_y = static_cast<uint32_t>(exchange_successor.y),
                 .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
                 .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
                 .kv_cache_num_layers = args.kv_cache_num_layers,
@@ -3299,15 +3373,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             };
             log_debug(
                 tt::LogOp,
-                "Chunked sliding K/V halo: device={}, hop={}/{} -> device={}, link={}, chain(w={}, s={}), "
-                "tail=[{}, {}), payload_rows={}, compact rows [{}, {})",
+                "Chunked sliding K/V halo: device={}, exchange={}/{} hop={} -> device={} ({} {} x{}), link={}, "
+                "chain(w={}, s={}), tail=[{}, {}), payload_rows={}, compact rows [{}, {})",
                 transport_rank,
-                hop,
-                halo_remote_hops,
+                exchange + 1,
+                halo_exchange_count,
+                plan.hop,
                 destination_rank,
+                plan.send_backward ? "backward" : "forward",
+                plan.distance,
+                plan.hop_count,
                 neighbor_halo.link_base,
-                hop_waits,
-                hop_signals,
+                exchange_waits,
+                exchange_signals,
                 neighbor_halo.send_to_next_start_Ht,
                 neighbor_halo.send_to_next_start_Ht + neighbor_halo.send_to_next_count_Ht,
                 neighbor_halo.send_to_next_count_Ht,
@@ -3320,14 +3398,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 halo_transport_coord.value(),
                 halo_destination_coord.value(),
                 all_gather_output_tensors,
-                halo_links_per_hop,
+                links_per_exchange,
                 ag_attrs.ring_size,
                 transport_rank,
                 ag_attrs.topology,
                 ag_attrs.semaphore,
                 ag_attrs.sub_device_id,
                 all_gather_fused_op_signaler.value(),
-                hop_core_grid_offset,
+                halo_exchange_core_grid_offset(exchange),
                 ag_attrs.core_allocation_strategy,
                 args.cache_batch_idx(),
                 compute_gather_valid_Ht(args, tensor_args),
