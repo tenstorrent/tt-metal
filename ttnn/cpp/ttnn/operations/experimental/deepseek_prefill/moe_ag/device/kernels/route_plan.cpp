@@ -80,9 +80,9 @@ void kernel_main() {
     }
     noc_async_read(dram(lmap_addr), l1_lmap, NG * 4);
     noc_async_read_barrier();
-    const uint32_t* lmap = reinterpret_cast<const uint32_t*>(l1_lmap);
+    const tt_l1_ptr uint32_t* lmap = reinterpret_cast<const tt_l1_ptr uint32_t*>(l1_lmap);
     auto slot = [&](uint32_t i, uint32_t k) -> uint32_t {
-        const uint32_t gid = reinterpret_cast<const uint16_t*>(l1_idx + i * IDX_STRIDE)[k];
+        const uint32_t gid = reinterpret_cast<const tt_l1_ptr uint16_t*>(l1_idx + i * IDX_STRIDE)[k];
         return gid < NG ? lmap[gid] : NONE;
     };
 
@@ -141,7 +141,7 @@ void kernel_main() {
             2 * EPC * 4,
             R,
             false);
-        uint32_t* rows = reinterpret_cast<uint32_t*>(l1_rows);
+        tt_l1_ptr uint32_t* rows = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_rows);
         for (uint32_t gid = 0; gid < NG; ++gid) {
             const uint32_t l = lmap[gid];
             rows[gid] = l < EPC ? m[2 * EPC + l] : 0;
@@ -161,7 +161,7 @@ void kernel_main() {
             start[e] = m[e];
             region[e] = m[EPC + e];
         }
-        uint32_t* ys = reinterpret_cast<uint32_t*>(l1_ys);
+        tt_l1_ptr uint32_t* ys = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_ys);
         for (uint32_t i = 0; i < n; ++i) {
             for (uint32_t k = 0; k < K; ++k) {
                 const uint32_t l = slot(i, k);

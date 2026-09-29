@@ -59,16 +59,16 @@ void kernel_main() {
         noc_async_read(get_noc_addr(g0 + i, wg), l1_w + i * W_STRIDE, K * 2);
     }
     {
-        uint32_t* z = reinterpret_cast<uint32_t*>(l1_zero);
+        tt_l1_ptr uint32_t* z = reinterpret_cast<tt_l1_ptr uint32_t*>(l1_zero);
         for (uint32_t i = 0; i < ROW_BYTES / 4; ++i) {
             z[i] = 0;
         }
     }
     noc_async_read_barrier();
-    const uint32_t* ys = reinterpret_cast<const uint32_t*>(l1_ys);
+    const tt_l1_ptr uint32_t* ys = reinterpret_cast<const tt_l1_ptr uint32_t*>(l1_ys);
     const uint64_t zero_src = get_noc_addr(l1_zero);
     for (uint32_t i = 0; i < n; ++i) {
-        const uint16_t* w = reinterpret_cast<const uint16_t*>(l1_w + i * W_STRIDE);
+        const tt_l1_ptr uint16_t* w = reinterpret_cast<const tt_l1_ptr uint16_t*>(l1_w + i * W_STRIDE);
         uint32_t cnt = 0;
         for (uint32_t k = 0; k < K; ++k) {
             cnt += ys[i * K + k] != NONE;

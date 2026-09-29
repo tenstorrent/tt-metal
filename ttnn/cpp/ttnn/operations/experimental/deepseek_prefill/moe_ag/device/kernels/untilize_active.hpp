@@ -21,7 +21,7 @@ inline void for_my_tile_rows(
     noc_async_read(row(regions_addr), l1 + NG * 4, NG * 4);
     noc_async_read(row(lmap_addr), l1 + 2 * NG * 4, NG * 4);
     noc_async_read_barrier();
-    const uint32_t* counts = reinterpret_cast<const uint32_t*>(l1);
+    const tt_l1_ptr uint32_t* counts = reinterpret_cast<const tt_l1_ptr uint32_t*>(l1);
     const uint32_t* regions = counts + NG;
     const uint32_t* lmap = counts + 2 * NG;
     uint32_t j = 0;
