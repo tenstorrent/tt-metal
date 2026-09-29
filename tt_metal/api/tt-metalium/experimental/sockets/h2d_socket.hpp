@@ -12,7 +12,7 @@
 #include <utility>
 
 namespace tt::umd {
-class TlbWindow;
+class IoWindow;
 }
 
 namespace tt::tt_metal::experimental::detail {
@@ -51,6 +51,14 @@ enum class H2DMode : uint8_t {
  * and the device kernel updates `bytes_acked` to indicate consumed data. The host blocks
  * on write() if the FIFO is full until the device acknowledges data.
  *
+ * Thread safety:
+ * - The FIFO is single-producer/single-consumer: one host producer writes data and one
+ *   device consumer acknowledges it.
+ * - An H2DSocket instance is not internally synchronized. Calls on the same instance
+ *   must not overlap across host threads unless the caller provides external synchronization.
+ * - A descriptor attaches another handle to the same FIFO; it does not create an independent
+ *   channel. At most one host process may actively write through the owner/connector handles.
+ *
  * Supports cross-process usage: the owner process creates the socket and exports a
  * flatbuffer descriptor. A remote process connects via the descriptor using only UMD
  * (no MetalContext required).
@@ -76,6 +84,12 @@ public:
      * Allocates named shared memory for host-side buffers, pins it for device DMA,
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
+     *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
+     * Only the rank owning recv_core maps host memory and may write or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
      *
      * If `recv_core` is a claimed service core, the device-side buffers are allocated
      * from that core's service-core L1 region instead of the worker-grid BankManager.
@@ -105,10 +119,10 @@ public:
      *                   coord of an L2CPU tile on the target device.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the receiver L2CPU for the socket metadata.
-     *                              Must be PCIe-aligned and within the L2CPU's static TLB window.
+     *                              Must be PCIe-aligned and within the L2CPU's IoWindow.
      * @param data_fifo_address LIM address for the data FIFO. In HOST_PUSH this is the ring
      *                          itself and must be PCIe-aligned, disjoint from the config buffer,
-     *                          and fit with fifo_size inside the L2CPU's static TLB window. In
+     *                          and fit with fifo_size inside the L2CPU's IoWindow. In
      *                          DEVICE_PULL the ring lives in pinned host memory and this is the
      *                          base the device computes ring offsets against.
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
@@ -267,8 +281,11 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& bytes_acked_info,
         const PinnedBufferInfo& data_info);
-    void init_receiver_tlb(
-        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
+    void init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+
+    // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
+    // Connectors remain context-free and do not use this path.
+    void enable_mock_flow_control(const MeshDevice& mesh_device);
 
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
@@ -297,7 +314,7 @@ private:
     uint32_t aligned_data_buf_start_ = 0;
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
-    tt::umd::TlbWindow* receiver_core_tlb_ = nullptr;
+    std::unique_ptr<tt::umd::IoWindow> receiver_core_window_;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_acked_ptr_ = nullptr;

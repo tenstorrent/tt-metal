@@ -112,14 +112,22 @@ constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
 // carry just the chip id.
 using LogicalChipId = uint32_t;
 
+// Node id within one PGD grouping's adjacency graph (proto Instance.id). Named so it is not
+// conflated with LogicalChipId (a mesh-local MGD chip) or a physical chip id.
+using GroupingChipId = uint32_t;
+
+// Stable numeric handle of one resolved PGD grouping instance (groupings are otherwise identified
+// by their name/type strings).
+using PhysicalGroupingId = uint32_t;
+
 /**
- * @brief Represents a fabric node identifier combining mesh ID and chip ID
+ * @brief Represents a fabric node identifier combining mesh ID and logical chip ID
  */
 class FabricNodeId {
 public:
-    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
+    explicit FabricNodeId(MeshId mesh_id_val, LogicalChipId chip_id_val);
     MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
+    LogicalChipId chip_id = 0;
 };
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);

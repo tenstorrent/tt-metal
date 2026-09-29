@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -25,6 +26,10 @@
 //
 // The invalid coordinates are derived from the device rather than hardcoded, because both grids
 // shrink under harvesting: a core that is out of range on a harvested part is legal on a stock one.
+//
+// The one core that has no bank and is still legal is a claimed service core; that case needs the
+// arch and fast-dispatch gating those fixtures carry, so it lives in
+// tests/tt_metal/tt_metal/dispatch/test_service_core_manager.cpp.
 
 namespace tt::tt_metal {
 namespace {
@@ -49,7 +54,13 @@ ShardedBufferConfig one_shard_config(IDevice* device, BufferType buffer_type, co
 }
 
 std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    return CreateBuffer(one_shard_config(device, buffer_type, core));
+    const auto config = one_shard_config(device, buffer_type, core);
+    return BufferImpl::create(
+        config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 
 // Constructs the buffer without allocating it: the explicit-address overload skips allocate_impl().
@@ -59,8 +70,14 @@ std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType bu
 // out, so an L1_SMALL config tensor there is constructed and never allocated.
 std::shared_ptr<Buffer> make_unallocated_width_sharded_buffer(
     IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    return CreateBuffer(
-        one_shard_config(device, buffer_type, core), device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const auto config = one_shard_config(device, buffer_type, core);
+    return BufferImpl::create(
+        config.device,
+        device->allocator()->get_base_allocator_addr(HalMemType::L1),
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 
 }  // namespace

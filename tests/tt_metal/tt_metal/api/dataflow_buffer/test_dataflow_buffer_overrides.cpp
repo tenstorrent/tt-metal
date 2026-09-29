@@ -6,6 +6,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -45,13 +46,22 @@ static void run_dfb_size_override_test(
     experimental::DataMovementHardwareConfig dm_producer_cfg;
     experimental::DataMovementHardwareConfig dm_consumer_cfg;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        dm_producer_cfg = experimental::DataMovementGen2Config{};
-        dm_consumer_cfg = experimental::DataMovementGen2Config{};
+        dm_producer_cfg = experimental::DataMovementHardwareConfig{};
+        dm_consumer_cfg = experimental::DataMovementHardwareConfig{};
     } else {
-        dm_producer_cfg =
-            experimental::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
-        dm_consumer_cfg = experimental::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+        dm_producer_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                },
+        };
+        dm_consumer_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt::tt_metal::NOC::NOC_1,
+                },
+        };
     }
 
     experimental::KernelSpec producer_spec{
@@ -88,10 +98,16 @@ static void run_dfb_size_override_test(
     };
     // Implicit sync is gen2 only
     if (mesh_device.arch() == ARCH::QUASAR && !implicit_sync) {
-        auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
-            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
-        auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
-            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config));
+        auto& producer_spec_dm = std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
+        auto& consumer_spec_dm = std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config);
+        if (!consumer_spec_dm.config_2xx) {
+            consumer_spec_dm.config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
@@ -116,7 +132,10 @@ static void run_dfb_size_override_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    Program& program = mesh_workload.get_programs().at(device_range);
 
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
@@ -168,7 +187,7 @@ static void run_dfb_size_override_test(
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
-        slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
 
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);

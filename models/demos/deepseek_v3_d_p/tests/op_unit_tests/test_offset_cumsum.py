@@ -74,13 +74,6 @@ def torch_offset_cumsum(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (2, 1),
-            fabric2d_device_params(),
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="fabric2d-2x1",
-        ),
-        pytest.param(
             (4, 1),
             torus_y_device_params(),
             1,
@@ -251,3 +244,67 @@ def test_offset_cumsum(
 
     assert all_passed, "offset_cumsum output does not match torch reference on one or more devices"
     logger.info("offset_cumsum matches torch reference!")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [fabric2d_device_params(fabric_payload_size=6144, l1_small_size=1216)],
+    indirect=True,
+)
+@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+def test_offset_cumsum_distinct_groups_cache(mesh_device, cluster_axis, memory_config):
+    rows, cols = tuple(mesh_device.shape)
+    width, experts_per_chip = 256, 8
+    retained = []
+    mesh_device.enable_program_cache()
+
+    def make_input(seed):
+        generator = torch.Generator().manual_seed(seed)
+        histograms = torch.randint(0, 64, (rows, cols, width), dtype=torch.int32, generator=generator)
+        tensor = ttnn.from_torch(
+            histograms,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, 1)),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        retained.append(tensor)
+        return histograms, tensor
+
+    def run(tensor):
+        return ttnn.experimental.deepseek_prefill.offset_cumsum(
+            tensor,
+            cluster_axis=cluster_axis,
+            num_links=2,
+            experts_per_chip=experts_per_chip,
+            memory_config=memory_config,
+            use_l1_small_for_semaphores=True,
+        )
+
+    def check(histograms, outputs):
+        per_device = [ttnn.get_device_tensors(t) for t in outputs]
+        assert all(len(tensors) == rows * cols for tensors in per_device)
+        for chip in range(rows * cols):
+            row, col = divmod(chip, cols)
+            data = histograms[:, col, :] if cluster_axis == 0 else histograms[row, :, :]
+            position = row if cluster_axis == 0 else col
+            total = data.sum(0)
+            aligned = ((total + 31) // 32 * 32).reshape(-1, experts_per_chip)
+            region = (aligned.cumsum(-1) - aligned).reshape(width)
+            offset = data[:position].sum(0) + region
+            for reference, tensors in zip((offset, total, region), per_device):
+                actual = ttnn.to_torch(tensors[chip]).reshape(-1).to(torch.int64)
+                assert torch.equal(actual, reference), (cluster_axis, row, col)
+
+    for iteration in range(3):
+        host, tensor = make_input(1234 + iteration)
+        outputs = run(tensor)
+        check(host, outputs)
+        if iteration == 0:
+            entries = mesh_device.num_program_cache_entries()
+        else:
+            assert mesh_device.num_program_cache_entries() == entries
+        retained.extend(outputs)

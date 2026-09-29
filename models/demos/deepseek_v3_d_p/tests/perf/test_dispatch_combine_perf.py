@@ -86,6 +86,7 @@ _COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
 # model -> (picks, dispatch baselines, combine baselines).
 _MODELS = {
     "dsv3": (_DS_CHUNK_PICKS, _DISPATCH_DS_CHUNK_EXPECTED_NS, _COMBINE_DS_CHUNK_EXPECTED_NS),
+    # https://github.com/tenstorrent/tt-metal/issues/54972
     "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
     "glm52": (_GLM52_CHUNK_PICKS, _DISPATCH_GLM52_CHUNK_EXPECTED_NS, _COMBINE_GLM52_CHUNK_EXPECTED_NS),
 }
@@ -127,7 +128,7 @@ def _perf_param_per_op(
         extra_env = {"TT_DS_CAPTURED_LAYER": str(captured_layer), "TT_DS_CAPTURED_COL": str(captured_col)}
     else:
         extra_env = {}
-    command = f"pytest {worker_dir}/{worker_file}::{worker_test} -k '{k_filter}'"
+    command = f"pytest {worker_dir}/{worker_file}::{worker_test} -k '{k_filter}' --wrapper-invocation"
     return (
         command,
         expected_per_op,

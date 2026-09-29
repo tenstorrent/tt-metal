@@ -9,7 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -42,9 +42,9 @@ void kernel_main() {
     const auto d = TensorAccessor(tensor::dst);
 
     Noc noc;
-    // dfb::in0 and dfb::in1 are each 1 page of size: 128 + page_size_bytes.
-    DataflowBuffer dfb0(dfb::in0);
-    DataflowBuffer dfb1(dfb::in1);
+    // scratch::in0 and scratch::in1 are each 1 page of size: 128 + page_size_bytes.
+    Scratchpad<uint8_t> dfb0(scratch::in0);
+    Scratchpad<uint8_t> dfb1(scratch::in1);
 
     // Alignment pre-calculations.
     constexpr uint64_t r_mask_to_use = decltype(s)::is_dram ? MASK_64 : MASK_16;
@@ -54,12 +54,8 @@ void kernel_main() {
     const uint64_t w_mask_to_use = MASK_16;
     const uint64_t w_offset_to_use = OFFSET_16;
 
-    dfb0.reserve_back(1);
-    dfb1.reserve_back(1);
-    uint32_t input_buffer = dfb0.get_write_ptr();
-    uint32_t alignment_buffer = dfb1.get_write_ptr();
-    dfb1.push_back(1);
-    dfb0.push_back(1);
+    uint32_t input_buffer = dfb0.get_base_address();
+    uint32_t alignment_buffer = dfb1.get_base_address();
 
     alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);  // aligned for writes
     input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);          // aligned for reads

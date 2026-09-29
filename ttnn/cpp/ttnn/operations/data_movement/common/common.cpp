@@ -11,8 +11,111 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 #include <numeric>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::data_movement {
+
+bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config) {
+    return mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED ||
+           (mem_config.nd_shard_spec().has_value() && !mem_config.shard_spec().has_value());
+}
+
+bool is_functionally_same_memory_config(
+    const tt::tt_metal::MemoryConfig& config_a, const tt::tt_metal::MemoryConfig& config_b) {
+    if (config_a == config_b) {
+        return true;  // same provenance, or interleaved: operator== is already exact
+    }
+    if (config_a.memory_layout() != config_b.memory_layout() || config_a.buffer_type() != config_b.buffer_type()) {
+        return false;
+    }
+    // The allocation flags change allocator semantics, so they are part of a layout's identity.
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+    if (per_core_allocation::is_per_core_allocation(config_a) !=
+            per_core_allocation::is_per_core_allocation(config_b) ||
+        range_lockstep_allocation::is_range_lockstep_allocation(config_a) !=
+            range_lockstep_allocation::is_range_lockstep_allocation(config_b)) {
+        return false;
+    }
+    // A genuinely ND layout is only described by its nd_shard_spec, which operator== already
+    // compared, so there is nothing left to relax. Not relaxed either: an ND-sharded *request*
+    // against a tensor whose ND spec normalized to 2D, which differs by memory_layout() above and
+    // so still reshards even though the distribution matches. Normalizing that equivalence is a
+    // wider change than a no-op gate warrants.
+    if (is_nd_sharded_memory_config(config_a) || is_nd_sharded_memory_config(config_b)) {
+        return false;
+    }
+    // Buffer creation follows the nd spec, so disagreeing nd specs allocate differently even when
+    // the 2D specs match. Only the one-sided case (no shadow spec yet) is relaxed.
+    if (config_a.nd_shard_spec().has_value() && config_b.nd_shard_spec().has_value() &&
+        config_a.nd_shard_spec() != config_b.nd_shard_spec()) {
+        return false;
+    }
+    // Layout-only sharded configs (no shard_spec) are deliberately not equal: reshape leaves those
+    // to its auto-derive path rather than treating them as a no-op.
+    return config_a.shard_spec().has_value() && config_a.shard_spec() == config_b.shard_spec();
+}
+
+tt::tt_metal::MemoryConfig drop_normalized_nd_shard_spec(const tt::tt_metal::MemoryConfig& mem_config) {
+    if (!mem_config.shard_spec().has_value() || !mem_config.nd_shard_spec().has_value()) {
+        return mem_config;
+    }
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+    const bool per_core = per_core_allocation::is_per_core_allocation(mem_config);
+    const bool range_lockstep = range_lockstep_allocation::is_range_lockstep_allocation(mem_config);
+    tt::tt_metal::MemoryConfig stripped{mem_config.memory_layout(), mem_config.buffer_type(), mem_config.shard_spec()};
+    // Mutually exclusive by construction, so at most one of these runs. Both require an L1 sharded
+    // config, which `stripped` still is.
+    if (per_core) {
+        per_core_allocation::set_per_core_allocation(stripped, true);
+    } else if (range_lockstep) {
+        range_lockstep_allocation::set_range_lockstep_allocation(stripped, true);
+    }
+    return stripped;
+}
+
+tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(
+    const tt::tt_metal::MemoryConfig& src_cfg,
+    const ttnn::Shape& src_padded_shape,
+    const ttnn::Shape& out_padded_shape,
+    bool is_tiled) {
+    const auto& src_nd = src_cfg.nd_shard_spec().value();
+    const uint32_t rank = out_padded_shape.rank();
+    // A shard spec's rank may legally be lower than its tensor's (BufferDistributionSpec only
+    // requires shard rank <= tensor rank), so align the shard shape to the source tensor rank
+    // first, then adapt both the shard and the padded shape to the output rank. Bailing on a rank
+    // mismatch instead would carry a stale-rank shard spec onto the output and re-trip the rank
+    // abort this path exists to avoid.
+    const ttnn::Shape src_shard_at_src_rank =
+        squeeze_or_unsqueeze_shape_to_ND(src_nd.shard_shape, src_padded_shape.rank());
+    const ttnn::Shape src_shard = squeeze_or_unsqueeze_shape_to_ND(src_shard_at_src_rank, rank);
+    const ttnn::Shape src_padded = squeeze_or_unsqueeze_shape_to_ND(src_padded_shape, rank);
+    ttsl::SmallVector<uint32_t> new_shard(rank);
+    for (uint32_t d = 0; d < rank; ++d) {
+        const uint32_t src_dim = src_padded[d] == 0 ? 1 : src_padded[d];
+        const uint32_t shard_d = src_shard[d] == 0 ? 1 : src_shard[d];
+        const uint32_t num_shards = (src_dim + shard_d - 1) / shard_d;  // per-dim shard count on the source
+        const uint32_t out_dim = out_padded_shape[d] == 0 ? 1 : out_padded_shape[d];
+        new_shard[d] = (out_dim + num_shards - 1) / num_shards;  // ceil-divide the output dim across those shards
+    }
+    if (is_tiled && rank >= 2) {
+        // Tiled shard shapes must be tile multiples on the inner two dims: round up, then clamp to
+        // the padded dim. A dim too small for that many tile-aligned shards (e.g. 64 fits two
+        // 32-tall shards, not four) lands on fewer cores; that is inherent, not a bug.
+        const uint32_t th = tt::constants::TILE_HEIGHT;
+        const uint32_t tw = tt::constants::TILE_WIDTH;
+        new_shard[rank - 1] = std::min(((new_shard[rank - 1] + tw - 1) / tw) * tw, out_padded_shape[rank - 1]);
+        new_shard[rank - 2] = std::min(((new_shard[rank - 2] + th - 1) / th) * th, out_padded_shape[rank - 2]);
+    }
+    return tt::tt_metal::MemoryConfig{src_cfg.buffer_type(), src_nd.with_shard_shape(ttnn::Shape(new_shard))};
+}
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
@@ -437,14 +540,83 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     return max_l1_space;
 }
 
+uint32_t get_pending_l1_output_reservation(
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& output_padded_shape,
+    const MemoryConfig& output_memory_config,
+    DataType output_dtype,
+    Layout output_layout,
+    bool require_constructible) {
+    if (output_memory_config.buffer_type() != tt::tt_metal::BufferType::L1) {
+        return 0;
+    }
+
+    // Sharded outputs already place exactly one shard per core, and their ops bind CBs to
+    // those buffers rather than allocating a separate static region, so no reservation is
+    // needed (and shard shapes are validated elsewhere).
+    if (output_memory_config.is_sharded()) {
+        return 0;
+    }
+
+    const uint32_t num_banks = input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    if (num_banks == 0) {
+        return 0;
+    }
+
+    size_t total_bytes = 0;
+    size_t page_bytes = 0;
+    try {
+        const tt::tt_metal::TensorSpec output_spec(
+            output_padded_shape,
+            tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(output_layout), output_memory_config));
+        total_bytes = output_spec.compute_packed_buffer_size_bytes();
+        page_bytes = output_spec.compute_page_size_bytes();
+    } catch (...) {
+        if (require_constructible) {
+            throw;
+        }
+        // If the spec cannot be constructed (unsupported dtype/layout combination), fall back
+        // to reserving nothing.
+        return 0;
+    }
+    if (page_bytes == 0) {
+        return static_cast<uint32_t>(tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(num_banks)));
+    }
+
+    // Interleaved pages are distributed round-robin as whole, alignment-padded pages, so the
+    // busiest bank holds ceil(num_pages / num_banks) of them. Reserving the average
+    // (total_bytes / num_banks) underestimates whenever num_pages is not a multiple of
+    // num_banks, which can still leave the CBs overlapping the output on the fullest bank.
+    const auto& allocator = *input_tensor_a.device()->allocator();
+    const uint64_t page_alignment = allocator.get_alignment(tt::tt_metal::BufferType::L1);
+    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), page_alignment);
+    const uint64_t num_pages = tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(page_bytes));
+    const uint64_t pages_on_fullest_bank = tt::div_up(num_pages, static_cast<uint64_t>(num_banks));
+    const uint64_t bytes_on_fullest_bank = pages_on_fullest_bank * aligned_page_bytes;
+
+    // That per-bank size is what the bank manager asks its free list for, but the L1 free lists are
+    // built with the DRAM alignment as both their block alignment and their minimum allocation
+    // (BankManager::init_allocators is handed dram_alignment_bytes so L1<->DRAM transfers stay
+    // aligned), so the allocation that actually lowers lowest_occupied_compute_l1_address is that
+    // size rounded up once more. Reserve what the allocator will take, not what the pages add up
+    // to, or a decision made within that last granule of the budget is more permissive than the
+    // program factory it predicts. (Under the opt-in HYBRID allocator mode the per-page rounding is
+    // also the DRAM alignment; tile pages and tile-width row-major pages are multiples of it, so
+    // that mode is not accounted for separately here.)
+    const uint64_t allocation_granule = allocator.get_alignment(tt::tt_metal::BufferType::DRAM);
+    return static_cast<uint32_t>(tt::align(std::max(bytes_on_fullest_bank, allocation_granule), allocation_granule));
+}
+
 bool is_enough_space(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
     const uint32_t num_tiles_per_row,
     const uint32_t staging_bytes_per_tile,
-    const uint32_t fixed_staging_bytes) {
+    const uint32_t fixed_staging_bytes,
+    const uint32_t reserved_l1_bytes_per_core) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    max_l1_space = max_l1_space > reserved_l1_bytes_per_core ? max_l1_space - reserved_l1_bytes_per_core : 0;
     uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(
         input_tensor_a,
         input_single_tile_size,
@@ -730,6 +902,149 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
         return static_cast<uint32_t>(t.buffer()->aligned_page_size());
     }
     return row_bytes;
+}
+
+void push_buffer_set(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const BlockBufferSet& set,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    tt::DataFormat input_cb_data_format,
+    tt::DataFormat output_cb_data_format,
+    uint32_t dram_alignment,
+    uint32_t tile_height,
+    const std::optional<tt::tt_metal::TileDescriptor>& tile) {
+    // The staging buffer is used by the reader when the DRAM source row and the L1 destination have
+    // different alignment offsets: the reader rounds the source address down to a dram_alignment
+    // boundary, issues one noc_async_read of (row_bytes + dram_alignment) into this buffer, then
+    // copies the correctly-offset slice into the input buffer.
+    //   row_bytes  = tile_width * elt_size * block_tiles  (one row of a block)
+    //              = input_single_tile_size / tile_height * block_tiles
+    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
+    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
+    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
+    //
+    // Only the tilize direction has such a reader; an untilize set leaves staging_index unset.
+    if (set.staging_index.has_value()) {
+        const uint32_t input_row_bytes = input_single_tile_size / tile_height;
+        const uint32_t temp_cb_size = input_row_bytes * set.block_tiles + 2 * dram_alignment;
+
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = temp_cb_size,
+            .core_ranges = set.core_ranges,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = *set.staging_index,
+                .data_format = input_cb_data_format,
+                .page_size = temp_cb_size,
+            }}},
+        });
+    }
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = set.block_tiles * input_single_tile_size,
+        .core_ranges = set.core_ranges,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = set.input_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+            .tile = tile,
+        }}},
+    });
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = set.block_tiles * output_single_tile_size,
+        .core_ranges = set.core_ranges,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = set.output_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+            .tile = tile,
+        }}},
+    });
+}
+
+BlockPlan make_block_plan(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const bool has_staging = (direction == BlockDirection::Tilize);
+
+    TT_FATAL(
+        core_order == BlockCoreOrder::ColumnMajor || !sub_core_grids.has_value(),
+        "RowMajor core order splits over the whole grid and cannot honour sub_core_grids");
+
+    const tt::tt_metal::CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreRangeSet default_grid(tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    tt::tt_metal::CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
+    // Tilize splits over the output (tiled) shape; untilize over the input (tiled) shape. They only
+    // coincide when nothing is padded away -- see BlockDirection.
+    const auto& padded =
+        (direction == BlockDirection::Tilize) ? output_tensor.padded_shape() : input_tensor.padded_shape();
+    const uint32_t num_tiles_per_col = padded[-2] / tile_height;
+    const uint32_t num_tiles_per_row = padded[-1] / tile_width;
+    const uint32_t num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
+
+    // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1. Only
+    // the tilize direction has one, so untilize budgets the input/output pair alone.
+    const uint32_t max_l1_size = get_max_l1_space(input_tensor);
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t staging_bytes_per_tile = has_staging ? (input_single_tile_size / tile_height) : 0;
+    const uint32_t fixed_staging_bytes = has_staging ? (2 * dram_alignment) : 0;
+    const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
+    const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
+    const uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
+
+    BlockPlan plan;
+    plan.split = (core_order == BlockCoreOrder::RowMajor)
+                     ? ttnn::split_blocks_for_tilize_wh(
+                           grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit)
+                     : ttnn::split_blocks_for_tilize_wh(
+                           available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+
+    // The work split hands out exactly two block widths, so there are exactly two buffer sets:
+    //
+    //   full     - `single_sub_block_size` tiles wide: the full-block cores, plus the cliff-*column*
+    //              cores (a short column still processes full-width blocks).
+    //   cliffrow - `single_block_size_cliff_row` tiles wide: the cores holding the narrow block at
+    //              the end of a row, plus the corner core that is both cliff-row and cliff-column.
+    //
+    // Each set gets its own indices and its own sizes, so no index is ever re-used at two different
+    // sizes. Either set may be empty for a given shape.
+    plan.full = BlockBufferSet{
+        .staging_index = has_staging ? std::optional<uint8_t>{static_cast<uint8_t>(tt::CBIndex::c_1)} : std::nullopt,
+        .input_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+        .output_index = static_cast<uint8_t>(tt::CBIndex::c_16),
+        .block_tiles = plan.split.single_sub_block_size,
+        .core_ranges = plan.split.core_range.merge(
+            plan.split.has_cliff_col ? plan.split.cliff_col_core_range : tt::tt_metal::CoreRangeSet{}),
+    };
+    plan.cliffrow = BlockBufferSet{
+        .staging_index = has_staging ? std::optional<uint8_t>{static_cast<uint8_t>(tt::CBIndex::c_3)} : std::nullopt,
+        .input_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+        .output_index = static_cast<uint8_t>(tt::CBIndex::c_17),
+        .block_tiles = plan.split.single_block_size_cliff_row,
+        .core_ranges = plan.split.has_cliff_row ? plan.split.cliff_row_core_range.merge(
+                                                      plan.split.has_cliff_col ? plan.split.cliff_col_row_core_range
+                                                                               : tt::tt_metal::CoreRangeSet{})
+                                                : tt::tt_metal::CoreRangeSet{},
+    };
+    return plan;
+}
+
+const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_metal::CoreCoord& core) {
+    const bool in_full = !plan.full.empty() && plan.full.core_ranges.contains(core);
+    const bool in_cliffrow = !plan.cliffrow.empty() && plan.cliffrow.core_ranges.contains(core);
+    TT_FATAL(
+        in_full != in_cliffrow,
+        "Core {} is covered by {} buffer sets; the work split must place every core in exactly one",
+        core.str(),
+        (in_full && in_cliffrow) ? "both" : "neither");
+    return in_cliffrow ? plan.cliffrow : plan.full;
 }
 
 }  // namespace ttnn::operations::data_movement

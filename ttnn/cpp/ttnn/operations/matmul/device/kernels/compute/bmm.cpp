@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as bmm_metal2.cpp. Ops ported to
+// Metal 2.0 bind the fork; this file serves the consumers still on the legacy API. Until the last
+// of them migrates and this file is retired, changes here likely belong in the fork too.
+
 #include <cstdint>
 
 #include "api/compute/matmul.h"
@@ -16,13 +20,13 @@ using std::uint32_t;
 void kernel_main() {
     constexpr int onetile = 1;
 
-    int dst_tile_index = 0;
-    int in0_block_tile_index = 0;
+    const int dst_tile_index = 0;
+    const int in0_block_tile_index = 0;
 
-    uint32_t batch = get_compile_time_arg_val(0);
-    uint32_t Mt = get_compile_time_arg_val(1);
-    uint32_t Kt = get_compile_time_arg_val(2);
-    uint32_t Nt = get_compile_time_arg_val(3);
+    const uint32_t batch = get_compile_time_arg_val(0);
+    const uint32_t Mt = get_compile_time_arg_val(1);
+    const uint32_t Kt = get_compile_time_arg_val(2);
+    const uint32_t Nt = get_compile_time_arg_val(3);
 
     constexpr uint32_t dfb_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_in1 = get_named_compile_time_arg_val("cb_in1");

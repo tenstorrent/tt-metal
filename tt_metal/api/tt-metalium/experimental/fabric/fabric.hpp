@@ -115,6 +115,11 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
+// returns the logical ethernet core on src that link_idx forwards through toward dst, for a link index
+// from get_forwarding_link_indices
+tt::tt_metal::CoreCoord get_forwarding_eth_core(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx);
+
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
@@ -141,7 +146,7 @@ struct FabricEriscDatamoverKernelConfig {
 tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**
- * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Call before creating unit meshes to enable fabric with the specified number of routing planes.
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the
@@ -204,7 +209,11 @@ public:
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
-        CoreType core_type = CoreType::WORKER);
+        CoreType core_type = CoreType::WORKER,
+        // usable_l1_end_address is highest L1 address the memory map may reach, exclusive.  A caller that wants the
+        // mux kept clear of L1_SMALL, to avoid clobbering persistent semaphores, passes
+        // the L1_SMALL floor here. 0 means "use the physical end of L1".
+        size_t usable_l1_end_address = 0);
 
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
@@ -329,7 +338,11 @@ public:
         uint8_t num_channels,
         uint8_t num_buffers_per_channel,
         size_t channel_buffer_size_bytes,
-        size_t base_l1_address);
+        size_t base_l1_address,
+        // Highest L1 address the memory map may reach, exclusive. 0 means "use the physical end of L1".
+        // Unlike V1 there is no shrink loop here, so a ceiling that binds is a hard error rather than a
+        // smaller mux.
+        size_t usable_l1_end_address = 0);
 
     void append_client_connection_rt_args(
         const tt::tt_metal::CoreCoord& mux_virtual_core,
@@ -379,13 +392,13 @@ private:
     uint32_t forwarder_service_burst_size_ = 0;
     uint32_t trid_ring_capacity_ = 0;
 
-    MemoryRegion status_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion shared_ring_region_{};
-    MemoryRegion channel_region_{};
-    MemoryRegion shared_control_region_{};
-    MemoryRegion credit_notify_scratch_region_{};
+    MemoryRegion status_region_;
+    MemoryRegion connection_info_region_;
+    MemoryRegion connection_handshake_region_;
+    MemoryRegion shared_ring_region_;
+    MemoryRegion channel_region_;
+    MemoryRegion shared_control_region_;
+    MemoryRegion credit_notify_scratch_region_;
 
     size_t memory_map_end_address_ = 0;
 };

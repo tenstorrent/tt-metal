@@ -23,11 +23,15 @@ Invoked from the CI dispatch-timeout command in two phases:
 
 Both phases derive the report filename from PYTEST_CURRENT_TEST so they
 target the same file regardless of PID.
+
+Callers with no pytest process pass --test-id for the identity and --report-dir for the
+location. Concurrent writers of one identity collapse onto a single report.
 """
 
 import argparse
 import hashlib
 import os
+import tempfile
 import sys
 from datetime import datetime, timezone
 from html import escape
@@ -37,23 +41,30 @@ REPORT_DIR = "generated/test_reports"
 TRIAGE_SUMMARY_PATH = "generated/triage_summary.txt"
 
 
-def _report_path_for_test(test_id: str) -> str:
+def _report_path_for_test(test_id: str, report_dir: str = REPORT_DIR) -> str:
     name_hash = hashlib.sha256(test_id.encode()).hexdigest()[:16]
-    return os.path.join(REPORT_DIR, f"hang_report_{name_hash}.xml")
+    return os.path.join(report_dir, f"hang_report_{name_hash}.xml")
 
 
-def write_hang_junit_xml(triage_summary: str = "") -> str | None:
+def resolve_test_id(fallback: str | None = None) -> str | None:
+    """PYTEST_CURRENT_TEST when running under pytest, else the fallback identity."""
+    current_test = os.environ.get("PYTEST_CURRENT_TEST")
+    if current_test:
+        return current_test.rsplit(" (", 1)[0]
+    return fallback or None
+
+
+def write_hang_junit_xml(
+    triage_summary: str = "", test_id: str | None = None, report_dir: str = REPORT_DIR
+) -> str | None:
     """Write (or overwrite) a JUnit XML report for the hung test.
 
-    Identifies the test via the PYTEST_CURRENT_TEST environment variable.
-    Returns the report path on success, or ``None`` if PYTEST_CURRENT_TEST is
-    not set (i.e. not running under pytest).
+    Returns the report path, or ``None`` if no test identity is available.
     """
-    current_test = os.environ.get("PYTEST_CURRENT_TEST")
-    if not current_test:
+    test_id = resolve_test_id(test_id)
+    if not test_id:
         return None
 
-    test_id = current_test.rsplit(" (", 1)[0]
     filepath, sep, test_name = test_id.partition("::")
     if not sep:
         test_name = "unknown"
@@ -92,11 +103,16 @@ def write_hang_junit_xml(triage_summary: str = "") -> str | None:
         triage_summary=escape(triage_summary),
     )
 
-    report_path = _report_path_for_test(test_id)
+    report_path = _report_path_for_test(test_id, report_dir)
     try:
-        os.makedirs(REPORT_DIR, exist_ok=True)
-        with open(report_path, "w") as f:
+        os.makedirs(report_dir, exist_ok=True)
+        # Writers can race on this path; rename so it is never half-written.
+        fd, tmp_path = tempfile.mkstemp(dir=report_dir, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
             f.write(xml_content)
+        # mkstemp is 0600; on shared storage the reader can be another user.
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, report_path)
         print(f"[INFO] Hang report written to {report_path}", file=sys.stderr)
         return report_path
     except Exception as e:
@@ -109,16 +125,31 @@ def main() -> None:
     parser.add_argument(
         "--update",
         action="store_true",
-        help=f"Read triage summary from {TRIAGE_SUMMARY_PATH} and overwrite the report.",
+        help="Read the triage summary and overwrite the report.",
+    )
+    parser.add_argument(
+        "--summary-path",
+        default=TRIAGE_SUMMARY_PATH,
+        help=f"Triage summary --update reads (default: {TRIAGE_SUMMARY_PATH}).",
+    )
+    parser.add_argument(
+        "--test-id",
+        default=None,
+        help="Identity as 'file::name', used when PYTEST_CURRENT_TEST is unset.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default=REPORT_DIR,
+        help=f"Directory to write the report into (default: {REPORT_DIR}).",
     )
     args = parser.parse_args()
 
     summary = ""
-    if args.update and os.path.isfile(TRIAGE_SUMMARY_PATH):
-        with open(TRIAGE_SUMMARY_PATH) as f:
+    if args.update and os.path.isfile(args.summary_path):
+        with open(args.summary_path) as f:
             summary = f.read()
 
-    write_hang_junit_xml(summary)
+    write_hang_junit_xml(summary, test_id=args.test_id, report_dir=args.report_dir)
 
 
 if __name__ == "__main__":

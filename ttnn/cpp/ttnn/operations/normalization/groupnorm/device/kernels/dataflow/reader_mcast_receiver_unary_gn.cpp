@@ -87,14 +87,14 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr bool GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2") == 1;
+    constexpr bool GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W") == 1;
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     // 19 and 20 are used in welford version but unused in this version
     constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<decltype(src0_args)::next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -104,11 +104,11 @@ void kernel_main() {
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
-    uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
 
@@ -129,7 +129,7 @@ void kernel_main() {
     constexpr uint32_t dfb_reread_rm_id = tt::CBIndex::c_20;
 #endif
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
@@ -139,7 +139,7 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
 #ifdef UNTILIZE_OUT
     DataflowBuffer dfb_reread_rm(dfb_reread_rm_id);
@@ -165,14 +165,14 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    const uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     const uint32_t num_reads_of_input = 3;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        const uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);
         out_block_h_last = residual % out_block_h_normal;
     }
@@ -222,7 +222,7 @@ void kernel_main() {
                     const auto src_a = TensorAccessor(src0_args, src_addr);
                     uint32_t l1_write_addr;
                     l1_write_addr = dfb_in0.get_write_ptr();
-                    dfb_in0.reserve_back(out_block_hw_normal);
+                    dfb_in0.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                     for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                         for (uint32_t nt = 0; nt < block_w; nt++) {
                             noc.async_read(
@@ -236,7 +236,7 @@ void kernel_main() {
                             noc.async_read_barrier();
                         }
                     }
-                    dfb_in0.push_back(out_block_hw_normal);
+                    dfb_in0.push_back(static_cast<uint16_t>(out_block_hw_normal));
 #endif
 
 #endif
@@ -262,7 +262,7 @@ void kernel_main() {
                         // add or copy with previous output results
                         const auto dst_a = TensorAccessor(out_args, out_addr);
 
-                        uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+                        const uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
 #ifdef UNTILIZE_OUT
                         // Reread the rows written; the next group accumulates onto them.
@@ -279,27 +279,27 @@ void kernel_main() {
                             out_block_hw_normal);
 #else
                         const uint32_t dst_tile_bytes = dfb_reread_out.get_tile_size();
-                        uint32_t l1_write_addr;
-                        l1_write_addr = dfb_reread_out.get_write_ptr();
-                        dfb_reread_out.reserve_back(out_block_hw_normal);
+                        uint32_t l1_write_addr_reread;
+                        l1_write_addr_reread = dfb_reread_out.get_write_ptr();
+                        dfb_reread_out.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
 
                         for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                             for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing l1_write_addr to stay aligned.
+                                // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing l1_write_addr_reread to stay aligned.
                                 if ((index_g_offset + nt) < per_core_N) {
                                     noc.async_read(
                                         dst_a,
-                                        CoreLocalMem<uint32_t>(l1_write_addr),
+                                        CoreLocalMem<uint32_t>(l1_write_addr_reread),
                                         single_tile_size_bytes,
                                         {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                             index_b_offset + index_g_offset},
                                         {});
                                     noc.async_read_barrier();
                                 }
-                                l1_write_addr += dst_tile_bytes;
+                                l1_write_addr_reread += dst_tile_bytes;
                             }
                         }
-                        dfb_reread_out.push_back(out_block_hw_normal);
+                        dfb_reread_out.push_back(static_cast<uint16_t>(out_block_hw_normal));
 #endif
                     }
                     out_block_start_id_offset += out_block_h_actual * num_channels_tiles;

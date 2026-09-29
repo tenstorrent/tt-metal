@@ -120,11 +120,12 @@ class Qwen36Model:
         # LM head [in,out]. Mesh: vocab-sharded (dim=-1); _lm_head all-gathers logits.
         # M=1 decode is weight-read-bound (~1.3GB/token), so sharding cuts bandwidth;
         # gather moves only the logit row. REPLICATED fallback if vocab indivisible.
-        lm_head_weight = state_dict["output.weight"].T.contiguous()  # [dim, vocab_size]
-        self._lmhead_vocab_sharded = self.num_devices > 1 and lm_head_weight.shape[-1] % self.num_devices == 0
+        lm_head_weight = state_dict["output.weight"]  # [vocab_size, dim]; transposed on cache miss only
+        vocab_rows = lm_head_weight.shape[0]
+        self._lmhead_vocab_sharded = self.num_devices > 1 and vocab_rows % self.num_devices == 0
         if self.num_devices > 1 and not self._lmhead_vocab_sharded:
             logger.warning(
-                f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
+                f"LM-head vocab {vocab_rows} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
         if self._lmhead_vocab_sharded:
@@ -136,6 +137,7 @@ class Qwen36Model:
             lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
+            preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -525,7 +527,13 @@ class Qwen36Model:
 
     @classmethod
     def from_pretrained(
-        cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, layer_indices=None, hf_model=None
+        cls,
+        device,
+        max_batch_size=1,
+        max_seq_len=2048,
+        n_layers=None,
+        layer_indices=None,
+        hf_model=None,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -553,11 +561,19 @@ class Qwen36Model:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 
+        # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
+        # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --
+        # gdn/weights.py::load_conv_weight does ttnn.from_torch(state_dict[name], ...) for q/k/v_conv in
+        # every DeltaNet layer, and gdn/tp.py derives taps the same way -- so a dataless placeholder
+        # feeds those layers garbage while the HF load is skipped. This is the same failure that made
+        # the vision demo emit token soup, on the text path. Re-enabling needs those conv weights either
+        # cache-backed or captured to the sidecar via an is_host_weight predicate. (#45400 review)
+        cache_path = args.weight_cache_path()
         logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
         state_dict = args.load_state_dict()
 
-        cache_path = args.weight_cache_path()
-        return cls(device, args, state_dict, tensor_cache_path=cache_path)
+        model = cls(device, args, state_dict, tensor_cache_path=cache_path)
+        return model
 
     def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None):
         """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the
@@ -3017,7 +3033,7 @@ class Qwen36Model:
                     ttnn.deallocate(x)
                     ttnn.deallocate(attn_out)
                     ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
-                    ff_out = layer.feed_forward.forward(ff_in)
+                    ff_out = layer.feed_forward.forward(ff_in, mode="prefill")
                     ttnn.deallocate(ff_in)
                     x = ttnn.add(h, ff_out)
                     ttnn.deallocate(h)

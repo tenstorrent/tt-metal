@@ -12,6 +12,8 @@ set_target_properties(
             api
 )
 
+file(GLOB_RECURSE unary_backward_kernels device/kernels/*.cpp)
+
 file(GLOB_RECURSE tanh_bw_kernels tanh_bw/device/kernels/*.cpp)
 
 file(GLOB_RECURSE kernels gelu_bw/device/kernels/*.cpp)
@@ -26,7 +28,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${tanh_bw_kernels} ${kernels}
+        FILES ${unary_backward_kernels} ${tanh_bw_kernels} ${kernels}
     PRIVATE
         ${TTNN_OP_ELTWISE_UNARY_BACKWARD_SRCS}
 )

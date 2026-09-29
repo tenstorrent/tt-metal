@@ -9,6 +9,9 @@
 // The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
 // rather than any one op's locals, and are not renamed once a consumer exists.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

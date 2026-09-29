@@ -30,9 +30,10 @@ namespace sfpu
 constexpr std::uint32_t SFPCONFIG_TARGET_LREG11  = 11;
 constexpr std::uint32_t SFPCONFIG_MOD_SET_LREG11 = 8;
 
+template <bool is_fp32_dest_acc_en>
 inline void _init_softmax_k_()
 {
-    sfpu::exp_init<false, 0x3F800000, true, DST_ACCUM_MODE>();
+    sfpu::exp_init<false, 0x3F800000, true, is_fp32_dest_acc_en>();
 }
 
 // For odd k, the final valid even lane predicates its paired odd tail lane.
@@ -66,7 +67,7 @@ inline void _zero_paired_odd_tail_lane_()
     }
 }
 
-template <int k>
+template <int k, bool is_fp32_dest_acc_en>
 inline void _softmax_k_()
 {
     // LREG0 = x - max(x)
@@ -85,7 +86,7 @@ inline void _softmax_k_()
     // //LREG0 = exp(x - max(x))
     sfpu::calculate_exponential<
         false,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         false, // scaling
         2,     // iterations
         true   // clamp negatives

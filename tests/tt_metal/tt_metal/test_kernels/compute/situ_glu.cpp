@@ -33,7 +33,8 @@ void kernel_main() {
 
     // Both input CBs must share a data format: init_sfpu configures the unpacker from cb_gate,
     // and copy_tile only updates the L1 address per call, not the THCON format registers.
-    init_sfpu(cb_gate, cb_out);
+    compute_kernel_hw_startup(cb_gate, cb_out);
+    copy_init(cb_gate);
     // Single SFPU op; nothing else reprograms the tanh constants between tiles.
     situ_glu_tile_init();
 
