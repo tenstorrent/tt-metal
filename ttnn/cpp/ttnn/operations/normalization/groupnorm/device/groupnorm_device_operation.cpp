@@ -61,6 +61,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+    TT_FATAL(args.num_groups > 0, "num_groups must be greater than 0, got {}", args.num_groups);
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
     TT_FATAL(

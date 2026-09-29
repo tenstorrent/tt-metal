@@ -250,6 +250,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
                             auto num_cores_r = program_config.compute_with_storage_grid_size.y;
                             // check dims
+                            TT_FATAL(program_config.block_h > 0, "block_h must be greater than 0.");
                             TT_FATAL(
                                 M * K /
                                         ((program_config.block_w * program_config.block_h) *
