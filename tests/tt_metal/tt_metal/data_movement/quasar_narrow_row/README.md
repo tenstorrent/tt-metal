@@ -197,14 +197,19 @@ export ARCH_NAME=quasar
 export TT_METAL_SIMULATOR=<path to an emu-quasar-* build>
 
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement \
-  --gtest_filter="*QuasarNarrowRowUntilize*"
+  --gtest_filter="*Quasar*:-*HostHugepagePcieLoopback*"
 ```
 
-Run the **whole** `*Quasar*` suite before trusting a green result. This kernel shares
-`addrgen_0` on core {0,0} with the addrgen and im2col tests, which program outer-loop,
-face-size and banking registers it does not; a reset that inherited their state would pass
-under the filter above and fail only in the full suite. (`HostHugepagePcieLoopback`, from
-main, hangs on this emulator — exclude it with `:-*HostHugepagePcieLoopback*`.)
+**That is the command to trust — the whole `*Quasar*` suite, not a filter on this test.** This
+kernel shares `addrgen_0` on core {0,0} with the addrgen and im2col tests, which program
+outer-loop, face-size and banking registers it does not. A reset that inherited their state
+passes when this test runs alone and fails only when it runs after them. That bug was real
+(`reset_counters_addrgen_0` where `reset_addrgen_0` was needed), and the full suite is what
+caught it. `HostHugepagePcieLoopback` comes from main and hangs on this emulator, hence the
+exclusion.
+
+`--gtest_filter="*QuasarNarrowRowUntilize*"` runs the 38 runs alone and is fine for an
+edit-compile loop, but green from it says nothing about state leakage.
 
 38 runs. The 1x3 emu has no fast-dispatch cores, hence slow dispatch.
 
