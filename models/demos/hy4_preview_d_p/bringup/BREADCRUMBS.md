@@ -320,3 +320,33 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_norm.py
+
+## S.dense_full.03 test (attempt 1)
+
+What was done
+- Reviewed the rendered swap test (attn_hc, attn_hc_pre, attn_norm on device). Kept the gated pcc_swap_out (0.98)
+  and added asserted checks, sized from a CPU mutation study (attn_norm replaced by mutations of the fp32 reference,
+  whole block run; table in the test docstring):
+  - attn_hc and attn_x vs golden at the swap 01 / 02 limits;
+  - attn_norm vs golden at the component limits (rel 0.008, ratio [0.993, 1.007], worst row 0.015), vs the CPU
+    attn_norm on the device attn_x (same limits), and the module again on attn_x x 0.1 vs CPU (rel 0.01, worst row
+    0.02; the eps check);
+  - q_resid rel <= 0.01; indexer top-k set overlap vs golden >= 0.995; attn_out rel <= 0.01 / worst row <= 0.05;
+    h_mid rel <= 0.01 / worst row <= 0.05; block out rel <= 0.01.
+
+Gotchas
+- q_a_layernorm removes any per-row scale of attn_norm from q_resid (x 1.02 leaves q_resid at 0.0017), and the
+  residual dominates out: attn_norm x 1.02 gives out rel 0.0128, x 1.01 only 0.0066; RMS over half the columns 0.0040,
+  eps 1e-6 0.0019. All of these pass the 0.98 out gate (w halves swapped too, 0.9867); the attn_norm checks catch them.
+- The trail's `pcc_swap_topk: match=0.79` is positional equality, not a bug; the set overlap is the real check
+  (proposed in known_issues.md).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999999, attn_norm rel 0.00166, topk overlap 0.99926, out rel 0.00167).
+- BRINGUP_IMPL=stub: FAIL (out PCC 0.524 and every extra check).
+- Gate (device): PASS. pcc_swap_out 0.999998; attn_norm rel 0.00214 / ratio [0.99771, 1.00059] / worst row 0.0036;
+  vs CPU same input 0.00195; x0.1 0.00176; q_resid 0.00182; topk overlap 0.99925; attn_out 0.00186; h_mid 0.00189 /
+  0.0034; out rel 0.00201.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_03_attn_norm.py
