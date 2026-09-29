@@ -17,13 +17,18 @@ RoPE ``from_torch``); only the forward is hooked.
 """
 import argparse
 import csv
+import json
+import os
 import time
 from collections import defaultdict
 
 from loguru import logger
 
-import ttnn
-from models.demos.blackhole.pplx_embed_4b.demo._common import (
+# The post-operation hooks only fire outside fast runtime mode (the default); without this the report captures 0 ops.
+os.environ.setdefault("TTNN_CONFIG_OVERRIDES", json.dumps({"enable_fast_runtime_mode": False}))
+
+import ttnn  # noqa: E402
+from models.demos.blackhole.pplx_embed_4b.demo._common import (  # noqa: E402
     apply_workload_env,
     build_single_device_model,
     generate_synthetic_inputs,

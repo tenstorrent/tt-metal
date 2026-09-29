@@ -29,6 +29,7 @@ import functools
 import os
 
 import ttnn
+from models.demos.blackhole.pplx_embed_4b.tt import qkv_chunks
 from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_concat_heads import nlp_concat_heads_headsplit
 from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_concat_heads import (
     supported as _concat_headsplit_supported,
@@ -40,6 +41,7 @@ from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_qkv_heads_norm imp
     nlp_create_qkv_heads_norm_headsplit,
 )
 from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.common import Mode
 
 _OPTIMIZED_BATCH = 1
 _OPTIMIZED_SEQ_LEN = 512
@@ -127,6 +129,7 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
             and _interleaved_out(kwargs.get("memory_config"))
             and _qkv_headsplit_supported(qkv_fused, num_heads, num_kv_heads, transpose_k_heads)
         ):
+            chunk_kwargs = {k: kwargs[k] for k in ("out_tensors", "batch_offset", "use_v3") if k in kwargs}
             return nlp_create_qkv_heads_norm_headsplit(
                 qkv_fused,
                 gq,
@@ -137,6 +140,7 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
                 num_kv_heads=num_kv_heads,
                 memory_config=kwargs.get("memory_config"),
                 **rot_kwargs,
+                **chunk_kwargs,
             )
         return original_fn(qkv_fused, *args, **kwargs)
 
@@ -440,6 +444,8 @@ class PplxBidirectionalAttention(Attention):
         _saved_dealloc = None
         _saved_mm = None
         _saved_reshape = None
+        rot = None
+        q_dtype = kv_dtype = None
         if concat_out:
             _saved_reshape = ttnn.reshape
             ttnn.reshape = _wrap_reshape_concat_out(_saved_reshape)
@@ -503,6 +509,25 @@ class PplxBidirectionalAttention(Attention):
                 return _saved_dealloc(t, *a, **kw)
 
             ttnn.deallocate = _guarded_dealloc
+        # QWEN_QKV_CHUNKS=2: this layer's input may be a stand-in for two half-batch normalised tensors
+        # (tt/qkv_chunks.py). The QKV matmul call then runs per half into L1, each half's heads op (v3, L1 input)
+        # writes into full-batch Q / K / V at its batch offset, and the base forward gets a never-written DRAM
+        # placeholder for the QKV output that the heads call below recognises and answers with those Q / K / V.
+        halves = qkv_chunks.take(x_11SH)
+        _saved_chunk = None
+        if halves is not None:
+            chunkable = self._fused_norm_consts is not None and rot is not None and x_11SH.shape[0] % len(halves) == 0
+            if not chunkable:  # materialise the stand-in (correct, not fast)
+                full = ttnn.concat(list(halves), dim=-2)
+                for h in halves:
+                    ttnn.deallocate(h)
+                ttnn.deallocate(x_11SH)
+                x_11SH = ttnn.reshape(full, list(x_11SH.shape))
+            else:
+                _saved_chunk = (ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads)
+                ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = self._qkv_chunk_hooks(
+                    x_11SH, halves, *_saved_chunk, q_dtype, kv_dtype
+                )
         try:
             return super().forward_prefill(
                 x_11SH,
@@ -527,6 +552,59 @@ class PplxBidirectionalAttention(Attention):
                 ttnn.experimental.minimal_matmul, ttnn.linear = _saved_mm
             if _saved_reshape is not None:
                 ttnn.reshape = _saved_reshape
+            if _saved_chunk is not None:
+                ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = _saved_chunk
+
+    def _qkv_chunk_hooks(self, standin, halves, inner_mm, heads, q_dtype, kv_dtype):
+        """(minimal_matmul, nlp_create_qkv_heads) replacements running this layer's QKV + heads per half batch."""
+        B, S, H = int(standin.shape[0]), int(standin.shape[-2]), int(standin.shape[-1])
+        Bc = B // len(halves)
+        standin_addr = standin.buffer_address()
+        done = {}
+        dev = standin.device()
+
+        def mm(a, b, *args, **kw):
+            if b is not self.wqkv or done or a.buffer_address() != standin_addr:
+                return inner_mm(a, b, *args, **kw)
+            heads_mc = self.args.get_attn_create_head_output_mem_config(Mode.PREFILL, None, prefill_seq_len=B * S)
+            hd = self.head_dim
+            alloc = lambda shp, dt, mc: ttnn.allocate_tensor_on_device(ttnn.Shape(shp), dt, ttnn.TILE_LAYOUT, dev, mc)
+            q_dt, kv_dt = q_dtype or ttnn.bfloat8_b, kv_dtype or ttnn.bfloat8_b
+            qkv = (
+                alloc([B, self.n_local_heads, S, hd], q_dt, heads_mc),
+                alloc([B, self.n_local_kv_heads, S, hd], kv_dt, heads_mc),
+                alloc([B, self.n_local_kv_heads, S, hd], kv_dt, heads_mc),
+            )
+            mm_seq = self.MAX_QKV_MM_SEQ_LEN
+            for c, h in enumerate(halves):
+                rows = Bc * S
+                hv = ttnn.reshape(h, [1, rows // mm_seq, mm_seq, H] if rows > mm_seq else [1, 1, rows, H])
+                y = inner_mm(hv, b, *args, **dict(kw, memory_config=ttnn.L1_MEMORY_CONFIG))
+                ttnn.deallocate(h)
+                heads(
+                    ttnn.reshape(y, [Bc, 1, S, -1]),
+                    num_heads=self.n_local_heads,
+                    num_kv_heads=self.n_local_kv_heads,
+                    transpose_k_heads=False,
+                    memory_config=heads_mc,
+                    out_tensors=qkv,
+                    batch_offset=c * Bc,
+                    use_v3=True,
+                )
+                ttnn.deallocate(y)
+            out_shape = [int(a.shape[i]) for i in range(len(a.shape) - 1)] + [int(b.shape[-1])]
+            placeholder = alloc(out_shape, kw.get("dtype") or ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG)
+            done["qkv"] = (placeholder.buffer_address(), qkv)
+            return placeholder
+
+        def create_heads(xqkv, *args, **kw):
+            hit = done.get("qkv")
+            if hit is not None and xqkv.buffer_address() == hit[0]:
+                done["qkv"] = None
+                return hit[1]
+            return heads(xqkv, *args, **kw)
+
+        return mm, create_heads
 
 
 PplxBidirectionalAttention.__name__ = "Attention"

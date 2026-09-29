@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// bs1 compute of the fused head-split + RMSNorm + RoPE op (QWEN_FUSED_COMPUTE_V3=1, bs1 default; batched sizes keep
-// compute_qkv_heads_norm.cpp). v1's math, tile for tile and in the same order (so the output is bit-identical), but
-// each phase runs once per unit over all of the unit's normalised heads (its Q heads and, when the unit carries K, its
-// K heads, which sit contiguously in the unit) instead of once per head. Every phase pays its data-format reconfig,
-// *_init and CB handshakes once per unit; at bs1 that is 9 phase set-ups for 5 heads instead of 45 (heads op 41.7 ->
-// 28.7 us in-model). At bs8/16/32 it is bit-identical too but 0.4-1.2% slower end to end, so it stays bs1-only
-// (NEGATIVE_RESULTS 53). Only the gamma multiply (gamma_q vs gamma_k) and the last RoPE step (Q output CB vs K|V
-// output CB) split into a Q and a K loop. Per unit, over nh heads of Wt = head_dim_tiles tiles:
+// v3 compute of the fused head-split + RMSNorm + RoPE op (QWEN_FUSED_COMPUTE_V3=1: bs1 default, and bs8/16 with the QKV
+// output in L1; bs32 keeps compute_qkv_heads_norm.cpp). v1's math, tile for tile and in the same order
+// (so the output is bit-identical), but each phase runs once per unit over all of the unit's normalised heads (its Q
+// heads and, when the unit carries K, its K heads, which sit contiguously in the unit) instead of once per head. Every
+// phase pays its data-format reconfig, *_init and CB handshakes once per unit; at bs1 that is 9 phase set-ups for 5
+// heads instead of 45 (heads op 41.7 -> 28.7 us in-model). At bs8/16/32 it is bit-identical too; with a DRAM input it
+// is 0.4-1.2% slower end to end (the op sits at the DRAM floor and the top grid rows' readers fall behind,
+// NEGATIVE_RESULTS 53 / 56), with an L1 input 30% faster (bs16 shapes 305 -> 214 us). Only the gamma multiply (gamma_q
+// vs gamma_k) and the last RoPE step (Q output CB vs K|V output CB) split into a Q and a K loop. Per unit, over nh
+// heads of Wt = head_dim_tiles tiles:
 //   x2  = x * x                        (CB 5,  nh*Wt tiles)
 //   ms  = row-sum(x2) * 1/head_dim     (CB 6,  nh tiles; one DST slot per head, <= 4 heads per acquire)
 //   inv = rsqrt(ms + eps)              (CB 7,  nh tiles)
@@ -29,6 +31,21 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+
+namespace ckernel {
+// rsqrt over the two left faces only (0 and 2, columns 0-15): a row-reduce result lives in column 0 and the
+// bcast_cols multiply that consumes it reads column 0 only, so the output is bit-identical with half the SFPU work
+// (compile-time arg 9, QWEN_FUSED_RSQRT_COL=1).
+ALWI void rsqrt_col_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsqrt,
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false, false),
+        idst,
+        VectorMode::C));
+}
+}  // namespace ckernel
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
@@ -110,7 +127,11 @@ inline void unit_heads(uint32_t nq, uint32_t nk, uint32_t kv_base) {
         }
         rsqrt_tile_init();
         for (uint32_t h = 0; h < n; ++h) {
-            rsqrt_tile(h);
+            if constexpr (get_compile_time_arg_val(9)) {
+                rsqrt_col_tile(h);
+            } else {
+                rsqrt_tile(h);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
