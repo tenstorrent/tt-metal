@@ -259,7 +259,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
              {"cos_Ht", cos_seq_len_t},
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
         .hw_config = create_reader_datamovement_config()};
 
     // Writer / compute — identical to the interleaved factory (shared kernel sources).
@@ -276,7 +276,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
         .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
@@ -318,7 +318,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
                  .accessor_name = "sin_interm",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args = {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
         .hw_config = compute_hw_config};
 
     // ------------------------------------------------------------------
@@ -365,21 +365,27 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"head_start", 0u},
+             {"head_end", n_heads}});
         AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             node,
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"head_start", 0u},
+             {"head_end", n_heads}});
         AddRuntimeArgsForNode(
             compute_run.runtime_arg_values,
             node,
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"head_start", 0u},
+             {"head_end", n_heads}});
     }
 
     ProgramSpec spec{

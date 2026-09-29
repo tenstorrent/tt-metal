@@ -30,6 +30,8 @@ void kernel_main() {
     auto batch_end = get_arg(args::batch_end);
     auto seq_t_start = get_arg(args::seq_t_start);
     auto seq_t_end = get_arg(args::seq_t_end);
+    auto head_start = get_arg(args::head_start);
+    auto head_end = get_arg(args::head_end);
 
     constexpr uint32_t onetile = 1;
     // Magic CB indices are gone: each buffer is a named DFB binding. The local
@@ -102,7 +104,7 @@ void kernel_main() {
             cos_dfb_obj.wait_front(my_cos_sin_tiles);
         }
 #endif
-        for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
+        for (uint32_t head_num = head_start; head_num < head_end; ++head_num) {
             uint32_t sin_cos_row_cnt = 0;
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
                 // input cb wait and reserve
