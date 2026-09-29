@@ -125,10 +125,6 @@ def _run_sfpu_binary_llk_golden(
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
     num_faces = MAX_NUM_FACES
 
-    unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
-    )
-
     src_A, tile_cnt_A, src_B = prepare_stimuli(
         formats, input_dimensions, src0_idx, src1_idx, mathop
     )

@@ -721,6 +721,8 @@ class TestConfig:
         Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
         ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
+
+        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root.
         """
         root = Path(arch_root)
         roots = [
@@ -729,10 +731,11 @@ class TestConfig:
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
-        variant = quasar_arch_variant()
-        if variant:
-            # First, so the variant's headers shadow the base Quasar ones.
-            roots.insert(0, root / "arch" / variant)
+        if root.name == "tt_llk_quasar":
+            variant = quasar_arch_variant()
+            if variant:
+                # First, so the variant's headers shadow the base Quasar ones.
+                roots.insert(0, root / "arch" / variant)
         return roots
 
     @staticmethod
