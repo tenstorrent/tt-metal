@@ -11,7 +11,10 @@ Per task:
   agent step (reference, plan, contract, implement)       write a brief, start a fresh ``claude -p`` with the
                                                            bringup-engineer definition, check what it did, run the gate
   tests declared and not frozen                            render the template, ``test`` role reviews it, freeze
-                                                           (reference passes, zero stub fails), then implement
+                                                           (reference passes, zero stub fails), then implement.
+                                                           A swap test is frozen without the review (F49: it gates
+                                                           every swapped step itself) unless agents.swap_review
+                                                           names its block type; a failed freeze starts the review
   failed attempts (DEFAULT_POLICY)                         implement / device fix: WIP commit, then ``ttnn-expert-debugger``
                                                            (TTNN only) with the WIP sha, logs and triage; other roles
                                                            (reference, plan, contract, test): STOPPED for a person
@@ -602,8 +605,20 @@ class Orchestrator:
         tail = res.log.read_text(errors="replace")[-4000:] if res.log and res.log.exists() else ""
         return res.summary() + "\n--- log tail ---\n" + tail
 
+    def swap_review(self, block_type: str) -> bool:
+        """Spec ``agents.swap_review``: all | [block types] (default none). F49: the swap template gates every swapped
+        step itself, so a swap test is frozen without a test-role review unless the spec names its block type."""
+        v = self.spec.get("agents.swap_review")
+        if v in (None, False, "none", []):
+            return False
+        return v in ("all", True) or block_type in (v if isinstance(v, list) else [v])
+
     def freeze_tests(self, task: dict) -> str | None:
-        """Render, review (test role), freeze. None on success, else the reason to stop."""
+        """Render, review (test role), freeze. None on success, else the reason to stop.
+
+        A swap task skips the review (F49, unless agents.swap_review names its block type) and freezes at once; the
+        freeze still requires PASS with the reference and FAIL with the stub. If that freeze fails, the test role is
+        started with the failure, as for a reviewed test."""
         from models.demos.common.bringup.testing.templates import render_component_test, render_swap_test
 
         b = task.get("brief") or {}
@@ -612,6 +627,19 @@ class Orchestrator:
         elif "step" in b:
             render_component_test(self.spec, b["block_type"], b["step"])
         previous = ""
+        if "swapped" in b and not self.swap_review(b["block_type"]):
+            try:
+                rec = freeze_task(self.spec, self.led, task["id"])
+                self.echo(
+                    f"  [{task['id']}] swap test frozen without review (F49): "
+                    f"reference={rec.get('reference')} stub={rec.get('stub')}"
+                )
+                return None
+            except FreezeError as e:
+                previous = str(e)
+                self.echo(
+                    f"  [{task['id']}] freeze without review failed, starting the test role: {previous.splitlines()[0]}"
+                )
         budget = self.policy(task, "test")["attempts"]
         for attempt in range(1, budget + 1):
             problems = self.run_agent(task, "test", attempt, self.brief(task, "test", attempt, previous))

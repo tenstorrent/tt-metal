@@ -7,6 +7,8 @@ The module under test is chosen by BRINGUP_IMPL (set by freeze):
     device     (default) the model's device implementation, from hooks.device_component / hooks.device_model
     reference  the CPU reference's own component: the test must PASS with it
     stub       zeros shaped like the reference output: the test must FAIL with it
+    mutate:<kind>  the CPU reference with its output altered (testing/mutate.py, F49): proves a test catches a
+               wrong module, on the CPU; BRINGUP_MUTATE_STEP names the one step to alter
 
 Device hooks a model provides (the implement role writes them):
     device_params(spec) -> dict                     mesh fixture params (fabric config, l1_small_size, ...)
@@ -33,8 +35,10 @@ DEFAULT_THRESHOLDS = {"component": 0.99, "block": 0.98, "layer": 0.97, "state": 
 
 
 def impl_mode() -> str:
+    from models.demos.common.bringup.testing.mutate import kind_of
+
     mode = os.environ.get(IMPL_ENV, "device")
-    if mode not in ("device", "reference", "stub"):
+    if mode not in ("device", "reference", "stub") and kind_of(mode) is None:
         raise ValueError(f"{IMPL_ENV}={mode!r}")
     return mode
 
@@ -130,7 +134,7 @@ def device_params(s) -> dict:
 
 def mesh_parametrize(fn):
     """Parametrize a pytest test with the spec's mesh shape and device params (the repo's mesh_device fixture).
-    Under BRINGUP_IMPL=reference or stub no device is opened: mesh_device is None."""
+    Under BRINGUP_IMPL=reference, stub or mutate:<kind> no device is opened: mesh_device is None."""
     import pytest
 
     if impl_mode() != "device":

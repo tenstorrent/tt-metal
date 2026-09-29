@@ -4,6 +4,8 @@
 """Test templates the tests step fills: one component test per (block type, step), one swap test per column of the
 swap order. The rendered files live in <model_dir>/tests/bringup/ and are frozen before any implementation exists.
 The test role may edit a rendered file (comparison mode, threshold, extra checks) before freezing, never after.
+A swap test gates every swapped step's own output (CHECKS = "steps", F49), so by default swap tests are frozen without
+a test-role review (spec agents.swap_review opts back in).
 """
 
 from __future__ import annotations
@@ -55,11 +57,12 @@ S = spec()
 BLOCK_TYPE = {block_type!r}
 SWAPPED = {swapped!r}
 THRESHOLD = {thr!r}  # None = spec thresholds.block (default 0.98)
+CHECKS = "steps"  # also gate every swapped step's own output (testing/component.py); None = block out only
 
 
 @mesh_parametrize
 def test_swap(mesh_device):
-    assert run_swap_test(S, BLOCK_TYPE, SWAPPED, mesh_device, THRESHOLD)
+    assert run_swap_test(S, BLOCK_TYPE, SWAPPED, mesh_device, THRESHOLD, CHECKS)
 '''
 )
 
