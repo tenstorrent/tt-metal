@@ -1,0 +1,253 @@
+diff --git a/include/jit_hw/__emule_fabric_stubs.h b/include/jit_hw/__emule_fabric_stubs.h
+index 831759e..f467e33 100644
+--- a/include/jit_hw/__emule_fabric_stubs.h
++++ b/include/jit_hw/__emule_fabric_stubs.h
+@@ -784,7 +784,7 @@ public:
+     // arg_idx advancement matters otherwise — there is no real EDM connection.
+     //
+     // Layout on TENSIX / VC0: per connection tag(1) + build_from_args<TENSIX>(3) = 4,
+-    // then, under FABRIC_2D only, the trailer my_chip_id(1) + my_mesh_id(1), then per
++    // then, under FABRIC_2D only, the trailer ew_dim(1) + my_chip_id(1) + my_mesh_id(1), then per
+     // connection dst_dev_id(1) + dst_mesh_id(1).
+     static RoutingPlaneConnectionManager __emule_build_from_args(
+         std::size_t& arg_idx, uint32_t num_connections) {
+@@ -797,7 +797,7 @@ public:
+             arg_idx += 2;  // WorkerToFabricEdmSender VC0 semaphore IDs are unused in emule
+         }
+ #if defined(FABRIC_2D)
+-        arg_idx += 2;  // my_chip_id, my_mesh_id (FABRIC_2D trailer header)
++        arg_idx += 3;  // ew_dim, my_chip_id, my_mesh_id (FABRIC_2D trailer header; ew_dim is newer tt-metal)
+         for (uint32_t i = 0; i < n; ++i) {
+             mgr.slots_[i].dst_dev_id =
+                 static_cast<uint16_t>(get_arg_val<uint32_t>(static_cast<int>(arg_idx++)));
+@@ -1498,13 +1498,30 @@ public:
+     tt::tt_fabric::WorkerToFabricEdmSender forward_fabric_sender;
+     tt::tt_fabric::WorkerToFabricEdmSender backward_fabric_sender;
+ 
++    // Consume the RT args exactly as silicon's build_from_args does (per direction: a has-connection flag, then
++    // the sender's own args when set), so kernels that read further RT args after the connection block (e.g.
++    // ring_attention_all_gather_writer's OpSignaler) stay aligned. Returning without advancing arg_idx made
++    // those kernels parse the fabric args as their own and signal garbage NOC coordinates.
+     template <BuildFromArgsMode build_mode = BUILD_ONLY>
+-    static FabricConnectionManager build_from_args(std::size_t& /*arg_idx*/) {
+-        return FabricConnectionManager{};
++    static FabricConnectionManager build_from_args(std::size_t& arg_idx) {
++        FabricConnectionManager m{};
++        m.has_fwd_ = get_arg_val<uint32_t>(static_cast<int>(arg_idx++)) != 0;
++        if (m.has_fwd_) {
++            m.forward_fabric_sender =
++                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
++        }
++        m.has_bwd_ = get_arg_val<uint32_t>(static_cast<int>(arg_idx++)) != 0;
++        if (m.has_bwd_) {
++            m.backward_fabric_sender =
++                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
++        }
++        return m;
+     }
+     static constexpr bool is_logically_connected() { return true; }
+-    bool has_forward_connection() const { return true; }
+-    bool has_backward_connection() const { return true; }
++    bool has_forward_connection() const { return has_fwd_; }
++    bool has_backward_connection() const { return has_bwd_; }
++    bool has_fwd_ = true;
++    bool has_bwd_ = true;
+     void open() {}
+     void open_start() {}
+     void open_finish() {}
+diff --git a/include/jit_hw/api/compile_time_args.h b/include/jit_hw/api/compile_time_args.h
+index f506ba9..da65010 100644
+--- a/include/jit_hw/api/compile_time_args.h
++++ b/include/jit_hw/api/compile_time_args.h
+@@ -5,6 +5,7 @@
+ #pragma once
+ #include <cstdint>
+ #include <string_view>
++#include <array>
+ #include <utility>
+ 
+ // Compile-time kernel arguments.  The JIT compiler passes
+@@ -21,7 +22,9 @@ constexpr uint32_t kernel_compile_time_args_arr[] = {KERNEL_COMPILE_TIME_ARGS};
+ // Upstream-name alias. Real `tt_metal/hw/inc/api/compile_time_args.h:23` exposes
+ // the array under the name `kernel_compile_time_args` (no `_arr` suffix).
+ // Mesh tensor accessor + concat reader kernels reference the unsuffixed name.
+-constexpr auto& kernel_compile_time_args = kernel_compile_time_args_arr;
++// A std::array like silicon's (make_array), so kernels can take kernel_compile_time_args.size() (ring-joint SDPA
++// reads its last CTA slot as get_ct_arg<kernel_compile_time_args.size() - 1>()).
++constexpr auto kernel_compile_time_args = std::to_array(kernel_compile_time_args_arr);
+ // Read CTA slot N. Returns 0 for N >= array size so upstream's
+ // `TensorAccessorArgs<CTA_OFFSET>` constexpr parsing path doesn't choke when
+ // the host emitted fewer slots than the kernel reads — matches the silicon
+diff --git a/include/jit_hw/api/compute/eltwise_binary_sfpu.h b/include/jit_hw/api/compute/eltwise_binary_sfpu.h
+index 116f42f..c709bcb 100644
+--- a/include/jit_hw/api/compute/eltwise_binary_sfpu.h
++++ b/include/jit_hw/api/compute/eltwise_binary_sfpu.h
+@@ -9,6 +9,10 @@
+ #include <limits>
+ 
+ #include "jit_hw/api/compute/common.h"
++// Silicon's eltwise_binary_sfpu.h exposes the raw functors + SFPU_BINARY_CALL macros; kernels that call the LLK
++// layer directly (e.g. a VectorMode::C binary op) rely on that.
++#include "jit_hw/ckernel_sfpu_binary.h"
++#include "jit_hw/llk_math_eltwise_binary_sfpu_macros.h"
+ 
+ namespace ckernel {
+ 
+diff --git a/include/jit_hw/api/compute/eltwise_unary/recip.h b/include/jit_hw/api/compute/eltwise_unary/recip.h
+index 9e1194d..b78a1c1 100644
+--- a/include/jit_hw/api/compute/eltwise_unary/recip.h
++++ b/include/jit_hw/api/compute/eltwise_unary/recip.h
+@@ -10,6 +10,10 @@
+ 
+ // VectorMode lives in ckernel::; see api/compute/vector_mode.h.
+ #include "jit_hw/api/compute/vector_mode.h"
++// Silicon's recip.h pulls the SFPU init/call macros (llk_math_eltwise_unary_sfpu_macros.h); SDPA's
++// recip_block_inplace uses SFPU_UNARY_INIT_FN(reciprocal, ...) with only this include in scope.
++#include "jit_hw/llk_math_eltwise_unary_sfpu_macros.h"
++#include "jit_hw/llk_math_unary_sfpu.h"
+ 
+ namespace ckernel {
+ 
+diff --git a/include/jit_hw/ckernel.h b/include/jit_hw/ckernel.h
+index 3638f20..590522c 100644
+--- a/include/jit_hw/ckernel.h
++++ b/include/jit_hw/ckernel.h
+@@ -152,6 +152,8 @@ enum class SfpuType : uint8_t {
+     ge = 15,
+     le = 16,
+     situ_glu = 17,
++    // SDPA recip_block_inplace inits through SFPU_UNARY_INIT_FN(reciprocal, ...) (tt-metal #56292).
++    reciprocal = 18,
+ };
+ enum class Transpose : uint8_t { Tile = 0, NoneT = 1, IntraFace = 2 };
+ 
+diff --git a/include/jit_hw/ckernel_sfpu_binary.h b/include/jit_hw/ckernel_sfpu_binary.h
+index f7eb6f6..6039db7 100644
+--- a/include/jit_hw/ckernel_sfpu_binary.h
++++ b/include/jit_hw/ckernel_sfpu_binary.h
+@@ -15,7 +15,14 @@
+ 
+ namespace ckernel::sfpu {
+ 
+-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
++// dst_rounding_mode: silicon's fp32 -> bf16 DEST rounding choice for the result; emule stores DEST as float, so it
++// has no effect here (accepted for signature parity, e.g. SFPU_BINARY_CALL(..., (APPROX, SUB, 8, fp32, Default))).
++template <
++    bool APPROXIMATION_MODE,
++    BinaryOp BINOP,
++    int ITERATIONS = 8,
++    bool is_fp32_dest_acc_en = false,
++    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default>
+ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+     static_assert(
+         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV ||
+@@ -52,4 +59,11 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
+     }
+ }
+ 
++// Silicon's dedicated MUL body (ckernel_sfpu_binary.h calculate_sfpu_binary_mul): same result as the MUL arm.
++template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
++inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
++    calculate_sfpu_binary<APPROXIMATION_MODE, BinaryOp::MUL, ITERATIONS, is_fp32_dest_acc_en>(
++        dst_index_in0, dst_index_in1, dst_index_out);
++}
++
+ }  // namespace ckernel::sfpu
+diff --git a/include/jit_hw/experimental/llk_sfpu/ckernel_sfpu_sdpa.h b/include/jit_hw/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+index 889806b..bbaa05d 100644
+--- a/include/jit_hw/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/include/jit_hw/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -34,7 +34,7 @@ constexpr bool sdpa_can_preload_ln2_constants() {
+ }
+ 
+ template <bool legacy_compat, bool is_fp32_dest_acc_en>
+-inline void calculate_recip_first_column() {
++inline void calculate_recip_first_column_compat() {
+     constexpr int ITERATIONS_HALF_FACE = 4;
+     if constexpr (legacy_compat) {
+         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+@@ -65,6 +65,12 @@ inline void calculate_recip_first_column() {
+     }
+ }
+ 
++// Silicon's form since tt-metal #56292 (legacy_compat dropped): the non-legacy Newton-Raphson path.
++template <bool is_fp32_dest_acc_en>
++inline void calculate_recip_first_column() {
++    calculate_recip_first_column_compat<false, is_fp32_dest_acc_en>();
++}
++
+ template <
+     bool SCALE_EN,
+     int ITERATIONS,
+diff --git a/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h b/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h
+index d443d28..a1bd1ac 100644
+--- a/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h
++++ b/include/jit_hw/tt_metal/fabric/hw/inc/mesh/api.h
+@@ -124,4 +124,67 @@ inline void fabric_multicast_noc_unicast_atomic_inc_with_state(
+     });
+ }
+ 
++// ---- Per-header 2D unicast stateful sends (silicon mesh/api.h: set_state takes the explicit destination
++// (dst_dev_id, dst_mesh_id) instead of a hop count). set_state records the UNICAST_2D route through the
++// route setter (as silicon's fabric_set_unicast_route does) and then lays the command fields through the
++// linear form, whose own route stamp is compiled out under EMULE_FABRIC_2D, so the 2D route survives.
++// with_state is identical to the linear form (the route lives with the header). ----
++template <UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None, typename CommandHeaderT = std::nullptr_t>
++inline void fabric_unicast_noc_unicast_write_set_state(
++    volatile PACKET_HEADER_TYPE* packet_header,
++    uint8_t dst_dev_id,
++    uint16_t dst_mesh_id,
++    CommandHeaderT command_header = nullptr,
++    uint16_t packet_size_bytes = 0) {
++    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
++    linear::experimental::fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
++        packet_header, 0, command_header, packet_size_bytes);
++}
++
++template <
++    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
++    typename CommandHeaderT = std::nullptr_t>
++inline void fabric_unicast_noc_scatter_write_set_state(
++    volatile PACKET_HEADER_TYPE* packet_header,
++    uint8_t dst_dev_id,
++    uint16_t dst_mesh_id,
++    CommandHeaderT command_header = nullptr,
++    uint16_t packet_size_bytes = 0) {
++    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
++    linear::experimental::fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
++        packet_header, 0, command_header, packet_size_bytes);
++}
++
++template <
++    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
++    typename CommandHeaderT = std::nullptr_t>
++inline void fabric_unicast_noc_unicast_atomic_inc_set_state(
++    volatile PACKET_HEADER_TYPE* packet_header,
++    uint8_t dst_dev_id,
++    uint16_t dst_mesh_id,
++    CommandHeaderT command_header = nullptr) {
++    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
++    linear::experimental::fabric_unicast_noc_unicast_atomic_inc_set_state<UpdateMask>(
++        packet_header, 0, command_header);
++}
++
++template <
++    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
++    typename CommandHeaderT = std::nullptr_t>
++inline void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
++    volatile PACKET_HEADER_TYPE* packet_header,
++    uint8_t dst_dev_id,
++    uint16_t dst_mesh_id,
++    CommandHeaderT command_header = nullptr,
++    uint16_t packet_size_bytes = 0) {
++    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
++    linear::experimental::fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
++        packet_header, 0, command_header, packet_size_bytes);
++}
++
++using linear::experimental::fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state;
++using linear::experimental::fabric_unicast_noc_scatter_write_with_state;
++using linear::experimental::fabric_unicast_noc_unicast_atomic_inc_with_state;
++using linear::experimental::fabric_unicast_noc_unicast_write_with_state;
++
+ }  // namespace tt::tt_fabric::mesh::experimental

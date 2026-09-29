@@ -39,6 +39,7 @@ _MESHES = {
     "2x2": pytest.param((2, 2), fabric2d_device_params(), id="2x2"),
     "4x1": pytest.param((4, 1), torus_y_device_params(), id="4x1"),
     "1x4": pytest.param((1, 4), torus_x_device_params(), id="1x4"),
+    "8x4": pytest.param((8, 4), fabric2d_device_params(), id="8x4"),  # BH Galaxy (tests/emule: tt-emule, no hw)
 }
 MESHES = [_MESHES[m] for m in os.environ.get("MIMO_AG_MESH", "2x2,4x1,1x4").split(",")]
 
