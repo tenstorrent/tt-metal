@@ -123,6 +123,7 @@ def test_layer_loop(mesh_device, device_params):
     order = schedule(R)
     ids = hf.tokenize_prompt(SEQ, path=PROMPT)
     max_seq = max(SEQ, 2 * CHUNK)  # the ring SDPA's chunked path needs a cache longer than the chunk
+    opts = MiMoRuntimeOptions.from_env()  # TT_METAL_SDPA_RING_TWO_LEVEL(_FOLD) -> sdpa_two_level(_fold)
     model = TtMiMoModel(
         mesh_device,
         cfg,
@@ -133,7 +134,7 @@ def test_layer_loop(mesh_device, device_params):
         layers=list(range(6)),
         global_state=global_state,
         allocate_kv=False,
-        options=MiMoRuntimeOptions.from_env(),
+        options=opts,
     )
     # one cache slot per step (virtual layer), per attention type
     slot, n_type = [], {}
@@ -164,7 +165,7 @@ def test_layer_loop(mesh_device, device_params):
         logger.info(f"device chunk {c + 1}/{SEQ // CHUNK} done")
     dev_kv = [read_kv(mesh_device, cfg, kv[cfg.layer_type(i)], slot[s], i, max_seq) for s, i in enumerate(order)]
     # device results next to the HF chain (same layout), for offline analysis without rerunning either side
-    tl = "_twolevel" if os.environ.get("TT_METAL_SDPA_RING_TWO_LEVEL") == "1" else ""
+    tl = "_twolevel" if opts.sdpa_two_level else ""
     tag = Path(PROMPT).stem if PROMPT else "prompt"
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -180,7 +181,7 @@ def test_layer_loop(mesh_device, device_params):
 
     g = hf_chain(cfg, ids, order)
     ref = g["hidden"]
-    two_level = os.environ.get("TT_METAL_SDPA_RING_TWO_LEVEL") == "1"
+    two_level = opts.sdpa_two_level
     logger.info(
         f"loop R={R} seq={SEQ} chunk={CHUNK} prompt={PROMPT or 'tests/prompt.txt'} SDPA two-level={two_level}: "
         f"{len(order)} steps"

@@ -226,6 +226,8 @@ class TtAttention:
             sp_axis=self.sp_axis,
             scale=self.scale,
             k_split=default_k_split(self.window, S_local, kv_actual, sp, forced=self.sdpa_k_split),
+            two_level=self.options.sdpa_two_level,
+            two_level_fold=self.options.sdpa_two_level_fold,
         )
         qr.deallocate(True)
         vd = self.spec.v_head_dim

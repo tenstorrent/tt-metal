@@ -62,6 +62,9 @@ class MiMoRuntimeOptions:
     ack_sync: bool = True  # MIMO_ACK_SYNC
     # GA ring SDPA K split; None: automatic (sdpa.default_k_split).
     sdpa_k_split: int | None = None
+    # Ring SDPA two-level accumulation (SDPAProgramConfig.ring_two_level / ring_two_level_fold).
+    sdpa_two_level: bool = False  # TT_METAL_SDPA_RING_TWO_LEVEL
+    sdpa_two_level_fold: int = 0  # TT_METAL_SDPA_RING_TWO_LEVEL_FOLD
 
     def __post_init__(self):
         assert self.routed_expert in ("op", "py", "unified"), self.routed_expert
@@ -108,5 +111,7 @@ class MiMoRuntimeOptions:
         kw["ttnn_cache_root"] = root if kw["ttnn_cache"] else None
         kw["ack_sync"] = flag("MIMO_ACK_SYNC", True)
         kw["sdpa_k_split"] = opt_int("MIMO_SDPA_KSPLIT")
+        kw["sdpa_two_level"] = flag("TT_METAL_SDPA_RING_TWO_LEVEL", False)
+        kw["sdpa_two_level_fold"] = int(env.get("TT_METAL_SDPA_RING_TWO_LEVEL_FOLD") or 0)
         kw.update(overrides)
         return cls(**kw)
