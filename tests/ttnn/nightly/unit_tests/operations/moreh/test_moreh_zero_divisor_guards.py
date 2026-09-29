@@ -53,9 +53,15 @@ def test_moreh_fold_kernel_size_zero(device, expect_error):
         )
 
 
-def test_moreh_fold_kernel_size_arity(device, expect_error):
+# compute_output_specs indexes both sizes before validation runs.
+@pytest.mark.parametrize(
+    "output_size, kernel_size, message",
+    [([8, 8], [3], "kernel_size takes 2 elements"), ([8], [3, 3], "output_size takes 2 elements")],
+    ids=["kernel_size", "output_size"],
+)
+def test_moreh_fold_size_arity(device, expect_error, output_size, kernel_size, message):
     x = ttnn.from_torch(torch.randn(1, 36, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    with expect_error(RuntimeError, "kernel_size takes 2 elements"):
+    with expect_error(RuntimeError, message):
         ttnn.operations.moreh.fold(
-            x, None, output_size=[8, 8], kernel_size=[3], dilation=[1, 1], padding=[1, 1], stride=[1, 1]
+            x, None, output_size=output_size, kernel_size=kernel_size, dilation=[1, 1], padding=[1, 1], stride=[1, 1]
         )
