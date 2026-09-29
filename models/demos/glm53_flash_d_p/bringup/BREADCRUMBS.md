@@ -1047,3 +1047,28 @@ Reference passes (vs CPU 0). Stub fails (PCC 0).
 Next step: implement only needs to add attn_residual to `DEVICE_STEPS["dsa_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.07 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through attn_residual on the device, and rewrote it
+from swap 06's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new residual-share block (every device output up to attn_out fixed, CPU residual) is the base
+  of the residual's share. The attention share is now that block vs the attention-share block, and reproduces swap 06
+  exactly (30 / 0.00069). The earlier shares are unchanged.
+- New attn_residual checks:
+  - vs golden h_mid: rel 0.006, ratio [0.985, 1.015], worst row 0.04, per-stream 0.008. These are looser than the
+    component test's limits because the CPU residual of the same device inputs already scores [0.9907, 1.0071] /
+    row 0.0244, which is upstream attn_hc error.
+  - vs the fp32 CPU residual of the same inputs, at the component limits, with the term coefficients; also run on
+    chunk 0.
+  - Residual share at block out: flips <= 64, same-routing rel <= 0.0015, ratio [0.997, 1.003].
+- Sensitivity: CPU host script /tmp/dsas07/sens.py (not kept); the numbers are in the test docstring. Flip counts
+  cannot separate bf16 noise (46) from small bugs (comb x1.005: 26), so the share gates on rel L2 instead.
+  Zeroed rows are invisible at block out; only the same-input check sees them.
+Results:
+- Device passes: PCC 0.999994 (c0 0.999994). Residual vs CPU same input: 0.00179 / [0.9983, 1.0019] / row 0.00246.
+  Residual share: 35 / 0.00091 / [0.9985, 1.0018]. Block out vs the all-CPU block: 50 flips (limit 64) / 0.00213.
+  About 100 s.
+- Reference passes (exact). Stub fails.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_07_attn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
