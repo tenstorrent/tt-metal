@@ -32,6 +32,27 @@ void kernel_main() {
     uint32_t in0_tensor_current_tile_id;
     uint32_t in0_tensor_current_tile_id_along_c;
 
+    constexpr bool head_parallel = get_arg(args::head_parallel) != 0;
+    if constexpr (head_parallel) {
+        // Blocks are (row, head) in row-major order: one head's tile row each.
+        for (uint32_t block = in0_tensor_tile_id; block < in0_tensor_tile_id + num_blocks; ++block) {
+            const uint32_t row_all = block / in0_c;
+            const uint32_t head = block % in0_c;
+            uint32_t tile_id =
+                (row_all / in0_h_tiles * in0_c + head) * in0_HtWt + (row_all % in0_h_tiles) * in0_w_tiles;
+            dfb_in0.reserve_back(in0_w_tiles);
+            uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+            for (uint32_t w_dim = 0; w_dim < in0_w_tiles; w_dim++) {
+                noc.async_read(
+                    s0, CoreLocalMem<uint32_t>(l1_write_addr), single_tile_size_bytes, {.page_id = tile_id++}, {});
+                l1_write_addr += single_tile_size_bytes;
+            }
+            noc.async_read_barrier();
+            dfb_in0.push_back(in0_w_tiles);
+        }
+        return;
+    }
+
     for (uint32_t block = 0; block < num_blocks; block++) {
         in0_tensor_current_tile_id_along_c = in0_tensor_tile_id;
         for (uint32_t c_dim = 0; c_dim < in0_c; c_dim++) {

@@ -75,7 +75,7 @@ void kernel_main() {
         }
     };
 
-    if constexpr (head_parallel) {
+    if constexpr (head_parallel && kv_out_c == 0) {
         for (uint32_t tile = 0; tile < num_blocks * q_out_w_tiles; tile += tile_batch) {
             dfb_qv.wait_front(tile_batch);
             uint32_t source = dfb_qv.get_read_ptr();
@@ -85,6 +85,38 @@ void kernel_main() {
             }
             noc.async_writes_flushed();
             dfb_qv.pop_front(tile_batch);
+        }
+    } else if constexpr (head_parallel) {
+        // Blocks are (batch, head slot, row) as the reader decodes them; route each to its Q, K or V head.
+        constexpr uint32_t slots = q_out_c + 2 * kv_out_c;
+        const uint32_t first_block = q_out_tensor_tile_id / q_out_w_tiles;
+        for (uint32_t block = first_block; block < first_block + num_blocks; ++block) {
+            const uint32_t batch_slot = block / q_out_h_tiles;
+            const uint32_t row = block % q_out_h_tiles;
+            const uint32_t batch = batch_slot / slots;
+            const uint32_t slot = batch_slot % slots;
+            for (uint32_t w = 0; w < q_out_w_tiles; w += tile_batch) {
+                dfb_qv.wait_front(tile_batch);
+                uint32_t source = dfb_qv.get_read_ptr();
+                for (uint32_t j = 0; j < tile_batch; ++j) {
+                    if (slot < q_out_c) {
+                        const uint32_t tile_id = ((batch * q_out_c + slot) * q_out_h_tiles + row) * q_out_w_tiles + w + j;
+                        noc.async_write(CoreLocalMem<uint32_t>(source), sq, tile_bytes_qv, {}, {.page_id = tile_id});
+                    } else if (slot < q_out_c + kv_out_c) {
+                        const uint32_t tile_id =
+                            ((batch * kv_out_c + slot - q_out_c) * q_out_h_tiles + row) * q_out_w_tiles + w + j;
+                        noc.async_write(CoreLocalMem<uint32_t>(source), sk, tile_bytes_qv, {}, {.page_id = tile_id});
+                    } else {
+                        const uint32_t tile_id =
+                            ((batch * kv_out_c + slot - q_out_c - kv_out_c) * q_out_h_tiles + row) * q_out_w_tiles +
+                            w + j;
+                        noc.async_write(CoreLocalMem<uint32_t>(source), sv, tile_bytes_qv, {}, {.page_id = tile_id});
+                    }
+                    source += tile_bytes_qv;
+                }
+                noc.async_writes_flushed();
+                dfb_qv.pop_front(tile_batch);
+            }
         }
     } else {
         for (uint32_t block = 0; block < num_blocks; block++) {

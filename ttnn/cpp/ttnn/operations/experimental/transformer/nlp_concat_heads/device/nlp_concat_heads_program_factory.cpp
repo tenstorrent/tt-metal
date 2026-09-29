@@ -72,6 +72,21 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             num_blocks_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
+    // Fewer tile rows than cores: split each row by head too. Blocks are then (row, head) in row-major order, so each
+    // block's output tiles are contiguous and the writer is unchanged.
+    const bool head_parallel = !in_sharded && !out_sharded && in0_c > 1 &&
+                               num_blocks < compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    const uint32_t block_tiles = head_parallel ? in0_w_tiles : per_tensor_tiles;
+    if (head_parallel) {
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_blocks_per_core_group_1,
+            num_blocks_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks * in0_c);
+    }
     uint32_t g1_numcores = core_group_1.num_cores();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -169,6 +184,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                     {"in0_w_tiles", in0_w_tiles},
                     {"in0_c", in0_c},
                     {"in0_HtWt", in0_HtWt},
+                    {"head_parallel", static_cast<uint32_t>(head_parallel)},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_h_dim", "in0_tensor_tile_id"}},
             .hw_config = create_reader_datamovement_config(),
@@ -253,7 +269,10 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
             uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
-            uint32_t in0_tensor_tile_id = (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);
+            // Head-parallel blocks are (row, head) indices the reader decodes itself.
+            uint32_t in0_tensor_tile_id = head_parallel ? num_blocks_written
+                                                        : (num_blocks_written / in0_h_tiles * in0_CHtWt) +
+                                                              (in0_h_dim * in0_w_tiles);
 
             AddRuntimeArgsForNode(
                 reader_run_args.runtime_arg_values,
@@ -268,8 +287,8 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                 writer_run_args.runtime_arg_values,
                 core,
                 {
-                    {"num_pages", num_blocks_per_core * per_tensor_tiles},
-                    {"start_id", num_blocks_written * per_tensor_tiles},
+                    {"num_pages", num_blocks_per_core * block_tiles},
+                    {"start_id", num_blocks_written * block_tiles},
                 });
             num_blocks_written += num_blocks_per_core;
         }
