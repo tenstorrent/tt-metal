@@ -123,6 +123,63 @@ _PREFILL_CHUNK = 2048
 # verify's reach past the block (W committed positions + K+1 candidate rows).
 _MAX_DRAFT = 15
 _DEBUG = os.environ.get("QWEN36_DFLASH_DEBUG", "0") == "1"
+# Scheduler-driven chunked prefill (opt-in; profiles/tp4_chunked/DESIGN.md): with the knob on, the class declares
+# supports_chunked_prefill + tt_prefill_chunk_tokens (the 2048 eager unit) + tt_block_output_chunked_prefill, the plugin's
+# TT chunk policy may split a long prompt into 2048-aligned chunks interleaved with the other users' speculative decode
+# steps, and prefill_forward resumes a partial prompt through the eager prefill_for_spec path (GDN state parked in the
+# B=1 scratch between calls, tt/chunked_prefill.py; drafter context in the slot's own ring). Off (default): the
+# capability dict, prefill_forward, the warm-up and the guards are exactly today's.
+_CP_ENV = "QWEN36_DFLASH_CHUNKED_PREFILL"
+# Per-row prefill timing of the chunked path (device-synchronised; measurement only, off by default).
+_CP_TIMING = os.environ.get("QWEN36_DFLASH_CP_TIMING", "0") == "1"
+# Drained per-step timers in decode_forward (plan/switch, begins, step; measurement only, off by default).
+_STEP_LOG = os.environ.get("QWEN36_DFLASH_STEP_LOG", "0") == "1"
+
+
+def dflash_chunked_prefill_on():
+    """The chunked-prefill knob, read at access time (speculation must be on: a plain-serving DFlash class is the base
+    class's behaviour and never declares the block-output chunk capability)."""
+    return _W > 1 and os.environ.get(_CP_ENV, "0") == "1"
+
+
+class _DFlashCapabilities(dict):
+    """The DFlash class's capability dict: the static entries are exactly today's (a ``dict()`` / ``{**}`` copy, ``items()``
+    and iteration see only them, ``supports_chunked_prefill`` present and False); with QWEN36_DFLASH_CHUNKED_PREFILL=1
+    (read at access time) ``[]`` / ``in`` / ``.get`` report chunked prefill on, the 2048-token chunk unit and the
+    block-output chunk contract. Only these three keys are dynamic (``supports_async_decode`` stays the static False).
+    """
+
+    _CHUNKED = "supports_chunked_prefill"
+    _DYNAMIC_ONLY = ("tt_prefill_chunk_tokens", "tt_block_output_chunked_prefill")
+
+    @staticmethod
+    def _on_values():
+        return {
+            "supports_chunked_prefill": True,
+            "tt_prefill_chunk_tokens": _PREFILL_CHUNK,
+            "tt_block_output_chunked_prefill": True,
+        }
+
+    def __getitem__(self, key):
+        if key == self._CHUNKED or key in self._DYNAMIC_ONLY:
+            if dflash_chunked_prefill_on():
+                return self._on_values()[key]
+            if key in self._DYNAMIC_ONLY:
+                raise KeyError(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        if key in self._DYNAMIC_ONLY:
+            return dflash_chunked_prefill_on()
+        return super().__contains__(key)
+
+    def get(self, key, default=None):
+        if key == self._CHUNKED or key in self._DYNAMIC_ONLY:
+            if dflash_chunked_prefill_on():
+                return self._on_values()[key]
+            if key in self._DYNAMIC_ONLY:
+                return default
+        return super().get(key, default)
 
 
 def parse_buckets(spec):
@@ -206,24 +263,36 @@ def bucket_id(bucket):
 class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
     """Qwen36ForCausalLM + model-internal multi-user DFlash2 speculation on decode steps (see module doc)."""
 
-    model_capabilities = {
-        **Qwen36ForCausalLM.model_capabilities,
-        # A decode step commits exactly _W tokens per request (EOS-filled at a stop).
-        "output_tokens_per_step": _W,
-        # Block on decode steps; prefill anchors are plain width-1 rows.
-        "tt_adaptive_block_output": _W > 1,
-        # ...for EVERY request of the step (one multi-user speculative step), not only when solo.
-        "tt_adaptive_block_batched": _W > 1,
-        # Ragged rows: one speculative iteration per step, each row 1..W real ids then -1 padding
-        # (QWEN36_DFLASH_RAGGED=1; the plugin must implement the same contract).
-        "tt_adaptive_block_ragged": _W > 1 and _RAGGED,
-        # EVERY text prompt speculates (0 = no prompt-length frontier): the plain decode / chunk-prefill
-        # traces never run on the request path (a spec replay after them hangs the device).
-        "tt_adaptive_block_max_prompt_tokens": 0,
-        # The block step writes the W committed positions AND the last verify's K+1 candidate rows into
-        # the paged KV inside one step: have the scheduler allocate that reach up front.
-        "tt_block_output_kv_lookahead_tokens": (_W + _MAX_DRAFT + 1) if _W > 1 else 0,
-    }
+    model_capabilities = _DFlashCapabilities(
+        {
+            **Qwen36ForCausalLM.model_capabilities,
+            # No scheduler-driven chunked prefill by default (QWEN36_CHUNKED_PREFILL is the plain class's knob and must not
+            # reach this class): the plain class reads its knob at access time; this dict copies only its static entries, so
+            # state the default explicitly (with _W == 1 the block-output refusals in the plugin would not catch it).
+            # QWEN36_DFLASH_CHUNKED_PREFILL=1 turns it on through _DFlashCapabilities' accessors (module constants).
+            "supports_chunked_prefill": False,
+            # A decode step commits exactly _W tokens per request (EOS-filled at a stop).
+            "output_tokens_per_step": _W,
+            # Block on decode steps; prefill anchors are plain width-1 rows.
+            "tt_adaptive_block_output": _W > 1,
+            # ...for EVERY request of the step (one multi-user speculative step), not only when solo.
+            "tt_adaptive_block_batched": _W > 1,
+            # Ragged rows: one speculative iteration per step, each row 1..W real ids then -1 padding
+            # (QWEN36_DFLASH_RAGGED=1; the plugin must implement the same contract).
+            "tt_adaptive_block_ragged": _W > 1 and _RAGGED,
+            # EVERY text prompt speculates (0 = no prompt-length frontier): the plain decode / chunk-prefill
+            # traces never run on the request path (a spec replay after them hangs the device).
+            "tt_adaptive_block_max_prompt_tokens": 0,
+            # The block step writes the W committed positions AND the last verify's K+1 candidate rows into
+            # the paged KV inside one step: have the scheduler allocate that reach up front.
+            "tt_block_output_kv_lookahead_tokens": (_W + _MAX_DRAFT + 1) if _W > 1 else 0,
+        }
+    )
+
+    # Chunked-prefill state (set per instance in __init__; class defaults for instances built without it, e.g. host tests)
+    _cp_on = False
+    _cp_owner_phys = None
+    _forbid_plain = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -247,6 +316,22 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._buckets = ()  # (B_cfg, T_cfg) verify geometries, largest B == max_num_seqs (module doc)
         self._multi_bucket = False
         self._last_bucket = None  # bucket id plan() last put in force (logged on change)
+        # Chunked prefill (QWEN36_DFLASH_CHUNKED_PREFILL=1): the physical slot whose partial prompt the B=1 scratch (or its
+        # park buffer) holds, the third ownership check next to the planner's first block and next position.
+        self._cp_on = dflash_chunked_prefill_on()
+        self._cp_owner_phys = None
+        self._forbid_plain = False  # armed at the end of the spec capture under the knob (plain-trace tripwire)
+        if self._cp_on:
+            if B <= 1:
+                raise RuntimeError(
+                    f"{_CP_ENV}=1 needs the batched B=1 prefill scratch (--max-num-seqs > 1); got max_num_seqs={B} "
+                    "(single-user-dflash2 has nothing to interleave a chunk with)"
+                )
+            if int(model.num_devices) != 4:
+                raise RuntimeError(
+                    f"{_CP_ENV}=1 is validated at TP=4 (P150x4 / P300x2) only; got {int(model.num_devices)} device(s) "
+                    "(the TP=2 spec prefill path is changing under lane Q; unset the knob)"
+                )
         if _W > 1:
             if not model.use_tp:
                 raise RuntimeError(
@@ -261,6 +346,11 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                 raise RuntimeError(
                     f"{_BUCKETS_ENV}={os.environ.get(_BUCKETS_ENV)!r} needs the multi-bucket decoder "
                     "(dflash2_serving.DFlash2DualBucketDecoder), which this tree does not have"
+                )
+            if self._cp_on:
+                logger.info(
+                    f"Qwen36DFlash serving: scheduler-driven chunked prefill ON ({_CP_ENV}=1, chunk unit "
+                    f"{_PREFILL_CHUNK}): partial prompts resume through the eager spec prefill"
                 )
             logger.info(
                 f"Qwen36DFlash serving: slots={B} block W={_W} tokens/step{' (ragged: one iteration/step)' if _RAGGED else ''}, "
@@ -416,10 +506,15 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             return pt[:, :nb].contiguous()
         return torch.cat([pt, torch.zeros(1, nb - pt.shape[1], dtype=torch.int32)], dim=1)
 
-    def _spec_prefill(self, model, dec, phys, prompt, T, pt_row):
+    def _spec_prefill(self, model, dec, phys, prompt, T, pt_row, start=0, final=True):
         """Eager tap-capturing prefill of ONE request into physical slot ``phys`` (masked bucket for a
         short prompt, 2048-token chunks + masked tail for a long one), each chunk's taps ingested into the
-        drafter's ring for that slot. Returns host logits [1, vocab] (float)."""
+        drafter's ring for that slot. Returns host logits [1, vocab] (float).
+
+        Chunked prefill: ``start`` > 0 resumes the slot's partial prompt at ``start`` (its drafter frontier
+        ``dec.ctx_len[phys]`` must equal ``start``; the GDN state must be in the bound scratch, see prefill_for_spec);
+        ``final=False`` is an intermediate chunk ending at ``T``: no logits (returns None), the drafter frontier is
+        left at ``T``."""
 
         def on_chunk(hidden, chunk_start, valid_len):
             taps = model.take_dflash_eager_taps()
@@ -427,12 +522,34 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                 raise RuntimeError("Qwen36DFlash: eager prefill captured no drafter taps (bucket trace gate on?)")
             dec.ingest_prompt(phys, taps, chunk_start + valid_len, chunk_start=chunk_start)
 
-        dec.ctx_len[phys] = 0
+        chunked = bool(start) or not final
+        if not start:
+            dec.ctx_len[phys] = 0
+        elif dec.ctx_len[phys] != start:
+            raise RuntimeError(
+                f"Qwen36DFlash chunked prefill: slot {phys} resumes at {start} but its drafter context ends at "
+                f"{dec.ctx_len[phys]} (the continuation moved slots or a chunk was lost)"
+            )
         model._dflash_tap = True
         try:
-            logits_dev = model.prefill_for_spec(prompt, self._spec_pref_pt(model, pt_row), T, on_chunk, slot=phys)
+            if chunked:
+                logits_dev = model.prefill_for_spec(
+                    prompt, self._spec_pref_pt(model, pt_row), T, on_chunk, slot=phys, start=int(start), final=final
+                )
+            else:
+                logits_dev = model.prefill_for_spec(prompt, self._spec_pref_pt(model, pt_row), T, on_chunk, slot=phys)
         finally:
             model._dflash_tap = False
+        if not final:
+            if logits_dev is not None:
+                ttnn.deallocate(logits_dev)
+                raise RuntimeError("Qwen36DFlash chunked prefill: an intermediate chunk produced logits")
+            if dec.ctx_len[phys] != T:
+                raise RuntimeError(
+                    f"Qwen36DFlash chunked prefill: intermediate chunk [{start}, {T}) left slot {phys}'s drafter "
+                    f"context at {dec.ctx_len[phys]}"
+                )
+            return None
         if _FAST_LOGITS:
             # Replicated, tile-padded to 32 rows: untilize on device (31 padding rows dropped, 16 MB -> 0.5 MB per
             # device) and read device 0 only -- the QWEN36_PREFILL_LOGITS_FAST path of prefill_paged_slots. The
@@ -522,6 +639,11 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         S0 = min(buckets[0], _PREFILL_CHUNK - 1)
         for u in range(1, B):
             self._spec_prefill(model, dec, u, dummy_prompt(S0, seed=100 + u), S0, rows[u])
+        if self._cp_on:
+            # 3) Chunked prefill: the park buffer (before ANY trace is captured; the base prefill warm-up's own call is
+            #    then a no-op) and every resume / park program, through the chunk policy's own orchestration.
+            model.ensure_gdn_park_buffer()
+            self._cp_warm_sequence(model, dec, rows, S0, "phase-1 warm-up")
         ttnn.synchronize_device(model.mesh_device)
         logger.info(f"Qwen36DFlash phase-1 warmup (alloc + compile) done in {time.perf_counter() - t0:.1f}s")
         self._warm_rows = rows
@@ -706,6 +828,9 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                     dec.set_bucket(ids[bt])
                     dec.step()
         dec.end(0)
+        if self._cp_on:
+            # ...and one chunked prompt with a rider between its chunks (park, unpark, resumed chunk and tail).
+            self._cp_warm_sequence(model, dec, rows, S0, "post-capture guard")
         ttnn.synchronize_device(dev)
         n1 = int(count())
         if n1 != n0:
@@ -721,6 +846,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             logger.info(
                 f"Qwen36DFlash post-capture guard: program cache unchanged at {n0} entries over the warm sweep + one "
                 f"traced step per bucket ({','.join(ids[bt] for bt in self._buckets)})"
+                + (" + a chunked prefill with a rider" if self._cp_on else "")
             )
 
     def _spec_capture(self):
@@ -762,6 +888,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._reset_bucket_policy(dec)
         self._spec = dec
         self._spec_pre = None
+        if self._cp_on:
+            # Tripwire (hang class): from here on a plain trace replay raises instead of hanging the device.
+            model._forbid_plain_traces = True
+            self._forbid_plain = True
         logger.info(f"Qwen36DFlash phase-2 warmup (captures) done in {time.perf_counter() - t0:.1f}s: {stats} (W={_W})")
 
     def _reset_bucket_policy(self, dec):
@@ -818,6 +948,14 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         if _W <= 1 or not self._spec_ready():
+            # Reachable with the tripwire armed only after release_persistent_capture (_spec None) while a plugin
+            # warm-up runs again (_in_warmup; otherwise _spec_ready() raises first): a plain forward would replay plain
+            # traces in a process that captured spec traces. On the request path _spec_ready() is True whenever the
+            # tripwire is armed; there the guard is model._check_plain_trace_allowed at the plain prefill replay sites.
+            if self._forbid_plain:
+                raise RuntimeError(
+                    "Qwen36DFlash: plain prefill after the speculative traces were captured (hang class)"
+                )
             return super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, **kwargs)
         model = self.model[0]
         dec = self._spec
@@ -830,6 +968,41 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         empty_slots = kwargs.get("empty_slots")
         logical = [int(s) for s in empty_slots] if empty_slots is not None else list(range(N))
         pt = torch.as_tensor(page_table)
+        resume_mask = kwargs.get("prefill_resume_mask")
+        final_mask = kwargs.get("prefill_final_mask")
+        if resume_mask is not None or final_mask is not None:
+            # The plugin's TT chunk policy (tt_block_output_chunked_prefill) passes both masks on EVERY prefill step.
+            resume_mask = [bool(x) for x in (resume_mask if resume_mask is not None else [False] * N)]
+            final_mask = [bool(x) for x in (final_mask if final_mask is not None else [True] * N)]
+            if len(resume_mask) != N or len(final_mask) != N:
+                raise RuntimeError(
+                    f"Qwen36DFlash: prefill masks of {len(resume_mask)}/{len(final_mask)} rows for {N} prompt rows"
+                )
+            trivial = not any(resume_mask) and all(final_mask)
+            if not trivial and not self._cp_on:
+                raise RuntimeError(
+                    f"Qwen36DFlash: the runner asked for a chunked prefill (resume={resume_mask}, final={final_mask}) "
+                    f"but {_CP_ENV} is off"
+                )
+            # Whole prompts with no partial held in the scratch take today's loop below, byte for byte. Anything else
+            # (a resume, an intermediate chunk, or whole prompts while a partial is held: it must be parked first)
+            # goes through the planner.
+            if not trivial or model._chunked_prefill_planner().owner is not None:
+                starts = kwargs.get("start_pos")
+                starts = [int(starts[u]) for u in range(N)] if starts is not None else [0] * N
+                out = self._prefill_planned(
+                    model,
+                    dec,
+                    [torch.as_tensor(tokens)[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)],
+                    [pt[u].reshape(-1).clone() for u in range(N)],
+                    [self._phys[logical[u]] for u in range(N)],
+                    starts,
+                    plens,
+                    resume_mask,
+                    final_mask,
+                )
+                logger.info(f"Finished prefill of {N} request(s), starting decode...")
+                return torch.cat(out, dim=0), torch.zeros(N, dtype=torch.long)
         out = []
         for u in range(N):
             phys = self._phys[logical[u]]
@@ -847,6 +1020,114 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         logger.info(f"Finished prefill of {N} request(s), starting decode...")
         return torch.cat(out, dim=0), torch.zeros(N, dtype=torch.long)
 
+    def _prefill_planned(self, model, dec, prompts, rows, phys_of, starts, ends, resume_mask, final_mask, seat=True):
+        """One prefill call under the chunk policy: the rows in ChunkedPrefillPlanner order (a resume row first; park
+        before any row that resets the scratch while a partial is held unparked, unpark before the resume), each through
+        the eager spec prefill. A final row returns its host logits [1, 1, vocab] and (``seat``) marks the slot for
+        begin() at its first decode step; an intermediate row returns zero logits, writes no slot row and becomes the
+        scratch owner. The planner's owner is committed only after every row succeeded (tt/chunked_prefill.py).
+        Returns the logits in call order."""
+        N = len(prompts)
+        planner = model._chunked_prefill_planner()
+        first_blocks = [int(r.reshape(-1)[0]) for r in rows]
+        plans, owner_after = planner.plan(starts, ends, resume_mask, final_mask, first_blocks)
+        out = [None] * N
+        owner_phys = self._cp_owner_phys
+        done = []
+        for p in plans:
+            u = p.row
+            phys = int(phys_of[u])
+            t0 = None
+            if _CP_TIMING:
+                ttnn.synchronize_device(model.mesh_device)
+                t0 = time.perf_counter()
+            if p.park_before:
+                model._park_gdn_scratch()
+            if p.unpark_before:
+                model._unpark_gdn_scratch()
+            t1 = None
+            if _CP_TIMING:
+                ttnn.synchronize_device(model.mesh_device)
+                t1 = time.perf_counter()
+            if p.resume:
+                if phys != self._cp_owner_phys:
+                    raise RuntimeError(
+                        f"Qwen36DFlash chunked prefill: resume row {u} is on slot {phys}, the partial prompt is in slot "
+                        f"{self._cp_owner_phys} (the plugin must keep a continuation on its state slot)"
+                    )
+                if dec.active[phys] or self._pending[phys] is not None:
+                    raise RuntimeError(
+                        f"Qwen36DFlash chunked prefill: resume slot {phys} has a live or pending session"
+                    )
+            else:
+                if dec.active[phys]:
+                    # vLLM released the previous occupant before reusing its slot; close its session if not.
+                    dec.end(phys)
+                self._carry[phys], self._stopped[phys], self._prev_tail[phys] = [], False, None
+                self._pending[phys] = None
+                if owner_phys == phys:
+                    owner_phys = None  # a new prompt reuses the stale partial's slot (the planner parked its state)
+            T = int(p.end)
+            if p.final:
+                logger.info(
+                    f"Prefilling slot {phys} up to {T} tokens (TP eager spec prefill"
+                    + (f", resumed at {p.start})" if p.resume else ")")
+                )
+            else:
+                logger.info(
+                    f"Prefilling slot {phys} tokens [{p.start}, {T}) (TP eager spec prefill, intermediate chunk)"
+                )
+            lt = self._spec_prefill(model, dec, phys, prompts[u][:, :T], T, rows[u], start=p.start, final=p.final)
+            if p.final:
+                out[u] = lt.view(1, 1, -1)
+                if seat:
+                    self._pending[phys] = (T, rows[u])
+                if p.resume:
+                    owner_phys = None
+            else:
+                out[u] = torch.zeros(1, 1, model.vocab_size, dtype=torch.float32)
+                owner_phys = phys
+            if _CP_TIMING:
+                ttnn.synchronize_device(model.mesh_device)
+                t2 = time.perf_counter()
+                logger.info(
+                    f"[DFLASH_CP] phys={phys} start={p.start} end={T} resume={int(p.resume)} final={int(p.final)} "
+                    f"park={int(p.park_before)} unpark={int(p.unpark_before)} park_ms={(t1 - t0) * 1e3:.1f} "
+                    f"prefill_ms={(t2 - t1) * 1e3:.1f}"
+                )
+            done.append((phys, p.start, T, int(p.resume), int(p.final), int(p.park_before), int(p.unpark_before)))
+        planner.owner = owner_after
+        self._cp_owner_phys = owner_phys if owner_after is not None else None
+        logger.info(f"Qwen36DFlash chunked rows [(phys, start, end, resume, final, park, unpark)]: {done}")
+        return out
+
+    def _cp_warm_sequence(self, model, dec, rows, S0, tag):
+        """Exercise every program of the chunked path (park / unpark, a resumed chunk with and without logits, a
+        tail-only resume, an intermediate chunk's no-logits exit) with the chunk policy's own orchestration: slot 0
+        takes a long prompt in chunks, slot 1 a short rider between them. Leaves no seated slot and no scratch owner."""
+        L0 = _PREFILL_CHUNK + S0
+        L1 = 2 * _PREFILL_CHUNK
+        p0 = dummy_prompt(max(L0, L1), seed=4242)
+        rider = dummy_prompt(S0, seed=4343)
+        seqs = [
+            # [0, C) intermediate; a rider (parks the partial); [C, C+S0) final: tail-only resume after an unpark
+            ([p0], [rows[0]], [0], [0], [_PREFILL_CHUNK], [False], [False]),
+            ([rider], [rows[1]], [1], [0], [S0], [False], [True]),
+            ([p0], [rows[0]], [0], [_PREFILL_CHUNK], [L0], [True], [True]),
+            # [0, C) intermediate; [C, 2C) final together with a rider: exact-multiple resume (logits from the chunk)
+            ([p0], [rows[0]], [0], [0], [_PREFILL_CHUNK], [False], [False]),
+            ([p0, rider], [rows[0], rows[1]], [0, 1], [_PREFILL_CHUNK, 0], [L1, S0], [True, False], [True, True]),
+        ]
+        for prompts, rws, phys, st, en, rs, fn in seqs:
+            self._prefill_planned(model, dec, prompts, rws, phys, st, en, rs, fn, seat=False)
+        ttnn.synchronize_device(model.mesh_device)
+        owner = model._chunked_prefill_planner().owner
+        if owner is not None or self._cp_owner_phys is not None or any(p is not None for p in self._pending):
+            raise RuntimeError(
+                f"Qwen36DFlash chunked-prefill {tag}: left scratch owner {owner} / slot {self._cp_owner_phys} / "
+                f"pending {self._pending}"
+            )
+
     # ------------------------------------------------------------------ decode: one block per step, all live slots
     def _no_device_sampler(self):
         """True when no model on the mesh has the ttnn device sampler (TP=2: 124,160 logits/device > its 64K cap)."""
@@ -854,6 +1135,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     def decode_forward(self, *args, **kwargs):
         if _W <= 1 or not self._spec_ready():
+            # Same reachability as in prefill_forward (a re-warm-up after release_persistent_capture); the plain decode
+            # trace replay lives in the generator base class and has no model-side guard of its own.
+            if self._forbid_plain:
+                raise RuntimeError("Qwen36DFlash: plain decode after the speculative traces were captured (hang class)")
             if _W > 1 and kwargs.get("sampling_params") is not None and self._no_device_sampler():
                 # Pre-arm plain step on a mesh without a device sampler: host logits (the runner samples).
                 kwargs = dict(kwargs, sampling_params=None)
@@ -891,6 +1176,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         # user), so the begins below land in the geometry in force; a mis-ordering is a decoder assert, never a
         # wrong-geometry seed. Single bucket: a host no-op.
         plan = getattr(dec, "plan", None)
+        if _STEP_LOG:
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            _ts = [time.perf_counter()]
+            _bucket_before = getattr(dec, "cur_id", None)
         if plan is not None:
             live_after = {phys for phys in range(B) if dec.active[phys]}
             for i in range(Bp):
@@ -900,6 +1189,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             if bucket != self._last_bucket:
                 logger.info(f"Qwen36DFlash: verify bucket {bucket} in force ({len(live_after)} live slot(s))")
                 self._last_bucket = bucket
+        if _STEP_LOG:
+            ttnn.synchronize_device(self.model[0].mesh_device)
+            _ts.append(time.perf_counter())
+            _nbegin = sum(1 for i in range(Bp) if int(poss[i]) >= 0 and self._pending[self._phys[i]] is not None)
         live_rows = []
         nosession_rows = []  # live rows without a session: EOS so the request ends (ragged: [EOS, -1, ...])
         for i in range(Bp):
@@ -934,9 +1227,21 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             live_rows.append((i, phys))
         t0 = time.perf_counter() if _DEBUG else 0.0
         if _RAGGED:
+            if _STEP_LOG:
+                ttnn.synchronize_device(self.model[0].mesh_device)
+                _ts.append(time.perf_counter())
             out = self._decode_ragged(dec, live_rows, Bp, t0)
             for i in nosession_rows:
                 out[i, 0] = self._eos_fill
+            if _STEP_LOG:
+                ttnn.synchronize_device(self.model[0].mesh_device)
+                _ts.append(time.perf_counter())
+                logger.info(
+                    f"[DFLASH_STEP] rows={len(live_rows)} begins={_nbegin} bucket={_bucket_before}->"
+                    f"{getattr(dec, 'cur_id', None)} plan_ms={(_ts[1] - _ts[0]) * 1e3:.1f} "
+                    f"begin_ms={(_ts[2] - _ts[1]) * 1e3:.1f} step_ms={(_ts[3] - _ts[2]) * 1e3:.1f} "
+                    f"tok={int((out >= 0).sum())}"
+                )
             return out
         # Step until every live row can fill its block. A row whose carry already holds a stop token
         # needs nothing: it emits through the stop this step (latency for a normal request); the
@@ -1068,6 +1373,11 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._spec.end(phys)
         self._pending[phys] = None
         self._carry[phys], self._stopped[phys], self._prev_tail[phys] = [], False, None
+        if self._cp_owner_phys == phys:
+            # An aborted / preempted partial prompt: its scratch state is dead; drop the ownership so the next prompt
+            # does not park it (a preempted request re-prefills from 0).
+            self._cp_owner_phys = None
+            self.model[0]._chunked_prefill_planner().owner = None
 
     def release_persistent_capture(self) -> None:
         if self._spec is None:
