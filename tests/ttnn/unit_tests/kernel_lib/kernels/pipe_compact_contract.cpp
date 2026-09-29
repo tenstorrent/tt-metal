@@ -14,12 +14,12 @@ void access_internal_semaphore(const Channel& channel) {
     }
 }
 
-void kernel_main() {
+template <uint32_t action>
+void exercise_contract() {
     using namespace dataflow_kernel_lib;
     constexpr McastArgs<3, 1> channel;
     static_assert(channel.next_runtime_args_offset() == get_compile_time_arg_val(1));
     static_assert(channel.next_compile_time_args_offset() == get_compile_time_arg_val(2));
-    constexpr uint32_t action = get_compile_time_arg_val(0);
     Noc noc;
     if constexpr (action == 0) {
         auto sender = channel.optional_sender(noc);
@@ -43,3 +43,5 @@ void kernel_main() {
         access_internal_semaphore<action>(channel);
     }
 }
+
+void kernel_main() { exercise_contract<get_compile_time_arg_val(0)>(); }
