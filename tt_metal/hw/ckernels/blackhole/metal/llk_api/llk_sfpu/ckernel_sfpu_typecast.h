@@ -450,7 +450,6 @@ inline void calculate_typecast_uint32_to_fp32() {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPSETMAN(0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG1, 0);
-        TTI_SFPNOP;
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
 #else
