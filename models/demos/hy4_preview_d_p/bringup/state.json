@@ -2547,6 +2547,92 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.moe_shared.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "adab73d6-044e-4978-bf30-4a164cf5377c"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_shared.attention.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_shared.attention.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 1182.4,
+    "session_id": "adab73d6-044e-4978-bf30-4a164cf5377c",
+    "t": "2026-09-29T18:04:24"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 39.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T18:06:33"
+   }
+  ],
+  "last_run": "2026-09-29T18:06:33",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.moe_shared.attention.log",
+  "metrics": {
+   "chunk0_rel_l2_attention_L02": 0.005916079971939325,
+   "chunk0_row_norm_ratio_max_attention_L02": 1.0010433197021484,
+   "chunk0_row_norm_ratio_min_attention_L02": 0.9979442358016968,
+   "chunk0_scale_coef_attention_L02": 0.9996107551215622,
+   "chunk0_worst_row_rel_l2_attention_L02": 0.007955724373459816,
+   "golden_rel_l2_attention_L02": 0.006132446229457855,
+   "golden_row_norm_ratio_max_attention_L02": 1.0012189149856567,
+   "golden_row_norm_ratio_min_attention_L02": 0.9980242252349854,
+   "golden_scale_coef_attention_L02": 0.9997022305301998,
+   "golden_worst_row_rel_l2_attention_L02": 0.008123893290758133,
+   "pcc_attention_L02": 0.9999811669520374,
+   "probe_rel_l2_attention_L02": 0.005380208138376474,
+   "probe_row_norm_ratio_max_attention_L02": 1.001484751701355,
+   "probe_row_norm_ratio_min_attention_L02": 0.9973267316818237,
+   "probe_scale_coef_attention_L02": 0.9998813109953792,
+   "probe_worst_row_rel_l2_attention_L02": 0.007886148989200592,
+   "scaled_rel_l2_attention_L02": 0.011879317462444305,
+   "scaled_row_norm_ratio_max_attention_L02": 1.0034314393997192,
+   "scaled_row_norm_ratio_min_attention_L02": 0.9962787628173828,
+   "scaled_scale_coef_attention_L02": 0.9999205580883848,
+   "scaled_worst_row_rel_l2_attention_L02": 0.02057812362909317
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T18:05:54",
+  "status": "PASS"
+ },
  "C.moe_shared.attn_hc": {
   "agent": {
    "defs": {
