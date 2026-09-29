@@ -639,3 +639,15 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
   file; missing shared paths are skipped). The first fails on the pre-F49 gate.py.
 - Recovered by hand for GLM: the sdpa fork change and the knowledge entries committed after C.dsa_moe.attention
   (supervision.md).
+
+## F50 (2026-09-29): state.json keeps only the gated metrics of a test that records many (GLM-5.3 run)
+
+- Symptom: the S.kda_moe.10 gate passed but its commit failed: the repo's pre-commit `check-large-files` refused
+  `models/demos/glm53_flash_d_p/bringup/state.json (506 KB) exceeds the 500 KB limit`; the orchestrator exited 1.
+- Cause: run_gate copied every recorded metric into state.json. GLM's swap tests record 300-400 informational
+  metrics each (per-step coefficients vs CPU and golden), so after ~60 of 96 tasks state.json passed 500 KB.
+- Fix: `gate.state_metrics`: up to STATE_METRICS_MAX (64) metrics are all kept; above that, only the ones the task's
+  thresholds match. results/<task>.json still holds every metric (the dashboard trails, prior view and profile read
+  those); state.json metrics feed only the ladder row detail and runs.compare deltas, which use gated metrics.
+- Selftests 214 -> 216 (test_core: many metrics -> gated only, results keep all; few metrics -> all kept). The first
+  fails on the pre-F50 gate.py. The GLM state.json was migrated in place with the same rule (518 KB -> see commit).
