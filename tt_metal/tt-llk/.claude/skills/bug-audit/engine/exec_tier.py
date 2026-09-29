@@ -28,7 +28,7 @@ machine the user has agreed to, and for tests only when the target hardware is a
 {tree} in a command expands to the audited tree's path.
 Diagnostics understood: compiler, linker and clang-tidy "file:line[:col]: error|warning|note: msg" lines; sanitizer
 "runtime error" lines and "#N 0x... in fn file:line" stack frames; and Python 'File "file", line N' frames. Test
-selection greps the test roots for each batch file's stem, or for its module path for Python files.
+selection ranks the tests under the test roots by how specifically they name the batch's files (pick_tests).
 """
 import json
 import os
@@ -194,6 +194,47 @@ def run_cmd(name, cmd, tree, timeout):
     return rc, open(logp, errors="replace").read(), round(time.time() - t0)
 
 
+GENERIC_STEM = 50  # a stem found in more test files than this (common, utils, device) says little on its own
+
+
+def grep_tests(args, roots, tree):
+    """Test files under the roots that grep matches; -Z, because a path may hold spaces."""
+    hits = set()
+    for root in roots:
+        out_ = spawn.run(
+            "grep",
+            ["-rlZ", "--include=*.py", "--include=*.cpp", *args, root],
+            cwd=tree,
+            capture_output=True,
+            text=True,
+        ).stdout
+        hits |= {x for x in out_.split("\0") if x}
+    return hits
+
+
+def pick_tests(files, roots, n, tree):
+    """The n tests that most specifically exercise a batch's files.
+
+    A test that names a file itself (its file name with extension, as an #include does, or its Python module path)
+    ranks first; then a test that names more of the batch's files; a bare-stem match last, and a stem that matches
+    more than GENERIC_STEM test files counts only when nothing better exists. Ties break by path, so a pick is
+    reproducible.
+    """
+    named, by_stem, generic = {}, {}, {}
+    for f in files:
+        exact = f.replace("/", ".")[:-3] if f.endswith(".py") else os.path.basename(f)
+        for t in grep_tests(["-F", exact], roots, tree):
+            named[t] = named.get(t, 0) + 1
+        stem = os.path.splitext(os.path.basename(f))[0]
+        hits = grep_tests(["-w", stem], roots, tree)
+        bucket = generic if len(hits) > GENERIC_STEM else by_stem
+        for t in hits:
+            bucket[t] = bucket.get(t, 0) + 1
+    pool = set(named) | set(by_stem) or set(generic)
+    score = lambda t: (-named.get(t, 0), -(by_stem.get(t, 0) + generic.get(t, 0)), t)
+    return sorted(pool, key=score)[:n]
+
+
 def file_to_batch():
     return {f: b for b, m in man.items() for f in m["files"]}
 
@@ -275,26 +316,12 @@ elif argv[0] == "run":
     tc = ex.get("tests", {})
     if "tests" in steps and tc.get("cmd"):
         for b, m in sorted(man.items()):
-            wanted = set()
-            for f in m["files"]:
-                stem = os.path.splitext(os.path.basename(f))[0]
-                pat = f.replace("/", ".")[:-3] if f.endswith(".py") else stem
-                for root in tc.get("roots") or ["tests"]:
-                    g = spawn.run(
-                        "grep",
-                        [
-                            "-rlwZ",
-                            "--include=*.py",
-                            "--include=*.cpp",
-                            pat,
-                            root,
-                        ],
-                        cwd=tree,
-                        capture_output=True,
-                        text=True,
-                    ).stdout.split("\0")
-                    wanted |= {x for x in g if x}  # -Z: a path may hold spaces
-            chosen = sorted(wanted)[: tc.get("max_per_batch", 8)]
+            chosen = pick_tests(
+                m["files"],
+                tc.get("roots") or ["tests"],
+                tc.get("max_per_batch", 8),
+                tree,
+            )
             if not chosen:
                 continue
             if ex.get("reset_cmd"):

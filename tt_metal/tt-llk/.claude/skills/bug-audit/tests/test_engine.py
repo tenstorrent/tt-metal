@@ -1027,7 +1027,7 @@ def _exec_run(tmp_path, test_files, batch_files, *configure):
         "--include",
         ",".join(batch_files),
         "--ext",
-        ".c,.py",
+        ".c,.cpp,.hpp,.py",
     )
     assert code == 0, o + e
     code, o, e = run(
@@ -1129,6 +1129,59 @@ def test_exec_tier_run_refuses_an_old_config_without_cards(tmp_path):
         os.path.join(ENGINE, "exec_tier.py"), "--run", tmp_path / "run", "run"
     )
     assert code != 0 and "--devices" in o + e, o + e
+
+
+def _generic_tests(n=60):
+    return {f"tests/g/test_g{i:02d}.py": "import common\n" for i in range(n)}
+
+
+def test_exec_tier_picks_tests_that_name_the_file_before_bare_stems(tmp_path):
+    tests = {
+        **_generic_tests(),
+        "tests/test_exact.cpp": '#include "src/widget.hpp"\n',
+        "tests/test_both.cpp": '#include "src/widget.hpp"\nint common;\n',
+        "tests/test_stem.py": "widget = 1\n",
+    }
+    code, out, _, tree = _exec_run(
+        tmp_path,
+        tests,
+        ["src/widget.hpp", "src/common.c"],
+        "--test-cmd",
+        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "--test-root",
+        "tests",
+        "--max-tests",
+        "10",
+        "--devices",
+        "0",
+    )
+    assert code == 0, out
+    picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
+    # named first (the one naming more batch files ahead), the bare stem next; the 60 generic-stem hits never
+    assert picked == [
+        "tests/test_both.cpp",
+        "tests/test_exact.cpp",
+        "tests/test_stem.py",
+    ], picked
+
+
+def test_exec_tier_falls_back_to_a_generic_stem_when_nothing_better_exists(tmp_path):
+    code, out, _, tree = _exec_run(
+        tmp_path,
+        _generic_tests(),
+        ["src/common.c"],
+        "--test-cmd",
+        "printf '%s\\n' {tests} > {tree}/picked.txt",
+        "--test-root",
+        "tests",
+        "--max-tests",
+        "2",
+        "--devices",
+        "0",
+    )
+    assert code == 0, out
+    picked = open(os.path.join(tree, "picked.txt")).read().splitlines()
+    assert picked == ["tests/g/test_g00.py", "tests/g/test_g01.py"], picked
 
 
 def test_every_spawn_user_imports_it_before_first_use():
