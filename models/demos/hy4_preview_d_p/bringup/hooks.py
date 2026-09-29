@@ -77,7 +77,7 @@ DEVICE_STEPS = {
         "mlp",
         "ffn_residual",
     },
-    "moe_full": {"router", "experts"},
+    "moe_full": {"router", "experts", "shared_expert"},
     "moe_shared": set(),
 }
 
@@ -100,6 +100,9 @@ _INDEXER_STEPS = {"indexer"}
 _ATTENTION_STEPS = {"attention"}
 # Dense SwiGLU MLP (tt/mlp.py:TtDenseMLP), layer 0: TP=2 over axis 1, fp32 intermediates, reduce_scatter over axis 1.
 _MLP_STEPS = {"mlp"}
+# Shared expert (tt/mlp.py:TtDenseMLP on mlp.shared_experts.*), MoE layers: intermediate 2048 -> 1024 per chip column,
+# same TP=2 / fp32 intermediates / reduce_scatter over axis 1 as the dense MLP.
+_SHARED_STEPS = {"shared_expert": "mlp.shared_experts."}
 # MoE router (tt/router.py:TtHy4Router), replicated fp32 gate + bias, on each row's S/2 tokens; no collective.
 _ROUTER_STEPS = {"router"}
 # Routed experts (tt/experts.py:TtHy4Experts): DeepSeek 2D EP (dispatch over axis 0 within each column, 64 experts per
@@ -428,16 +431,17 @@ class _AttentionHostFn:
         return out
 
 
-def _mlp_module(mesh, spec, layer, loader=None, cfg=None):
-    """TtDenseMLP: gate / up column-parallel and down row-parallel over mesh columns (9216 of 18432 per chip), bf16 as
-    stored; HiFi4 + fp32 dest, fp32 gate / up / h (``HY4_MLP_MID=bf16`` for comparison); unclamped."""
+def _mlp_module(mesh, spec, layer, loader=None, cfg=None, prefix="mlp."):
+    """TtDenseMLP: gate / up column-parallel and down row-parallel over mesh columns (9216 of 18432 per chip for the
+    dense MLP, 1024 of 2048 for the shared expert, ``prefix="mlp.shared_experts."``), bf16 as stored; HiFi4 + fp32
+    dest, fp32 gate / up / h (``HY4_MLP_MID=bf16`` for comparison); unclamped."""
     import os
 
     import ttnn
     from models.demos.hy4_preview_d_p.tt.mlp import TtDenseMLP
 
     loader = loader or _loader(spec)
-    p = f"model.layers.{layer}.mlp."
+    p = f"model.layers.{layer}.{prefix}"
     w = lambda n: loader.get(p + n + ".weight")  # noqa: E731
     mid = ttnn.bfloat16 if os.environ.get("HY4_MLP_MID") == "bf16" else ttnn.float32
     return TtDenseMLP(mesh, w("gate_proj"), w("up_proj"), w("down_proj"), tp_axis=1, mid=mid)
@@ -591,6 +595,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _AttentionHostFn(mesh, _attention_module(mesh, spec, layer, loader, cfg))
     if step in _MLP_STEPS:
         return _row_in_col_out_host_fn(mesh, _mlp_module(mesh, spec, layer, loader, cfg))
+    if step in _SHARED_STEPS:
+        return _row_in_col_out_host_fn(mesh, _mlp_module(mesh, spec, layer, loader, cfg, prefix=_SHARED_STEPS[step]))
     if step in _ROUTER_STEPS:
         return _router_host_fn(mesh, _router_module(mesh, spec, layer, loader, cfg))
     if step in _EXPERTS_STEPS:
@@ -619,6 +625,7 @@ def device_component(mesh, spec, layer, step):
             _INDEXER_STEPS,
             _ATTENTION_STEPS,
             _MLP_STEPS,
+            _SHARED_STEPS,
             _ROUTER_STEPS,
             _EXPERTS_STEPS,
         )
