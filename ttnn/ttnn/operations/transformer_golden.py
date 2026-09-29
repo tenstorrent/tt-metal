@@ -922,7 +922,9 @@ def sparse_sdpa_golden(
     return sparse_mla(q, kvpe, indices.to(torch.int64), scale, v_dim, attention_sink)
 
 
-def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=False, chunk_start_idx=0):
+def sparse_attention_ref_msa(
+    q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=False, chunk_start_idx=0, q_positions=None
+):
     """MSA block-sparse reference: attend the selected blocks, softmax, then PV with separate V.
 
         q       [B, H, S, d]            (post-rope, post-qk-norm — done upstream)
@@ -931,7 +933,9 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
         -> out  [B, H, S, v_dim]        (v_dim = v.shape[-1])
 
     `causal=True` enables a token-level causality — required for correctness on the diagonal block,
-    whose selected tokens after the query position are future and must not be attended.
+    whose selected tokens after the query position are future and must not be attended. Query row s sits at
+    global position chunk_start_idx + s, or q_positions[s] when given ([S] ints; e.g. the rotated rows a
+    device holds after a mid-slab chunk start).
 
     Query heads sharing a KV head also share that KV head's block selection. All-masked rows return 0.
     """
@@ -969,9 +973,9 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
     scores = scores.masked_fill(~token_mask, float("-inf"))
     if causal:
         # Strictly-future keys (only ever inside the diagonal block; past blocks are all <= query pos).
-        q_pos = (torch.arange(S) + chunk_start_idx).view(1, 1, S, 1)
+        q_pos = torch.arange(S) + chunk_start_idx if q_positions is None else torch.as_tensor(q_positions)
         kv_pos = torch.arange(T).view(1, 1, 1, T)
-        scores = scores.masked_fill(kv_pos > q_pos, float("-inf"))
+        scores = scores.masked_fill(kv_pos > q_pos.view(1, 1, S, 1), float("-inf"))
 
     row_has_value = (scores > float("-inf")).any(dim=-1, keepdim=True)
     scores = torch.where(row_has_value, scores, torch.zeros_like(scores))

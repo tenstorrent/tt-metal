@@ -53,7 +53,7 @@ class _Setup:
     """Per-user goldens, the two-user x two-layer caches with the first `prewrite_chunks` chunks of every user written
     into (user, LAYER_IDX), the last chunk's Q slab, and the dense_sp kwargs both tests share."""
 
-    def __init__(self, mesh_device, n_chunks, chunk_local, *, prewrite_chunks):
+    def __init__(self, mesh_device, n_chunks, chunk_local, *, prewrite_chunks, full_goldens=True):
         rows, cols = tuple(mesh_device.shape)
         assert (rows, cols) == (8, 4)
         self.mesh_device, self.chunk_local = mesh_device, chunk_local
@@ -69,7 +69,10 @@ class _Setup:
         self.v = [
             torch.randn(1, NKV, self.cache_global, HEAD_DIM, dtype=torch.bfloat16) * 0.1 for _ in range(NUM_USERS)
         ]
-        self.refs = [torch_gqa_causal(self.q.float(), self.k[u].float(), self.v[u].float()) for u in range(NUM_USERS)]
+        if full_goldens:
+            self.refs = [
+                torch_gqa_causal(self.q.float(), self.k[u].float(), self.v[u].float()) for u in range(NUM_USERS)
+            ]
 
         self.ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
         shape = list(mesh_device.shape)
@@ -152,6 +155,57 @@ def test_ring_joint_cache_read_sp(mesh_device, device_params, slot_form, n_chunk
         passing, pcc = comp_pcc(s.refs[u][:, :, s.last :, :], outs[-1], PCC_BF8_CACHE)
         logger.info(f"ring_joint cache-read SP=8 x TP=4, {slot_form} slot, user {u}: pcc={pcc}")
         assert passing, f"cache-read PCC fail ({slot_form} slot, user {u}): {pcc}"
+    assert not torch.equal(outs[0], outs[1]), "users must produce distinct outputs for the slot check to mean anything"
+
+
+def torch_gqa_causal_rows(q, k, v, start, end):
+    """Full-causal GQA golden for query rows [start, end) over keys [0, end), one KV group at a time (the full
+    [NQ, S, S] score tensor does not fit at three-chunk capacity)."""
+    rep = NQ // NKV
+    out = torch.empty(1, NQ, end - start, HEAD_DIM)
+    causal = torch.arange(end)[None, :] > torch.arange(start, end)[:, None]
+    for g in range(NKV):
+        scores = (q[:, g * rep : (g + 1) * rep, start:end].float() @ k[:, g, :end].float().transpose(-1, -2)) * (
+            HEAD_DIM**-0.5
+        )
+        out[:, g * rep : (g + 1) * rep] = (
+            torch.softmax(scores.masked_fill(causal, float("-inf")), dim=-1) @ v[:, g, :end].float()
+        )
+    return out
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize(
+    "chunk_local,start_offset",
+    [(32, 32), (640, 32), (640, 640), (640, 736)],
+    ids=["2x256_rotated", "5120_mid_block_straddle", "5120_rotated", "5120_rotated_straddle"],
+)
+def test_ring_joint_cache_read_sp_mid_slab(mesh_device, device_params, chunk_local, start_offset, reset_seeds):
+    """Multi-turn resume at a 32-token boundary: the chunk starts mid-slab at kv_actual = chunk_global + offset, so
+    the KV write and the Q rows follow the writer's rotation (rotated_chip_positions via bc_index) and the boundary
+    chip straddles two slab blocks. Two whole chunks are pre-written (the previous turn; the resumed chunk overwrites
+    their tail), then dense_sp_attention writes the resumed chunk and reads the prefix, vs the full-causal golden."""
+    s = _Setup(mesh_device, 3, chunk_local, prewrite_chunks=2, full_goldens=False)
+    kv_actual = s.chunk_global + start_offset
+    end = kv_actual + s.chunk_global
+    outs = []
+    for u in range(NUM_USERS):
+        out = dense_sp_attention(
+            s.make_q(kv_actual),
+            s.cache_k,
+            s.cache_v,
+            s.make_chunk(s.k[u][0], kv_actual),
+            s.make_chunk(s.v[u][0], kv_actual),
+            kv_actual=kv_actual,
+            logical_n=end,
+            slot_idx=u,
+            **s.common,
+        )
+        outs.append(s.gather(out, kv_actual))
+        ref = torch_gqa_causal_rows(s.q, s.k[u], s.v[u], kv_actual, end)
+        passing, pcc = comp_pcc(ref, outs[-1], PCC_BF8_CACHE)
+        logger.info(f"ring_joint mid-slab cache-read kv_actual={kv_actual}, user {u}: pcc={pcc}")
+        assert passing, f"mid-slab cache-read PCC fail (kv_actual={kv_actual}, user {u}): {pcc}"
     assert not torch.equal(outs[0], outs[1]), "users must produce distinct outputs for the slot check to mean anything"
 
 
