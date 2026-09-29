@@ -56,6 +56,7 @@ def _pcc(a, b):
 
 
 @pytest.mark.timeout(5400)
+@pytest.mark.parametrize("prompt", ["full", "padded", "tiny"])
 @pytest.mark.parametrize("schedule", ["stack", "swa"])
 @pytest.mark.parametrize("chunks", [1, 2], ids=["single_chunk", "two_chunks"])
 @pytest.mark.parametrize("weights", ["small", "synthetic", "real"])
@@ -71,7 +72,7 @@ def _pcc(a, b):
     ],
     indirect=True,
 )
-def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule):
+def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule, prompt):
     LAYERS = SCHEDULES[schedule]
     ckpt = resolve_checkpoint() if weights == "real" else None
     if weights == "real" and ckpt is None:
@@ -83,7 +84,12 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         seq = SEQ
         spec = orc.real_spec(LAYERS, seq, candidate_topk_blocks=96, checkpoint=ckpt.root if ckpt else None)
         cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": 96})  # match the oracle's candidate count
-    tokens = orc.random_tokens(spec)
+    # prompt lengths: full chunks, a padded last chunk (graph.md rule 8), and a prompt shorter than a ratio-2 group
+    # pair plus window edge (empty or single compressed row: top-k empty)
+    valid = {"full": seq, "padded": seq - 12, "tiny": 3}[prompt]
+    if prompt != "full" and weights != "small":
+        pytest.skip("prompt-length edge cases run at small dims")
+    tokens = orc.random_tokens(spec, valid)
     reference = orc.build_reference(spec) if ckpt is None else None
     result = orc.oracle(spec, tokens, model=reference)
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), cfg.HC_MULT
@@ -116,32 +122,40 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
         del w
 
     def run():
-        """All chunks through all layers in execution order; layer inputs teacher-forced per chunk."""
+        """All chunks through all layers in execution order; layer inputs teacher-forced per chunk, padded rows
+        of the last chunk zero (their outputs are not compared)."""
         chunk = seq // chunks
         state = V41PrefillState(mesh_device, cfg, seq, chunk, list(LAYERS))
         outs = {layer: ([], []) for layer in LAYERS}
         for c in range(chunks):
-            rows = slice(c * chunk, (c + 1) * chunk)
+            start = c * chunk
+            length = min(chunk, valid - start)
+            if length <= 0:
+                break
             for layer in LAYERS:
                 rec = result["blocks"][layer]
+                x_rows = torch.zeros(chunk, *rec["x_in"].shape[1:])
+                x_rows[:length] = rec["x_in"][start : start + length].float()
+                pre_rows = torch.zeros(chunk, rec["pre_in"].shape[-1])
+                pre_rows[:length] = rec["pre_in"][start : start + length].float()
                 x = ttnn.from_torch(
-                    _pack(rec["x_in"][rows].float(), tp),
+                    _pack(x_rows, tp),
                     device=mesh_device,
                     dtype=ttnn.float32,
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(2, 3)),
                 )
                 pre = ttnn.from_torch(
-                    rec["pre_in"][rows].float()[None, None],
+                    pre_rows[None, None],
                     device=mesh_device,
                     dtype=ttnn.float32,
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(2, None)),
                 )
-                x_out, pre_out = blocks[layer](x, pre, state, chunk)
-                outs[layer][0].append(_unpack(down(x_out)[0, 0], n, tp))
-                outs[layer][1].append(down(pre_out)[0, 0, :, :n])
-            state.advance(chunk)
+                x_out, pre_out = blocks[layer](x, pre, state, length)
+                outs[layer][0].append(_unpack(down(x_out)[0, 0], n, tp)[:length])
+                outs[layer][1].append(down(pre_out)[0, 0, :length, :n])
+            state.advance(length)
         return state, {layer: (torch.cat(a), torch.cat(b)) for layer, (a, b) in outs.items()}
 
     state, first = run()
@@ -149,15 +163,20 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
     report = {}
     # the first layer's attention alone on the oracle's attention input (a KV source reads only its own rows)
     head = LAYERS[0]
-    attn_state = V41PrefillState(mesh_device, cfg, seq, seq, [head])
-    attn_in = ttnn.from_torch(
-        result["blocks"][head]["attn_in"][None, None],
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(2, 3)),
-    )
-    attention_pcc = _pcc(result["blocks"][head]["attn_out"], down(blocks[head].attn(attn_in, attn_state, seq))[0, 0])
+    attention_pcc = None
+    if prompt == "full" and chunks == 1:
+        # the first layer's attention alone on the oracle's attention input (a KV source reads only its own rows)
+        attn_state = V41PrefillState(mesh_device, cfg, seq, seq, [head])
+        attn_in = ttnn.from_torch(
+            result["blocks"][head]["attn_in"][None, None],
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(2, 3)),
+        )
+        attention_pcc = _pcc(
+            result["blocks"][head]["attn_out"], down(blocks[head].attn(attn_in, attn_state, seq))[0, 0]
+        )
     for layer in LAYERS:
         rec, (x_out, pre_out) = result["blocks"][layer], first[layer]
         entry = {
@@ -172,7 +191,7 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
             w0 = state.geometry.window_rows
             entry["compressed_kv"] = _pcc(pub["compress_kv"], host(state.kv[layer])[w0 : w0 + rows])
             entry["index_k"] = _pcc(pub["index_k"], host(state.index_k[layer])[:rows])
-        if layer == head and chunks == 1:
+        if layer == head and attention_pcc is not None:
             entry["attention_alone"] = attention_pcc
         report[layer] = entry
         logger.info(f"layer {layer} ({weights}): {entry}")

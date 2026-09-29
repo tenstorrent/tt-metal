@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41Index
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 
-TOPK_ALIGN = 16
+TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chunks a multiple of 32
 
 
 class TtV41Attention(LightweightModule):
