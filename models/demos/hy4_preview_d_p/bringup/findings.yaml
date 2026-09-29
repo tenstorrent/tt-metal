@@ -14,3 +14,15 @@ findings:
     permutation is needed for rotary_embedding_llama-style kernels. hy4_preview_findings.md still says to "permute the rope
     columns on the host (rotate_half to interleaved)"; that no longer applies. The q_a / kv_a RMSNorm eps is 1e-6 in HF and
     1e-5 in SGLang; the reference follows HF, a negligible difference.
+- id: C-indexer-score-precision
+  task: C.dense_full.indexer
+  kind: OP
+  title: ring_indexer_score_dsa is too coarse for Hy4's top-2048 in bf16 DEST; forked with opt-in fp32 DEST
+  detail: >-
+    On the layer-0 golden (s4096 chunk 1) the source op (bf16 DEST, HiFi4, q 64 x k 256) gave logits rel 0.024 vs fp32
+    (rows ~1.7% low: truncating bf16 MAC over 32 heads; plus the blocked custom gate multiply at k > 32, which has no
+    fidelity phases) and top-k set overlap 0.9853 < 0.99, while CPU top-k on the same device q / k / w scored 0.9987.
+    k_chunk 32 (per-column path, fidelity honoured) lifts the source op to 0.9926. The indexer_score fork adds opt-in fp32
+    DEST (and the srcA reconfig its causal mask needs): rel 0.0036, overlap 0.99708 = fp32 scores rounded to bf16.
+    The plan's host permutation of wq_b / wk / k_norm is not needed: rotary_embedding_indexed takes rotary_offset=64, so
+    the index-key cache stays in checkpoint order. Perf of k_chunk 32 at 56k is unmeasured (perf step).
