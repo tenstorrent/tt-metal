@@ -2620,6 +2620,76 @@
   "started": "2026-09-29T16:26:15",
   "status": "PASS"
  },
+ "C.moe_shared.attn_hc_pre": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "66136e12-8e86-4e9c-a7b5-1880f1eaac2b"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/briefs/C.moe_shared.attn_hc_pre.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6687c3049c75567b7750a0b970283b68cc6c8487",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/agents/C.moe_shared.attn_hc_pre.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 201.6,
+    "session_id": "66136e12-8e86-4e9c-a7b5-1880f1eaac2b",
+    "t": "2026-09-29T16:44:55"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 25.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T16:46:10"
+   }
+  ],
+  "last_run": "2026-09-29T16:46:10",
+  "log": "/localdev/dnijemcevic/bringup/hy4_preview_d_p/runs/run1/logs/C.moe_shared.attn_hc_pre.log",
+  "metrics": {
+   "cpu_rel_l2_attn_hc_pre_L02": 0.0,
+   "pcc_attn_hc_pre_L02": 0.9999967950836892,
+   "rel_l2_attn_hc_pre_L02": 0.002530802972614765,
+   "rot_rel_l2_attn_hc_pre_L02": 0.0,
+   "worst_row_rel_l2_attn_hc_pre_L02": 0.003496779128909111
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T16:45:45",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 402.8,
