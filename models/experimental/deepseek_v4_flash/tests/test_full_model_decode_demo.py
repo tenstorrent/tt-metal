@@ -53,7 +53,7 @@ import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
-from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (

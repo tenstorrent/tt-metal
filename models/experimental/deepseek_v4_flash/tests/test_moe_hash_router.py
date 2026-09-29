@@ -25,7 +25,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4HashRouter
+from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4HashRouter
 
 HIDDEN = 256
 NUM_EXPERTS = 64

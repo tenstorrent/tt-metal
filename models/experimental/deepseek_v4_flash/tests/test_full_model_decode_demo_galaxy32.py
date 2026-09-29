@@ -8,8 +8,8 @@ The 8-chip demo (``test_full_model_decode_demo.py``) streams each layer's weight
 from DRAM through the prefetcher's shared GCB, one page at a time, every token.
 This one does no weight DRAM traffic at all: the ``galaxy32`` profile turns on
 ``decode.packed_l1_weights``, so each chip's layers have their non-expert matmul
-weights fused into a single bf4 height-sharded L1 tensor (``tt/l1_placement.py``
-for the per-zone placement, ``tt/l1_weights.py`` for the packing), and every
+weights fused into a single bf4 height-sharded L1 tensor (``tt/decode/l1_placement.py``
+for the per-zone placement, ``tt/decode/l1_weights.py`` for the packing), and every
 matmul reads its slab straight out of L1 where it already sits. Only the routed
 experts stay in DRAM -- they are far too large to be resident and are gathered
 per token by ``fused_experts`` anyway.
@@ -54,7 +54,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v4_flash.tt.l1_placement import (
+from models.experimental.deepseek_v4_flash.tt.decode.l1_placement import (
     L1_PER_CORE,
     RESIDENT_LAYERS,
     ZONES,

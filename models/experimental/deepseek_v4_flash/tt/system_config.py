@@ -145,7 +145,7 @@ class PrefetcherSettings:
 
     ``num_prefetch_pages`` is the shared ring's depth in pages (each ~18 KB of L1 per receiver
     core at bf4) -- i.e. how far the senders may run ahead -- and ``num_prefetch_slabs`` the
-    depth of a private, single-weight ring (see :mod:`.decode_prefetch`).
+    depth of a private, single-weight ring (see :mod:`.decode.decode_prefetch`).
     """
 
     num_prefetch_pages: int = 16

@@ -136,7 +136,7 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
     render_message,
     sort_tool_results_by_call_order,
 )
-from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import PagedCacheFull
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 
 _VENDOR = "tenstorrent"

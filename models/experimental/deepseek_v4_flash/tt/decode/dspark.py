@@ -6,8 +6,8 @@
 Standalone port of :mod:`models.experimental.deepseek_v4_flash.dspark`; the only
 importer in the repo is ``tests/test_dspark_ttnn.py`` -- this module is *not* part of the
 decode model. Every learned projection (``main_proj``, Q/K/V/O, SwiGLU, LM head, Markov
-``W2``, confidence) is a :class:`~.layers.LinearDecode` whose weight streams through one
-shared decode GCB (:func:`~.layers.make_shared_decode_gcb`), so every construction here
+``W2``, confidence) is a :class:`~..layers.LinearDecode` whose weight streams through one
+shared decode GCB (:func:`~..layers.make_shared_decode_gcb`), so every construction here
 passes ``use_prefetcher=True`` with an explicit ``global_cb`` / ``global_cb_page_bytes``.
 
 Letters used below: ``B`` = users decoded per round (1 here), ``gamma`` =
@@ -19,7 +19,7 @@ matmul in/out features, ``V`` = ``vocab_size``.
 Activations are DRAM ``[1, 1, rows, K]`` turned into TILE WIDTH_SHARDED L1 by
 :func:`_matmul_a` (``use_rm_hs=False``): the ROW_MAJOR HEIGHT_SHARDED replica path is
 Flash's M=1 decode layout and rejects M>8, while DSpark's block is a full tile of rows.
-``main_proj`` is followed by its own :class:`~.layers.DeepSeekV4RMSNorm` (``main_norm``),
+``main_proj`` is followed by its own :class:`~..layers.DeepSeekV4RMSNorm` (``main_norm``),
 not a matmul epilogue. RoPE is :func:`~.attention._apply_rope`
 (``fused_partial_rope``). Attention is ``scaled_dot_product_attention_decode`` with the
 draft block as the decode batch and ``share_cache`` so every query sees the same
@@ -55,15 +55,15 @@ from .attention import (
     _interleaved_rotate_matrix,
     make_rope_table,
 )
-from .common import DeepSeekV4Module, _HIFI4_SDPA
-from .layers import (
+from ..common import DeepSeekV4Module, _HIFI4_SDPA
+from ..layers import (
     DeepSeekV4RMSNorm,
     LinearDecode,
     decode_gcb_page_bytes,
     make_shared_decode_gcb,
 )
-from .system_config import active_system_config
-from .weight_cache import WeightCache, _as_cache, _load_weight
+from ..system_config import active_system_config
+from ..weight_cache import WeightCache, _as_cache, _load_weight
 
 
 # Kept clear of the two cores the model pipeline hand-off sockets use. Explicit local
@@ -190,7 +190,7 @@ class DSparkAttention(DeepSeekV4Module):
         self, config: DSparkConfig, weights: dict, prefix: str, device, cache, dtype, n_blocks, global_cb, page_bytes
     ):
         """``prefix`` is the ``mtp.<i>.attn`` state-dict prefix; the four ``[N, K]`` weights
-        it names become :class:`~.layers.LinearDecode`s that all draw on ``global_cb``
+        it names become :class:`~..layers.LinearDecode`s that all draw on ``global_cb``
         (``page_bytes``-sized pages, ``n_blocks`` B cores, ``use_rm_hs=False``)."""
         self.device = device
         self.num_heads = config.num_attention_heads
@@ -303,7 +303,7 @@ class DSparkAttention(DeepSeekV4Module):
 class DSparkMLP(DeepSeekV4Module):
     def __init__(self, config, weights, prefix, device, cache, dtype, n_blocks, global_cb, page_bytes):
         """SwiGLU MLP: ``gate``/``up`` are ``[I, D]`` and ``down`` ``[D, I]`` torch weights
-        (``[out, in]``), each a prefetched :class:`~.layers.LinearDecode` sharing
+        (``[out, in]``), each a prefetched :class:`~..layers.LinearDecode` sharing
         ``global_cb`` / ``page_bytes`` over ``n_blocks`` B cores. ``prefix`` is
         ``mtp.<i>.mlp``."""
         h, inter = config.hidden_size, config.intermediate_size
@@ -348,7 +348,7 @@ class DSparkStage(DeepSeekV4Module):
         context-fusing ``main_proj`` / ``main_norm`` (only when ``has_main``, stage 0) and
         the final ``norm`` (only when ``has_heads``, last stage). ``prefix`` is
         ``mtp.<i>``; the ``[D]`` norm weights are ``sharded=True``
-        :class:`~.layers.DeepSeekV4RMSNorm`s."""
+        :class:`~..layers.DeepSeekV4RMSNorm`s."""
         cache = _as_cache(cache)
         self.eps = config.rms_norm_eps
         self.attn_norm = DeepSeekV4RMSNorm(
@@ -453,7 +453,7 @@ class DSparkModel(DeepSeekV4Module):
         ``weights`` maps torch state-dict keys to tensors. ``n_blocks`` defaults to
         :func:`_n_blocks_for` at ``hidden_size``; ``num_prefetch_pages`` to the active
         profile's ``prefetcher.num_prefetch_pages`` and is the ring depth in pages. The
-        GCB page size comes from :func:`~.layers.decode_gcb_page_bytes` over
+        GCB page size comes from :func:`~..layers.decode_gcb_page_bytes` over
         :func:`dspark_decode_specs`, so all of these layers can share one prefetch FIFO.
 
         ``embed_tokens`` and ``markov_w1`` stay ROW_MAJOR ``[V, D]`` / ``[V, rank]`` DRAM
