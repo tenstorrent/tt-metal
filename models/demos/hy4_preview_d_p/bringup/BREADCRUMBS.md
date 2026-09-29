@@ -2832,3 +2832,28 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
+
+## C.moe_shared.ffn_hc_pre test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test for ffn_hc_pre at layer 2 (ffn_x = sum_j pre_j x h_mid stream j, s4096 chunk 1,
+  bf16 golden) with the layer-1 test (test_c_moe_full_ffn_hc_pre.py), LAYER = 2, docstring tables re-measured on the
+  layer-2 golden. Checks: gated PCC 0.99, CPU-bridge assert, element count, finite; vs golden rel <= 0.005, row ratio
+  [0.994, 1.006], worst row <= 0.01; vs CPU step rel <= 0.003, row <= 0.006; rotated pre gates vs CPU 0.004 / 0.01.
+- CPU mutation study: /tmp/hy4_ssh_ffnhcpre2/study.py (the layer-1 script with layer 2, outside the repo).
+
+Decisions
+- Limits unchanged from layer 1: every study mutation except pre + 3e-4 (a gate-input error) fails at least one
+  check. Layer-2 gates: pre means 1.1e-3 / 1.4e-6 / 1.0 / 0.10; only stream 1 is invisible on the golden (the
+  rotation catches it at rel 0.125); a dropped stream 0 now fails the golden worst row (0.049).
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00243, ratio [0.99712, 1.00294], worst row 0.00575; vs CPU 0; rotated 0).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device, TtHcPre via `_HC_PRE_STEPS`, blackhole-box-2x2): PASS, pcc_ffn_hc_pre_L02 0.999997, same numbers as
+  the reference (the fp32 device module matches the CPU step exactly).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
