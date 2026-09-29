@@ -60,14 +60,33 @@ for f in rows:
     if key_of(f) in fixes:
         f["suggested_fix"] = fixes[key_of(f)]
 
+SAME_LINE_FIELDS = (
+    "category",
+    "severity",
+    "summary",
+    "failure_scenario",
+    "suggested_fix",
+    "source",
+    "batch",
+)
 by_status = collections.defaultdict(dict)
 for f in rows:
     k = key_of(f)
     cur = by_status[f["status"]].get(k)
-    if cur is None or f.get("votes", {}).get("confirmed", 0) > cur.get("votes", {}).get(
-        "confirmed", 0
-    ):
+    if cur is None:
         by_status[f["status"]][k] = f
+        continue
+    votes = lambda x: x.get("votes", {}).get("confirmed", 0)  # noqa: E731
+    win, lose = (f, cur) if votes(f) > votes(cur) else (cur, f)
+    by_status[f["status"]][k] = win
+    # file:line is the identity, but a second finding on the line is never dropped: it may be the same defect under
+    # another class, or a second defect. It rides on the entry, unjudged, where a reader sees it.
+    same = win.setdefault("same_line", [])
+    for x in [lose, *lose.pop("same_line", [])]:
+        if x["summary"] != win["summary"] and all(
+            x["summary"] != y["summary"] for y in same
+        ):
+            same.append({fld: x.get(fld) for fld in SAME_LINE_FIELDS})
 conf = list(by_status["confirmed"].values())
 unc = {
     k: f
@@ -130,7 +149,7 @@ for (
 ) in (
     conf
 ):  # a merged bug is as severe as its worst site: a HIGH copy must not hide behind a MEDIUM one
-    for m in f.get("merged_sites", []):
+    for m in f.get("merged_sites", []) + f.get("same_line", []):
         if SEV_ORDER.get(m["severity"], 3) < SEV_ORDER.get(f["severity"], 3):
             f.setdefault("severity_own", f["severity"])
             f["severity"] = m["severity"]
@@ -170,6 +189,8 @@ def table(fh, fs):
     )
     for i, f in enumerate(fs, 1):
         s = f["summary"].replace("|", "\\|")[:150]
+        if f.get("same_line"):
+            s += f" (+{len(f['same_line'])} more reported at this line)"
         loc = f"`{key_of(f)}`" + "".join(
             f"<br>+ `{x.split(' (')[0]}`" for x in f.get("also_at", [])
         )  # every site, e.g. WH and BH
@@ -209,6 +230,16 @@ def detail(fh, fs):
             for m in f["merged_sites"]:
                 fh.write(
                     f"- `{m['site']}` ({m['relation']}, {m['severity']}): {m['summary']}\n"
+                    f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
+                )
+            fh.write("\n")
+        if f.get("same_line"):
+            fh.write(
+                "*Also reported at this line (not judged whether it is the same defect; split it out if it is not):*\n\n"
+            )
+            for m in f["same_line"]:
+                fh.write(
+                    f"- [{m['category']}, {m['severity']}] {m['summary']}\n"
                     f"  - fails: {m['failure_scenario']}\n  - fix: {m['suggested_fix']}\n"
                 )
             fh.write("\n")

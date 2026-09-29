@@ -561,6 +561,48 @@ def test_rerunning_dedup_keeps_earlier_merges(rundir):
     ], "the earlier merge survives"
 
 
+def test_a_second_finding_on_the_same_line_is_kept_not_dropped(rundir):
+    write(
+        str(rundir / "verdicts" / "A-0000.json"),
+        {
+            "findings": [
+                finding(
+                    "k.cpp",
+                    9,
+                    "medium",
+                    category="arg-binding",
+                    summary="arg 2 bound to the wrong slot",
+                ),
+                finding(
+                    "k.cpp",
+                    9,
+                    "high",
+                    category="arg-binding",
+                    summary="arg 4 bound to the wrong slot",
+                    votes={"confirmed": 2},
+                ),
+                finding(
+                    "k.cpp", 9, "low", summary="arg 2 bound to the wrong slot"
+                ),  # an exact repeat
+            ]
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    conf = json.load(open(rundir / "CONFIRMED.json"))
+    assert len(conf) == 1, conf  # file:line stays the identity
+    f = conf[0]
+    assert [m["summary"] for m in f["same_line"]] == [
+        "arg 4 bound to the wrong slot"
+    ], f
+    assert (
+        f["severity"] == "high"
+    ), "a HIGH finding on the line must not hide behind the entry's own severity"
+    md = open(rundir / "CONFIRMED.md").read()
+    assert (
+        "arg 2 bound to the wrong slot" in md and "arg 4 bound to the wrong slot" in md
+    )
+
+
 def test_a_recheck_does_not_overrule_a_later_confirmation(rundir):
     k = ("r.cpp", 4)
     write(
