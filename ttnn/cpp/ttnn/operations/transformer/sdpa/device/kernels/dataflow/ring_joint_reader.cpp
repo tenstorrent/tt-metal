@@ -1152,13 +1152,6 @@ void kernel_main() {
                         fetch_k);
                 }
 
-#ifdef SDPA_RING_PUSH_BEFORE_FORWARD
-                // Push first so compute starts on K while forward() waits for the downstream ready
-                // signal; forward() flushes its NoC reads of this slot before it can be re-reserved.
-                if (!is_padded_iter) {
-                    cb_k.push_back(k_chunk_tiles);
-                }
-#endif
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
@@ -1185,10 +1178,8 @@ void kernel_main() {
                     continue;
                 }
 
-#ifndef SDPA_RING_PUSH_BEFORE_FORWARD
                 // Make K available to compute.
                 cb_k.push_back(k_chunk_tiles);
-#endif
                 KV_chunks_processed_in_iter++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
@@ -1301,22 +1292,16 @@ void kernel_main() {
                             fetch_v);
                     }
 
-#ifdef SDPA_RING_PUSH_BEFORE_FORWARD
-                    // Same as K: push first, forward after (forward() flushes before returning).
-                    cb_v.push_back(v_cb_entry_tiles);
-#endif
-                    // Default order forwards V before push_back so compute cannot pop the slot
-                    // while the mcast still reads it; SDPA_RING_PUSH_BEFORE_FORWARD swaps the two.
+                    // Forward V to next core(s) before push_back — prevents compute from
+                    // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
                         if (v_chain.should_forward(nv, q_iter_local)) {
                             v_chain.forward(noc, cb_v_start_address);
                         }
                     }
 
-#ifndef SDPA_RING_PUSH_BEFORE_FORWARD
                     // Make V available to compute.
                     cb_v.push_back(v_cb_entry_tiles);
-#endif
                 }
             }
         }

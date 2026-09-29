@@ -1801,9 +1801,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (std::getenv("TT_SDPA_PROFILE_ZONES") != nullptr) {
         defines["SDPA_PROFILE_ZONES"] = "1";
     }
-    if (std::getenv("TT_SDPA_RING_PUSH_BEFORE_FORWARD") != nullptr) {
-        defines["SDPA_RING_PUSH_BEFORE_FORWARD"] = "1";
-    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
