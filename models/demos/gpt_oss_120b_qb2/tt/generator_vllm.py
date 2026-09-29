@@ -202,6 +202,7 @@ class TTGptOssForCausalLM:
     tt_supported_decode_batch_sizes = decode_trace_buckets(MAX_CONCURRENT_SEQS)
     model_capabilities = {
         "supports_prefix_caching": PREFIX_CACHING_ENABLED,
+        "supports_sliding_window_prefix_caching": PREFIX_CACHING_ENABLED,
         "supports_async_decode": True,
         "supports_decode_output_batch_size": True,
         "supports_sample_on_device": True,
