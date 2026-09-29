@@ -52,7 +52,7 @@ _PERF_REFERENCE_MS = {
 }
 # Galaxy SP8xTP4 calibration (2026-09-28) at the end of the KDA op tuning series: median of three
 # independent sessions, each the median of five warm synchronized 10-replay samples.
-_GALAXY_PERF_REFERENCE_MS = 2.634
+_GALAXY_PERF_REFERENCE_MS = 2.425
 
 
 @pytest.fixture(scope="session")
