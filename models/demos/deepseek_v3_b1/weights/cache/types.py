@@ -26,11 +26,15 @@ class SourceTensorSelection:
     names: tuple[str, ...]
 
 
+# Optional mesh_shape_override / mesh_offset_override place the tensor on a SUBMESH
+# region (e.g. shape (4, 2) at offset (0, 2) on a 4x4). Offset defaults to origin.
 @dataclass(frozen=True)
 class ReplicateMeshMapper:
     """Replicate the tensor on every device in the mesh."""
 
     strategy: Literal["replicate"] = "replicate"
+    mesh_shape_override: tuple[int, int] | None = None
+    mesh_offset_override: tuple[int, ...] = (0, 0)
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,8 @@ class ShardMeshMapper:
 
     dim: int
     strategy: Literal["shard"] = "shard"
+    mesh_shape_override: tuple[int, int] | None = None
+    mesh_offset_override: tuple[int, ...] = (0, 0)
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,8 @@ class Shard2dMeshMapper:
 
     dims: tuple[int | None, int | None]
     strategy: Literal["shard_2d"] = "shard_2d"
+    mesh_shape_override: tuple[int, int] | None = None
+    mesh_offset_override: tuple[int, ...] = (0, 0)
 
 
 MeshMapperConfig = Union[ReplicateMeshMapper, ShardMeshMapper, Shard2dMeshMapper]

@@ -10,25 +10,23 @@
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
-    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
+    constexpr uint32_t x_block_size = get_arg(args::x_block_size);
+    constexpr uint32_t w_block_size = get_arg(args::w_block_size);
 
-    // constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
-    // constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
+    uint32_t num_blocks = get_arg(args::num_blocks);
 
-    uint32_t num_blocks = get_arg_val<uint32_t>(0);
-
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_tilize = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_in = dfb::cb_in;
+    constexpr auto cb_tilize = dfb::cb_tilize;
+    constexpr auto cb_out = dfb::cb_out;
 
     DataflowBuffer dfb_tilize_exp(cb_tilize);
     DataflowBuffer dfb_out_exp(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out);
-    unary_op_init_common(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)

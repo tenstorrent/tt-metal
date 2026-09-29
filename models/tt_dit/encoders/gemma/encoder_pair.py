@@ -154,6 +154,11 @@ class GemmaTokenizerEncoderPair:
         # than untraced — and the trace never amortizes. Resident (e.g. 4x8) captures once and
         # replays warm.
         self._encoder_trace = not dynamic_load
+        # A capture taken after this one reuses the memory freed from its capture-time activations,
+        # and replaying the encode then writes over whatever now owns that region. Consumers that
+        # capture traces of their own after construction call ``defer_trace_capture`` and reopen the
+        # gate once they are done, which makes the encode the last capture taken.
+        self._trace_gate_open = True
 
     # Dims the pipeline warmup needs before the encoder is built.
     @property
@@ -167,6 +172,14 @@ class GemmaTokenizerEncoderPair:
     @property
     def audio_dim(self) -> int:
         return self._audio_dim
+
+    def defer_trace_capture(self) -> None:
+        """Hold the encode trace back until ``open_trace_gate`` (see ``_trace_gate_open``)."""
+        self._trace_gate_open = False
+
+    def open_trace_gate(self) -> None:
+        """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
+        self._trace_gate_open = True
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.
@@ -350,7 +363,7 @@ class GemmaTokenizerEncoderPair:
             src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
 
             video_dev, audio_dev = self._encode_device(
-                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace
+                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
             )
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (

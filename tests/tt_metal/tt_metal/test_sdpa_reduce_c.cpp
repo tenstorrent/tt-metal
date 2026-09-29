@@ -15,6 +15,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
 using namespace tt;
@@ -180,8 +181,6 @@ static bool test_sdpa_reduce_c(
         do_eltwise_max,
         num_faces);
 
-    // Get device and command queue from mesh
-    tt_metal::IDevice* device = mesh_device->get_devices().at(0);
     tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -197,77 +196,67 @@ static bool test_sdpa_reduce_c(
     uint32_t qk_im_num_tiles = q_chunk_size * k_chunk_size;
     uint32_t stats_num_tiles = q_chunk_size;
 
-    auto qk_im_buffer_config = tt::tt_metal::ShardedBufferConfig{
-        .device = device,
-        .size = qk_im_num_tiles * cb_tile_size,
-        .page_size = cb_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::L1,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-            {q_chunk_size * tile_height, k_chunk_size * tt::constants::TILE_WIDTH},
-            tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            {tile_height, tt::constants::TILE_WIDTH},
-            {q_chunk_size, k_chunk_size})};
+    auto qk_im_shard_spec = tt::tt_metal::ShardSpecBuffer(
+        CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+        {q_chunk_size * tile_height, k_chunk_size * tt::constants::TILE_WIDTH},
+        tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        {tile_height, tt::constants::TILE_WIDTH},
+        {q_chunk_size, k_chunk_size});
+    auto stats_shard_spec = tt::tt_metal::ShardSpecBuffer(
+        CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+        {stats_num_tiles * tile_height, tt::constants::TILE_WIDTH},
+        tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        {tile_height, tt::constants::TILE_WIDTH},
+        {stats_num_tiles, 1});
+    auto one_tile_shard_spec = tt::tt_metal::ShardSpecBuffer(
+        CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+        {tile_height, tt::constants::TILE_WIDTH},
+        tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        {tile_height, tt::constants::TILE_WIDTH},
+        {1, 1});
 
-    auto stats_buffer_config = tt::tt_metal::ShardedBufferConfig{
-        .device = device,
-        .size = stats_num_tiles * cb_tile_size,
-        .page_size = cb_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::L1,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-            {stats_num_tiles * tile_height, tt::constants::TILE_WIDTH},
-            tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            {tile_height, tt::constants::TILE_WIDTH},
-            {stats_num_tiles, 1})};
+    auto make_sharded_l1_buffer = [&](uint32_t size, const ShardSpecBuffer& shard_spec) {
+        return tt_metal::distributed::MeshBuffer::create(
+            tt_metal::distributed::ReplicatedBufferConfig{.size = size},
+            {
+                .page_size = cb_tile_size,
+                .buffer_type = tt::tt_metal::BufferType::L1,
+                .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+            },
+            mesh_device.get());
+    };
 
-    auto one_tile_buffer_config = tt::tt_metal::ShardedBufferConfig{
-        .device = device,
-        .size = cb_tile_size,
-        .page_size = cb_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::L1,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-            {tile_height, tt::constants::TILE_WIDTH},
-            tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            {tile_height, tt::constants::TILE_WIDTH},
-            {1, 1})};
-
-    // Create sharded buffers for CB inputs/outputs
-    auto qk_im_buffer = CreateBuffer(qk_im_buffer_config);
-    auto prev_max_buffer = CreateBuffer(stats_buffer_config);
-    auto out_max_buffer = CreateBuffer(stats_buffer_config);
-    auto identity_scale_buffer = CreateBuffer(one_tile_buffer_config);
+    auto qk_im_buffer = make_sharded_l1_buffer(qk_im_num_tiles * cb_tile_size, qk_im_shard_spec);
+    auto prev_max_buffer = make_sharded_l1_buffer(stats_num_tiles * cb_tile_size, stats_shard_spec);
+    auto out_max_buffer = make_sharded_l1_buffer(stats_num_tiles * cb_tile_size, stats_shard_spec);
+    auto identity_scale_buffer = make_sharded_l1_buffer(cb_tile_size, one_tile_shard_spec);
 
     // Create CBs and point them to sharded buffers
     auto cb_qk_im_id = tt::CBIndex::c_0;
     auto cb_qk_im_config = tt::tt_metal::CircularBufferConfig(qk_im_num_tiles * cb_tile_size, {{cb_qk_im_id, cb_df}})
                                .set_page_size(cb_qk_im_id, cb_tile_size)
-                               .set_globally_allocated_address(*qk_im_buffer);
+                               .set_globally_allocated_address(*qk_im_buffer->get_reference_buffer());
     tt_metal::CreateCircularBuffer(program, core, cb_qk_im_config);
 
     auto cb_prev_max_id = tt::CBIndex::c_1;
     auto cb_prev_max_config =
         tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_prev_max_id, cb_df}})
             .set_page_size(cb_prev_max_id, cb_tile_size)
-            .set_globally_allocated_address(*prev_max_buffer);
+            .set_globally_allocated_address(*prev_max_buffer->get_reference_buffer());
     tt_metal::CreateCircularBuffer(program, core, cb_prev_max_config);
 
     auto cb_out_max_id = tt::CBIndex::c_2;
     auto cb_out_max_config =
         tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_out_max_id, cb_df}})
             .set_page_size(cb_out_max_id, cb_tile_size)
-            .set_globally_allocated_address(*out_max_buffer);
+            .set_globally_allocated_address(*out_max_buffer->get_reference_buffer());
     tt_metal::CreateCircularBuffer(program, core, cb_out_max_config);
 
     auto cb_identity_scale_id = tt::CBIndex::c_3;
     auto cb_identity_scale_config =
         tt::tt_metal::CircularBufferConfig(1 * cb_tile_size, {{cb_identity_scale_id, cb_df}})
             .set_page_size(cb_identity_scale_id, cb_tile_size)
-            .set_globally_allocated_address(*identity_scale_buffer);
+            .set_globally_allocated_address(*identity_scale_buffer->get_reference_buffer());
     tt_metal::CreateCircularBuffer(program, core, cb_identity_scale_config);
 
     std::vector<uint32_t> compute_kernel_args = {
@@ -304,18 +293,18 @@ static bool test_sdpa_reduce_c(
     auto qk_im_tilized = tiny ? tilize_16x32(qk_im_tensor.get_values(), q_chunk_size * tile_height, k_chunk_size * 32)
                               : tilize_nfaces(qk_im_tensor.get_values(), q_chunk_size * 32, k_chunk_size * 32);
     qk_im = pack_bfloat16_vec_into_uint32_vec(qk_im_tilized);
-    tt_metal::detail::WriteToBuffer(qk_im_buffer, qk_im);
+    slow_dispatch::WriteToBuffer(*qk_im_buffer, qk_im);
 
     std::vector<bfloat16> prev_max_first_col;
     auto prev_max_rm = make_prev_max_matrix(q_chunk_size, 25.0f, 65.0f, prev_max_first_col, tile_height);
     auto prev_max_tilized = tiny ? tilize_16x32(prev_max_rm, q_chunk_size * tile_height, 32)
                                  : tilize_nfaces(prev_max_rm, q_chunk_size * 32, 32);
     auto prev_max_uint_vec = pack_bfloat16_vec_into_uint32_vec(prev_max_tilized);
-    tt_metal::detail::WriteToBuffer(prev_max_buffer, prev_max_uint_vec);
+    slow_dispatch::WriteToBuffer(*prev_max_buffer, prev_max_uint_vec);
 
     auto identity_scale_tile = make_identity_scale_tile(tile_height);
     auto identity_scale_uint_vec = pack_bfloat16_vec_into_uint32_vec(identity_scale_tile);
-    tt_metal::detail::WriteToBuffer(identity_scale_buffer, identity_scale_uint_vec);
+    slow_dispatch::WriteToBuffer(*identity_scale_buffer, identity_scale_uint_vec);
 
     // Execute program using MeshWorkload
     tt_metal::distributed::MeshWorkload workload;
@@ -329,7 +318,7 @@ static bool test_sdpa_reduce_c(
 
     // Read outputs
     std::vector<uint32_t> out_max_vec;
-    tt_metal::detail::ReadFromBuffer(out_max_buffer, out_max_vec);
+    slow_dispatch::ReadFromBuffer(*out_max_buffer, out_max_vec);
     auto out_max_bfp16 = unpack_uint32_vec_into_bfloat16_vec(out_max_vec);
     auto out_max_rm = tiny ? untilize_16x32(out_max_bfp16, q_chunk_size * tile_height, 32)
                            : untilize_nfaces(out_max_bfp16, q_chunk_size * 32, 32);

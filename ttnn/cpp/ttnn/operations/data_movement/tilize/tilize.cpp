@@ -50,6 +50,19 @@ ttnn::Tensor tilize(
     bool use_low_perf,
     tt::tt_metal::Tile tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
+    // Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
+    // short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
+    if (input_tensor.physical_volume() == 0) {
+        TensorSpec spec(
+            input_tensor.logical_shape(),
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE, tile),
+                memory_config.value_or(input_tensor.memory_config())));
+        return create_device_tensor(spec, input_tensor.device());
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
@@ -60,27 +73,30 @@ ttnn::Tensor tilize(
     uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / input_tile_height;
 
     // Fold in the block factory's c_1 staging CB so routing does not pick "fits" when only c_0+c_16 fit.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     const uint32_t staging_bytes_per_tile = input_single_tile_size / input_tile_height;
     const uint32_t fixed_staging_bytes = 2 * dram_alignment;
 
-    bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
+    // Reserve the output buffer's per-core L1 up front: it is allocated after this check
+    // but before the CBs are placed, so leaving it out overestimates the CB budget and can
+    // pick a factory whose static CBs then clash with it (issue #21358).
+    const uint32_t pending_l1_output_bytes = ttnn::operations::data_movement::get_pending_l1_output_reservation(
         input_tensor,
-        input_single_tile_size,
-        output_single_tile_size,
-        num_tiles_per_col,
-        staging_bytes_per_tile,
-        fixed_staging_bytes);
+        input_tensor.padded_shape(),
+        memory_config.value_or(input_tensor.memory_config()),
+        output_dtype.value_or(input_tensor.dtype()),
+        Layout::TILE);
+
     bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
         input_tensor,
         input_single_tile_size,
         output_single_tile_size,
         num_tiles_per_row,
         staging_bytes_per_tile,
-        fixed_staging_bytes);
+        fixed_staging_bytes,
+        pending_l1_output_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:
@@ -99,7 +115,6 @@ ttnn::Tensor tilize(
                 ttnn::DRAM_MEMORY_CONFIG,
                 output_dtype,
                 use_multicore,
-                enough_space_width,
                 /*enough_space_height=*/false,
                 use_low_perf,
                 tile,
@@ -111,7 +126,6 @@ ttnn::Tensor tilize(
             memory_config,
             output_dtype,
             use_multicore,
-            enough_space_width,
             enough_space_height,
             use_low_perf,
             tile,

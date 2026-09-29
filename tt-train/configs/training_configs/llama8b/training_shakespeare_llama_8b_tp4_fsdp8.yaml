@@ -3,7 +3,6 @@ training_config:
   seed: 5489
   model_save_interval: 10000
   batch_size: 16
-  num_epochs: 1
   max_steps: 1200
   optimizer:
     type: AdamW

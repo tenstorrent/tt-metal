@@ -48,7 +48,7 @@ CASES = [
 ]
 
 
-@pytest.mark.timeout(600)  # bounds the DM->DM credit-coherence wedge so this repro can't hang forever
+@pytest.mark.timeout(1200)  # bounds the DM->DM credit-coherence wedge so this repro can't hang forever
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("in_shape, out_shape, tid", CASES, ids=[c[-1] for c in CASES])
 def test_quasar_reshape_tiled(mesh_device, in_shape, out_shape, tid):

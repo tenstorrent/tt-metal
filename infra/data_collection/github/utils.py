@@ -29,25 +29,50 @@ def get_data_pipeline_datetime_from_datetime(requested_datetime):
     return requested_datetime.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
+def get_jobs_that_started_(github_pipeline_json, github_jobs_json):
+    """
+    The jobs of this pipeline attempt that actually started running.
+
+    A run that its concurrency group cancelled before any job started reports either no jobs at
+    all, or jobs that GitHub concluded as skipped without ever running them. Neither kind has
+    logs, timings or test reports to analyse. Jobs that started before the pipeline was submitted
+    are dropped too, because those are carried over from a previous attempt for that pipeline.
+    """
+    pipeline_submission_ts = get_datetime_from_github_datetime(github_pipeline_json["created_at"])
+
+    def job_started_(github_job):
+        # Skipped jobs get a start timestamp from GitHub, but nothing ever ran on a runner
+        # See https://github.com/tenstorrent/tt-metal/issues/24151 for an example
+        if github_job.get("conclusion") == "skipped":
+            return False
+        job_start_ts = github_job.get("started_at")
+        if not job_start_ts:
+            return False
+        return get_datetime_from_github_datetime(job_start_ts) >= pipeline_submission_ts
+
+    return list(filter(job_started_, github_jobs_json["jobs"]))
+
+
 def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json):
     github_pipeline_id = github_pipeline_json["id"]
     pipeline_submission_ts = github_pipeline_json["created_at"]
 
     repository_url = github_pipeline_json["repository"]["html_url"]
 
-    jobs = github_jobs_json["jobs"]
-    jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
-    # We filter out jobs that started before because that means they're from a previous attempt for that pipeline
-    eligible_jobs_start_times = list(
-        filter(
-            lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
-            jobs_start_times,
-        )
+    # get_jobs_that_started_ already drops jobs carried over from a previous attempt, jobs GitHub
+    # concluded as skipped without running them, and jobs with no start timestamp at all. Reading
+    # started_at off the raw list instead would fail on that last kind, and would let a skipped
+    # job's invalid start timestamp set the pipeline start -- the same timestamp that
+    # get_job_row_from_github_job already discards for skipped jobs further down.
+    sorted_jobs_start_times = sorted(
+        get_datetime_from_github_datetime(job_["started_at"])
+        for job_ in get_jobs_that_started_(github_pipeline_json, github_jobs_json)
     )
-    sorted_jobs_start_times = sorted(eligible_jobs_start_times)
+    # Callers are expected to have screened out pipelines with nothing to analyse with
+    # get_jobs_that_started_, so reaching this point means the JSON objects are malformed
     assert (
         sorted_jobs_start_times
-    ), f"It seems that this pipeline does not have any jobs that started on or after the pipeline was submitted, which should be impossible. Please directly inspect the JSON objects"
+    ), f"This pipeline does not have any jobs that started on or after the pipeline was submitted. Please directly inspect the JSON objects"
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
     pipeline_end_ts = github_pipeline_json["updated_at"]
@@ -103,6 +128,11 @@ def return_first_string_starts_with(starting_string, strings):
 
 def get_job_failure_signature_(github_job, failure_description, workflow_outputs_dir) -> Optional[Union[InfraErrorV1]]:
     error_snippet_to_signature_mapping = {
+        # Actions runner timing out downloading a custom action/repo tarball from codeload.github.com
+        # (same root cause as the ACTION_DOWNLOAD_FAILURE cases below, just the timeout variant instead
+        # of an explicit error) — must be checked before the generic "has timed out" job-timeout snippet,
+        # which would otherwise swallow this and misroute it through hang detection
+        "download has timed out": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
         "has timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
@@ -119,6 +149,35 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "could not read Username": str(InfraErrorV1.CHECKOUT_FAILURE),
         "terminal prompts disabled": str(InfraErrorV1.CHECKOUT_FAILURE),
         "Fetched in submodule path": str(InfraErrorV1.CHECKOUT_FAILURE),
+        # Docker daemon rejects a container operation with a null id (distinct from registry/pull failures above)
+        "Value cannot be null. (Parameter 'ContainerId')": str(InfraErrorV1.DOCKER_CONTAINER_ID_NULL_FAILURE),
+        # GitHub Actions runner failing to download a custom action's tarball from codeload.github.com
+        # (e.g. actions/checkout itself), distinct from a `git clone` failure of the repo under test
+        "Failed to download archive": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
+        "Failed to download action": str(InfraErrorV1.ACTION_DOWNLOAD_FAILURE),
+        # phoenix-actions/test-reporting surfacing a real test failure as a .github-path annotation
+        "Failed tests were found and 'fail-on-error'": str(InfraErrorV1.TEST_REPORTER_FAILURE),
+        "No test report files were found": str(InfraErrorV1.TEST_REPORTER_NO_REPORTS_FAILURE),
+        "/usr/bin/git' failed with exit code 128": str(InfraErrorV1.GIT_PROCESS_FAILURE),
+        "Failed to FinalizeArtifact": str(InfraErrorV1.ARTIFACT_FINALIZE_FAILURE),
+        # Artifact/workflow-run record expired or was cleaned up server-side, distinct from the
+        # transient ECONNRESET case below — must be checked first since both share the same prefix
+        "Failed to GetSignedArtifactURL: Received non-retryable error: Failed request: (404) Not Found": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_NOT_FOUND_FAILURE
+        ),
+        # Match the connection-specific portion, not the bare operation name: a 403/500/malformed
+        # GetSignedArtifactURL is a different failure mode and must not land in the connection bucket
+        "Failed to GetSignedArtifactURL: Unable to make request": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE
+        ),
+        # Match the 403-specific portion: a ListArtifacts ECONNRESET is a connection error, not a
+        # forbidden error, and should not be swallowed by the operation name alone
+        "Failed to ListArtifacts: Received non-retryable error: Failed request: (403) Forbidden": str(
+            InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE
+        ),
+        "Upload progress stalled.": str(InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
+        "Request was cancelled.": str(InfraErrorV1.REQUEST_CANCELLED_FAILURE),
+        "We received a malformed request from your client": str(InfraErrorV1.GITHUB_API_MALFORMED_REQUEST_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
@@ -169,6 +228,12 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
 
         if is_clang_tidy_failure:
             return str(CodeQualityErrorV1.CLANG_TIDY_VIOLATION)
+
+    # Most generic step-failure message GitHub emits ("Process completed with exit code N").
+    # Checked only after the step-specific classifiers above so a checkout/clang-tidy step that
+    # fails with this generic annotation still gets its specific signature, not this fallback.
+    if "Process completed with exit code" in failure_description:
+        return str(InfraErrorV1.GENERIC_EXIT_CODE_FAILURE)
 
     # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
@@ -638,7 +703,7 @@ def create_json_with_github_benchmark_environment(
     git_branch_name = os.environ["GITHUB_REF_NAME"]
 
     assert "GITHUB_RUN_ID" in os.environ
-    github_pipeline_id = os.environ["GITHUB_RUN_ID"]
+    github_pipeline_id = int(os.environ["GITHUB_RUN_ID"])
 
     github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 

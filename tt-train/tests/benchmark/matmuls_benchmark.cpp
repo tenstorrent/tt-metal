@@ -163,7 +163,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
             /*compute_kernel_config=*/compute_kernel_config,
             /*core_grid=*/grid_config.core_grid,
             /*output_tile=*/std::nullopt);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         output_tensor.deallocate();
     }
 
@@ -186,7 +186,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
                 /*compute_kernel_config=*/compute_kernel_config,
                 /*core_grid=*/grid_config.core_grid,
                 /*output_tile=*/std::nullopt);
-            tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+            tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
             const auto end_time = std::chrono::high_resolution_clock::now();
             total_time += end_time - start_time;
             output_tensor.deallocate();
@@ -256,6 +256,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
     device->enable_program_cache();
 
     std::vector<BenchmarkResult> results;
+    results.reserve(core_grid_configs.size());
 
     for ([[maybe_unused]] auto _ : state) {
         results.clear();

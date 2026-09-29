@@ -21,6 +21,7 @@ ORCHESTRATOR_STEPS = Path(__file__).parent / "issue_solver" / "orchestrator_step
 RUN_UTILS = Path(__file__).parent / "issue_solver_run_utils.py"
 RUN_TEST = Path(__file__).parents[2] / ".claude" / "scripts" / "run_test.sh"
 LLK_CONFTEST = Path(__file__).parents[2] / "tests" / "python_tests" / "conftest.py"
+LLK_PLUGIN = LLK_CONFTEST.parent / "helpers" / "llk_pytest_plugin.py"
 
 
 def _run(log_dir, *args):
@@ -696,7 +697,7 @@ def test_verification_result_rejects_zero_coverage_even_with_exit_zero(tmp_path)
 
 
 def test_cardless_collection_guard_precedes_device_initialization():
-    source = LLK_CONFTEST.read_text(encoding="utf-8")
+    source = LLK_PLUGIN.read_text(encoding="utf-8")
     start = source.index("def pytest_configure(config):")
     end = source.index("def pytest_ignore_collect", start)
     configure = source[start:end]
@@ -4760,6 +4761,10 @@ def _host_worktree(tmp_path, body):
     tests = tree / "tests/python_tests"
     tests.mkdir(parents=True)
     (tests / "conftest.py").write_bytes(LLK_CONFTEST.read_bytes())
+    (tests / "helpers").mkdir()
+    (tests / "helpers/llk_pytest_plugin.py").write_bytes(LLK_PLUGIN.read_bytes())
+    # The plugin infers LLK_HOME from a tt_llk_* sibling of tests/.
+    (tree / "tt_llk_blackhole").mkdir()
     (tests / "test_host.py").write_text(body)
     (tests / "test_device.py").write_text("def test_device(): pass\n")
     scripts = tree / "codegen/scripts"

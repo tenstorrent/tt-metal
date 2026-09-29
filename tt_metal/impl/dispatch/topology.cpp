@@ -478,6 +478,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     if (remote_devices.empty()) {
         // MMIO devices only, just replicate a single chip arch for each
         std::vector<DispatchKernelNode> nodes_for_one_mmio = populate_single_device();
+        nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
         uint32_t index_offset = 0;
         for (auto id : mmio_devices) {
             for (auto node : nodes_for_one_mmio) {
@@ -498,6 +499,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? galaxy_nine_chip_arch_1cq_fabric : galaxy_nine_chip_arch_2cq_fabric;
+            nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
@@ -539,6 +541,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
+            nodes.reserve(mmio_devices.size() * nodes_for_one_mmio.size());
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {

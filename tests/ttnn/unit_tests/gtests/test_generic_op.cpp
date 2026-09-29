@@ -41,6 +41,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
@@ -1234,7 +1235,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), available_cores, 0),
         ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), available_cores, 0),
     };
-    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device_, std::nullopt, {});
 
     // Fixed core layout for all devices
     CoreCoord mux_fwd_core = {0, 0};
@@ -1308,6 +1309,10 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
         // Writer CT args
         std::vector<uint32_t> writer_ct_args = common_ct_args;
+        // Keep this manual descriptor in sync with minimal_default_writer.cpp. The writer
+        // consumes this argument before the optional worker-mux configuration; the reader
+        // does not consume it, so it must not be part of common_ct_args.
+        writer_ct_args.push_back(ring_size - 1);  // barrier_target_count
         // fabric_mux_connection_ct_args
         writer_ct_args.push_back(mux_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
         writer_ct_args.push_back(
@@ -1631,8 +1636,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     receiver_device->quiesce_devices();
 
     std::vector<uint32_t> sender_status;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1642,8 +1647,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
 
     std::vector<uint32_t> receiver_status;
 
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,

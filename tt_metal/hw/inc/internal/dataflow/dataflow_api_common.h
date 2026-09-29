@@ -54,7 +54,7 @@ extern uint32_t crta_count;
  */
 
 #ifdef ARCH_QUASAR
-#define NOC_UNICAST_WRITE_VC 2
+#define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 8
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 9
 #else

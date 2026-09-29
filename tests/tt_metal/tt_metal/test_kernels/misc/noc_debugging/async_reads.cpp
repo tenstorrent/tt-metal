@@ -23,7 +23,7 @@ void kernel_main() {
             {
                 .noc_x = OTHER_CORE_X,
                 .noc_y = OTHER_CORE_Y,
-                .addr = i,
+                .addr = L1_BUFFER_ADDR,
             },
             {});
 #if defined(USE_READ_BARRIER)

@@ -13,6 +13,7 @@ import pytest
     [
         (torch.tensor([100], dtype=torch.uint8), ttnn.uint8, "UINT8"),
         (torch.tensor([-100], dtype=torch.int32), ttnn.int32, "INT32"),
+        (torch.tensor([-1], dtype=torch.int8), ttnn.int8, "INT8 negative"),
         (torch.tensor([3.14], dtype=torch.float32), ttnn.float32, "FLOAT32"),
         (torch.tensor([2.71], dtype=torch.bfloat16), ttnn.bfloat16, "BFLOAT16"),
         (torch.tensor([30000], dtype=torch.int16), ttnn.uint16, "UINT16"),
@@ -33,6 +34,8 @@ import pytest
         (torch.tensor([4294967295], dtype=torch.int64), ttnn.uint32, "UINT32 max"),
         # Minimum values
         (torch.tensor([-2147483648], dtype=torch.int32), ttnn.int32, "INT32 min"),
+        (torch.tensor([-128], dtype=torch.int8), ttnn.int8, "INT8 min"),
+        (torch.tensor([127], dtype=torch.int8), ttnn.int8, "INT8 max"),
         # Small float values
         (torch.tensor([1e-6], dtype=torch.float32), ttnn.float32, "FLOAT32 small"),
         (torch.tensor([-1e-6], dtype=torch.float32), ttnn.float32, "FLOAT32 negative small"),

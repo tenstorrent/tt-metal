@@ -199,6 +199,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(10 + tensors.size());
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
 
@@ -217,6 +218,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     runtime_args.push_back(raw_scores_semaphore_id);
 
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(dram_bank2core_coords.size());
     uint32_t dram_bank = 0;
     for (auto core : dram_bank2core_coords) {
         uint32_t vchannel = dram_bank & 0x3;

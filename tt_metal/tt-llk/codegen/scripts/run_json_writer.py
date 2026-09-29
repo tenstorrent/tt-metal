@@ -2361,7 +2361,7 @@ def _host_inputs(args: argparse.Namespace, source: str, patch: str) -> dict[str,
     harness = {
         name: hashlib.sha256((llk_root / name).read_bytes()).hexdigest()
         for name in (
-            "tests/python_tests/conftest.py",
+            "tests/python_tests/helpers/llk_pytest_plugin.py",
             ".claude/scripts/run_test.sh",
             "codegen/scripts/run_json_writer.py",
         )

@@ -297,8 +297,22 @@ void DevicePrintParserImpl<PointerSize>::read_arguments_from_payload(
 template <uint8_t PointerSize>
 std::pair<std::vector<std::string>, std::vector<typename DevicePrintParserImpl<PointerSize>::FormatPlaceholderInfo>>
 DevicePrintParserImpl<PointerSize>::parse_format_string(std::string_view format_str) {
+    // Upper bound on the placeholder count: every unescaped '{' starts at most one placeholder.
+    size_t placeholder_count = 0;
+    for (size_t i = 0; i < format_str.size(); i++) {
+        if (format_str[i] == '{') {
+            if (i + 1 < format_str.size() && format_str[i + 1] == '{') {
+                i++;  // Escaped '{', not a placeholder.
+                continue;
+            }
+            placeholder_count++;
+        }
+    }
+
     std::vector<std::string> plain_text_parts;
+    plain_text_parts.reserve(placeholder_count + 1);
     std::vector<FormatPlaceholderInfo> placeholders;
+    placeholders.reserve(placeholder_count);
     fmt::memory_buffer current_text;
     for (size_t i = 0; i < format_str.size(); i++) {
         if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {

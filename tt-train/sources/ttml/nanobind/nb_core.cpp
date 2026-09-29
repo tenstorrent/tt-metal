@@ -433,7 +433,7 @@ void py_module(nb::module_& m) {
                 name: The name to store the trace under (default: "END_TRACE")
 
             Note:
-                If capture is not active, this function prints a warning.
+                If capture is not active, this function does nothing.
                 Not thread safe.
             )doc");
 
@@ -472,7 +472,8 @@ void py_module(nb::module_& m) {
                 DRAMUsage object with peak, total_allocations, and total_deallocations fields
 
             Raises:
-                RuntimeError: If the named trace doesn't exist
+                RuntimeError: If the named trace doesn't exist, or if more than one
+                    segment shares the name (use get_dram_usage_all() for duplicates)
 
             Note:
                 Not thread safe.
@@ -505,7 +506,8 @@ void py_module(nb::module_& m) {
                 L1UsagePerCore object with peak_cb, peak_l1, and peak_total fields
 
             Raises:
-                RuntimeError: If the named trace doesn't exist
+                RuntimeError: If the named trace doesn't exist, or if more than one
+                    segment shares the name (use get_l1_usage_all() for duplicates)
 
             Note:
                 Not thread safe.

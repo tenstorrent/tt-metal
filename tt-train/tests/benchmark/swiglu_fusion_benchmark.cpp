@@ -146,7 +146,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, const uint
             loss->backward();
             ttml::utils::MemoryUsageTracker::snapshot("BACKWARD_PASS");
             optimizer_mem->step();
-            tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
+            tt::tt_metal::distributed::Synchronize(*dev, std::nullopt);
             const auto t1 = std::chrono::high_resolution_clock::now();
             ttml::autograd::ctx().reset_graph();
             step_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -176,7 +176,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, const uint
             auto loss = ttml::ops::cross_entropy_loss(logits, targets);
             loss->backward();
             optimizer_timed->step();
-            tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
+            tt::tt_metal::distributed::Synchronize(*dev, std::nullopt);
             const auto t1 = std::chrono::high_resolution_clock::now();
             ttml::autograd::ctx().reset_graph();
             return std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -194,7 +194,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, const uint
         optimizer_timed.reset();
         model_timed.reset();
         ttml::autograd::ctx().reset_graph();
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     }
 
     return result;

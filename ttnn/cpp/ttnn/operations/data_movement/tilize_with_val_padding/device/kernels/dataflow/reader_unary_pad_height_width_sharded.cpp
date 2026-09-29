@@ -8,33 +8,34 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_input_rows = get_arg_val<uint32_t>(0);
-    const uint32_t input_width_bytes = get_arg_val<uint32_t>(1);
-    const uint32_t input_block_size = get_arg_val<uint32_t>(2);
-    const uint32_t num_padded_tiles_per_batch = get_arg_val<uint32_t>(3);
-    const uint32_t num_padded_rows = get_arg_val<uint32_t>(4);
-    const uint32_t num_batches = get_arg_val<uint32_t>(5);
-    const uint32_t packed_pad_value = get_arg_val<uint32_t>(6);
-
-    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_dfb = get_compile_time_arg_val(2);
+    const uint32_t input_width_bytes = get_arg(args::input_width_bytes);
+    const uint32_t input_block_size = get_arg(args::input_block_size);
+    const uint32_t num_padded_tiles_per_batch = get_arg(args::num_padded_tiles_per_batch);
+    const uint32_t num_padded_rows = get_arg(args::num_padded_rows);
+    const uint32_t num_batches = get_arg(args::num_batches);
+    const uint32_t packed_pad_value = get_arg(args::packed_pad_value);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_pad(pad_dfb);
+    // src_shard is a LocalTensorAccessor over this core's borrowed input shard (L1); read-only here.
+    // dfb_in1 is the row-major staging DFB the compute kernel tilizes from.
+    // pad holds one row of the pad value, reused for every padded row. It is reader-private with no
+    // second party, so the former self-loop DFB (bound PRODUCER+CONSUMER) synchronized nothing;
+    // converted to a Scratchpad.
+    LocalTensorAccessor<uint32_t> src_shard(tensor::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    Scratchpad<volatile uint32_t> pad(scratch::pad);
 
-    dfb_in0.reserve_back(num_input_rows);
     dfb_in1.reserve_back(num_padded_tiles_per_batch);
-    dfb_pad.reserve_back(1);
 
-    uint32_t read_addr = dfb_in0.get_read_ptr();
+    uint32_t read_addr = src_shard.get_bank_base_address();
     uint32_t write_addr = dfb_in1.get_write_ptr();
-    uint32_t pad_addr = dfb_pad.get_write_ptr();
+    uint32_t pad_addr = pad.get_base_address();
 
     {
         CoreLocalMem<uint32_t> dst(write_addr);
@@ -47,9 +48,14 @@ void kernel_main() {
     }
     read_addr += input_block_size;
     write_addr += input_block_size;
-    volatile tt_l1_ptr std::uint32_t* pad = (volatile tt_l1_ptr uint32_t*)(pad_addr);
-    for (uint32_t i = 0; i < input_width_bytes >> 2; ++i) {
-        pad[i] = packed_pad_value;
+    {
+        // The pad row is CPU-filled here and then used as a NOC read source below. On Quasar the DM
+        // core's writes sit in L2 cache; scoped_lock releases (flushes) them so the NOC read sees the
+        // filled data instead of stale/zero L1. No-op on Wormhole/Blackhole.
+        auto pad_lock = pad.scoped_lock(0, input_width_bytes >> 2);
+        for (uint32_t i = 0; i < input_width_bytes >> 2; ++i) {
+            pad[i] = packed_pad_value;
+        }
     }
     for (uint32_t i = 0; i < num_padded_rows; ++i) {
         CoreLocalMem<uint32_t> dst(write_addr);

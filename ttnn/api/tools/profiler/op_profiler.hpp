@@ -78,6 +78,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<ttnn::Tensor>
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const ttnn::Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
+    ret.reserve(tensors.size());
     for (const auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
@@ -89,6 +90,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<std::optional
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<ttnn::Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
+    ret.reserve(tensors.size());
     for (const auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));

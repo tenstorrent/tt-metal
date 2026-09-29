@@ -52,10 +52,7 @@ message(STATUS "Found ${ALL_KERNEL_FILES_LEN} kernel files")
 if(NOT DEFINED ARCH_NAME)
     set(ARCH_NAME "wormhole_b0")
 endif()
-set(TOLOWER
-    "${ARCH_NAME}"
-    ARCH_NAME_LOWER
-)
+string(TOLOWER "${ARCH_NAME}" ARCH_NAME_LOWER)
 
 if(ARCH_NAME_LOWER MATCHES "wormhole")
     set(ARCH_NAME_PREFIX "wormhole")
@@ -83,8 +80,10 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/${ARCH_NAME_PREFIX}/${ARCH_NAME_LOWER}_defines"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/common"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tools/include"
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/common/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib/hal"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_api"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_api/llk_sfpu"
@@ -97,7 +96,6 @@ target_compile_options(
     jit_kernels_index
     PRIVATE
         -O2
-        -mcpu=tt-wh
         -std=c++20
         -flto=auto
         -ffast-math
@@ -142,6 +140,7 @@ target_compile_definitions(
 )
 
 if(ARCH_NAME_LOWER MATCHES "wormhole")
+    target_compile_options(jit_kernels_index PRIVATE -mcpu=tt-wh)
     target_compile_definitions(
         jit_kernels_index
         PRIVATE
@@ -150,6 +149,7 @@ if(ARCH_NAME_LOWER MATCHES "wormhole")
             NUM_L1_BANKS=64
     )
 elseif(ARCH_NAME_LOWER MATCHES "blackhole")
+    target_compile_options(jit_kernels_index PRIVATE -mcpu=tt-bh)
     target_compile_definitions(
         jit_kernels_index
         PRIVATE

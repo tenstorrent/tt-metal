@@ -6,50 +6,39 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
-// HW-bcast scale for fused scale-attn-softmax
-FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
-    constexpr auto dfb_fused_scale = tt::CBIndex::c_2;
-    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
-    uint32_t u = get_arg_val<uint32_t>(0);
-    dfb_fused_scale_obj.reserve_back(1);
-    auto ptr = reinterpret_cast<uint16_t*>(dfb_fused_scale_obj.get_write_ptr());
-    ptr[0] = u >> 16;
-    dfb_fused_scale_obj.push_back(1);
-}
+#include <cstdint>
 
 void kernel_main() {
-    constexpr uint32_t dfb_max_scaler = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_sum_scaler = tt::CBIndex::c_13;
+    constexpr auto dfb_max_scaler = dfb::max_scaler;
+    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
 
-    constexpr uint32_t block_wt = get_compile_time_arg_val(0);
-    constexpr auto mask_args = TensorAccessorArgs<1>();
+    constexpr std::uint32_t block_wt = get_arg(args::block_w);
 
-    const uint32_t mask_addr = get_arg_val<uint32_t>(1);
-    const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(2);
-    uint32_t mask_num_tiles = get_arg_val<uint32_t>(3);
+    const std::uint32_t mask_start_tile_id = get_arg(args::mask_start_tile_id);
+    std::uint32_t mask_num_tiles = get_arg(args::mask_num_tiles);
 
-    constexpr uint32_t dfb_attn = tt::CBIndex::c_3;
-    uint32_t mask_tile_bytes = get_tile_size(dfb_attn);
-    uint32_t mask_id = mask_start_tile_id;
+    constexpr auto dfb_attn = dfb::fused_attn;
+    DataflowBuffer dfb_attn_obj(dfb_attn);
+    std::uint32_t mask_tile_bytes = dfb_attn_obj.get_entry_size();
+    std::uint32_t mask_id = mask_start_tile_id;
 
-    const auto addr_mask = TensorAccessor(mask_args, mask_addr);
+    const auto addr_mask = TensorAccessor(tensor::mask);
 
     Noc noc;
-    DataflowBuffer dfb_attn_obj(dfb_attn);
 
-    constexpr auto dfb_fused_scale = tt::CBIndex::c_2;
-    const uint32_t pre_scale = get_arg_val<uint32_t>(0);
+    constexpr auto dfb_fused_scale = dfb::fused_scale;
+    const std::uint32_t pre_scale = get_arg(args::pre_scale);
     generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
 
-    constexpr uint32_t block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 2);
-    for (uint32_t h = 0; h < block_ht; h++) {
+    constexpr std::uint32_t block_ht = get_arg(args::block_ht);
+    for (std::uint32_t h = 0; h < block_ht; h++) {
         dfb_attn_obj.reserve_back(block_wt);
-        uint32_t write_offset = 0;
-        for (uint32_t w = 0; w < block_wt; w++) {
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
             noc.async_read(
                 addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
             write_offset += mask_tile_bytes;

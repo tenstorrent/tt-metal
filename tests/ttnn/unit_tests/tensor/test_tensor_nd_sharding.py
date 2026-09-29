@@ -126,3 +126,53 @@ def test_nd_shardspec_construction_across_tensor_ranks(device, torch_tensor, sha
 
     assert tt_tensor.memory_config().is_sharded()
     assert tt_tensor.memory_config().nd_shard_spec is not None
+
+
+# DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row. A shard
+# core off row 0 aliases onto an existing bank and corrupts data, so allocation must be rejected.
+@pytest.mark.parametrize(
+    "grid",
+    [
+        # 2x2: cores (0,1)/(1,1) alias banks 0 and 1.
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+        # Single row but off row 0: every core has y != 0.
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 1))]),
+    ],
+    ids=["two_rows", "off_row0"],
+)
+def test_reject_dram_nd_shard_bank_aliasing(device, expect_error, grid):
+    """A DRAM NdShardSpec whose grid aliases banks must fail when the buffer is allocated."""
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, ttnn.NdShardSpec(ttnn.Shape([1, 1, 32, 64]), grid))
+    torch_input = torch.arange(0, 2 * 3 * 64 * 128, dtype=torch.float32).reshape(2, 3, 64, 128).to(torch.bfloat16)
+    with expect_error(RuntimeError, "DRAM banks are 1D"):
+        ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        )
+
+
+def test_accept_dram_nd_shard_single_row(device):
+    """A DRAM NdShardSpec on a single row of banks (y == 0) round-trips correctly."""
+    num_banks = device.dram_grid_size().x
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))])
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, ttnn.NdShardSpec(ttnn.Shape([1, 1, 32, 64]), grid))
+
+    torch_input = torch.arange(0, 2 * 3 * 64 * 128, dtype=torch.float32).reshape(2, 3, 64, 128).to(torch.bfloat16)
+    tt = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    assert torch.equal(ttnn.to_torch(tt), torch_input)
+
+
+def test_accept_l1_nd_shard_two_dim_grid(device):
+    """The DRAM-only guard must not reject a legitimate 2D worker grid in L1."""
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 2 or grid_size.y < 2:
+        pytest.skip("Device grid too small for a 2x2 L1 shard grid")
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape([1, 1, 32, 32]), grid))
+
+    torch_input = torch.arange(0, 64 * 64, dtype=torch.float32).reshape(1, 1, 64, 64).to(torch.bfloat16)
+    tt = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    assert torch.equal(ttnn.to_torch(tt), torch_input)

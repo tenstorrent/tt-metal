@@ -45,6 +45,8 @@ struct MeshTraceBuffer {
     // The MeshBuffer this trace will be serialized to, before being run on a
     // MeshDevice
     std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;
+    // Highest DRAM address that may be accessed when this trace is replayed.
+    DeviceAddr dram_high_water_mark = 0;
 
     ~MeshTraceBuffer();
 };
@@ -65,7 +67,8 @@ public:
         MeshCommandQueue& mesh_cq,
         std::shared_ptr<MeshTraceBuffer>& trace_buffer,
         DeviceAddr dram_allocation_high_water_mark = 0,
-        DeviceAddr dram_deletion_high_water_mark = 0);
+        DeviceAddr dram_deletion_high_water_mark = 0,
+        DeviceAddr max_live_trace_high_water_mark = 0);
 };
 
 }  // namespace tt::tt_metal::distributed

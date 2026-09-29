@@ -15,6 +15,13 @@ namespace ttnn::prim {
 struct TransposeHCShardedProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const TransposeParams& operation_attributes,
+        const TransposeInputs& tensor_args,
+        Tensor& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 }  // namespace ttnn::prim

@@ -231,7 +231,9 @@ GlobalCoresInfo map_tensor_to_gcores_nd(
 
     // Validate and normalize partition dimensions
     std::vector<int> normalized_dims;
+    normalized_dims.reserve(partition_dims.size());
     std::vector<uint32_t> dim_sizes;
+    dim_sizes.reserve(partition_dims.size());
     for (int dim : partition_dims) {
         if (dim < 0) {
             dim = tensor_rank + dim;

@@ -152,10 +152,10 @@ void py_module(nb::module_& mod) {
             Args:
                 tensor (ttnn.Tensor): The tensor to be copied from host to device.
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
-                memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`, DRAM_MEMORY_CONFIG will be used.
 
-            Kwargs:
-                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
+            Keyword Args:
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
@@ -175,8 +175,8 @@ void py_module(nb::module_& mod) {
                 tensor (ttnn.Tensor): the tensor to be copied from device to host.
                 blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
 
-            Kwargs:
-                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
+            Keyword Args:
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: the host tensor copy.
@@ -253,9 +253,9 @@ void py_module(nb::module_& mod) {
 
                 * - dtype
                     - layout
-                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
                     - TILE
-                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
                     - ROW_MAJOR
 
             Memory Support:
@@ -264,6 +264,8 @@ void py_module(nb::module_& mod) {
 
             Limitations:
                 -  tensor must be on the host.
+                -  INT8 (like UINT8) is host-only: device typecast/tilize are not yet supported for it,
+                   so INT8 conversions run on host.
         )doc",
         &ttnn::to_dtype,
         nb::arg("tensor"),

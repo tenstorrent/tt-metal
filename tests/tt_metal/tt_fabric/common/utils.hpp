@@ -53,6 +53,7 @@ void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane)
 void expect_galaxy_rank_group_1x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_1x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_2x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);

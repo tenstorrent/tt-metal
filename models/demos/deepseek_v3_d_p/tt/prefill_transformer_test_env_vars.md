@@ -59,14 +59,17 @@ names are baked in:
 
 ```python
 TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache")).resolve()
-ILLIAD_1024_TRACE     = TRACE_DIR_BASE / "illiad_prefill_fa2"
-ILLIAD_25024_TRACE    = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
-ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
-ABC_1K_PAD_LEFT_1024  = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
-LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
 LONGBOOK_QA_ENG_5120  = TRACE_DIR_BASE / "longbook_qa_eng_prefill_5120_nopad"
+LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
 LONGBOOK_QA_ENG_56320 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_56320_nopad"
 ```
+
+Two shared filesystems, different layouts; the in-code default targets the first:
+
+| filesystem | traces sit | native lengths |
+|---|---|---|
+| `/mnt/MLPerf/deepseek-prefill-cache` (CIv1, mounted `:ro` by `blackhole-e2e-tests-impl.yaml`) | in the base | 5120, 25600 |
+| `/mnt/models/deepseek-prefill-cache` (Exabox, Blaze/Galaxy `mpirun`) | under `golden/` | 5120, 56320 |
 
 **Step 2 — the lookup table**. The key is the tuple
 `(input_source, isl_total, padding_side)`, where `isl_total` is the trace's native
@@ -74,10 +77,6 @@ LONGBOOK_QA_ENG_56320 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_56320_nopad"
 
 ```python
 TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
-    ("json_prompts",    1024,  "right"): ILLIAD_1024_TRACE,
-    ("json_prompts",    25600, "right"): ILLIAD_25024_TRACE,
-    ("abc_1k",          1024,  "right"): ABC_1K_PAD_RIGHT_1024,
-    ("abc_1k",          1024,  "left"):  ABC_1K_PAD_LEFT_1024,
     ("longbook_qa_eng", 5120,  "right"): LONGBOOK_QA_ENG_5120,
     ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
     ("longbook_qa_eng", 56320, "right"): LONGBOOK_QA_ENG_56320,
@@ -111,11 +110,13 @@ attention + absolute-position RoPE), so they are identical whether the full sequ
 just its first `isl_total` tokens are prefilled. The per-layer hidden-state PCC and the
 KVPE PCC checks therefore remain valid on the sliced reference.
 
-**Caveat:** the trace's stored `logits` / `next_token_id` belong to the *full* sequence's
-final position, so they are meaningless for a shorter prefill. For a sliced trace,
-`slice_debug_trace()` drops `logits` (→ `None`) and the test **skips the logits PCC and
-first-token-match checks** (per-layer + KVPE PCC still run). An exact-length match keeps
-all checks.
+**Note:** the trace's stored `logits` / `next_token_id` belong to the *full* sequence's final
+position. `logits.safetensors` is not read at all: the prefill transformer has no norm / LM-head /
+sampling tail (the populated KV cache is its output). On a **full-model, unsliced** run the test
+derives the first token on the host (final norm + LM head on the CPU over the last layer's hidden
+state) and compares it with the trace's `next_token_id` (from `metadata.json` or
+`output_metadata.json`); a trace that records neither logs N/A and does not fail, and a sliced
+trace skips the check.
 
 Requesting an `isl_total` **larger** than every available trace still yields no trace
 (the test then falls back to reference cache / live HF compute).
@@ -130,19 +131,18 @@ the loader reads by **fixed filenames/keys**, not by searching:
 - KV cache: `kv_cache/layer_{i}.safetensors` or flat `kv_cache.safetensors`, preferring
   the key `kv_post_transform_layer_{i}` and falling back to `compressed_kv_layer_{i}`
   (with a warning that PCC will be unreliable).
-- Optional `logits.safetensors`.
+- A `logits.safetensors`, if present, is ignored.
 
 **What this means for you:**
 
 - To point at a custom trace location, set `DEEPSEEK_V3_TRACE_DIR` to a base dir that
   **contains the exact hardcoded subdirectory names** above — e.g.
-  `$DEEPSEEK_V3_TRACE_DIR/ABC_1k_prefill_padd_right_1024/metadata.json`.
+  `$DEEPSEEK_V3_TRACE_DIR/longbook_qa_eng_prefill_5120_nopad/metadata.json`.
 - If no trace matches your `(input_source, padding_side)` with a native isl `>= isl_total`,
   **no trace is used regardless of the env var** — the test falls back to the reference
   cache / live HF compute.
-- This is a different mechanism from the variant's `prefill_trace_default` field
-  (`/mnt/models/.../golden/...`), which is consumed by the *chunked* transformer test and
-  the standalone runners via `PREFILL_TRACE_DIR` — not by this `find_trace_dir` path.
+- `DEEPSEEK_V3_TRACE_DIR` covers only the table above. The `variant_default` PCC rows instead read
+  `variant.test_prefill_trace_default` — a hardcoded adapter path, with no env override here.
 
 ### `HF_HOME`
 HuggingFace cache dir used for the auto-download fallback (weights, config, tokenizer).
@@ -153,8 +153,8 @@ Default `~/.cache/huggingface`.
 ## Tier 2 — optional behavior toggles
 
 ### `TT_DS_PREFILL_INFINITEBENCH_CACHE`
-Where InfiniteBench prompt subsets are cached (only relevant when `input_source` is
-`passkey`/`kv_retrieval`/`longdialogue_qa_eng`/`longbook_qa_eng`). Falls back under `HF_HOME`.
+Where the InfiniteBench subset is cached. Needed whenever a `longbook_qa_eng` run tokenizes:
+the smoke rows, and any pcc run where no golden resolved. Falls back under `HF_HOME`.
 
 ### `TT_DS_PREFILL_DEBUG_TOKEN_COUNT`
 `1/true/yes` enables a token-count debug path inside the MoE block (`tt_moe.py`).
@@ -167,10 +167,6 @@ Root dir for CI summary files, one per-kind subdir: `PREFILL_SUMMARIES/pcc` (per
 `PREFILL_SUMMARIES/perf` (chunk-timing tables). One file per parameterized run; a CI step globs a subdir
 and concatenates into `$GITHUB_STEP_SUMMARY`. Default `/tmp/prefill_summaries_<user>`. (PCC PNG plots are
 separate and still go to the trace dir, not here.)
-
-### `<NAME>_OUTPUT_DIR`
-Per-stage dump dir for `save_intermediate_output` — e.g. `NORM_OUTPUT_DIR`,
-`LM_HEAD_OUTPUT_DIR`. Default `/tmp/{name}_outputs`.
 
 ### `DEEPSEEK_V3_MLA_REF_CACHE`  (`variant.mla_ref_cache_env`)
 MLA-layer reference cache dir. Primarily exercised by `test_mla.py`, defined on the variant.
@@ -191,14 +187,27 @@ Path where the above warning is also appended (CI job summary).
 
 ---
 
-## Kimi variant equivalents (only if you run the `kimi_k2_6` variant)
+## Kimi variant equivalents (only if you run the `kimi_k2_7` variant)
 
 Same roles as the DSV3 names above:
 
-- `DEEPSEEK_V3_HF_MODEL` → `KIMI_K2_6_HF_MODEL`
+- `DEEPSEEK_V3_HF_MODEL` → `KIMI_K2_7_HF_MODEL`
 - `TT_DS_PREFILL_TTNN_CACHE` → `TT_KIMI_PREFILL_TTNN_CACHE`
 - `TT_DS_PREFILL_HOST_REF_CACHE` → `TT_KIMI_PREFILL_HOST_REF_CACHE`
 - `DEEPSEEK_V3_MLA_REF_CACHE` → `KIMI_MLA_REF_CACHE`
+
+---
+
+## Mistral variant equivalents (only if you run the `mistral_small_4` variant)
+
+Same roles again:
+
+- `DEEPSEEK_V3_HF_MODEL` → `MISTRAL4_HF_MODEL`
+- `TT_DS_PREFILL_TTNN_CACHE` → `TT_MISTRAL4_PREFILL_TTNN_CACHE`
+- `TT_DS_PREFILL_HOST_REF_CACHE` → `TT_MISTRAL4_PREFILL_HOST_REF_CACHE`
+- `DEEPSEEK_V3_MLA_REF_CACHE` → `MISTRAL4_MLA_REF_CACHE`
+
+`TT_MISTRAL4_PREFILL_TTNN_CACHE` has no default — point it at a writable directory of your own.
 
 ---
 
@@ -206,10 +215,10 @@ Same roles as the DSV3 names above:
 
 A large `PREFILL_*` family exists in this module
 (`PREFILL_HF_MODEL`, `PREFILL_TTNN_CACHE`, `PREFILL_NUM_LAYERS`, `PREFILL_SP`/`PREFILL_TP`,
-`PREFILL_STANDALONE*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
+`PREFILL_STANDALONE_CHUNKED_*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
 `PREFILL_H2D_*`, `MIGRATION_DONE_FILE`, `DEEPSEEK_PREFILL_TRACE_DIR/PT`, etc.).
 
-These belong to the standalone multi-process prefill runner (`tt/runners/*`) and the
+These belong to the multi-process prefill runner (`tt/runners/*`) and the
 chunked/migration/stress tests — they are **not** read by `test_prefill_transformer.py`,
 so setting them here has no effect. Note the runner uses `PREFILL_TTNN_CACHE` /
 `PREFILL_HF_MODEL` while this test uses the `TT_DS_PREFILL_*` / `DEEPSEEK_V3_HF_MODEL`

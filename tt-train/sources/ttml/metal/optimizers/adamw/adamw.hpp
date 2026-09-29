@@ -22,6 +22,8 @@ ttnn::Tensor adamw(
     float beta2_pow,
     float epsilon,
     float weight_decay,
-    StochasticRounding stochastic_rounding = StochasticRounding::Disabled);
+    StochasticRounding stochastic_rounding = StochasticRounding::Disabled,
+    // Required iff stochastic rounding is enabled.
+    std::optional<uint32_t> stochastic_rounding_seed = std::nullopt);
 
 }  // namespace ttml::metal

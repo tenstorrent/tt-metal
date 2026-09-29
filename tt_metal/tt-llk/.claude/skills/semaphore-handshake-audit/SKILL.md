@@ -16,6 +16,28 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis:
+
+    tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks semaphore-handshake
+    # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
+    # candidates: out/audit.<arch>.json -> .checks["semaphore-handshake"].findings
+
+`MUTEX_IMBALANCE` = a function whose acquire/release counts differ (wrapper defs
+and RAII ctor/dtor are already excluded). `WAIT_WITHOUT_INIT` = a wait whose
+identity has no matching **concrete** SEMINIT in the parsed tree — a **candidate
+only** (the BRISC boot firmware inits Max out-of-tree, and the generic
+`t6_sem(index)` wrapper can init any semaphore). A finding tagged
+`safety: LOW_CONFIDENCE` means a generic init IS present and *may* cover it —
+still surfaced, just lower priority; an untagged one has no init of any kind in
+tree. Wait/init identity vocabularies (`semaphore::NAME` vs `p_stall::SEMAPHORE_n`)
+don't reconcile statically, so treat every one as a lead to confirm, not a verdict.
+The tool covers only these two mechanical signals; **widen for** cross-thread
+post/get direction, cross-layer producers (ttnn/models), and deadlock cycles —
+none of which it decides (see `blind_spots`). It never clears a site; you decide.
+If unbuilt, proceed manually.
+
 ## The bug class (precise)
 The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphores[0..7]`, each a 4-bit `Value` 0–15 plus a `Max`) and **two ATGETM/ATRELM mutexes**. Unlike config-register races (covered by `cfg-word-overlap-audit`, `reconfig-stall-audit`, `mmio-race-audit`), these bugs are in the *handshake protocol*: a mis-initialized, unbalanced, wrong-direction, or wrongly-ordered post/wait/get → **lost synchronization (silent data corruption)** or **deadlock (TENSIX TIMED OUT)**.
 
@@ -26,22 +48,22 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 - LLK wrappers (`ckernel.h`): `t6_semaphore_init(idx, min, max)` → `TTI_SEMINIT(max, min, …)` (so wrapper `min` = initial `Value`, `max` = `Max`). `t6_semaphore_post/get` are Tensix `SEMPOST/SEMGET` (in-stream, ordered). `semaphore_post/get` (no `t6_`) are **RISC MMIO** writes to `pc_buf_base[PC_BUF_SEMAPHORE_BASE+idx]` — asynchronous to the Tensix stream. The `LLK_ASSERT(value<MAX)` / `(value>0)` guards are **debug-only** → release builds silently over/underflow.
 
 ## Semaphore map (WH/BH — `ckernel_structs.h`)
-| # | Name | Roles |
-|---|------|-------|
-|0|`FPU_SFPU`| fpu↔sfpu; also reused (aliased `SFPU_FPU`) in some experimental kernels |
-|1|`MATH_PACK`| math↔pack on **dest** register (the main double-buffer) |
-|2|`UNPACK_TO_DEST`| unpack↔math, unpack-direct-to-dest |
-|3|`UNPACK_OPERAND_SYNC`| unpack↔pack/math operand get/release |
-|4|`PACK_DONE`| pack iteration begin/end (perf) |
-|5|`UNPACK_SYNC`| RISC↔unpack, config-context acquire/release |
-|6|`UNPACK_MATH_DONE`| (see name reuse note below) |
-|7|`MATH_DONE`| math-done barrier for unpack-to-dest |
+| #   | Name                  | Roles |
+| --- | --------------------- | ------- |
+| 0   | `FPU_SFPU`            | fpu↔sfpu; also reused (aliased `SFPU_FPU`) in some experimental kernels |
+| 1   | `MATH_PACK`           | math↔pack on **dest** register (the main double-buffer) |
+| 2   | `UNPACK_TO_DEST`      | unpack↔math, unpack-direct-to-dest |
+| 3   | `UNPACK_OPERAND_SYNC` | unpack↔pack/math operand get/release |
+| 4   | `PACK_DONE`           | pack iteration begin/end (perf) |
+| 5   | `UNPACK_SYNC`         | RISC↔unpack, config-context acquire/release |
+| 6   | `UNPACK_MATH_DONE`    | (see name reuse note below) |
+| 7   | `MATH_DONE`           | math-done barrier for unpack-to-dest |
 
 ## What to check — and the rules
 
 ### 1. INIT correctness vs usage (do this FIRST — it's the most-missed)
 - **Every semaphore used with `wait_on_max`/`STALL_ON_MAX` MUST be `SEMINIT`'d with `Max` = the intended buffer depth**, by one thread, *before any thread uses it*. If it relies on the HW-reset default `Max`, the producer's backpressure gate is wrong → over-post (silent corruption) or premature/never block.
-  - In-tree, only `MATH_PACK` is `SEMINIT`'d inside tt-llk: `_llk_math_pack_sync_init_` (`llk_math_common.h`) sets `Max=1` (`DstSync::SyncFull`) or `Max=2` (`SyncHalf`), `Value=0`. **`UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE` have no `SEMINIT` in tt-llk** — they are boot-initialized by **BRISC firmware**, not the compute-API startup. Ground truth (verified): `brisc.cc` → `c_tensix_core::initialize_tensix_semaphores()` (`tt_metal/hw/inc/internal/.../c_tensix_core.h`) runs once before any TRISC kernel and issues `ex_sem_init(sem, max, value)` = `Max=1, Value=0` for `MATH_PACK`, `UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE`. So all are depth-1 by default and init-ordered before use; `MATH_PACK` is then re-`SEMINIT`'d per `DstSync` mode by `_llk_math_pack_sync_init_`. The LLK **test** harness mirrors this in `tests/helpers/include/boot.h`. When auditing, confirm any NEW wait-on-max semaphore is added to `initialize_tensix_semaphores` (or re-init'd in LLK); flag any wait-on-max semaphore with no reachable `SEMINIT` in BRISC firmware **or** tt-llk.
+  - In-tree, only `MATH_PACK` is `SEMINIT`'d inside tt-llk: `_llk_math_pack_sync_init_` (`llk_math_common.h`) sets `Max=1` (`DstSync::SyncFull`) or `Max=2` (`SyncHalf`), `Value=0`. **`UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE` have no `SEMINIT` in tt-llk** — they are boot-initialized by **BRISC firmware**, not the compute-API startup. Ground truth (verified): `brisc.cc` → `c_tensix_core::initialize_tensix_semaphores()` (`tt_metal/hw/inc/internal/.../c_tensix_core.h`) runs once before any TRISC kernel and issues `ex_sem_init(sem, max, value)` = `Max=1, Value=0`. **On WH/BH it inits four** — `MATH_PACK`, `UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE`; **on Quasar only three** — `MATH_PACK`, `UNPACK_TO_DEST`, `MATH_DONE` (there is **no `PACK_DONE`** semaphore on Quasar). So those are depth-1 by default and init-ordered before use; `MATH_PACK` is then re-`SEMINIT`'d per `DstSync` mode by `_llk_math_pack_sync_init_`. The LLK **test** harness approximates this in `tests/helpers/include/boot.h`, but via `t6_semaphore_init` (SEMINIT) and for a DIFFERENT subset — `UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE` (NOT `MATH_PACK`, which the compute path re-inits) — so do not treat `boot.h` as a byte-for-byte copy of the firmware init. When auditing, confirm any NEW wait-on-max semaphore is added to `initialize_tensix_semaphores` (or re-init'd in LLK); flag any wait-on-max semaphore with no reachable `SEMINIT` in BRISC firmware **or** tt-llk.
 - **Initial `Value` must match the empty/full convention** — producer/consumer semaphores start at `Value=0` (empty). A stale non-zero value (no re-init across kernels, or across a `DstSync` mode switch) desyncs from cycle one.
 - **The issuing thread + ordering**: semaphores are thread-agnostic (single bank), but `SEMINIT` executes in one thread's stream. It must land before any thread's first wait/post/get. Verify the init barrier (e.g. `_llk_math_pack_sync_init_` does `tensix_sync()` + `while(semaphore_read(MATH_PACK)>0){}` to drain prior packs **before** re-`SEMINIT`). Missing barrier → init races a peer still using the old value.
 - **Mode-switch re-init**: `SyncFull`↔`SyncHalf` need `Max` 1↔2. Changing dest-sync mode without re-`SEMINIT` (and a dest drain) leaves `Max` mismatched to the real buffer depth.
@@ -49,6 +71,7 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 
 ### 2. Post/get (producer/consumer) balance
 - Exactly **one `SEMGET` per `SEMPOST`** over any complete iteration. Walk every branch: a post inside an `if` whose get is unconditional (or vice-versa), or an early `return`/`continue` between them, drifts `Value` → producer eventually wedges at `Max` forever (deadlock) or consumer drains a slot that was never filled.
+- **Count per EXECUTED iteration, not per source line.** A `TT_OP_SEMPOST`/`SEMWAIT`/`SEMGET` installed into a MOP slot, or captured into a replay buffer, executes `outer` or `outer × inner` times per one `run()`/`replay()` — so one textual occurrence can be many posts. Worse, the stream is not uniform: a `LOOP0_LAST`/`LOOP1_LAST` override replaces a loop op on the **last inner** iteration, so a pair that balances across iterations `1..N-1` need not balance on `N`, and template 0 selects per iteration from a runtime mask. Resolve the word at its slot per `race-audit-all` → *"A word's SLOT, not its line"*; the tool's `mop-replay` check recalls these as `MOP_SLOTTED_WORD` / `MOP_WORD_SLOT_UNATTRIBUTED` but resolves **no counts**. If the counts do not resolve, report UNCERTAIN rather than balancing the source text.
 - Because `SEMPOST` ignores `Max`, **every producer post must be preceded (in that thread's program order) by the `wait_on_max` gate** — that gate is the only thing preventing overshoot past the intended depth. A post on a path that skips the wait → silent overflow toward 15.
 - **Cross-layer handshakes (don't false-flag a deadlock):** for experimental/custom ops, the producer and consumer halves can live in **different layers** — an LLK function may provide only one half (e.g. a `wait_on_zero`+`get`) while the matching `post` is issued by the **compute kernel / model layer** (`ttnn/cpp/.../kernels/...`, `models/.../kernel_includes/...`, `tt_metal/hw/inc/api/compute/...`), exactly like `MATH_PACK`'s halves sit in `cmath`/`cpack` but are assembled by the compute API. So a `wait_on_zero` with **no producer in tt-llk is NOT automatically a deadlock** — chase the producer repo-wide (`grep -rIn '<SEM>' ttnn models tt_metal/hw/inc/api`) before flagging. Only call it a deadlock if no reachable layer posts it.
 
@@ -60,7 +83,7 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 - **Ordering vs a paired blocking `mailbox_write`:** when a producer releases the consumer with a `semaphore_post` AND hands data via a `mailbox_write` in the same path, the `semaphore_post` must come **first** — a full mailbox FIFO can stall the producer before it posts, deadlocking against the waiting consumer (→ `mailbox-sync-audit`, signal-before-blocking-write).
 
 ### 5. Mutex (ATGETM/ATRELM) balance & deadlock
-- `t6_mutex_acquire(idx)`/`t6_mutex_release(idx)` (`mutex::REG_RMW`=0, `mutex::SFPU`=4) must be **balanced on every path** — an early return between acquire and release holds the mutex and **deadlocks every other thread** that acquires it. The mutex only helps parties that take it (`REG_RMW` is **not** taken by the math thread — see `cfg-word-overlap-audit`).
+- `t6_mutex_acquire(idx)`/`t6_mutex_release(idx)` (`mutex::REG_RMW`=0, `mutex::SFPU`=4) must be **balanced on every path** — an early return between acquire and release holds the mutex and **deadlocks every other thread** that acquires it. The per-iteration counting rule from #2 applies here too: a `TT_OP_ATGETM`/`ATRELM` in a MOP slot or a replay buffer is acquired/released once per executed iteration, so an acquire and a release sitting in **different slots** need not pair up per iteration. The mutex only helps parties that take it (`REG_RMW` is **not** taken by the math thread — see `cfg-word-overlap-audit`).
 - `mutex::SFPU` is **declared but currently never acquired** in tt-llk. It exists because SFPU instructions can issue from both T1 and T2; if a kernel ever issues SFPU from pack concurrently with math without taking it → race. Flag any new cross-thread SFPU issue that doesn't.
 
 ### 6. Cross-thread deadlock cycle
@@ -69,11 +92,12 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 ## Method
 1. **Enumerate** every site, tagged by thread via filename (`*unpack*`/`cunpack`=T0, `*math*`/`cmath`=T1, `*pack*`/`cpack`=T2):
    ```bash
-   cd tt_metal/tt-llk
-   grep -rInE "t6_semaphore_(post|get|wait_on_max|wait_on_zero|init)|semaphore_(post|get)\(|TTI_SEM(POST|GET|WAIT|INIT)|t6_mutex_(acquire|release)|TTI_ATGETM|TTI_ATRELM" \
-     tt_llk_* --include=*.h | grep -v /tests/
-   # init sites (incl. above tt-llk — kernels/firmware do some SEMINIT):
-   grep -rInE "SEMINIT|t6_semaphore_init" tt_metal/hw tt_metal/tt-llk --include=*.h
+   # in-tree ops — from the repo root
+   grep -rInE "t6_semaphore_(post|get|wait_on_max|wait_on_zero|init)|semaphore_(post|get|read)\(|TTI?_SEM(POST|GET|WAIT|INIT)|t6_mutex_(acquire|release)|TTI?_ATGETM|TTI?_ATRELM" \
+     tt_metal/tt-llk/tt_llk_* --include=*.h | grep -v /tests/
+   # init sites, incl. ABOVE tt-llk (kernels/firmware do some SEMINIT — e.g.
+   # brisc.cc initialize_tensix_semaphores()); ALSO from the repo root:
+   grep -rInE "SEMINIT|t6_semaphore_init|initialize_tensix_semaphores" tt_metal/hw tt_metal/tt-llk ttnn/cpp models --include=*.h --include=*.cc --include=*.cpp | grep -v /tests/
    ```
 2. **Per semaphore**, list every (thread, op, condition, file:line). Classify ops: `SEMINIT`(Max,Value) / `SEMPOST`(producer) / `SEMGET`(consumer) / `SEMWAIT`(max|zero) / RISC-MMIO post|get.
 3. **Run the rules**: init present + correct Max/Value (#1) → balance over all branches (#2) → directions (#3) → MMIO ordering (#4) → mutex balance (#5) → deadlock graph (#6).
@@ -90,7 +114,7 @@ WH/BH share this model. **Quasar** adds HW AutoTTSync affecting RISC↔Tensix or
 
 ## Verified non-bugs (don't re-flag)
 - `deepseek_compute_kernel_init` (`tt_metal/hw/inc/api/compute/experimental/deepseek_compute_kernel_hw_startup.h`): `MATH` inits `FPU_SFPU` (sem 0), `PACK` inits `SFPU_FPU` (= `UNPACK_MATH_DONE`, sem 6). Different semaphores **on purpose** — a two-semaphore bidirectional FPU↔SFPU handshake (documented in its `@note`), not a typo.
-- `UNPACK_TO_DEST` / `MATH_DONE` having no `SEMINIT` *inside tt-llk* is **not** a missing-init bug: BRISC firmware `c_tensix_core::initialize_tensix_semaphores()` boot-inits them (and `MATH_PACK`, `PACK_DONE`) to `Max=1, Value=0` before any TRISC kernel. In particular `MATH_DONE`'s `wait_on_max` is a real depth-1 gate (Max=1), not a no-op — do not assume a default `Max` of 15.
+- `UNPACK_TO_DEST` / `MATH_DONE` having no `SEMINIT` *inside tt-llk* is **not** a missing-init bug: BRISC firmware `c_tensix_core::initialize_tensix_semaphores()` boot-inits them (and `MATH_PACK`) to `Max=1, Value=0` before any TRISC kernel — plus `PACK_DONE` **on WH/BH only** (Quasar has no `PACK_DONE` semaphore; see line 65). In particular `MATH_DONE`'s `wait_on_max` is a real depth-1 gate (Max=1), not a no-op — do not assume a default `Max` of 15.
 - `FPU_SFPU` (sem 0) in the experimental `llk_unpack_AB_reduce_custom*.h` is **consumer-only** (`wait_on_zero`+`get`, "wait for blocked_matmul_and_pack to signal") — **not** a missing-producer deadlock. The matching `post` is issued by the compute-kernel layer (e.g. `sdpa.h`/`custom_tilize.h` MATH `post`, `llk_math_sdpa_custom_mm.h`, driven by `blocked_matmul_and_pack<>` in `sparse_sdpa_compute.cpp`); init via the deepseek startup (`Max=1`). Classic cross-layer handshake.
 
 ## Thoroughness (optional, full sweep)

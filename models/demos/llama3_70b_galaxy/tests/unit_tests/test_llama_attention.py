@@ -8,11 +8,11 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -62,11 +62,17 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize(
+    "generation_start_pos",
+    (0, 127),  # 127 exercises decode at the 127->128 KV-cache tile boundary
+    ids=("start_pos_0", "start_pos_127"),
+)
 def test_llama_attention_inference(
     max_seq_len,
     batch_size,
     paged_attention,
     page_params,
+    generation_start_pos,
     mesh_device,
     reset_seeds,
 ):
@@ -84,12 +90,12 @@ def test_llama_attention_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = Attention(args=model_args)
+    reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     seq_len = 1
 
-    generation_start_pos = 127
     generation_length = 1
     all_tests_pass = True
 
@@ -247,7 +253,9 @@ def test_llama_attention_inference(
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos_dram[0], :].unsqueeze(0)
 
-        reference_output = reference_model(pt_attention_input, current_pos_dram[0], freqs_cis_i, mask=None)
+        reference_output = reference_model(
+            pt_attention_input.to(ref_dtype), current_pos_dram[0], freqs_cis_i, mask=None
+        )
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
@@ -321,9 +329,13 @@ def test_llama_attention_inference(
                 ]
 
             for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
-                cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+                # The HF reference DynamicCache only stores the positions actually written by this
+                # test (appended order 0..generation_length-1), whereas the TT cache is a fixed
+                # buffer indexed by absolute position. Compare the written window in each so we can
+                # exercise a non-zero start position (e.g. the 127->128 tile boundary).
+                num_written = min(generation_length, model_args.max_seq_len - generation_start_pos)
+                cache_pt = cache_pt[:, :, 0:num_written, :]
+                cache_tt = cache_tt[:, :, generation_start_pos : generation_start_pos + num_written, :]
                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
                 if i == 0:
                     logger.info(f"K cache output: {output_pcc}")

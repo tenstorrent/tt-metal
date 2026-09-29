@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(dfb::x, dfb::x, dfb::y);
+    compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
     dfb_one_obj.wait_front(onetile);  // comes from the reader
 

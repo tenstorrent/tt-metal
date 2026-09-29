@@ -122,7 +122,7 @@ ProgramDescriptor create_single_tile_descriptor(
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
 
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -507,7 +507,7 @@ ProgramDescriptor create_multi_tile_descriptor(
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
 
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -789,7 +789,8 @@ ProgramDescriptor create_multi_tile_descriptor(
         (std::uint32_t)output_cb_index,
         (std::uint32_t)num_rows_per_core_group_1,
         (std::uint32_t)Wt,
-        (std::uint32_t)half_Wt};
+        (std::uint32_t)half_Wt,
+        (std::uint32_t)token_idx.has_value()};
     if (token_idx.has_value()) {
         compute_kernel_args_group_1.insert(
             compute_kernel_args_group_1.end(),
@@ -900,11 +901,11 @@ ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
     return create_multi_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
 
-void RotaryEmbeddingDeviceOperation::override_runtime_arguments(
+void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output,
+    const RotaryEmbeddingParams& operation_attributes,
+    const RotaryEmbeddingInputs& tensor_args,
+    Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Patch the cached program in place: only buffer addresses (never hashed) and the token_idx-derived
     // decode scalars (deliberately hash-excluded) can change across a cache hit.  Everything else is a

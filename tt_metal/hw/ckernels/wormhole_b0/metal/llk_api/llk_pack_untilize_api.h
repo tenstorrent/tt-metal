@@ -3,47 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
-#include "llk_param_structs.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/
-
-/**
- * Configure the packer hardware for an untilize output operand.
- *
- * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile
- * size are all derived from the output CB metadata associated with the operand id.
- * Callers no longer thread face geometry through the API, since per-CB face geometry
- * is recorded in the CB descriptor at program creation time. The relu configuration is
- * taken from the supplied pack params.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @tparam pack_mode           Packer program mode (e.g. Default, Untilize).
- * @param  pack_params         Pack parameters carrying the output operand and relu config.
- */
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
-
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile,
-        pack_params->relu_config.val);
-}
 
 /**
  * Initialize the packer for an untilize operation on the given output operand.
@@ -75,6 +42,22 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
+    if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
+        // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
+        SAN_HOOK(unsupported());
+    }
+
+    SAN_HOOK(init<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<OperationPackUntilize::Diagonal>(diagonal),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_row),
+        StateDiscard<std::uint32_t>(row_num_datums)));
+
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_dst_format[output_id], face_r_dim, num_faces);
 }
@@ -104,7 +87,7 @@ template <
     bool diagonal = false,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    uint32_t tile_dst_ct_offset = 0,
+    std::uint32_t tile_dst_ct_offset = 0,
     bool dense = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
@@ -124,10 +107,40 @@ inline void llk_pack_untilize(
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
+    if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
+        // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
+        SAN_HOOK(unsupported());
+    }
+
+    SAN_HOOK(execute<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<OperationPackUntilize::Diagonal>(diagonal),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_row),
+        StateDiscard<std::uint32_t>(row_num_datums),
+        StateDiscard<std::uint32_t>(block_rt_dim),
+        StateDiscard<std::uint32_t>(block_c_index),
+        StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
+
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
+}
+
+/**
+ * Uninitialize the packer untilize configuration.
+ *
+ * @param output Output circular buffer / operand index.
+ */
+inline void llk_pack_untilize_uninit([[maybe_unused]] std::uint32_t output) {
+    SAN_HOOK(uninit<OperationPackUntilize>());
+
+    _llk_pack_untilize_uninit_();
 }

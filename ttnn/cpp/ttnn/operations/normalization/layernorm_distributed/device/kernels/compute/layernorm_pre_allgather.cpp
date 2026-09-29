@@ -6,7 +6,7 @@
  * This kernel computes larnorm statistics.
  * For layernorm it computes E(x**2) and E(x) and returns them as a two tile wide output tensor containing E(x**2) and
  * E(x) in the left most columns per tile. For rmsnorm it computes E(x**2) and returns it as a one tile wide output
- * tensor containing E(x**2) in the left most column per tile.
+ * tensor containing E(x**2) in the left most column.
  */
 
 #include <cstdint>
@@ -15,94 +15,112 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 
-namespace pre_add = norm::kernel_util::compute::pre_add;
+namespace ckl = compute_kernel_lib;
+
+// The statistics pass reads either the raw input or the fused a + b result, depending on whether a
+// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
+// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
+#ifdef FUSE_PRE_ADD
+constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
+#else
+constexpr auto dfb_inp_id = dfb::in0;  // just a
+#endif
 
 void kernel_main() {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    const auto NCHt = get_arg(args::NCHt);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto blk = get_arg(args::blk);
+    constexpr bool unpack_fp32_active = get_arg(args::unpack_fp32_active) != 0;
+    // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
+    constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
+    constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    DataflowBuffer dfb_reduce(dfb::reduce);
+    constexpr auto in0_input =
+        ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+#ifdef FUSE_PRE_ADD
+    constexpr auto res_input =
+        ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+#endif
+    constexpr auto input_squared =
+        ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
 
-    constexpr uint32_t onetile = 1;
+#ifdef FUSE_PRE_ADD
+    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
+#else
+    compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
+#endif
 
-    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_reduce_id = tt::CBIndex::c_1;
-
-    constexpr uint32_t dfb_out = tt::CBIndex::c_14;
-
-    constexpr uint32_t dfb_x2_id = tt::CBIndex::c_6;   // x**2
-    constexpr uint32_t dfb_res_id = tt::CBIndex::c_5;  // residual b (unused when !FUSE_PRE_ADD)
-    constexpr uint32_t dfb_inp_id = FUSE_PRE_ADD ? tt::CBIndex::c_3 : dfb_in0_id;  // fused a + b, or just a
-
-    if constexpr (FUSE_PRE_ADD) {
-        binary_op_init_common(dfb_in0_id, dfb_res_id, dfb_inp_id);
-    } else {
-        binary_op_init_common(dfb_inp_id, dfb_reduce_id, dfb_x2_id);
-    }
-
-    DataflowBuffer dfb_in0(dfb_in0_id);
-    DataflowBuffer dfb_res(dfb_res_id);
-    DataflowBuffer dfb_inp(dfb_inp_id);
-    DataflowBuffer dfb_x2(dfb_x2_id);
-    DataflowBuffer dfb_reduce(dfb_reduce_id);
+    constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
-        pre_add::one_row<FUSE_PRE_ADD>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
-
-        /*
-         * x**2
-         */
-        reconfig_data_format(dfb_inp_id, dfb_inp_id);
-        pack_reconfig_data_format(dfb_x2_id);
-        mul_tiles_init(dfb_inp_id, dfb_inp_id);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_inp.wait_front(wt + blk);  // cumulative wait
-
-            tile_regs_acquire();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
-            }
-            tile_regs_commit();
-
-            dfb_x2.reserve_back(blk);
-
-            tile_regs_wait();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                pack_tile(wtr, dfb_x2_id, wt + wtr);
-            }
-            tile_regs_release();
-
-            dfb_x2.push_back(blk);
+        // Fuse pre-add: dfb_inp_id = dfb::in0 + dfb::res (absent entirely when there is no residual)
+#ifdef FUSE_PRE_ADD
+        if constexpr (unpack_fp32_active) {
+            ckl::binary_sfpu<
+                ckl::AddBinary<>,
+                in0_input,
+                res_input,
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape);
+        } else {
+            ckl::add<
+                in0_input,
+                res_input,
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                squaring_shape);
         }
+#endif
+
+        if constexpr (unpack_fp32_active) {
+            ckl::unary<
+                ckl::Square<>,
+                input_squared,
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
+        } else {
+            ckl::square<
+                input_squared,
+                ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
+        }
+
         /*
          * sum(x**2)
          */
-
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         // Bulk mode for optimal performance
         compute_kernel_lib::reduce<
-            PoolType::AVG,
+            reduce_type,
             ReduceDim::REDUCE_ROW,
-            dfb_x2_id,
-            dfb_reduce_id,
-            dfb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            dfb::x2,
+            dfb::reduce,
+            dfb::out,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         /*
          * sum(x)
          */
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         // Bulk mode for optimal performance
         compute_kernel_lib::reduce<
-            PoolType::AVG,
+            reduce_type,
             ReduceDim::REDUCE_ROW,
             dfb_inp_id,
-            dfb_reduce_id,
-            dfb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            dfb::reduce,
+            dfb::out,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
     }
     dfb_reduce.pop_front(1);
 }

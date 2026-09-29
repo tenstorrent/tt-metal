@@ -6,23 +6,21 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr auto output_args = TensorAccessorArgs<0>();
-
-    ArgFetcher arg_fetcher;
-    uint32_t output_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    uint32_t start_id = arg_fetcher.get_next_arg_val<uint32_t>();
-    uint32_t num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    // The output base address is now supplied by the tensor binding.
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_output_tiles = get_arg(args::num_output_tiles);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_out = 16;
+    constexpr uint32_t cb_id_out = dfb::out0;
 
-    const auto s = TensorAccessor(output_args, output_addr);
+    const auto s = TensorAccessor(tensor::output);
 
     Noc noc;
     DataflowBuffer dfb_out(cb_id_out);
-    const auto out_tile_bytes = get_tile_size(cb_id_out);
+    const auto out_tile_bytes = dfb_out.get_tile_size();
 
     uint32_t end_id = start_id + num_output_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {

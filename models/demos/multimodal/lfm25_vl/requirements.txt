@@ -1,0 +1,4 @@
+# LFM2-VL (Lfm2VlForConditionalGeneration) requires recent transformers.
+transformers>=5.1.0
+pillow
+pydantic

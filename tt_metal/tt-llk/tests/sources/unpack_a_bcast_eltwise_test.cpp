@@ -39,6 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_bcastA_B_(L1_ADDRESS(params.buffer_A[srca_index]), L1_ADDRESS(params.buffer_B[srcb_index]), params.SRCA_REUSE_COUNT);
         }
     }
+    _llk_unpack_bcastA_B_uninit_(formats.unpack_A_dst);
 }
 
 #endif

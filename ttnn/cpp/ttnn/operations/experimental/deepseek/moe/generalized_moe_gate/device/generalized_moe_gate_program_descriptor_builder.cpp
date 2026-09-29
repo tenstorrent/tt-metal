@@ -138,6 +138,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
         {"moe_gate_topk", operation_attrs.topk},
         {"moe_gate_softmax", operation_attrs.output_softmax ? 1u : 0u},
+        {"moe_gate_ungrouped_top8", operation_attrs.grouped ? 0u : 1u},
         {"moe_gate_num_blocks", num_blocks},
         {"moe_gate_run_scores_cb", run_scores_cb},
         {"moe_gate_run_idx_cb", run_idx_cb},
@@ -153,13 +154,6 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // The multi-block combine parks block0's run in DEST and reads it back in block1's SEPARATE acquire;
     // that only survives if acquire does not swap banks.
     compute_config.dst_full_sync_en = true;
-
-    // Path-select for the unified kernel, injected as a compile DEFINE (NOT a named CT arg): the compute API
-    // picks ungrouped-vs-grouped with `#if GMG_UNGROUPED_TOP8` at PREPROCESS time, before CT-arg constexprs
-    // exist. =1 → ungrouped global top-k; =0 → DeepSeek grouped gate. Set on ALL THREE kernels: the single
-    // .cpp is compiled for every RISC and includes the compute API header, whose `#error` guard requires the
-    // macro to be defined (so a missing define is a hard compile error, never a silent grouped fallthrough).
-    const KernelDescriptor::Defines gmg_defines = {{"GMG_UNGROUPED_TOP8", operation_attrs.grouped ? "0" : "1"}};
 
     KernelDescriptor reader{
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),
@@ -194,10 +188,6 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .named_compile_time_args = std::move(trisc_named),
         .config = compute_config,
     };
-
-    reader.defines = gmg_defines;
-    writer.defines = gmg_defines;
-    compute_k.defines = gmg_defines;
 
     tt::tt_metal::ProgramDescriptor program_desc;
     program_desc.kernels.reserve(3);

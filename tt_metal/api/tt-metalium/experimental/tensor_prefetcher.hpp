@@ -26,6 +26,7 @@ class MeshTensor;
 
 namespace distributed {
 class MeshDevice;
+class MeshCommandQueue;
 class MeshCoordinateRangeSet;
 }  // namespace distributed
 
@@ -33,14 +34,43 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-// Reserved for future prefetcher-wide options.
-struct TensorPrefetcherConfig {};
+struct BlackholeTensorPrefetcherConfig {
+    // GDDR Memory Controller Multi-Port Front End (MPFE) weighted round-robin service levels.
+    // Higher relative values receive more arbitration service; valid weights are 0 through 7.
+    //
+    // The controller register names use slots P1/P2/P3, which correspond to the Blackhole
+    // DRAM tile names D0/D1/D2, respectively. These config fields name traffic roles rather
+    // than fixed D tiles because each DRAM bank's SoC descriptor assigns those roles:
+    //   - free_sender_mpfe_weight: the unreserved D tile selected for the first prefetch sender.
+    //   - noc1_sender_mpfe_weight: the D tile named by worker_endpoint[1].
+    //   - ordinary_mpfe_weight: the D tile named by worker_endpoint[0].
+    uint32_t free_sender_mpfe_weight = 0;
+    uint32_t noc1_sender_mpfe_weight = 1;
+    uint32_t ordinary_mpfe_weight = 5;
 
-// Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
-// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0 and
-// either no harvested DRAM channels or a single device). When this returns false,
-// StartTensorPrefetcher would TT_FATAL, so callers (e.g. tests) can use this
-// to skip rather than fail.
+    // Static mode holds the active L/M/H tuple for the prefetcher's lifetime.
+    // Dynamic mode idles both prefetch senders at H and independently lowers each
+    // sender to its active weight only while that sender processes a request.
+    bool dynamic_mpfe_weighting = false;
+
+    // The benchmark tuner runs unchanged model commands by setting
+    // TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE=1 plus per-field environment
+    // overrides. While enabled, those benchmark-only values take precedence over
+    // this config and the resolved policy is logged.
+};
+
+// Architectures apply their default config when arch specific configs are unset.
+struct TensorPrefetcherConfig {
+    std::optional<BlackholeTensorPrefetcherConfig> blackhole = std::nullopt;
+};
+
+// Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
+//   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and
+//   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
+//     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
+//     that DRISC's NIUs in stream mode, so the two cannot coexist.
+// When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
+// use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
@@ -79,7 +109,7 @@ struct TensorPrefetcherInput {
     // ring matmul, rotation[r] = r reproduces the natural topology order. The matmul must be
     // built to consume in the matching order, else it deadlocks. The host is responsible for
     // supplying a rotation consistent with the consumer's ring topology.
-    std::vector<uint32_t> rotation = {};
+    std::vector<uint32_t> rotation;
 };
 
 // Build per-device Programs (two DRISC kernels per DRAM bank), allocate
@@ -98,7 +128,7 @@ struct TensorPrefetcherInput {
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
-//     >= 19.12.0.0 and either no harvested DRAM channels or a single device).
+//     >= 19.12.0.0).
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
@@ -118,12 +148,13 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //   - Per-tensor `rotation` (on each TensorPrefetcherInput) is documented on that struct; a
 //     non-empty rotation enables streaming and sets the per-receiver delivery order, the only
 //     knob that varies delivery order within a request.
-//   - `cq_id` is the command queue on which a trace may be recording. When that
-//     CQ is mid trace-capture, the request is captured into the trace instead of
-//     being sent immediately, and is (re)sent on every replay of that trace
-//     (ReplayTrace / ttnn.execute_trace). When the CQ is not capturing, the
-//     request is sent immediately. Defaults (std::nullopt) to the current/default
-//     command queue.
+//   - `trace_capture_cq` is the command queue on which a trace may be recording, and
+//     must belong to `mesh_device`. When it is non-null and mid trace-capture, the
+//     request is captured into the trace instead of being sent, and is (re)sent on
+//     every replay of that trace (ReplayTrace / ttnn.execute_trace). Otherwise — a
+//     non-capturing queue, or null (the default) — the request is sent immediately,
+//     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
+//     to opt into capture on the calling thread's current queue.
 //
 // The caller is responsible for keeping the tensors in `input_tensors` and
 // `gcb` alive until Stop returns.
@@ -132,25 +163,23 @@ void QueueTensorPrefetcherRequest(
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
-    std::optional<uint8_t> cq_id = std::nullopt);
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
-// Fence the prefetcher against command queue `cq_id`: every prefetch request queued
-// after this call waits until all work previously enqueued on `cq_id` has completed
+// Fence the prefetcher against command queue `cq`: every prefetch request queued
+// after this call waits until all work previously enqueued on `cq` has completed
 // on device before it reads DRAM. Use this to guarantee that data written over
-// `cq_id` (e.g. the EnqueueWriteBuffer that populates the weights) has landed before
+// `cq` (e.g. the EnqueueWriteBuffer that populates the weights) has landed before
 // the prefetcher streams it.
 //
 // Call this synchronously on the host thread that issued the data writes — after
 // those writes, and before the QueueTensorPrefetcherRequest that consumes them.
 //
-//   - `cq_id` selects the command queue to fence against.
+//   - The prefetcher fenced is the one active on `cq.device()`.
 //   - `device_subset` defaults to the full mesh when std::nullopt.
 //
-// Preconditions (TT_FATAL): a prefetcher is active on this mesh device.
+// Preconditions (TT_FATAL): a prefetcher is active on `cq`'s mesh device.
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
-    uint8_t cq_id,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
+    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no

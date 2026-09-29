@@ -31,7 +31,7 @@ echo "CCACHE_SHA256=$($SHA_CMD "$TMPDIR/ccache.tar.xz" | cut -d' ' -f1)"
 echo ""
 
 # mold
-MOLD_VERSION="${MOLD_VERSION:-2.40.4}"
+MOLD_VERSION="${MOLD_VERSION:-2.42.0}"
 echo "Downloading mold ${MOLD_VERSION}..."
 curl -fsSL -o "$TMPDIR/mold.tar.gz" \
     "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
@@ -52,6 +52,16 @@ echo "Downloading ClangBuildAnalyzer ${CLANGBUILDANALYZER_VERSION}..."
 curl -fsSL -o "$TMPDIR/clangbuildanalyzer.tar.gz" \
     "https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v${CLANGBUILDANALYZER_VERSION}.tar.gz"
 echo "CLANGBUILDANALYZER_SHA256=$($SHA_CMD "$TMPDIR/clangbuildanalyzer.tar.gz" | cut -d' ' -f1)"
+echo ""
+
+# include-what-you-use. The version is half of a pin: IWYU_LLVM_MAJOR in
+# Dockerfile.tools has to move with it (0.24 is the clang-20 release), and it
+# feeds the tool tag hash in compute-tool-tags.sh, so bump the two together.
+IWYU_VERSION="${IWYU_VERSION:-0.24}"
+echo "Downloading include-what-you-use ${IWYU_VERSION}..."
+curl -fsSL -o "$TMPDIR/iwyu.tar.gz" \
+    "https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/${IWYU_VERSION}.tar.gz"
+echo "IWYU_SHA256=$($SHA_CMD "$TMPDIR/iwyu.tar.gz" | cut -d' ' -f1)"
 echo ""
 
 # GDB

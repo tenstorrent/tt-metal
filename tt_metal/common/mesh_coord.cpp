@@ -8,6 +8,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/format.h>
 #include <mesh_coord.hpp>
+#include "distributed/mesh_coord_utils.hpp"
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -40,6 +41,7 @@ std::vector<size_t> find_diff_dimensions(const MeshCoordinateRange& a, const Mes
     TT_ASSERT(a.dims() == b.dims(), "Cannot compare ranges with different dimensions: {} != {}", a.dims(), b.dims());
 
     std::vector<size_t> diff_dims;
+    diff_dims.reserve(a.dims());
     for (size_t i = 0; i < a.dims(); ++i) {
         if (a.start_coord()[i] != b.start_coord()[i] || a.end_coord()[i] != b.end_coord()[i]) {
             diff_dims.push_back(i);
@@ -634,6 +636,11 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
 
 std::vector<MeshCoordinate> MeshCoordinateRangeSet::coords() const {
     std::vector<MeshCoordinate> coords;
+    size_t num_coords = 0;
+    for (const auto& range : ranges_) {
+        num_coords += range.shape().mesh_size();
+    }
+    coords.reserve(num_coords);
     for (const auto& range : ranges_) {
         for (const auto& coord : range) {
             coords.push_back(coord);

@@ -9,7 +9,7 @@
 //                      must equal inner_count * outer_count (4 * 4 = 16 for the default config)
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
@@ -52,8 +52,7 @@ void kernel_main() {
         uint64_t dest_addr = peek_dest_addrgen_0();
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
-        DPRINT << "  Source address: " << HEX() << (uint32_t)src_addr << " Destination address: " << HEX()
-               << (uint32_t)dest_addr << ENDL();
+        DEVICE_PRINT("  Source address: 0x{:x} Destination address: 0x{:x}\n", src_addr, dest_addr);
     }
 }
 // /* Real loop with noc */

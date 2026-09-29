@@ -27,6 +27,7 @@ class DispatchSettings {
 public:
     explicit DispatchSettings(
         uint32_t num_hw_cqs,
+        uint32_t num_cqs_per_core,
         const CoreType& core_type,
         bool is_galaxy_cluster,
         bool are_cqs_dram_backed,
@@ -110,8 +111,6 @@ public:
 
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
 
-    static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
-
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
     // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
@@ -137,8 +136,7 @@ public:
     uint32_t num_hw_cqs_{0};
 
     // Rd/Wr/Msg pointer sizes
-    uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
-    uint32_t prefetch_q_pcie_rd_ptr_size_{};  // configured with alignment
+    uint32_t prefetch_q_rd_ptr_size_{0};      // configured with alignment
     uint32_t dispatch_s_sync_sem_{};          // configured with alignment
     uint32_t other_ptrs_size{};               // configured with alignment
 
@@ -164,7 +162,11 @@ public:
 private:
     void init_worker_defaults(
         uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment);
+    void init_dispatch_defaults(
+        uint32_t num_hw_cqs, uint32_t num_cqs_per_core, bool are_cqs_dram_backed, uint32_t l1_alignment);
     void init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment);
+    uint32_t get_prefetch_q_entries(
+        CoreType core_type, uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed);
 };
 
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.

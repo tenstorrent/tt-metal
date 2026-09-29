@@ -1,0 +1,40 @@
+# MiniMax-M3 — 2-galaxy 2-stage loopback driver manifest: prefill slots 0,1 (2 chunks each) through the
+# 2-galaxy pipeline, then migrate 0->2 and 1->3 through the local migration endpoint (loopback).
+#
+# Pairs with m3_binding_loopback_migration_2galaxy_2rank.yaml. Run with migration_driver on rank 0's
+# host; its read-backs cover only the layers resident on that host — verify the other host's half there.
+# client_dir is deliberately absent — export PREFILL_MIGRATION_CLIENT_DIR (it is per-checkout).
+
+model:
+  variant: minimax_m3
+  num_layers: 60
+  max_seq_len: 10240
+  chunk_size: 5120
+
+transport:
+  sp: 8                             # per-stage mesh is a full [8,4] galaxy
+  tp: 4
+  h2d_service_id: m3_prefill      # [MATCH RUNNER]
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2                    # src slots 0,1 (the runner's table has 4 slots, so 2,3 are free dsts)
+  chunks: "2"
+  max_requests: 2                 # one resident request per slot
+  interleave: round_robin
+  check_pcc: true                 # SOURCE-slot golden PCC; --verify-migration covers the destinations
+
+migration:
+  dest_endpoint_id: 1             # == our own endpoint id => loopback
+  dst_slot_offset: 2
+  timeout_ms: 3600000
+  done_file: /tmp/m3_migration_done.sentinel   # driver-side only; no runner counterpart
+  table_path: /data/philei/tmp/m3_kv_chunk_table_pp.pb   # [MATCH RUNNER]
+  device_map_path: /tmp/m3_kv_device_map.json            # [MATCH RUNNER] reader merges the _r*.json siblings
+  cmd_queue: /mig_ep1_cmd                      # [MATCH ENDPOINT]
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  M3_INDEX_CACHE_BF16: "1"        # [MATCH RUNNER]
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

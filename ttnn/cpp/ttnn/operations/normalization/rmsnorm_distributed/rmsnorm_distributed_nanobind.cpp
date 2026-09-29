@@ -45,6 +45,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
                 use_2d_core_grid (bool, optional): the 2D core grid. Defaults to None.
+                fast_and_approximate_mode (bool, optional): FLOAT32 only. ``False`` (default) uses the accurate SFPU path (full float32 accumulation); ``True`` uses the faster FPU path (inputs truncated to TF32). The accurate path is unavailable on Quasar and falls back to the FPU there. No effect for non-FLOAT32 inputs. Defaults to False.
 
               Returns:
                 ttnn.Tensor: the output tensor.
@@ -83,7 +84,8 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("use_2d_core_grid") = nb::none());
+        nb::arg("use_2d_core_grid") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {

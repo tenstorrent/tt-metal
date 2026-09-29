@@ -776,8 +776,20 @@ def run(
 
                         try:
                             apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
-                        except Exception:
-                            pass  # Intentionally ignored: topology application is best-effort, fallback to default
+                        except Exception as _topo_exc:
+                            # Was silently ignored. This call stamps the topology the gather interprets its mesh
+                            # axes by, so a failure here changes what the op does -- and made itself
+                            # invisible. Run 32268063132 failed 24 all_gather vectors on j09glx02, ALL with
+                            # cluster_axis=1 (axis 0: 0 of 73 failed) at Max ATOL 0.0078125 / PCC 0.99999,
+                            # i.e. a ~1-LSB bf16 difference on an op that only moves data. All 24 carried a
+                            # placement -- but so did all 174 that passed, so whether this call succeeded on
+                            # one set and not the other could not be determined from the logs at all.
+                            logger.warning(
+                                f"SWEEPS: all_gather_async could not apply the traced topology "
+                                f"(placement={input_a_tensor_placement}, mesh={mesh_shape}): "
+                                f"{type(_topo_exc).__name__}: {_topo_exc}. The gather runs with the "
+                                f"default topology, which may not match the traced one."
+                            )
 
             else:
                 # Use _get_tensors helper for generality format
@@ -974,8 +986,20 @@ def run(
 
                             try:
                                 apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
-                            except Exception:
-                                pass  # Intentionally ignored: topology application is best-effort, fallback to default
+                            except Exception as _topo_exc:
+                                # Was silently ignored. This call stamps the topology the gather interprets its mesh
+                                # axes by, so a failure here changes what the op does -- and made itself
+                                # invisible. Run 32268063132 failed 24 all_gather vectors on j09glx02, ALL with
+                                # cluster_axis=1 (axis 0: 0 of 73 failed) at Max ATOL 0.0078125 / PCC 0.99999,
+                                # i.e. a ~1-LSB bf16 difference on an op that only moves data. All 24 carried a
+                                # placement -- but so did all 174 that passed, so whether this call succeeded on
+                                # one set and not the other could not be determined from the logs at all.
+                                logger.warning(
+                                    f"SWEEPS: all_gather_async could not apply the traced topology "
+                                    f"(placement={input_a_tensor_placement}, mesh={mesh_shape}): "
+                                    f"{type(_topo_exc).__name__}: {_topo_exc}. The gather runs with the "
+                                    f"default topology, which may not match the traced one."
+                                )
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         _ag_kwargs = dict(
@@ -1002,8 +1026,20 @@ def run(
 
                             try:
                                 apply_tensor_placement_topology(tt_input, input_a_tensor_placement, mesh_shape)
-                            except Exception:
-                                pass  # Intentionally ignored: topology application is best-effort, fallback to default
+                            except Exception as _topo_exc:
+                                # Was silently ignored. This call stamps the topology the gather interprets its mesh
+                                # axes by, so a failure here changes what the op does -- and made itself
+                                # invisible. Run 32268063132 failed 24 all_gather vectors on j09glx02, ALL with
+                                # cluster_axis=1 (axis 0: 0 of 73 failed) at Max ATOL 0.0078125 / PCC 0.99999,
+                                # i.e. a ~1-LSB bf16 difference on an op that only moves data. All 24 carried a
+                                # placement -- but so did all 174 that passed, so whether this call succeeded on
+                                # one set and not the other could not be determined from the logs at all.
+                                logger.warning(
+                                    f"SWEEPS: all_gather_async could not apply the traced topology "
+                                    f"(placement={input_a_tensor_placement}, mesh={mesh_shape}): "
+                                    f"{type(_topo_exc).__name__}: {_topo_exc}. The gather runs with the "
+                                    f"default topology, which may not match the traced one."
+                                )
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
                             persistent_output_buffer,

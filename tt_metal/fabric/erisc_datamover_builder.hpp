@@ -297,6 +297,10 @@ struct FabricEriscDatamoverConfig {
         {};
 
     static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
+    // sender_channels_buffer_index_semaphore_address is the field_size-strided block allocated per
+    // sender channel; the producer reads and writes it as a whole SenderChannelProducerCursor, so the
+    // struct *is* the block -- assert equality, not just that it fits.
+    static_assert(sizeof(tt::tt_fabric::SenderChannelProducerCursor) == field_size);
 
     // ----------- Receiver Channels
     // persistent mode field

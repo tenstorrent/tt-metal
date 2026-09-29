@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -45,21 +46,31 @@ void kernel_main() {
 
     cb_untilized_sin.wait_front(Wt);
     cb_untilized_sin_sync.reserve_back(Wt);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-    uint64_t sin_l1_read_addr = get_noc_addr(cb_untilized_sin.get_read_ptr()) + cos_sin_offset;
+    uint32_t sin_l1_read_addr = cb_untilized_sin.get_read_ptr() + cos_sin_offset;
     uint32_t sin_l1_write_addr = cb_untilized_sin.get_read_ptr();
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-    noc_async_read(sin_l1_read_addr, sin_l1_write_addr, Wbytes);
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(sin_l1_write_addr),
+        Wbytes,
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+         .addr = sin_l1_read_addr},
+        {});
     noc.async_read_barrier();
     cb_untilized_sin_sync.push_back(Wt);
 
     cb_untilized_cos.wait_front(Wt);
     cb_untilized_cos_sync.reserve_back(Wt);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-    uint64_t cos_l1_read_addr = get_noc_addr(cb_untilized_cos.get_read_ptr()) + cos_sin_offset;
+    uint32_t cos_l1_read_addr = cb_untilized_cos.get_read_ptr() + cos_sin_offset;
     uint32_t cos_l1_write_addr = cb_untilized_cos.get_read_ptr();
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-    noc_async_read(cos_l1_read_addr, cos_l1_write_addr, Wbytes);
+    noc.async_read(
+        UnicastEndpoint{},
+        CoreLocalMem<uint32_t>(cos_l1_write_addr),
+        Wbytes,
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+         .addr = cos_l1_read_addr},
+        {});
     noc.async_read_barrier();
     cb_untilized_cos_sync.push_back(Wt);
 #endif

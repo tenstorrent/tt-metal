@@ -520,7 +520,7 @@ class TTNNPatchEmbedding(TTNNModule):
         stride_h = patch_size
         stride_w = 1
         pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-        folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+        folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)  # 1568, 1024
         ttnn.deallocate(pixel_values)
         folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Convert back to interleaved or otherwise to_layout will fail

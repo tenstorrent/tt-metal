@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -41,8 +42,7 @@ void kernel_main() {
 
     cb_input.reserve_back(num_rows * Wt);
     cb_input.push_back(num_rows * Wt);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-    uint64_t input_l1_read_addr = get_noc_addr(cb_input.get_read_ptr());
+    uint32_t input_l1_read_addr = cb_input.get_read_ptr();
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
     const auto s1 = TensorAccessor(cos_args, cos_addr);
@@ -85,10 +85,22 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; ++i) {
         cb_rotated_input.reserve_back(Wt);
         uint32_t rotated_input_l1_write_addr = cb_rotated_input.get_write_ptr();
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-        noc_async_read(input_l1_read_addr + half_Wt_size, rotated_input_l1_write_addr, half_Wt_size);
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
-        noc_async_read(input_l1_read_addr, rotated_input_l1_write_addr + half_Wt_size, half_Wt_size);
+        noc.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(rotated_input_l1_write_addr),
+            half_Wt_size,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = input_l1_read_addr + half_Wt_size},
+            {});
+        noc.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(rotated_input_l1_write_addr + half_Wt_size),
+            half_Wt_size,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = input_l1_read_addr},
+            {});
         input_l1_read_addr += Wt_size;
         noc.async_read_barrier();
         cb_rotated_input.push_back(Wt);

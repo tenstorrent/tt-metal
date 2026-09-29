@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string_view>
 #include "l1_banking_allocator.hpp"
 
 #include <allocator.hpp>
@@ -66,6 +68,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     // Define the bank assignment here.
     std::vector<uint32_t> shuffled_bank_id = {};
+    shuffled_bank_id.reserve(num_l1_banks);
     if (not config_->l1_bank_remap.empty()) {
         TT_ASSERT(
             num_l1_banks == config_->l1_bank_remap.size(),
@@ -219,9 +222,20 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+    // The quasar_aether_2x3 map's DRAM endpoints are addressable within a 64 MiB
+    // local field while the DRAM view is larger. Clamp the bank size so top-down
+    // allocations (kernel binaries) never compose an out-of-window operand.
+    uint64_t att_dram_view_size = soc_desc.dram_view_size;
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        const char* att_map = std::getenv("TT_METAL_NOC_ATT");
+        if (att_map != nullptr && std::string_view(att_map) == "quasar_aether_2x3") {
+            constexpr uint64_t k_aether_dram_window_span = 1ull << 26;
+            att_dram_view_size = std::min<uint64_t>(att_dram_view_size, k_aether_dram_window_span);
+        }
+    }
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
-         .dram_bank_size = soc_desc.dram_view_size,
+         .dram_bank_size = att_dram_view_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),

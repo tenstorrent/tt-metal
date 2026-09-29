@@ -12,7 +12,7 @@
 void kernel_main() {
     constexpr int onetile = 1;
     auto per_core_block_cnt = get_arg(args::per_core_block_cnt);
-    binary_op_init_common(dfb::in0, dfb::in1, dfb::out);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     DataflowBuffer dfb_c0(dfb::in0);
     DataflowBuffer dfb_c1(dfb::in1);
@@ -20,13 +20,13 @@ void kernel_main() {
     DataflowBuffer dfb_c24(dfb::im0);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        bool last_out = block == (per_core_block_cnt - 1);
+        const bool last_out = block == (per_core_block_cnt - 1);
 
         dfb_c0.wait_front(onetile);
         dfb_c1.wait_front(onetile);
 
         tile_regs_acquire();
-        mul_tiles_init(dfb::in0, dfb::in1);
+        mul_init(dfb::in0, dfb::in1);
         mul_tiles(dfb::in0, dfb::in1, 0, 0, 0);
         tile_regs_commit();
 

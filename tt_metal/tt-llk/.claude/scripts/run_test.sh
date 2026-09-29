@@ -471,8 +471,11 @@ _collect_tests() {
   local collection_log="${EVIDENCE_DIR}/collection.log"
   rm -f "$COLLECTION_JSON" "$collection_log"
   local rc
-  if grep -Fq -- '"--codegen-collection-json"' \
-      "${WORKTREE}/tests/python_tests/conftest.py"; then
+  # The harness hooks moved from conftest.py into helpers/llk_pytest_plugin.py;
+  # probe both so either layout keeps the structured collection path.
+  if grep -Fqs -- '"--codegen-collection-json"' \
+      "${WORKTREE}/tests/python_tests/conftest.py" \
+      "${WORKTREE}/tests/python_tests/helpers/llk_pytest_plugin.py"; then
     ( CHIP_ARCH="$ARCH" pytest --collect-only -q \
         --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" ) \
         >"$collection_log" 2>&1
@@ -785,8 +788,12 @@ _do_host() {
   [[ -z "$K_FILTER" ]] || identity+=(--k "$K_FILTER")
   python3 "$RUN_JSON_WRITER" host-input-manifest --output "$HOST_INPUT_MANIFEST" \
     --host-source-sha256 "$SOURCE_TREE_SHA256" "${identity[@]}" || return 3
-  local host_plugin host_bootstrap
-  host_plugin="$(dirname "$(dirname "$(dirname "$(realpath "$RUN_JSON_WRITER")")")")/tests/python_tests/conftest.py"
+  local harness_tests host_plugin host_bootstrap
+  harness_tests="$(dirname "$(dirname "$(dirname "$(realpath "$RUN_JSON_WRITER")")")")/tests/python_tests"
+  # The hooks live in the plugin module; conftest.py is only a shim that would
+  # import helpers from the tree under test. Older harnesses kept them in conftest.
+  host_plugin="${harness_tests}/helpers/llk_pytest_plugin.py"
+  [[ -f "$host_plugin" ]] || host_plugin="${harness_tests}/conftest.py"
   host_bootstrap='import importlib.util,sys,pytest
 path=sys.argv.pop(1)
 spec=importlib.util.spec_from_file_location("_codegen_host_harness",path)

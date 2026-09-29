@@ -139,6 +139,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     uint32_t chunk_size,
     bool use_qk_l2norm,
     bool output_head_major,
+    bool use_mcast,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& eye,
@@ -321,7 +322,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             C,
             output_final_state,
             out_mem,
-            kernel_cfg);
+            kernel_cfg,
+            use_mcast);
         o_c = scan[0];
         final_state = scan[1];
         // DEBUG: QWEN_GDN_DUMP=<idx> routes prep[idx] out through the o path (idx 2 = q_decay,

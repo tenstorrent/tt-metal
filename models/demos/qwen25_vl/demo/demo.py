@@ -80,6 +80,14 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    # NOTE: no warm-ttnn-cache skip here -- this fork always loads the real weights.
+    # The skip was gated on text_only, but every caller builds the vision tower, so the branch was
+    # unreachable and the model never actually saved anything. Enabling it needs the multimodal
+    # weight set identified first: the "a placeholder is safe because the vision path uses a
+    # separate live HF reference" reasoning was disproved on qwen36, where the same comment held and
+    # vision_demo.py still generated token soup from a dataless state_dict (CI run 31503881448) --
+    # the multimodal splice reads weights the placeholder cannot supply. Until the equivalent weight
+    # here is found and sidecarred (as gemma3-vision does), cold-load. (#45400 review)
     state_dict = tt_model_args.load_state_dict()
 
     paged_attention_config = (
@@ -314,7 +322,11 @@ def test_demo(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -740,9 +752,12 @@ def test_demo(
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * batch_size
-    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
+    # total_inference_decode_time is the last batch's decode time, so use that batch's token count.
+    decode_tok_s_user = (
+        num_tokens_generated_decode[batch_idx] - 1
+    ) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
+        (num_tokens_generated_decode[batch_idx] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
 
     vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
@@ -881,7 +896,7 @@ def test_demo(
             batch_size=batch_size,
             config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
-            output_sequence_length=num_tokens_generated_decode[0],
+            output_sequence_length=num_tokens_generated_decode[batch_idx],
         )
         if targets:
             verify_perf(

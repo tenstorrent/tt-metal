@@ -20,8 +20,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Return True if the Tensor prefetcher (DRISC) is supported on `mesh_device`,
-            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0
-            and either no harvested DRAM channels or a single device). When this returns False,
+            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
+            When this returns False,
             start_tensor_prefetcher would raise, so callers can use this to skip instead.
 
             Args:
@@ -46,14 +46,38 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             request), so a single prefetcher can serve GCBs with different num_receivers
             values.
 
+            On Blackhole, the GDDR Memory Controller Multi-Port Front End (MPFE) uses
+            weighted round-robin arbitration. Weights are in [0, 7], and higher relative
+            values receive more service. The hardware slots P1/P2/P3 correspond to DRAM
+            tiles D0/D1/D2; the arguments below name traffic roles, which Metal maps to
+            each bank's D tiles using its worker_endpoint assignment.
+
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
+                free_sender_mpfe_weight (Optional[int]): active free-sender MPFE weight.
+                    None uses the Metal default.
+                noc1_sender_mpfe_weight (Optional[int]): active NOC1-sender MPFE weight.
+                    None uses the Metal default.
+                ordinary_mpfe_weight (Optional[int]): ordinary-operation MPFE weight.
+                    None uses the Metal default.
+                dynamic_mpfe_weighting (Optional[bool]): when True, idle both prefetch senders
+                    at the ordinary weight and lower each private sender slot only while it
+                    handles a request. None uses the Metal default.
+
+            The benchmark tuning script enables TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE
+            and supplies per-field environment overrides. Those benchmark-only values take
+            precedence over these keyword arguments while the enable variable is set.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("free_sender_mpfe_weight") = std::nullopt,
+        nb::arg("noc1_sender_mpfe_weight") = std::nullopt,
+        nb::arg("ordinary_mpfe_weight") = std::nullopt,
+        nb::arg("dynamic_mpfe_weighting") = std::nullopt);
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
@@ -85,10 +109,13 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
-                cq_id (Optional[int]): command queue that may be recording a trace. When that
-                    CQ is mid trace-capture, the request is captured into the trace instead of
-                    being sent immediately, and is re-sent on every execute_trace of that trace.
-                    Defaults to the current/default command queue.
+                capture_into_trace (bool): whether this request may be captured into a trace.
+                    When True and the current command queue is mid trace-capture, the request
+                    is captured into the trace instead of being sent immediately, and is
+                    re-sent on every execute_trace of that trace. Defaults to False: the
+                    request is always sent immediately and is never captured, whatever any
+                    command queue is doing. Which queue counts as current follows the usual
+                    ttnn convention — pass cq_id=n, or wrap the call in ttnn.command_queue(n).
 
             Returns:
                 None
@@ -99,7 +126,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("global_cb"),
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt,
-        nb::arg("cq_id") = std::nullopt);
+        nb::arg("capture_into_trace") = false);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
         mod,
@@ -115,7 +142,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to fence.
-                cq_id (int): the command queue to fence against.
+                cq_id (Optional[int]): the command queue to fence against. Defaults to the
+                    calling thread's current queue (also what ttnn.command_queue(n) sets).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh to
                     fence. Defaults to the full mesh.
 
@@ -124,7 +152,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         )doc",
         &wait_for_cq_on_tensor_prefetcher,
         nb::arg("mesh_device"),
-        nb::arg("cq_id") = 0,
+        nb::arg("cq_id") = std::nullopt,
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt);
 
@@ -171,15 +199,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more 1D ring matmuls
-            (gather_in0=true) with their weight tensors. The weight's DRAM layout is auto-detected
-            (legacy WIDTH_SHARDED K-row-major vs receiver-contiguous NdShardSpec) and validated/sized
-            accordingly, so callers do not choose a layout-specific factory. See notes in
-            ttnn/api/ttnn/global_circular_buffer.hpp.
+            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 or
+            mcast_in0 1D matmuls with their weight tensors. The weight's DRAM layout is
+            auto-detected (legacy WIDTH_SHARDED K-row-major vs receiver-contiguous NdShardSpec)
+            and validated/sized accordingly.
 
             Args:
                 mesh_device: The mesh device.
-                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
+                program_configs: List of compatible 1D matmul program configs.
                 weights: List of DRAM in1 tensors, one per program_config. All must share the same
                     DRAM layout (all legacy WIDTH_SHARDED, or all receiver-contiguous NdShardSpec).
                 bank_to_receivers: List of (bank_id, receivers) pairs.
@@ -206,16 +233,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_tensor_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
-            Centralizes the recv-contig prefetcher/matmul cross-checks (num_shards == ring_size,
-            weight K divisible by ring_size, weight per-receiver N == per_core_N) so call sites
-            don't re-derive (and mis-derive) them. Returns the block_count (== ring_size); raises
-            on any mismatch.
+            Compute and validate the block_count to pair with a DRAM weight in
+            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
+            global_cb. Gather returns the receiver/ring count. Mcast returns
+            weight_K_tiles / in0_block_w and uses natural FIFO order.
 
             Args:
-                program_config: The gather_in0 1D mcast matmul program config that will consume the weight.
-                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                program_config: The 1D matmul program config that will consume the weight.
+                weight: The DRAM weight tensor, in either layout.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
 
             Returns:

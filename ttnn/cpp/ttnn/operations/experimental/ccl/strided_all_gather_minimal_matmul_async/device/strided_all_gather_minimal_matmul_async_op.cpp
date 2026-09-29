@@ -20,6 +20,71 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.input_tensor.padded_shape()[0] == 1 && tensor_args.input_tensor.padded_shape()[1] == 1,
         "StridedAllGatherMinimalMatmulAsync requires input tensor to have batch size of 1.");
+    TT_FATAL(
+        tensor_args.fused_ternary_input_a.has_value() == tensor_args.fused_ternary_input_b.has_value(),
+        "StridedAllGatherMinimalMatmulAsync fused addcmul requires both ternary inputs (a and b) or neither.");
+
+    // SwiGLU packs gate/up tile-pairs along the weight's N, so the weight width must be an even
+    // number of tiles; each pair collapses to one output tile. Restated here because this op does
+    // not route through MinimalMatmulDeviceOperation::validate_*.
+    if (attributes.matmul_struct.fuse_swiglu) {
+        TT_FATAL(
+            !attributes.matmul_struct.fused_activation.has_value(),
+            "StridedAllGatherMinimalMatmulAsync cannot combine fuse_swiglu with a unary fused_activation");
+        TT_FATAL(
+            !attributes.matmul_struct.fused_ternary_scalar.has_value() &&
+                !tensor_args.fused_ternary_input_a.has_value(),
+            "StridedAllGatherMinimalMatmulAsync cannot combine fuse_swiglu with fused ternary (addcmul)");
+        const uint32_t N = tensor_args.weight_tensor.logical_shape()[-1];
+        const int32_t chunks = attributes.matmul_struct.chunks;
+        TT_FATAL(
+            N % (2 * tt::constants::TILE_WIDTH) == 0,
+            "StridedAllGatherMinimalMatmulAsync fuse_swiglu requires weight width N={} to be a multiple of "
+            "2*TILE_WIDTH={}",
+            N,
+            2 * tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            (N / chunks) % (2 * tt::constants::TILE_WIDTH) == 0,
+            "StridedAllGatherMinimalMatmulAsync fuse_swiglu requires per-chunk weight width N/chunks={} to be a "
+            "multiple of 2*TILE_WIDTH={}",
+            N / chunks,
+            2 * tt::constants::TILE_WIDTH);
+    }
+    if (tensor_args.fused_ternary_input_a.has_value()) {
+        TT_FATAL(
+            !attributes.matmul_struct.fused_activation.has_value(),
+            "StridedAllGatherMinimalMatmulAsync cannot combine fused_activation with ternary (addcmul) inputs.");
+
+        // Matmul output is [.., M, N]
+        auto mm_specs = matmul_device_operation_t::compute_output_specs(
+            attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
+        const auto& mm_logical = mm_specs[0].logical_shape();
+        const uint32_t M = mm_logical[-2];
+        const uint32_t N = mm_logical[-1];
+
+        const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
+        const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
+        TT_FATAL(
+            ternary_a.layout() == tt::tt_metal::Layout::TILE && ternary_b.layout() == tt::tt_metal::Layout::TILE,
+            "StridedAllGatherMinimalMatmulAsync ternary inputs must be TILE layout.");
+        const auto& a_logical = ternary_a.logical_shape();
+        const auto& b_logical = ternary_b.logical_shape();
+        TT_FATAL(
+            a_logical[-2] == M && a_logical[-1] == N,
+            "fused_ternary_input_a shape must match matmul output [M={}, N={}], got [{}, {}].",
+            M,
+            N,
+            a_logical[-2],
+            a_logical[-1]);
+        TT_FATAL(
+            (b_logical[-2] == 1 || b_logical[-2] == M) && b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}].",
+            N,
+            M,
+            N,
+            b_logical[-2],
+            b_logical[-1]);
+    }
 }
 
 StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalMatmulAsync::compute_output_specs(
@@ -28,13 +93,17 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     tt::tt_metal::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
-    // Matmul shape - now returns a vector, extract the single output (chunks=1 by default)
+    // Matmul specs: one per output chunk (chunks == 1 by default)
     auto minimal_matmul_output_specs_vec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
-    TT_FATAL(minimal_matmul_output_specs_vec.size() == 1, "Expected single matmul output spec");
-    tt::tt_metal::TensorSpec minimal_matmul_output_specs = minimal_matmul_output_specs_vec[0];
 
-    return {strided_all_gather_output_shape, minimal_matmul_output_specs};
+    spec_return_value_t specs;
+    specs.reserve(1 + minimal_matmul_output_specs_vec.size());
+    specs.push_back(strided_all_gather_output_shape);
+    for (auto& spec : minimal_matmul_output_specs_vec) {
+        specs.push_back(spec);
+    }
+    return specs;
 }
 
 StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinimalMatmulAsync::create_output_tensors(
@@ -44,13 +113,17 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
         attributes.strided_all_gather_async_struct,
         StridedAllGatherAsyncInputs{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
-    // Matmul output tensor - now returns a vector, extract the single output (chunks=1 by default)
+    // Matmul outputs: one per chunk (chunks == 1 by default), appended after the all-gather output.
     auto minimal_matmul_output_tensors_vec = matmul_device_operation_t::create_output_tensors(
         attributes.matmul_struct, {strided_all_gather_output_tensor, tensor_args.weight_tensor});
-    TT_FATAL(minimal_matmul_output_tensors_vec.size() == 1, "Expected single matmul output tensor");
-    ttnn::Tensor minimal_matmul_output_tensor = minimal_matmul_output_tensors_vec[0];
 
-    return {strided_all_gather_output_tensor, minimal_matmul_output_tensor};
+    tensor_return_value_t outputs;
+    outputs.reserve(1 + minimal_matmul_output_tensors_vec.size());
+    outputs.push_back(strided_all_gather_output_tensor);
+    for (auto& t : minimal_matmul_output_tensors_vec) {
+        outputs.push_back(t);
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::experimental::prim
@@ -75,8 +148,19 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<bool> read_local_slice_from_input) {
+    std::optional<bool> read_local_slice_from_input,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode,
+    bool fuse_swiglu) {
     using OperationType = ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
+
+    // addcmul uses value=1 (torch default) when ternary inputs are given without an explicit scalar
+    if (fused_ternary_input_a.has_value() && !fused_ternary_scalar.has_value()) {
+        fused_ternary_scalar = 1.0f;
+    }
 
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
@@ -109,7 +193,10 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
         .config = config,
         .fused_activation = std::move(fused_activation),
         .output_mem_config = memory_config_mm,
-        .compute_kernel_config = compute_kernel_config.value()};
+        .fused_ternary_scalar = fused_ternary_scalar,
+        .compute_kernel_config = compute_kernel_config.value(),
+        .chunks = chunks,
+        .fuse_swiglu = fuse_swiglu};
     ttnn::experimental::prim::StridedAllGatherAsync ag_op{};
 
     bool read_local_from_input = read_local_slice_from_input.value_or(false);
@@ -120,8 +207,10 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
         strided_all_gather_core_grid_offset,
         read_local_from_input,
         devices,
-        ag_op};
-    auto tensor_args = OperationType::tensor_args_t{input_tensor, weight_tensor, persistent_output_buffer, bias};
+        ag_op,
+        mm_signal_aggregator_mode};
+    auto tensor_args = OperationType::tensor_args_t{
+        input_tensor, weight_tensor, persistent_output_buffer, bias, fused_ternary_input_a, fused_ternary_input_b};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

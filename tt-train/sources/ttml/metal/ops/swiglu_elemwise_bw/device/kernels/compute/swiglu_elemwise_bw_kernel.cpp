@@ -32,7 +32,7 @@ constexpr uint32_t cb_silu_grad = tt::CBIndex::c_7;
 inline void compute_sigmoid() {
     tile_regs_acquire();
     for (uint32_t i = 0; i < block_size; ++i) {
-        copy_tile_init(cb_linear1);
+        copy_init(cb_linear1);
         copy_tile(cb_linear1, i, i);
         sigmoid_tile_init();
         sigmoid_tile(i);
@@ -47,7 +47,7 @@ inline void compute_dL_dgate() {
     cb_wait_front(cb_sigmoid, block_size);
 
     tile_regs_acquire();
-    mul_tiles_init(cb_linear1, cb_sigmoid);
+    mul_init(cb_linear1, cb_sigmoid);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_linear1, cb_sigmoid, i, i, i);
     }
@@ -56,7 +56,7 @@ inline void compute_dL_dgate() {
 
     cb_wait_front(cb_scratch, block_size);
     tile_regs_acquire();
-    mul_tiles_init(cb_scratch, cb_dL_dprod);
+    mul_init(cb_scratch, cb_dL_dprod);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_scratch, cb_dL_dprod, i, i, i);
     }
@@ -73,7 +73,7 @@ inline void compute_silu_grad() {
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < block_size; ++i) {
-        copy_tile_init(cb_sigmoid);
+        copy_init(cb_sigmoid);
         copy_tile(cb_sigmoid, i, i);
         binop_with_scalar_tile_init();
         rsub_unary_tile(i, one);
@@ -83,7 +83,7 @@ inline void compute_silu_grad() {
 
     cb_wait_front(cb_scratch, block_size);
     tile_regs_acquire();
-    mul_tiles_init(cb_linear1, cb_scratch);
+    mul_init(cb_linear1, cb_scratch);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_linear1, cb_scratch, i, i, i);
         binop_with_scalar_tile_init();
@@ -95,7 +95,7 @@ inline void compute_silu_grad() {
 
     cb_wait_front(cb_silu_grad, block_size);
     tile_regs_acquire();
-    mul_tiles_init(cb_sigmoid, cb_silu_grad);
+    mul_init(cb_sigmoid, cb_silu_grad);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_sigmoid, cb_silu_grad, i, i, i);
     }
@@ -110,7 +110,7 @@ inline void compute_dL_dlinear1() {
     cb_wait_front(cb_silu_grad, block_size);
 
     tile_regs_acquire();
-    mul_tiles_init(cb_gate, cb_dL_dprod);
+    mul_init(cb_gate, cb_dL_dprod);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_gate, cb_dL_dprod, i, i, i);
     }
@@ -119,7 +119,7 @@ inline void compute_dL_dlinear1() {
 
     cb_wait_front(cb_scratch, block_size);
     tile_regs_acquire();
-    mul_tiles_init(cb_scratch, cb_silu_grad);
+    mul_init(cb_scratch, cb_silu_grad);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_scratch, cb_silu_grad, i, i, i);
     }
@@ -140,8 +140,8 @@ void kernel_main() {
     // 2) dL/dgate
     // 3) silu'(U)
     // 4) dL/dlinear1
-    init_sfpu(cb_linear1, cb_dL_dlinear1);
-    binary_op_init_common(cb_linear1, cb_gate, cb_dL_dlinear1);
+    compute_kernel_hw_startup(cb_linear1, cb_gate, cb_dL_dlinear1);
+    copy_init(cb_linear1);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {

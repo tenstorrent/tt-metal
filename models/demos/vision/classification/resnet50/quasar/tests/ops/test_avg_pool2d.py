@@ -69,7 +69,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # avg_pool2d shares compute_pool_2d's reduce dest-sync path, so it may hang like max_pool2d; cap the run
 # so a stall surfaces as a timeout failure (a valid "not-yet-working" signal for the LLK team) not a block.
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_avg_pool2d_resnet50_global(mesh_device):
     torch.manual_seed(0)

@@ -148,6 +148,19 @@ def test_bernoulli_seed_distinguishes_cache_entries(device):
     device.disable_and_clear_program_cache()
 
 
+def test_bernoulli_decorrelates_neighboring_core_seeds(device):
+    """Neighboring host seeds must not collapse to the same per-core RNG stream."""
+    shape = (64, 32)  # Two tiles are split across two cores.
+    cpu_input = torch.full(shape, 0.5, dtype=torch.float32)
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    output = ttnn.to_torch(ttnn.bernoulli(npu_input, seed=0xFFFFFFFE, dtype=ttnn.float32)).reshape(2, 32, 32)
+
+    # The host assigns 0xFFFFFFFE and 0xFFFFFFFF to these cores. rand_init remaps
+    # the all-ones LFSR lock state, so a missing core salt makes both streams equal.
+    assert not torch.equal(output[0], output[1]), "neighboring cores emitted duplicate Bernoulli streams"
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 8, 70, 40]],
@@ -173,3 +186,38 @@ def test_bernoulli_with_compute_kernel_options(shape, in_dtype, out_dtype, devic
         npu_input, seed, dtype=get_lib_dtype(ttnn, out_dtype), compute_kernel_config=compute_kernel_config
     )
     assert list(npu_output.shape) == shape
+
+
+def test_bernoulli_seed_distinguishes_cache_entries(device):
+    """Regression guard for bernoulli's seed static/dynamic contract on the cache-hit fast path.
+
+    `seed` is excluded from compute_program_hash, so calls differing only in seed must cache-hit, but
+    the seed must still be re-applied to the cached program by
+    BernoulliProgramFactory::override_runtime_arguments. Pins both halves:
+      * a different seed must NOT grow the cache -> guards against re-adding seed to the hash.
+      * a different seed must change the sampled mask -> guards against the frozen-seed bug.
+    """
+    shape = [1, 1, 32, 64]
+    cpu_input = torch.full(shape, 0.5, dtype=torch.bfloat16)
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    def run(seed):
+        out = ttnn.bernoulli(npu_input, seed, dtype=ttnn.bfloat16)
+        return ttnn.to_torch(out).float().clone()
+
+    out_a = run(1234)
+    entries_a = device.num_program_cache_entries()
+    run(1234)
+    entries_b = device.num_program_cache_entries()
+    out_c = run(5678)
+    entries_c = device.num_program_cache_entries()
+
+    assert entries_a == 1, "the first dispatch must create exactly one cache entry"
+    assert entries_b == entries_a, "same seed must reuse the cached program"
+    assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
+    assert not torch.equal(out_a, out_c), "a different seed must change the sampled mask (seed re-patched on cache hit)"
+
+    device.disable_and_clear_program_cache()

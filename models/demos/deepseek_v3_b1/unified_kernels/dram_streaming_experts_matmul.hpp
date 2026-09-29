@@ -12,7 +12,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -277,8 +277,7 @@ struct DRAMStreamingExpertsMatmul {
                 custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             } else {
-                reconfig_data_format<SrcOrder::Reverse, /*is_tile_dim_reconfig_en=*/true>(
-                    CTArgs::cb_in0, CTArgs::cb_in1);
+                reconfig_full_operand<SrcOrder::Reverse>(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
                 custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);

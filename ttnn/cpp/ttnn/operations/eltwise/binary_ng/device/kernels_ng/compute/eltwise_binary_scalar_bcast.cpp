@@ -49,7 +49,8 @@ ALWI void process_tile(
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
-    unary_bcast_init<BroadcastType::SCALAR>(cb_bcast, cb_llk_post);
+    reconfig_data_format(cb_bcast, cb_bcast);
+    unary_bcast_init<BroadcastType::SCALAR>(cb_bcast);
     exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
     unary_bcast<BroadcastType::SCALAR>(cb_bcast, 0, 0);
@@ -60,9 +61,6 @@ ALWI void process_tile(
     tile_regs_release();
 
     pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
     PREPROCESS(
         BCAST_OP,
@@ -135,9 +133,9 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))

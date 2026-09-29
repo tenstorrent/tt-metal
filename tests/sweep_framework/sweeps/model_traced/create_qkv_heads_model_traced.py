@@ -104,7 +104,7 @@ def run(
 
     # Create golden output: split QKV and reshape heads
     torch_input_flat = torch_input_tensor_a.reshape(batch, seq_len, -1)
-    (ref_q, ref_k, ref_v) = torch.split(
+    ref_q, ref_k, ref_v = torch.split(
         torch_input_flat, [num_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
     )
     ref_q = torch.reshape(ref_q, [batch, seq_len, num_heads, head_dim]).transpose(-3, -2)
@@ -196,9 +196,15 @@ def run(
         memory_config=actual_output_memory_config,
         **op_kwargs,
     )
-    q = mesh_tensor_to_torch(q, device if is_mesh_device else None)
-    k = mesh_tensor_to_torch(k, device if is_mesh_device else None)
-    v = mesh_tensor_to_torch(v, device if is_mesh_device else None)
+    q = mesh_tensor_to_torch(
+        q, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
+    k = mesh_tensor_to_torch(
+        k, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
+    v = mesh_tensor_to_torch(
+        v, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC for all three outputs using check_with_pcc

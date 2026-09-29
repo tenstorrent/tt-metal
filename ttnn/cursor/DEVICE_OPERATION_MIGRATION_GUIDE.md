@@ -607,6 +607,8 @@ A program-cache hit does not rebuild the program, so anything excluded from `com
 
 > **Scope.** This applies to `ProgramFactory` and `ProgramDescriptor` factories. The `WorkloadDescriptor` variant has no `override_runtime_arguments` path yet — the adapter re-applies its hash-excluded values via `get_dynamic_runtime_args` on a cache hit, so a WorkloadDescriptor factory must keep that hook until override support is added there.
 
+> **Where it goes.** On the program factory, next to its `create_descriptor`. The framework probes only the factory, so an `override_runtime_arguments` on the `DeviceOperation` is **ignored** — it compiles, and it is never invoked. The framework calls the hook on the factory that built the cached program, so a factory patches only its own layout and never mirrors `select_program_factory`. A multi-factory op gives the hook to each factory that needs one.
+
 ```cpp
 static void override_runtime_arguments(
     tt::tt_metal::Program& program,

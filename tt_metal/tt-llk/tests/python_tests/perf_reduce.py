@@ -14,9 +14,10 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     MATH_OP,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
@@ -66,7 +67,7 @@ def test_perf_reduce(
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
         ],
-        runtimes=[TILE_COUNT(tile_count)],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,
