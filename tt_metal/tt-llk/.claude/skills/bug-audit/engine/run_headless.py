@@ -26,6 +26,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spawn  # noqa: E402
 
+from common import blocked_actions, headless_flags  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
 p = argparse.ArgumentParser()
@@ -107,8 +109,7 @@ def run_wave(wave, args_path, out_path):
             "--output-format",
             "stream-json",
             "--verbose",
-            "--permission-mode",
-            "auto",
+            *headless_flags(),
             "--add-dir",
             SKILL,
             "--add-dir",
@@ -227,6 +228,13 @@ while True:
     cur["persisted"] = (
         True  # the wave's verdicts are on disk; only the derived reports are at stake below
     )
+    sid = scan(cur["wave"])[0]
+    cur["blocked_actions"] = blocked_actions(sid) if sid else 0
+    if cur["blocked_actions"]:
+        note(
+            f"wave {cur['wave']}: the deny rules refused {cur['blocked_actions']} build/test/device/tree-changing "
+            "call(s) by agents (information only; the hunt is read-only by design)"
+        )
     save_state(S)
     r = py(f"{HERE}/consolidate.py", "--run", run)
     if r.returncode != 0:

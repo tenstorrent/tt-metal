@@ -23,6 +23,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spawn  # noqa: E402
 
+from common import headless_flags  # noqa: E402
+
 p = argparse.ArgumentParser()
 p.add_argument("--script", required=True)
 p.add_argument("--args", required=True)
@@ -78,8 +80,7 @@ while not os.path.exists(a.out) and attempt < a.max_attempts:
         "--output-format",
         "stream-json",
         "--verbose",
-        "--permission-mode",
-        "auto",
+        *headless_flags(),
         "--add-dir",
         os.path.dirname(script),
         "--add-dir",

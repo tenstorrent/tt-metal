@@ -1184,6 +1184,56 @@ def test_exec_tier_falls_back_to_a_generic_stem_when_nothing_better_exists(tmp_p
     assert picked == ["tests/g/test_g00.py", "tests/g/test_g01.py"], picked
 
 
+def test_headless_sessions_deny_builds_tests_devices_and_tree_changes():
+    sys.path.insert(0, ENGINE)
+    from common import STATIC_DENY, headless_flags
+
+    flags = headless_flags()
+    assert (
+        flags[:2] == ["--permission-mode", "auto"] and flags[2] == "--disallowedTools"
+    )
+    for rule in [
+        "Bash(make *)",
+        "Bash(pytest *)",
+        "Bash(tt-smi *)",
+        "Bash(rm *)",
+        "Bash(sed -i *)",
+        "Bash(git checkout *)",
+        "Bash(git -C * checkout *)",
+    ]:
+        assert rule in STATIC_DENY, rule
+    assert not any(
+        r.startswith(("Bash(cp", "Bash(grep", "Bash(git log", "Bash(sed -n *"))
+        for r in STATIC_DENY
+    )
+    for driver in ("run_headless.py", "run_workflow_headless.py"):
+        src = open(os.path.join(ENGINE, driver)).read()
+        assert "*headless_flags()" in src and '"auto"' not in src, driver
+
+
+def test_blocked_actions_counts_refused_calls_in_workflow_agent_transcripts(tmp_path):
+    sys.path.insert(0, ENGINE)
+    from common import blocked_actions
+
+    sub = (
+        tmp_path
+        / "projects"
+        / "-some-cwd"
+        / "sid-1"
+        / "subagents"
+        / "workflows"
+        / "wf_x"
+    )
+    sub.mkdir(parents=True)
+    denied = '{"content":"Permission to use Bash with command make --version has been denied."}'
+    (sub / "agent-1.jsonl").write_text(
+        f"{denied}\n" + '{"content":"ok"}\n' + f"{denied}\n"
+    )
+    (tmp_path / "projects" / "-some-cwd" / "other").mkdir()
+    assert blocked_actions("sid-1", str(tmp_path)) == 2
+    assert blocked_actions("sid-2", str(tmp_path)) == 0
+
+
 def test_every_spawn_user_imports_it_before_first_use():
     import ast
     import glob

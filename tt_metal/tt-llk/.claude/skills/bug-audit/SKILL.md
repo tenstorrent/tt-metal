@@ -423,7 +423,11 @@ time, so an edit mid-run measures a mixture. For long runs, launch each arm with
 - **Never persist verdicts by hand.** Always go through `persist_wave.py`. A hand-persisted wave once contaminated
   two unrelated in-flight batches.
 - **Hunters do not execute.** Workflow agents have run on-device experiments without being asked. Static hunts are
-  told not to build, run or touch hardware; execution happens only in the opt-in tier.
+  told not to build, run or touch hardware, and the headless drivers enforce it: their sessions deny builds, test
+  runners, card tools and tree-changing commands (`common.STATIC_DENY`), and workflow agents inherit those rules.
+  Read-only commands are unaffected. Each wave records how many calls were refused (`blocked_actions` in the run's
+  headless state). The rules match command text, so they are a guard, not a sandbox. Execution happens only in the
+  opt-in tier, whose commands `exec_tier.py` runs itself.
 - **Workflow mechanics:** a thrown workflow returns `[]`, but its journal survives on disk, so resume with
   `resumeFromRunId` (`run_headless.py` does this). Read results from the task's output file, never from the
   completion notification, which truncates large returns. The Workflow tool refuses some script paths: pass the

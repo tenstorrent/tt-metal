@@ -12,6 +12,80 @@ import sys
 
 SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 
+# Headless audit sessions run unattended in auto mode, and their agents (workflow agents inherit the session's
+# permission rules) must never build, run tests, touch a card, or change the audited tree: execution belongs to
+# exec_tier.py, which runs its commands itself. Deny rules are checked before auto mode's classifier, and match any
+# subcommand of a compound command. They match the command text only, so this is a guard, not a sandbox.
+_DENY_CMDS = [
+    "make",
+    "cmake",
+    "ninja",
+    "./build_metal.sh",
+    "build_metal.sh",
+    "pytest",
+    "python -m pytest",
+    "python3 -m pytest",
+    "ctest",
+    "tt-smi",
+    "tt-exalens",
+    "rm",
+    "sed -i",
+    "sed -E -i",
+    "sed -n -i",
+]
+_DENY_GIT = [
+    "checkout",
+    "switch",
+    "restore",
+    "reset",
+    "clean",
+    "commit",
+    "push",
+    "stash",
+    "rebase",
+    "merge",
+    "cherry-pick",
+    "am",
+    "apply",
+]
+STATIC_DENY = (
+    [f"Bash({c} *)" for c in _DENY_CMDS]
+    + [f"Bash(git {g} *)" for g in _DENY_GIT]
+    + [f"Bash(git -C * {g} *)" for g in _DENY_GIT]
+)
+
+
+def blocked_actions(session_id, config_dir=None):
+    """How many tool calls the deny rules refused in a headless session's workflow agents (information only).
+
+    Workflow agents' transcripts live under <config>/projects/<cwd>/<session>/subagents/; a refused call's result reads
+    "Permission to use <tool> with command <cmd> has been denied."
+    """
+    import glob
+
+    root = (
+        config_dir
+        or os.environ.get("CLAUDE_CONFIG_DIR")
+        or os.path.expanduser("~/.claude")
+    )
+    n = 0
+    for f in glob.glob(
+        os.path.join(root, "projects", "*", session_id, "subagents", "**", "*.jsonl"),
+        recursive=True,
+    ):
+        with open(f, errors="replace") as fh:
+            n += sum(
+                1
+                for ln in fh
+                if "Permission to use " in ln and "has been denied." in ln
+            )
+    return n
+
+
+def headless_flags():
+    """claude -p flags shared by every headless driver: auto mode, plus the static-hunt deny rules."""
+    return ["--permission-mode", "auto", "--disallowedTools", *STATIC_DENY]
+
 
 def run_dir(argv=None):
     argv = sys.argv if argv is None else argv
