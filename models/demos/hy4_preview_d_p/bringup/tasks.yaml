@@ -2286,6 +2286,13 @@ tasks:
     kind: op
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-09-29T19:27:47'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py: 093bfaa3cc4a67ed1dcce104e433e32d647b11d9bc71c9400c66060f1ecce5e5
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: S.moe_shared.09
   title: 'moe_shared block with steps 1-9 on device (last: ffn_hc_pre)'
   step: implement
