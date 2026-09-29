@@ -42,12 +42,12 @@ indexes:
 
 operands:
   - {name: x, dims: [128, 64], format: Float32}  # c_0
-  - {name: input_mask, dims: [32, 64], format: Float16_b, const_value: 1.0}  # c_7
-  - {name: ones, dims: [32, 32], format: Float16_b, const_value: 1.0}  # c_26
-  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.011048543456039806}  # c_2: 1/sqrt(128*64)
-  - {name: mean, dims: [32, 32], format: Float32, const_value: 0.0}  # received c_15
-  - {name: variance, dims: [32, 32], format: Float32, const_value: 1.0}  # received c_15, second use
-  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-5}  # c_3
+  - {name: input_mask, dims: [32, 64], format: Float16_b, stimuli: 1.0}  # c_7
+  - {name: ones, dims: [32, 32], format: Float16_b, stimuli: 1.0}  # c_26
+  - {name: scaler, dims: [32, 32], format: Float16_b, stimuli: 0.011048543456039806}  # c_2: 1/sqrt(128*64)
+  - {name: mean, dims: [32, 32], format: Float32, stimuli: 0.0}  # received c_15
+  - {name: variance, dims: [32, 32], format: Float32, stimuli: 1.0}  # received c_15, second use
+  - {name: eps, dims: [32, 32], format: Float16_b, stimuli: 1.0e-5}  # c_3
   - {name: beta, dims: [32, 64], format: Float16_b}  # c_6
   - {name: masked, dims: [128, 64], format: Float32}  # c_13, version 0
   - {name: sum_x, dims: [32, 32], format: Float32}  # c_17
