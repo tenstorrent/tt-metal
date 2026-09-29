@@ -1,0 +1,21 @@
+findings:
+- id: kda-actual-end-padding
+  task: C.*
+  kind: API
+  title: KDA layers must pass actual_end (main's padded-chunk fix, cherry-picked); keep KDA state in an address-stable store
+  detail: >-
+    The branch now has main's #57070 (skip padded KDA prefill recurrence with a runtime end bound) and #58049 (bind
+    actual_end only when given), cherry-picked as 158a510b062 and 926ca262f00. Pass actual_end (device UINT32 scalar,
+    exclusive global valid end, 32-aligned) into every KDA layer, as TtK3KdaAttention.forward does
+    (models/demos/deepseek_v3_d_p/tt/kimi_k3/attention.py: metadata[1:3] under trace, device scalars from
+    ctx.actual_start/actual_end eagerly, validate_kda_bounds on the host). Without it the padded tail of the last
+    chunk (K.1 ends it 32 tokens early and pads with 0xFFFFFFFF) folds into kda_recurrent and kda_conv. With SP=2 on
+    axis 0 the padded tail sits on the second row; the fix skips padded chunks and groups per rank while keeping CCL
+    participation. Always pass actual_start too: main's prepare_chunk_recurrence binds q as "actual_start" when it is
+    absent, and #55670's aliased-parameter check rejects that (TT_FATAL "TensorArgument 'actual_start' must reference
+    a MeshTensor reachable from tensor_args"); 14 op tests in tests/ttnn/nightly/unit_tests/operations/experimental/kda
+    fail this way on clean main 98134127a7b too (CI never ran them after the merge). Keep the states like Kimi-K3's
+    tt/kimi_k3/kda_state.py KdaStateCache (address-stable, ttnn.copy write-back, reset the slot when actual_start == 0,
+    never inside a trace). The K.1 hook contract_state_pcc can rebuild the TP/SP shards with
+    models/demos/deepseek_v3_d_p/tests/kda/utils.py reconstruct_state_at_sp_rank / reconstruct_convolution_at_sp_rank.
+    Clamp the 0xFFFFFFFF pad token id before the embedding lookup.
