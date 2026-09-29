@@ -7,6 +7,8 @@
       [--since <commit>] [--max-files 20] [--max-lines 3500] \
       [--knowledge references/classes-universal.md,references/classes-<domain>.md]   # a repo pack only to re-measure it
 
+--knowledge defaults to the universal classes, plus the Tenstorrent classes for a tenstorrent/ repo.
+
 --root must be a git checkout pinned at the commit you mean to audit (a dedicated worktree is best), so
 recorded file:line findings stay valid for the life of the run. The commit is recorded in state.json.
 --since limits the scope to files changed between <commit> and the audited commit (diff mode).
@@ -67,8 +69,9 @@ p.add_argument(
 )
 p.add_argument(
     "--knowledge",
-    default="",
-    help="comma list of knowledge files the hunters must read",
+    default=None,
+    help="comma list of knowledge files the hunters must read. Default: references/classes-universal.md, plus "
+    "references/classes-tenstorrent.md when --repo is a tenstorrent/ repo. 'none' hands hunters no class list",
 )
 p.add_argument(
     "--recurse-submodules",
@@ -89,6 +92,32 @@ out = os.path.abspath(a.out)
 if os.path.exists(os.path.join(out, "state.json")):
     sys.exit(
         f"{out} already holds a run; resume it instead of re-initialising (re-init would orphan its verdicts)"
+    )
+# the class lists are the hunters' checklist; without them the hunt prompt names no bug classes at all
+skill = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if a.knowledge is None:
+    knowledge = ["references/classes-universal.md"]
+    if a.repo.lower().startswith("tenstorrent/"):
+        knowledge.append("references/classes-tenstorrent.md")
+elif a.knowledge.strip().lower() == "none":
+    knowledge = []
+else:
+    knowledge = [k.strip() for k in a.knowledge.split(",") if k.strip()]
+missing = [
+    k
+    for k in knowledge
+    if not os.path.isfile(k if os.path.isabs(k) else os.path.join(skill, k))
+]
+if missing:
+    sys.exit(
+        f"knowledge file(s) not found (relative paths resolve against {skill}): {', '.join(missing)}"
+    )
+if knowledge:
+    print(f"knowledge handed to every hunter: {', '.join(knowledge)}")
+else:
+    print(
+        "WARNING: hunters get NO bug-class list, only the generic hunt prompt",
+        file=sys.stderr,
     )
 
 
@@ -209,7 +238,6 @@ with open(os.path.join(out, "ledger.tsv"), "w") as fh:
     for b in batches:
         for f in b["files"]:
             fh.write(f"{f}\t{b['prio']}\t{nlines(f)}\t{b['batch']}\tpending\t0\n")
-knowledge = [k.strip() for k in a.knowledge.split(",") if k.strip()]
 # prior-run reconciliation: per batch, what earlier runs confirmed or refuted in these files
 if a.prior_run:
     import json as _json

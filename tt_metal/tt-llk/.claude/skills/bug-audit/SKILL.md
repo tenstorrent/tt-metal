@@ -30,8 +30,9 @@ Not handed to hunters by default:
 3. The repo pack, if one exists: `packs/<repo>.md`. It holds class weights from the repo's real bug history, hot
    spots per area, "fix seeds", fixes found incomplete, and the checks reviewers apply. As reading for hunters it
    showed **no measurable recall benefit** in either benchmark run (see *Measured recall*), so it costs tokens on every
-   batch for no measured gain. Add it with `--knowledge ...,packs/<repo>.md` only to re-measure it. Its hot areas
-   still inform the `--prio` globs.
+   batch for no measured gain. Add it only to re-measure it, with
+   `--knowledge references/classes-universal.md,<domain>,packs/<repo>.md`: an explicit list replaces the default,
+   so name the class lists too. Its hot areas still inform the `--prio` globs.
 4. An optional private overlay: a `packs-private/<repo>.md` next to the run directory, for internal-only material
    that must never be committed to a public repo.
 
@@ -100,10 +101,11 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
 1. **Pin the tree.** Make a dedicated worktree at the commit to audit
    (`git worktree add --detach <path> <commit>`), and keep it until the run is closed, so every recorded
    `file:line` stays valid.
-2. **Init:** `engine/init_run.py --root <tree> --out <run> --repo owner/name --prio 'A=<highest-value globs>' ...
-   --knowledge references/classes-universal.md,<domain>`. Put device kernels and core runtime
-   first, host periphery next, and tests and models last. Batches are at most 20 files and 3,500 lines (1,500 for
-   priority A), so a hunter can read every line.
+2. **Init:** `engine/init_run.py --root <tree> --out <run> --repo owner/name --prio 'A=<highest-value globs>' ...`.
+   Put device kernels and core runtime first, host periphery next, and tests and models last. Batches are at most
+   20 files and 3,500 lines (1,500 for priority A), so a hunter can read every line. `--knowledge` defaults to the
+   universal classes, plus `classes-tenstorrent.md` for a `tenstorrent/` repo; pass it to name another domain
+   list, or `none` to run without a class list.
    - **Submodules:** `git ls-files` lists a submodule as ONE entry, so by default its files are silently out of
      scope. `init_run.py` warns and names them. Either pass `--recurse-submodules`, or audit each submodule as its
      own run and say so in the report. An earlier whole-repo audit missed an entire submodule this way.

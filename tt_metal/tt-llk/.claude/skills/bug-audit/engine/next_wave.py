@@ -61,6 +61,11 @@ skill = os.path.dirname(here)
 knowledge = [
     k if os.path.isabs(k) else os.path.join(skill, k) for k in st.get("knowledge", [])
 ]
+if not knowledge:
+    print(
+        "# WARNING: this run hands hunters NO bug-class list (state.json knowledge is empty)",
+        file=sys.stderr,
+    )
 roots = {b: man[b]["root"] for b in pick if man[b].get("root")}
 rdirs = {os.path.dirname(r) for r in roots.values()}
 if (

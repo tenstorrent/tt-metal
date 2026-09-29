@@ -828,6 +828,51 @@ def test_init_run_refuses_an_empty_scope(tmp_path):
     assert code != 0 and "no file" in out.lower(), out
 
 
+def _init_knowledge(tmp_path, repo, *extra):
+    tree = _git_tree(tmp_path, ["a/x.c"])
+    out = tmp_path / "run"
+    code, o, e = run(
+        os.path.join(ENGINE, "init_run.py"),
+        "--root",
+        tree,
+        "--out",
+        out,
+        "--repo",
+        repo,
+        "--ext",
+        ".c",
+        *extra,
+    )
+    k = json.load(open(out / "state.json"))["knowledge"] if code == 0 else None
+    return code, o + e, k, out
+
+
+def test_init_run_hands_hunters_the_class_lists_by_default(tmp_path):
+    code, out, k, _ = _init_knowledge(tmp_path, "tenstorrent/tt-metal")
+    assert code == 0 and k == [
+        "references/classes-universal.md",
+        "references/classes-tenstorrent.md",
+    ], out
+
+
+def test_init_run_default_is_universal_only_outside_tenstorrent(tmp_path):
+    code, out, k, _ = _init_knowledge(tmp_path, "o/r")
+    assert code == 0 and k == ["references/classes-universal.md"], out
+
+
+def test_init_run_knowledge_none_is_explicit_and_warns(tmp_path):
+    code, out, k, _ = _init_knowledge(tmp_path, "o/r", "--knowledge", "none")
+    assert code == 0 and k == [] and "NO bug-class list" in out, out
+
+
+def test_init_run_refuses_a_missing_knowledge_file_before_writing(tmp_path):
+    code, out, _, run_dir = _init_knowledge(
+        tmp_path, "o/r", "--knowledge", "references/nope.md"
+    )
+    assert code != 0 and "nope.md" in out, out
+    assert not run_dir.exists() or not os.listdir(run_dir), os.listdir(run_dir)
+
+
 def test_every_spawn_user_imports_it_before_first_use():
     import ast
     import glob
