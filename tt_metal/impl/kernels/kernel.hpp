@@ -25,6 +25,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include "binary_metadata.hpp"  // ll_api::BufRwInfo (op-to-op R/W inference)
+#include <tt_stl/small_vector.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
@@ -176,6 +177,25 @@ struct PrefetcherPipeBindingHandle {
 struct TensorBindingSequenceHandle {
     std::string sequence_name;
     std::vector<std::string> members;
+};
+
+// Op-to-op R/W inference, resolved to bound objects (see Kernel::resolve_buf_rw). Each access is
+// identified by its program-level TensorParameter name and the bound buffer's base address. The address
+// is the cross-op RAW comparison key -- two ops touch the "same" buffer iff their addresses match (the
+// same matching the ttnn-graph RAW analysis used). Derived by mapping each .tt.BUF_RW slot (a binding's
+// base-address CRTA byte offset) back through the kernel's tensor bindings (slot -> param name) and its
+// CRTA (slot/sizeof(u32) -> the address the runtime bound at that word).
+struct ResolvedBufRw {
+    struct Access {
+        // View into the kernel's TensorBindingHandle -- no allocation; valid while the kernel lives.
+        // Diagnostic only: the cross-op RAW comparison keys on `address`, not the name.
+        std::string_view param_name;
+        uint32_t address = 0;
+    };
+    // Stack-backed: no heap for the common case (a kernel touches only a few tensor-like objects).
+    ttsl::SmallVector<Access, 8> reads;
+    ttsl::SmallVector<Access, 8> writes;
+    bool opaque = false;  // an un-analyzable (raw) access was seen -> a detector must keep the barrier
 };
 
 class Kernel : public JitBuildSettings {
@@ -365,6 +385,11 @@ public:
     // binary is loaded (llrt::get_binary_metadata), so this does no ELF parsing itself; the kernel must
     // already be compiled -- call after a warm-up enqueue. binary_root is derived internally from `device`.
     ll_api::BufRwInfo query_buf_rw(const IDevice& device) const;
+
+    // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
+    // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses). Requires the
+    // program run args to have been set and the binary compiled -- call after an enqueue.
+    ResolvedBufRw resolve_buf_rw(const IDevice& device);
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
     const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
