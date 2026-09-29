@@ -77,7 +77,7 @@ DEVICE_STEPS = {
         "mlp",
         "ffn_residual",
     },
-    "moe_full": set(),
+    "moe_full": {"router"},
     "moe_shared": set(),
 }
 
@@ -100,6 +100,8 @@ _INDEXER_STEPS = {"indexer"}
 _ATTENTION_STEPS = {"attention"}
 # Dense SwiGLU MLP (tt/mlp.py:TtDenseMLP), layer 0: TP=2 over axis 1, fp32 intermediates, reduce_scatter over axis 1.
 _MLP_STEPS = {"mlp"}
+# MoE router (tt/router.py:TtHy4Router), replicated fp32 gate + bias, on each row's S/2 tokens; no collective.
+_ROUTER_STEPS = {"router"}
 
 
 def _loader(spec):
@@ -473,6 +475,42 @@ def _col_split_host_fn(mesh, module):
     return fn
 
 
+def _router_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtHy4Router: mlp.gate.weight [256, 6144] and e_score_correction_bias [256] replicated in fp32; fp32 logits
+    (HiFi4 + fp32 acc), sigmoid, + bias, ttnn.topk 8, gather / renorm, x routed_scaling_factor."""
+    from models.demos.hy4_preview_d_p.tt.router import TtHy4Router
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    p = f"model.layers.{layer}.mlp.gate."
+    assert cfg.norm_topk_prob, "TtHy4Router always renormalizes the top-k weights"
+    return TtHy4Router(
+        mesh,
+        loader.get(p + "weight").float(),
+        loader.get(p + "e_score_correction_bias").float(),
+        top_k=cfg.num_experts_per_tok,
+        route_scale=cfg.routed_scaling_factor,
+    )
+
+
+def _router_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: the row-split input
+    replicated over axis 1 in; (idx, wts) [S/2, 8] per chip read back from column 0 and scattered on the host)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import row_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = row_split_to_device(mesh, x, dtype=ttnn.float32)
+        idx, wts = module(xd)
+        ti = row_split_to_host(mesh, idx).to(torch.int64)
+        tw = row_split_to_host(mesh, wts).float()
+        for t in (xd, idx, wts):
+            ttnn.deallocate(t)
+        return torch.zeros(ti.shape[0], module.num_experts, dtype=torch.float32).scatter_(1, ti, tw)
+
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, loader, cfg):
     if step in _NORM_STEPS:
         return _col_split_host_fn(mesh, _norm_module(mesh, spec, layer, step, loader, cfg))
@@ -488,6 +526,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _AttentionHostFn(mesh, _attention_module(mesh, spec, layer, loader, cfg))
     if step in _MLP_STEPS:
         return _row_in_col_out_host_fn(mesh, _mlp_module(mesh, spec, layer, loader, cfg))
+    if step in _ROUTER_STEPS:
+        return _router_host_fn(mesh, _router_module(mesh, spec, layer, loader, cfg))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -512,6 +552,7 @@ def device_component(mesh, spec, layer, step):
             _INDEXER_STEPS,
             _ATTENTION_STEPS,
             _MLP_STEPS,
+            _ROUTER_STEPS,
         )
     ):
         loader = _loader(spec)
