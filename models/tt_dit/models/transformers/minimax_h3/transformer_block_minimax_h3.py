@@ -18,6 +18,7 @@ from ....utils.substate import rename_substate
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, register_mmrs_config
+from .quant_config import MiniMaxH3QuantProfile
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -67,8 +68,12 @@ class MiniMaxH3TransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         precomputed_adaln: bool = False,
+        quant_config: MiniMaxH3QuantProfile | None = None,
     ) -> None:
         super().__init__()
+
+        # No profile means bf16 everywhere, i.e. the model this block has always built.
+        quant = quant_config if quant_config is not None else MiniMaxH3QuantProfile.bf16()
 
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
@@ -103,6 +108,7 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            **quant.attention_kwargs(),
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -123,6 +129,7 @@ class MiniMaxH3TransformerBlock(Module):
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            **quant.ffn_kwargs(),
         )
         # With precomputed modulation the projection never exists on device: the caller passes the
         # six tables into `forward` instead, and this block's `adaln_proj.*` checkpoint keys are

@@ -77,6 +77,7 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.quant_config import MiniMaxH3QuantProfile, resolve_quant_profile
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -314,6 +315,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "coresident": False,
         "vae_output_type": "uint8",
         "precomputed_adaln": True,
+        "dit_quant_profile": "bf8_weights",
     },
     # The QB2: two p300 boards, 4 chips on a line. TP takes the full mesh on axis 1 (14 heads and
     # 5376 / (32 * 4) both divide) and SP is the size-1 axis 0 -- the same assignment Wan's (1, 4)
@@ -511,6 +513,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         precomputed_adaln: bool | None = None,
+        dit_quant_profile: str | MiniMaxH3QuantProfile | None = None,
         task: str = "t2va",
         lora_path: str | os.PathLike | None = None,
         lora_strength: float = 1.0,
@@ -568,6 +571,12 @@ class MiniMaxH3Pipeline:
         # the schedule the two were built for.
         self.precomputed_adaln = (
             preset.get("precomputed_adaln", False) if precomputed_adaln is None else bool(precomputed_adaln)
+        )
+        # Weight-dtype policy for the DiT block stack, resolved here so it is baked into
+        # construction: the Parameters are declared quantized, so a cache miss loads each shard
+        # direct to quant and the bf16 stack is never resident. `None` builds bf16.
+        self.dit_quant_profile = resolve_quant_profile(
+            preset.get("dit_quant_profile") if dit_quant_profile is None else dit_quant_profile
         )
         self._adaln_table = None
         self._adaln_cache: MiniMaxH3AdalnCache | None = None
@@ -754,6 +763,7 @@ class MiniMaxH3Pipeline:
         warmup: bool = True,
         coresident: bool | None = None,
         precomputed_adaln: bool | None = None,
+        dit_quant_profile: str | MiniMaxH3QuantProfile | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -795,6 +805,7 @@ class MiniMaxH3Pipeline:
             warmup=warmup,
             coresident=coresident,
             precomputed_adaln=precomputed_adaln,
+            dit_quant_profile=dit_quant_profile,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1328,9 +1339,15 @@ class MiniMaxH3Pipeline:
     def _dit_weight_mode(self) -> str:
         # Part of the device-weight cache subfolder: a precomputed-AdaLN build has a different set
         # of tensors than a resident one, so the two must never share a cache directory.
+        # ... and the quantized cache holds quantized tensorbins, which a bf16 Parameter would
+        # read back as a silently wrong weight, so the dtype policy is part of the key too.
         if self.precomputed_adaln:
-            return "precomputed_adaln"
-        return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+            mode = "precomputed_adaln"
+        else:
+            mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        if self.dit_quant_profile is not None:
+            mode = f"{mode}_{self.dit_quant_profile.cache_tag}"
+        return mode
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
@@ -1347,6 +1364,7 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             is_fsdp=self.dit_fsdp,
             precomputed_adaln=self.precomputed_adaln,
+            quant_config=self.dit_quant_profile,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:

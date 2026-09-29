@@ -17,6 +17,7 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
+from .quant_config import MiniMaxH3QuantProfile
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 
@@ -224,9 +225,13 @@ class MiniMaxH3Transformer3DModel(Module):
         # `adaln_proj` and `norm_out.linear`, ~26 GB -- is left off the device and the caller
         # supplies a `MiniMaxH3AdalnCache` per forward instead. See `adaln_cache_minimax_h3`.
         precomputed_adaln: bool = False,
+        # Weight-dtype policy for the block stack's linears. None keeps every weight bf16, so no
+        # mesh that does not ask for a profile changes. See `quant_config`.
+        quant_config: MiniMaxH3QuantProfile | None = None,
     ) -> None:
         super().__init__()
 
+        self.quant_config = quant_config
         self.precomputed_adaln = precomputed_adaln
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
@@ -324,8 +329,9 @@ class MiniMaxH3Transformer3DModel(Module):
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
                     precomputed_adaln=precomputed_adaln,
+                    quant_config=None if quant_config is None else quant_config.for_block(i, num_layers),
                 )
-                for _ in range(num_layers)
+                for i in range(num_layers)
             ]
         )
 

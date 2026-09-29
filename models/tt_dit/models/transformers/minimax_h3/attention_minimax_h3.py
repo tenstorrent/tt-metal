@@ -103,6 +103,10 @@ class MiniMaxH3Attention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_sequence_parallel: bool = True,
+        qkv_dtype: ttnn.DataType = ttnn.bfloat16,
+        out_dtype: ttnn.DataType = ttnn.bfloat16,
+        activation_dtype: ttnn.DataType | None = None,
+        pin_output_bf16: bool = False,
     ) -> None:
         super().__init__()
 
@@ -137,11 +141,17 @@ class MiniMaxH3Attention(Module):
         # Fused QKV: one matmul, output split into three. The state dict is rearranged in
         # `_prepare_torch_state` so that column-parallel fracturing hands each device the same
         # 14 heads of q, k and v.
+        # dtypes default to bf16, so a caller that passes no quant profile builds the model it
+        # always built. `to_out` is the carve-out: its matmul folds the gated residual into a fused
+        # addcmul whose ternary inputs must share the weight's tile format.
         self.to_qkv = ColParallelLinear(
             hidden_size,
             3 * self.inner_dim,
             chunks=3,
             bias=False,
+            dtype=qkv_dtype,
+            activation_dtype=activation_dtype,
+            pin_output_bf16=pin_output_bf16,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
@@ -151,6 +161,9 @@ class MiniMaxH3Attention(Module):
             self.inner_dim,
             hidden_size,
             bias=False,
+            dtype=out_dtype,
+            activation_dtype=activation_dtype,
+            pin_output_bf16=pin_output_bf16,
             mesh_device=mesh_device,
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,

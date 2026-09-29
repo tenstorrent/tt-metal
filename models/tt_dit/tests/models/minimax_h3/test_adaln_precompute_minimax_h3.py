@@ -46,7 +46,9 @@ MAX_TABLE_REL_RMSE = 0.02
 # than an adjacent step's, which is what a wrong `step_offset` would return.
 WRONG_STEP_MARGIN = 5.0
 
-HIDDEN = 64
+# 128 and not a smaller toy width: the 1x4 row fractures the norms over TP=4 and
+# `DistributedRMSNorm` wants embedding_dim divisible by TILE * mesh_width = 128.
+HIDDEN = 128
 TIME_EMBED_DIM = 32
 FREQ_DIM = 16
 NUM_LAYERS = 3
@@ -248,8 +250,10 @@ def test_adaln_cache_matches_the_on_device_projection(
 
     block = MiniMaxH3TransformerBlock(
         hidden_size=HIDDEN,
-        num_heads=1,
-        head_dim=HIDDEN,
+        # 4 heads, not 1: attention is never run here, but it is constructed, and its head count
+        # has to divide the TP factor for the 1x4 row to build at all.
+        num_heads=4,
+        head_dim=HIDDEN // 4,
         ffn_dim=2 * HIDDEN,
         time_embed_dim=TIME_EMBED_DIM,
         mesh_device=mesh_device,
