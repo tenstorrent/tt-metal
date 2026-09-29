@@ -8,6 +8,7 @@ watcher_runtime/
 profile/
 profile_retry/reports/
 profile_short/reports/
+**/reports/
 **/.logs/
 **/profile_log_device.csv
 **/*.tracy
@@ -25,3 +26,6 @@ profile_retry/raw_ops.csv.gz
 profile_short/raw_ops.csv.gz
 profile_retry/raw_decode_ops.csv
 profile_short/raw_decode_ops.csv
+batch8_profile_retry/raw_decode_ops.csv
+batch8_profile_retry/raw_decode_ops.csv.gz
+batch8_profile_retry/raw_decode_ops_device*.csv

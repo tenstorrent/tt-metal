@@ -1,0 +1,765 @@
+{
+    "metadata": {
+        "model_name": "gemma-4-26B-A4B-it",
+        "model_repo": "google/gemma-4-26B-A4B-it",
+        "device": "P300X2",
+        "generated_at": "2026-09-28T22:26:26+00:00",
+        "report_id": "google__gemma-4-26B-A4B-it_2026-09-28T222626+0000",
+        "workflow": "benchmarks",
+        "report_partial": false,
+        "report_blocks": 23,
+        "server_mode": "docker",
+        "run_command": "python run.py --model google/gemma-4-26B-A4B-it --workflow benchmarks --device p300x2 --docker-server --dev-mode --impl gemma4-autoport --ci-mode --override-docker-image ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-919c110d3d4331b7753c1db78618e879905ae46d-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109033860866",
+        "runtime_model_spec_json": "/home/ubuntu/actions-runner/_work/tt-agentic-bringup-qb2/tt-agentic-bringup-qb2/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-09-28_22-07-49_id_gemma4-autoport_gemma-4-26B-A4B-it_p300x2_AtaaJEJR.json",
+        "model_id": "id_gemma4-autoport_gemma-4-26B-A4B-it_p300x2",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "model_impl": "gemma4-autoport"
+    },
+    "sections": [
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 97.67,
+                "p50_ttft": 97.832,
+                "p99_ttft": 100.179,
+                "mean_tpot_ms": 20.1053,
+                "mean_e2el_ms": 2651.0381,
+                "tps_input_throughput": 48.2788,
+                "tps_output_throughput": 48.2788,
+                "tps_total_throughput": 96.5576,
+                "request_throughput": 0.3772,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 22:27:02"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 256,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4151.9505,
+                "p50_ttft": 3991.6926,
+                "p99_ttft": 6177.9952,
+                "mean_tpot_ms": 769.8839,
+                "mean_e2el_ms": 101927.2011,
+                "tps_input_throughput": 40.1852,
+                "tps_output_throughput": 40.1852,
+                "tps_total_throughput": 80.3704,
+                "request_throughput": 0.3139,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 22:40:49"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 128,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 96.1595,
+                "p50_ttft": 96.2223,
+                "p99_ttft": 96.7441,
+                "mean_tpot_ms": 20.3062,
+                "mean_e2el_ms": 20869.3735,
+                "tps_input_throughput": 6.1333,
+                "tps_output_throughput": 49.0665,
+                "tps_total_throughput": 55.1999,
+                "request_throughput": 0.0479,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 22:42:43"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 128,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 3837.9306,
+                "p50_ttft": 4000.0286,
+                "p99_ttft": 4006.5767,
+                "mean_tpot_ms": 698.5906,
+                "mean_e2el_ms": 718496.0731,
+                "tps_input_throughput": 5.7008,
+                "tps_output_throughput": 45.6063,
+                "tps_total_throughput": 51.3071,
+                "request_throughput": 0.0445,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 23:31:06"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 1024,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 530.2237,
+                "p50_ttft": 530.1132,
+                "p99_ttft": 531.8866,
+                "mean_tpot_ms": 20.6601,
+                "mean_e2el_ms": 3154.054,
+                "tps_input_throughput": 324.6366,
+                "tps_output_throughput": 40.5796,
+                "tps_total_throughput": 365.2162,
+                "request_throughput": 0.317,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 23:31:33"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 1024,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 16166.4713,
+                "p50_ttft": 16707.8487,
+                "p99_ttft": 16712.9528,
+                "mean_tpot_ms": 785.9369,
+                "mean_e2el_ms": 115980.4551,
+                "tps_input_throughput": 282.5271,
+                "tps_output_throughput": 35.3159,
+                "tps_total_throughput": 317.843,
+                "request_throughput": 0.2759,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 23:39:29"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 2048,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 1053.563,
+                "p50_ttft": 1053.8571,
+                "p99_ttft": 1055.5036,
+                "mean_tpot_ms": 22.926,
+                "mean_e2el_ms": 3965.1601,
+                "tps_input_throughput": 516.4686,
+                "tps_output_throughput": 32.2793,
+                "tps_total_throughput": 548.7478,
+                "request_throughput": 0.2522,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 23:39:58"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 2048,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 32110.2275,
+                "p50_ttft": 33146.8468,
+                "p99_ttft": 33195.2307,
+                "mean_tpot_ms": 792.0333,
+                "mean_e2el_ms": 132698.4585,
+                "tps_input_throughput": 493.8664,
+                "tps_output_throughput": 30.8667,
+                "tps_total_throughput": 524.7331,
+                "request_throughput": 0.2411,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 23:49:02"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 2095.2046,
+                "p50_ttft": 2097.1871,
+                "p99_ttft": 2104.5048,
+                "mean_tpot_ms": 23.232,
+                "mean_e2el_ms": 5045.6676,
+                "tps_input_throughput": 811.7457,
+                "tps_output_throughput": 25.3671,
+                "tps_total_throughput": 837.1127,
+                "request_throughput": 0.1982,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-28 23:49:37"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 63993.3502,
+                "p50_ttft": 65992.6913,
+                "p99_ttft": 66132.3648,
+                "mean_tpot_ms": 800.6016,
+                "mean_e2el_ms": 165669.7597,
+                "tps_input_throughput": 791.1557,
+                "tps_output_throughput": 24.7236,
+                "tps_total_throughput": 815.8793,
+                "request_throughput": 0.1932,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 00:00:54"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4185.9837,
+                "p50_ttft": 4185.9837,
+                "p99_ttft": 4205.9838,
+                "mean_tpot_ms": 23.1779,
+                "mean_e2el_ms": 7129.5738,
+                "tps_input_throughput": 1148.9723,
+                "tps_output_throughput": 17.9527,
+                "tps_total_throughput": 1166.925,
+                "request_throughput": 0.1403,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 00:01:25"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 31,
+                "num_requests": 62,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 124854.9645,
+                "p50_ttft": 128518.8862,
+                "p99_ttft": 129233.2415,
+                "mean_tpot_ms": 831.7424,
+                "mean_e2el_ms": 230486.2481,
+                "tps_input_throughput": 1101.7933,
+                "tps_output_throughput": 17.2155,
+                "tps_total_throughput": 1119.0088,
+                "request_throughput": 0.1345,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 00:09:23"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 4184.8513,
+                "p50_ttft": 4184.8513,
+                "p99_ttft": 4208.122,
+                "mean_tpot_ms": 21.1184,
+                "mean_e2el_ms": 25788.9673,
+                "tps_input_throughput": 317.6517,
+                "tps_output_throughput": 39.7065,
+                "tps_total_throughput": 357.3581,
+                "request_throughput": 0.0388,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 00:10:49"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 28,
+                "num_requests": 56,
+                "input_sequence_length": 8192,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 112548.7269,
+                "p50_ttft": 116370.942,
+                "p99_ttft": 116751.0811,
+                "mean_tpot_ms": 655.8922,
+                "mean_e2el_ms": 783526.4774,
+                "tps_input_throughput": 292.7471,
+                "tps_output_throughput": 36.5934,
+                "tps_total_throughput": 329.3405,
+                "request_throughput": 0.0357,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 00:37:32"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 10000,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 5207.6292,
+                "p50_ttft": 5207.6292,
+                "p99_ttft": 5230.7365,
+                "mean_tpot_ms": 21.0922,
+                "mean_e2el_ms": 26784.9503,
+                "tps_input_throughput": 373.3402,
+                "tps_output_throughput": 38.23,
+                "tps_total_throughput": 411.5703,
+                "request_throughput": 0.0373,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 00:39:14"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 23,
+                "num_requests": 46,
+                "input_sequence_length": 10000,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 114258.2384,
+                "p50_ttft": 119119.948,
+                "p99_ttft": 119306.5075,
+                "mean_tpot_ms": 541.5443,
+                "mean_e2el_ms": 668258.0111,
+                "tps_input_throughput": 344.1769,
+                "tps_output_throughput": 35.2437,
+                "tps_total_throughput": 379.4206,
+                "request_throughput": 0.0344,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:02:07"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 16384,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 8414.531,
+                "p50_ttft": 8414.531,
+                "p99_ttft": 8423.9354,
+                "mean_tpot_ms": 23.2071,
+                "mean_e2el_ms": 11361.8355,
+                "tps_input_throughput": 1441.9875,
+                "tps_output_throughput": 11.2655,
+                "tps_total_throughput": 1453.253,
+                "request_throughput": 0.088,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:02:51"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 15,
+                "num_requests": 30,
+                "input_sequence_length": 16384,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 117877.233,
+                "p50_ttft": 125280.4455,
+                "p99_ttft": 126105.4009,
+                "mean_tpot_ms": 458.3661,
+                "mean_e2el_ms": 176089.7219,
+                "tps_input_throughput": 1395.6319,
+                "tps_output_throughput": 10.9034,
+                "tps_total_throughput": 1406.5352,
+                "request_throughput": 0.0852,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:09:05"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 32768,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 16467.1986,
+                "p50_ttft": 16467.1986,
+                "p99_ttft": 16467.1986,
+                "mean_tpot_ms": 23.5109,
+                "mean_e2el_ms": 19453.0837,
+                "tps_input_throughput": 1684.4342,
+                "tps_output_throughput": 6.5798,
+                "tps_total_throughput": 1691.014,
+                "request_throughput": 0.0514,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:09:54"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 7,
+                "num_requests": 7,
+                "input_sequence_length": 32768,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 105686.6105,
+                "p50_ttft": 120543.6472,
+                "p99_ttft": 120546.3951,
+                "mean_tpot_ms": 318.4026,
+                "mean_e2el_ms": 146123.7456,
+                "tps_input_throughput": 1569.7056,
+                "tps_output_throughput": 6.1317,
+                "tps_total_throughput": 1575.8373,
+                "request_throughput": 0.0479,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:12:49"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 65536,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 34253.1317,
+                "p50_ttft": 34253.1317,
+                "p99_ttft": 34253.1317,
+                "mean_tpot_ms": 23.9918,
+                "mean_e2el_ms": 37300.0955,
+                "tps_input_throughput": 1756.977,
+                "tps_output_throughput": 3.4316,
+                "tps_total_throughput": 1760.4086,
+                "request_throughput": 0.0268,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:14:15"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 3,
+                "num_requests": 3,
+                "input_sequence_length": 65536,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 82486.969,
+                "p50_ttft": 106594.1212,
+                "p99_ttft": 106595.6771,
+                "mean_tpot_ms": 288.9172,
+                "mean_e2el_ms": 119179.4581,
+                "tps_input_throughput": 1649.6645,
+                "tps_output_throughput": 3.222,
+                "tps_total_throughput": 1652.8865,
+                "request_throughput": 0.0252,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:17:01"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 131072,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 74152.9897,
+                "p50_ttft": 74152.9897,
+                "p99_ttft": 74152.9897,
+                "mean_tpot_ms": 24.86,
+                "mean_e2el_ms": 77310.2071,
+                "tps_input_throughput": 1695.3963,
+                "tps_output_throughput": 1.6557,
+                "tps_total_throughput": 1697.052,
+                "request_throughput": 0.0129,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 01:19:48"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "NA",
+                "total": 23,
+                "passed": 0,
+                "failed": 0,
+                "na": 23,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Agentic Targets",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \ud83d\udfe8 `NA` (0/23 passed, 23 NA)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- Agentic Targets: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+}

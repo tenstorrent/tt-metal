@@ -1,0 +1,75 @@
+{
+  "batch": 32,
+  "rows": [
+    {
+      "layer": 0,
+      "step": 0,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 0,
+      "step": 1,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 0,
+      "step": 2,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 5,
+      "step": 0,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 5,
+      "step": 1,
+      "exact_output": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 5,
+      "step": 2,
+      "exact_output": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    }
+  ],
+  "fixtures": {
+    "doc/optimized_decoder/actual_text_layer0_4096_128.pt": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+    "doc/optimized_decoder/actual_text_layer5_4096_128.pt": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+  },
+  "candidate": "runtime",
+  "passed": true,
+  "source_sha256": {
+    "tests/check_tsu_batch.py": "2193783852c2e0a5463964ca5d8546c4cc13f8eac04cb60a3b7d70247bc1be83",
+    "tests/tsu_batch_candidate.py": "ba2586f8c3c66028a7cf3606317a235c4074806991bf2ad295f628edd7786bc9",
+    "tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+    "tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "tt/generator.py": "92bc9a64bad64cf7f3b4dbda01293824c515030f9f861ee97091350521bb3091",
+    "tt/generator_vllm.py": "ab0aed5cae4ad38ae36fb8717f56eed2a67ec75681ebd1a56ce160ef71e353df",
+    "tt/model.py": "f52a55d7976779dec1f9e011d72c74bbef76d72bad19f44279a8bc4a8be63d8e",
+    "tt/multichip_decoder.py": "cde38d24834f748416b0d4a44954c0f228db72586c3f5eea6f01b43af8686144",
+    "tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+    "tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+    "tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+    "tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+    "tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672"
+  }
+}

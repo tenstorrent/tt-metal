@@ -1,0 +1,287 @@
+{
+  "scope": "Matched serving benchmark cohorts; TSU is 1000 / mean TPOT",
+  "control": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch_control_async/bench",
+  "candidate": "/home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch_control_async/bench",
+  "source_sha256": "e5140fbb831f15db2b95e6020a87bdfd95e8763282f73d444362f31ec1ba941a",
+  "rows": [
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 19.46190205278007,
+        "mean_ttft_ms": 2154.7219411004335,
+        "mean_e2el_ms": 4626.383501803502,
+        "median_itl_ms": 19.580780528485775,
+        "output_throughput": 27.66598503679452,
+        "tsu": 51.38243925429443
+      },
+      "candidate": {
+        "mean_tpot_ms": 19.46190205278007,
+        "mean_ttft_ms": 2154.7219411004335,
+        "mean_e2el_ms": 4626.383501803502,
+        "median_itl_ms": 19.580780528485775,
+        "output_throughput": 27.66598503679452,
+        "tsu": 51.38243925429443
+      }
+    },
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "repeat": 1,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 19.705852530310004,
+        "mean_ttft_ms": 2108.225082978606,
+        "mean_e2el_ms": 4610.868354327977,
+        "median_itl_ms": 19.586002454161644,
+        "output_throughput": 27.759089162634734,
+        "tsu": 50.746345455588795
+      },
+      "candidate": {
+        "mean_tpot_ms": 19.705852530310004,
+        "mean_ttft_ms": 2108.225082978606,
+        "mean_e2el_ms": 4610.868354327977,
+        "median_itl_ms": 19.586002454161644,
+        "output_throughput": 27.759089162634734,
+        "tsu": 50.746345455588795
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        32
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 680.3012794998792,
+        "mean_ttft_ms": 14624.088156764628,
+        "mean_e2el_ms": 101022.3506532493,
+        "median_itl_ms": 677.3648764938116,
+        "output_throughput": 40.54470751309608,
+        "tsu": 1.4699369678315848
+      },
+      "candidate": {
+        "mean_tpot_ms": 680.3012794998792,
+        "mean_ttft_ms": 14624.088156764628,
+        "mean_e2el_ms": 101022.3506532493,
+        "median_itl_ms": 677.3648764938116,
+        "output_throughput": 40.54470751309608,
+        "tsu": 1.4699369678315848
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        32
+      ],
+      "repeat": 1,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 680.5583416070884,
+        "mean_ttft_ms": 14446.18259218987,
+        "mean_e2el_ms": 100877.0919762901,
+        "median_itl_ms": 677.3217101581395,
+        "output_throughput": 40.602951667290924,
+        "tsu": 1.4693817397617575
+      },
+      "candidate": {
+        "mean_tpot_ms": 680.5583416070884,
+        "mean_ttft_ms": 14446.18259218987,
+        "mean_e2el_ms": 100877.0919762901,
+        "median_itl_ms": 677.3217101581395,
+        "output_throughput": 40.602951667290924,
+        "tsu": 1.4693817397617575
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        8,
+        16
+      ],
+      "repeat": 0,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 180.50950552349704,
+        "mean_ttft_ms": 3787.641962815542,
+        "mean_e2el_ms": 26712.349164299667,
+        "median_itl_ms": 177.72315116599202,
+        "output_throughput": 38.333541588342875,
+        "tsu": 5.539874463119779
+      },
+      "candidate": {
+        "mean_tpot_ms": 180.50950552349704,
+        "mean_ttft_ms": 3787.641962815542,
+        "mean_e2el_ms": 26712.349164299667,
+        "median_itl_ms": 177.72315116599202,
+        "output_throughput": 38.333541588342875,
+        "tsu": 5.539874463119779
+      }
+    },
+    {
+      "shape": [
+        128,
+        128,
+        8,
+        16
+      ],
+      "repeat": 1,
+      "checks": {
+        "identical_harness_command": true,
+        "complete": true,
+        "generated_texts_equal": true,
+        "input_lens_equal": true,
+        "output_lens_equal": true,
+        "model_id_equal": true,
+        "tokenizer_id_equal": true
+      },
+      "control": {
+        "mean_tpot_ms": 180.40248043890162,
+        "mean_ttft_ms": 3175.515486218501,
+        "mean_e2el_ms": 26086.630501959007,
+        "median_itl_ms": 177.7049251832068,
+        "output_throughput": 39.252972020729224,
+        "tsu": 5.54316103396748
+      },
+      "candidate": {
+        "mean_tpot_ms": 180.40248043890162,
+        "mean_ttft_ms": 3175.515486218501,
+        "mean_e2el_ms": 26086.630501959007,
+        "median_itl_ms": 177.7049251832068,
+        "output_throughput": 39.252972020729224,
+        "tsu": 5.54316103396748
+      }
+    }
+  ],
+  "pooled": [
+    {
+      "shape": [
+        4096,
+        128,
+        1,
+        4
+      ],
+      "repeats": 2,
+      "control": {
+        "mean_tpot_ms": 19.583877291545036,
+        "mean_ttft_ms": 2131.47351203952,
+        "mean_e2el_ms": 4618.62592806574,
+        "median_itl_ms": 19.58339149132371,
+        "tsu": 51.062411447590655
+      },
+      "candidate": {
+        "mean_tpot_ms": 19.583877291545036,
+        "mean_ttft_ms": 2131.47351203952,
+        "mean_e2el_ms": 4618.62592806574,
+        "median_itl_ms": 19.58339149132371,
+        "tsu": 51.062411447590655
+      },
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        128,
+        128,
+        32,
+        32
+      ],
+      "repeats": 2,
+      "control": {
+        "mean_tpot_ms": 680.4298105534838,
+        "mean_ttft_ms": 14535.13537447725,
+        "mean_e2el_ms": 100949.7213147697,
+        "median_itl_ms": 677.3432933259755,
+        "tsu": 1.4696593013562522
+      },
+      "candidate": {
+        "mean_tpot_ms": 680.4298105534838,
+        "mean_ttft_ms": 14535.13537447725,
+        "mean_e2el_ms": 100949.7213147697,
+        "median_itl_ms": 677.3432933259755,
+        "tsu": 1.4696593013562522
+      },
+      "tsu_gain_percent": 0.0
+    },
+    {
+      "shape": [
+        128,
+        128,
+        8,
+        16
+      ],
+      "repeats": 2,
+      "control": {
+        "mean_tpot_ms": 180.45599298119933,
+        "mean_ttft_ms": 3481.5787245170213,
+        "mean_e2el_ms": 26399.489833129337,
+        "median_itl_ms": 177.7140381745994,
+        "tsu": 5.5415172612426575
+      },
+      "candidate": {
+        "mean_tpot_ms": 180.45599298119933,
+        "mean_ttft_ms": 3481.5787245170213,
+        "mean_e2el_ms": 26399.489833129337,
+        "median_itl_ms": 177.7140381745994,
+        "tsu": 5.5415172612426575
+      },
+      "tsu_gain_percent": 0.0
+    }
+  ],
+  "passed": true
+}
