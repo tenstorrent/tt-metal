@@ -112,6 +112,7 @@ struct AccumulatorHalf {
 // When each core processes exactly 1 Q chunk, this state carries across ring iterations.
 struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
+    bool tl_has_tot = false;  // two-level: the total CBs hold this Q chunk's total (single Q-chunk path)
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
@@ -2243,6 +2244,189 @@ void sdpa_standard_v2(
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Two-level softmax accumulation (SDPA_RING_TWO_LEVEL, host opt-in; see ring_joint_sdpa_program_factory.cpp).
+//
+// The streaming ring path keeps one raw bf16 (max, sum, out) accumulation over every K chunk of every ring
+// iteration. Once the running sum is ~2^9 x a chunk's contribution, bf16 rounding drops (or rounds up) the
+// contribution -- the output drifts by 10s of % at 200K+ keys. Two levels: each ring iteration (and every
+// SDPA_TL_FOLD_EVERY K chunks) accumulates a fresh block, merged into a separate total at its end:
+//   m = max(m_T, m_B); a_T = exp(s*(m_T - m)); a_B = exp(s*(m_B - m)); l = a_T*l_T + a_B*l_B; O = a_T*O_T + a_B*O_B.
+// All helpers are templates so kernels built without the flag instantiate none of them. The host enables the
+// mode only when every CB involved is bf16, so no unpack/pack data-format reconfig is needed here.
+// ---------------------------------------------------------------------------------------------------
+#ifndef SDPA_RING_TWO_LEVEL
+#define SDPA_RING_TWO_LEVEL 0
+#endif
+#ifndef SDPA_TL_FOLD_EVERY
+#define SDPA_TL_FOLD_EVERY 0
+#endif
+#ifndef SDPA_TL_L1_TOTAL
+#define SDPA_TL_L1_TOTAL 0
+#endif
+#ifndef SDPA_TL_OUT_CB
+#define SDPA_TL_OUT_CB 0
+#define SDPA_TL_SUM_CB 0
+#define SDPA_TL_MAX_CB 0
+#endif
+#ifndef SDPA_TL_M_CB
+#define SDPA_TL_M_CB 0
+#define SDPA_TL_ALPHA_CB 0
+#endif
+
+// Copy n tiles from the front of in_cb to the back of out_cb (pops in_cb), up to `batch` tiles per DEST
+// acquire. batch <= vDHt keeps it within half of cb_out (2 * qktv_h * vDHt tiles), which the writer drains
+// concurrently when out_cb is the staging output.
+template <uint32_t batch>
+__attribute__((noinline, noclone)) void tl_copy_tiles(uint32_t in_cb, uint32_t out_cb, uint32_t n) {
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    copy_init(in_cb);
+    configure_single_tile_pack(out_cb);
+    for (uint32_t i = 0; i < n; i += batch) {
+        const uint32_t b = (n - i) < batch ? (n - i) : batch;
+        CircularBuffer(in_cb).wait_front(b);
+        CircularBuffer(out_cb).reserve_back(b);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < b; ++j) {
+            copy_tile(in_cb, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < b; ++j) {
+            pack_tile(j, out_cb);
+        }
+        tile_regs_release();
+        CircularBuffer(in_cb).pop_front(b);
+        CircularBuffer(out_cb).push_back(b);
+    }
+}
+
+// Move a whole accumulator (out, max, sum) from src to dst.
+template <uint32_t Sq_chunk_t, uint32_t vDHt>
+__attribute__((noinline, noclone)) void tl_copy_half(const AccumulatorHalf src, const AccumulatorHalf dst) {
+    constexpr uint32_t dst_limit = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t batch = vDHt < dst_limit ? vDHt : dst_limit;
+    tl_copy_tiles<batch>(src.out, dst.out, Sq_chunk_t * vDHt);
+    tl_copy_tiles<batch>(src.max, dst.max, Sq_chunk_t);
+    tl_copy_tiles<batch>(src.sum, dst.sum, Sq_chunk_t);
+}
+
+// D = merge(T, B); pops T and B. D must not alias T or B (callers fold into the total via a free scratch
+// half + tl_copy_half). Processed one sbh-row group at a time, so the scratch CBs (m, alpha_t, and alpha_b =
+// the caller's cb_exp_max_diff) need only sbh tiles; inputs are popped row group by row group (as the per-chunk
+// SALAD pops prev.out). sbh = the caller's qktv_h when it divides Sq_chunk_t, so the SALAD instantiation is shared.
+template <uint32_t Sq_chunk_t, uint32_t vDHt, uint32_t scale_fp32, uint32_t sbh>
+__attribute__((noinline, noclone)) void tl_merge(
+    const AccumulatorHalf T, const AccumulatorHalf B, const AccumulatorHalf D, uint32_t alpha_b_cb) {
+    static_assert(Sq_chunk_t % sbh == 0, "tl_merge: sbh must divide Sq_chunk_t");
+    constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t m_cb = SDPA_TL_M_CB;
+    constexpr uint32_t alpha_t_cb = SDPA_TL_ALPHA_CB;
+    CircularBuffer(D.out).reserve_back(Sq_chunk_t * vDHt);
+    CircularBuffer(D.sum).reserve_back(Sq_chunk_t);
+    CircularBuffer(D.max).reserve_back(Sq_chunk_t);
+    for (uint32_t r = 0; r < Sq_chunk_t / sbh; ++r) {
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        // 1) Reference max m = m_B + relu(m_T - m_B) -> m_cb and D.max. FPU sub/add + packer ReLU (already in this
+        //    kernel; an SFPU binary max would not fit the kernel-config buffer). m only has to be one consistent
+        //    reference for both alphas, so its bf16 rounding is harmless. alpha_t_cb holds relu(m_T - m_B) first.
+        CircularBuffer(T.max).wait_front(sbh);
+        CircularBuffer(B.max).wait_front(sbh);
+        configure_single_tile_pack(alpha_t_cb);
+        CircularBuffer(alpha_t_cb).reserve_back(sbh);
+        sub_init(T.max, B.max);
+        PACK((llk_pack_relu_config(ReluConfig::zero())));
+        for (uint32_t i = 0; i < sbh; ++i) {
+            tile_regs_acquire();
+            sub_tiles(T.max, B.max, i, i, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, alpha_t_cb);
+            tile_regs_release();
+        }
+        PACK((llk_pack_relu_config(ReluConfig::none())));
+        CircularBuffer(alpha_t_cb).push_back(sbh);
+        CircularBuffer(alpha_t_cb).wait_front(sbh);
+        CircularBuffer(m_cb).reserve_back(sbh);
+        add_tiles_init(B.max, alpha_t_cb);
+        for (uint32_t i = 0; i < sbh; ++i) {
+            tile_regs_acquire();
+            add_tiles(B.max, alpha_t_cb, i, i, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, m_cb);
+            pack_tile(0, D.max);
+            tile_regs_release();
+        }
+        CircularBuffer(m_cb).push_back(sbh);
+        CircularBuffer(alpha_t_cb).pop_front(sbh);
+
+        // 2) a_B = exp(s*(m_B - m)), a_T = exp(s*(m_T - m)) (first column, as the per-chunk SALAD does).
+        exp_packthread_tile_init<EXP_APPROX_MODE>();
+        for (uint32_t k = 0; k < 2; ++k) {
+            const uint32_t src_max = k ? T.max : B.max;
+            const uint32_t alpha_cb = k ? alpha_t_cb : alpha_b_cb;
+            CircularBuffer(alpha_cb).reserve_back(sbh);
+            sub_exp_first_col_blocks<false, scale_fp32>(src_max, m_cb, alpha_cb, 0, sbh);
+            CircularBuffer(alpha_cb).push_back(sbh);
+        }
+
+        // 3) D rows = a_B*B (overwrite), then += a_T*T (packer L1 accumulate) -- out and sum together.
+        for (uint32_t k = 0; k < 2; ++k) {
+            const AccumulatorHalf& src = k ? T : B;
+            const uint32_t alpha_cb = k ? alpha_t_cb : alpha_b_cb;
+            PACK((llk_pack_reconfig_l1_acc(k)));
+            salad_correct_fused<sbh, vDHt, dst_size>(src.out, src.sum, alpha_cb, D.out, D.sum, 0, 0, r);
+        }
+        PACK((llk_pack_reconfig_l1_acc(0)));
+
+        // 4) Release this row group's inputs.
+        CircularBuffer(m_cb).pop_front(sbh);
+        CircularBuffer(alpha_t_cb).pop_front(sbh);
+        CircularBuffer(alpha_b_cb).pop_front(sbh);
+        CircularBuffer(B.out).pop_front(sbh * vDHt);
+        CircularBuffer(B.sum).pop_front(sbh);
+        CircularBuffer(B.max).pop_front(sbh);
+        CircularBuffer(T.out).pop_front(sbh * vDHt);
+        CircularBuffer(T.sum).pop_front(sbh);
+        CircularBuffer(T.max).pop_front(sbh);
+    }
+    CircularBuffer(D.out).push_back(Sq_chunk_t * vDHt);
+    CircularBuffer(D.sum).push_back(Sq_chunk_t);
+    CircularBuffer(D.max).push_back(Sq_chunk_t);
+}
+
+// All CBs are bf16 when two-level is enabled (host-enforced), so only the packer L1-acc state needs resetting.
+template <uint32_t srca_cb, uint32_t srcb_cb, uint32_t pack_cb>
+ALWI void tl_restore_formats_fn() {
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
+// dst = merge(T, B) via the free scratch half; or, without a total yet, dst = B. Restores step formats.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t sbh,
+    uint32_t srca_cb,
+    uint32_t srcb_cb,
+    uint32_t pack_cb>
+__attribute__((noinline, noclone)) void tl_merge_copy(
+    const AccumulatorHalf T,
+    const bool has_tot,
+    const AccumulatorHalf B,
+    const AccumulatorHalf scratch,
+    const AccumulatorHalf dst,
+    const uint32_t alpha_b_cb) {
+    if (has_tot) {
+        tl_merge<Sq_chunk_t, vDHt, scale_fp32, sbh>(T, B, scratch, alpha_b_cb);
+        tl_copy_half<Sq_chunk_t, vDHt>(scratch, dst);
+    } else {
+        tl_copy_half<Sq_chunk_t, vDHt>(B, dst);
+    }
+    tl_restore_formats_fn<srca_cb, srcb_cb, pack_cb>();
+}
+
 /**
  * Streaming Ring SDPA (v2): Ring-aware variant of sdpa_standard_v2 with deferred normalization.
  * Accumulates raw (un-normalized) softmax state across ring iterations; normalizes once on the
@@ -2381,6 +2565,20 @@ void sdpa_ring_v2(
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
     static_assert(!has_sliding_window || chunked_enabled, "Sliding windows require chunked prefill");
+    // Two-level accumulation (see tl_merge). The host only enables it for configs this path supports.
+    constexpr bool two_level =
+        SDPA_RING_TWO_LEVEL && !has_sliding_window && !use_l1_state_fifo && !is_balanced_sdpa && !use_attention_sink;
+    // Folds must update the total in place, so they need the L1 total (the host allocates it for them).
+    [[maybe_unused]] constexpr uint32_t tl_fold_every = SDPA_TL_L1_TOTAL ? SDPA_TL_FOLD_EVERY : 0;
+    [[maybe_unused]] constexpr AccumulatorHalf tl_tot = {SDPA_TL_SUM_CB, SDPA_TL_MAX_CB, SDPA_TL_OUT_CB};
+    // Same row height as the per-chunk SALAD (sdpa_inner_loop_step), so tl_merge shares its instantiation.
+    [[maybe_unused]] constexpr uint32_t tl_qktv_h = ttnn::transformer::sdpa::streaming_qktv_h(
+        qktv_subblock_h, qktv_subblock_w, compute_kernel_lib::DEST_AUTO_LIMIT, Sq_chunk_t);
+    [[maybe_unused]] constexpr uint32_t tl_sbh = (Sq_chunk_t % tl_qktv_h == 0) ? tl_qktv_h : 1;
+    // Unpack/pack formats sdpa_inner_loop_step assumes on entry (its maybe-reconfigs are compile-time deltas).
+    [[maybe_unused]] auto tl_restore_formats = [&]() {
+        tl_restore_formats_fn<cb_qkt_im, cb_identity_scale_in, cb_normalized_out>();
+    };
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
     const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_enabled;
 
@@ -2419,6 +2617,12 @@ void sdpa_ring_v2(
     }
 
     uint32_t KV_chunks_processed_in_iter = 0;
+
+#if defined(SDPA_KSPLIT) && SDPA_KSPLIT > 1
+    // K split: this Q unit's partition (virtual head / SDPA_KSPLIT_NH); it only processes K chunks k with
+    // k % SDPA_KSPLIT == ksplit_part (the reader skips the others the same way).
+    uint32_t ksplit_part = 0;
+#endif
 
     // ---- Q-loop helpers ---------------------------------------------------
 
@@ -2482,6 +2686,11 @@ void sdpa_ring_v2(
             }
             return false;
         }
+#if defined(SDPA_KSPLIT) && SDPA_KSPLIT > 1
+        if (k_chunk % SDPA_KSPLIT != ksplit_part) {
+            return true;
+        }
+#endif
         return !kv_chunk_starts_before_logical_end<
             kv_pad_rotation_enabled,
             chunked_enabled,
@@ -2521,6 +2730,9 @@ void sdpa_ring_v2(
             q_flat = rotated_slots.at(q);
         }
         uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+#if defined(SDPA_KSPLIT) && SDPA_KSPLIT > 1
+        ksplit_part = ((q_flat / num_q_chunks) % (SDPA_KSPLIT_NH * SDPA_KSPLIT)) / SDPA_KSPLIT_NH;
+#endif
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
@@ -2602,7 +2814,38 @@ void sdpa_ring_v2(
         // guarantees it), so the first K chunk merges straight out of the FIFO and pops it.
         // The staging path builds the identical triple, so both share one redirect.
         const bool fifo_entry = use_l1_state_fifo && !is_first_active_iter;
-        if (restore_from_staging || fifo_entry) {
+        // Two-level: the restored state is the TOTAL; this ring iteration accumulates a fresh block, merged
+        // into the total at its last K chunk. Without intra-ring folds the total simply stays in the staging
+        // CBs until that merge (no extra L1). The merge lands in scratch and pops the staging total BEFORE
+        // writing the staging outputs: the writer's prefetch of the next Q blocks on cb_prev_out space and
+        // its deferred save of the previous Q frees cb_out, so that order is the one that cannot deadlock.
+        // With folds the total must be updatable, so it is copied into the L1 total here.
+        bool tl_has_tot = false;
+        uint32_t tl_block_kv = 0;
+        bool tl_merged_to_staging = false;
+        AccumulatorHalf tl_T = tl_tot;
+        if constexpr (two_level) {
+            if (SDPA_TL_L1_TOTAL && q_per_core == 1) {
+                tl_has_tot = acc_state.tl_has_tot;
+            } else if (restore_from_staging) {
+                tl_has_tot = true;
+                if constexpr (tl_fold_every > 0) {
+                    tl_merge_copy<
+                        Sq_chunk_t,
+                        vDHt,
+                        scale_fp32,
+                        tl_sbh,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_normalized_out>(
+                        tl_tot, false, {cb_sum_in, cb_max_in, cb_prev_out}, tl_tot, tl_tot, cb_exp_max_diff);
+                } else {
+                    tl_T = {cb_sum_in, cb_max_in, cb_prev_out};
+                }
+            }
+        }
+        const bool redirect_prev_to_staging = !two_level && (restore_from_staging || fifo_entry);
+        if (redirect_prev_to_staging) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
 
@@ -2630,12 +2873,21 @@ void sdpa_ring_v2(
             }
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
+            if constexpr (two_level) {
+                tl_block_kv++;
+            }
 
-            const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+            // Two-level: every block starts fresh (the total lives in the tl CBs).
+            const bool is_first =
+                two_level ? (tl_block_kv == 1) : (is_first_kv_for_this_q && (KV_chunks_processed == 1));
             const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
+            // Two-level: a total exists at the last K chunk -> the step leaves the block in scratch and the
+            // merge (below) writes the staging / normalized output instead of the step.
+            const bool tl_final_merge = two_level && is_last_k && tl_has_tot;
+
             // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k && !tl_final_merge;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
@@ -2765,7 +3017,7 @@ void sdpa_ring_v2(
             // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
             // to writer-staging CBs, eliminating post-loop copy_block calls.
             // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
-            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1 && !tl_final_merge;
             ASSERT(!has_sliding_window || !save_to_staging);
             // FIFO exit: sum/out redirect into the FIFO (pack-only, write-pointer relative). max
             // cannot — the step reads cur.max front-relative — so mirror it via step_save_max_cb.
@@ -2908,8 +3160,59 @@ void sdpa_ring_v2(
                 std::swap(q_prev, q_cur);
                 // After K0's swap, q_cur holds the staging/FIFO buffers. Reset to the scratch
                 // accumulator CBs so the rest of the pass ping-pongs between scratch halves.
-                if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
+                if (redirect_prev_to_staging && KV_chunks_processed == 1) {
                     q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                }
+            }
+
+            // Two-level: fold the finished block (q_prev after the swap) into the total, or finish.
+            if constexpr (two_level) {
+                if (tl_final_merge) {
+                    if (is_last_ring_iter) {
+                        tl_merge<Sq_chunk_t, vDHt, scale_fp32, tl_sbh>(tl_T, q_prev, q_cur, cb_exp_max_diff);
+                        normalize_row_streaming<
+                            false,
+                            vDHt,
+                            compute_kernel_lib::DEST_AUTO_LIMIT,
+                            cb_col_identity,
+                            cb_recip_scratch,
+                            cb_normalized_out,
+                            scale_fp32,
+                            use_attention_sink,
+                            cb_attention_sink>(q_cur.sum, q_cur.out, Sq_chunk_t, q_cur.max);
+                        sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+                        tl_has_tot = false;
+                        tl_restore_formats();
+                    } else {
+                        // Multi Q-chunk -> writer staging; single Q-chunk -> the L1 total.
+                        const AccumulatorHalf dst =
+                            q_per_core > 1 ? AccumulatorHalf{cb_sum_out, cb_max_out, cb_out} : tl_tot;
+                        tl_merge_copy<
+                            Sq_chunk_t,
+                            vDHt,
+                            scale_fp32,
+                            tl_sbh,
+                            cb_qkt_im,
+                            cb_identity_scale_in,
+                            cb_normalized_out>(tl_T, true, q_prev, q_cur, dst, cb_exp_max_diff);
+                        tl_has_tot = q_per_core == 1;
+                        tl_merged_to_staging = q_per_core > 1;
+                    }
+                } else if (
+                    (!is_last_k && tl_fold_every > 0 && tl_block_kv == tl_fold_every) ||
+                    (SDPA_TL_L1_TOTAL && is_last_k && q_per_core == 1 && !is_last_ring_iter)) {
+                    // Intra-ring fold, or (single Q-chunk) the first block ending at a ring boundary: the block
+                    // is merged into -- or becomes -- the L1 total, and the next K chunk starts a fresh block.
+                    tl_merge_copy<
+                        Sq_chunk_t,
+                        vDHt,
+                        scale_fp32,
+                        tl_sbh,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_normalized_out>(tl_T, tl_has_tot, q_prev, q_cur, tl_tot, cb_exp_max_diff);
+                    tl_has_tot = true;
+                    tl_block_kv = 0;
                 }
             }
         }
@@ -2938,7 +3241,10 @@ void sdpa_ring_v2(
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;
-        } else if (!is_last_ring_iter) {
+            if constexpr (two_level) {
+                acc_state.tl_has_tot = tl_has_tot;
+            }
+        } else if (!is_last_ring_iter && !tl_merged_to_staging) {
             // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
             // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
             // Sum already in cb_sum_out (redirected via q_cur.sum on last K-chunk).

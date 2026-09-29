@@ -18,6 +18,12 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    // Ring joint SDPA only: split every (head, Q chunk) over this many key partitions (K chunk k belongs to
+    // partition k % ring_k_split), each on its own core, so the work divides evenly over the grid. With > 1 the op
+    // returns per-partition raw state instead of the normalized output: output [B, NH * ring_k_split, S, DV] holds
+    // the unnormalized O of partition p at virtual head p * NH + h, stats the matching running max / sum; the caller
+    // merges them (see ttnn.transformer.ring_joint_sdpa_merge_k_split).
+    uint32_t ring_k_split = 1;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

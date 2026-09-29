@@ -227,9 +227,18 @@ inline void materialize_v_prefix_from_k(Noc noc, uint32_t kt_base_addr, uint32_t
     cb_v.push_back(v_cb_entry_tiles);
 }
 
+#ifndef SDPA_KSPLIT
+#define SDPA_KSPLIT 1
+#endif
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
+    // K split (factory: ring_k_split): the flat Q schedule runs over NH * KSPLIT virtual heads, partition-major;
+    // virtual head p * NH + h reads real head h's Q / K / V and only the K chunks k with k % KSPLIT == p. K/V
+    // chains group cores by (partition, KV head), i.e. by virtual KV head.
+    constexpr uint32_t KSPLIT = SDPA_KSPLIT;
+    constexpr uint32_t NHv = NH * KSPLIT;
     constexpr uint32_t NHK = get_compile_time_arg_val(2);
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
@@ -908,11 +917,16 @@ void kernel_main() {
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
             // iterations reuse one K/V window.  Every other specialization retains the ordinary
             // head-major flat order and optional causal zigzag remap.
-            const auto decoded_q = decompose_global_q_index(flat_q_index, num_q_chunks, NH, use_zigzag_balancing);
+            const auto decoded_q = decompose_global_q_index(flat_q_index, num_q_chunks, NHv, use_zigzag_balancing);
             const uint32_t nb = decoded_q.nb;
-            const uint32_t nq = decoded_q.nq;
+            const uint32_t nq_virtual = decoded_q.nq;
+            const uint32_t nq = nq_virtual % NH;      // real Q head (Q / K / V reads, sink)
+            const uint32_t k_part = nq_virtual / NH;  // K split partition
             const uint32_t q_chunk = decoded_q.q_chunk;
             const uint32_t nk = nq / q_heads_per_k;
+            // chain / mcast group of this unit: the virtual KV head (partition-major), == nk without a split
+            const uint32_t nk_chain = nq_virtual / q_heads_per_k;
+            const uint32_t nv_chain = nq_virtual / q_heads_per_v;
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
             const uint32_t q_iter_local = [&]() {
@@ -923,7 +937,7 @@ void kernel_main() {
                 }
             }();
             if constexpr (enable_kv_chains && gqa_grouped_kv) {
-                if (nk == gqa_cfg.head) {
+                if (nk_chain == gqa_cfg.head) {
                     gqa_group_q_iter++;
                 }
             }
@@ -1017,14 +1031,16 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = !has_sliding_window && has_joint_k && k_chunk >= num_local_k_chunks;
+                // K split: another partition's chunk is skipped exactly like an out-of-range one (compute mirrors it)
                 const bool kv_chunk_is_beyond_logical_n =
                     !has_sliding_window && !kv_chunk_is_joint &&
-                    !kv_chunk_starts_before_logical_end<
-                        kv_pad_rotation_enabled,
-                        chunked_enabled,
-                        kv_local_padded_Nt,
-                        chunk_size_t,
-                        q_local_padded_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt);
+                    (!kv_chunk_starts_before_logical_end<
+                         kv_pad_rotation_enabled,
+                         chunked_enabled,
+                         kv_local_padded_Nt,
+                         chunk_size_t,
+                         q_local_padded_Nt>(source_ring_id, source_k_chunk * Sk_chunk_t, logical_nt) ||
+                     (KSPLIT > 1 && source_k_chunk % KSPLIT != k_part));
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
                 // range starts at ring_id * Lt_local. A joint K chunk whose global start tile is
@@ -1113,9 +1129,9 @@ void kernel_main() {
                 // K: either read locally (injector or not participant) or receive from chain
                 const uint32_t k_chain_head = [&]() {
                     if constexpr (gqa_grouped_kv) {
-                        return nk;
+                        return nk_chain;
                     } else {
-                        return nq;
+                        return nq_virtual;
                     }
                 }();
                 CircularBuffer cb_k(cb_k_in);
@@ -1179,10 +1195,9 @@ void kernel_main() {
                     // both K and V and waits for every receiver's ready signal. The data remains
                     // staging-only because we intentionally do not push it to compute.
                     if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
-                        const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(2 * v_cb_entry_tiles);
-                        if (v_chain.should_receive(nv)) {
+                        if (v_chain.should_receive(nv_chain)) {
                             v_chain.receive(noc);
                         }
                     }
@@ -1274,7 +1289,7 @@ void kernel_main() {
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
                     bool received_v_from_chain = false;
                     if constexpr (!has_sliding_window) {
-                        if (v_chain.should_receive(nv)) {
+                        if (v_chain.should_receive(nv_chain)) {
                             v_chain.receive(noc);
                             received_v_from_chain = true;
                         }
@@ -1306,7 +1321,7 @@ void kernel_main() {
                     // Forward V to next core(s) before push_back — prevents compute from
                     // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
-                        if (v_chain.should_forward(nv, q_iter_local)) {
+                        if (v_chain.should_forward(nv_chain, q_iter_local)) {
                             v_chain.forward(noc, cb_v_start_address);
                         }
                     }

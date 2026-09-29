@@ -29,7 +29,7 @@ from models.demos.mimo_v2_d_p.tt.rope import permute_heads
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_name
 
 from .kv_cache import MiMoKVCache
-from .sdpa import ring_attention
+from .sdpa import default_k_split, ring_attention
 
 
 def kv_heads_for_col(col: int, tp: int, n_q: int, n_kv: int) -> list[int]:
@@ -73,27 +73,45 @@ def attention_host_weights(cfg: MiMoTextConfig, layer_idx: int, sd: dict, tp: in
     cols = []
     for c in range(tp):
         kv_idx = kv_heads_for_col(c, tp, n_q, n_kv)
-        cols.append(torch.cat([wq[c * nq_l * hd : (c + 1) * nq_l * hd], heads(wk, kv_idx, hd), heads(wv, kv_idx, hd)], 0).T)
+        cols.append(
+            torch.cat([wq[c * nq_l * hd : (c + 1) * nq_l * hd], heads(wk, kv_idx, hd), heads(wv, kv_idx, hd)], 0).T
+        )
     sink = sd["attention_sink_bias"].float().view(1, n_q, 1, 1) * (hd**0.5) if spec.has_sink else None
     return {"wqkv": torch.cat(cols, -1), "wo": sd["o_proj.weight"].float().T.contiguous(), "sink": sink}
 
 
-def load_attention_weights(mesh_device, cfg: MiMoTextConfig, layer_idx: int, sd: dict, weight_dtype=ttnn.bfloat8_b, cache_prefix=None):
+def load_attention_weights(
+    mesh_device, cfg: MiMoTextConfig, layer_idx: int, sd: dict, weight_dtype=ttnn.bfloat8_b, cache_prefix=None
+):
     """``sd``: the layer's ``self_attn.*`` sub-state (HF names; fused qkv in global [Q|K|V] order)."""
     host = attention_host_weights(cfg, layer_idx, sd, mesh_device.shape[1])
     shape = tuple(mesh_device.shape)
     to = lambda t, dims, name, dt=weight_dtype: ttnn.as_tensor(
-        t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dt, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        t,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=dims),
         cache_file_name=cache_name(mesh_device, cache_prefix, f"attn.{name}"),
     )
     sink = None if host["sink"] is None else to(host["sink"], (None, 1), "sink", ttnn.bfloat16)
-    return AttentionWeights(wqkv=to(host["wqkv"][None, None], (None, 3), "wqkv"), wo=to(host["wo"][None, None], (None, 2), "wo"), sink=sink)
+    return AttentionWeights(
+        wqkv=to(host["wqkv"][None, None], (None, 3), "wqkv"), wo=to(host["wo"][None, None], (None, 2), "wo"), sink=sink
+    )
 
 
 class TtAttention:
-    def __init__(self, mesh_device, cfg: MiMoTextConfig, layer_idx: int, state_dict, ccl_manager, weight_dtype=ttnn.bfloat8_b,
-                 cache_prefix=None):
+    def __init__(
+        self,
+        mesh_device,
+        cfg: MiMoTextConfig,
+        layer_idx: int,
+        state_dict,
+        ccl_manager,
+        weight_dtype=ttnn.bfloat8_b,
+        cache_prefix=None,
+    ):
         self.mesh_device = mesh_device
         self.cfg = cfg
         self.layer_idx = layer_idx
@@ -109,7 +127,11 @@ class TtAttention:
         self.w = load_attention_weights(mesh_device, cfg, layer_idx, state_dict, weight_dtype, cache_prefix)
         self._pcs = {}
         self.compute_cfg = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     def _pc(self, name, a, w):
@@ -118,23 +140,48 @@ class TtAttention:
             self._pcs[key] = best_mm_config(self.mesh_device, a.shape[2], a.shape[3], w.shape[3])
         return self._pcs[key]
 
-    def __call__(self, x, rope, trans_mat, kv_cache: MiMoKVCache, *, cache_layer: int, kv_actual: int, user: int = 0, valid_end: int | None = None):
+    def __call__(
+        self,
+        x,
+        rope,
+        trans_mat,
+        kv_cache: MiMoKVCache,
+        *,
+        cache_layer: int,
+        kv_actual: int,
+        user: int = 0,
+        valid_end: int | None = None,
+    ):
         """x [1,1,S_local,H] -> [1,1,S_local,H] (replicated over TP)."""
         S_local = x.shape[2]
         sp = self.mesh_device.shape[self.sp_axis]
-        xqkv = ttnn.linear(x, self.w.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_cfg, program_config=self._pc("qkv", x, self.w.wqkv))
+        xqkv = ttnn.linear(
+            x,
+            self.w.wqkv,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_cfg,
+            program_config=self._pc("qkv", x, self.w.wqkv),
+        )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv, num_heads=self.nq_l, num_kv_heads=self.nkv_l, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            xqkv,
+            num_heads=self.nq_l,
+            num_kv_heads=self.nkv_l,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         xqkv.deallocate(True)
         # Partial rope: only the first rope_dim (64 of 192) dims of each head are rotated; the rest are copied.
-        rope_kw = dict(kv_actual_global=kv_actual, cluster_axis=self.sp_axis, rotary_dim=rope[0].shape[-1], rotary_offset=0)
+        rope_kw = dict(
+            kv_actual_global=kv_actual, cluster_axis=self.sp_axis, rotary_dim=rope[0].shape[-1], rotary_offset=0
+        )
         qr = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(q, rope[0], rope[1], trans_mat, **rope_kw)
         kr = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(k, rope[0], rope[1], trans_mat, **rope_kw)
         q.deallocate(True)
         k.deallocate(True)
         if self.v_dim != v.shape[3]:
-            vs = ttnn.slice(v, [0, 0, 0, 0], [1, self.nkv_l, S_local, self.v_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            vs = ttnn.slice(
+                v, [0, 0, 0, 0], [1, self.nkv_l, S_local, self.v_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
             v.deallocate(True)
             v = vs
 
@@ -142,8 +189,14 @@ class TtAttention:
         for cache, t in ((kv_cache.k, kr), (kv_cache.v, v)):
             src = ttnn.typecast(t, cache.dtype) if t.dtype != cache.dtype else t
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache, src, slot_idx=user, layer_idx=cache_layer, num_layers=kv_cache.num_layers,
-                kv_actual_global=kv_actual, cluster_axis=self.sp_axis, valid_global=valid_end,
+                cache,
+                src,
+                slot_idx=user,
+                layer_idx=cache_layer,
+                num_layers=kv_cache.num_layers,
+                kv_actual_global=kv_actual,
+                cluster_axis=self.sp_axis,
+                valid_global=valid_end,
             )
             if src is not t:
                 src.deallocate(True)
@@ -151,8 +204,18 @@ class TtAttention:
         v.deallocate(True)
 
         o = ring_attention(
-            qr, kv_cache, kv_actual=kv_actual, logical_n=kv_actual + S_local * sp, window=self.window, sink=self.w.sink,
-            layer_slot=slot, mesh_device=self.mesh_device, ccl_manager=self.ccl, sp_axis=self.sp_axis, scale=self.scale,
+            qr,
+            kv_cache,
+            kv_actual=kv_actual,
+            logical_n=kv_actual + S_local * sp,
+            window=self.window,
+            sink=self.w.sink,
+            layer_slot=slot,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.ccl,
+            sp_axis=self.sp_axis,
+            scale=self.scale,
+            k_split=default_k_split(self.window, S_local, kv_actual, sp),
         )
         qr.deallocate(True)
         vd = self.spec.v_head_dim
@@ -162,6 +225,12 @@ class TtAttention:
             o = os_
         oc = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         o.deallocate(True)
-        out = ttnn.linear(oc, self.w.wo, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_cfg, program_config=self._pc("o", oc, self.w.wo))
+        out = ttnn.linear(
+            oc,
+            self.w.wo,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_cfg,
+            program_config=self._pc("o", oc, self.w.wo),
+        )
         oc.deallocate(True)
         return all_reduce_tp(out, self.mesh_device)

@@ -524,7 +524,12 @@ void kernel_main() {
                 local_n_mask_chunk_id,
                 joint_n_mask_chunk_id,
                 acc_state,
+            // K split: the final iteration saves the raw (O, max, sum) like any other (the caller merges)
+#if defined(SDPA_KSPLIT) && SDPA_KSPLIT > 1
+                false,
+#else
                 is_last_ring_iter,
+#endif
                 // Rotated: NOT this iteration's count. q_per_core only selects L1-persistent vs
                 // DRAM-round-trip accumulators, and that choice must be the same on every iteration
                 // and must match the reader and writer. The fixed slot count (base + 1 >= 2) is.

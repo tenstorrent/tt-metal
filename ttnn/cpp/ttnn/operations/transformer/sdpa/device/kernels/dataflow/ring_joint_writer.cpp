@@ -473,9 +473,17 @@ inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_
     }
 }
 
+#ifndef SDPA_KSPLIT
+#define SDPA_KSPLIT 1
+#endif
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
-    constexpr uint32_t NH = get_compile_time_arg_val(1);
+    // K split (factory: ring_k_split): the writer only sees virtual heads -- the flat Q schedule and the output /
+    // stats tensors both span NH * KSPLIT heads (partition-major), and every unit saves its raw (O, max, sum) on the
+    // final ring iteration instead of writing a normalized output (the caller merges the partitions).
+    constexpr uint32_t KSPLIT = SDPA_KSPLIT;
+    constexpr uint32_t NH = get_compile_time_arg_val(1) * KSPLIT;
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
     constexpr uint32_t vDHt = get_compile_time_arg_val(3);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
@@ -882,7 +890,14 @@ void kernel_main() {
                 rotated_args_base, rotated_iter_stride, rotated_ordinal, global_q_start, global_q_end - global_q_start};
 
             const uint32_t last_q_index = q_per_core - 1;
+            // Two-level accumulation (SDPA_RING_TWO_LEVEL): compute holds the restored total in cb_prev_out until
+            // the Q chunk's last K chunk, so the prefetch below blocks for the whole K loop. Flush the previous Q's
+            // save first, or compute's end-of-Q write into cb_out would wait on that flush.
+#if defined(SDPA_RING_TWO_LEVEL) && SDPA_RING_TWO_LEVEL
+            const bool flush_before_prefetch = true;
+#else
             const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
+#endif
 
             // Saves use this iteration's chunk count. Restores must use the previous executed
             // iteration's count: gaining a float changes the last fixed slot from LAST to INNER,
@@ -1130,7 +1145,7 @@ void kernel_main() {
                     cb_sig.pop_front(1);
                 }
 
-                if (is_last_ring_iter) {
+                if (is_last_ring_iter && KSPLIT == 1) {
                     // Last-iter writes carry default trid (caller never set a non-zero trid here);
                     // pass 0 so the per-group flush waits exactly for these writes.
                     const auto& gen = [&]() -> const auto& {
@@ -1176,7 +1191,19 @@ void kernel_main() {
             // Q loop for all of them to land in DRAM, before the outer ring-iter loop advances
             // or the op teardown runs. Previously this was a per-Q barrier inside the loop.
             if (is_last_ring_iter) {
+                if constexpr (KSPLIT > 1) {
+                    // the last unit's raw state is still a deferred save
+                    if (deferred.pending) {
+                        flush_deferred_save();
+                    }
+                }
                 noc.async_write_barrier();
+                if constexpr (KSPLIT > 1) {
+                    // The final iteration's writes were all transaction-ID tagged saves (the unsplit path ends with
+                    // plain output writes): leave the write command buffer at ID 0, or the next program's plain
+                    // writes carry the stale ID and its barriers hang.
+                    noc_async_write_set_trid(0);
+                }
             }
         } else {
             for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {

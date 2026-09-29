@@ -106,6 +106,11 @@ struct RingJointSDPAParams {
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
+    // K split factor (program_config.ring_k_split; 1 = off).
+    std::uint32_t k_split() const {
+        return program_config.has_value() && program_config->ring_k_split > 1 ? program_config->ring_k_split : 1;
+    }
+
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
 
     static constexpr auto attribute_names = std::forward_as_tuple(

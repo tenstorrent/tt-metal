@@ -378,6 +378,28 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args);
 
+    // K split (program_config.ring_k_split > 1): per-partition raw state out, merged by the caller. Implemented for the
+    // chunked-prefill KV-cache path with the streaming compute only (see ring_joint_sdpa_program_factory.cpp).
+    if (const uint32_t k_split = args.k_split(); k_split > 1) {
+        TT_FATAL(k_split <= 8, "RingJointSDPA ring_k_split must be <= 8, got {}", k_split);
+        TT_FATAL(
+            !get_fp32_dest_acc_en(args.compute_kernel_config),
+            "RingJointSDPA ring_k_split needs the streaming compute (fp32_dest_acc_en=false)");
+        TT_FATAL(
+            args.kv_actual_isl.has_value(),
+            "RingJointSDPA ring_k_split needs the KV-cache chunked path (kv_actual_isl)");
+        TT_FATAL(!args.is_balanced, "RingJointSDPA ring_k_split does not support is_balanced");
+        TT_FATAL(!args.has_sliding_window(), "RingJointSDPA ring_k_split does not support sliding windows");
+        TT_FATAL(
+            !tensor_args.attention_sink.has_value(), "RingJointSDPA ring_k_split does not support attention sinks");
+        TT_FATAL(!tensor_args.joint_q.has_value(), "RingJointSDPA ring_k_split does not support joint attention");
+        TT_FATAL(!tensor_args.has_latent_v(), "RingJointSDPA ring_k_split does not support latent V");
+        TT_FATAL(!tensor_args.has_metadata(), "RingJointSDPA ring_k_split needs the host path (no metadata tensors)");
+        TT_FATAL(
+            !args.all_gather_operation_attributes.full_mesh,
+            "RingJointSDPA ring_k_split does not support full-mesh rings");
+    }
+
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
@@ -1089,6 +1111,15 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     auto out_shape = input.logical_shape();
     // head dim as v head dim
     out_shape[3] = v_head_dim;
+    // K split: one virtual head per (partition, head), partition-major, holding raw (unnormalized) partial state.
+    const uint32_t k_split = args.k_split();
+    out_shape[1] *= k_split;
+    stats_shape[1] *= k_split;
+    if (k_split > 1) {
+        // Same tiles, full width: the staged running sum is 32 per-column partial sums (the kernel reduces them with
+        // a column-identity matmul at normalization), so the caller's merge needs every column; max is column 0.
+        stats_shape[3] = tt::constants::TILE_WIDTH;
+    }
 
     return {
         tt::tt_metal::TensorSpec(

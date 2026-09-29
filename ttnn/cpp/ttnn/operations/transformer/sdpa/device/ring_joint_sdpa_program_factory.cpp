@@ -20,6 +20,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -307,6 +308,10 @@ RingWorkPlan build_ring_work_plan(
         }
         const bool joint_contributes = valid_joint_kv_chunks > 0;
         uint32_t valid_spatial_kv_chunks = 0;
+        // K split: valid chunks per partition (k % k_split); a partition with one valid chunk saves on its K0 like a
+        // single-chunk iteration, so the writer must flush early for it too.
+        const uint32_t k_split = args.k_split();
+        std::array<uint32_t, 8> part_valid{};
         for (uint32_t k_chunk = 0; k_chunk < derivation.num_local_k_chunks; ++k_chunk) {
             const uint32_t local_tile_start = k_chunk * derivation.k_chunk_tile_count;
             if (local_tile_start >= derivation.kv_local_padded_Nt) {
@@ -320,6 +325,7 @@ RingWorkPlan build_ring_work_plan(
                     derivation.q_local_padded_Nt,
                     derivation.kv_local_padded_Nt) < derivation.logical_nt) {
                 valid_spatial_kv_chunks++;
+                part_valid[k_chunk % k_split]++;
             }
         }
         const uint32_t valid_kv_chunks = valid_spatial_kv_chunks + valid_joint_kv_chunks;
@@ -333,7 +339,20 @@ RingWorkPlan build_ring_work_plan(
         if (ring_iter_does_work) {
             plan.masks.active_ring_iter_mask |= (1u << ring_iter);
         }
-        if (valid_kv_chunks <= 1) {
+        uint32_t min_part_valid = valid_kv_chunks;
+        if (k_split > 1) {
+            min_part_valid = *std::min_element(part_valid.begin(), part_valid.begin() + k_split);
+            // Every partition must see K in every active iteration (a unit's first processed chunk starts its state;
+            // an empty partition would leave stale staging behind).
+            TT_FATAL(
+                !ring_iter_does_work || min_part_valid >= 1,
+                "RingJointSDPA ring_k_split={}: ring iteration {} has {} valid K chunks; every partition needs one "
+                "(use a smaller split or a longer context)",
+                k_split,
+                ring_iter,
+                valid_spatial_kv_chunks);
+        }
+        if (min_part_valid <= 1) {
             plan.masks.single_valid_kv_chunk_mask |= (1u << ring_iter);
         }
     }
@@ -1272,7 +1291,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
      * the total number of Q chunks across all batches and heads, evenly across the cores.
      *
      */
-    const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
+    // K split: every (head, Q chunk) runs as K_SPLIT work units (virtual heads p * NH + h, partition-major), unit p
+    // taking the K chunks k with k % K_SPLIT == p. Scheduling, chain grouping, and the output / stats layout all see
+    // NHv virtual heads; Q / K / V reads map back to the real head (kernels: SDPA_KSPLIT).
+    const uint32_t K_SPLIT = args.k_split();
+    const uint32_t NHv = NH * K_SPLIT;
+    const uint32_t all_heads_num_q_chunks = B * NHv * num_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
     const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
@@ -1916,6 +1940,52 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
 
+    // Two-level softmax accumulation (prototype, opt-in via TT_METAL_SDPA_RING_TWO_LEVEL=1). The bf16 running
+    // (max, sum, out) state loses small per-K-chunk contributions once the running sum is ~2^9 x larger than
+    // them (long contexts: output inflation/deflation). With two levels each ring iteration -- and optionally
+    // every TT_METAL_SDPA_RING_TWO_LEVEL_FOLD K chunks -- accumulates into a fresh block that is merged into the
+    // total at its end. Compute-only change: reader/writer staging is unchanged. Multi-Q-chunk cores keep the
+    // total in the existing DRAM-staging CBs (no extra L1); an L1 total (tl_* CBs, one extra accumulator) is
+    // allocated only when a core can own a single Q chunk (no staging) or intra-ring folds are requested.
+    // NOTE: read at program-build time only; the env is not part of the program hash.
+    const bool two_level_requested = [] {
+        const char* env = std::getenv("TT_METAL_SDPA_RING_TWO_LEVEL");
+        return env != nullptr && std::string(env) == "1";
+    }();
+    // All CBs the merge touches must share one format (bf16): the kernel then needs no unpack/pack reconfig
+    // around the merge, which keeps it inside the kernel-config (binary size) budget.
+    const bool two_level_formats_ok = out_df == tt::DataFormat::Float16_b && im_df == tt::DataFormat::Float16_b &&
+                                      stats_df == tt::DataFormat::Float16_b && sum_df == tt::DataFormat::Float16_b &&
+                                      qk_im_df == tt::DataFormat::Float16_b && scalar_df == tt::DataFormat::Float16_b;
+    const bool two_level = two_level_requested && two_level_formats_ok && use_streaming_compute &&
+                           !has_sliding_window && !use_attention_sink && !args.is_balanced && K_SPLIT == 1;
+    if (two_level) {
+        const char* fold_env = std::getenv("TT_METAL_SDPA_RING_TWO_LEVEL_FOLD");
+        const uint32_t fold_every = fold_env != nullptr ? static_cast<uint32_t>(std::stoul(fold_env)) : 0;
+        const bool single_q_core_possible = all_heads_num_q_chunks / num_cores <= 1;
+        const bool l1_total = fold_every > 0 || single_q_core_possible;
+        if (l1_total) {
+            defines["SDPA_TL_OUT_CB"] = std::to_string(allocate_tile_cb(out_im_tiles, im_tile_size, im_df));
+            defines["SDPA_TL_SUM_CB"] = std::to_string(allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df));
+            defines["SDPA_TL_MAX_CB"] = std::to_string(allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df));
+        }
+        defines["SDPA_RING_TWO_LEVEL"] = "1";
+        defines["SDPA_TL_L1_TOTAL"] = l1_total ? "1" : "0";
+        defines["SDPA_TL_FOLD_EVERY"] = std::to_string(fold_every);
+        // The merge runs one SALAD row group at a time (compute: tl_sbh = qktv_h when it divides Sq_chunk_t,
+        // else 1), so its scratch needs only one row group of stats tiles.
+        const uint32_t tl_rows = Sq_chunk_t % writer_out_row_group_h == 0 ? writer_out_row_group_h : 1;
+        defines["SDPA_TL_M_CB"] = std::to_string(allocate_tile_cb(tl_rows, stats_tile_size, stats_df));
+        defines["SDPA_TL_ALPHA_CB"] = std::to_string(allocate_tile_cb(tl_rows, stats_tile_size, stats_df));
+        log_info(
+            tt::LogOp,
+            "RingJointSDPA: two-level softmax accumulation enabled (fold every {} K chunks, L1 total {})",
+            fold_every,
+            l1_total);
+    } else if (two_level_requested) {
+        log_warning(tt::LogOp, "RingJointSDPA: two-level accumulation requested but unsupported for this config");
+    }
+
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
         cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,      cb_sum_in,
@@ -2017,10 +2087,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     std::vector<ChainConfig> gqa_chain_configs(
         enable_kv_chains && gqa_grouped_kv ? num_cores : 0);  // Grouped K/V for GQA
     // Sliding attention reads K/V independently on every core and does not build chains.
-    std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH : 0);
+    std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NHv : 0);
 
     // Evenly distribute flat global q chunks across cores
-    const uint32_t total_q_chunks = B * NH * num_q_chunks;
+    const uint32_t total_q_chunks = B * NHv * num_q_chunks;
 
     uint32_t base_chunks_per_core = 0;
     uint32_t extra_chunks_per_core = 0;
@@ -2043,7 +2113,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const uint32_t head_span = num_q_chunks;
         const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
         const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
-        const uint32_t head = (NH == 0) ? 0 : (head_index % NH);
+        const uint32_t head = (NHv == 0) ? 0 : (head_index % NHv);
         return std::pair<uint32_t, uint32_t>{head, q_chunk};
     };
 
@@ -2234,7 +2304,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     std::string gqa_mcast_fallback_reason;
     std::vector<uint32_t> gqa_chain_max_q(gqa_chain_configs.size(), 0);  // per-core loop-padding count
     if (gqa_grouped_kv && build_kv_chains) {
-        std::vector<std::vector<ChainSegment>> kv_group_segments(NHK);
+        // K split: one K/V group per (partition, KV head): cores of different partitions stream different K chunks.
+        std::vector<std::vector<ChainSegment>> kv_group_segments(NHK * K_SPLIT);
 
         for (uint32_t ci = 0; ci < num_cores; ++ci) {
             if (core_work[ci].global_q_count == 0) {
@@ -2473,6 +2544,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool remainder_changes_owner =
         ring_size > 1 && rotated_groups_needed > 0 && rotated_groups_needed < rotated_groups.size();
     const bool use_rotated_q_split =
+        // K split keeps the static flat split (its units already divide evenly; no migration of partial state).
+        K_SPLIT == 1 &&
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
         remainder_changes_owner && build_kv_chains &&
@@ -2817,6 +2890,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
+    if (K_SPLIT > 1) {
+        // Every core runs >= 2 units, so every unit's (O, max, sum) round-trips through the DRAM staging (the output
+        // and stats tensors, per virtual head) and the last ring iteration saves it instead of normalizing.
+        TT_FATAL(
+            base_chunks_per_core >= 2 && !enable_zigzag_balancing && use_streaming_compute && !has_sliding_window,
+            "RingJointSDPA ring_k_split={}: needs >= 2 units per core ({} units on {} cores), no zigzag, streaming "
+            "compute",
+            K_SPLIT,
+            total_q_chunks,
+            num_cores);
+        defines["SDPA_KSPLIT"] = std::to_string(K_SPLIT);
+        defines["SDPA_KSPLIT_NH"] = std::to_string(NH);
+    }
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
     // Build kernel descriptors locally so we can append per-core runtime args
