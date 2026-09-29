@@ -493,7 +493,7 @@ class Qwen36MLP:
                     program_config=m1_pc,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b if tpc.act_bf8_resid() else ttnn.bfloat16,
                 )
             elif m1_pc is not None:
                 assert not tpc.m3_enabled("ZB"), (
@@ -506,7 +506,7 @@ class Qwen36MLP:
                     program_config=m1_pc,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b if tpc.act_bf8_resid() else ttnn.bfloat16,
                 )
             elif i2_pc is not None:
                 output = ttnn.linear(

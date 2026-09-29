@@ -637,6 +637,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         const char* glu_sfpu_on_pack_env = std::getenv("TT_MATMUL_GLU_SFPU_ON_PACK");
         if (glu_sfpu_on_pack || (glu_sfpu_on_pack_env != nullptr && std::string(glu_sfpu_on_pack_env) == "1")) {
             mm_kernel_defines["GLU_SFPU_ON_PACK"] = "1";
+            // One-pass fused silu(g) * u on the pack thread; env TT_MATMUL_GLU_FUSED_SFPU=0 keeps the two-pass path.
+            const char* glu_fused_env = std::getenv("TT_MATMUL_GLU_FUSED_SFPU");
+            if (glu_fused_env == nullptr || std::string(glu_fused_env) != "0") {
+                mm_kernel_defines["GLU_FUSED_SFPU"] = "1";
+            }
         }
     }
     if (fp32_dest_acc_en) {

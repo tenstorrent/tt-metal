@@ -1422,6 +1422,7 @@ def gated_deltanet_forward_ttnn(
         memory_config=mc_outproj,
         compute_kernel_config=ckc,
         program_config=_pc(o, o_proj_weight),
+        **({"dtype": ttnn.bfloat8_b} if (T > 1 and os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1") else {}),
     )
 
     return o, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv_state

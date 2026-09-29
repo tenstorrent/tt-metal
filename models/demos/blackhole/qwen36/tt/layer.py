@@ -14,6 +14,7 @@ from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36Ga
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.tt.tp_common import M5_ADDNORM_T
+from models.demos.blackhole.qwen36.tt.tp_common import act_bf8_norm as tpc_act_bf8_norm
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
@@ -64,6 +65,7 @@ def _m5_add_norm(norm, a, b, h_mc, n_mc):
         memory_config=n_mc,
         compute_kernel_config=norm.compute_kernel_config_hifi2,
         residual_output_tensor=h,
+        **({"dtype": ttnn.bfloat8_b} if (a.shape[-2] == M5_ADDNORM_T and tpc_act_bf8_norm()) else {}),
     )
     return h, n
 
@@ -452,6 +454,7 @@ class Qwen36DecoderLayer:
                     program_config=None,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     compute_kernel_config=self.attention_norm.compute_kernel_config_hifi2,
+                    **({"dtype": ttnn.bfloat8_b} if (x.shape[-2] == M5_ADDNORM_T and tpc_act_bf8_norm()) else {}),
                 )
             else:
                 attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)

@@ -550,6 +550,7 @@ def gated_attention_forward_ttnn(
                 qkv_fused_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, qkv_fused_weight),
             )  # [B, T, H*Dh + 2*Hkv*Dh]
         else:
@@ -558,6 +559,7 @@ def gated_attention_forward_ttnn(
                 q_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, q_deint_weight),
             )  # [B, T, H*Dh]
             kv = ttnn.linear(
@@ -565,6 +567,7 @@ def gated_attention_forward_ttnn(
                 kv_packed_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, kv_packed_weight),
             )  # [B, T, 2*Hkv*Dh]
         if prefill_last_row_only:
@@ -576,11 +579,18 @@ def gated_attention_forward_ttnn(
                 ttnn.deallocate(_hs_blk)
             else:
                 _hs_last = ttnn.to_layout(hidden_states[:, T - 1 : T, :], ttnn.TILE_LAYOUT)
+            if (
+                _hs_last.dtype != ttnn.bfloat16
+            ):  # QWEN36_ACT_BF8_NORM=1: n is bfloat8_b, the 1-row gate matmul reads bf16
+                _hs_bf = ttnn.typecast(_hs_last, ttnn.bfloat16)
+                ttnn.deallocate(_hs_last)
+                _hs_last = _hs_bf
             gate = ttnn.linear(
                 _hs_last,
                 gate_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc_row(_hs_last, gate_deint_weight),
             )  # [1, 1, H*Dh]
             ttnn.deallocate(_hs_last)
@@ -590,6 +600,7 @@ def gated_attention_forward_ttnn(
                 gate_deint_weight,
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
+                dtype=ttnn.bfloat16,
                 program_config=_pc(hidden_states, gate_deint_weight),
             )  # [B, T, H*Dh] flat, used as-is later
         if _fused_qkv:
@@ -1163,6 +1174,11 @@ def gated_attention_forward_ttnn(
         program_config=_pc_row(attn_output, o_proj_weight)
         if prefill_last_row_only
         else _pc(attn_output, o_proj_weight),
+        **(
+            {"dtype": ttnn.bfloat8_b}
+            if (T > 1 and not prefill_last_row_only and _os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1")
+            else {}
+        ),
     )
 
     return attn_output, new_key, new_value

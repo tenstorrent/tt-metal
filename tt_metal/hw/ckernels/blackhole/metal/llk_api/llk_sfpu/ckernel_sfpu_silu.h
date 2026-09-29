@@ -215,7 +215,76 @@ inline void calculate_silu_bf16_p5_pipe() {
     TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
     TTI_INCRWC(0, 2, 0, 0);
 }
+
+// Fused SwiGLU (P6): out = bf16(silu(g) * u) in ONE pass, bf16 Dest. Same P5 pipe math as calculate_silu_bf16_p5_pipe,
+// but the final bf16 rounding of silu(g) is dropped: o = xy*e + xy (fp32) is multiplied by u (loaded from the tile
+// SWIGLU_UP_ROWS Dest rows after the gate tile, i.e. tile idx+1) and rounded once. Stored over the gate tile.
+// LREG0 is free between the r MAD and the next ARECIP, so u lives there. No 0*x fix (0*inf/NaN differ from the
+// two-pass path; finite inputs give the same value, sign of zero may differ).
+constexpr std::uint32_t SWIGLU_UP_ROWS = 64;
+template <int ITERATIONS>
+inline void calculate_swiglu_bf16_p5_pipe() {
+    silu_p5_load_consts();
+    TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 0);
+    TTI_SFPSETSGN(0, LREG3, LREG7, 1);
+    TTI_SFPSWAP(0, LREG14, LREG7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSETSGN(0, LREG7, LREG3, 0);
+    TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);
+    TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG0, 1);
+    TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);
+    TTI_SFPMAD(LREG3, LREG13, LREG0, LREG6, 1);
+    TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);
+    TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);
+    TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);
+    TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);
+    if constexpr (ITERATIONS > 1) {
+        constexpr int BODY = 22;
+        TTI_REPLAY(0, BODY, 1, 1);
+        TTI_SFPARECIP(0, LREG5, LREG0, 0);             // y = ~1/d
+        TTI_SFPLOAD(LREG3, 0, ADDR_MOD_7, 2);          // x' (row i+1)
+        TTI_SFPMAD(LREG5, LREG0, LCONST_1, LREG6, 1);  // e = 1 - d*y
+        TTI_SFPSETSGN(0, LREG3, LREG7, 1);             // |x'|
+        TTI_SFPSWAP(0, LREG14, LREG7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSETSGN(0, LREG7, LREG3, 0);                  // xc
+        TTI_SFPLOAD(LREG7, 0, ADDR_MOD_7, 0);               // x (row i)
+        TTI_SFPMAD(LREG3, LREG13, LREG4, LREG5, 1);         // f
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);       // xy = x*y
+        TTI_SFPMAD(LREG5, LCONST_1, LREG4, LREG0, 1);       // km
+        TTI_SFPMAD(LREG7, LREG6, LREG7, LREG7, 0);          // o = xy*e + xy (fp32, not rounded)
+        TTI_SFPMAD(LREG3, LREG13, LREG0, LREG6, 1);         // r (last read of LREG0 = km)
+        TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);  // u (row i)
+        TTI_SFPMAD(LREG6, LREG1, LREG2, LREG3, 0);          // p = r*e2 + e1
+        TTI_SFPSHFT(23, LREG5, LREG5, SHFT_IMM_FROM_VC);    // kk
+        TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);       // o*u
+        TTI_SFPMAD(LREG3, LREG6, LCONST_1, LREG3, 0);       // p = p*r + 1
+        TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFPIADD(0, LREG3, LREG5, IADD_CC_NONE);       // E = p + kk
+        TTI_SFPADD(LCONST_1, LREG5, LCONST_1, LREG5, 0);  // d' = 1 + E
+        TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);            // out over gate tile
+        TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int i = 2; i < ITERATIONS; i++) {
+            TTI_REPLAY(0, BODY, 0, 0);
+        }
+    }
+    TTI_SFPARECIP(0, LREG5, LREG0, 0);
+    TTI_SFPLOAD(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_SFPMAD(LREG5, LREG0, LCONST_1, LREG6, 1);
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFPMAD(LREG7, LREG6, LREG7, LREG7, 0);
+    TTI_SFPLOAD(LREG0, 0, ADDR_MOD_7, SWIGLU_UP_ROWS);
+    TTI_SFPMUL(LREG7, LREG0, LCONST_0, LREG7, 0);
+    TTI_SFP_STOCH_RND(0, 0, LREG0, LREG7, LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPSTORE(LREG7, 0, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
 }  // namespace silu_detail
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_swiglu() {
+    static_assert(!is_fp32_dest_acc_en, "fused SwiGLU SFPU is bf16-dest only");
+    silu_detail::calculate_swiglu_bf16_p5_pipe<ITERATIONS>();
+}
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {

@@ -543,6 +543,17 @@ R5_FLAG_DEFAULTS = {"GLU": "0"}
 R5_GLU_T = 2048  # the swept chunk size (M = 64 tiles over 10 core rows at per_core_M 7)
 
 
+def act_bf8_resid():
+    """QWEN36_ACT_BF8_RESID=1 (default 0): prefill (T > 1) o-proj / down-proj outputs (G3, F3, M2) in bfloat8_b."""
+    return os.environ.get("QWEN36_ACT_BF8_RESID", "0") == "1"
+
+
+def act_bf8_norm():
+    """QWEN36_ACT_BF8_NORM=1 (default 0): prefill (T == M5_ADDNORM_T) norm outputs n (fused add+norm, layer-0 norm) in
+    bfloat8_b; the residual h stays bf16 and every matmul reading n sets its output dtype explicitly."""
+    return os.environ.get("QWEN36_ACT_BF8_NORM", "0") == "1"
+
+
 def r5_value(item):
     """Raw value of the R5 item flag (a key of R5_FLAG_DEFAULTS): env QWEN36_R5_<item>."""
     return os.environ.get("QWEN36_R5_" + item, R5_FLAG_DEFAULTS[item])
@@ -564,7 +575,9 @@ def r5_glu_progcfg(x, w_gate_up, grid, compute_kernel_config):
         return None
     if ws[-2:] != [2048, 12288] or any(d != 1 for d in ws[:-2]) or w_gate_up.dtype != ttnn.bfloat8_b:
         return None
-    if x.dtype != ttnn.bfloat16 or x.memory_config().is_sharded():
+    if x.dtype != (ttnn.bfloat8_b if act_bf8_norm() else ttnn.bfloat16) and x.dtype != ttnn.bfloat16:
+        return None
+    if x.memory_config().is_sharded():
         return None
     if getattr(compute_kernel_config, "fp32_dest_acc_en", True):
         return None

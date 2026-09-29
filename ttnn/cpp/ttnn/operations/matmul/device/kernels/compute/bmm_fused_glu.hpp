@@ -59,6 +59,14 @@ FORCE_INLINE void mul_binary_tile_pack(uint32_t idst0, uint32_t idst1, uint32_t 
         VectorMode::RC)));
 }
 
+#ifdef GLU_FUSED_SFPU
+// One pass y = silu(g) * u over the tile pair (2j, 2j + 1), result over tile 2j (see calculate_swiglu).
+FORCE_INLINE void swiglu_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_swiglu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
+}
+#endif
+
 FORCE_INLINE void mul_binary_tile_init_pack() {
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 }
@@ -77,8 +85,12 @@ FORCE_INLINE void glu_pairs_from_pack() {
     // Point the SFPU at the DEST half that the packer owns.
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
     for (uint32_t j = 0; j < num_tiles / 2; j++) {
+#ifdef GLU_FUSED_SFPU
+        swiglu_tile_pack(2 * j);
+#else
         silu_tile_pack(2 * j);
         mul_binary_tile_pack(2 * j, 2 * j + 1, 2 * j);
+#endif
     }
     // Wait for the SFPU before packing.
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

@@ -386,6 +386,14 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "z|a|0|b|0 in-proj (M1 S4), the o-proj family (FA/GDN o_proj) and the FA q|k|v fused proj (numerics change, "
         "PCC ~0.99995); excludes GDN q|k|v in-proj (M1 S3); 0=in0_block_w 8 for all of them",
     ),
+    "QWEN36_ACT_BF8_RESID": (
+        "1",
+        "P6_BF8ACT: 1 = bfloat8_b output for the T>1 prefill o-proj / MLP down matmuls (G3, F3, M2); 0 = bf16 (no change)",
+    ),
+    "QWEN36_ACT_BF8_NORM": (
+        "1",
+        "P6_BF8ACT: 1 = bfloat8_b fused add+RMSNorm / layer-0 norm output n at T == 2048 (residual h stays bf16); 0 = bf16 (no change)",
+    ),
     # SGRN item flag (tt/tp_common.py sgrn_kernel_variant(); only with QWEN36_C2_SGRN=1); unset = op default 4.
     "QWEN36_SGRN_VARIANT": (
         "5",
