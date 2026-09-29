@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/creation/creation.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -185,6 +186,30 @@ Tensor full_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().logical_shape() : shape;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+
+    // Fast on-device fill, the same path full_like_impl takes: allocate the tensor on the device and fill it
+    // there instead of building it on the host and uploading it. The host path below stays for host tensors,
+    // row-major layouts, the other dtypes, sharded memory configs, and a bfloat16 NaN fill value (the device
+    // fill stores that as inf, the host path as NaN).
+    const float float_value = static_cast<float>(fill_value);
+    const bool output_on_device =
+        !optional_output_tensor.has_value() || optional_output_tensor->storage_type() == StorageType::DEVICE;
+    const bool device_fill_dtype =
+        dtype_value == DataType::FLOAT32 || (dtype_value == DataType::BFLOAT16 && !std::isnan(float_value));
+    if (device_to_use != nullptr && output_on_device && device_fill_dtype && layout_value == Layout::TILE &&
+        !mem_cfg.is_sharded()) {
+        Tensor output = optional_output_tensor.has_value()
+                            ? *optional_output_tensor
+                            : create_device_tensor(
+                                  tt::tt_metal::TensorSpec(
+                                      shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+                                  device_to_use);
+        // Round to bfloat16 on the host (ties to even, as the host path does), so the device stores exactly the
+        // value the host path would have written.
+        const float value =
+            dtype_value == DataType::FLOAT32 ? float_value : static_cast<float>(::bfloat16(float_value));
+        return ttnn::fill(output, value, mem_cfg, output);
+    }
 
     auto concrete_full = [&]<typename BufferType>(BufferType fill_value) {
         return creation_detail::full_impl<BufferType>(
