@@ -150,7 +150,9 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
     #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
     #     the runtime), not inline here. ---
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    def build_kv_chunk_table(
+        self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None
+    ) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
         `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
