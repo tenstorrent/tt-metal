@@ -411,7 +411,8 @@ class Gemma4Model:
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
-        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        # Tile layout out of the lookup: the caller wants tiles, and this skips a separate tilize per chunk.
+        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         embeds = ttnn.mul(embeds, self.embed_scale)
 
         # All-gather sharded hidden dim back to full hidden
