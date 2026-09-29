@@ -26,24 +26,18 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _acknowledge_corruptible(value):
-    """Acknowledge the device tensors contained in a sampling result."""
+def _acknowledge_trace_io_corruptible(value):
+    """Acknowledge device tensors in trace inputs or outputs that another trace may overwrite."""
     if value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _acknowledge_corruptible(item)
+            _acknowledge_trace_io_corruptible(item)
         return
     if isinstance(value, LogProbsResult):
-        _acknowledge_corruptible((value.topk_logprobs, value.topk_indices))
+        _acknowledge_trace_io_corruptible((value.topk_logprobs, value.topk_indices))
         return
     trace_allocation_tracker.acknowledge_corruptible(value)
-
-
-def _acknowledge_trace_buffers_corruptible(bucket, value):
-    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
-    if bucket is not None:
-        _acknowledge_corruptible(value)
 
 
 def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
@@ -437,6 +431,10 @@ class SamplingGenerator:
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
+
+        The returned device tensors are reusable trace output buffers. A later trace execution can
+        overwrite them. Consume or copy their contents before executing another trace if they must
+        be retained.
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
@@ -481,10 +479,11 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
-        # These output buffers are owned by this trace and fully overwritten before each return.
-        # They can therefore safely survive while another keyed sampling trace is replayed.
-        _acknowledge_corruptible(output)
-        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, logits)
+        # These reusable output buffers are fully overwritten before each return. Acknowledge their
+        # limited lifetime so another keyed sampling trace can replay while they remain allocated.
+        _acknowledge_trace_io_corruptible(output)
+        if self._active_trace_bucket is not None:
+            _acknowledge_trace_io_corruptible(logits)
 
         return slot["output"]
 
@@ -513,6 +512,10 @@ class SamplingGenerator:
 
         ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
         the trace at capture time, so a replay always performs it.
+
+        With trace replay, the returned device tensors are reusable trace output buffers. A later
+        trace execution can overwrite them. Consume or copy their contents before executing another
+        trace if they must be retained.
         """
 
         penalties_on = self._penalties_active

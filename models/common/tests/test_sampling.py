@@ -22,8 +22,7 @@ from models.common.sampling import (
 from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import (
     MAX_UINT32,
-    _acknowledge_corruptible,
-    _acknowledge_trace_buffers_corruptible,
+    _acknowledge_trace_io_corruptible,
     _hash_request_seed_to_device_seed,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
@@ -74,9 +73,7 @@ def test_sampling_trace_buffer_acknowledgement(monkeypatch):
     marked = []
     monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
 
-    _acknowledge_corruptible(["trace-output", None])
-    _acknowledge_trace_buffers_corruptible(None, ["default"])
-    _acknowledge_trace_buffers_corruptible(1, ["input", None, ("output",)])
+    _acknowledge_trace_io_corruptible(["trace-output", None, ("input", "output")])
 
     assert marked == ["trace-output", "input", "output"]
 
