@@ -1290,3 +1290,31 @@ Result: PCC 0.999807, selection overlap 0.99683, worst row 0.875, matched rel L2
 sums [2.4939, 2.5068]. Chunk 0: 0.999856 / 0.99811. This is on par with the CPU reference (0.99982 / 0.99695). About
 21 s.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_router.py`
+
+## S.dsa_moe.11 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through router on the device. I rewrote it from
+swap 10's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new router-share block (every device output up to ffn_norm fixed, CPU router and tail) is the
+  base of the router's share. The norm share is now that block vs the norm-share block, and it reproduces swap 10
+  exactly (34 / 0.00065 / [0.9982, 1.0014]). Every other swap-10 check and limit is unchanged, including the 96-flip
+  limit vs the all-CPU block (device 70).
+- New router checks (`_router_checks`, as the component test):
+  - vs the fp32 CPU router of the device ffn_norm, tighter than the component test: overlap >= 0.998, worst row
+    >= 0.75, matched rel <= 0.0025, coefficient [0.9995, 1.0005], 8 nonzeros, row sums 2.5 +- 0.015. Also run on
+    chunk 0. The component limits pass x1.002, truncation, 0.3% weight noise and a recentred bf16 choice.
+  - vs golden: the component limits. The CPU router of the device ffn_norm is at 0.99536 / 0.00195 / 0.99962.
+  - Router share at block out: flips <= 32, same-routing rel <= 0.0015, ratio [0.997, 1.003], flipped-row ratio
+    [0.95, 1.05].
+- Sensitivity: CPU host script /tmp/dsas11/sens.py (not kept). It takes about 2 s per case, because the layer-3
+  experts are eager. The numbers are in the test docstring.
+  - bf16 rounding of the weights gives the whole device share (0.00086 vs 0.00088).
+  - One row x1.02 shows only in its row sum (2.55). Proposed known issue.
+Results:
+- Device passes: PCC 0.999991 (c0 0.999994).
+  - Router vs CPU same input: 0.99963 / worst row 0.875 / mrel 0.00161 / coefficient 1.00005 (c0 0.99915).
+  - Router share: 6 flips / 0.00088 / [0.9980, 1.0023], flipped rows [0.9975, 1.0087].
+  - About 111 s.
+- Reference passes (exact). Stub fails.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_11_router.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
