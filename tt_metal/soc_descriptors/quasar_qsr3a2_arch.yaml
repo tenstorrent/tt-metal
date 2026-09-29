@@ -1,0 +1,165 @@
+# QSR3.A2 craq-sim descriptor. The package is one UMD chip containing three
+# Quasar dies in one flat descriptor-frame NOC coordinate space.
+#
+# UNCONFIRMED: 12 x 19 is the descriptor occupancy bound. No source states the
+# strapped QSR3.A2 NOC sizes or the coordinate frame reported by silicon.
+grid:
+  x_size: 12
+  y_size: 19
+
+arc:
+  []
+
+pcie:
+  []
+
+# DELIBERATE DEVIATION: each 1 GB DRAM channel is modelled at the facing Quasar
+# D2D proxy coordinate, not at the true Mimir coordinate one hop farther out.
+# Silicon capacity is 6 GB per interface; 1 GB is the approved UNCONFIRMED
+# bring-up placeholder.
+dram:
+  [[1-4],
+  [1-5],
+  [10-2],
+  [10-3],
+  [1-10],
+  [1-11],
+  [10-8],
+  [10-9],
+  [1-16],
+  [1-17],
+  [10-14],
+  [10-15]]
+
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 1,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 2,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 3,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 4,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 5,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 6,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 7,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 8,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 9,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 10,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    },
+    {
+      channel: 11,
+      eth_endpoint: [0,0],
+      worker_endpoint: [0,0],
+      address_offset: 0
+    }
+  ]
+
+dram_view_size:
+  1073741824
+
+eth:
+  []
+
+# Row-major over the compact logical 8 x 12 worker grid. Physical NOC rows
+# retain the two-row D2D gaps between dies.
+functional_workers:
+  [2-2, 3-2, 4-2, 5-2, 6-2, 7-2, 8-2, 9-2,
+  2-3, 3-3, 4-3, 5-3, 6-3, 7-3, 8-3, 9-3,
+  2-4, 3-4, 4-4, 5-4, 6-4, 7-4, 8-4, 9-4,
+  2-5, 3-5, 4-5, 5-5, 6-5, 7-5, 8-5, 9-5,
+  2-8, 3-8, 4-8, 5-8, 6-8, 7-8, 8-8, 9-8,
+  2-9, 3-9, 4-9, 5-9, 6-9, 7-9, 8-9, 9-9,
+  2-10, 3-10, 4-10, 5-10, 6-10, 7-10, 8-10, 9-10,
+  2-11, 3-11, 4-11, 5-11, 6-11, 7-11, 8-11, 9-11,
+  2-14, 3-14, 4-14, 5-14, 6-14, 7-14, 8-14, 9-14,
+  2-15, 3-15, 4-15, 5-15, 6-15, 7-15, 8-15, 9-15,
+  2-16, 3-16, 4-16, 5-16, 6-16, 7-16, 8-16, 9-16,
+  2-17, 3-17, 4-17, 5-17, 6-17, 7-17, 8-17, 9-17]
+
+harvested_workers:
+  []
+
+# D2D, SMU, Mimir, and Keraunos coordinates are intentionally omitted per the
+# approved model direction.
+router_only:
+  []
+
+# DERIVED / UNCONFIRMED: die-major slot order is NW, SW, SE, carrying the
+# register-description lane binding through the 180-degree die rotation.
+dispatch:
+  [1-6, 1-1, 10-1, 1-12, 1-7, 10-7, 1-18, 1-13, 10-13]
+
+worker_l1_size:
+  4194304
+
+dram_bank_size:
+  1073741824
+
+eth_l1_size:
+  0
+
+arch_name: QUASAR
+
+features:
+  unpacker:
+    version: 1
+    inline_srca_trans_without_srca_trans_instr: False
+  math:
+    dst_size_alignment: 32768
+  packer:
+    version: 1
+  overlay:
+    version: 1
