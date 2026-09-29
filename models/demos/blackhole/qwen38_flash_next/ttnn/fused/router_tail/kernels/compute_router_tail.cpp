@@ -52,18 +52,6 @@ FORCE_INLINE void frt_load_tile(uint32_t cb_probs, uint32_t cb_index, uint32_t w
     copy_tile(cb_index, w, slot + 2);
 }
 
-// Dev knobs (timing only; every one of them breaks the output): FRT_SORT_PHASE_START..FRT_SORT_PHASE_END runs that
-// window of the network's phases (0..5; a single phase runs all its steps), FRT_EXP_ITERATIONS runs N of the 8 SFPU
-// vectors per face of the precise exp (0 skips the exp).
-#ifndef FRT_SORT_PHASE_START
-#define FRT_SORT_PHASE_START 0
-#endif
-#ifndef FRT_SORT_PHASE_END
-#define FRT_SORT_PHASE_END 5
-#endif
-#ifndef FRT_EXP_ITERATIONS
-#define FRT_EXP_ITERATIONS 8
-#endif
 #ifndef FRT_EXP_LIVE
 #define FRT_EXP_LIVE 1
 #endif
@@ -71,24 +59,11 @@ FORCE_INLINE void frt_load_tile(uint32_t cb_probs, uint32_t cb_index, uint32_t w
 // The chain's sort of the 64 values in DST 0/1 (indices 2/3): topk.cpp's local sort call (unstable network, largest,
 // end phase 5); pass_mask != 0 sorts only those token passes of the same network (topk_lanes.h).
 FORCE_INLINE void frt_sort64(uint32_t pass_mask) {
-#ifndef FRT_TOPK_SORT_SKIP  // dev knob (timing): transposes and copies only, no sort
-#if FRT_SORT_PHASE_START == 0 && FRT_SORT_PHASE_END == 5
     if (pass_mask == 0) {
         ckernel::topk_local_sort<false>(0, 0 /* largest */, 5 /* end_phase */);
     } else {
         topk_local_sort_lanes<false>(0, 0 /* largest */, 5 /* end_phase */, pass_mask);
     }
-#else
-    // the phase window: a single phase (start == end) runs its steps num_steps..4 down to 1 as the full network does
-    if (pass_mask == 0) {
-        ckernel::topk_local_sort<false>(
-            0, 0 /* largest */, FRT_SORT_PHASE_END, FRT_SORT_PHASE_START, 4, FRT_SORT_PHASE_END + 1);
-    } else {
-        topk_local_sort_lanes<false>(
-            0, 0 /* largest */, FRT_SORT_PHASE_END, pass_mask, FRT_SORT_PHASE_START, 4, FRT_SORT_PHASE_END + 1);
-    }
-#endif
-#endif
 }
 
 void kernel_main() {
@@ -115,10 +90,7 @@ void kernel_main() {
     constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
     constexpr uint32_t ndst = 4;  // softmax block size under fp32 dest
     static_assert(Wt % ndst == 0, "the softmax blocks must tile the row");
-#ifndef FRT_TOPK_TILES
-#define FRT_TOPK_TILES Wt
-#endif
-    constexpr uint32_t topk_tiles = FRT_TOPK_TILES;  // dev knob: sort only the first N width tiles (timing)
+    constexpr uint32_t topk_tiles = Wt;
 
     DataflowBuffer in0(cb_in0);
     DataflowBuffer max_scaler(cb_max_scaler);
@@ -132,31 +104,6 @@ void kernel_main() {
         FUSED_ZONE("fz_rt_c_softmax");
         // ---- softmax.cpp: NUMERIC_STABLE, no mask, EXP_APPROX 0 ----
         compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_exps);
-#ifdef FRT_SOFTMAX_COPY_ONLY
-        // dev knob (timing): probabilities = logits, no softmax math
-        max_scaler.wait_front(1);
-        sum_scaler.wait_front(1);
-        in0.wait_front(Wt);
-        copy_init(cb_in0);
-        pack_reconfig_data_format(cb_probs);
-        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-            tile_regs_acquire();
-            probs.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                copy_tile(cb_in0, wt + wt8, wt8);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                pack_tile(wt8, cb_probs);
-            }
-            tile_regs_release();
-            probs.push_back(ndst);
-        }
-        in0.pop_front(Wt);
-        max_scaler.pop_front(1);
-        sum_scaler.pop_front(1);
-#else
         max_scaler.wait_front(1);
         sum_scaler.wait_front(1);
         reconfig_data_format(cb_in0, cb_in0);
@@ -184,12 +131,10 @@ void kernel_main() {
             }
             exps.reserve_back(ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-#if FRT_EXP_ITERATIONS == 8 && FRT_EXP_LIVE
+#if FRT_EXP_LIVE
                 exp_tile_live(wt8, live_pairs);  // the full precise exp's instructions, on the live vector pairs only
-#elif FRT_EXP_ITERATIONS == 8
+#else
                 exp_tile<false>(wt8);
-#elif FRT_EXP_ITERATIONS > 0
-                exp_tile<false, false, ckernel::InputClamping::ClampToNegative, FRT_EXP_ITERATIONS>(wt8);  // dev knob
 #endif
             }
             tile_regs_commit();
@@ -241,7 +186,6 @@ void kernel_main() {
         exps.pop_front(Wt);
         max_scaler.pop_front(1);
         sum_scaler.pop_front(1);
-#endif
     }
 
     // ---- topk.cpp single core, Wt tiles, output_tiles 1, largest, stable_sort false ----
@@ -256,7 +200,6 @@ void kernel_main() {
     index.wait_front(Wt);
     {
         FUSED_ZONE("fz_rt_c_topk_sort");
-#ifndef FRT_TOPK_SPLIT
         tile_regs_acquire();
         for (uint32_t w = 0; w < topk_tiles; ++w) {
             frt_load_tile(cb_probs, cb_index, w, (w == 0) ? 0 : 1);
@@ -265,50 +208,6 @@ void kernel_main() {
             }
         }
         tile_regs_commit();
-#else
-        // dev knob (study, never serves): a two-core width split emulated on one core.  The chain over tiles 0..Wt/2-1
-        // (its running top 32 staged through cb_vals_t / cb_idx_t), the chain over tiles Wt/2..Wt-1, then one sort of
-        // the two running sets.  The values agree with the sequential chain, the tie order does not.
-        static_assert(FRT_TOPK_SPLIT == 2, "the split emulation is two-way");
-        constexpr uint32_t half = Wt / 2;
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < half; ++w) {
-            frt_load_tile(cb_probs, cb_index, w, (w == 0) ? 0 : 1);
-            if (w != 0) {
-                frt_sort64(pass_mask);
-            }
-        }
-        tile_regs_commit();
-        vals_t.reserve_back(1);
-        idx_t.reserve_back(1);
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_vals_t);
-        pack_tile(0, cb_vals_t);
-        pack_reconfig_data_format(cb_idx_t);
-        pack_tile(2, cb_idx_t);
-        tile_regs_release();
-        vals_t.push_back(1);
-        idx_t.push_back(1);
-        tile_regs_acquire();
-        for (uint32_t w = half; w < Wt; ++w) {
-            frt_load_tile(cb_probs, cb_index, w, (w == half) ? 0 : 1);
-            if (w != half) {
-                frt_sort64(pass_mask);
-            }
-        }
-        vals_t.wait_front(1);
-        idx_t.wait_front(1);
-        reconfig_data_format_srca(cb_vals_t);
-        copy_init(cb_vals_t);
-        copy_tile(cb_vals_t, 0, 1);
-        reconfig_data_format_srca(cb_idx_t);
-        copy_init(cb_idx_t);
-        copy_tile(cb_idx_t, 0, 3);
-        frt_sort64(pass_mask);
-        tile_regs_commit();
-        vals_t.pop_front(1);
-        idx_t.pop_front(1);
-#endif
     }
     probs.pop_front(Wt);
     index.pop_front(Wt);

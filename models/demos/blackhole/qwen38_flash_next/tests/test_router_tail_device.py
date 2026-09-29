@@ -24,7 +24,9 @@ def _host(tensor):
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{**DEVICE_PARAMS, "trace_region_size": 2_000_000}], indirect=True)
 @pytest.mark.parametrize("rows", [1, 5, 32])
-def test_router_tail_current_llk_and_reuse(mesh_device, rows):
+@pytest.mark.parametrize("exp_live", ["0", "1"])
+def test_router_tail_current_llk_and_reuse(mesh_device, rows, exp_live, monkeypatch):
+    monkeypatch.setenv(router_tail.EXP_LIVE_ENV, exp_live)
     cached = None
     for seed in (310, 311):
         generator = torch.Generator().manual_seed(seed)

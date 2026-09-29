@@ -158,13 +158,12 @@ def lanes_plan(rows: int, pass_tokens=None) -> list[tuple[int, int]]:
 
 def _core_plan(rows: int) -> tuple[list[tuple[int, int, int]], bool]:
     """``(tile_row, pass_mask, token_mask)`` per core and whether the lane form was chosen: the lane form for one tile
-    unless ``QWEN38_ROUTER_TAIL_LANES=0``, else one core per tile row (pass_mask = the dev knob, default 0 = the LLK's
-    four-pass sort)."""
+    unless ``QWEN38_ROUTER_TAIL_LANES=0``, else one core per tile row (pass_mask = 0, the LLK's four-pass sort)."""
 
     tile_rows = -(-rows // fp.TILE)
     if tile_rows == 1 and lanes_enabled():
         return [(0, pass_mask, token_mask) for pass_mask, token_mask in lanes_plan(rows)], True
-    return [(t, _dev_pass_mask(), ALL_TOKENS) for t in range(tile_rows)], False
+    return [(t, 0, ALL_TOKENS) for t in range(tile_rows)], False
 
 
 def lane_cores(rectangle: "ttnn.CoreRange", count: int) -> list["ttnn.CoreCoord"]:
@@ -187,13 +186,7 @@ def program_parts(
     plan, _lanes = _core_plan(rows)
     if rectangle is None:
         rectangle = placement.free_rectangle(logits.device(), *RECTANGLE)
-    replicas = _dev_replicas()
-    if replicas == 1:
-        cores = lane_cores(rectangle, len(plan))
-    else:  # dev knob: the plan's first core plus silent replicas over the rectangle in row-major order
-        tile_row, pass_mask, _token_mask = plan[0]
-        plan = plan[:1] + [(tile_row, pass_mask, 0)] * (replicas - 1)
-        cores = placement.cores_of(rectangle)[:replicas]
+    cores = lane_cores(rectangle, len(plan))
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
     named = [(name, index) for name, index, _dtype, _pages in CBS] + [
         ("Wt", WIDTH_TILES),
@@ -250,7 +243,7 @@ def program_parts(
         ttnn.WriterConfigDescriptor(),
     )
     compute = kernel(KERNELS["compute"], [], per_core(lambda _t, _r, p, m: [p, m]), compute_config)
-    compute.defines = _dev_defines() + fp.zone_defines()
+    compute.defines = _compute_defines() + fp.zone_defines()
     del sem_base  # no program-local semaphores in this form
     return [reader, writer, compute], cbs, []
 
@@ -264,66 +257,10 @@ def router_tail_program(
     return fp.program_descriptor(kernels, cbs=cbs, semaphores=semaphores)
 
 
-def _dev_defines() -> list[tuple[str, str]]:
-    """Study knobs (dev only; every one of them breaks the output): QWEN38_ROUTER_TAIL_TOPK_TILES=N sorts only the
-    first N width tiles, QWEN38_ROUTER_TAIL_SOFTMAX_COPY_ONLY=1 skips the softmax math, QWEN38_ROUTER_TAIL_TOPK_SORT_SKIP=1
-    keeps the transposes and copies but skips the sorts, QWEN38_ROUTER_TAIL_TOPK_SPLIT=2 emulates a two-core width
-    split on one core (the study's tie-order counter-example), QWEN38_ROUTER_TAIL_EXP_ITERATIONS / _SORT_PHASES time the
-    exact form's anchors.  QWEN38_ROUTER_TAIL_EXP_LIVE=0 is the bitwise A/B switch back to the full exp_tile (not a
-    study knob: the output is the same)."""
+def _compute_defines() -> list[tuple[str, str]]:
+    """Retain the bitwise full-exp control; incomplete arithmetic study modes are not served."""
 
-    defines = []
-    tiles = os.environ.get("QWEN38_ROUTER_TAIL_TOPK_TILES")
-    if tiles:
-        defines.append(("FRT_TOPK_TILES", str(int(tiles))))
-    if os.environ.get("QWEN38_ROUTER_TAIL_SOFTMAX_COPY_ONLY") == "1":
-        defines.append(("FRT_SOFTMAX_COPY_ONLY", "1"))
-    if os.environ.get("QWEN38_ROUTER_TAIL_TOPK_SORT_SKIP") == "1":
-        defines.append(("FRT_TOPK_SORT_SKIP", "1"))
-    split = os.environ.get("QWEN38_ROUTER_TAIL_TOPK_SPLIT")
-    if split:
-        defines.append(("FRT_TOPK_SPLIT", str(int(split))))
-    if os.environ.get(EXP_LIVE_ENV, "1") == "0":
-        defines.append(
-            ("FRT_EXP_LIVE", "0")
-        )  # A/B switch: the full exp_tile over all 32 vectors (today's instruction stream)
-    exp_iterations = os.environ.get("QWEN38_ROUTER_TAIL_EXP_ITERATIONS")
-    if exp_iterations:
-        if not 0 <= int(exp_iterations) <= 8:
-            raise ValueError(f"QWEN38_ROUTER_TAIL_EXP_ITERATIONS must be 0..8, got {exp_iterations}")
-        defines.append(("FRT_EXP_ITERATIONS", str(int(exp_iterations))))
-    phases = os.environ.get("QWEN38_ROUTER_TAIL_SORT_PHASES")
-    if phases:
-        start, end = (int(v) for v in phases.split(":"))
-        if not 0 <= start <= end <= 5:
-            raise ValueError(f"QWEN38_ROUTER_TAIL_SORT_PHASES must be start:end within 0..5, got {phases}")
-        defines.append(("FRT_SORT_PHASE_START", str(start)))
-        defines.append(("FRT_SORT_PHASE_END", str(end)))
-    return defines
-
-
-def _dev_replicas() -> int:
-    """Study knob (dev only): QWEN38_ROUTER_TAIL_DEV_REPLICAS=N runs the program on N cores of one rectangle, the
-    extra cores reading and sorting everything and writing nothing (token_mask 0, so with the live exp they skip the
-    exp too): the concurrent-read timing of a multi-core form.  N must be 1 (off) or a multiple of 4 up to 20 (the
-    placement rectangle's cores; more would truncate silently against it)."""
-
-    replicas = int(os.environ.get("QWEN38_ROUTER_TAIL_DEV_REPLICAS", "1"))
-    if replicas != 1 and not (replicas % 4 == 0 and 4 <= replicas <= 20):
-        raise ValueError(
-            f"QWEN38_ROUTER_TAIL_DEV_REPLICAS must be 1 or a multiple of 4 up to 20 (the rectangle), got {replicas}"
-        )
-    return replicas
-
-
-def _dev_pass_mask() -> int:
-    """Study knob (dev only): QWEN38_ROUTER_TAIL_TOPK_PASS_MASK=<0..15> makes the single-core form sort only those
-    passes of the LLK network (topk_lanes.h); the tokens of the other passes come out wrong.  0 = the LLK's own sort."""
-
-    mask = int(os.environ.get("QWEN38_ROUTER_TAIL_TOPK_PASS_MASK", "0"))
-    if not 0 <= mask < (1 << PASSES):
-        raise ValueError(f"QWEN38_ROUTER_TAIL_TOPK_PASS_MASK must be 0..{(1 << PASSES) - 1}, got {mask}")
-    return mask
+    return [("FRT_EXP_LIVE", "0")] if os.environ.get(EXP_LIVE_ENV, "1") == "0" else []
 
 
 def router_tail(logits, *, top_k: int = TOP_K, compute_kernel_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):

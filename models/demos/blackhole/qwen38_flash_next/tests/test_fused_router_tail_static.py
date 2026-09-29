@@ -96,11 +96,7 @@ def test_compute_kernel_pins_the_replaced_ops_instruction_sequences():
     assert compute.index("if (pass_mask == 0) {") < compute.index("topk_local_sort_lanes<false>")
     assert '#include "topk_lanes.h"' in compute and '#include "exp_live.h"' in compute
     # the live-vector exp serves by default; the A/B switch keeps the full exp_tile in its own branch
-    assert (
-        compute.index("#if FRT_EXP_ITERATIONS == 8 && FRT_EXP_LIVE")
-        < compute.index("exp_tile_live(wt8, live_pairs)")
-        < compute.index("#elif FRT_EXP_ITERATIONS == 8")
-    )
+    assert compute.index("#if FRT_EXP_LIVE") < compute.index("exp_tile_live(wt8, live_pairs)") < compute.index("#else")
     assert "const uint32_t live_pairs = exp_live_pairs(token_mask);" in compute
 
 
@@ -154,68 +150,12 @@ def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
     assert "VectorMode::RC_custom" in header and "calculate_bitonic_topk_phases_steps_lanes" in header
 
 
-def test_dev_knobs_map_to_defines_and_validate(monkeypatch, expect_error):
-    """The timing knobs of the exact-form anchors (dev only): exp iterations, the sort's phase window, the replicas."""
-
-    for name in (
-        "QWEN38_ROUTER_TAIL_EXP_ITERATIONS",
-        "QWEN38_ROUTER_TAIL_SORT_PHASES",
-        "QWEN38_ROUTER_TAIL_DEV_REPLICAS",
-        "QWEN38_ROUTER_TAIL_TOPK_TILES",
-        "QWEN38_ROUTER_TAIL_SOFTMAX_COPY_ONLY",
-        "QWEN38_ROUTER_TAIL_TOPK_SORT_SKIP",
-        "QWEN38_ROUTER_TAIL_TOPK_SPLIT",
-        rt.EXP_LIVE_ENV,
-    ):
-        monkeypatch.delenv(name, raising=False)
-    assert rt._dev_defines() == [] and rt._dev_replicas() == 1
-    monkeypatch.setenv("QWEN38_ROUTER_TAIL_EXP_ITERATIONS", "1")
-    monkeypatch.setenv("QWEN38_ROUTER_TAIL_SORT_PHASES", "0:4")
-    assert rt._dev_defines() == [
-        ("FRT_EXP_ITERATIONS", "1"),
-        ("FRT_SORT_PHASE_START", "0"),
-        ("FRT_SORT_PHASE_END", "4"),
-    ]
-    monkeypatch.setenv("QWEN38_ROUTER_TAIL_EXP_ITERATIONS", "9")
-    with expect_error(ValueError):
-        rt._dev_defines()
-    monkeypatch.setenv("QWEN38_ROUTER_TAIL_EXP_ITERATIONS", "0")
-    monkeypatch.setenv("QWEN38_ROUTER_TAIL_SORT_PHASES", "5:4")
-    with expect_error(ValueError):
-        rt._dev_defines()
-    monkeypatch.setenv("QWEN38_ROUTER_TAIL_DEV_REPLICAS", "16")
-    assert rt._dev_replicas() == 16
-    for bad in ("2", "44", "0", "24"):
-        monkeypatch.setenv("QWEN38_ROUTER_TAIL_DEV_REPLICAS", bad)
-        with expect_error(ValueError):
-            rt._dev_replicas()
-    compute = SOURCES["compute"]
-    # the knobs default to today's instruction stream: the pinned calls sit in the default branches
-    assert (
-        "#define FRT_EXP_ITERATIONS 8" in compute
-        and "#define FRT_SORT_PHASE_START 0" in compute
-        and "#define FRT_SORT_PHASE_END 5" in compute
-    )
-    assert (
-        compute.index("#elif FRT_EXP_ITERATIONS == 8")
-        < compute.index("exp_tile<false>(wt8)")
-        < compute.index("#elif FRT_EXP_ITERATIONS > 0")
-    )
-    monkeypatch.delenv("QWEN38_ROUTER_TAIL_SORT_PHASES")
-    monkeypatch.delenv("QWEN38_ROUTER_TAIL_EXP_ITERATIONS")
-    assert rt._dev_defines() == []  # the A/B switch off = no define: the live exp serves by default
+def test_full_exp_control_preserves_the_precise_path(monkeypatch):
+    monkeypatch.delenv(rt.EXP_LIVE_ENV, raising=False)
+    assert rt._compute_defines() == []
     monkeypatch.setenv(rt.EXP_LIVE_ENV, "0")
-    assert rt._dev_defines() == [("FRT_EXP_LIVE", "0")]
-    assert compute.index("#if FRT_SORT_PHASE_START == 0 && FRT_SORT_PHASE_END == 5") < compute.index(
-        "topk_local_sort<false>(0, 0 /* largest */, 5 /* end_phase */)"
-    )
-    # a single phase runs all its steps: start_step = end_phase + 1 down to end_step 4 (the LLK's default window)
-    assert "FRT_SORT_PHASE_END, pass_mask, FRT_SORT_PHASE_START, 4, FRT_SORT_PHASE_END + 1)" in compute
-    source = inspect.getsource(
-        rt.program_parts
-    )  # the descriptors' builder holds the plan (router_tail_program wraps it)
-    assert "replicas = _dev_replicas()" in source and "plan[:1] + [(tile_row, pass_mask, 0)] * (replicas - 1)" in source
-    assert "cores = placement.cores_of(rectangle)[:replicas]" in source
+    assert rt._compute_defines() == [("FRT_EXP_LIVE", "0")]
+    assert "exp_tile<false>(wt8)" in SOURCES["compute"]
 
 
 def test_single_core_form_runs_the_full_exp(monkeypatch):
@@ -223,7 +163,6 @@ def test_single_core_form_runs_the_full_exp(monkeypatch):
     sequence (no saving, no change)."""
 
     monkeypatch.setenv(rt.LANES_ENV, "0")
-    monkeypatch.delenv("QWEN38_ROUTER_TAIL_TOPK_PASS_MASK", raising=False)
     plan, lanes = rt._core_plan(1)
     assert not lanes and plan == [(0, 0, rt.ALL_TOKENS)]
     assert rt.ALL_TOKENS == (1 << 32) - 1 and _exp_live_pairs(rt.ALL_TOKENS) == 0xFF

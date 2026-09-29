@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 import re
 import struct
 from pathlib import Path
@@ -281,14 +280,3 @@ def test_lane_forms_keep_the_one_row_paths_and_the_kernel_layouts():
     assert "greedy_candidates(logits.tensor, packed_lanes=PACKED_LANES_ROWS)" in inspect.getsource(
         gt.greedy_candidates_fused
     )
-
-
-def test_manifest_lists_the_files():
-    manifest_path = HERE / "tools" / "release" / "manifest.json"
-    if not manifest_path.exists():
-        pytest.skip("tools/release/manifest.json is not in this tree (the public tree ships without tools/release/)")
-    manifest = json.loads(manifest_path.read_text())["public"]
-    for path in ("tests/test_fused_greedy_tail_static.py", "ttnn/fused/greedy_tail/__init__.py") + tuple(
-        f"ttnn/fused/greedy_tail/kernels/{name}.cpp" for name in ("scan", "merge", "resolve")
-    ):
-        assert path in manifest, path

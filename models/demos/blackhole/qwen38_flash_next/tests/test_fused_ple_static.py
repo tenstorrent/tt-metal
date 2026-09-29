@@ -8,11 +8,8 @@ FPU multiply, the ternary MAC sequence, the FPU delta add), and the manifest."""
 from __future__ import annotations
 
 import inspect
-import json
 import re
 from pathlib import Path
-
-import pytest
 
 from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import ple
@@ -167,26 +164,6 @@ def test_every_chain_attribute_the_fused_ple_uses_exists():
         assert used, prefix
         assert used <= names, (prefix, sorted(used - names))
     assert 'module._validate_residual(gated, label="PLE gated value")' in fused_source
-
-
-def test_manifest_lists_the_files():
-    manifest_path = HERE / "tools" / "release" / "manifest.json"
-    if not manifest_path.exists():
-        pytest.skip("tools/release/manifest.json is not in this tree (the public tree ships without tools/release/)")
-    manifest = json.loads(manifest_path.read_text())["public"]
-    for path in ["tests/test_fused_ple_static.py", "ttnn/fused/ple/__init__.py"] + [
-        f"ttnn/fused/ple/kernels/{k}"
-        for k in (
-            "gate_compute.cpp",
-            "gate_reader.cpp",
-            "gate_writer.cpp",
-            "norm_gamma_rows_compute.cpp",
-            "conv_compute.cpp",
-            "conv_reader.cpp",
-            "conv_writer.cpp",
-        )
-    ]:
-        assert path in manifest, path
 
 
 def test_lane_hook_and_lane_forms_are_pinned():
