@@ -42,13 +42,14 @@ Golden numbers (Blackhole p150 ×4, unicast write):
 | NeighborExchange | 2048 / 4096 | 19.2 / 38.4 | 9.4 M |
 | Linear | 4096 | 28–29 | 6.8–7.1 M |
 | Linear, custom router max payload | 3K / 5K / 8K / 15K | 23.7 / 38.2 / 41.0 / 41.8 | 7.2 M → 2.7 M |
-| Fused write + atomic-inc on every packet (NeighborExchange) | 2048 / 4096 | 5.9 / 10.9 | 2.9 M |
+| Fused write + atomic-inc on every packet (NeighborExchange) | 2048 / 4096 | 5.9 / 10.9 in the golden; 17.8 / 35.5 re-measured 2026-09-29 | 2.9 M (golden) |
 
 What these numbers already tell us:
 
 - The ceiling depends on the fabric topology config, so every result has to name its config.
 - Throughput is limited by packet rate up to about 5 KiB, then flattens at about 41 GB/s.
-- A fused atomic-inc on every packet is about 3.5× slower than plain writes (use it once per chunk).
+- The golden shows a fused atomic-inc on every packet as about 3.5× slower than plain writes, but a re-run on
+  2026-09-29 (firmware 19.12.0) measured it at the same speed as plain writes. Trust fresh runs over the golden.
 - The GB/s figure is the same for 1–4 links, which reads as a per-link number (not yet confirmed).
 
 ### Shared infrastructure (built once)
