@@ -64,34 +64,35 @@ def _build_profiler_cmd(
     op_support_count,
     is_command_binary_exe,
 ):
-    check_return_code = ""
-    device_analysis_opt = ""
-    python_post_process_opt = ""
-    capture_perf_counters_opt = ""
-    sum_profiling_opt = ""
-    op_support_count_opt = ""
+    """Build the `python3 -m tracy ...` invocation as an argv list, to be run without a shell."""
+    cmd = ["python3", "-m", "tracy", "-p"]
     if python_post_process:
-        python_post_process_opt = "-r"
-    if sum_profiling:
-        sum_profiling_opt = "--enable-sum-profiling"
-    if op_support_count != PROFILER_DEFAULT_OP_SUPPORT_COUNT:
-        op_support_count_opt = f"--op-support-count {op_support_count}"
+        cmd.append("-r")
+    cmd += ["-o", str(output_profiler_dir)]
     if check_test_return_code:
-        check_return_code = "--check-exit-code"
+        cmd.append("--check-exit-code")
     if device_analysis_types:
         assert type(device_analysis_types) == list
-        device_analysis_opt_list = [f" -a {analysis}" for analysis in device_analysis_types]
-        device_analysis_opt = "".join(device_analysis_opt_list)
+        for analysis in device_analysis_types:
+            cmd += ["-a", analysis]
+    if sum_profiling:
+        cmd.append("--enable-sum-profiling")
+    if op_support_count != PROFILER_DEFAULT_OP_SUPPORT_COUNT:
+        cmd += ["--op-support-count", str(op_support_count)]
     if capture_perf_counters_groups:
         assert type(capture_perf_counters_groups) == list
-        capture_perf_counters_opt = (
-            "--profiler-capture-perf-counters=" + ",".join(capture_perf_counters_groups) + " --perf-counter-multipass"
-        )
+        cmd.append("--profiler-capture-perf-counters=" + ",".join(capture_perf_counters_groups))
+        cmd.append("--perf-counter-multipass")
+    cmd += ["-t", "5000"]
 
-    cmd_call = "" if is_command_binary_exe else "-m"
-    # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
-    quoted_command = command if is_command_binary_exe else shlex.quote(command)
-    return f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
+    if is_command_binary_exe:
+        # The caller hands over a shell-style command line (e.g. `-m 'pytest x.py -k "a and b"'`); split it the way
+        # the shell used to, so quoted arguments stay whole.
+        cmd += shlex.split(command)
+    else:
+        # A module command goes to tracy's -m as one argument, like the shlex.quote()d form did through the shell.
+        cmd += ["-m", command]
+    return cmd
 
 
 def merge_pass_csv(pass1_csv_path, pass2_csv_path):
@@ -171,15 +172,15 @@ def _descendant_process_groups(root_pid):
 
 
 def _run_profiler_cmd(profiler_cmd):
-    """Run `python -m tracy ...` in its own session and take the whole tree down with the caller.
+    """Run the `python -m tracy ...` argv (no shell) in its own session; take the whole tree down with the caller.
 
-    subprocess.run(shell=True) only reaps the `sh -c` wrapper: when the caller is interrupted
+    A plain subprocess.run() does not kill its child on interruption: when the caller is interrupted
     (pytest-timeout raising inside the wait, SIGINT) the orphaned `python -m tracy` and the test it
     captured keep the CI step's stdout open until the step budget kills it (10 min on the Blackhole
     device-perf legs after a 600 s pytest-timeout, e.g. 2026-09-16 jobs 104841076912 and
     104881661500; 45 s of post-processing on wh_n150 on 09-10).
     """
-    proc = subprocess.Popen([profiler_cmd], shell=True, start_new_session=True)
+    proc = subprocess.Popen(profiler_cmd, start_new_session=True)
     try:
         returncode = proc.wait()
     except BaseException:
@@ -224,7 +225,7 @@ def run_multi_pass(
         op_support_count,
         is_command_binary_exe,
     )
-    logger.info(f"L1 two-pass: running pass 1 (L1 bank 0) — {profiler_cmd}")
+    logger.info(f"L1 two-pass: running pass 1 (L1 bank 0) — {shlex.join(profiler_cmd)}")
     _run_profiler_cmd(profiler_cmd)
 
     # Pass 2: L1_1 instead of L1_0
@@ -241,7 +242,7 @@ def run_multi_pass(
         op_support_count,
         is_command_binary_exe,
     )
-    logger.info(f"L1 two-pass: running pass 2 (L1 bank 1) — {profiler_cmd_pass2}")
+    logger.info(f"L1 two-pass: running pass 2 (L1 bank 1) — {shlex.join(profiler_cmd_pass2)}")
     _run_profiler_cmd(profiler_cmd_pass2)
 
     # Merge L1_1 columns from pass 2 into pass 1 CSV
@@ -288,7 +289,7 @@ def run_device_profiler(
             op_support_count,
             is_command_binary_exe,
         )
-        logger.info(profiler_cmd)
+        logger.info(shlex.join(profiler_cmd))
         _run_profiler_cmd(profiler_cmd)
 
 
