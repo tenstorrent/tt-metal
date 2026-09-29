@@ -10,9 +10,9 @@ after the board's power manager has settled the clock (≈1.1–1.3 GHz under lo
 | batch | baseline | pplx-embed-4B now | Qwen3-Embedding-4B now | speedup | H200 | × H200 (pplx) | tok/s (pplx) |
 |---|---|---|---|---|---|---|---|
 | 1 | 45.773 ± 0.160 ms | **16.5 ms** | 17.4 ms | 2.77× | 5.44 ms | 3.03× | 31.0k |
-| 8 | 190.065 ± 4.527 | **116.8** | 117.7 | 1.63× | 33.08 | 3.53× | 35.1k |
-| 16 | 375.817 ± 5.810 | **216.7** | 220.1 | 1.73× | 67.23 | 3.22× | 37.8k |
-| 32 | 726.944 ± 2.552 | **433.7** | 433.7 | 1.68× | 139.15 | 3.12× | 37.8k |
+| 8 | 190.065 ± 4.527 | **96.9** | 96.8 | 1.96× | 33.08 | 2.93× | 42.3k |
+| 16 | 375.817 ± 5.810 | **180.7** | 191.1 | 2.08× | 67.23 | 2.69× | 45.3k |
+| 32 | 726.944 ± 2.552 | **397.7** | 397.7 | 1.83× | 139.15 | 2.86× | 41.2k |
 
 - **Baseline** is the reference measurement of pplx-embed-4B on Blackhole P150 as provided by the customer
   (mean ± spread, ms). The two models share one code path; Qwen3-Embedding-4B differs only by causal attention
@@ -42,8 +42,9 @@ was adopted later). The last column is e2e latency after the step: bs1 / bs8 / b
 | 12 | bs1: concat-free SDPA output; residual adds written in the norm's shard layout | the per-layer concat and 72 layout conversions are gone | 17.3 / 115.3 / 221.0 / 425.5 |
 | 13 | bs1: SDPA packs each GQA group's 4 query heads as one head (`pack_gqa_heads`, q192 on 11×8); the fused heads kernel batches every norm/RoPE phase across a unit's heads and keeps its constants resident in L1; both norms keep their block-shard output for the QKV/FF1/FF3 matmuls | K/V stream once per KV head instead of once per query head; 45 phase set-ups per unit → 9; the 72 sharded-to-interleaved ops are gone | **15.9** / 115.3 / 221.0 / 425.5 |
 | 14 | bs8–32: SDPA keeps K/V in a core's buffers across its Q chunks of the same (batch, KV head) (`reuse_kv`, q128); the fused add+RMSNorm's short-lived operands (WO/FF2 outputs, both norm outputs, the post-attention sum at bs8/16) live in L1 | each core reads a KV head's K/V once instead of once per Q chunk (142 MB → 36 MB per call at bs16) and finer chunks fill the grid; the DRAM-bound norm halves its traffic (435 → 255 µs per call at bs32) | 15.9 / **110.5** / **212.9** / **416.2** |
+| 15 | bs8–32: the fused SwiGLU is applied on `minimal_matmul`'s pack thread in each block's last K block (K_block 40), and bs32 runs the fused kernel too; QKV output kept in L1 at bs8/16; at bs32 QKV + heads run in two half-batch chunks with L1 outputs; norm output preallocated at the top of L1 | the SwiGLU SFPU pass overlaps the math thread's next subblock instead of a serialized epilogue (fused FF13 at bs16 2688 → 1691 µs, and bs32's FF1 + FF3 + product 4684 → 3248 µs); the heads op reads its input from L1 (bs16 322 → 210 µs) | 15.9 / **87.7** / **172.8** / **360.4** |
 
-Sustained after step 14: **16.5 / 116.8 / 216.7 / 433.7 ms**. Configuration lives in
+Sustained after step 15: **16.5 / 96.9 / 180.7 / 397.7 ms**. Configuration lives in
 `demo/_common.py::apply_workload_env` (per-batch defaults, every knob overridable from the shell), the kernels in
 `tt/custom_ops/`, the shared-code changes in `models/tt_transformers/tt/`, the SDPA op and the 2D matmul factory.
 
@@ -56,26 +57,26 @@ throughput gated by the slowest chip (pplx-embed-4B, ISL 512, 32/32 chips active
 | per-chip batch | global batch | per-chip median | slowest chip | vs one chip sustained | embeddings/s | tokens/s | scaling vs 32 × one chip |
 |---|---|---|---|---|---|---|---|
 | 1 | 32 | 17.1 ms | 17.5 ms | +4% | 1,833 | 0.94 M | 95% |
-| 4 | 128 | 70.1 | 72.0 | +2% | 1,777 | 0.91 M | 96% |
-| 8 | 256 | 117.6 | 123.1 | +0.7% | 2,080 | 1.06 M | 95% |
-| 16 | 512 | 218.4 | 235.0 | +0.8% | 2,179 | 1.12 M | 92% |
-| 32 | 1,024 | 432.5 | 457.2 | −0.3% | 2,239 | 1.15 M | 95% |
+| 4 | 128 | 63.9 | 66.9 | +1% | 1,913 | 0.98 M | 95% |
+| 8 | 256 | 99.2 | 108.0 | +2% | 2,371 | 1.21 M | 90% |
+| 16 | 512 | 189.9 | 209.4 | +5% | 2,445 | 1.25 M | 86% |
+| 32 | 1,024 | 389.0 | 414.4 | −2% | 2,471 | 1.27 M | 96% |
 
-The per-chip median matches the single-chip sustained numbers, so the chips do not interfere; the 4–6% lost
-against ideal scaling is chip-to-chip spread (fastest to slowest chip: 16.0–17.7 ms at bs1, 402–461 ms at bs32),
+The per-chip median stays within a few percent of the single-chip sustained numbers, so the chips do not interfere;
+the 4–14% lost against ideal scaling is chip-to-chip spread (fastest to slowest chip: 16.0–17.7 ms at bs1, 349–416 ms at bs32),
 which gates the synchronous aggregate.
 
 ## Where the time goes now
 
 Share of device kernel time per batch (Tracy, signposted trace replay, one P150). The SwiGLU column is empty at
-bs 8 and 16 because there the product runs inside the fused SwiGLU matmul.
+bs 8 to 32 because there the product runs inside the fused SwiGLU matmul.
 
 | Batch | Matmul | SDPA | Fused heads | Norm + residual | SwiGLU product | Matmul + SDPA | Kernel sum |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 | 66.6% | 6.8% | 6.6% | 7.3% | 12.4% | 73.4% | 15.1 ms |
-| 8 | 80.5% | 7.3% | 6.3% | 5.8% | 0.0% | 87.8% | 101.0 ms |
-| 16 | 82.4% | 6.3% | 6.1% | 5.2% | 0.0% | 88.6% | 187.7 ms |
-| 32 | 68.5% | 6.0% | 6.1% | 5.1% | 14.2% | 74.5% | 345.8 ms |
+| 8 | 77.5% | 9.5% | 5.3% | 7.6% | 0.0% | 87.0% | 77.8 ms |
+| 16 | 80.2% | 7.9% | 5.1% | 6.6% | 0.0% | 88.2% | 147.7 ms |
+| 32 | 81.2% | 7.2% | 5.3% | 6.1% | 0.0% | 88.4% | 287.7 ms |
 
 ## Reproduce
 

@@ -133,9 +133,9 @@ Sustained latency at ISL 512 (median of iterations 15–29 of a 30-iteration run
 | batch | Qwen3-Embedding-4B | pplx-embed-4B (same stack) | H200 reference | × H200 |
 |---|---|---|---|---|
 | 1 | **17.4 ms** | 16.5 ms | 5.44 ms | 3.2× |
-| 8 | **117.7** | 116.8 | 33.08 | 3.6× |
-| 16 | **220.1** | 216.7 | 67.23 | 3.3× |
-| 32 | **433.7** | 433.7 | 139.15 | 3.1× |
+| 8 | **96.8** | 96.9 | 33.08 | 2.9× |
+| 16 | **191.1** | 180.7 | 67.23 | 2.8× |
+| 32 | **397.7** | 397.7 | 139.15 | 2.9× |
 
 The previous demo in this directory measured 32.3 ms at bs=1 and 725 ms at bs=32. STS-B Spearman through the
 batched paths (last token + EOS): 0.819 / 0.810 / 0.808 / 0.807 at bs 1 / 8 / 16 / 32
