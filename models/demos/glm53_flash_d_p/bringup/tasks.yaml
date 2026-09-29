@@ -1551,6 +1551,13 @@ tasks:
     kind: residual
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T12:31:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_moe_add.py: cbb98e610eb393f222c0bdfa3df6cf0cc5f3476ed10a49b340bfada3d906b2c7
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.14
   title: 'dsa_moe block with steps 1-14 on device (last: moe_add)'
   step: implement
