@@ -161,3 +161,37 @@ class TtHcPre:
             ttnn.deallocate(y)
             y = y2
         return y
+
+
+class TtHcPost:
+    """iHC post (HF HYV4HyperConnection residual): h_j = stream_j + post_j * y on each of the 4 streams, fp32. Hy4
+    has no comb matrix, so the streams are not mixed (deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post without the
+    comb terms).
+
+    Call with the per-chip streams [1, 1, S/2, 4 x H/2] fp32 TILE (tt/layout.py), the gates [1, 1, S/2, 8] fp32 TILE
+    (TtHcGates, replicated over axis 1; post = columns 4-7) and the sublayer output y [1, 1, S/2, H/2] (this chip's
+    hidden columns, split by rows over axis 0 and columns over axis 1); returns the new streams in the input's
+    layout, fp32. No collective: each chip updates its own column block of every stream."""
+
+    def __init__(self, mesh, hidden: int):
+        self.mesh = mesh
+        self.hidden = hidden
+
+    def __call__(self, x: ttnn.Tensor, gates: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
+        s2, w = x.shape[-2], x.shape[-1] // HC
+        assert y.shape[-1] == w and y.shape[-2] == s2, (tuple(x.shape), tuple(y.shape))
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        yf = y if y.dtype == ttnn.float32 else ttnn.typecast(y, ttnn.float32)
+        out = []
+        for j in range(HC):
+            st = ttnn.slice(x, [0, 0, 0, j * w], [1, 1, s2, (j + 1) * w], memory_config=dram)
+            post = ttnn.slice(gates, [0, 0, 0, HC + j], [1, 1, s2, HC + j + 1], memory_config=dram)
+            out.append(ttnn.addcmul(st, yf, post, memory_config=dram))
+            ttnn.deallocate(st)
+            ttnn.deallocate(post)
+        if yf is not y:
+            ttnn.deallocate(yf)
+        h = ttnn.concat(out, dim=-1, memory_config=dram)
+        for t in out:
+            ttnn.deallocate(t)
+        return h
