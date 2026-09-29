@@ -1,0 +1,33 @@
+{
+ "metrics": {
+  "pcc_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 0.9999958794721197
+  },
+  "rel_l2_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 0.002871731761842966
+  },
+  "row_norm_ratio_max_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 1.0009233951568604
+  },
+  "row_norm_ratio_min_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 0.9990574717521667
+  },
+  "syn_rel_l2_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 0.001833550981245935
+  },
+  "syn_worst_row_rel_l2_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 0.0025241593830287457
+  },
+  "worst_row_rel_l2_attn_norm_L01": {
+   "t": "2026-09-29T10:29:23",
+   "value": 0.003151488257572055
+  }
+ },
+ "task": "C.moe_full.attn_norm"
+}
