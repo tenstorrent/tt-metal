@@ -50,8 +50,9 @@ class TtDenseMLP:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=dim),
         )
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x: replicated [1, 1, S, H] TILE bf16 (ffn_norm output). Returns replicated [1, 1, S, H] bf16."""
+    def __call__(self, x: ttnn.Tensor, split: bool = False) -> ttnn.Tensor:
+        """x: replicated [1, 1, S, H] TILE bf16 (ffn_norm output). Returns replicated [1, 1, S, H] bf16.
+        split: return this chip's [1, 1, S/4, H] quarter instead (reduce_scatter on both axes, fp32)."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         lim = self.limit
         g = ttnn.linear(x, self.w_gate, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
@@ -68,7 +69,12 @@ class TtDenseMLP:
         o = ttnn.linear(h, self.w_down, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
         ttnn.deallocate(h)
         # 2x2: reduce over both mesh axes (all 4 TP ranks), in fp32: a bf16 all_reduce scales the sum by +0.19%.
-        r = ttnn.all_reduce(o, cluster_axis=None, memory_config=mc)
+        if split:
+            from models.demos.glm53_flash_d_p.tt.common import scatter_rows
+
+            r = scatter_rows(o)
+        else:
+            r = ttnn.all_reduce(o, cluster_axis=None, memory_config=mc)
         ttnn.deallocate(o)
         out = ttnn.typecast(r, ttnn.bfloat16, memory_config=mc)
         ttnn.deallocate(r)
