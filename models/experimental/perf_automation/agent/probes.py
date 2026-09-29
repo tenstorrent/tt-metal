@@ -80,9 +80,8 @@ def adaptive_backstop(floor_default: int = 3600, mult: int = 3, env_key: str = "
         except Exception:  # noqa: BLE001
             pass
         base = observed_tracy_baseline_seconds(m) or base
-    if ceil < floor:
-        ceil = floor
-    return min(ceil, max(floor, int(mult * base)))
+    # Same arithmetic as every other budget in this tree, so it is asked for rather than repeated.
+    return sized_budget(base, floor, mult=mult, ceiling_s=ceil)
 
 
 # ---------------------------------------------------------------------------
@@ -685,15 +684,13 @@ _HARD_CEILING_MULT = 4
 _BUDGET_GROWTH = 4  # headroom over measured cost, the same multiple the ceiling uses
 
 
-def sized_budget(observed_s, floor_s, override_env: str = "") -> int:
-    """Seconds this step may take: operator's value, else headroom over measured cost, else floor."""
-    if override_env:
-        override = os.environ.get(override_env)
-        if override:
-            try:
-                return max(1, int(override))
-            except ValueError:
-                pass
+def sized_budget(observed_s, floor_s, mult=None, ceiling_s=0) -> int:
+    """Headroom over MEASURED cost, never below `floor_s`, optionally capped at `ceiling_s`.
+
+    The arithmetic only. Reading an operator's override stays with each caller because the callers
+    genuinely differ -- one clamps a pinned value to at least a second, another passes it through as
+    given, and flattening that here would change what a pinned 0 means in the domain that allows it.
+    What must not differ, and did, is how a measurement becomes a budget."""
     try:
         observed = float(observed_s or 0.0)
     except (TypeError, ValueError):
@@ -702,7 +699,13 @@ def sized_budget(observed_s, floor_s, override_env: str = "") -> int:
         floor = int(floor_s or 0)
     except (TypeError, ValueError):
         floor = 0
-    return max(floor, int(_BUDGET_GROWTH * observed))
+    m = float(_BUDGET_GROWTH if mult is None else mult)
+    out = max(floor, int(m * observed))
+    try:
+        ceil = int(ceiling_s or 0)
+    except (TypeError, ValueError):
+        ceil = 0
+    return min(max(ceil, floor), out) if ceil else out
 
 
 def _pgroup_io_counters(pgid) -> tuple:

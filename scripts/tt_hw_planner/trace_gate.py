@@ -375,7 +375,13 @@ def _record_capture_s(demo_dir, seconds: float) -> None:
 def _capture_budget_s(demo_dir) -> int:
     from models.experimental.perf_automation.agent import probes as _pr_budget
 
-    return _pr_budget.sized_budget(_observed_capture_s(demo_dir), _CAPTURE_FLOOR_S, override_env=_CAPTURE_BUDGET_ENV)
+    override = os.environ.get(_CAPTURE_BUDGET_ENV)
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            pass
+    return _pr_budget.sized_budget(_observed_capture_s(demo_dir), _CAPTURE_FLOOR_S)
 
 
 def _wedge_retries() -> int:

@@ -56,7 +56,11 @@ _REPLAY_ITERS = max(1, int(os.environ.get("TT_TRACE_REPLAY_ITERS", "16")))
 # as that budget affords are added -- at least two, so there is always an average, and never more
 # than was asked for, so a cheap stage is measured exactly as before. The count is the means; the
 # budget is the constraint, and it is the caller's to state rather than this file's to guess.
-_REPLAY_BUDGET_ENVS = ("PERF_MCP_VALIDATE_TIMEOUT", "PERF_MCP_MEASURE_STALL_SEC")
+# BUDGETS ONLY. This listed PERF_MCP_MEASURE_STALL_SEC, which is a STALL WINDOW -- run.py passes it
+# as `stall_s=`, the no-progress detector's window, not an allowance for the work. Sizing a
+# measurement from it would have cut sample counts in the optimize domain, where it is routinely set,
+# for a reason that has nothing to do with how long the measurement may take.
+_REPLAY_BUDGET_ENVS = ("PERF_MCP_VALIDATE_TIMEOUT", "PERF_MCP_MEASURE_BACKSTOP")
 _MIN_REPLAY_ITERS = 2  # an average needs two; dimensionless, so it assumes nothing about the model
 
 
