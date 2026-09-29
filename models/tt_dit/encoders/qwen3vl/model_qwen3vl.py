@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 # tradeoff — SDPA pads+masks a partial last chunk internally, so nothing needs to be aligned
 # to it. (Also reused as the flash-SDPA q/k chunk size, an independent perf-tiling knob.)
 SEQ_BUCKET_SIZE = 128
+# Largest SP shard whose fp32-accumulate ring SDPA program fits Wormhole's kernel-config buffer;
+# see `Qwen3VlAttention._ring_compute_kernel_config`.
+_RING_FP32_ACC_MAX_LOCAL_ROWS_WH = 512
 
 
 @dataclass
@@ -669,11 +672,34 @@ class Qwen3VlAttention(Module):
         )
         return cfg, worker_grid
 
+    def _ring_compute_kernel_config(self, local_seq_len: int):
+        """fp32 destination accumulation, except where the ring SDPA program cannot fit on Wormhole.
+
+        `fp32_dest_acc_en=True` selects the ring joint SDPA's legacy compute path, whose kernels are
+        larger than the streaming path's. On Wormhole the whole program (five kernel binaries plus
+        runtime-arg, CB and semaphore tables) must fit the 70656-byte Tensix kernel-config buffer, and
+        it does so only while the local shard is a single K chunk: at 128 and 512 rows it fits, at 1024
+        and above it lands at 72-73.5 KB for every chunking that fits L1 (probed 2026-09-29 at 128/256/512
+        q and k chunks, shards 1024-7168). Only ref2va reaches those shards -- a presentation with a
+        video reference pads to 8192 tokens, 1024 rows over SP=8. The bf16-accumulate streaming path
+        fits at every shard (3.2 ms at 1024 rows, 81.7 ms at 7168), so Wormhole takes it above
+        `_RING_FP32_ACC_MAX_LOCAL_ROWS_WH`; shorter shards, and every Blackhole shard, keep fp32.
+        """
+        rows = -(-local_seq_len // 32) * 32
+        if self._device.arch() == ttnn.device.Arch.WORMHOLE_B0 and rows > _RING_FP32_ACC_MAX_LOCAL_ROWS_WH:
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
+        return self._sdpa_compute_kernel_config
+
     def _ring_attention(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
         """Causal ring attention over a sequence sharded on the SP axis (zero-width joint slots)."""
         sp_axis, ccl = self._sp_axis, self._ccl_manager
         local_seq_len = q.shape[2]
         pc, worker_grid = self._ring_program_config(local_seq_len)
+        compute_kernel_config = self._ring_compute_kernel_config(local_seq_len)
         empty_q = tensor.bf16_tensor(torch.zeros(1, self._num_local_heads, 0, self._head_dim), device=self._device)
         empty_kv = tensor.bf16_tensor(torch.zeros(1, self._num_local_kv_heads, 0, self._head_dim), device=self._device)
         attn, _joint, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -692,7 +718,7 @@ class Qwen3VlAttention(Module):
             joint_strategy="rear",
             logical_n=local_seq_len * self._sp_factor,
             program_config=pc,
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            compute_kernel_config=compute_kernel_config,
             dim=2,
             scale=self._head_dim**-0.5,
             multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
