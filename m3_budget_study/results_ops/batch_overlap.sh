@@ -5,6 +5,7 @@
 #
 # Configs (CONFIGS, default "off ov ovf"): off = both knobs 0, ov = OVERLAP, ovf = OVERLAP + FUSE_RS, fuse = FUSE_RS only.
 # Kinds (KINDS, default "kv kvg wall prof"), in this order:
+#   smoke budget_sweep.py at W=4096, h=0, 1 warm-up (5 on a first point) + 3 timed, BUDGET_OUT_STATS=1 (not in the default)
 #   kv    budget_packed.py, B=2 (W=4096), slot 0 at h=0 + slot 1 at h=16384, KV dump -> overlap/kv_<cfg>;
 #         compare_kv.py vs kv_off -> overlap/kv_compare_<cfg>.txt
 #   kvg   tools/profile_4x2.py on PROFILE_MESH=2x4 (chunk 5120 up to 56320 tokens): KV PCC vs the golden in the log,
@@ -21,6 +22,7 @@
 #
 #   nohup m3_budget_study/results_ops/batch_overlap.sh > m3_budget_study/results_ops/logs/batch_overlap.out 2>&1 &
 #   KINDS="kv" CONFIGS="off ov" ...   a subset;   ONLY="ovl_wall_ov_w4096" ...   single case ids;   DRY_RUN=1 lists cases
+#   ID_SUFFIX=_r2 ...   appended to every case id (a repeat, e.g. CONFIGS in reverse order to check drift)
 set -uo pipefail
 RES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$RES/../.." && pwd)}"
@@ -54,13 +56,15 @@ knobs () {  # config -> the two knob assignments
 
 # id | kind | config | extra env (space-separated K=V)
 CASES=()
+SFX="${ID_SUFFIX:-}"
 for kind in $KINDS; do
   for cfg in $CONFIGS; do
     case "$kind" in
-      kv) CASES+=("ovl_kv_${cfg}|kv|$cfg|HARNESS=budget_packed.py BUDGET_B=2 BUDGET_COMPOS=G=0:2048,16384:2048 BUDGET_DUMP_KV=$OUT/kv_$cfg BUDGET_WARMUP=1 BUDGET_ITERS=1") ;;
-      kvg) CASES+=("ovl_kvg_${cfg}|kvg|$cfg|PROFILE_MESH=2x4 PROFILE_STAGE=0 PROFILE_NUM_LAYERS=7 PROFILE_CHUNK=5120 PROFILE_CACHE=51200 PREFILL_TRACE_DIR=$GOLDEN/longbook_56320 PROFILE_KV_PCC=1 PROFILE_KV_DUMP=$OUT/kvg_$cfg") ;;
+      smoke) CASES+=("ovl_smoke_${cfg}${SFX}|wall|$cfg|HARNESS=budget_sweep.py BUDGET_W=4096 BUDGET_POINTS=0:4096 BUDGET_WARMUP=1 BUDGET_ITERS=3 BUDGET_OUT_STATS=1") ;;
+      kv) CASES+=("ovl_kv_${cfg}${SFX}|kv|$cfg|HARNESS=budget_packed.py BUDGET_B=2 BUDGET_COMPOS=G=0:2048,16384:2048 BUDGET_DUMP_KV=$OUT/kv_$cfg$SFX BUDGET_WARMUP=1 BUDGET_ITERS=1") ;;
+      kvg) CASES+=("ovl_kvg_${cfg}${SFX}|kvg|$cfg|PROFILE_MESH=2x4 PROFILE_STAGE=0 PROFILE_NUM_LAYERS=7 PROFILE_CHUNK=5120 PROFILE_CACHE=51200 PREFILL_TRACE_DIR=$GOLDEN/longbook_56320 PROFILE_KV_PCC=1 PROFILE_KV_DUMP=$OUT/kvg_$cfg$SFX") ;;
       wall) for W in 4096 8192; do
-              CASES+=("ovl_wall_${cfg}_w${W}|wall|$cfg|HARNESS=budget_sweep.py BUDGET_W=$W BUDGET_POINTS=0:$W,139264:$W")
+              CASES+=("ovl_wall_${cfg}_w${W}${SFX}|wall|$cfg|HARNESS=budget_sweep.py BUDGET_W=$W BUDGET_POINTS=0:$W,139264:$W")
             done ;;
       prof) CASES+=("ovl_${cfg}_w4096_h141312_prose|prof|$cfg|") ;;
       *) echo "unknown kind $kind"; exit 1 ;;
@@ -75,14 +79,14 @@ other_harness () {
 post () {  # kind cfg id: the compare / overlap readout of one finished case
   local kind="$1" cfg="$2" id="$3"
   case "$kind" in
-    kv) if [ "$cfg" != off ] && [ -f "$OUT/kv_off/slot0.pt" ] && [ -f "$OUT/kv_$cfg/slot0.pt" ]; then
-          COMPARE_SP=2 "$PY" "$TT_METAL_HOME/m3_budget_study/compare_kv.py" "$OUT/kv_off" "$OUT/kv_$cfg" 0:2048 1:18432 \
-            > "$OUT/kv_compare_$cfg.txt" 2>&1; tail -1 "$OUT/kv_compare_$cfg.txt"
+    kv) if [ "$cfg$SFX" != off ] && [ -f "$OUT/kv_off/slot0.pt" ] && [ -f "$OUT/kv_$cfg$SFX/slot0.pt" ]; then
+          COMPARE_SP=2 "$PY" "$TT_METAL_HOME/m3_budget_study/compare_kv.py" "$OUT/kv_off" "$OUT/kv_$cfg$SFX" 0:2048 1:18432 \
+            > "$OUT/kv_compare_$cfg$SFX.txt" 2>&1; tail -1 "$OUT/kv_compare_$cfg$SFX.txt"
         fi ;;
     kvg) grep -E 'KV PCC vs golden' "$RES/logs/$id.log" | tail -1
-         if [ "$cfg" != off ] && [ -f "$OUT/kvg_off/kv.pt" ] && [ -f "$OUT/kvg_$cfg/kv.pt" ]; then
-           "$PY" "$RES/tools/profile_4x2.py" --compare "$OUT/kvg_off" "$OUT/kvg_$cfg" > "$OUT/kvg_compare_$cfg.txt" 2>&1
-           tail -1 "$OUT/kvg_compare_$cfg.txt"
+         if [ "$cfg$SFX" != off ] && [ -f "$OUT/kvg_off/kv.pt" ] && [ -f "$OUT/kvg_$cfg$SFX/kv.pt" ]; then
+           "$PY" "$RES/tools/profile_4x2.py" --compare "$OUT/kvg_off" "$OUT/kvg_$cfg$SFX" > "$OUT/kvg_compare_$cfg$SFX.txt" 2>&1
+           tail -1 "$OUT/kvg_compare_$cfg$SFX.txt"
          fi ;;
     wall) grep -E '"kind": "point"' "$RES/logs/$id.log" | sed 's/^RESULT //' ;;
     prof) local csv; csv="$(find "$RES/profiles/$id" -name 'ops_perf_results_*.csv' 2>/dev/null | sort | tail -1)"

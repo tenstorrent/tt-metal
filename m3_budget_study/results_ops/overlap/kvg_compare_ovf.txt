@@ -1,0 +1,9 @@
+A=/home/vmelnykov/tt-metal/m3_budget_study/results_ops/overlap/kvg_off mesh=[2, 4]  B=/home/vmelnykov/tt-metal/m3_budget_study/results_ops/overlap/kvg_ovf mesh=[2, 4]  tokens=56320
+  layer  0: k=1.00000 v=1.00000
+  layer  1: k=1.00000 v=1.00000
+  layer  2: k=1.00000 v=1.00000
+  layer  3: k=1.00000 v=1.00000 index_k=1.00000
+  layer  4: k=0.99994 v=0.99992 index_k=0.99994
+  layer  5: k=0.99984 v=0.99954 index_k=0.99987
+  layer  6: k=0.99979 v=0.99932 index_k=0.99981
+worst PCC 0.99932

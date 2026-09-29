@@ -1,0 +1,5 @@
+run_id,status,elapsed_s,W,h,B,input,segments,wall_ms,capture_mb,csv
+ovl_off_w4096_h141312_prose,OK,195,4096,139264,1,prose,"",146.4,3023,/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/ovl_off_w4096_h141312_prose/20260929_230639_stages4_stage0_layers0+1+2+3+4+5+6_cache141312_1d_bf4/ops_perf_results_2026_09_29_23_09_40.csv
+ovl_ov_w4096_h141312_prose,OK,196,4096,139264,1,prose,"",144.1,3007,/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/ovl_ov_w4096_h141312_prose/20260929_230955_stages4_stage0_layers0+1+2+3+4+5+6_cache141312_1d_bf4/ops_perf_results_2026_09_29_23_13_03.csv
+ovl_fuse_w4096_h141312_prose,OK,181,4096,139264,1,prose,"",145.3,3016,/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/ovl_fuse_w4096_h141312_prose/20260929_231312_stages4_stage0_layers0+1+2+3+4+5+6_cache141312_1d_bf4/ops_perf_results_2026_09_29_23_16_08.csv
+ovl_ovf_w4096_h141312_prose,OK,195,4096,139264,1,prose,"",143.6,3000,/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/ovl_ovf_w4096_h141312_prose/20260929_231614_stages4_stage0_layers0+1+2+3+4+5+6_cache141312_1d_bf4/ops_perf_results_2026_09_29_23_19_18.csv

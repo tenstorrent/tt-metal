@@ -1,0 +1,12 @@
+/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/ovl_off_w4096_h141312_prose/20260929_230639_stages4_stage0_layers0+1+2+3+4+5+6_cache141312_1d_bf4/ops_perf_results_2026_09_29_23_09_40.csv
+  clock 1.350 GHz, sub-device ids: shared_expert=['-'], dispatch=['-']
+  layer            dispatch_us shared_us window_us overlap_us saved_us overlap%   worst-device window_us
+  layer03_sparse         781.4     638.5    2161.4        0.0   -718.7       0%   dev1 2400.4
+  layer04_sparse         754.0     642.4    2128.4        0.0   -726.2       0%   dev28 2970.2
+  layer05_sparse         734.7     645.9    2119.3        0.0   -736.0       0%   dev24 2418.4
+  layer06_sparse         732.2     649.9    2116.4        0.0   -719.3       0%   dev0 2240.7
+  layer              mlp_us gap_in_us gap_out_us   (median over devices)
+  layer03_sparse     6464.9       0.1     -780.3
+  layer04_sparse     7961.9       0.1     -752.9
+  layer05_sparse     6815.5       0.1     -733.7
+  layer06_sparse     6536.3       0.1     -731.1

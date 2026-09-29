@@ -34,6 +34,8 @@ Env:
   BUDGET_TOKENS      metadata.json with token_ids, tiled to length                       [required]
   BUDGET_ANY_LAYERS  1 -> allow BUDGET_LAYER_IDS outside the stage's own layer range     [default 0]
   BUDGET_MEM         1 -> report per-bank DRAM in use after the last point               [default 0]
+  BUDGET_OUT_STATS   1 -> after each point, one extra forward reporting its output's finite fraction,
+                     mean |x| and std (a smoke check of the stage's hidden state)       [default 0]
   M3_FABRIC, M3_CCL_TOPOLOGY, EXPERT_DTYPE, HF_MODEL, TT_CACHE_PATH as for profile_prefill.py.
 """
 
@@ -154,12 +156,26 @@ def main():
         runtime, kv_cache = build(mesh, layer_ids, W, capacity, stages, stage)
         emit(kind="built", load_s=round(time.perf_counter() - t0, 1), mesh=list(mesh.shape))
 
-        def forward(h, n):
+        def forward(h, n, stats=False):
             inp = runtime.make_chunk_input(tokens(h))
             t = time.perf_counter()
             out = runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=h, actual_end=h + n)
             ttnn.synchronize_device(mesh)
             ms = (time.perf_counter() - t) * 1e3
+            if stats and out is not None:
+                x = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
+                fin = x.isfinite()
+                xf = x[fin]
+                emit(
+                    kind="out_stats",
+                    h=h,
+                    n=n,
+                    shape=list(x.shape),
+                    finite_frac=round(fin.float().mean().item(), 6),
+                    mean_abs=round(xf.abs().mean().item(), 5),
+                    std=round(xf.std().item(), 5),
+                    max_abs=round(xf.abs().max().item(), 3),
+                )
             if out is not None:  # a non-last stage hands back its hidden state
                 out.deallocate(True)
             return ms
@@ -186,6 +202,8 @@ def main():
                 wall_ms_min=round(min(walls), 3),
                 wall_ms_max=round(max(walls), 3),
             )
+            if os.getenv("BUDGET_OUT_STATS", "0") == "1":
+                forward(h, n, stats=True)
         if os.getenv("BUDGET_MEM", "0") == "1":
             # DRAM held after the deepest point: weights + KV cache + persistent gather buffers (not a true peak).
             mv = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)

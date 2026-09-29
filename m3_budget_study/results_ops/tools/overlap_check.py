@@ -13,6 +13,13 @@ Spans are wall time on the chip (first start to last end), not summed kernel tim
 clock implied by the ops' own DEVICE FW DURATION [ns]. One row per layer: the median over devices and the worst
 device (largest window). Also lists the SUB DEVICE IDs seen per zone.
 
+A second table per layer, from each device's ops in host order, shows what the sub-device load / clear cost:
+
+  mlp        span of every op under <layer>/mlp (first start to last end)
+  gap_in     dispatch's first start minus the latest end of the mlp ops enqueued before it (the load drain)
+  gap_out    first start of the first op enqueued after the window minus the latest end of every op up to the
+             window's end (the clear drain; negative = the next op started before the window ended)
+
   overlap_check.py <ops_perf_results_*.csv> [--json out.json]
 """
 
@@ -28,8 +35,9 @@ ROOT = "profiled_chunk"
 EXCLUDE = {"dispatch": ("dispatch_v2_prep",), "shared_expert": ("tp_reduce_scatter", "tp_allreduce")}
 
 
-def spans(path):
-    """{(layer, zone, device): [start_cycle, end_cycle]}, {(zone): set(sub-device ids)}, ns per cycle."""
+def spans(path, seq=None):
+    """{(layer, zone, device): [start_cycle, end_cycle]}, {(zone): set(sub-device ids)}, ns per cycle.
+    seq, if a dict: filled with {(layer, device): [(zone, start, end), ...]} for every op under <layer>/mlp."""
     stack, out, sds = [], {}, defaultdict(set)
     ns_per_cycle = []
     with open(path, newline="") as f:
@@ -43,7 +51,19 @@ def spans(path):
                     while stack and stack.pop() != end:
                         pass
                 continue
-            if not stack or stack[0] != ROOT or len(stack) < 4 or stack[2] != "mlp":
+            if not stack or stack[0] != ROOT or len(stack) < 3 or stack[2] != "mlp":
+                continue
+            if seq is not None:
+                try:
+                    s0, e0, d0 = (
+                        int(row["DEVICE FW START CYCLE"]),
+                        int(row["DEVICE FW END CYCLE"]),
+                        int(row["DEVICE ID"]),
+                    )
+                    seq.setdefault((stack[1], d0), []).append(("/".join(stack[3:]), s0, e0))
+                except (KeyError, TypeError, ValueError):
+                    pass
+            if len(stack) < 4:
                 continue
             layer, zone, sub = stack[1], stack[3], stack[4:]
             if zone not in EXCLUDE or (sub and sub[0] in EXCLUDE[zone]):
@@ -72,7 +92,8 @@ def main():
     ap.add_argument("csv")
     ap.add_argument("--json")
     args = ap.parse_args()
-    sp, sds, npc = spans(args.csv)
+    seq = {}
+    sp, sds, npc = spans(args.csv, seq)
     layers = sorted({k[0] for k in sp})
     rows = []
     print(
@@ -114,6 +135,13 @@ def main():
         rows.append({"layer": layer, "median": med, "overlap_pct_of_shorter": pct, "worst": worst, "devices": per_dev})
     if not rows:
         print("  no MoE layer with both a dispatch and a shared_expert zone under profiled_chunk")
+    drains = drain_table(seq, npc)
+    if drains:
+        print(f"  {'layer':16s} {'mlp_us':>8s} {'gap_in_us':>9s} {'gap_out_us':>10s}   (median over devices)")
+        for layer, med in drains.items():
+            print(f"  {layer:16s} {med['mlp_us']:8.1f} {med['gap_in_us']:9.1f} {med['gap_out_us']:10.1f}")
+        for r in rows:
+            r["drain"] = drains.get(r["layer"])
     if args.json:
         with open(args.json, "w") as f:
             json.dump(
@@ -126,6 +154,35 @@ def main():
                 f,
                 indent=1,
             )
+
+
+def _in_window(zone):
+    return (
+        zone == "dispatch"
+        or zone.startswith("dispatch/")
+        or zone == "shared_expert"
+        or (zone.startswith("shared_expert/") and zone.split("/")[1] not in EXCLUDE["shared_expert"])
+    )
+
+
+def drain_table(seq, npc):
+    """{layer: median over devices of mlp_us, gap_in_us, gap_out_us} (see the module doc)."""
+    per_layer = defaultdict(list)
+    for (layer, dev), ops in seq.items():
+        idx = [i for i, (z, _, _) in enumerate(ops) if _in_window(z) and not z.startswith("dispatch/dispatch_v2_prep")]
+        first_d = next((i for i, (z, _, _) in enumerate(ops) if z == "dispatch" or z.startswith("dispatch/")), None)
+        if not idx or first_d is None:
+            continue
+        last = max(idx)
+        before = [e for _, _, e in ops[:first_d]]
+        gap_in = (ops[first_d][1] - max(before)) * npc / 1e3 if before else 0.0
+        upto = max(e for _, _, e in ops[: last + 1])
+        gap_out = (ops[last + 1][1] - upto) * npc / 1e3 if last + 1 < len(ops) else 0.0
+        mlp = (max(e for _, _, e in ops) - min(s for _, s, _ in ops)) * npc / 1e3
+        per_layer[layer].append({"mlp_us": mlp, "gap_in_us": gap_in, "gap_out_us": gap_out})
+    return {
+        layer: {k: statistics.median(v[k] for v in vals) for k in vals[0]} for layer, vals in sorted(per_layer.items())
+    }
 
 
 if __name__ == "__main__":
