@@ -1,0 +1,1658 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Swap test 15: block type moe_full (layer 1) with ffn_residual swapped in last.
+
+Rendered from models/demos/common/bringup/testing/templates.py. Frozen: an implementation may not edit this file.
+Runs the whole block of layer 1 (moe_full) with these steps on the device and the rest on the CPU reference:
+    attn_hc
+    attn_hc_pre
+    attn_norm
+    q_a
+    indexer
+    attention
+    attn_residual
+    ffn_hc
+    ffn_hc_pre
+    ffn_norm
+    router
+    experts
+    shared_expert
+    moe_combine
+    ffn_residual
+
+Reviewed (S.moe_full.15.test.1): every swap-14 check is kept at its limits (the reviews of swaps 14, 13, 12, 11, 10,
+09 and 08 follow); the ffn_residual checks come last in the code. The swapped step is block out = h_mid_j + post_j x
+mlp_out for each of the 4 streams j (post = ffn_hc columns 4-7, fp32 math; the same hc_post as attn_residual), from the
+block's own device h_mid / ffn_hc / mlp_out. Post column means 1.1e-4 / 8.0e-5 / 1.6e-6 / 0.023, so the addend on
+stream 2 (norm ~0.03 against a stream of ~73) is below bf16 resolution. Measured on the CPU (golden s4096 chunk 1,
+2048 rows; the swap-12 device run's h_mid / ffn_hc / mlp_out in /tmp/hy4_sm12/seen.pt, ffn_residual replaced by
+mutations; study /tmp/hy4_sm15/study.py, log study.log, outside the repo). "out" = PCC / rel vs golden (limit 0.01);
+"post" = vs ffn_residual with the same gates and mlp_out, per stream rel / worst (row, stream) (swap 14's post check,
+limits 0.005 / 0.02); "c" = vs the CPU ffn_residual on the same inputs, rel / worst (row, stream); "add" = addend
+|coef-1|/tol, excess, worst row excess (fail > 1); "rot" = the module on per-row rotated post gates vs the CPU step:
+rel / worst addend row excess:
+
+    variant                 out PCC  out rel | post          | c               | add            | rot
+    fp32 reference          0.999973 0.00755 | 0 / 0         | 0 / 0           | 0 / 0 / 0      | 0 / 0
+    bf16 output             0.999972 0.00773 | 0.0017/0.0017 | 0.0017/0.0017   | 0.01/0.50/0.50 | 0.0017 / 0.50
+    bf16 math               0.999969 0.00808 | 0.0030/0.0044 | 0.0029/0.0044   | 0.05/0.59/0.66 | 0.0029 / 0.68
+    1.002 x mlp_out         0.999972 0.00810 | 0.0016/0.0019 | 0.0015/0.0019   | 0.14/0.14/0.04 | 0.0016 / 0.04 (p)
+    1.005 / 0.995 x mlp_out 0.99997  <=0.0093 | 0.0040/0.0048 | 0.0037/0.0048  | 0.35/0.35/0.09 | 0.0039, r 1.0051 (p)
+    0.999 x h_mid           0.999973 0.00754 | 0.0010/0.0010 | 0.00055/0.0010  | 0.01/0.33/0.58 | 0.00057 / 2.3 (p)
+    addend dropped on s2    0.999973 0.00755 | 0.0004/0.0032 | 0.00009/0.0032  | 0.13/0.13/0.92 | 0.39 / 19 (p)
+    rotated gates ignored   0.999973 0.00755 | 0 / 0         | 0 / 0           | 0 / 0 / 0      | 0.96 / 1326 (p)
+    golden out (cached)     1.000000 0       | 0.0080/0.057  | 0.0075/0.057    | 0.20/0.91/3.1  | 0.96 / 1320
+    1.01 x mlp_out, post + 1e-4, addend dropped on stream 0 / 1 / 3 or on the last row, post 0 / 1, 1 / 2 or 2 / 3
+    swapped, rows 1023 / 1024 swapped, last row zeroed, last 32 columns per stream zeroed, h_mid or out streams
+    swapped, returns h_mid, zero stub: fail swap 14's out / post checks (out rel >= 0.0103 or post row >= 0.099)
+
+"(p)" = passes the 0.98 out gate and every swap-14 check. A cached golden out passes the gate at PCC 1.0 and fails
+only the post row check. So the test also asserts, on the swapped step:
+  - block out vs the CPU ffn_residual on the block's own h_mid / ffn_hc / mlp_out (the module's inputs): rel L2
+    <= 5e-4, worst (row, stream) <= 1e-3 (the h_mid limits since swap 07; the device TtHcPost is fp32 and
+    bit-identical, and a bf16 hc_post would already fail the h_mid check, so this adds no new precision demand);
+  - the addend per stream, delta_j = out_j - h_mid_j vs post_j x mlp_out, with the rounding-aware float64 limits of
+    the h_mid addend (coef, excess, worst row);
+  - the module again with each row's post gates rotated by (row mod 4) (every stream meets the large gate 3), vs the
+    CPU step: rel <= 5e-4, worst row <= 1e-3, per-token stream norm ratio in [0.995, 1.005], and the addend checks;
+  - out vs golden per token and stream norm ratio: [0.98, 1.02] on the rows routed as in the golden, [0.95, 1.05] on
+    the rest (a near-tie flip swaps a whole expert; the exact step scores [0.9904, 1.0088] / [0.9907, 1.0195]).
+Every "(p)" row fails at least one of these (1.002 x mlp_out c 0.0015; 0.999 x h_mid c 0.00055 and rot row 2.3;
+stream 2 dropped c row 0.0032 and rot 0.39). Known gap: a uniform mlp_out or post scale error below ~0.07 % (c 5e-4).
+Device run (this gate, tt/ihc.py:TtHcPost, fp32): pcc_swap_out 0.999973; out vs CPU ffn_residual rel 0 / row 0,
+addend coefs 1.0, rotated rel 0 / ratio [1.0, 1.0]; out stream ratio vs golden on 1936 matched rows [0.99037,
+1.00875], on 112 flipped rows [0.99069, 1.01949]; tail 0.0064; out rel 0.00753 (swap 14: 0.0064 / 0.00753).
+
+Reviewed (S.moe_full.14.test.1): every swap-13 check is kept at its limits (the reviews of swaps 13, 12, 11, 10, 09
+and 08 follow); the moe_combine checks come first here. The swapped step is mlp_out [S, H] = experts_out + shared_out
+(HF HYV4MoE), both addends now from the device (the harness hands the module the block's own experts_out /
+shared_out); block out = h_mid + post_j x mlp_out (CPU ffn_residual). Measured on the CPU (golden s4096 chunk 1, 2048
+rows; the swap-12 device run's h_mid / ffn_hc / experts_out / shared_out in /tmp/hy4_sm12/seen.pt, moe_combine
+replaced by mutations; study /tmp/hy4_sm14/study.py, log study.log, outside the repo). "out" = block out PCC / rel vs
+golden (limit 0.01); "c" = vs the exact fp32 sum of the same addends: rel [per-row norm ratio] worst row; "add" = per
+addend (s = shared, e = experts; delta = mlp_out - other addend vs this addend, float64) coef / worst row; "g" = vs
+golden: rel / global coef, and per-row ratio / worst row on the 1936 rows routed as in the golden:
+
+    variant                     out PCC   out rel | c                              | add s coef/row  e coef/row | g
+    fp32 a + b (reference)      0.999973  0.00755 | 0 [1, 1] 0                     | 1.0 / 0         1.0 / 0    | 0.0111 1.00056 [0.9903, 1.0074] 0.0176
+    bf16 output                 0.999972  0.00765 | 0.0017 [0.9999, 1.0001] 0.0017 | 0.99999 / 0.013 0.99999 / 0.014 | 0.0112 (ok)
+    bf16 inputs                 0.999973  0.00764 | 0.0015 [0.9999, 1.0001] 0.0018 | 1.0 / 0.015     1.0 / 0.014 | 0.0112 (ok)
+    1.005 x shared              0.999972  0.00804 | 0.0022 [1.0002, 1.0048] 0.0048 | 1.0050 / 0.005  1.0007 / 0.041 | 0.0114 1.0020 (p)
+    1.01 x shared               0.999968  0.00882 | 0.0044 [1.0004, 1.0096] 0.0097 | 1.0100          1.0015 / 0.083 | 0.0121 1.0034 (p)
+    0.995 x shared              0.999973  0.00742 | 0.0022 [0.9952, 0.9998] 0.0048 | 0.9950          0.9993 / 0.041 | 0.0112 0.9991 (p)
+    1.003 x experts             0.999972  0.00818 | 0.0024 [1.0001, 1.0029] 0.0029 | 1.0014 / 0.024  1.0030 / 0.003 | 0.0115 1.0027 (p)
+    1.005 x experts             0.999970  0.00876 | 0.0039 [1.0002, 1.0048] 0.0048 | 1.0023 / 0.040  1.0050         | 0.0120 1.0041 (p)
+    1.005 x both                0.999969  0.00932 | 0.0050 [1.0050, 1.0050] 0.0050 | 1.0073 / 0.041  1.0057 / 0.044 | 0.0124 1.0056 (p)
+    shared rows 1023 / 1024 swp 0.999961  0.00898 | 0.0149 [0.876, 1.0] 0.50        | 0.9994 / 1.15   0.9999 / 0.66  | 0.0185 [0.876, ...] 0.50 (p)
+    golden shared (not own)     0.999973  0.00750 | 0.0015 [0.9963, 1.0019] 0.0064 | 0.99925 / 0.011 0.99985 / 0.027 | 0.0110 (p)
+    golden mlp_out (cached)     0.999995  0.00358 | 0.0111 [0.930, 1.021] 0.19     | 0.9990 / 0.37   0.9992 / 0.27  | 0 (p)
+    golden experts (not own)    0.999995  0.00362 | 0.0109 [0.930, 1.022] 0.19     | 0.9997 / 0.37   0.9994 / 0.27  | 0.0025 (p)
+    1.01 x experts, last row zeroed, last 32 columns / rows zeroed, rows 1023 / 1024 swapped: out rel >= 0.0107 (fail)
+    shared column / SP halves swapped, a + 0.5 b, shared dropped, experts dropped, 2 (a + b), zero stub: out PCC
+    <= 0.989, out rel >= 0.166 (fail)
+
+"(p)" = passes the 0.98 out gate and every swap-13 check (block out rel <= 0.01; the out-vs-CPU-tail check starts
+from the CPU experts, whose routing differs, so it does not see a 0.5 % addend scale). A cached golden mlp_out even
+improves out (0.0036). So the test also asserts, on the swapped step:
+  - vs the exact fp32 sum of the block's own device experts_out + shared_out (the module's actual inputs): rel L2
+    <= 0.003, per-row norm ratio in [0.997, 1.003], worst row <= 0.005 (bf16 output 0.0017 / 0.0017; shared rows
+    swapped 0.50, golden shared 0.0064, cached 0.19);
+  - per addend on those inputs (as test_c_moe_full_moe_combine.py): |coef - 1| <= 0.002 (catches 1.003 x experts and
+    0.995 x shared), add rel <= 0.008 (shared) / 0.005 (experts), add worst row <= 0.03 (bf16 output 0.013 / 0.014);
+  - the module again on (experts_out, -shared_out) and on (experts_out, 0) (the block's device addends) vs the exact
+    sums: rel <= 0.004, worst row <= 0.005 (a module that ignores an input or returns a cached sum fails);
+  - vs golden (backstop; the device addends alone put the exact sum at 0.0111 / coef 1.00056 / matched rows
+    [0.9903, 1.0074] 0.0176): rel <= 0.02, global coef within 0.004 of 1, and on the rows routed as in the golden
+    per-row ratio in [0.98, 1.02], worst row <= 0.03.
+Every "(p)" row fails at least one of these; bf16 rounding of the inputs or the output passes them. Known gap: a
+scale error on one addend below 0.2 % (bf16 noise on the coefficient is 1e-5, so the limit could tighten later).
+Device run (this gate, tt/mlp.py:TtMoeCombine, fp32 ttnn.add): pcc_swap_out 0.999973; mlp_out vs the CPU sum of
+the device addends rel 0 / row 0, addend coefs 1.000000, probes 0; vs golden 0.0111 coef 1.00040, on 1936 matched
+rows [0.99026, 1.00729] row 0.0176; tail 0.0064; out rel 0.00753 (swap 13: 0.0064 / 0.00753).
+
+Reviewed (S.moe_full.13.test.1): every swap-12 check is kept at its limits (the reviews of swaps 12, 11, 10, 09 and
+08 follow); the shared_expert checks come first here. The swapped step is shared_out [S, H] = down(silu(gate(x)) x
+up(x)) (HF HYV4MLP as mlp.shared_experts, intermediate 2048, unclamped) on x = ffn_norm, now from the device;
+mlp_out = experts_out + shared_out (CPU moe_combine), block out = h_mid + post_j x mlp_out. Measured on the CPU
+(golden s4096 chunk 1, 2048 rows; the swap-12 device run's ffn_norm / h_mid / ffn_hc / experts_out, shared_expert
+replaced by mutations of the fp32 step; study /tmp/hy4_sm13/study.py and coef.py, logs *.log, outside the repo).
+"out" = block out PCC / rel vs golden (swap 12's device run: 0.00757, limit 0.01); "c" = vs the CPU shared_expert
+on the same device ffn_norm: rel [per-row norm ratio] worst row; "g" = vs golden; "x2" = the module on the device
+ffn_norm x 2 (bf16) vs the CPU step, rel / worst row:
+
+    variant                  out PCC   out rel | c                              | g                              | x2
+    fp32 reference           0.999973  0.00755 | 0 [1, 1] 0                     | 0.0035 [0.9971, 1.0081] 0.0112 | 0 / 0
+    bf16 output              0.999973  0.00757 | 0.0017 [0.9999, 1.0001] 0.0017 | 0.0038 [0.9971, 1.0082] 0.0113 | 0.0017 / 0.0017
+    bf16 gate / up / h       0.999973  0.00761 | 0.0028 [0.9959, 1.0036] 0.0058 | 0.0045 [0.9956, 1.0077] 0.0117 | 0.0027 / 0.0052
+    bfp8 weights             0.999970  0.00792 | 0.0071 [0.9988, 1.0011] 0.0091 | 0.0079 [0.9971, 1.0081] 0.0137 | 0.0073 / 0.0099
+    x 1.005                  0.999972  0.00804 | 0.0050 [1.0050, 1.0050] 0.0050 | 0.0067 [1.0020, 1.0131] 0.0146 | 0.0050 (p)
+    x 1.01                   0.999968  0.00882 | 0.0100 [1.0100, 1.0100] 0.0100 | 0.0113 [1.0070, 1.0181] 0.0193 | 0.0100 (p)
+    clamped SwiGLU at 10     0.999973  0.00755 | 0 [1, 1] 0 (golden-blind)      | 0.0035 (as reference)          | 0.085 / 0.42 (p)
+    rows 1023 / 1024 swapped 0.999961  0.00898 | 0.034 [0.816, 1.226] 1.15      | 0.034 [0.818, 1.228] 1.15      | 0.034 / 1.14 (p)
+    HiFi2-like               0.999949  0.01062 | 0.027 [0.973, 0.979] 0.028     | 0.026 [0.971, 0.983] 0.030     | 0.026 / 0.028
+    x 1.02 / x 1.03          >= 0.99994 >= 0.0110 | 0.020 / 0.030                | 0.021 / 0.031                  | 0.020 / 0.030
+    last row zeroed          0.999913  0.01327 | 0.030 [0, 1] 1.0                | 0.030 [0, 1.008] 1.0           | 0.031 / 1.0
+    last 32 rows zeroed      0.998990  0.04492 | 0.129 [0, 1] 1.0                | 0.129                          | 0.129 / 1.0
+    gelu_tanh                0.999486  0.03527 | 0.115 [0.767, 1.112] 0.38      | 0.116                          | 0.069 / 0.31
+    no silu / quarter of the intermediate dropped / gate-up swapped: out PCC 0.9885 / 0.9897 / 0.9823 (rel >= 0.145)
+    sigmoid, one K half of down (no reduce), gate/up shards mixed, down K halves swapped, output column halves
+    swapped, rows shifted, SP row halves swapped, input x 0.5, shared dropped (zero stub), doubled: out PCC <= 0.978
+
+"(p)" = passes the 0.98 out gate and every swap-12 check (block out rel <= 0.01; the out-vs-CPU-tail rel <= 0.01
+also carries the device experts' 0.0065). x 1.01 would move out by only 0.0013. The golden cannot see the clamp
+(gate <= 8.1, up <= 9.7 on the golden). So the test also asserts, on the swapped step:
+  - vs the CPU shared_expert on the same device ffn_norm, at the component limits (test_c_moe_full_shared_expert.py):
+    rel L2 <= 0.008, per-row norm ratio in [0.99, 1.01], worst row <= 0.015, and float64 global coefficient
+    <got, want> / <want, want> within 0.003 of 1 (x 1.005: 1.0050; bf16 gate / up / h 0.99989, bfp8 weights 0.99998);
+  - the module again on the device ffn_norm x 2 (bf16; gate / up pass +-10), vs the CPU step on the same input:
+    rel <= 0.006, ratio in [0.99, 1.01], worst row <= 0.012, coefficient within 0.003 of 1 (the clamp: 0.085 / 0.42);
+  - vs golden (backstop; the device ffn_norm alone puts the exact CPU step at 0.0035 / [0.9971, 1.0081] / 0.0112,
+    coefficient 0.99925): rel <= 0.01, ratio in [0.985, 1.015], worst row <= 0.02, coefficient within 0.004 of 1.
+Every "(p)" row fails at least one of these; bf16 rounding and bfp8 weights pass them. Known gap (as the component
+test): a scale error below ~0.3 %.
+Device run (this gate, tt/mlp.py:TtDenseMLP on mlp.shared_experts, HiFi4, bf16 weights): pcc_swap_out 0.999973;
+shared vs CPU 0.00072 [0.99915, 0.99961] row 0.0010 coef 0.99945 (a steady -0.06 % scale, 5x inside the limit);
+x 2 vs CPU 0.00072 [0.99923, 0.99964] row 0.0009; vs golden 0.0034 [0.99650, 1.00751] row 0.0112 coef 1.00018;
+tail 0.0064; out rel 0.00753 (swap 12: 0.0065 / 0.00757).
+
+Reviewed (S.moe_full.12.test.1): every swap-11 check is kept at its limits (the reviews of swaps 11, 10, 09 and 08
+follow); the experts checks come first here. The swapped step is experts_out [S, H] (HF HYV4Experts: sum over the 8
+routed pairs of router[t, e] x down_e(silu(min(g, 10)) x clamp(u, -10, 10))), from ffn_norm and the dense routing
+matrix, both now from the device; mlp_out = experts_out + shared_out (CPU), block out = h_mid + post_j x mlp_out.
+Measured on the CPU (golden s4096 chunk 1, 2048 rows; experts replaced by mutations; A = golden ffn_norm / router /
+h_mid, the other steps' CPU inputs; B = the device run's ffn_norm / router / h_mid / gates; study
+/tmp/hy4_sm12/study.py, log study.log, outside the repo). "out" = block out PCC vs golden / rel vs golden (B) / vs the
+block with the correct CPU experts ("tail"); "c" = vs the CPU experts on the same inputs: rel [per-token norm ratio]
+worst token / global coefficient; "g" = vs golden (B): rel [ratio on the 1936 rows routed as in the golden] worst row:
+
+    variant                    out PCC   rel g   tail    | c                                    | g (B)
+    fp32 reference             0.999984  0.0059  0       | 0 [1.0, 1.0] 0 / 1.0                 | 0.0114 [0.986, 1.007] 0.021
+    bf16 output                0.999984  0.0060  0.0010  | 0.0017 [0.9999, 1.0001] 0.0017       | 0.0115 (ok)
+    device estimate (bfp8 W, bf16 h / out)               | 0.0068 [0.9972, 1.0031] 0.0086       | 0.0133 [0.987, 1.008] 0.022 (ok)
+    x 1.005                    0.999981  0.0074  0.0029  | 0.0050 ... coef 1.0050               | coef 1.0053 (p)
+    x 1.01                     0.999974  0.0096  0.0059  | 0.010 [1.010, 1.010] 0.010 / 1.0100  | (p)
+    x 1.02                     0.999948  0.0147  0.0117  | 0.020 / 1.0200                       | (p)
+    no clamp                   0.999971  0.0081  0.0050  | 0.0093 [1.0, 1.071] 0.079            | (p)
+    clamp gate only            0.999975  0.0075  0.0043  | 0.0081 [1.0, 1.071] 0.079            | (p)
+    clamp up only              0.999980  0.0066  0.0026  | 0.0044 [1.0, 1.032] 0.036            | (p)
+    limit 9 / gelu_tanh        0.99976 / 0.99959  >= 0.023 | 0.038 [0.886, ...] / 0.062 [0.79, 1.11] | (p)
+    drop expert 235 (2 tok.)   0.999983  0.0061  0.0015  | 0.0026 [0.972, 1.0] 0.186            | (p)
+    drop expert 98 / 0         0.99998 / 0.99997  <= 0.0077 <= 0.0051 | worst row 0.046 / 0.219  | (p)
+    drop hottest expert 187    0.990458  0.139   0.139   | 0.199 [0.137, 1.0] 0.98              | (p)
+    drop smallest pair / token 0.999831  0.018   0.018   | 0.033 [0.77, 1.0] 0.60               | (p)
+    capacity 256 per expert    0.995428  0.096   0.096   | 0.139 [0.138, 1.0] 0.98              | (p)
+    last row / last 32 zeroed  0.99978 / 0.99597  >= 0.021 | worst row 1.0                       | (p)
+    rows 1023 / 1024 swapped   0.999927  0.0122  0.0107  | 0.041 [0.90, 1.11] 1.44              | (p)
+    route scale dropped, weights = 1, one chip's 64 experts dropped, experts 128..255 missing (no axis-1 reduce), SP
+    row halves swapped, output column halves swapped, zero stub: out PCC <= 0.967 (fail)
+
+"(p)" = passes the 0.98 out gate: 19 of 26 mutations do, 18 of them real bugs. Swap 11's out checks (out vs golden
+rel <= 0.01, out vs the CPU tail rel <= 0.01) miss x 1.005, x 1.01 (out 0.0096), the three clamp bugs and dropping a
+small expert (235, 98, 0). So the test also asserts, on the swapped step:
+  - vs the CPU experts on the same device ffn_norm and device routing (test_c_moe_full_experts.py limits): rel L2
+    <= 0.015, per-token norm ratio in [0.98, 1.02], worst token <= 0.03, float64 global coefficient within 0.004 of 1
+    (x 1.005 1.0050, clamp up only ratio 1.032 / row 0.036, drop expert 98 row 0.046);
+  - the module again on the device ffn_norm x 2 (exact in bf16; the gate reaches ~21, so the clamp fires) with the
+    device routing, vs the CPU experts on the same input, same limits (component study: no clamp 0.47, clamp gate only
+    0.23, clamp up only 0.158, limit 9 0.078, gelu 0.044);
+  - vs golden: rel L2 <= 0.03, global coefficient within 0.004 of 1, and on the rows whose top-8 set equals the
+    golden's (a near-tie flip swaps a whole expert in the other rows) per-token ratio in [0.97, 1.03], worst row
+    <= 0.04. The device ffn_norm alone puts the exact CPU experts at 0.0114 / [0.986, 1.007] / 0.021 there, so the
+    component's [0.98, 1.02] / 0.03 would leave the device ~0.003 of margin; these are backstops, the vs-CPU checks
+    carry the detection.
+Every "(p)" row above fails at least one of these; bf16 output and the bfp8-weight device estimate pass them.
+Known gap (as the component test): x 1.003, and one token's smallest pair when it moves its row by < 0.03.
+Device run (this gate, tt/experts.py:TtHy4Experts, unified ClampedSiluGlu, HiFi4, bfp8 weights): pcc_swap_out
+0.999973; experts vs CPU 0.00785 [0.99351, 1.00580] row 0.0110 coef 1.00016; x 2 vs CPU 0.00768 [0.99457, 1.00440]
+row 0.0101 coef 1.00024; vs golden 0.0139, on 1936 matched rows [0.98270, 1.00793] row 0.0247, coef 1.00043; tail
+0.0065; out rel 0.00757 (swap 11: 0.0045 / 0.00594).
+
+Reviewed (S.moe_full.11.test.1): every swap-10 check is kept at its limits (the reviews of swaps 10, 09 and 08
+follow); the router checks are at the end of this docstring. Swap 10's review (S.moe_full.10.test.1): every swap-09 check is kept at its limits (swap 08's and swap 09's reviews follow);
+the ffn_norm checks are at the end of this docstring. Swap 09's review (S.moe_full.09.test.1): every swap-08 check is
+kept at its limits; the ffn_hc_pre checks follow swap 08's. Swap 08's review (S.moe_full.08.test.1) follows. The gated metric is pcc_swap_out (PCC, float [2048, 24576] golden = the 4 iHC
+streams, spec block threshold 0.98). The swapped step is ffn_hc, the iHC gates [S, 8] fp32 (pre 0-3 | post 4-7) from
+h_mid with the hc_mlp_layer weights of layer 1. The gate columns span six orders of magnitude (means pre 1e-5, 1.5e-6,
+0.93, 0.33, post 1e-4, 8e-5, 1.6e-6, 0.023; columns 0 / 1 / 6 within ~10x of hc_eps), and the h_mid row RMS is small
+(0.006 .. 0.08), so rms_norm_eps 1e-5 matters at the block's own scale. The pre gates make ffn_x (then ffn_norm, the
+MoE); the post gates scale mlp_out into each stream (ffn_residual -> out; only post 7 moves out much). Measured on the
+CPU (golden s4096 chunk 1, 2048 rows; ffn_hc replaced by mutations of the fp32 step, every other step the fp32 CPU
+reference; study /tmp/hy4_sm8/study.py, outside the repo). "gates c" = vs the CPU ffn_hc on the same h_mid: rel /
+worst of columns 2, 3, 4, 5, 7 / worst of columns 0, 1, 6 / post worst row; "ffn_x c" = rel / row; "post" = out vs
+ffn_residual with the CPU gates and the same mlp_out, worst stream / row; "tail" = out vs the whole CPU tail, rel:
+
+    variant                      gates c                    | ffn_x c        | post           | tail    | out PCC
+    fp32 reference               0 / 0 / 0 / 0              | 0 / 0          | 0 / 0          | 0       | 0.999997
+    bf16 output                  0.0013 / 0.0017 / 0.0023 / 0.0039 | 0.0013 / 0.0046 | 0.0013 / 0.0032 | 0.0022 | 0.999995 (ok)
+    bf16 input and fn            0.0001 / 0.0005 / 0.0010 / 0.0007 | 0.0001 / 0.0005 | 0.0002 / 0.0005 | 0.0002 | 0.999997 (ok)
+    sigmoid abs err 1e-4         0.0005 / 1.42 / 66 / 0.085 | 0.0002 / 0.0005 | 0.025 / 0.27   | 0.0091  | 0.999955 (p)
+    pre x 1.01                   0.010 / 0.010 / 0.010 / 0  | 0.010 / 0.010  | 0 / 0          | 0.0006  | 0.999997 (p)
+    post x 1.01                  0.0003 / 0.010 / 0.010 / 0.010 | 0 / 0      | 0.0079 / 0.0095 | 0.0075 | 0.999989 (p)
+    post x 1.1                   0.0028 / 0.10 / 0.10 / 0.10 | 0 / 0         | 0.079 / 0.095  | 0.075   | 0.999296 (p)
+    gate 0 / 1 / 6 zeroed        0 / 0 / 1.0 / <= 0.002     | 0 / 0          | <= 0.0004 / 0.003 | 1e-4 | 0.999997 (p)
+    gate 1 = gate 0              0 / 0 / 7.9 / 0            | 0 / 0          | 0 / 0          | 0       | 0.999997 (p)
+    gate 4 / 5 zeroed            0.0002 / 1.0 / 0 / 0.086   | 0 / 0          | 0.028 / 0.22   | 0.0054  | 0.999982 (p)
+    base 0 / 1 swapped           0 / 0 / 6.8 / 0            | 0 / 0          | 0 / 0          | 0       | 0.999997 (p)
+    base 2 / 3 swapped           0.11 / 0.28 / 0 / 0        | 0.16 / 0.42    | 0 / 0          | 0.13    | 0.993984 (p)
+    base 5 / 6 swapped           0 / 0.18 / 0.21 / 0.016    | 0 / 0          | 0.0018 / 0.040 | 0.0003  | 0.999997 (p)
+    fn rows 4 / 5 swapped        0.0005 / 3.4 / 0 / 0.093   | 0 / 0          | 0.067 / 0.36   | 0.013   | 0.999911 (p)
+    fn streams 0 / 1 swapped     0.010 / 0.55 / 0.28 / 0.11 | 0.016 / 0.040  | 0.029 / 0.14   | 0.035   | 0.999777 (p)
+    last row = previous row      0.0012 / 0.018 / 0.002 / 0.61 | 0.0030 / 0.10 | 0.017 / 0.49 | 0.016   | 0.999864 (p)
+    last row zeroed              0.021 / 0.029 / 0.018 / 1.0 | 0.029 / 1.0   | 0.028 / 0.80   | 0.026   | 0.999665 (p)
+    rms_norm_eps 1e-6 / 1e-4     0.017 / 0.40 / 0.25 / 0.48; 0.089 / 15 / 12 / 8.7 | 0.007; 0.034 | ... | 0.020; 0.23 | 0.99985; 0.98351 (p)
+    hc_eps dropped               0 / 0.0071 / 0.66 / 0.0004 | 0 / 0          | 0.0001 / 0.0014 | 5e-5   | 0.999997 (p)
+    post = 1 x sigmoid, gate 3 = gate 2, gate 7 zeroed, fn rows 1 / 2 or 6 / 7, fn streams 2 / 3, one chip's partial
+    sumsq, RMS over one stream, chip-major columns, attn_hc weights, pre | post halves swapped, zero stub: out PCC
+    <= 0.961 (fail)
+
+"(p)" = passes the 0.98 out gate: 23 of 35 mutations do, 21 of them real bugs (sigmoid abs err 1e-3, not listed,
+passes at 0.995854 and fails every column check). Several (gates 0 / 1 / 6, base 0 / 1, hc_eps) change out by
+<= 1e-4 and are visible only per gate column. So the test also asserts (informational metrics):
+  - everything swap 07 (test_swap_moe_full_07_attn_residual.py) asserts, at its limits: attn_hc, attn_x (+ vs CPU,
+    rotated pre gates), attn_norm and q_resid (vs golden, vs the CPU step, eps checks), topk (overlap vs golden and
+    vs the CPU indexer, structure, chunk 0 exact), attn_out five ways, h_mid (vs golden, stream ratio, vs the CPU
+    attn_residual, addend, rotated post gates), router top-8 overlap >= 0.99, block out finite and rel L2 <= 0.01;
+  - ffn_hc vs golden: rel L2 <= 0.01, per column <= 0.015 (columns 0 / 1 / 6: <= 0.03), post worst row <= 0.02 (the
+    component's limits widened for the device h_mid, rel 0.004 off the golden); ffn_x vs golden rel <= 0.01, worst
+    row <= 0.05;
+  - ffn_hc vs the CPU ffn_hc on the same device h_mid: rel L2 <= 0.005, per column <= 0.015 (columns 0 / 1 / 6:
+    <= 0.02), post worst row <= 0.015; the pre gates through ffn_x (CPU ffn_hc_pre from the device gates vs from the
+    CPU gates): rel <= 0.005, worst row <= 0.02;
+  - the post gates through out: block out vs ffn_residual(h_mid, CPU gates, the block's own mlp_out), per stream
+    rel <= 0.005, worst (row, stream) <= 0.02 (same mlp_out, so no routing flips in between);
+  - block out vs the whole CPU tail (ffn_hc .. ffn_residual) from the device h_mid: rel <= 0.01 (worst row not gated:
+    near-tie expert flips give 0.055 even for a bf16 output).
+Every "(p)" bug above fails one of these; bf16 rounding of the input, fn or output passes them. No scaled-input eps
+probe (layer 0's swap 08 has one): here rms_norm_eps 1e-6 already fails the per-column check at the block's scale.
+The trail line pcc_swap_topk is positional match (template default) and is not meaningful for the device's unsorted
+indices.
+Device run (this gate): pcc_swap_out 0.999983; ffn_hc vs golden 0.00155, columns [0.0146, 0.0035, 0.0013, 0.0028,
+0.0054, 0.0059, 0.0095, 0.0032], post row 0.0139; vs CPU 0.00036, columns [0.0099, 0.0042, 0.0003, 0.0007, 0.0074,
+0.0089, 0.0105, 0.0040], post row 0.0095; ffn_x vs golden 0.0043 / 0.0128, vs CPU 0.00048 / 0.0012; post through out
+stream <= 0.0032 / row 0.0054; tail 0.0033; router 0.99377; out rel 0.00608.
+
+ffn_hc_pre (swap 09). The swapped step is ffn_x [S, H] = sum_j pre_j x h_mid stream j (pre = ffn_hc columns 0-3),
+feeding ffn_norm -> router / experts / shared expert; block out = h_mid + post_j x mlp_out. Pre gates 0 / 1 sit at
+hc_eps at this layer (column means 1.0e-5, 1.5e-6, 0.93, 0.33), so streams 0 / 1 carry ~1e-5 of ffn_x, and ffn_norm
+removes any row scale of ffn_x before the MoE. Measured on the CPU (golden s4096 chunk 1, 2048 rows; ffn_hc_pre
+replaced by mutations, every other step the fp32 CPU reference; study /tmp/hy4_sm9/study.py, outside the repo).
+"g" = vs golden rel / worst row; "c" = vs the CPU ffn_hc_pre on the same h_mid and gates; "rot" = the step again with
+each row's pre gates rotated by row mod 4, vs the CPU step; "tail" = out vs the CPU tail (rel):
+
+    variant                      ffn_x g rel/row   | c rel/row       | rot rel/row     | tail    | out PCC
+    fp32 reference               0.0022 / 0.0032   | 0 / 0           | 0 / 0           | 0       | 0.999997
+    bf16 output                  0.0024 / 0.0035   | 0.0017 / 0.0017 | 0.0017 / 0.0017 | 0.0023  | 0.999995 (ok)
+    bf16 accumulation            0.0028 / 0.0036   | 0.0021 / 0.0024 | 0.0019 / 0.0024 | 0.0029  | 0.999994 (ok)
+    pre x 1.005                  0.0054 / 0.0059   | 0.0050 / 0.0050 | 0.0050 / 0.0050 | 0.0003  | 0.999997 (p)
+    pre x 1.02                   0.020 / 0.020     | 0.020 / 0.020   | 0.020 / 0.020   | 0.0011  | 0.999997 (p)
+    pre + 3e-4                   0.0024 / 0.0033   | 0.0010 / 0.0015 | 0.0009 / 0.0020 | 0.0010  | 0.999997 (p, not caught)
+    stream 0 dropped             0.0022 / 0.0032   | 1e-5 / 1e-4     | 0.33 / 0.94     | 1e-5    | 0.999997 (p)
+    stream 1 dropped             0.0022 / 0.0032   | 0 / 0           | 0.30 / 0.96     | 0       | 0.999997 (p)
+    streams 0 / 1 swapped        0.0022 / 0.0032   | 0 / 0           | 0.12 / 0.36     | 0       | 0.999997 (p)
+    streams 0 / 2 swapped        0.24 / 0.48       | 0.24 / 0.48     | 0.16 / 0.56     | 0.15    | 0.989247 (p)
+    rows 1023 / 1024 swapped     0.016 / 1.21      | 0.016 / 1.21    | 0.035 / 3.06    | 0.013   | 0.999912 (p)
+    last row zeroed              0.029 / 1.0       | 0.029 / 1.0     | 0.050 / 1.0     | 0.026   | 0.999665 (p)
+    streams 1 / 2 swapped (0.978), no gating (0.978), gate rows shifted by 1 (0.976), streams 2 / 3 or 0 / 3
+    swapped, stream 2 or 3 dropped, gate j on stream j + 1, stream blocks chip-major, post gates as pre, SP row
+    halves swapped, output column halves swapped, zero stub: out PCC <= 0.978 (fail)
+
+9 of 25 mutations pass the 0.98 out gate. A dropped stream 0 or 1 and a 0 / 1 swap leave ffn_x, the router and out
+unchanged, and a pre scale error barely reaches out (ffn_norm removes it: pre x 1.02 moves the tail by 0.001). So on
+top of swap 08's checks (ffn_x vs golden rel <= 0.01 / row <= 0.05 now sees the device step; out vs the CPU tail,
+which starts from the CPU gates and the CPU ffn_x, now covers ffn_hc and ffn_hc_pre together), the test asserts the
+component test's limits (test_c_moe_full_ffn_hc_pre.py):
+  - ffn_x (device) vs the CPU ffn_hc_pre on the same device h_mid and device gates: rel L2 <= 0.003, worst row
+    <= 0.006 (bf16 accumulation 0.0021 / 0.0024 passes; pre x 1.005 0.0050 fails);
+  - the ffn_hc_pre module once more on that h_mid with each row's pre gates rotated by row mod 4, vs the CPU step:
+    rel L2 <= 0.004, worst row <= 0.01 (stream 0 / 1 dropped 0.33 / 0.30, streams 0 / 1 swapped 0.12).
+Every "(p)" row above fails at least one of these, except pre + 3e-4 on every gate: that is below the bf16 rounding
+of gate 2 (~0.004), and the gates are the step's input, so the module cannot make that error by itself.
+Device run (this gate, tt/ihc.py:TtHcPre, fp32): pcc_swap_out 0.999983; ffn_hc_pre vs CPU rel 0 / row 0, rotated
+rel 0 / row 0; ffn_x vs golden 0.0043 / 0.0128; tail 0.0033; router 0.99377; out rel 0.00608 (all as swap 08).
+
+ffn_norm (swap 10). The swapped step is ffn_norm [S, H] = w x ffn_x x rsqrt(mean(ffn_x^2) + 1e-5)
+(post_attention_layernorm, w in [0.085, 0.209]), feeding the router, the routed experts and the shared expert; block
+out = h_mid + post_j x moe(ffn_norm). Layer-1 ffn_x row rms is in [0.0040, 0.072], so eps (smallest mean(x^2) 1.6x
+eps) and the RMS reduction both show on the golden. Measured on the CPU (golden s4096 chunk 1, 2048 rows; ffn_norm
+replaced by mutations, every other step the fp32 CPU reference; study /tmp/hy4_sm10/study.py, outside the repo).
+"g" = vs golden rel [row norm ratio] worst row; "c" = vs the CPU ffn_norm on the same ffn_x (rel / worst row);
+"x0.1" / "x30" = the step on ffn_x x 0.1 / x 30 (bf16) vs the CPU step (rel / worst row); "rt" = router top-8
+overlap vs golden; "out g" = block out vs golden rel (the CPU tail check gives the same within 1e-4):
+
+    variant                  ffn_norm g                    | c              | x0.1           | x30            | rt     | out PCC   out g
+    fp32 reference           0.0022 [0.9999, 1.0001] 0.0032 | 0 / 0          | 0 / 0          | 0 / 0          | 0.9987 | 0.999997  0.0024
+    bf16 output              0.0025 [0.9998, 1.0001] 0.0036 | 0.0017 / 0.0017 | 0.0017 / 0.0018 | 0.0017 / 0.0018 | 0.9974 | 0.999995 0.0030 (ok)
+    bf16 everywhere          0.0040 [0.9958, 1.0035] 0.0055 | 0.0033 / 0.0050 | 0.0029 / 0.0045 | 0.0029 / 0.0046 | 0.9969 | 0.999989 0.0047 (ok)
+    x 1.01                   0.0102 [1.0099, 1.0101] 0.0105 | 0.0100 / 0.0100 | 0.0100 / 0.0100 | 0.0100 / 0.0100 | 0.9985 | 0.999950  0.018 (p)
+    x 1.05 / x 1.2           0.050 / 0.20                   | 0.050 / 0.20   | ...            | ...            | 0.9924 | 0.99890 / 0.98655  0.091 / 0.38 (p)
+    eps 1.2e-5               0.0130 [0.9632, 0.9999] 0.0368 | 0.0128 / 0.0367 | 0.050 / 0.086  | 0 / 0.0001     | 0.9987 | 0.999986  0.0057 (p)
+    eps 2e-5 / 1e-6 / 0      0.056 / 0.073 / 0.083          | same           | 0.19 / 0.61 / 1.17 | <= 0.0001  | 0.997  | >= 0.99953  0.023 .. 0.033 (p)
+    RMS over half the cols   0.0109 [0.9793, 1.0399] 0.040  | 0.0106 / 0.040 | 0.0058 / 0.024 | 0.0116 / 0.040 | 0.9986 | 0.999855  0.020 (p)
+    RMS over a quarter       0.0165 [0.9602, 1.0604] 0.060  | 0.0163 / 0.060 | 0.0098 / 0.034 | 0.0174 / 0.061 | 0.9987 | 0.999590  0.032 (p)
+    LayerNorm instead of RMS 0.0104 [0.9998, 1.0001] 0.038  | 0.0101 / 0.038 | 0.0114 / 0.038 | 0.0099 / 0.038 | 0.9917 | 0.999972  0.0075 (p)
+    input_layernorm's w      0.181 [0.888, 0.922] 0.19      | 0.181 / 0.19   | 0.180 / 0.19   | 0.181 / 0.19   | 0.8553 | 0.989748  0.21 (p)
+    w halves / quarters (TP) 0.125 / 0.127 [0.99, 1.03] 0.14 | 0.125 / 0.14  | 0.12 / 0.14    | 0.13 / 0.14    | 0.88   | 0.9991    0.045 (p)
+    rows 1023 / 1024 swapped 0.033 [0.983, 1.018] 1.04      | 0.033 / 1.04   | 0.022 / 1.19   | 0.032 / 1.03   | 0.9977 | 0.999912  0.013 (p)
+    last row zeroed          0.0235 [0.0, 1.0001] 1.0       | 0.023 / 1.0    | 0.031 / 1.0    | 0.022 / 1.0    | 0.9982 | 0.999665  0.026 (p)
+    sum instead of mean, 1 + w, no weight, output column halves swapped, SP row halves swapped, rows shifted by 1, no
+    norm, w x x / sqrt(eps), zero stub: out PCC <= 0.7286 (fail)
+
+"(p)" = passes the 0.98 out gate: 16 of 25 mutations do, all real bugs. At this layer the MoE output is large next to
+the residual (x 1.01 moves out by 0.018), so swap 09's out checks (out vs golden rel <= 0.01, out vs the CPU tail rel
+<= 0.01) catch most of them. Two do not: LayerNorm (out 0.0075, tail 0.0072, router 0.9917) and eps 1.2e-5 (out
+0.0057). So the test also asserts the component test's limits on the swapped step (test_c_moe_full_ffn_norm.py):
+  - ffn_norm vs golden: rel L2 <= 0.01, per-row norm ratio in [0.99, 1.01], worst row <= 0.03 (as layer 0's swap 10:
+    upstream device error included, ffn_x is 0.0043 / row 0.0128 off the golden);
+  - ffn_norm vs the CPU ffn_norm on the same device ffn_x: rel L2 <= 0.008, ratio in [0.993, 1.007], worst row
+    <= 0.015 (LayerNorm 0.038, eps 1.2e-5 ratio 0.963);
+  - the module once more on that ffn_x x 0.1 (bf16, eps dominates most rows) vs the CPU step: rel L2 <= 0.01, worst
+    row <= 0.02 (eps 1.2e-5 0.050; ratio printed, not gated, as in the component test);
+  - and on that ffn_x x 30 (bf16, mean(x^2) >> eps, the RMS reduction dominates) vs the CPU step: rel L2 <= 0.006,
+    ratio in [0.993, 1.007], worst row <= 0.015 (half columns 0.040, LayerNorm 0.038).
+Every "(p)" row above fails at least one of these; bf16 everywhere (the pessimistic device estimate) passes them with
+about 2x margin.
+Device run (this gate, tt/norm.py:TtGatheredRmsNorm): pcc_swap_out 0.999984; ffn_norm vs golden 0.00572
+[0.99866, 1.00066] row 0.0131; vs CPU 0.00174 [0.99915, 1.00063] row 0.0019; x0.1 0.00168 / 0.0019; x30 0.00169
+[0.99937, 1.00088] row 0.0019; tail 0.0043; router 0.99347; out rel 0.00599.
+
+router (swap 11). The swapped step is the dense routing matrix [S, 256] fp32 (HYV4TopkRouter: fp32 logits
+ffn_norm @ W^T, sigmoid, top-8 on sigmoid + e_score_correction_bias, weights = the unbiased sigmoids of the 8,
+renormalized, x routed_scaling_factor 2.827), feeding the routed experts; block out = h_mid + post_j x
+(experts(ffn_norm, router) + shared(ffn_norm)). Measured on the CPU (golden s4096 chunk 1, 2048 rows; router replaced
+by mutations on the CPU ffn_norm, every other step the fp32 CPU reference; study /tmp/hy4_sm11/study.py and rows.py,
+outside the repo). "g" = vs golden: mean top-8 overlap / matched-row weight rel L2 / row sum / 2.827; "c" = vs the CPU
+router on the same ffn_norm: overlap / matched rel / worst row overlap; "tail" = out vs the CPU tail (rel):
+
+    variant                  g ov    mrel    sum/2.827        | c ov    mrel    row  | tail    | out PCC   out g
+    fp32 reference           0.99866 0.00173 [1.0000, 1.0000] | 1.0     0       1.0  | 0       | 0.999997  0.0024
+    bf16 output              0.99866 0.00110 [0.9980, 1.0018] | 1.0     0.00171 1.0  | 0.0009  | 0.999997  0.0026 (ok)
+    bias bf16                0.99866 0.00173 [1.0000, 1.0000] | 0.99976 0       0.875 | 0.0007 | 0.999997  0.0024 (ok)
+    logits bf16              0.99371 0.00191                  | 0.99371 0.00084 0.875 | 0.0045 | 0.999988  0.0050 (p)
+    sigmoid bf16             0.99274 0.00220                  | 0.99255 0.00134 0.875 | 0.0056 | 0.999983  0.0058 (p)
+    choice keys bf16         0.99011 0.00173                  | 0.99054 0       0.875 | 0.0051 | 0.999985  0.0055 (p)
+    all bf16                 0.98804 0.00236                  | 0.98828 0.00160 0.875 | 0.0062 | 0.999978  0.0066 (p)
+    weights from choice      0.99866 0.02626                  | 1.0     0.02621 1.0  | 0.0070  | 0.999975  0.0074 (p)
+    weights x 1.005          0.99866 0.00534 [1.0050, 1.0050] | 1.0     0.00500 1.0  | 0.0029  | 0.999995  0.0038 (p)
+    weights x 1.02           0.99866 0.02013 [1.0200, 1.0200] | 1.0     0.02000 1.0  | 0.0117  | 0.999967  0.0120 (p)
+    logits x 1.01            0.99854 0.00651                  | 0.99963 0.00622 0.875 | 0.0034 | 0.999994  0.0041 (p)
+    logits + 0.1             0.99475 0.02675                  | 0.99536 0.02674 0.875 | 0.0161 | 0.999919  0.0162 (p)
+    rows 1023 / 1024 swapped 0.99768 0.00173                  | 0.99902 0       0.0  | 0.0079  | 0.999966  0.0082 (p)
+    last row zeroed          0.99817 0.00173 [0.0, 1.0] nnz 0 | 0.99951 0       0.0  | 0.0204  | 0.999791  0.0205 (p)
+    last 32 rows zeroed      0.98303                          | 0.98438         0.0  | 0.090   | 0.995980  0.090 (p)
+    no bias / half bias / bias halves misaligned: g ov 0.917 / 0.955 / 0.868, tail >= 0.014, out PCC >= 0.99968 (p)
+    scale 2.5 / no scale: mrel 0.116 / 0.646, sums 0.884 / 0.354, out PCC 0.998858 (p) / 0.943263
+    top-7 / top-9: nnz 7 / 9, tail 0.055 / 0.046, out PCC 0.999189 / 0.999375 (p)
+    no renorm (sums 1.23 .. 5.80), weights reversed within the top-8, SP row halves swapped, expert halves swapped,
+    softmax scores, zero stub: out PCC <= 0.9383 (fail)
+
+"(p)" = passes the 0.98 out gate: 20 of 26 mutations do (the two bf16-bias / bf16-output rows are harmless). Swap
+10's out checks (out vs golden rel <= 0.01, vs the CPU tail rel <= 0.01, overlap vs golden >= 0.99) miss 9 of them:
+logits / sigmoid / choice keys / all bf16 (all-bf16 overlap 0.988 fails only barely), weights from the biased choice
+score, weights x 1.005, logits x 1.01 and rows 1023 / 1024 swapped. So the test also asserts on the swapped step
+(the component limits of test_c_moe_full_router.py where the input is the same):
+  - exactly 8 nonzeros per row, finite non-negative weights, every row sum / 2.827 within 0.004 of 1 (bf16 output
+    rounding 0.0018; weights x 1.005 fails);
+  - vs golden: mean top-8 overlap >= 0.99 (kept from swaps 07-10: the device ffn_norm alone costs the CPU router
+    0.005 of overlap, so the component's 0.995 cannot hold here) and matched-row weight rel L2 <= 0.01;
+  - vs the CPU router on the same device ffn_norm: mean overlap >= 0.996 (every bf16 stage fails, <= 0.99371),
+    matched-row weight rel L2 <= 0.004 (weights from choice 0.026, x 1.005 0.005, logits x 1.01 0.0062), and worst
+    row overlap >= 0.75 (a precision flip changes 1 of 8, as does every mutation above that is not a row bug; two
+    adjacent rows share at most 4 of 8 experts, so a row swap or a zeroed row scores <= 0.5).
+Every "(p)" row above fails at least one of these; the bf16 bias and bf16 output rows pass them.
+No scaled-input probe: at x 3 the logit-precision mutations separate no better than at x 1 (logits bf16 vs CPU
+0.99664 at x 3), and every router bug above is caught on the block's own ffn_norm.
+Device run (this gate, tt/router.py:TtHy4Router): pcc_swap_out 0.999984; router nnz 8, row sums / 2.827 [1.00000,
+1.00000]; vs golden overlap 0.99316 (1936 matched rows, rel 0.00233); vs the CPU router on the device ffn_norm
+overlap 0.99933, worst row 0.875, 2037 matched rows, rel 0.000062; tail 0.0045; out rel 0.00594.
+"""
+
+import torch
+
+from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.reference.interface import Ctx, run_block
+from models.demos.common.bringup.testing.component import _step, module_under_test
+from models.demos.common.bringup.testing.harness import (
+    compare,
+    component_golden,
+    default_mode,
+    device_ctx,
+    mesh_parametrize,
+    reference_ctx,
+    spec,
+    threshold,
+)
+
+S = spec()
+BLOCK_TYPE = "moe_full"
+SWAPPED = [
+    "attn_hc",
+    "attn_hc_pre",
+    "attn_norm",
+    "q_a",
+    "indexer",
+    "attention",
+    "attn_residual",
+    "ffn_hc",
+    "ffn_hc_pre",
+    "ffn_norm",
+    "router",
+    "experts",
+    "shared_expert",
+    "moe_combine",
+    "ffn_residual",
+]
+THRESHOLD = None  # None = spec thresholds.block (default 0.98)
+HC_MULT = 4
+GATES_MAX_REL_L2 = 0.01  # attn_hc [S, 8] vs golden: ||got - want|| / ||want||
+GATES_MAX_COL_REL = 0.01  # per gate column (pre 0-3, post 4-7), rel L2 vs golden
+GATES_MAX_POST_ROW_REL = 0.015  # worst row, rel L2 over the post columns
+X_MAX_REL_L2 = 0.005  # attn_x vs golden, whole tensor
+X_RATIO = (0.996, 1.004)  # attn_x per-row ||got|| / ||want|| vs golden
+X_MAX_ROW_REL = 0.01  # attn_x vs golden, worst row
+CPU_MAX_REL_L2 = 0.003  # attn_x vs the CPU hc_pre on the same inputs
+CPU_MAX_ROW_REL = 0.006
+ROT_MAX_REL_L2 = 0.004  # rotated pre gates, vs the CPU hc_pre on the same inputs
+ROT_MAX_ROW_REL = 0.01
+H_MID_MAX_REL = 0.007  # h_mid vs golden, whole tensor (as swap 06)
+H_MID_MAX_ROW_REL = 0.025  # h_mid, worst (row, stream) (as swap 06)
+MID_STREAM_RATIO = (0.98, 1.02)  # h_mid per token and stream ||got|| / ||want|| vs golden
+RES_MAX_REL_L2 = 5e-4  # h_mid vs the CPU attn_residual on the same inputs (device fp32: bit-identical), and rotated
+RES_MAX_ROW_REL = 1e-3  # the same, worst (row, stream)
+ADD_COEF_TOL = 0.01  # per stream |coef_j - 1| <= this + ROUND_MULT * r_j / ||t_j|| (test_c_moe_full_attn_residual.py)
+MAX_ADD_REL = 0.01  # per stream ||delta_j - t_j|| <= this * ||t_j|| + ROUND_MULT * r_j
+MAX_ADD_ROW_REL = 0.05  # per token ||delta - t|| <= this * ||t|| + ROUND_MULT * r + ROW_FLOOR
+ROUND_MULT = 2.0  # allowance for the bf16 rounding of the output
+ROW_FLOOR = 1e-6
+N_MAX_REL_L2 = 0.008  # attn_norm vs golden, and vs the CPU attn_norm on the same input
+N_RATIO = (0.993, 1.007)  # attn_norm per-row norm ratio vs golden
+N_MAX_ROW_REL = 0.015  # attn_norm worst row, vs golden and vs the CPU step on the same input
+SYN_SCALE = 0.1  # eps check: the device attn_x x SYN_SCALE (bf16) through the module vs the CPU step
+SYN_MAX_REL_L2 = 0.01
+SYN_MAX_ROW_REL = 0.02
+Q_MAX_REL_L2 = 0.008  # q_resid vs golden, and vs the CPU q_a on the same input
+Q_RATIO = (0.994, 1.006)  # q_resid per-row norm ratio vs golden
+Q_MAX_ROW_REL = 0.015  # q_resid worst row, vs golden and vs the CPU step on the same input
+Q_SYN_SCALE = 0.01  # eps check: the device attn_norm x Q_SYN_SCALE (bf16) through the q_a module vs the CPU step
+Q_SYN_MAX_REL_L2 = 0.01
+Q_SYN_MAX_ROW_REL = 0.02
+TOPK_MIN_OVERLAP = 0.99  # topk vs golden and vs the CPU indexer on the same input: mean per-row set overlap
+TOPK_MIN_ROW_OVERLAP = 0.97  # topk worst row overlap (vs golden and vs the CPU step)
+SENTINEL = 0xFFFFFFFF  # topk_large_indices' pad for rows with fewer valid keys than k
+ATT_MAX_REL_L2 = 0.015  # attn_out (the swapped step), whole tensor: vs golden, vs CPU, chunk 0, probe, scaled
+ATT_RATIO = (0.985, 1.015)  # attn_out per-row ||got|| / ||want|| (test_c_moe_full_attention.py limits)
+ATT_MAX_ROW_REL = 0.04  # attn_out, worst token row
+PROBE_KEYS = 64  # probe topk: this many random causal positions per row, unsorted, the rest -1
+PROBE_SEED = 0
+ATT_SYN_SCALE = 1e-3  # eps check: the device attn_norm x ATT_SYN_SCALE (bf16), where kv_a_layernorm's eps matters
+ROUTER_MIN_OVERLAP = 0.99  # router top-8 selection overlap vs golden
+FHC_SMALL_COLS = (0, 1, 6)  # ffn_hc gates within ~10x of hc_eps (column means 1e-5, 1.5e-6, 1.6e-6)
+FHC_MAX_REL_L2 = 0.01  # ffn_hc [S, 8] vs golden, whole tensor
+FHC_MAX_COL_REL = 0.015  # ffn_hc vs golden, per column rel L2 (columns 2, 3, 4, 5, 7)
+FHC_MAX_SMALL_COL_REL = 0.03  # the same on FHC_SMALL_COLS
+FHC_MAX_POST_ROW_REL = 0.02  # ffn_hc vs golden, worst row over the post columns
+FHC_CPU_MAX_REL_L2 = 0.005  # ffn_hc vs the CPU ffn_hc on the same device h_mid
+FHC_CPU_MAX_COL_REL = 0.015  # the same, per column (columns 2, 3, 4, 5, 7)
+FHC_CPU_MAX_SMALL_COL_REL = 0.02  # the same on FHC_SMALL_COLS
+FHC_CPU_MAX_POST_ROW_REL = 0.015  # the same, worst row over the post columns
+FX_MAX_REL_L2 = 0.01  # ffn_x (now the device ffn_hc_pre) vs golden
+FX_MAX_ROW_REL = 0.05  # the same, worst row
+FX_CPU_MAX_REL_L2 = 0.005  # ffn_x from the device gates vs from the CPU gates on the same h_mid
+FX_CPU_MAX_ROW_REL = 0.02  # the same, worst row
+POST_MAX_STREAM_REL = 0.005  # out vs ffn_residual(h_mid, CPU gates, the block's mlp_out): per stream rel L2
+POST_MAX_ROW_REL = 0.02  # the same, worst (row, stream)
+TAIL_MAX_REL_L2 = 0.01  # block out vs the CPU tail (ffn_hc .. ffn_residual) from the same device h_mid
+OUT_MAX_REL_L2 = 0.01  # block output, whole tensor
+FXD_MAX_REL_L2 = 0.003  # ffn_x (device ffn_hc_pre) vs the CPU ffn_hc_pre on the same device h_mid and gates
+FXD_MAX_ROW_REL = 0.006  # the same, worst row
+FROT_MAX_REL_L2 = 0.004  # ffn_hc_pre on per-row rotated pre gates vs the CPU step on the same inputs
+FROT_MAX_ROW_REL = 0.01  # the same, worst row
+FN_MAX_REL_L2 = 0.01  # ffn_norm vs golden (upstream device error included)
+FN_RATIO = (0.99, 1.01)  # ffn_norm per-row norm ratio vs golden
+FN_MAX_ROW_REL_L2 = 0.03  # ffn_norm worst row vs golden
+FN_CPU_MAX_REL_L2 = 0.008  # ffn_norm vs the CPU ffn_norm on the same device ffn_x (the component's golden limits)
+FN_CPU_RATIO = (0.993, 1.007)
+FN_CPU_MAX_ROW_REL_L2 = 0.015
+FN_EPS_SCALE = 0.1  # eps check: the device ffn_x x FN_EPS_SCALE (bf16), eps dominates most rows, vs the CPU step
+FN_EPS_MAX_REL_L2 = 0.01
+FN_EPS_MAX_ROW_REL_L2 = 0.02
+FN_SYN_SCALE = 30.0  # RMS check: the device ffn_x x FN_SYN_SCALE (bf16), mean(x^2) >> eps, vs the CPU step
+FN_SYN_MAX_REL_L2 = 0.006
+FN_SYN_RATIO = (0.993, 1.007)
+FN_SYN_MAX_ROW_REL_L2 = 0.015
+TOP_K = 8
+ROUTE_SCALE = 2.827  # routed_scaling_factor: every routing row sums to it (norm_topk_prob)
+RT_MAX_ROW_SUM_ERR = 0.004  # |sum(row) / 2.827 - 1| (test_c_moe_full_router.py)
+RT_MAX_MATCHED_REL_L2 = 0.01  # router vs golden, weights on rows whose selected set equals the golden's
+RT_CPU_MIN_OVERLAP = 0.996  # router vs the CPU router on the same device ffn_norm: mean per-row overlap
+RT_CPU_MAX_MATCHED_REL_L2 = 0.004  # the same, matched-row weight rel L2
+RT_CPU_MIN_ROW_OVERLAP = 0.75  # the same, worst row (a near-tie flip costs 1 of 8; other rows share <= 4 of 8)
+EX_MAX_REL_L2 = (
+    0.015  # experts_out vs the CPU experts on the same device ffn_norm + router (test_c_moe_full_experts.py)
+)
+EX_RATIO = (0.98, 1.02)  # the same, per-token norm ratio
+EX_MAX_ROW_REL = 0.03  # the same, worst token
+EX_MAX_COEF_ERR = 0.004  # the same, |<got, want> / <want, want> - 1| (float64)
+EX_SYN_SCALE = 2.0  # clamp probe: the device ffn_norm x 2 (exact in bf16) with the device routing, vs the CPU experts
+EX_G_MAX_REL_L2 = 0.03  # experts_out vs golden, whole tensor (routing flips and upstream device error included)
+EX_G_RATIO = (0.97, 1.03)  # experts_out vs golden, per-token norm ratio on rows routed as in the golden
+EX_G_MAX_ROW_REL = 0.04  # the same rows, worst token rel L2
+EX_G_MAX_COEF_ERR = 0.004  # experts_out vs golden, global coefficient (whole tensor)
+SE_MAX_REL_L2 = 0.008  # shared_out vs the CPU shared_expert on the device ffn_norm (component limits)
+SE_RATIO = (0.99, 1.01)  # the same, per-row norm ratio
+SE_MAX_ROW_REL = 0.015  # the same, worst row
+SE_MAX_COEF_ERR = 0.003  # the same, |<got, want> / <want, want> - 1| (float64)
+SE_SYN_SCALE = 2.0  # clamp probe: the device ffn_norm x 2 (bf16), gate / up pass +-10, vs the CPU shared_expert
+SE_SYN_MAX_REL_L2 = 0.006
+SE_SYN_RATIO = (0.99, 1.01)
+SE_SYN_MAX_ROW_REL = 0.012
+SE_G_MAX_REL_L2 = 0.01  # shared_out vs golden (upstream device error included)
+SE_G_RATIO = (0.985, 1.015)
+SE_G_MAX_ROW_REL = 0.02
+SE_G_MAX_COEF_ERR = 0.004
+MC_MAX_REL_L2 = 0.003  # mlp_out vs the exact fp32 sum of the block's own device addends (bf16 output 0.0017)
+MC_RATIO = (0.997, 1.003)  # the same, per-row norm ratio (bf16 output [0.9999, 1.0001])
+MC_MAX_ROW_REL = 0.005  # the same, worst row (bf16 output 0.0017; shared rows 1023 / 1024 swapped 0.50)
+MC_MAX_COEF_DEV = 0.002  # per addend |coef - 1| on those addends (bf16 output 1e-5; 1.003 x experts 0.003)
+MC_MAX_ADD_REL = {"shared_out": 0.008, "experts_out": 0.005}  # per addend ||delta - t|| / ||t|| (bf16 0.0038 / 0.0021)
+MC_MAX_ADD_ROW_REL = 0.03  # per addend, worst row (bf16 0.013 / 0.014; 1.005 x shared moves the experts row 0.041)
+MC_PROBE_MAX_REL = 0.004  # the module on (experts, -shared) and (experts, 0) vs the exact sums
+MC_PROBE_MAX_ROW_REL = 0.005
+MC_G_MAX_REL_L2 = 0.02  # mlp_out vs golden (the exact sum of the device addends: 0.0111)
+MC_G_MAX_COEF_ERR = 0.004  # the same, global coefficient (exact sum 1.00056)
+MC_G_RATIO = (0.98, 1.02)  # the same, per-row ratio on rows routed as in the golden (exact sum [0.9903, 1.0074])
+MC_G_MAX_ROW_REL = 0.03  # the same rows, worst row (exact sum 0.0176)
+FR_MAX_REL_L2 = 5e-4  # out vs the CPU ffn_residual on the block's own h_mid / ffn_hc / mlp_out (as h_mid, swap 07)
+FR_MAX_ROW_REL = 1e-3  # the same, worst (row, stream) (addend dropped on stream 2: 0.0032)
+FR_ROT_RATIO = (0.995, 1.005)  # rotated post gates vs the CPU step: per token and stream norm ratio
+OUT_STREAM_RATIO = (0.98, 1.02)  # out vs golden, per token and stream norm ratio, rows routed as in the golden
+OUT_FLIP_STREAM_RATIO = (0.95, 1.05)  # the same on rows whose top-8 set differs from the golden's
+
+
+def _rel(got, want):
+    got, want = got.float().reshape(want.shape), want.float()
+    return ((got - want).norm() / want.norm().clamp_min(1e-12)).item()
+
+
+def _worst_row_rel(got, want, streams=1):
+    got = got.float().reshape(want.shape[0], streams, -1)
+    want = want.float().reshape(want.shape[0], streams, -1)
+    return ((got - want).norm(dim=-1) / want.norm(dim=-1).clamp_min(1e-12)).max().item()
+
+
+def _ratio(got, want):
+    r = got.float().reshape(want.shape).norm(dim=-1) / want.float().norm(dim=-1).clamp_min(1e-12)
+    return r.min().item(), r.max().item()
+
+
+def _errors(got, want):
+    """rel L2, per-row norm ratio (min, max), worst row rel L2."""
+    got, want = got.float().reshape(want.shape), want.float()
+    if want.shape[0] == 0:  # no rows selected (e.g. none routed as the golden): fail every limit, do not crash
+        return float("inf"), 0.0, float("inf"), float("inf")
+    rel = ((got - want).norm() / want.norm().clamp_min(1e-12)).item()
+    wn = want.norm(dim=-1).clamp_min(1e-12)
+    ratio = got.norm(dim=-1) / wn
+    return rel, ratio.min().item(), ratio.max().item(), ((got - want).norm(dim=-1) / wn).max().item()
+
+
+def _rotated(gates):
+    """Each row's pre gates rotated by (row mod 4), so every stream meets the large gate on a quarter of the rows."""
+    n = gates.shape[0]
+    idx = (torch.arange(HC_MULT)[None, :] + torch.arange(n)[:, None]) % HC_MULT
+    gs = gates.clone()
+    gs[:, :HC_MULT] = torch.gather(gates[:, :HC_MULT], 1, idx)
+    return gs
+
+
+def _rotated_post(gates):
+    """Each row's post gates (columns 4-7) rotated by (row mod 4), so every stream meets the large post gates."""
+    n = gates.shape[0]
+    idx = (torch.arange(HC_MULT)[None, :] + torch.arange(n)[:, None]) % HC_MULT
+    gs = gates.clone()
+    gs[:, HC_MULT:] = torch.gather(gates[:, HC_MULT:], 1, idx)
+    return gs
+
+
+def _normalize(out, want, failures):
+    """int64 [S, k] with every pad (negative, or the uint32 sentinel) as -1; None (and a failure) if unusable."""
+    if out.is_floating_point():
+        failures.append(f"topk: output must be integer positions, got {out.dtype}")
+        return None
+    if out.numel() != want.numel():
+        failures.append(f"topk: output has {out.numel()} elements, want {tuple(want.shape)}")
+        return None
+    t = out.reshape(want.shape).to(torch.int64)
+    return torch.where((t < 0) | (t == SENTINEL), torch.full_like(t, -1), t)
+
+
+def _row_overlap(got, want):
+    """Per-row |got & want| / |want| over the valid (non -1) positions; 1.0 for a row with none wanted."""
+    res = []
+    for a, b in zip(got, want):
+        b = b[b >= 0]
+        res.append(torch.isin(b, a[a >= 0]).float().mean().item() if b.numel() else 1.0)
+    return torch.tensor(res)
+
+
+def _structure(got, start, k):
+    """Causality, uniqueness and per-row valid count of a normalized output at absolute rows [start, start + S)."""
+    fails = []
+    pos = torch.arange(start, start + got.shape[0])[:, None]
+    valid = got >= 0
+    noncausal = (valid & (got > pos)).sum().item()
+    if noncausal:
+        fails.append(f"{noncausal} selected positions are after their query row (non-causal)")
+    srt = got.sort(dim=-1).values
+    dup = ((srt[:, 1:] == srt[:, :-1]) & (srt[:, 1:] >= 0)).sum().item()
+    if dup:
+        fails.append(f"{dup} repeated positions within rows")
+    n = valid.sum(-1)
+    exp = torch.clamp(pos[:, 0] + 1, max=k)
+    bad = (n != exp).nonzero().flatten()
+    if bad.numel():
+        r = bad[0].item()
+        fails.append(
+            f"{bad.numel()} rows hold the wrong number of valid positions "
+            f"(first: row {r} at position {start + r} has {n[r].item()}, want {exp[r].item()})"
+        )
+    return fails
+
+
+def _probe_topk(start, rows, k, n, seed):
+    """[rows, k] int64: per row min(n, pos + 1) distinct random positions in [0, pos], unsorted, then -1 pads."""
+    gen = torch.Generator().manual_seed(seed)
+    out = torch.full((rows, k), -1, dtype=torch.int64)
+    for i in range(rows):
+        p = start + i
+        m = min(n, p + 1)
+        out[i, :m] = torch.randperm(p + 1, generator=gen)[:m]
+    return out
+
+
+@mesh_parametrize
+def test_swap(mesh_device):
+    g, c = component_golden(S)
+    layer = S.representative_layer(BLOCK_TYPE)
+    ref = S.hooks().reference(S, layers=[layer], dtype=torch.float32)
+    steps = ref.block_graph(layer)
+    rctx, dctx = reference_ctx(ref, layer, g, c), device_ctx(layer, g, c)
+    overrides, muts = {}, {}
+    for name in SWAPPED:
+        _step(ref, layer, name)
+        mut = module_under_test(S, ref, mesh_device, layer, name)
+        assert not getattr(mut, "cpu_bridge", False), f"device_component returned a CPU bridge for {name}"
+        muts[name] = mut
+        overrides[name] = lambda ctx, *x, mut=mut: mut(ctx, dctx, *x)
+    gl = g.layer(c, layer)
+    seen = {}
+    run_block(
+        steps,
+        lambda n: ref.component(layer, n),
+        rctx,
+        gl["in"].float(),
+        rec=lambda n, t: seen.__setitem__(n, t),
+        overrides=overrides,
+    )
+    for n, t in seen.items():
+        if n not in ("in", "out") and n in gl:
+            compare(f"pcc_swap_{n}", t, gl[n], default_mode(gl[n]), 0.0)  # the trail, for diagnosis; not gated
+    thr = threshold(S, "block") if THRESHOLD is None else THRESHOLD
+    _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
+
+    # Extra checks (see the module docstring). Recorded as informational metrics, asserted here.
+    failures = [] if ok else [f"pcc_swap_out below {thr}"]
+
+    def finite_shape(n):
+        got, want = seen[n], gl[n]
+        if got.numel() != want.numel() or got.shape[-1] != want.shape[-1]:
+            failures.append(f"{n}: shape {tuple(got.shape)} vs golden {tuple(want.shape)}")
+            return False
+        if not torch.isfinite(got.float()).all():
+            failures.append(f"{n}: non-finite")
+            return False
+        return True
+
+    # attn_hc: the iHC gates [S, 8] (pre 0-3 | post 4-7), as swap 01.
+    gates_ok = finite_shape("attn_hc")
+    if gates_ok:
+        want = gl["attn_hc"].float()
+        got = seen["attn_hc"].float().reshape(want.shape)
+        rel = _rel(got, want)
+        col_rel = ((got - want).norm(dim=0) / want.norm(dim=0).clamp_min(1e-12)).tolist()
+        post_row = _worst_row_rel(got[:, HC_MULT:], want[:, HC_MULT:])
+        metrics.record("rel_l2_swap_attn_hc", rel)
+        metrics.record("max_col_rel_l2_swap_attn_hc", max(col_rel))
+        metrics.record("post_worst_row_rel_l2_swap_attn_hc", post_row)
+        print(
+            f"attn_hc: rel_l2={rel:.6f} (<= {GATES_MAX_REL_L2}) col rel (pre 0-3 | post 4-7)="
+            f"{[round(v, 5) for v in col_rel]} (<= {GATES_MAX_COL_REL}) post worst row={post_row:.5f} "
+            f"(<= {GATES_MAX_POST_ROW_REL})"
+        )
+        if rel > GATES_MAX_REL_L2:
+            failures.append(f"attn_hc: rel L2 {rel:.5f} > {GATES_MAX_REL_L2}")
+        bad = [j for j, v in enumerate(col_rel) if v > GATES_MAX_COL_REL]
+        if bad:
+            failures.append(f"attn_hc: rel L2 > {GATES_MAX_COL_REL} in columns {bad}")
+        if post_row > GATES_MAX_POST_ROW_REL:
+            failures.append(f"attn_hc: post worst row rel L2 {post_row:.5f} > {GATES_MAX_POST_ROW_REL}")
+
+    # attn_x vs golden (swap 02).
+    x_ok = finite_shape("attn_x")
+    if x_ok:
+        rel = _rel(seen["attn_x"], gl["attn_x"])
+        rmin, rmax = _ratio(seen["attn_x"], gl["attn_x"])
+        row = _worst_row_rel(seen["attn_x"], gl["attn_x"])
+        metrics.record("rel_l2_swap_attn_x", rel)
+        metrics.record("worst_row_rel_l2_swap_attn_x", row)
+        print(
+            f"attn_x vs golden: rel_l2={rel:.6f} (<= {X_MAX_REL_L2}) row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+            f"(in {list(X_RATIO)}) worst_row_rel_l2={row:.5f} (<= {X_MAX_ROW_REL})"
+        )
+        if rel > X_MAX_REL_L2:
+            failures.append(f"attn_x: rel L2 {rel:.5f} > {X_MAX_REL_L2}")
+        if not (X_RATIO[0] <= rmin and rmax <= X_RATIO[1]):
+            failures.append(f"attn_x: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(X_RATIO)}")
+        if row > X_MAX_ROW_REL:
+            failures.append(f"attn_x: worst row rel L2 {row:.5f} > {X_MAX_ROW_REL}")
+
+        if gates_ok:
+            # vs the CPU hc_pre on the same inputs (block input + the gates the device produced).
+            cpu = ref.component(layer, "attn_hc_pre")
+            gates = seen["attn_hc"].float().reshape(gl["attn_hc"].shape)
+            same = cpu(rctx, gl["in"].float(), gates).float()
+            crel, crow = _rel(seen["attn_x"], same), _worst_row_rel(seen["attn_x"], same)
+            metrics.record("rel_l2_swap_attn_x_vs_cpu", crel)
+            print(
+                f"attn_x vs CPU hc_pre on the same inputs: rel_l2={crel:.6f} (<= {CPU_MAX_REL_L2}) "
+                f"worst_row_rel_l2={crow:.5f} (<= {CPU_MAX_ROW_REL})"
+            )
+            if crel > CPU_MAX_REL_L2 or crow > CPU_MAX_ROW_REL:
+                failures.append(f"attn_x vs CPU on the same inputs: rel {crel:.5f} / worst row {crow:.5f}")
+
+            # Stream order: the module again with each row's pre gates rotated by (row mod 4).
+            rot = (gl["in"].float(), _rotated(gates))
+            rot_want = cpu(rctx, *rot).float()
+            rot_out = muts["attn_hc_pre"](rctx, dctx, *rot)
+            if rot_out.numel() != rot_want.numel() or not torch.isfinite(rot_out.float()).all():
+                failures.append(f"attn_hc_pre rotated gates: shape {tuple(rot_out.shape)} or non-finite")
+            else:
+                yrel, yrow = _rel(rot_out, rot_want), _worst_row_rel(rot_out, rot_want)
+                metrics.record("rot_rel_l2_swap_attn_x", yrel)
+                print(
+                    f"attn_hc_pre with rotated pre gates vs CPU: rel_l2={yrel:.6f} (<= {ROT_MAX_REL_L2}) "
+                    f"worst_row_rel_l2={yrow:.5f} (<= {ROT_MAX_ROW_REL})"
+                )
+                if yrel > ROT_MAX_REL_L2 or yrow > ROT_MAX_ROW_REL:
+                    failures.append(f"attn_hc_pre rotated gates: rel {yrel:.5f} / worst row {yrow:.5f} (stream order?)")
+
+    def rel_row(tag, got, want, max_rel, max_row, ratio=None, what="vs golden"):
+        rel, row = _rel(got, want), _worst_row_rel(got, want)
+        metrics.record(f"rel_l2_swap_{tag}", rel)
+        metrics.record(f"worst_row_rel_l2_swap_{tag}", row)
+        msg = f"{tag} {what}: rel_l2={rel:.6f} (<= {max_rel})"
+        if ratio is not None:
+            rmin, rmax = _ratio(got, want)
+            msg += f" row norm ratio=[{rmin:.5f}, {rmax:.5f}] (in {list(ratio)})"
+            if not (ratio[0] <= rmin and rmax <= ratio[1]):
+                failures.append(f"{tag} {what}: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(ratio)}")
+        if max_row is not None:
+            msg += f" worst_row_rel_l2={row:.5f} (<= {max_row})"
+            if row > max_row:
+                failures.append(f"{tag} {what}: worst row rel L2 {row:.5f} > {max_row}")
+        print(msg)
+        if rel > max_rel:
+            failures.append(f"{tag} {what}: rel L2 {rel:.5f} > {max_rel}")
+
+    # attn_norm: vs golden, vs the CPU step on the same input, and on a scaled input (eps).
+    n_ok = finite_shape("attn_norm")
+    if n_ok:
+        rel_row("attn_norm", seen["attn_norm"], gl["attn_norm"], N_MAX_REL_L2, N_MAX_ROW_REL, N_RATIO)
+        if x_ok:
+            cpu_n = ref.component(layer, "attn_norm")
+            x = seen["attn_x"].float().reshape(gl["attn_x"].shape)
+            rel_row(
+                "attn_norm_vs_cpu",
+                seen["attn_norm"],
+                cpu_n(rctx, x).float(),
+                N_MAX_REL_L2,
+                N_MAX_ROW_REL,
+                what="vs CPU attn_norm on the device attn_x",
+            )
+            xs = (x * SYN_SCALE).bfloat16().float()
+            syn_want = cpu_n(rctx, xs).float()
+            syn_out = muts["attn_norm"](rctx, dctx, xs)
+            if syn_out.numel() != syn_want.numel() or not torch.isfinite(syn_out.float()).all():
+                failures.append(f"attn_norm scaled input: shape {tuple(syn_out.shape)} or non-finite")
+            else:
+                yrel, yrow = _rel(syn_out, syn_want), _worst_row_rel(syn_out, syn_want)
+                ymin, ymax = _ratio(syn_out, syn_want)
+                metrics.record("syn_rel_l2_swap_attn_norm", yrel)
+                metrics.record("syn_worst_row_rel_l2_swap_attn_norm", yrow)
+                print(
+                    f"attn_norm on attn_x x{SYN_SCALE} vs CPU: rel_l2={yrel:.6f} (<= {SYN_MAX_REL_L2}) row norm "
+                    f"ratio=[{ymin:.5f}, {ymax:.5f}] worst_row_rel_l2={yrow:.5f} (<= {SYN_MAX_ROW_REL})"
+                )
+                if yrel > SYN_MAX_REL_L2 or yrow > SYN_MAX_ROW_REL:
+                    failures.append(f"attn_norm scaled input: rel {yrel:.5f} / worst row {yrow:.5f} (wrong eps?)")
+
+    # q_resid (the swapped step): vs golden, vs the CPU step on the same input, and on a scaled input (eps).
+    if finite_shape("q_resid"):
+        rel_row("q_resid", seen["q_resid"], gl["q_resid"], Q_MAX_REL_L2, Q_MAX_ROW_REL, Q_RATIO)
+        if n_ok:
+            cpu_q = ref.component(layer, "q_a")
+            xn = seen["attn_norm"].float().reshape(gl["attn_norm"].shape)
+            rel_row(
+                "q_resid_vs_cpu",
+                seen["q_resid"],
+                cpu_q(rctx, xn).float(),
+                Q_MAX_REL_L2,
+                Q_MAX_ROW_REL,
+                what="vs CPU q_a on the device attn_norm",
+            )
+            xs = (xn * Q_SYN_SCALE).bfloat16().float()
+            syn_want = cpu_q(rctx, xs).float()
+            syn_out = muts["q_a"](rctx, dctx, xs)
+            if syn_out.numel() != syn_want.numel() or not torch.isfinite(syn_out.float()).all():
+                failures.append(f"q_a scaled input: shape {tuple(syn_out.shape)} or non-finite")
+            else:
+                yrel, yrow = _rel(syn_out, syn_want), _worst_row_rel(syn_out, syn_want)
+                ymin, ymax = _ratio(syn_out, syn_want)
+                metrics.record("syn_rel_l2_swap_q_resid", yrel)
+                metrics.record("syn_worst_row_rel_l2_swap_q_resid", yrow)
+                print(
+                    f"q_a on attn_norm x{Q_SYN_SCALE} vs CPU: rel_l2={yrel:.6f} (<= {Q_SYN_MAX_REL_L2}) row norm "
+                    f"ratio=[{ymin:.5f}, {ymax:.5f}] worst_row_rel_l2={yrow:.5f} (<= {Q_SYN_MAX_ROW_REL})"
+                )
+                if yrel > Q_SYN_MAX_REL_L2 or yrow > Q_SYN_MAX_ROW_REL:
+                    failures.append(f"q_a scaled input: rel {yrel:.5f} / worst row {yrow:.5f} (wrong eps?)")
+
+    # topk (the swapped step): vs golden, structure, vs the CPU indexer on the same input, and chunk 0.
+    def topk_checks(tag, got, want, start):
+        """Overlap (mean, worst row) of normalized got vs want and the structure checks; returns nothing."""
+        rows = _row_overlap(got, want)
+        pos = torch.arange(start, start + got.shape[0])[:, None]
+        self_frac = (got == pos).any(-1).float().mean().item()
+        metrics.record(f"topk_overlap_swap_{tag}", rows.mean().item())
+        metrics.record(f"topk_worst_row_overlap_swap_{tag}", rows.min().item())
+        print(
+            f"topk {tag}: overlap={rows.mean().item():.5f} (>= {TOPK_MIN_OVERLAP}) worst row={rows.min().item():.5f} "
+            f"(>= {TOPK_MIN_ROW_OVERLAP}) self selected={self_frac:.5f} (== 1)"
+        )
+        if rows.mean().item() < TOPK_MIN_OVERLAP:
+            failures.append(f"topk {tag}: overlap {rows.mean().item():.5f} < {TOPK_MIN_OVERLAP}")
+        if rows.min().item() < TOPK_MIN_ROW_OVERLAP:
+            failures.append(f"topk {tag}: worst row overlap {rows.min().item():.5f} < {TOPK_MIN_ROW_OVERLAP}")
+        if self_frac < 1.0:
+            failures.append(f"topk {tag}: only {self_frac:.5f} of rows select their own position")
+        failures.extend(f"topk {tag}: {f}" for f in _structure(got, start, want.shape[-1]))
+
+    want_tk = gl["topk"].long()
+    got_tk = _normalize(seen["topk"], want_tk, failures)
+    if got_tk is not None:
+        start = c * g.chunk
+        topk_checks("vs_golden", got_tk, want_tk, start)
+        if n_ok and "q_resid" in seen:
+            cpu = ref.component(layer, "indexer")
+            xn = seen["attn_norm"].float().reshape(gl["attn_norm"].shape)
+            qr = seen["q_resid"].float().reshape(gl["q_resid"].shape)
+            cpu_tk = cpu(reference_ctx(ref, layer, g, c), xn, qr).long()
+            topk_checks("vs_cpu", got_tk, cpu_tk, start)
+
+        # Chunk 0: every row sees <= 2048 keys and must keep exactly [0, position], the rest padded.
+        g0 = g.layer(0, layer)
+        want0 = g0["topk"].long()
+        dctx0 = Ctx(layer, 0, g.chunk, None, {"state_prefix": g.state(layer), "prefix_len": 0, "max_seq": g.seq})
+        out0 = muts["indexer"](reference_ctx(ref, layer, g, 0), dctx0, g0["attn_norm"].float(), g0["q_resid"].float())
+        got0 = _normalize(out0, want0, failures)
+        if got0 is not None:
+            rows0 = _row_overlap(got0, want0)
+            metrics.record("topk_chunk0_worst_row_overlap_swap", rows0.min().item())
+            print(
+                f"topk chunk 0 (start 0): mean overlap={rows0.mean().item():.6f} worst row={rows0.min().item():.5f} (== 1)"
+            )
+            if rows0.min().item() < 1.0:
+                failures.append(f"topk chunk 0: worst row overlap {rows0.min().item():.5f} < 1")
+            failures.extend(f"topk chunk 0: {f}" for f in _structure(got0, 0, want0.shape[-1]))
+
+    # attn_out (the swapped step): vs golden, vs the CPU step on the same device inputs, then the module on chunk 0,
+    # on a probe topk and on a scaled attn_norm, each vs the CPU step on the same inputs.
+    def att_check(tag, got, want):
+        if got.numel() != want.numel() or not torch.isfinite(got.float()).all():
+            failures.append(f"attn_out {tag}: shape {tuple(got.shape)} vs {tuple(want.shape)} or non-finite")
+            return
+        rel, row = _rel(got, want), _worst_row_rel(got, want)
+        rmin, rmax = _ratio(got, want)
+        metrics.record(f"rel_l2_swap_attn_out_{tag}", rel)
+        metrics.record(f"worst_row_rel_l2_swap_attn_out_{tag}", row)
+        print(
+            f"attn_out {tag}: rel_l2={rel:.6f} (<= {ATT_MAX_REL_L2}) row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+            f"(in {list(ATT_RATIO)}) worst_row_rel_l2={row:.5f} (<= {ATT_MAX_ROW_REL})"
+        )
+        if rel > ATT_MAX_REL_L2:
+            failures.append(f"attn_out {tag}: rel L2 {rel:.5f} > {ATT_MAX_REL_L2}")
+        if not (ATT_RATIO[0] <= rmin and rmax <= ATT_RATIO[1]):
+            failures.append(f"attn_out {tag}: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(ATT_RATIO)}")
+        if row > ATT_MAX_ROW_REL:
+            failures.append(f"attn_out {tag}: worst row rel L2 {row:.5f} > {ATT_MAX_ROW_REL}")
+
+    if finite_shape("attn_out"):
+        att_check("vs_golden", seen["attn_out"], gl["attn_out"])
+        if n_ok and "q_resid" in seen and got_tk is not None:
+            cpu = ref.component(layer, "attention")
+            xn = seen["attn_norm"].float().reshape(gl["attn_norm"].shape)
+            qr = seen["q_resid"].float().reshape(gl["q_resid"].shape)
+            att_check("vs_cpu", seen["attn_out"], cpu(reference_ctx(ref, layer, g, c), xn, qr, got_tk).float())
+
+            # (c) golden chunk 0: start 0, empty prefix, -1 pads in every row.
+            g0 = g.layer(0, layer)
+            in0 = (g0["attn_norm"].float(), g0["q_resid"].float(), g0["topk"].long())
+            dctx0 = Ctx(layer, 0, g.chunk, None, {"state_prefix": g.state(layer), "prefix_len": 0, "max_seq": g.seq})
+            want0 = cpu(reference_ctx(ref, layer, g, 0), *in0).float()
+            att_check("chunk0", muts["attention"](reference_ctx(ref, layer, g, 0), dctx0, *in0), want0)
+
+            # (d) probe topk: 64 random causal positions per row, unsorted, the rest -1.
+            start = c * g.chunk
+            ptk = _probe_topk(start, xn.shape[0], gl["topk"].shape[-1], PROBE_KEYS, PROBE_SEED)
+            pwant = cpu(reference_ctx(ref, layer, g, c), xn, qr, ptk).float()
+            att_check("probe", muts["attention"](reference_ctx(ref, layer, g, c), dctx, xn, qr, ptk), pwant)
+
+            # (e) eps: attn_norm scaled so kv_a_layernorm's eps 1e-6 is visible.
+            xs = (xn * ATT_SYN_SCALE).bfloat16().float()
+            swant = cpu(reference_ctx(ref, layer, g, c), xs, qr, got_tk).float()
+            att_check("scaled", muts["attention"](reference_ctx(ref, layer, g, c), dctx, xs, qr, got_tk), swant)
+        else:
+            failures.append("attn_out: vs-CPU, chunk 0, probe and scaled checks skipped (unusable upstream output)")
+
+    # h_mid (the swapped step): vs golden (+ per-stream norm ratio), vs the CPU step on the same device inputs (+ the
+    # addend per stream), and the module on rotated post gates vs the CPU step.
+    if finite_shape("h_mid"):
+        rel = _rel(seen["h_mid"], gl["h_mid"])
+        wr = _worst_row_rel(seen["h_mid"], gl["h_mid"], HC_MULT)
+        metrics.record("rel_l2_swap_h_mid", rel)
+        metrics.record("worst_row_rel_l2_swap_h_mid", wr)
+        print(f"h_mid: rel_l2={rel:.6f} (<= {H_MID_MAX_REL}) worst (row, stream) rel={wr:.6f} (<= {H_MID_MAX_ROW_REL})")
+        if rel > H_MID_MAX_REL:
+            failures.append(f"h_mid rel L2 {rel:.5f} > {H_MID_MAX_REL}")
+        if wr > H_MID_MAX_ROW_REL:
+            failures.append(f"h_mid worst row rel L2 {wr:.5f} > {H_MID_MAX_ROW_REL}")
+        want = gl["h_mid"].float()
+        n = want.shape[0]
+        hm = seen["h_mid"].float().reshape(n, HC_MULT, -1)
+        sr = hm.norm(dim=-1) / want.view(n, HC_MULT, -1).norm(dim=-1).clamp_min(1e-12)
+        smin, smax = sr.min().item(), sr.max().item()
+        metrics.record("stream_norm_ratio_min_swap_h_mid", smin)
+        metrics.record("stream_norm_ratio_max_swap_h_mid", smax)
+        print(f"h_mid per-token stream norm ratio=[{smin:.5f}, {smax:.5f}] (in {list(MID_STREAM_RATIO)})")
+        if not (MID_STREAM_RATIO[0] <= smin and smax <= MID_STREAM_RATIO[1]):
+            failures.append(f"h_mid: stream norm ratio [{smin:.5f}, {smax:.5f}] outside {list(MID_STREAM_RATIO)}")
+
+        a_ok = seen["attn_out"].numel() == gl["attn_out"].numel() and torch.isfinite(seen["attn_out"].float()).all()
+        g_ok = seen["attn_hc"].numel() == gl["attn_hc"].numel() and torch.isfinite(seen["attn_hc"].float()).all()
+        if a_ok and g_ok:
+            cpu_r = ref.component(layer, "attn_residual")
+            xs_in = gl["in"].float()
+            gt = seen["attn_hc"].float().reshape(gl["attn_hc"].shape)
+            y = seen["attn_out"].float().reshape(gl["attn_out"].shape)
+            same = cpu_r(rctx, xs_in, gt, y).float()
+            crel, crow = _rel(seen["h_mid"], same), _worst_row_rel(seen["h_mid"], same, HC_MULT)
+            metrics.record("rel_l2_swap_h_mid_vs_cpu", crel)
+            metrics.record("worst_row_rel_l2_swap_h_mid_vs_cpu", crow)
+            print(
+                f"h_mid vs CPU attn_residual on the same inputs: rel_l2={crel:.7f} (<= {RES_MAX_REL_L2}) "
+                f"worst (row, stream) rel={crow:.7f} (<= {RES_MAX_ROW_REL})"
+            )
+            if crel > RES_MAX_REL_L2 or crow > RES_MAX_ROW_REL:
+                failures.append(f"h_mid vs CPU on the same inputs: rel {crel:.6f} / worst row {crow:.6f}")
+
+            # The addend on each stream: delta_j = h_mid_j - in_j vs t_j = post_j * attn_out, rounding-aware limits
+            # (the component's; r = bf16 rounding error of the exact fp32 result), float64 statistics.
+            xs = xs_in.view(n, HC_MULT, -1)
+            tgt32 = gt[:, HC_MULT:].unsqueeze(-1) * y.view(n, 1, -1)
+            exact = xs + tgt32
+            rnd = (exact.bfloat16().float() - exact).double()
+            tgt = tgt32.double()
+            delta = (hm - xs).double()
+            err = delta - tgt
+            tn = tgt.norm(dim=(0, 2)).clamp_min(1e-30)
+            rs = rnd.norm(dim=(0, 2))
+            coef = (delta * tgt).sum(dim=(0, 2)) / (tn * tn)
+            coef_x = ((coef - 1).abs() / (ADD_COEF_TOL + ROUND_MULT * rs / tn)).tolist()  # > 1 fails
+            excess = (err.norm(dim=(0, 2)) / (MAX_ADD_REL * tn + ROUND_MULT * rs)).tolist()  # > 1 fails
+            row_x = err.norm(dim=-1) / (MAX_ADD_ROW_REL * tgt.norm(dim=-1) + ROUND_MULT * rnd.norm(dim=-1) + ROW_FLOOR)
+            worst = row_x.max().item()
+            worst_at = divmod(int(row_x.argmax().item()), HC_MULT)
+            metrics.record("add_coef_min_swap_h_mid", coef.min().item())
+            metrics.record("add_coef_max_swap_h_mid", coef.max().item())
+            metrics.record("add_excess_swap_h_mid", max(excess))
+            metrics.record("add_worst_row_excess_swap_h_mid", worst)
+            print(
+                f"h_mid addend per stream: coef={[round(v, 5) for v in coef.tolist()]} (|coef-1|/tol="
+                f"{[round(v, 3) for v in coef_x]} <= 1) excess={[round(v, 3) for v in excess]} (<= 1) "
+                f"worst row excess={worst:.3f} (<= 1) at (row, stream)={worst_at}"
+            )
+            bad = [j for j, v in enumerate(coef_x) if v > 1]
+            if bad:
+                failures.append(f"h_mid addend: coefficient off on streams {bad}: {coef.tolist()}")
+            bad = [j for j, v in enumerate(excess) if v > 1]
+            if bad:
+                failures.append(f"h_mid addend: error above the limit on streams {bad}: excess {excess}")
+            if worst > 1:
+                failures.append(f"h_mid addend: worst row excess {worst:.3f} at (row, stream) {worst_at}")
+
+            # Rotated post gates: every stream meets the large gates on a quarter of the rows.
+            gr = _rotated_post(gt)
+            rwant = cpu_r(rctx, xs_in, gr, y).float()
+            rout = muts["attn_residual"](rctx, dctx, xs_in, gr, y)
+            if rout.numel() != rwant.numel() or not torch.isfinite(rout.float()).all():
+                failures.append(f"attn_residual rotated post gates: shape {tuple(rout.shape)} or non-finite")
+            else:
+                prel, prow = _rel(rout, rwant), _worst_row_rel(rout, rwant, HC_MULT)
+                metrics.record("rot_rel_l2_swap_h_mid", prel)
+                metrics.record("rot_worst_row_rel_l2_swap_h_mid", prow)
+                print(
+                    f"attn_residual with rotated post gates vs CPU: rel_l2={prel:.7f} (<= {RES_MAX_REL_L2}) "
+                    f"worst (row, stream) rel={prow:.7f} (<= {RES_MAX_ROW_REL})"
+                )
+                if prel > RES_MAX_REL_L2 or prow > RES_MAX_ROW_REL:
+                    failures.append(f"attn_residual rotated post gates: rel {prel:.6f} / worst row {prow:.6f}")
+        else:
+            failures.append("h_mid: attn_hc / attn_out unusable, cannot check attn_residual against the CPU step")
+
+    # ffn_hc (the swapped step): the iHC gates [S, 8] from h_mid, vs golden and vs the CPU ffn_hc on the same device
+    # h_mid; per column (the small columns 0 / 1 / 6 carry bugs nothing downstream sees), the pre gates through ffn_x,
+    # the post gates through out with the block's own mlp_out (no routing in between).
+    def gate_check(tag, got, want, max_rel, max_col, max_small, max_row):
+        err = got - want
+        rel = (err.norm() / want.norm().clamp_min(1e-12)).item()
+        col = (err.norm(dim=0) / want.norm(dim=0).clamp_min(1e-12)).tolist()
+        prow = (err[:, HC_MULT:].norm(dim=-1) / want[:, HC_MULT:].norm(dim=-1).clamp_min(1e-12)).max().item()
+        big = max(v for j, v in enumerate(col) if j not in FHC_SMALL_COLS)
+        small = max(col[j] for j in FHC_SMALL_COLS)
+        metrics.record(f"rel_l2_swap_ffn_hc_{tag}", rel)
+        metrics.record(f"max_col_rel_l2_swap_ffn_hc_{tag}", big)
+        metrics.record(f"max_small_col_rel_l2_swap_ffn_hc_{tag}", small)
+        metrics.record(f"post_worst_row_rel_l2_swap_ffn_hc_{tag}", prow)
+        print(
+            f"ffn_hc {tag}: rel_l2={rel:.6f} (<= {max_rel}) col rel={[round(v, 5) for v in col]} (<= {max_col}, "
+            f"columns {list(FHC_SMALL_COLS)} <= {max_small}) post worst row={prow:.5f} (<= {max_row})"
+        )
+        if rel > max_rel:
+            failures.append(f"ffn_hc {tag}: rel L2 {rel:.5f} > {max_rel}")
+        bad = [j for j, v in enumerate(col) if v > (max_small if j in FHC_SMALL_COLS else max_col)]
+        if bad:
+            failures.append(f"ffn_hc {tag}: column rel L2 above the limit in columns {bad}")
+        if prow > max_row:
+            failures.append(f"ffn_hc {tag}: post worst row rel L2 {prow:.5f} > {max_row}")
+
+    mid_ok = seen["h_mid"].numel() == gl["h_mid"].numel() and torch.isfinite(seen["h_mid"].float()).all()
+    if finite_shape("ffn_hc"):
+        want_hc = gl["ffn_hc"].float()
+        gt = seen["ffn_hc"].float().reshape(want_hc.shape)
+        gate_check(
+            "vs_golden", gt, want_hc, FHC_MAX_REL_L2, FHC_MAX_COL_REL, FHC_MAX_SMALL_COL_REL, FHC_MAX_POST_ROW_REL
+        )
+        if finite_shape("ffn_x"):
+            rel_row("ffn_x", seen["ffn_x"], gl["ffn_x"], FX_MAX_REL_L2, FX_MAX_ROW_REL)
+        if mid_ok:
+            hm = seen["h_mid"].float().reshape(gl["h_mid"].shape)
+            cpu_hc, cpu_pre = ref.component(layer, "ffn_hc"), ref.component(layer, "ffn_hc_pre")
+            cpu_g = cpu_hc(rctx, hm).float()
+            gate_check(
+                "vs_cpu",
+                gt,
+                cpu_g,
+                FHC_CPU_MAX_REL_L2,
+                FHC_CPU_MAX_COL_REL,
+                FHC_CPU_MAX_SMALL_COL_REL,
+                FHC_CPU_MAX_POST_ROW_REL,
+            )
+            cpu_fx = cpu_pre(rctx, hm, cpu_g).float()
+            rel_row(
+                "ffn_x_vs_cpu",
+                cpu_pre(rctx, hm, gt).float(),
+                cpu_fx,
+                FX_CPU_MAX_REL_L2,
+                FX_CPU_MAX_ROW_REL,
+                what="from the device gates vs from the CPU gates on the device h_mid",
+            )
+
+            # ffn_hc_pre (the swapped step): the device ffn_x vs the CPU step on the same device h_mid and gates, then
+            # the module on per-row rotated pre gates (pre gates 0 / 1 are ~hc_eps here, so a dropped stream 0 or 1,
+            # or a 0 / 1 swap, is otherwise invisible).
+            def pre_check(tag, got, want, max_rel, max_row):
+                if got.numel() != want.numel() or not torch.isfinite(got.float()).all():
+                    failures.append(f"ffn_hc_pre {tag}: shape {tuple(got.shape)} vs {tuple(want.shape)} or non-finite")
+                    return
+                rel, row = _rel(got, want), _worst_row_rel(got, want)
+                rmin, rmax = _ratio(got, want)
+                metrics.record(f"rel_l2_swap_ffn_hc_pre_{tag}", rel)
+                metrics.record(f"worst_row_rel_l2_swap_ffn_hc_pre_{tag}", row)
+                print(
+                    f"ffn_hc_pre {tag}: rel_l2={rel:.7f} (<= {max_rel}) row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+                    f"worst_row_rel_l2={row:.6f} (<= {max_row})"
+                )
+                if rel > max_rel or row > max_row:
+                    failures.append(f"ffn_hc_pre {tag}: rel {rel:.5f} / worst row {row:.5f} (stream order or scale?)")
+
+            if finite_shape("ffn_x"):
+                pre_check("vs_cpu", seen["ffn_x"], cpu_pre(rctx, hm, gt).float(), FXD_MAX_REL_L2, FXD_MAX_ROW_REL)
+            rg = _rotated(gt)
+            pre_check(
+                "rotated",
+                muts["ffn_hc_pre"](rctx, dctx, hm, rg),
+                cpu_pre(rctx, hm, rg).float(),
+                FROT_MAX_REL_L2,
+                FROT_MAX_ROW_REL,
+            )
+
+            # Post gates through out: the block's out vs ffn_residual with the CPU gates and the block's own mlp_out.
+            res = ref.component(layer, "ffn_residual")
+            if "mlp_out" in seen and seen["mlp_out"].numel() * HC_MULT == hm.numel():
+                mo = seen["mlp_out"].float().reshape(hm.shape[0], -1)
+                pw = res(rctx, hm, cpu_g, mo).float()
+                n = pw.shape[0]
+                d = seen["out"].float().reshape(n, HC_MULT, -1) - pw.view(n, HC_MULT, -1)
+                srel = (d.norm(dim=(0, 2)) / pw.view(n, HC_MULT, -1).norm(dim=(0, 2)).clamp_min(1e-12)).tolist()
+                prow = _worst_row_rel(seen["out"], pw, HC_MULT)
+                metrics.record("post_stream_rel_l2_swap_out_vs_cpu_gates", max(srel))
+                metrics.record("post_worst_row_rel_l2_swap_out_vs_cpu_gates", prow)
+                print(
+                    f"out vs ffn_residual(h_mid, CPU gates, block mlp_out): stream rel={[round(v, 5) for v in srel]} "
+                    f"(<= {POST_MAX_STREAM_REL}) worst (row, stream) rel={prow:.5f} (<= {POST_MAX_ROW_REL})"
+                )
+                if max(srel) > POST_MAX_STREAM_REL or prow > POST_MAX_ROW_REL:
+                    failures.append(f"out vs CPU post gates: stream rel {max(srel):.5f} / worst row {prow:.5f}")
+            else:
+                failures.append("mlp_out missing or misshapen, cannot check the post gates through out")
+
+            # Block out vs the whole CPU tail from the same device h_mid (routing flips make rows noisy: rel only).
+            fnm = ref.component(layer, "ffn_norm")(rctx, cpu_fx)
+            rt = ref.component(layer, "router")(rctx, fnm)
+            mo_c = ref.component(layer, "moe_combine")(
+                rctx, ref.component(layer, "experts")(rctx, fnm, rt), ref.component(layer, "shared_expert")(rctx, fnm)
+            )
+            tail = res(rctx, hm, cpu_g, mo_c).float()
+            trel, trow = _rel(seen["out"], tail), _worst_row_rel(seen["out"], tail, HC_MULT)
+            metrics.record("rel_l2_swap_out_vs_cpu_tail", trel)
+            metrics.record("worst_row_rel_l2_swap_out_vs_cpu_tail", trow)  # informational (near-tie expert flips)
+            print(
+                f"out vs CPU tail from the device h_mid: rel_l2={trel:.6f} (<= {TAIL_MAX_REL_L2}) "
+                f"worst (row, stream) rel={trow:.5f} (not gated)"
+            )
+            if trel > TAIL_MAX_REL_L2:
+                failures.append(f"out vs CPU tail: rel {trel:.5f} > {TAIL_MAX_REL_L2}")
+        else:
+            failures.append("ffn_hc: h_mid unusable, cannot check ffn_hc against the CPU step")
+
+    # ffn_norm (the swapped step): vs golden, vs the CPU step on the same device ffn_x, and the module on that ffn_x
+    # scaled down (x 0.1, eps dominates most rows) and up (x 30, the RMS reduction dominates), each vs the CPU step.
+    def fn_check(tag, got, want, max_rel, ratio, max_row):
+        if got.numel() != want.numel() or not torch.isfinite(got.float()).all():
+            failures.append(f"ffn_norm {tag}: shape {tuple(got.shape)} vs {tuple(want.shape)} or non-finite")
+            return
+        rel, rmin, rmax, row = _errors(got, want)
+        metrics.record(f"rel_l2_swap_ffn_norm_{tag}", rel)
+        metrics.record(f"row_norm_ratio_min_swap_ffn_norm_{tag}", rmin)
+        metrics.record(f"row_norm_ratio_max_swap_ffn_norm_{tag}", rmax)
+        metrics.record(f"worst_row_rel_l2_swap_ffn_norm_{tag}", row)
+        rtxt = "not gated" if ratio is None else f"in {list(ratio)}"
+        print(
+            f"ffn_norm {tag}: rel_l2={rel:.6f} (<= {max_rel}) row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+            f"({rtxt}) worst_row_rel_l2={row:.5f} (<= {max_row})"
+        )
+        if rel > max_rel:
+            failures.append(f"ffn_norm {tag}: rel L2 {rel:.5f} > {max_rel}")
+        if ratio is not None and not (ratio[0] <= rmin and rmax <= ratio[1]):
+            failures.append(f"ffn_norm {tag}: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(ratio)}")
+        if row > max_row:
+            failures.append(f"ffn_norm {tag}: worst row rel L2 {row:.5f} > {max_row}")
+
+    if finite_shape("ffn_norm"):
+        fn_check("vs_golden", seen["ffn_norm"], gl["ffn_norm"].float(), FN_MAX_REL_L2, FN_RATIO, FN_MAX_ROW_REL_L2)
+        fx_ok = "ffn_x" in seen and seen["ffn_x"].numel() == gl["ffn_x"].numel()
+        if fx_ok and torch.isfinite(seen["ffn_x"].float()).all():
+            cpu_fn = ref.component(layer, "ffn_norm")
+            fxd = seen["ffn_x"].float().reshape(gl["ffn_x"].shape)
+            fn_check(
+                "vs_cpu",
+                seen["ffn_norm"],
+                cpu_fn(rctx, fxd).float(),
+                FN_CPU_MAX_REL_L2,
+                FN_CPU_RATIO,
+                FN_CPU_MAX_ROW_REL_L2,
+            )
+            xe = (fxd * FN_EPS_SCALE).bfloat16().float()
+            fn_check(
+                "eps",
+                muts["ffn_norm"](rctx, dctx, xe),
+                cpu_fn(rctx, xe).float(),
+                FN_EPS_MAX_REL_L2,
+                None,
+                FN_EPS_MAX_ROW_REL_L2,
+            )
+            xs = (fxd * FN_SYN_SCALE).bfloat16().float()
+            fn_check(
+                "scaled",
+                muts["ffn_norm"](rctx, dctx, xs),
+                cpu_fn(rctx, xs).float(),
+                FN_SYN_MAX_REL_L2,
+                FN_SYN_RATIO,
+                FN_SYN_MAX_ROW_REL_L2,
+            )
+        else:
+            failures.append("ffn_norm: ffn_x unusable, cannot check ffn_norm against the CPU step")
+
+    # router (the swapped step): structure and row sums, selection and matched-row weights vs golden, and vs the CPU
+    # router on the same device ffn_norm (mean and worst-row overlap, matched-row weights).
+    def selection(got, want):
+        gs, ws = got != 0, want != 0
+        row = (gs & ws).sum(-1).float() / ws.sum(-1).clamp_min(1)
+        m = (gs == ws).all(-1)
+        mrel = ((got[m] - want[m]).norm() / want[m].norm().clamp_min(1e-12)).item() if m.any() else float("inf")
+        return row.mean().item(), row.min().item(), mrel, int(m.sum().item())
+
+    if finite_shape("router"):
+        want_rt = gl["router"].float()
+        got_rt = seen["router"].float().reshape(want_rt.shape)
+        nnz = (got_rt != 0).sum(-1)
+        rsum = got_rt.sum(-1) / ROUTE_SCALE
+        rmin, rmax = rsum.min().item(), rsum.max().item()
+        overlap, _, mrel, nm = selection(got_rt, want_rt)
+        metrics.record("router_overlap_swap", overlap)
+        metrics.record("router_matched_rel_l2_swap", mrel)
+        metrics.record("router_row_sum_min_swap", rmin)
+        metrics.record("router_row_sum_max_swap", rmax)
+        print(
+            f"router: nnz/row {nnz.min().item()}..{nnz.max().item()} (== {TOP_K}) row_sum / {ROUTE_SCALE} = "
+            f"[{rmin:.5f}, {rmax:.5f}] (1 +- {RT_MAX_ROW_SUM_ERR})\n"
+            f"router vs golden: top-8 overlap={overlap:.5f} (>= {ROUTER_MIN_OVERLAP}) matched_rows={nm}/{want_rt.shape[0]} "
+            f"matched_rel_l2={mrel:.5f} (<= {RT_MAX_MATCHED_REL_L2})"
+        )
+        if not (nnz == TOP_K).all():
+            failures.append(f"router: nonzeros per row in [{nnz.min().item()}, {nnz.max().item()}], want {TOP_K}")
+        if not (got_rt >= 0).all():
+            failures.append("router: negative routing weight")
+        if not (1 - RT_MAX_ROW_SUM_ERR <= rmin and rmax <= 1 + RT_MAX_ROW_SUM_ERR):
+            failures.append(f"router: row sum / {ROUTE_SCALE} in [{rmin:.5f}, {rmax:.5f}] (route scale or renorm bug)")
+        if overlap < ROUTER_MIN_OVERLAP:
+            failures.append(f"router selection overlap {overlap:.4f} < {ROUTER_MIN_OVERLAP}")
+        if mrel > RT_MAX_MATCHED_REL_L2:
+            failures.append(f"router vs golden: matched-row weight rel L2 {mrel:.5f} > {RT_MAX_MATCHED_REL_L2}")
+        fn_ok = "ffn_norm" in seen and seen["ffn_norm"].numel() == gl["ffn_norm"].numel()
+        if fn_ok and torch.isfinite(seen["ffn_norm"].float()).all():
+            fnd = seen["ffn_norm"].float().reshape(gl["ffn_norm"].shape)
+            cpu_rt = ref.component(layer, "router")(rctx, fnd).float().reshape(want_rt.shape)
+            c_ov, c_row, c_mrel, c_nm = selection(got_rt, cpu_rt)
+            metrics.record("router_overlap_swap_vs_cpu", c_ov)
+            metrics.record("router_worst_row_overlap_swap_vs_cpu", c_row)
+            metrics.record("router_matched_rel_l2_swap_vs_cpu", c_mrel)
+            print(
+                f"router vs CPU router on the device ffn_norm: overlap={c_ov:.5f} (>= {RT_CPU_MIN_OVERLAP}) worst row "
+                f"overlap={c_row:.4f} (>= {RT_CPU_MIN_ROW_OVERLAP}) matched_rows={c_nm}/{want_rt.shape[0]} "
+                f"matched_rel_l2={c_mrel:.6f} (<= {RT_CPU_MAX_MATCHED_REL_L2})"
+            )
+            if c_ov < RT_CPU_MIN_OVERLAP:
+                failures.append(
+                    f"router vs CPU: overlap {c_ov:.5f} < {RT_CPU_MIN_OVERLAP} (bf16 logits / scores / keys?)"
+                )
+            if c_row < RT_CPU_MIN_ROW_OVERLAP:
+                failures.append(f"router vs CPU: worst row overlap {c_row:.4f} < {RT_CPU_MIN_ROW_OVERLAP} (row order?)")
+            if c_mrel > RT_CPU_MAX_MATCHED_REL_L2:
+                failures.append(f"router vs CPU: matched-row weight rel L2 {c_mrel:.5f} > {RT_CPU_MAX_MATCHED_REL_L2}")
+        else:
+            failures.append("router: ffn_norm unusable, cannot check the router against the CPU step")
+
+    # experts (the swapped step): vs the CPU experts on the same device ffn_norm and routing (component limits), the
+    # module again on ffn_norm x 2 (the clamp fires), and vs golden (whole tensor; per token on rows routed as in the
+    # golden, since a near-tie flip swaps a whole expert in a row).
+    def ex_check(tag, got, want, max_rel, ratio, max_row, max_coef, rows=None):
+        if got.numel() != want.numel() or not torch.isfinite(got.float()).all():
+            failures.append(f"experts {tag}: shape {tuple(got.shape)} vs {tuple(want.shape)} or non-finite")
+            return
+        got, want = got.float().reshape(want.shape), want.float()
+        rel = _rel(got, want)
+        g2, w2 = (got, want) if rows is None else (got[rows], want[rows])
+        _, rmin, rmax, row = _errors(g2, w2)
+        g64, w64 = got.double(), want.double()
+        coef = ((g64 * w64).sum() / (w64 * w64).sum()).item()
+        metrics.record(f"rel_l2_swap_experts_{tag}", rel)
+        metrics.record(f"row_norm_ratio_min_swap_experts_{tag}", rmin)
+        metrics.record(f"row_norm_ratio_max_swap_experts_{tag}", rmax)
+        metrics.record(f"worst_row_rel_l2_swap_experts_{tag}", row)
+        metrics.record(f"coef_swap_experts_{tag}", coef)
+        on = "" if rows is None else f" on {int(rows.sum().item())} rows routed as golden"
+        ctxt = "not gated" if max_coef is None else f"1 +- {max_coef}"
+        print(
+            f"experts {tag}: rel_l2={rel:.6f} (<= {max_rel}){on} row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+            f"(in {list(ratio)}) worst_row_rel_l2={row:.5f} (<= {max_row}) coef={coef:.5f} ({ctxt})"
+        )
+        if rel > max_rel:
+            failures.append(f"experts {tag}: rel L2 {rel:.5f} > {max_rel}")
+        if not (ratio[0] <= rmin and rmax <= ratio[1]):
+            failures.append(f"experts {tag}: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(ratio)}")
+        if row > max_row:
+            failures.append(f"experts {tag}: worst row rel L2 {row:.5f} > {max_row} (dropped expert / pair, rows?)")
+        if max_coef is not None and abs(coef - 1) > max_coef:
+            failures.append(f"experts {tag}: global scale {coef:.5f} not within {max_coef} of 1")
+
+    if finite_shape("experts_out"):
+        fn_ok = "ffn_norm" in seen and seen["ffn_norm"].numel() == gl["ffn_norm"].numel()
+        rt_ok = "router" in seen and seen["router"].numel() == gl["router"].numel()
+        if fn_ok and rt_ok and torch.isfinite(seen["ffn_norm"].float()).all() and torch.isfinite(seen["router"]).all():
+            cpu_ex = ref.component(layer, "experts")
+            fnd = seen["ffn_norm"].float().reshape(gl["ffn_norm"].shape)
+            rtd = seen["router"].float().reshape(gl["router"].shape)
+            ex_check(
+                "vs_cpu",
+                seen["experts_out"],
+                cpu_ex(rctx, fnd, rtd).float(),
+                EX_MAX_REL_L2,
+                EX_RATIO,
+                EX_MAX_ROW_REL,
+                EX_MAX_COEF_ERR,
+            )
+            xs = (fnd * EX_SYN_SCALE).bfloat16().float()
+            ex_check(
+                f"x{EX_SYN_SCALE:g}",
+                muts["experts"](rctx, dctx, xs, rtd),
+                cpu_ex(rctx, xs, rtd).float(),
+                EX_MAX_REL_L2,
+                EX_RATIO,
+                EX_MAX_ROW_REL,
+                EX_MAX_COEF_ERR,
+            )
+            same = ((rtd != 0) == (gl["router"].float() != 0)).all(-1)
+            ex_check(
+                "vs_golden",
+                seen["experts_out"],
+                gl["experts_out"].float(),
+                EX_G_MAX_REL_L2,
+                EX_G_RATIO,
+                EX_G_MAX_ROW_REL,
+                EX_G_MAX_COEF_ERR,
+                rows=same,
+            )
+        else:
+            failures.append("experts: ffn_norm / router unusable, cannot check the experts against the CPU step")
+
+    # shared_expert (the swapped step): vs the CPU step on the same device ffn_norm (component limits + global scale),
+    # the module again on ffn_norm x 2 (the clamp would fire there), and vs golden (backstop).
+    def se_check(tag, got, want, max_rel, ratio, max_row, max_coef):
+        if got.numel() != want.numel() or not torch.isfinite(got.float()).all():
+            failures.append(f"shared_expert {tag}: shape {tuple(got.shape)} vs {tuple(want.shape)} or non-finite")
+            return
+        got, want = got.float().reshape(want.shape), want.float()
+        rel, rmin, rmax, row = _errors(got, want)
+        g64, w64 = got.double(), want.double()
+        coef = ((g64 * w64).sum() / (w64 * w64).sum().clamp_min(1e-300)).item()
+        metrics.record(f"rel_l2_swap_shared_out_{tag}", rel)
+        metrics.record(f"row_norm_ratio_min_swap_shared_out_{tag}", rmin)
+        metrics.record(f"row_norm_ratio_max_swap_shared_out_{tag}", rmax)
+        metrics.record(f"worst_row_rel_l2_swap_shared_out_{tag}", row)
+        metrics.record(f"coef_swap_shared_out_{tag}", coef)
+        print(
+            f"shared_expert {tag}: rel_l2={rel:.6f} (<= {max_rel}) row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+            f"(in {list(ratio)}) worst_row_rel_l2={row:.5f} (<= {max_row}) coef={coef:.6f} (1 +- {max_coef})"
+        )
+        if rel > max_rel:
+            failures.append(f"shared_expert {tag}: rel L2 {rel:.5f} > {max_rel}")
+        if not (ratio[0] <= rmin and rmax <= ratio[1]):
+            failures.append(f"shared_expert {tag}: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(ratio)}")
+        if row > max_row:
+            failures.append(f"shared_expert {tag}: worst row rel L2 {row:.5f} > {max_row} (dropped / misplaced rows?)")
+        if not abs(coef - 1) <= max_coef:
+            failures.append(f"shared_expert {tag}: global scale {coef:.6f} not within {max_coef} of 1")
+
+    if finite_shape("shared_out"):
+        fn_ok = "ffn_norm" in seen and seen["ffn_norm"].numel() == gl["ffn_norm"].numel()
+        if fn_ok and torch.isfinite(seen["ffn_norm"].float()).all():
+            cpu_se = ref.component(layer, "shared_expert")
+            fnd = seen["ffn_norm"].float().reshape(gl["ffn_norm"].shape)
+            se_check(
+                "vs_cpu",
+                seen["shared_out"],
+                cpu_se(rctx, fnd).float(),
+                SE_MAX_REL_L2,
+                SE_RATIO,
+                SE_MAX_ROW_REL,
+                SE_MAX_COEF_ERR,
+            )
+            xs = (fnd * SE_SYN_SCALE).bfloat16().float()
+            se_check(
+                f"x{SE_SYN_SCALE:g}",
+                muts["shared_expert"](rctx, dctx, xs),
+                cpu_se(rctx, xs).float(),
+                SE_SYN_MAX_REL_L2,
+                SE_SYN_RATIO,
+                SE_SYN_MAX_ROW_REL,
+                SE_MAX_COEF_ERR,
+            )
+        else:
+            failures.append("shared_expert: ffn_norm unusable, cannot check the shared expert against the CPU step")
+        se_check(
+            "vs_golden",
+            seen["shared_out"],
+            gl["shared_out"].float(),
+            SE_G_MAX_REL_L2,
+            SE_G_RATIO,
+            SE_G_MAX_ROW_REL,
+            SE_G_MAX_COEF_ERR,
+        )
+
+    # moe_combine (the swapped step): vs the exact fp32 sum of the block's own device addends (the module's inputs),
+    # per addend coefficient / error on those, the module again on (experts, -shared) and (experts, 0), and vs golden.
+    def mc_ok(n):
+        return n in seen and seen[n].numel() == gl[n].numel() and torch.isfinite(seen[n].float()).all()
+
+    if finite_shape("mlp_out"):
+        n = gl["mlp_out"].shape[0]
+        mo = seen["mlp_out"].float().reshape(n, -1)
+        if mc_ok("experts_out") and mc_ok("shared_out"):
+            ex = seen["experts_out"].float().reshape(n, -1)
+            sh = seen["shared_out"].float().reshape(n, -1)
+            exact = ref.component(layer, "moe_combine")(rctx, ex, sh).float().reshape(n, -1)
+            rel, rmin, rmax, row = _errors(mo, exact)
+            metrics.record("rel_l2_swap_mlp_out_vs_cpu", rel)
+            metrics.record("row_norm_ratio_min_swap_mlp_out_vs_cpu", rmin)
+            metrics.record("row_norm_ratio_max_swap_mlp_out_vs_cpu", rmax)
+            metrics.record("worst_row_rel_l2_swap_mlp_out_vs_cpu", row)
+            print(
+                f"mlp_out vs CPU moe_combine on the device addends: rel_l2={rel:.7f} (<= {MC_MAX_REL_L2}) row norm "
+                f"ratio=[{rmin:.6f}, {rmax:.6f}] (in {list(MC_RATIO)}) worst_row_rel_l2={row:.6f} (<= {MC_MAX_ROW_REL})"
+            )
+            if rel > MC_MAX_REL_L2:
+                failures.append(f"mlp_out vs CPU: rel L2 {rel:.5f} > {MC_MAX_REL_L2}")
+            if not (MC_RATIO[0] <= rmin and rmax <= MC_RATIO[1]):
+                failures.append(f"mlp_out vs CPU: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(MC_RATIO)}")
+            if row > MC_MAX_ROW_REL:
+                failures.append(f"mlp_out vs CPU: worst row rel L2 {row:.5f} > {MC_MAX_ROW_REL} (misplaced rows?)")
+
+            # Each addend on its own (float64): delta = mlp_out - other addend vs this addend.
+            named = {"experts_out": ex.double(), "shared_out": sh.double()}
+            g64 = mo.double()
+            for name, t in named.items():
+                other = sum(v for k, v in named.items() if k != name)
+                d = g64 - other
+                err = d - t
+                tn = t.norm().clamp_min(1e-300)
+                coef = ((d * t).sum() / (tn * tn)).item()
+                arel = (err.norm() / tn).item()
+                arow = (err.norm(dim=-1) / t.norm(dim=-1).clamp_min(1e-30)).max().item()
+                tag = name.replace("_out", "")
+                metrics.record(f"add_coef_{tag}_swap_mlp_out", coef)
+                metrics.record(f"add_rel_l2_{tag}_swap_mlp_out", arel)
+                metrics.record(f"add_worst_row_{tag}_swap_mlp_out", arow)
+                print(
+                    f"mlp_out addend {name}: coef={coef:.6f} (1 +- {MC_MAX_COEF_DEV}) rel={arel:.6f} "
+                    f"(<= {MC_MAX_ADD_REL[name]}) worst row={arow:.5f} (<= {MC_MAX_ADD_ROW_REL})"
+                )
+                if not abs(coef - 1) <= MC_MAX_COEF_DEV:
+                    failures.append(f"mlp_out: {name} enters with coefficient {coef:.5f} (scaled addend?)")
+                if arel > MC_MAX_ADD_REL[name]:
+                    failures.append(f"mlp_out: {name} addend error {arel:.5f} > {MC_MAX_ADD_REL[name]}")
+                if arow > MC_MAX_ADD_ROW_REL:
+                    failures.append(f"mlp_out: {name} worst row addend error {arow:.4f} > {MC_MAX_ADD_ROW_REL}")
+
+            # Probes: the module must add its own inputs.
+            for label, a, b in (("experts - shared", ex, -sh), ("experts + 0", ex, torch.zeros_like(sh))):
+                pe = a + b
+                p = muts["moe_combine"](rctx, dctx, a, b)
+                if p.numel() != pe.numel() or not torch.isfinite(p.float()).all():
+                    failures.append(f"moe_combine probe {label}: shape {tuple(p.shape)} or non-finite")
+                    continue
+                pg = p.float().reshape(n, -1)
+                prel = ((pg - pe).norm() / pe.norm().clamp_min(1e-12)).item()
+                prow = _worst_row_rel(pg, pe)
+                ptag = label.replace(" ", "").replace("-", "minus").replace("+", "plus")
+                metrics.record(f"probe_rel_l2_{ptag}_swap_mlp_out", prel)
+                metrics.record(f"probe_worst_row_rel_l2_{ptag}_swap_mlp_out", prow)
+                print(
+                    f"moe_combine probe {label}: rel={prel:.7f} (<= {MC_PROBE_MAX_REL}) worst row={prow:.6f} "
+                    f"(<= {MC_PROBE_MAX_ROW_REL})"
+                )
+                if prel > MC_PROBE_MAX_REL or prow > MC_PROBE_MAX_ROW_REL:
+                    failures.append(
+                        f"moe_combine probe {label}: rel {prel:.5f} / worst row {prow:.5f} (module ignores its inputs?)"
+                    )
+        else:
+            failures.append("moe_combine: experts_out / shared_out unusable, cannot check mlp_out against the CPU step")
+
+        # vs golden (backstop): whole tensor, global scale, and per row on the rows routed as in the golden.
+        want = gl["mlp_out"].float().reshape(n, -1)
+        grel = _rel(mo, want)
+        gcoef = ((mo.double() * want.double()).sum() / (want.double() ** 2).sum().clamp_min(1e-300)).item()
+        rt_ok = "router" in seen and seen["router"].numel() == gl["router"].numel()
+        if rt_ok:
+            same = ((seen["router"].float().reshape(gl["router"].shape) != 0) == (gl["router"].float() != 0)).all(-1)
+        else:
+            same = torch.ones(n, dtype=torch.bool)
+        _, rmin, rmax, row = _errors(mo[same], want[same])
+        metrics.record("rel_l2_swap_mlp_out_vs_golden", grel)
+        metrics.record("coef_swap_mlp_out_vs_golden", gcoef)
+        metrics.record("row_norm_ratio_min_swap_mlp_out_vs_golden", rmin)
+        metrics.record("row_norm_ratio_max_swap_mlp_out_vs_golden", rmax)
+        metrics.record("worst_row_rel_l2_swap_mlp_out_vs_golden", row)
+        print(
+            f"mlp_out vs golden: rel_l2={grel:.6f} (<= {MC_G_MAX_REL_L2}) coef={gcoef:.6f} (1 +- {MC_G_MAX_COEF_ERR}) "
+            f"on {int(same.sum().item())} rows routed as golden: row norm ratio=[{rmin:.5f}, {rmax:.5f}] "
+            f"(in {list(MC_G_RATIO)}) worst_row_rel_l2={row:.5f} (<= {MC_G_MAX_ROW_REL})"
+        )
+        if grel > MC_G_MAX_REL_L2:
+            failures.append(f"mlp_out vs golden: rel L2 {grel:.5f} > {MC_G_MAX_REL_L2}")
+        if not abs(gcoef - 1) <= MC_G_MAX_COEF_ERR:
+            failures.append(f"mlp_out vs golden: global scale {gcoef:.5f} not within {MC_G_MAX_COEF_ERR} of 1")
+        if not (MC_G_RATIO[0] <= rmin and rmax <= MC_G_RATIO[1]):
+            failures.append(f"mlp_out vs golden: row norm ratio [{rmin:.5f}, {rmax:.5f}] outside {list(MC_G_RATIO)}")
+        if row > MC_G_MAX_ROW_REL:
+            failures.append(f"mlp_out vs golden: worst row rel L2 {row:.5f} > {MC_G_MAX_ROW_REL}")
+
+    # ffn_residual (the swapped step): block out vs the CPU ffn_residual on the block's own h_mid / ffn_hc / mlp_out
+    # (the module's inputs), the addend per stream (rounding-aware, float64), the module again with each row's post
+    # gates rotated by (row mod 4) (stream 2's addend is below bf16 resolution on the real gates), and the per-token
+    # per-stream norm ratio vs golden, split by routing.
+    def post_check(tag, out, xs_in, gates, y, ratio=None):
+        """out vs the CPU ffn_residual on (xs_in, gates, y); the per-stream addend checks; returns nothing."""
+        n = xs_in.shape[0]
+        want = ref.component(layer, "ffn_residual")(rctx, xs_in, gates, y).float().reshape(xs_in.shape)
+        if out.numel() != want.numel() or not torch.isfinite(out.float()).all():
+            failures.append(f"ffn_residual {tag}: shape {tuple(out.shape)} vs {tuple(want.shape)} or non-finite")
+            return
+        got = out.float().reshape(want.shape)
+        crel, crow = _rel(got, want), _worst_row_rel(got, want, HC_MULT)
+        metrics.record(f"{tag}rel_l2_swap_out_vs_cpu_residual", crel)
+        metrics.record(f"{tag}worst_row_rel_l2_swap_out_vs_cpu_residual", crow)
+        msg = (
+            f"ffn_residual {tag or 'block'} vs CPU ffn_residual on the same inputs: rel_l2={crel:.7f} "
+            f"(<= {FR_MAX_REL_L2}) worst (row, stream) rel={crow:.7f} (<= {FR_MAX_ROW_REL})"
+        )
+        if ratio is not None:
+            sr = got.view(n, HC_MULT, -1).norm(dim=-1) / want.view(n, HC_MULT, -1).norm(dim=-1).clamp_min(1e-12)
+            smin, smax = sr.min().item(), sr.max().item()
+            metrics.record(f"{tag}stream_norm_ratio_min_swap_out_vs_cpu_residual", smin)
+            metrics.record(f"{tag}stream_norm_ratio_max_swap_out_vs_cpu_residual", smax)
+            msg += f" stream norm ratio=[{smin:.5f}, {smax:.5f}] (in {list(ratio)})"
+            if not (ratio[0] <= smin and smax <= ratio[1]):
+                failures.append(f"ffn_residual {tag}: stream norm ratio [{smin:.5f}, {smax:.5f}] outside {list(ratio)}")
+        print(msg)
+        if crel > FR_MAX_REL_L2 or crow > FR_MAX_ROW_REL:
+            failures.append(f"ffn_residual {tag} vs CPU on the same inputs: rel {crel:.6f} / worst row {crow:.6f}")
+
+        # The addend on each stream: delta_j = out_j - h_mid_j vs t_j = post_j * mlp_out (as the h_mid addend above).
+        xs = xs_in.float().view(n, HC_MULT, -1)
+        tgt32 = gates.float()[:, HC_MULT:].unsqueeze(-1) * y.float().view(n, 1, -1)
+        exact = xs + tgt32
+        rnd = (exact.bfloat16().float() - exact).double()
+        tgt = tgt32.double()
+        err = (got.view(n, HC_MULT, -1) - xs).double() - tgt
+        tn = tgt.norm(dim=(0, 2)).clamp_min(1e-30)
+        rs = rnd.norm(dim=(0, 2))
+        coef = ((err + tgt) * tgt).sum(dim=(0, 2)) / (tn * tn)
+        coef_x = ((coef - 1).abs() / (ADD_COEF_TOL + ROUND_MULT * rs / tn)).tolist()  # > 1 fails
+        excess = (err.norm(dim=(0, 2)) / (MAX_ADD_REL * tn + ROUND_MULT * rs)).tolist()  # > 1 fails
+        row_x = err.norm(dim=-1) / (MAX_ADD_ROW_REL * tgt.norm(dim=-1) + ROUND_MULT * rnd.norm(dim=-1) + ROW_FLOOR)
+        worst = row_x.max().item()
+        worst_at = divmod(int(row_x.argmax().item()), HC_MULT)
+        metrics.record(f"{tag}add_coef_min_swap_out", coef.min().item())
+        metrics.record(f"{tag}add_coef_max_swap_out", coef.max().item())
+        metrics.record(f"{tag}add_excess_swap_out", max(excess))
+        metrics.record(f"{tag}add_worst_row_excess_swap_out", worst)
+        print(
+            f"ffn_residual {tag or 'block'} addend per stream: coef={[round(v, 5) for v in coef.tolist()]} "
+            f"(|coef-1|/tol={[round(v, 3) for v in coef_x]} <= 1) excess={[round(v, 3) for v in excess]} (<= 1) "
+            f"worst row excess={worst:.3f} (<= 1) at (row, stream)={worst_at}"
+        )
+        bad = [j for j, v in enumerate(coef_x) if v > 1]
+        if bad:
+            failures.append(f"ffn_residual {tag} addend: coefficient off on streams {bad}: {coef.tolist()}")
+        bad = [j for j, v in enumerate(excess) if v > 1]
+        if bad:
+            failures.append(f"ffn_residual {tag} addend: error above the limit on streams {bad}: excess {excess}")
+        if worst > 1:
+            failures.append(f"ffn_residual {tag} addend: worst row excess {worst:.3f} at (row, stream) {worst_at}")
+
+    if mc_ok("h_mid") and mc_ok("ffn_hc") and mc_ok("mlp_out"):
+        hm = seen["h_mid"].float().reshape(gl["h_mid"].shape)
+        gt = seen["ffn_hc"].float().reshape(gl["ffn_hc"].shape)
+        mo = seen["mlp_out"].float().reshape(gl["mlp_out"].shape)
+        post_check("", seen["out"], hm, gt, mo)
+        gr = _rotated_post(gt)
+        post_check("rot_", muts["ffn_residual"](rctx, dctx, hm, gr, mo), hm, gr, mo, FR_ROT_RATIO)
+    else:
+        failures.append("ffn_residual: h_mid / ffn_hc / mlp_out unusable, cannot check out against the CPU step")
+
+    # out vs golden per token and stream, split by routing (a near-tie flip swaps a whole expert in a row).
+    if finite_shape("out"):
+        n = gl["out"].shape[0]
+        sr = seen["out"].float().reshape(n, HC_MULT, -1).norm(dim=-1) / gl["out"].float().view(n, HC_MULT, -1).norm(
+            dim=-1
+        ).clamp_min(1e-12)
+        if "router" in seen and seen["router"].numel() == gl["router"].numel():
+            same = ((seen["router"].float().reshape(gl["router"].shape) != 0) == (gl["router"].float() != 0)).all(-1)
+        else:
+            same = torch.ones(n, dtype=torch.bool)  # no usable routing: every row takes the matched limits
+        for label, rows, lim in (("matched", same, OUT_STREAM_RATIO), ("flipped", ~same, OUT_FLIP_STREAM_RATIO)):
+            if not rows.any():
+                print(f"out per-stream norm ratio vs golden on {label} rows: none")
+                continue
+            smin, smax = sr[rows].min().item(), sr[rows].max().item()
+            metrics.record(f"stream_norm_ratio_min_swap_out_{label}", smin)
+            metrics.record(f"stream_norm_ratio_max_swap_out_{label}", smax)
+            print(
+                f"out per-stream norm ratio vs golden on {int(rows.sum().item())} {label} rows: "
+                f"[{smin:.5f}, {smax:.5f}] (in {list(lim)})"
+            )
+            if not (lim[0] <= smin and smax <= lim[1]):
+                failures.append(
+                    f"out vs golden ({label} rows): stream norm ratio [{smin:.5f}, {smax:.5f}] outside {list(lim)}"
+                )
+
+    # Block out.
+    out_rel = _rel(seen["out"], gl["out"])
+    out_row = _worst_row_rel(seen["out"], gl["out"], HC_MULT)
+    metrics.record("rel_l2_swap_out", out_rel)
+    metrics.record("worst_row_rel_l2_swap_out", out_row)  # informational only (near-tie expert flips)
+    print(f"rel_l2_swap_out={out_rel:.6f} (<= {OUT_MAX_REL_L2}) worst (row, stream) rel={out_row:.5f} (not gated)")
+    if not (torch.isfinite(seen["out"]).all() and out_rel <= OUT_MAX_REL_L2):
+        failures.append(f"block out rel L2 {out_rel:.4f} > {OUT_MAX_REL_L2} (or non-finite)")
+    assert not failures, "; ".join(failures)
