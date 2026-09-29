@@ -4,6 +4,7 @@
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_tiled_program_factory.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -70,6 +71,14 @@ constexpr std::string_view reader_source =
 constexpr std::string_view compute_source =
     "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
     "qkv_causal_conv1d_silu_tiled.cpp";
+// fused_qk_l2_norm: taps accumulated in dest + TTI SiLU + per-head q/k L2 norm (see the kernel header).
+constexpr std::string_view compute_fast_source =
+    "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
+    "qkv_causal_conv1d_silu_tiled_fast.cpp";
+// fused_qk_l2_norm: the writer takes the fp32 q/k blocks from the out32 DFB, v from out.
+constexpr std::string_view writer_qk32_source =
+    "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
+    "writer_qkv_causal_conv1d_silu_tiled_qk32.cpp";
 constexpr std::string_view writer_source =
     "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
     "writer_qkv_causal_conv1d_silu_tiled.cpp";
@@ -368,6 +377,48 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
             .data_format_metadata = data_format,
         });
     }
+    // fused_qk_l2_norm: per-head L2 norm of q and k in the compute epilogue (B = 4 = one head); q/k leave as
+    // fp32 through out32.
+    const bool qknorm = attrs.fused_qk_l2_norm;
+    if (qknorm) {
+        const uint32_t tile_f32 = tt::tile_size(tt::DataFormat::Float32);
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"ybuf"},
+            .entry_size = tile_size,
+            .num_entries = 4 * plan.block_tiles,  // the compute's 4-stage q/k pipeline keeps up to 4 steps
+            .data_format_metadata = data_format,
+        });
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"yq"},
+            .entry_size = tile_size,
+            .num_entries = 2 * plan.block_tiles,  // S1's copy of y: steps j-1 and j
+            .data_format_metadata = data_format,
+        });
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"ones"},
+            .entry_size = tile_size,
+            .num_entries = 1,
+            .data_format_metadata = data_format,
+        });
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"sq"},
+            .entry_size = tile_f32,
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::Float32,
+        });
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"rn"},
+            .entry_size = tile_f32,
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::Float32,
+        });
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"out32"},
+            .entry_size = tile_f32,
+            .num_entries = 3 * plan.block_tiles,
+            .data_format_metadata = tt::DataFormat::Float32,
+        });
+    }
 
     m2::Group<m2::TensorBinding> reader_tensors = {
         m2::TensorBinding{input_tensor_name, "input"},
@@ -430,7 +481,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
 
     m2::KernelSpec compute{
         .unique_id = compute_kernel_name,
-        .source = std::filesystem::path(compute_source),
+        .source = std::filesystem::path(qknorm ? compute_fast_source : compute_source),
         .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
@@ -445,6 +496,27 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluTiledProgramFactory:
         .runtime_arg_schema = {.runtime_arg_names = {"step_start", "step_count"}},
         .hw_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config),
     };
+
+    if (qknorm) {
+        for (const char* name : {"ybuf", "yq", "ones", "sq", "rn"}) {
+            compute.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{name}, name));
+            compute.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{name}, name));
+        }
+        const uint32_t head_dim = plan.block_tiles * tt::constants::TILE_WIDTH;
+        // sq / rn are fp32 FPU operands (srcB of the row-sum matmul / the broadcast multiply).
+        auto& compute_unpack_modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+        compute_unpack_modes.emplace(m2::DFBSpecName{"sq"}, tt::tt_metal::UnpackMode::UnpackToSrc);
+        compute_unpack_modes.emplace(m2::DFBSpecName{"rn"}, tt::tt_metal::UnpackMode::UnpackToSrc);
+        compute.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"out32"}, "out32"));
+        writer.source = std::filesystem::path(writer_qk32_source);
+        writer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"out32"}, "out32"));
+        compute.compiler_options.defines.emplace("QKV_CONV_Q_BLOCKS", std::to_string(plan.Qt / plan.block_tiles));
+        compute.compiler_options.defines.emplace(
+            "QKV_CONV_QK_BLOCKS", std::to_string((plan.Qt + plan.Kt) / plan.block_tiles));
+        compute.compiler_options.defines.emplace("QKV_CONV_QK_EPS", "1e-6f");
+        compute.compiler_options.defines.emplace(
+            "QKV_CONV_Q_SCALE", fmt::format("{:.9g}f", 1.0 / std::sqrt(static_cast<double>(head_dim))));
+    }
 
     m2::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
     m2::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};

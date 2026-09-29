@@ -116,6 +116,7 @@ void validate_row_major(const QkvCausalConv1dSiluParams& attrs, const QkvCausalC
     using namespace kda_factory_detail;
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
+    TT_FATAL(!attrs.fused_qk_l2_norm, "qkv_causal_conv1d_silu: fused_qk_l2_norm applies to TILE input only");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     TT_FATAL(
@@ -139,6 +140,15 @@ void validate_tiled(const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1
     using namespace kda_factory_detail;
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_layout(in.input, Layout::TILE, operation_name, "input");
+    if (attrs.fused_qk_l2_norm) {
+        TT_FATAL(
+            attrs.channel_chunk_size == 128 && attrs.q_width % 128 == 0 && attrs.k_width % 128 == 0,
+            "qkv_causal_conv1d_silu: fused_qk_l2_norm needs channel_chunk_size 128 (one 128-channel head per step) "
+            "and q/k widths that are multiples of 128, got channel_chunk_size={}, q_width={}, k_width={}",
+            attrs.channel_chunk_size,
+            attrs.q_width,
+            attrs.k_width);
+    }
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     check_default_tile_shape(in.input, "input");
@@ -200,9 +210,13 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
     const auto layout = TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // fused_qk_l2_norm: q and k are fp32 (the normalized output); v stays bf16.
+    const auto qk_layout = attrs.fused_qk_l2_norm
+                               ? TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config)
+                               : layout;
     spec_return_value_t specs = {
-        TensorSpec(Shape({1, attrs.sequence, attrs.q_width}), layout),
-        TensorSpec(Shape({1, attrs.sequence, attrs.k_width}), layout),
+        TensorSpec(Shape({1, attrs.sequence, attrs.q_width}), qk_layout),
+        TensorSpec(Shape({1, attrs.sequence, attrs.k_width}), qk_layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.v_width}), layout)};
     if (attrs.return_conv_state) {
         // new_state: rows 0-2 = x[T-3..T-1]; the tile padding rows 3-31 are zero. It is always
@@ -260,7 +274,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t channel_chunk_size,
     bool return_conv_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool fused_qk_l2_norm) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(
@@ -272,7 +287,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .channel_chunk_size = channel_chunk_size,
             .return_conv_state = return_conv_state,
             .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .fused_qk_l2_norm = fused_qk_l2_norm},
         QkvCausalConv1dSiluInputs{
             .input = input, .history = history, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
 }

@@ -44,6 +44,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t channel_chunk_size,
     bool return_conv_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool fused_qk_l2_norm = false);
 
 }  // namespace ttnn::experimental::prim

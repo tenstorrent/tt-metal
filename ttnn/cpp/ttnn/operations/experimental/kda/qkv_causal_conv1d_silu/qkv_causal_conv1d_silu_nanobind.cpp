@@ -159,10 +159,21 @@ nb::dict tiled_program_plan_binding(
 
 void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
     nb::class_<QkvCausalConv1dSiluProgramConfig>(mod, "QkvCausalConv1dSiluProgramConfig")
-        .def(nb::init<uint32_t>(), nb::kw_only(), nb::arg("channel_chunk_size").noconvert())
+        .def(
+            "__init__",
+            [](QkvCausalConv1dSiluProgramConfig* self, uint32_t channel_chunk_size, bool fused_qk_l2_norm) {
+                new (self) QkvCausalConv1dSiluProgramConfig{channel_chunk_size, fused_qk_l2_norm};
+            },
+            nb::kw_only(),
+            nb::arg("channel_chunk_size").noconvert(),
+            nb::arg("fused_qk_l2_norm").noconvert() = false)
         .def_ro("channel_chunk_size", &QkvCausalConv1dSiluProgramConfig::channel_chunk_size)
+        .def_ro("fused_qk_l2_norm", &QkvCausalConv1dSiluProgramConfig::fused_qk_l2_norm)
         .def("__repr__", [](const QkvCausalConv1dSiluProgramConfig& config) {
-            return fmt::format("QkvCausalConv1dSiluProgramConfig(channel_chunk_size={})", config.channel_chunk_size);
+            return fmt::format(
+                "QkvCausalConv1dSiluProgramConfig(channel_chunk_size={}, fused_qk_l2_norm={})",
+                config.channel_chunk_size,
+                config.fused_qk_l2_norm);
         });
 
     ttnn::bind_function<"qkv_causal_conv1d_silu", "ttnn.experimental.kda.">(
@@ -210,6 +221,13 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 divisor of ``(Q+K+V) / 32``. For TILE input the default is B = 4
                 (``channel_chunk_size=128``), or 2 or 1 when 4 does not divide
                 ``(Q+K+V) / 32``.
+                ``fused_qk_l2_norm=True`` (TILE input only; needs
+                ``channel_chunk_size=128`` and Q, K multiples of 128) selects the
+                fast kernel (taps accumulated in dest, TTI SiLU; not bit-identical
+                to the default) with a fused per-128-channel-head L2 norm of q and
+                k: ``q = y_q * rsqrt(sum(y_q^2) + 1e-6) / sqrt(128)``,
+                ``k = y_k * rsqrt(sum(y_k^2) + 1e-6)``. q and k are then FLOAT32;
+                v and ``new_state`` stay BFLOAT16. Defaults to False.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration for q, k and v. Defaults to DRAM. ``new_state`` is
                 always DRAM interleaved.
@@ -220,7 +238,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
-                tensors ``q[1,T,Q]``, ``k[1,T,K]``, and ``v[1,T,V]``.
+                tensors ``q[1,T,Q]``, ``k[1,T,K]``, and ``v[1,T,V]`` (q and k are
+                FLOAT32 with ``fused_qk_l2_norm=True``).
             With ``return_conv_state=True``: ``(q, k, v, new_state)``, where
                 ``new_state`` is a new DRAM-interleaved TILE BFLOAT16 tensor
                 ``[1, 3, Q+K+V]`` that holds ``x[T-3:T]`` (the next call's

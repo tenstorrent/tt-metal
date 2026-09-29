@@ -23,6 +23,12 @@ struct QkvCausalConv1dSiluParams {
     bool return_conv_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // TILE input only, channel_chunk_size 128 (one 128-channel head per step), q/k widths multiples of 128.
+    // Selects qkv_causal_conv1d_silu_tiled_fast.cpp (the 4 taps accumulate in dest; two-row interleaved TTI SiLU;
+    // NOT bit-identical to the default kernel) with a q/k epilogue that L2-normalizes q and k per 128-channel head
+    // and token (q also * 1/sqrt(128); eps 1e-6), as ChunkGdnFused's in-kernel QK norm. q and k are returned as
+    // FLOAT32 TILE tensors; v and new_state stay bf16.
+    bool fused_qk_l2_norm = false;
 };
 
 struct QkvCausalConv1dSiluInputs {
