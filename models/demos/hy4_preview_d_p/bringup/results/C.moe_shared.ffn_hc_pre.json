@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "cpu_rel_l2_ffn_hc_pre_L02": {
+   "t": "2026-09-29T19:28:49",
+   "value": 0.0
+  },
+  "pcc_ffn_hc_pre_L02": {
+   "t": "2026-09-29T19:28:49",
+   "value": 0.999997048953777
+  },
+  "rel_l2_ffn_hc_pre_L02": {
+   "t": "2026-09-29T19:28:49",
+   "value": 0.0024287665728479624
+  },
+  "rot_rel_l2_ffn_hc_pre_L02": {
+   "t": "2026-09-29T19:28:50",
+   "value": 0.0
+  },
+  "worst_row_rel_l2_ffn_hc_pre_L02": {
+   "t": "2026-09-29T19:28:49",
+   "value": 0.005748082883656025
+  }
+ },
+ "task": "C.moe_shared.ffn_hc_pre"
+}
