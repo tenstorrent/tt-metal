@@ -26,6 +26,10 @@ void MorehFoldOperation::validate_inputs(
     TT_FATAL(operation_attributes.dilation.size() == 2, "Fold: dilation takes 2 elements");
     TT_FATAL(operation_attributes.padding.size() == 2, "Fold: padding takes 2 elements");
     TT_FATAL(operation_attributes.stride.size() == 2, "Fold: stride takes 2 elements");
+    for (uint32_t i = 0; i < 2; ++i) {
+        TT_FATAL(operation_attributes.stride[i] > 0, "Fold: stride must be greater than 0");
+        TT_FATAL(operation_attributes.kernel_size[i] > 0, "Fold: kernel_size must be greater than 0");
+    }
 
     uint32_t kernel_size_product = 1;
     uint32_t l = 1;
@@ -71,6 +75,7 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
     auto input_tensor_shape = tensor_args.input.logical_shape();
     auto input_tensor_rank = tensor_args.input.logical_shape().rank();
     uint32_t kernel_size_product = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1];
+    TT_FATAL(kernel_size_product > 0, "Fold: kernel_size must be greater than 0");
     auto output_shape = [&] {
         if (input_tensor_rank == 3) {
             uint32_t N = input_tensor_shape[0];
