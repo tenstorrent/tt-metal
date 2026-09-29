@@ -356,6 +356,7 @@ class Orchestrator:
         extra = [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml"] if role == "plan" else []
         if task.get("step") == "contract":
             extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
+            extra.append(f"{b}/hooks.py")  # contract_state_pcc (fixed-size state read-back) is a hook
         extra.append(BRINGUP_OPS)
         if role == "implement" and OR.deferrable(task):
             extra.append(rel(self.spec, OR.root(self.spec)))  # an op request, if the agent defers the step (F46)

@@ -651,3 +651,14 @@ KV cache, wrong for a recurrence (the final state already includes the chunk und
   those); state.json metrics feed only the ladder row detail and runs.compare deltas, which use gated metrics.
 - Selftests 214 -> 216 (test_core: many metrics -> gated only, results keep all; few metrics -> all kept). The first
   fails on the pre-F50 gate.py. The GLM state.json was migrated in place with the same rule (518 KB -> see commit).
+
+## F51 (2026-09-29): the contract step may change the model's hooks.py (GLM-5.3 run)
+
+- Symptom: GLM K.1 failed twice on "fixed-size state ['kda_recurrent', 'kda_conv'] unchecked: hooks.contract_state_pcc is
+  missing". The agent had written the read-back in tt/runners/adapter.py, but K.1's allowed paths (task paths
+  [tt] + prefill engine + forks + knowledge) left bringup/hooks.py read-only, so it could not register the hook; it
+  rightly refused to monkeypatch the hooks module at run time.
+- Cause: F48 made the contract gate require a `contract_state_pcc` hook for spec state.fixed, but the contract role's
+  allowed paths and the gate's stage_paths never included the model's hooks.py.
+- Fix: allowed_paths adds `<bringup>/hooks.py` for the contract step; stage_paths commits it for that step.
+- Selftests 216 -> 217 (test_orchestrator: the contract step may change and commits hooks.py). Fails on the pre-F51 code.

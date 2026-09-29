@@ -389,6 +389,17 @@ def test_the_contract_step_may_change_the_prefill_engine(orch):
     assert CONTRACT_SHARED not in o.allowed_paths(o.led.task("C.1"), "implement")
 
 
+def test_the_contract_step_may_change_the_hooks(orch):
+    """F51: K.1 needs hooks.contract_state_pcc for fixed-size state; the contract agent may add it and the gate commits it."""
+    from models.demos.common.bringup.core.gate import stage_paths
+
+    o = orch([impl_task()], {})
+    contract = dict(o.led.task("C.1"), step="contract")
+    assert any(p.endswith("bringup/hooks.py") for p in o.allowed_paths(contract, "contract"))
+    (o.led.dir / "hooks.py").write_text("def contract_state_pcc(*a):\n    return {}\n")
+    assert any(p.endswith("hooks.py") for p in stage_paths(o.spec, o.led, dict(contract, id="C.1")))
+
+
 def test_a_stale_waiting_note_is_cleared_when_the_task_runs_again(orch):
     """F29: the dashboard showed "waiting for a person" on a running task after the person had answered."""
     o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
