@@ -132,9 +132,7 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
   results for the MLP and CCL sweeps. The missing report is a scoped exclusion, not an
   impossibility.
 - No runtime fallback audit.
-- Non-aligned sequence lengths are only covered where a bug forced it. `prefill_1d` selects on
-  a 64..256 window and `chunk_size` is 4096, so the boundaries either side of both deserve
-  explicit cases.
+- Batched prefill has not been swept across the length branches; the sweep below is batch 1.
 - 262144 tokens is a capacity result, not a latency or quality result; no run at that length
   has been executed on this mesh.
 - Single-chip-versus-multichip speedup has no valid referent and is not reported. Unsharded
@@ -202,6 +200,29 @@ be near 16.8 t/s/u, still 43%. That is consistent with the platform deltas recor
 64 worker cores against roughly 110, one usable ethernet link against two, and one DRAM reader
 per bank because multiple readers are Blackhole-only. It is a hardware gap rather than a defect,
 but it is larger than the phrase "slower on Wormhole" would suggest.
+
+## Sequence-length branches
+
+Every length-dependent gate in the shipping policy was exercised at its value and on both
+sides: `dram_prefill_max` 32, `prefill_1d` 64 to 256, `minimal_role_min` 128 for output and
+down, `minimal_prefill_min` 512 for every role, and the 4096-token chunk loop. Lengths 31, 32,
+33, 63, 64, 65, 66, 67, 127, 128, 129, 255, 256, 257, 511, 512, 513, 1024, 4095, 4096, 4097 and
+5000 all prefill and generate coherently, with no failure at any of them. Thirteen of the
+non-tile-aligned lengths are in that list, so the public path does not require a length
+divisible by the tile, page or chunk size.
+
+Two independent oracles back the run rather than just an exit code:
+
+The same prefix was reached a second way for every length up to 513, by prefilling 32 tokens
+and then teacher-forcing the remaining corpus tokens through decode. That traverses
+`direct_allreduce` and the DRAM-sharded projections instead of `prefill_1d` and `_minimal`, and
+the two routes agree on the predicted token at all fifteen cross-checked lengths.
+
+The probe corpus is a sentence tiled to length, which has a period of 13 tokens, so lengths
+sharing a residue must predict the same token. Across seven residues holding more than one
+length there are no mismatches, which carries the short-length decode agreement up to the long
+lengths that are too expensive to reach through decode: 4095 pairs with 65, 1024 with 127 and
+257, 5000 with 255, and the chunk boundary itself, 4096 and 4097, with 66 and 67.
 
 ## Collective dtype
 
