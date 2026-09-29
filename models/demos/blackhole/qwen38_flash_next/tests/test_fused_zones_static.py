@@ -105,7 +105,10 @@ def test_zone_defines_follow_the_environment_switch():
     source = inspect.getsource(fp._kernel)
     assert "defines=[*defines, *zone_defines()]" in source
     builder = inspect.getsource(router_tail.program_parts)  # the descriptors' builder (router_tail_program wraps it)
-    assert "defines=fp.zone_defines()," in builder and "compute.defines = _dev_defines() + fp.zone_defines()" in builder
+    assert (
+        "defines=fp.zone_defines()," in builder
+        and "compute.defines = _compute_defines() + fp.zone_defines()" in builder
+    )
 
 
 def test_descriptors_are_byte_identical_with_the_switch_unset(monkeypatch):
