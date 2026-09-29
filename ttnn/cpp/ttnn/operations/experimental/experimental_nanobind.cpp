@@ -100,6 +100,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/moe_hash_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_ag/moe_ag_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
@@ -175,6 +176,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
+    deepseek_prefill::moe_ag::detail::bind_moe_ag(mod);
     deepseek_prefill::attn_res_gather_softmax::detail::bind_attn_res_gather_softmax(mod);
     deepseek_prefill::attn_res_weighted_reduce_nc::detail::bind_attn_res_weighted_reduce_nc(mod);
     deepseek_prefill::pack_scaled_fp8_kv_cache::detail::bind_pack_scaled_fp8_kv_cache(mod);

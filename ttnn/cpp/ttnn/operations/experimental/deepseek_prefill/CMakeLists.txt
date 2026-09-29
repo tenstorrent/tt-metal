@@ -14,6 +14,7 @@ add_subdirectory(masked_bincount)
 add_subdirectory(mhc_split_sinkhorn)
 add_subdirectory(moe_fused_swiglu)
 add_subdirectory(moe_grouped_topk)
+add_subdirectory(moe_ag)
 add_subdirectory(moe_hash_gate)
 add_subdirectory(moe_padding_config)
 add_subdirectory(offset_cumsum)
@@ -47,6 +48,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
         TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeAg
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
@@ -89,6 +91,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeAg>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>
