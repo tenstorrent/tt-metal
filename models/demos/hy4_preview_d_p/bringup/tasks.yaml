@@ -1901,6 +1901,13 @@ tasks:
     - attn_hc
     - attn_hc_pre
     layer: 2
+  frozen:
+    at: '2026-09-29T16:55:14'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py: 4a1010dd5d84885a5aa7cab5242dd2dd05a235049eeb0b640a7d3b14869724ce
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_shared.attn_norm
   title: moe_shared attn_norm (norm) on device, layer 2
   step: implement
