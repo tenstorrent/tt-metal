@@ -14,9 +14,37 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"  // SFPU call macros
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+
+// Complement-form decay: final_decay carries expm1(G_last) (see prepare_chunk_recurrence) and the state
+// update is S + (S * expm1(G_last) + update). The FPU reads FP32
+// circular-buffer operands through 19-bit source registers, which drops the low 13 mantissa bits of the state on
+// every block; rounding the new state to TF32 (nearest even) before it is packed makes that read exact, so the
+// state is rounded once per 32-token block, without bias.
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+template <int ITERATIONS = 8>
+inline void calculate_round_to_tf32() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vInt bits = sfpi::as<sfpi::vInt>(value);
+        sfpi::vInt odd = (bits >> 13u) & 1;
+        bits = bits + 0x0FFF;
+        bits = bits + odd;
+        bits = bits & -8192;
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+
+inline void round_to_tf32_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_to_tf32, (8), idst, VectorMode::RC);
+}
+#endif
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
 enum class ChunkInputPolicy { RETAIN, CONSUME };
@@ -118,27 +146,45 @@ FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
     }
 }
 
-FORCE_INLINE void multiply_by_decay(
-    DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
+// output = TF32_nearest(state + (state * decay_m1 + update)), one DST pass per tile group.
+FORCE_INLINE void complement_update(
+    DataflowBuffer& state,
+    DataflowBuffer& decay_m1,
+    DataflowBuffer& update,
+    DataflowBuffer& output,
+    uint32_t key_tiles,
+    uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t count = key_tiles * value_tiles;
     const uint32_t state_id = state.get_id();
-    const uint32_t decay_id = decay.get_id();
+    const uint32_t decay_id = decay_m1.get_id();
+    const uint32_t update_id = update.get_id();
     const uint32_t output_id = output.get_id();
 
     output.reserve_back(count);
-    reconfig_data_format(state_id, decay_id);
-    mul_bcast_cols_init(state_id, decay_id);
-    // Batch independent tiles to amortize destination-register lifecycle overhead.
     for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
         const uint32_t remaining = count - block_start;
         const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
         tile_regs_acquire();
+        reconfig_data_format(state_id, decay_id);
+        mul_bcast_cols_init(state_id, decay_id);
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             const uint32_t index = block_start + tile;
-            const uint32_t key = index / value_tiles;
-            mul_tiles_bcast_cols(state_id, decay_id, index, key, tile);
+            mul_tiles_bcast_cols(state_id, decay_id, index, index / value_tiles, tile);  // S * expm1(G_last)
+        }
+        reconfig_data_format(update_id, update_id);
+        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(update_id);
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(update_id, block_start + tile, tile);
+        }
+        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(state_id);
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(state_id, block_start + tile, tile);
+        }
+        MATH((SFPU_UNARY_INIT(unused)));
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            MATH((round_to_tf32_tile(tile)));
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -247,15 +293,12 @@ FORCE_INLINE void update_state(
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         final_decay.wait_front(Kt);
     }
-    multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
-    state_temporary.wait_front(key_value_tiles);
+    // Complement-form update (see complement_update); state_temporary is not used on this path.
+    complement_update(current_state, final_decay, state_update, destination, Kt, Vt);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         final_decay.pop_front(Kt);
     }
-    elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
-        state_temporary, state_update, destination);
     current_state.pop_front(key_value_tiles);
-    state_temporary.pop_front(key_value_tiles);
     state_update.pop_front(key_value_tiles);
 }
 
