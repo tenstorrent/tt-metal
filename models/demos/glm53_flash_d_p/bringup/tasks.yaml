@@ -1226,6 +1226,13 @@ tasks:
     kind: op
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T10:09:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_collapse.py: 10d08e542573e75db4c322ef1d0ba2eb386ded23c08b8fef513f586951f76678
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.09
   title: 'dsa_moe block with steps 1-9 on device (last: ffn_collapse)'
   step: implement
