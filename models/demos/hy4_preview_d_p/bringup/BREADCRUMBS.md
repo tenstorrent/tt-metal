@@ -803,3 +803,53 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_08_ffn_hc.py
+
+## C.dense_full.ffn_hc_pre test (attempt 1)
+
+What was done
+- Reviewed the rendered component test (ffn_x = sum_j pre_j x h_mid stream j, layer 0, s4096 chunk 1, bf16 golden).
+  Kept the gated pcc_ffn_hc_pre_L00 (0.99) and the CPU-bridge assert pattern; added asserted checks:
+  - vs golden: finite, element count, rel L2 <= 0.005, row norm ratio in [0.994, 1.006], worst row <= 0.01.
+  - vs the CPU step on the same golden inputs: rel L2 <= 0.003, worst row <= 0.006.
+  - the module once more with each row's pre gates rotated by (row mod 4), vs the CPU step: rel <= 0.004, row <= 0.01.
+  Metrics rel_l2_*, worst_row_rel_l2_*, cpu_rel_l2_*, rot_rel_l2_* recorded (informational).
+- CPU mutation study in /tmp/hy4_ffnhcpre/study{,2}.py (outside the repo); tables in the test docstring.
+
+Decisions and why
+- h_mid's streams are distinct, so no synthetic streams (unlike attn_hc_pre); but stream 1's pre gate is ~4e-6, so
+  dropping it is invisible on the golden. Rotating the gates per row gives every stream the large gate on a quarter
+  of the rows (stream 1 dropped: rel 0.34).
+- The fp32 CPU step is rel 0.0024 off the golden (golden from fp32 upstream, gates rounded to bf16), so the tight
+  limits are vs the CPU step on the same inputs; the golden limits sit above bf16 accumulation (0.0032, ratio 1.0035).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999997, rel 0.00241, ratio [0.99658, 1.00324], row 0.00405; vs CPU and
+  rotated exact). BRINGUP_IMPL=stub: FAIL (pcc 0).
+- Gate (device): FAIL, NotImplementedError (no device module for ffn_hc_pre yet; expected before implement).
+
+Gotcha for implement
+- Same module as attn_hc_pre (`tt/ihc.py:TtHcPre`): add "ffn_hc_pre" to `hooks._HC_PRE_STEPS` (and DEVICE_STEPS).
+  It is called twice (golden gates, then rotated gates).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc_pre.py
+
+## C.dense_full.ffn_hc_pre implement (attempt 1)
+
+What was done
+- No new module: ffn_hc_pre is the same math as attn_hc_pre, so it reuses `tt/ihc.py:TtHcPre` (4 slices of the
+  streams, 4 slices of pre-gate columns, then multiply + 3 x addcmul in fp32; no collective, no weights, no host
+  work). The inputs are h_mid and ffn_hc; the output ffn_x is [1, 1, S/2, 3072] fp32 per chip.
+- `bringup/hooks.py`: "ffn_hc_pre" added to `_HC_PRE_STEPS` (so `device_component` / `_device_step_fn` route it
+  through `_hc_pre_host_fn`) and to `DEVICE_STEPS["dense_full"]` (hybrid device_model). The DEVICE_STEPS dict is
+  now one entry per line (black line length).
+
+Results
+- Gate: PASS. pcc_ffn_hc_pre_L00 0.999997. vs golden: rel L2 0.00241, row ratio [0.99658, 1.00324], worst row
+  0.00405, the same as the fp32 CPU step. vs the CPU step: rel 0.0. Rotated gates: rel 0.0. The device fp32
+  multiply/addcmul chain matches torch's fp32 4-term sum bit for bit, as it did for attn_hc_pre.
+- The "FAIL pcc ... 0.000000" line at the top of the log comes from the stubbed precompile collect pass, not
+  the real run.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc_pre.py
