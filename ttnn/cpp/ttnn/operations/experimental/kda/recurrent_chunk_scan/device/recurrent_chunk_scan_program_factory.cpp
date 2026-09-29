@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -79,6 +80,11 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full);
     const auto& cores = distribution.core_set;
     const uint32_t Vt = distribution.value_tiles_per_core;
+    // A head's value blocks share every V-independent chunk input. When they sit in one grid row, value block 0
+    // reads those inputs once and multicasts them to its siblings instead of each block re-reading DRAM.
+    const uint32_t value_blocks = Vt_full / Vt;
+    const auto grid = device.compute_with_storage_grid_size();
+    const bool mcast_shared = value_blocks > 1 && grid.x % value_blocks == 0;
     const uint32_t cc = Ct * Ct;
     const uint32_t ck = Ct * Kt;
     const uint32_t cv = Ct * Vt;
@@ -112,6 +118,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
 
+    const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
+    const tt::tt_metal::experimental::SemaphoreSpecName valid_semaphore_name{"valid"};
     const tt::tt_metal::experimental::TensorParamName v_beta_tensor_name{"v_beta"};
     const tt::tt_metal::experimental::TensorParamName kd_tensor_name{"kd"};
     const tt::tt_metal::experimental::TensorParamName q_decay_tensor_name{"q_decay"};
@@ -203,10 +211,15 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"summary", static_cast<uint32_t>(summary)},
-             {"groups_per_head", attrs.groups_per_head}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
+             {"groups_per_head", attrs.groups_per_head},
+             {"mcast_shared", static_cast<uint32_t>(mcast_shared)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"head", "value_block", "num_chunks", "peer_x0", "peer_y0", "peer_x1", "peer_y1", "receivers"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    reader.semaphore_bindings.push_back(tt::tt_metal::experimental::SemaphoreBinding{ready_semaphore_name, "ready"});
+    reader.semaphore_bindings.push_back(tt::tt_metal::experimental::SemaphoreBinding{valid_semaphore_name, "valid"});
     if (!summary) {
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{q_decay_tensor_name, "q_decay"});
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{intra_tensor_name, "intra"});
@@ -338,10 +351,32 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
         const uint32_t group = head % attrs.groups_per_head;
+        // The sender (value block 0) addresses its siblings' rectangle; receivers address the sender.
+        uint32_t peer_x0 = 0;
+        uint32_t peer_y0 = 0;
+        uint32_t peer_x1 = 0;
+        uint32_t peer_y1 = 0;
+        if (mcast_shared) {
+            const uint32_t sender_index = index - value_block;
+            const auto first = device.worker_core_from_logical_core(
+                distribution.cores[value_block == 0 ? sender_index + 1 : sender_index]);
+            const auto last = device.worker_core_from_logical_core(distribution.cores[sender_index + value_blocks - 1]);
+            peer_x0 = first.x;
+            peer_y0 = first.y;
+            peer_x1 = last.x;
+            peer_y1 = last.y;
+        }
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+            {{"head", head},
+             {"value_block", value_block},
+             {"num_chunks", NC},
+             {"peer_x0", peer_x0},
+             {"peer_y0", peer_y0},
+             {"peer_x1", peer_x1},
+             {"peer_y1", peer_y1},
+             {"receivers", value_blocks - 1}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
@@ -386,6 +421,11 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = summary ? "summarize_chunk_recurrence" : "recurrent_chunk_scan",
         .dataflow_buffers = std::move(dfbs),
+        .semaphores =
+            {
+                tt::tt_metal::experimental::SemaphoreSpec{.unique_id = ready_semaphore_name, .target_nodes = cores},
+                tt::tt_metal::experimental::SemaphoreSpec{.unique_id = valid_semaphore_name, .target_nodes = cores},
+            },
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
             .name = "main",
