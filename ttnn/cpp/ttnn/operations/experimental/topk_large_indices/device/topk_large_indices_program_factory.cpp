@@ -187,9 +187,30 @@ void set_runtime_args(
     shared.num_chunks = num_chunks;
 }
 
+uint32_t column_segments_for(uint32_t num_rows, uint32_t num_chunks, uint64_t num_cores) {
+    // Largest power-of-two column split that still gives every (row, segment) its own core and every
+    // segment at least one whole K chunk. Rows that are not fewer than the cores keep the row split.
+    uint32_t num_segments = 1;
+    while (static_cast<uint64_t>(num_rows) * (2ull * num_segments) <= num_cores && 2u * num_segments <= num_chunks) {
+        num_segments *= 2;
+    }
+    return num_segments;
+}
+
 }  // namespace
 
-ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
+ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores) {
+    // A column of a K 1024 chunk that keeps its own top 64 holds every one of the row's top 64 it has seen, so
+    // with k <= 64 a chunk only needs a column sort and a column merge, and a segment one full sort at its end.
+    // That pays from four chunks per row segment on Blackhole.
+    constexpr uint32_t column_body_min_chunks = 4;
+    if (k <= 64) {
+        const uint32_t chunks = tt::div_up(input_last_dim, to_uint32(LlkTargetK::K1024));
+        if (chunks / column_segments_for(num_rows, chunks, num_cores) >= column_body_min_chunks) {
+            return ComputeBodyMode::ColumnSegmented;
+        }
+    }
+
     const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
 
     // Segmented fusion handles every width with one binary; rows of at most 32
@@ -212,12 +233,7 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
     const auto cores = corerange_to_cores(core_grid, std::nullopt, true);
     const uint64_t num_cores = cores.size();
 
-    // Largest power-of-two column split that still gives every (row, segment) its own core and every
-    // segment at least one whole K chunk. Rows that are not fewer than the cores keep the row split.
-    uint32_t num_segments = 1;
-    while (static_cast<uint64_t>(num_rows) * (2ull * num_segments) <= num_cores && 2u * num_segments <= num_chunks) {
-        num_segments *= 2;
-    }
+    const uint32_t num_segments = column_segments_for(num_rows, num_chunks, num_cores);
 
     std::vector<CoreRowAssignment> assignments;
     assignments.reserve(cores.size());
@@ -283,15 +299,19 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     auto& indices = tensor_return_value;
 
     const uint32_t k = operation_attributes.k;
-    const auto llk_target_k = snap_to_llk_target_k(k);
-    const uint32_t llk_k = to_uint32(llk_target_k);
-    const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
-
     const auto& all_cores = operation_attributes.resolved_worker_core_grid;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
-    // Runtime row counts are intentionally patched through runtime args instead of the program hash. The
-    // caller-selected structural core grid is fixed in the hash, so cache hits can change shape without ever
-    // creating kernels or CBs on cores owned by another subdevice.
+    const auto body_mode = compute_body_mode(
+        k,
+        flattened_rows_excluding_last_dim(input.logical_shape()),
+        input.logical_shape()[-1],
+        static_cast<uint32_t>(cores.size()));
+    const uint32_t llk_k = body_mode == ComputeBodyMode::ColumnSegmented ? to_uint32(LlkTargetK::K1024)
+                                                                         : to_uint32(snap_to_llk_target_k(k));
+    const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
+    // Runtime row counts are patched through runtime args; they reach the program hash only through the body
+    // mode (k <= 64). The caller-selected structural core grid is fixed in the hash, so cache hits can change
+    // shape without ever creating kernels or CBs on cores owned by another subdevice.
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
@@ -325,12 +345,12 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     auto indices_cb_config =
         tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices, tt::DataFormat::Float32}})
             .set_page_size(cb_indices, indices_cb_row_bytes);
-    if (llk_target_k == LlkTargetK::K512) {
+    if (llk_k == to_uint32(LlkTargetK::K512)) {
         indices_cb_config.set_unpack_face_geometry(cb_indices, tt::constants::FACE_HEIGHT, 2);
     }
     tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
 
-    if (llk_target_k != LlkTargetK::K512) {
+    if (llk_k != to_uint32(LlkTargetK::K512)) {
         const auto indices_scratch_cb_config =
             tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
                 .set_page_size(cb_indices_scratch, indices_row_bytes);
@@ -376,7 +396,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
-    const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);

@@ -2702,6 +2702,21 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
+// Sorts each 64 row column of a K=1024 tile on its own. A fused merge of two tiles whose columns were sorted
+// in opposite directions by `_topk_xl_local_sort_generic_<1024, true>` leaves every column bitonic.
+template <std::uint32_t K>
+inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool ascending)
+{
+    static_assert(K == 1024, "K must be 1024: the column rebuild sorts the 64 row columns of one tile");
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    for (int col = 0; col < 2; col++)
+    {
+        canonical_big_block_with_replay<2>(ascending);
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
+}
+
 // =============================================================================
 //  Index injection / extraction
 // =============================================================================
