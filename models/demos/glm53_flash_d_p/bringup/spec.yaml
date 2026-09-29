@@ -1,0 +1,158 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup).
+# GLM-5.3-Flash (text decoder only; vision tower and MTP skipped), layers 0-4, chunked prefill on 4x Blackhole p300c
+# (two dual-chip cards). The full model (~321B params, ~42 GiB per chip even with bfp4 experts) does not fit; layers
+# 0-4 cover all three block types (3 KDA dense, 1 DSA MoE, 1 KDA MoE). A subset result is never reported as full-model.
+# Feasibility study: glm53_flash_findings.md (repo root).
+model: glm53_flash_d_p
+display_name: GLM-5.3-Flash (layers 0-4)
+hf_id: zai-org/GLM-5.3-Flash
+model_dir: models/demos/glm53_flash_d_p
+hooks: models.demos.glm53_flash_d_p.bringup.hooks
+num_layers: 45
+prior: null
+layers: "0-4"
+box:
+  name: 4x Blackhole p300c (2 cards), mesh 2x2 (FABRIC_2D)
+  chip: Blackhole p300c
+  mesh: [2, 2]                     # owner's choice
+  chip_dram_gb: 32
+  device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
+  test_timeout_s: 3600
+target: {seq: 56320, chunk: 5120, dtype: bf16}
+ladder:
+  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k; the 2nd chunk exceeds the indexer's 2048-token top-k
+  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+  - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 50k prefix, device 50k->55k
+  - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
+block_types:                       # each block: two mHC steps (4-stream residual, 20-iteration Sinkhorn) around attn and MLP
+  kda_dense:                       # KDA linear attention (64 heads x 128, short conv 4, low-rank forget gate bounded at -5,
+    layers: "0-2"                  #   gated RMSNorm output) + dense clamped SwiGLU 12288
+    representative: 0
+  dsa_moe:                         # DSA sparse MLA (q_lora 1536, kv_lora 512, 64 heads, qk 256 / v 256, NoPE; indexer
+    layers: [3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43]   # 32x128, keys pooled by 4 with a learned softmax, top 512
+    representative: 3              #   pools + tail) + MoE 288 experts top-8, 1 shared, sigmoid noaux_tc, clamp 10
+  kda_moe:                         # KDA linear attention + MoE (as above)
+    layers: "4-6,8-10,12-14,16-18,20-22,24-26,28-30,32-34,36-38,40-42,44"
+    representative: 4
+state:
+  kind: mixed
+  tensors: [kv_latent, index_key, kda_recurrent, kda_conv]
+  by_block_type:
+    dsa_moe: [kv_latent, index_key]            # MLA latent [S, 512] (after kv_a_layernorm); indexer keys pooled by 4
+    kda_dense: [kda_recurrent, kda_conv]       # recurrent state [64, 128, 128]; q/k/v conv tails (last 3 inputs)
+    kda_moe: [kda_recurrent, kda_conv]
+  fixed: [kda_recurrent, kda_conv]             # fixed size: goldens snapshot them at chunk starts (F48)
+golden: {keep_fp32: [kda_recurrent]}
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text:                              # instruction-tuned thinking model: the book is the model's reply to a short request
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: model_turn
+  request: "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
+  template_kwargs: {reasoning_effort: low}     # the template always opens <think>; no switch turns thinking off
+  min_top1: 0.4
+hf:
+  revision: eb9eb208eb0d988989d07a6a12d0fdeb5f52574a
+  parity_seq: 4096                 # > the indexer's top-k (512 pools = 2048 tokens), so HF parity exercises the selection
+  custom_loader: true              # transformers 5.12.1 lacks glm5_next (vendored from 5.17); FP8 328 GB > 249 GB host RAM
+intake:
+  smoke: {prompt: "What is the capital of France? Answer in one word.", expect: "Paris"}
+checkpoint:
+  expect:
+    "model.language_model.embed_tokens.weight": [154880, 4096]
+    "lm_head.weight": [154880, 4096]
+    "model.language_model.norm.weight": [4096]
+    "model.language_model.layers.0.self_attn.q_proj.weight": [8192, 4096]            # KDA, bf16
+    "model.language_model.layers.0.self_attn.o_proj.weight": [4096, 8192]
+    "model.language_model.layers.0.mlp.gate_proj.weight": [12288, 4096]              # fp8 e4m3 + 128x128 weight_scale_inv
+    "model.language_model.layers.3.self_attn.q_a_proj.weight": [1536, 4096]          # fp8
+    "model.language_model.layers.3.self_attn.kv_a_proj_with_mqa.weight": [512, 4096] # fp8, NoPE: no rope columns
+    "model.language_model.layers.3.self_attn.indexer.index_kpool_compress_ape": [4, 128]
+    "model.language_model.layers.*.mlp.gate.weight": [288, 4096]
+    "model.language_model.layers.*.mlp.gate.e_score_correction_bias": [288]
+    "model.language_model.layers.*.mlp.experts.*.gate_proj.weight": [2048, 4096]
+    "model.language_model.layers.*.mlp.experts.*.down_proj.weight": [4096, 2048]
+    "model.language_model.layers.*.hc_attn_fn": "*"
+  config:
+    num_hidden_layers: 45
+    hidden_size: 4096
+    num_attention_heads: 64
+    kv_lora_rank: 512
+    q_lora_rank: 1536
+    qk_head_dim: 256
+    v_head_dim: 256
+    qk_rope_head_dim: 0
+    index_n_heads: 32
+    index_head_dim: 128
+    index_topk: 2048
+    index_kpool: 4
+    n_routed_experts: 288
+    num_experts_per_tok: 8
+    n_shared_experts: 1
+    moe_intermediate_size: 2048
+    intermediate_size: 12288
+    first_k_dense_replace: 3
+    hc_mult: 4
+    hc_sinkhorn_iters: 20
+    swiglu_limit: 10.0
+    vocab_size: 154880
+  trim_drop: ["model.visual.*"]    # R.4 keeps layers 0-4; layer 45 (MTP) goes with the other dropped layers
+contract: {adapter: glm53_flash_d_p}
+agents:
+  rules:                           # the owner's rules, shown in every brief
+    - "Always use 2D fabric: the mesh opens with ttnn.FabricConfig.FABRIC_2D (spec box.device_params). Configure CCLs,
+      dispatch and combine for it; never open a device or build a test with FABRIC_1D or FABRIC_1D_RING."
+    - "Text decoder only: never build, load or test the vision tower (model.visual.*) or the MTP layer (layer 45)."
+    - "The CPU reference (reference role) is a chunked, sparse CPU implementation, validated against the HF glm5_next
+      modeling code (vendored from transformers 5.17 into the reference; the shared python_env keeps 5.12.1) at short
+      lengths (hf.parity_seq). HF's dense indexer scores and eager attention need tens of GB at 56k, so the reference
+      gathers the selected pools instead. Load weights per layer: the FP8 checkpoint (328 GB) exceeds this host's
+      249 GB RAM, so the whole-model HF sanity (hooks.hf_model) streams layers and dequantizes FP8 blocks when used."
+    - "Weights: FP8 e4m3 tensors carry a float32 weight_scale_inv per 128x128 block; the CPU reference dequantizes them
+      exactly as the checkpoint defines them. On device, experts are bfp8 (the checkpoint is 8-bit, so never bfp4) and
+      every matmul uses HiFi4 during functional bring-up."
+    - "Start from glm53_flash_findings.md (repo root, a feasibility study: check every claim you rely on) and the
+      models/demos/deepseek_v3_d_p modules it lists: tt/kda (KDA), tt/kimi_k3 (KDA + NoPE MLA, KDA state across
+      chunks), tt/mla (MLA, indexer, sparse attention), tt/mhc (mHC + Sinkhorn), tt/moe; the MiMo router
+      (models/demos/mimo_v2_6_d_p/tt/router.py) for sigmoid + correction bias in fp32."
+    - "The ttnn.bringup ops (ttnn/ttnn/bringup/INDEX.md: dispatch, combine, offset_cumsum, unified_routed_expert_ffn
+      with ClampedSiluGlu = silu(min(gate,10)) * clamp(up,±10), which matches GLM, rms_norm_ttnn, sdpa) are shared
+      with other bring-ups: use them as you see fit; extend one only through the bringup-fork-op recipe (option default
+      off, default program unchanged)."
+    - "The p300c chips have an 11x10 compute grid (fewer columns than p150b): core grids tuned elsewhere (Kimi-K3's
+      KDA config, MiMo's experts) may not fit; read the grid from the device, never hard-code it."
+  model: null
+  timeout_s: 14400
+  read:
+    reference:
+      - /localdev/dnijemcevic/bringup/glm53_flash_d_p/hf_modeling/modeling_glm5_next.py   # transformers 0291458166a6
+      - /localdev/dnijemcevic/bringup/glm53_flash_d_p/hf_modeling/configuration_glm5_next.py
+      - /localdev/dnijemcevic/bringup/glm53_flash_d_p/hf/config.json
+      - glm53_flash_findings.md
+      - models/demos/mimo_v2_6_d_p/reference
+      - models/demos/deepseek_v3_d_p/reference/kda
+      - models/demos/deepseek_v3_d_p/reference/mhc
+      - models/demos/deepseek_v3_d_p/reference/kimi_k3
+      - models/demos/common/bringup/selftest/fixture_model.py
+    plan:
+      - glm53_flash_findings.md
+      - ttnn/ttnn/bringup/INDEX.md
+      - models/demos/mimo_v2_6_d_p/bringup/plan.yaml
+      - models/demos/mimo_v2_6_d_p/tt
+      - models/demos/deepseek_v3_d_p/tt/kda
+      - models/demos/deepseek_v3_d_p/tt/kimi_k3
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/deepseek_v3_d_p/tt/mhc
+      - models/demos/deepseek_v3_d_p/tt/moe
+    implement:
+      - glm53_flash_findings.md
+      - ttnn/ttnn/bringup/INDEX.md
+      - models/demos/mimo_v2_6_d_p/tt
+      - models/demos/deepseek_v3_d_p/tt/kda
+      - models/demos/deepseek_v3_d_p/tt/kimi_k3
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/deepseek_v3_d_p/tt/mhc
+      - models/demos/deepseek_v3_d_p/tt/moe
+  policy: {}
+paths:
+  hf: /localdev/dnijemcevic/bringup/glm53_flash_d_p/hf
+dashboard: {styles: [standard, teletext]}   # owner: both
