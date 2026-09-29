@@ -2450,3 +2450,26 @@ TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH
 - Next candidates: the DSA latent / pooled keys could be computed on the chip's rows, with the 512- / 128-wide results
   gathered instead of the 4096-wide attn_norm. The shared expert could run TP 2 on the half (it would drop the AG
   axis 0 + RS axis 0), but that needs a new weight layout.
+
+## O.1 optests (attempt 1): fork-test cases for the 8 ttnn.bringup calls
+- Added one random-input case per captured call (fork_calls.json, last rung) to each fork's `tests/cases.py`
+  (append only): dispatch a278b0297c, combine b6242cb705, offset_cumsum 97cbac374b (2x2, dispatch groups = mesh
+  columns, 288 experts / 72 per chip, buffer 43232, all through the existing dispatch-group paths). Also
+  unified_routed_expert_moe 820d12513b (ClampedSiluGlu, high_precision, HiFi4, bfp8 weights, 72 experts),
+  rms_norm 3689df566e / 693a2b7a58 (FLOAT32 in, [1280, 1536] and [5120, 512]) and 6fa50c3954 (bf16 [1280, 4096]),
+  and sparse_sdpa d894c9aab4 (high_precision).
+- Test changes, with other models' cases unchanged (same random draws, same checks):
+  - rms_norm test: x is kept at the captured dtype (FLOAT32 is no longer rounded to bf16).
+  - URE reference: adds ClampedSiluGlu, silu(min(g, 10)) * clamp(u, +/-10). The test has an optional `gate_up_scale`
+    (GLM: 4.0, so about 1% of gates / ups hit the clamp; without the clamp the result is off by rel 0.073).
+  - sdpa test: a `sparse_sdpa` branch plus `reference.sparse_sdpa`. The ids are causal and random (chip d = query
+    rows 1280 d .. of the chunk at 51200), 2051 valid plus 0xFFFFFFFF sentinels, and every 16th row is short.
+- Measured (seed 0, 4 chips): dispatch / combine / offset_cumsum exact. URE pcc 0.999997, rel 0.00250 (limit 0.008).
+  rms fp32 max rel 0.0022 (atol 0.002 + rtol 0.004). rms bf16 max rel 0.0046 (0.005 + 0.008). sparse_sdpa pcc
+  0.999984, rel 0.0057-0.0058, row ratio [0.9867, 1.0139] (limits 0.008, [0.98, 1.02]). The unit test's 0.0017 is
+  diluted by exact 1-id rows (known_issues Proposed). A 1.01 output scale fails all 5 math cases (checked by hand,
+  then reverted).
+- INDEX.md: glm53_flash_d_p added to "Used by" for URE, dispatch, combine, offset_cumsum, rms_norm_ttnn.
+- Gate: {"forks_used": 6, "fork_calls": 8, "fork_calls_uncovered": 0, "fork_tests_failed": 0}, 31 fork tests passed.
+- Re-run: the gate from the brief. One fork: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/<fork>/tests/test_<fork>.py -k glm53`.

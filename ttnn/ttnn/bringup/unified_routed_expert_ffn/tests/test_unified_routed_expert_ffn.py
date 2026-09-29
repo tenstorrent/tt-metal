@@ -112,7 +112,8 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
     # Random dispatched buffer, random everywhere (padding rows too).
     x = torch.randn(n_dev * N, H, generator=g).to(torch.bfloat16)
 
-    # Weights ~ N(0, 1/fan_in), rounded to bfp8 on the host; the reference uses the rounded values.
+    # Weights ~ N(0, 1/fan_in) (gate / up times gate_up_scale when set), rounded to bfp8 on the host; the reference
+    # uses the rounded values.
     wspec = c["weights"]
     wdt, wlay = getattr(ttnn.DataType, wspec["dtype"]), getattr(ttnn.Layout, wspec["layout"])
     compose = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
@@ -122,6 +123,8 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
         host = {}
         for name, shape, fan_in in (("gate", (H, I), H), ("up", (H, I), H), ("down", (I, H), I)):
             w = torch.randn(n_dev * shape[0], shape[1], generator=g) * fan_in**-0.5
+            if name != "down" and c.get("gate_up_scale"):  # push gate / up into an activation's clamp range
+                w = w * c["gate_up_scale"]
             t = ttnn.from_torch(w, dtype=wdt, layout=wlay, mesh_mapper=_shard(mesh_device))
             host[name] = ttnn.to_torch(t, mesh_composer=compose).reshape(n_dev, *shape)
             tt_w[name].append(ttnn.to_device(t, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG))
