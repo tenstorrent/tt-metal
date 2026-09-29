@@ -32,8 +32,13 @@ constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(5);
 constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(6);
 constexpr bool send_backward = get_compile_time_arg_val(7);
 constexpr uint32_t meta_cb_id = get_compile_time_arg_val(8);
+// A multicast exchange sends one line multicast per run of hops that ship the same source slab.
+// unicast_route_arg1 is then the distance to the exchange's nearest receiver.
+constexpr bool multicast = get_compile_time_arg_val(9) == 1;
 
-constexpr uint32_t page_size_base_idx = 9;
+constexpr uint32_t page_size_base_idx = 10;
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
@@ -61,8 +66,7 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
-    // First page this exchange writes in the receiver's compact buffer: a multi-hop halo gives each hop
-    // its own block (chunked_sliding_halo_hop_dest_row).
+    // First page this exchange writes in the receiver's compact buffer (chunked_sliding_halo_block_dest_row).
     std::array<uint32_t, num_inputs> output_origin_page;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
@@ -71,6 +75,16 @@ void kernel_main() {
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         output_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    uint32_t mc_hop_count = 1;
+    std::array<uint32_t, ring_attention_all_gather::kMaxMulticastHaloHops> mc_origin_rows{};
+    if constexpr (multicast) {
+        mc_hop_count = get_arg_val<uint32_t>(arg_idx++);
+        ASSERT(mc_hop_count <= ring_attention_all_gather::kMaxMulticastHaloHops);
+        for (uint32_t i = 0; i < mc_hop_count; ++i) {
+            mc_origin_rows[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
     }
 
     if constexpr (has_halo_metadata) {
@@ -105,6 +119,20 @@ void kernel_main() {
             const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
             input_tile_id_start[input_idx] = range.start;
             input_tile_id_end[input_idx] = range.end;
+        }
+        if constexpr (multicast) {
+            ring_attention_all_gather::compute_multicast_origin_rows(
+                kv_actual_isl,
+                q_local_tile_rows,
+                ring_size_rt,
+                halo_tile_rows,
+                source_device,
+                cache_local_tile_rows,
+                halo_slot_count,
+                hop,
+                sources.first_start_tile,
+                mc_hop_count,
+                mc_origin_rows.data());
         }
     }
 
@@ -153,76 +181,79 @@ void kernel_main() {
     const uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        // Send this hop's halo tail directly to its block of the destination device's compact buffer.
+    // Sends `count` (up to NOC_SCATTER_WRITE_MAX_CHUNKS) consecutive output pages from L1; `signal`
+    // fuses the ready-increment, which takes at most two pages.
+    static_assert(packet_size_in_pages <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+    const auto send_pages = [&](uint32_t input_idx, uint32_t first_tile, uint32_t count, size_t l1_addr, bool signal) {
+        if (count == 0) {
+            return;
+        }
+        std::array<uint64_t, NOC_SCATTER_WRITE_MAX_CHUNKS> noc_addrs{};
+        for (uint32_t i = 0; i < count; ++i) {
+            noc_addrs[i] = output_addrgens[input_idx].get_noc_addr(first_tile + i);
+        }
+        const uint16_t page = static_cast<uint16_t>(output_page_size);
+        if (count == 1 && signal) {
+            pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                    noc_addrs[0], out_ready_sem_noc_addr_in_pkt, 1, true},
+                output_page_size);
+        } else if (count == 1) {
+            pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc_addrs[0]}, output_page_size);
+        } else if (signal) {
+            ASSERT(count == 2);
+            pkt_hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
+                    {noc_addrs[0], noc_addrs[1]}, out_ready_sem_noc_addr_in_pkt, {page}, 1, true},
+                output_page_size * 2);
+        } else {
+            std::array<uint16_t, NOC_SCATTER_WRITE_MAX_CHUNKS - 1> chunk_sizes;
+            chunk_sizes.fill(page);
+            pkt_hdr->to_noc_unicast_scatter_write(
+                tt::tt_fabric::NocUnicastScatterCommandHeader(
+                    noc_addrs.data(), chunk_sizes.data(), static_cast<uint8_t>(count)),
+                output_page_size * count);
+        }
+        perform_payload_send(fabric_direction_connection, l1_addr, output_page_size * count, pkt_hdr);
+        noc_async_writes_flushed();
+    };
 
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-            uint32_t tiles_read = input_tile_id_start[input_idx];
-            const uint32_t tiles_to_read = input_tile_id_end[input_idx];
-            const uint32_t output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
-            while (tiles_read < tiles_to_read) {
-                const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_output.wait_front(packet_size_in_pages);
-                const size_t l1_read_addr = cb_output.get_read_ptr();
-                const uint32_t tile_id = output_batch_head_base + output_origin_page[input_idx] + tiles_read;
-
-                if (num_pages_to_read == 2) {
-                    const uint32_t second_tile_id = tile_id + 1;
+    for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+        uint32_t run_end = run_start + 1;
+        if constexpr (multicast) {
+            run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+            ccl_routing_utils::line_multicast_route_info_t route{};
+            route.start_distance_in_hops = static_cast<uint16_t>(ring_joint::chunked_sliding_halo_run_distance(
+                unicast_route_arg1, mc_hop_count, run_start, run_end, send_backward));
+            route.range_hops = static_cast<uint16_t>(run_end - run_start);
+            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, route);
+        }
+        run_start = run_end;
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                uint32_t tiles_read = input_tile_id_start[input_idx];
+                const uint32_t tiles_to_read = input_tile_id_end[input_idx];
+                const uint32_t output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
+                while (tiles_read < tiles_to_read) {
+                    const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+                    cb_output.wait_front(packet_size_in_pages);
+                    const size_t l1_read_addr = cb_output.get_read_ptr();
+                    const uint32_t tile_id = output_batch_head_base + output_origin_page[input_idx] + tiles_read;
                     const bool is_last_source_packet = input_idx + 1 == num_inputs &&
                                                        bh_idx + 1 == input_batch_head_count[input_idx] &&
                                                        tiles_read + num_pages_to_read >= tiles_to_read;
-
-                    if (is_last_source_packet) {
-                        const uint64_t first_noc_addr = output_addrgens[input_idx].get_noc_addr(tile_id);
-                        const uint64_t second_noc_addr = output_addrgens[input_idx].get_noc_addr(second_tile_id);
-                        pkt_hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
-                            tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
-                                {first_noc_addr, second_noc_addr},
-                                out_ready_sem_noc_addr_in_pkt,
-                                {static_cast<uint16_t>(output_page_size)},
-                                1,
-                                true},
-                            output_page_size * 2);
-                        perform_payload_send(fabric_direction_connection, l1_read_addr, output_page_size * 2, pkt_hdr);
-                        noc_async_writes_flushed();
-                    } else {
-                        scatter_fabric_write_unidir(
-                            tile_id,
-                            second_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
-                    }
-                } else {
-                    ASSERT(num_pages_to_read == 1);
-
-                    const bool is_last_source_packet = input_idx + 1 == num_inputs &&
-                                                       bh_idx + 1 == input_batch_head_count[input_idx] &&
-                                                       tiles_read + num_pages_to_read >= tiles_to_read;
-                    if (is_last_source_packet) {
-                        tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
-                            output_page_size,
-                            pkt_hdr,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 1, true},
-                            tile_id,
-                            output_addrgens[input_idx]);
-                        perform_payload_send(fabric_direction_connection, l1_read_addr, output_page_size, pkt_hdr);
-                        noc_async_writes_flushed();
-                    } else {
-                        fabric_write_unidir(
-                            tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
-                    }
+                    const uint32_t signal_pages = is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
+                    const uint32_t plain_pages = num_pages_to_read - signal_pages;
+                    send_pages(input_idx, tile_id, plain_pages, l1_read_addr, false);
+                    send_pages(
+                        input_idx,
+                        tile_id + plain_pages,
+                        signal_pages,
+                        l1_read_addr + plain_pages * output_page_size,
+                        true);
+                    tiles_read += num_pages_to_read;
+                    cb_output.pop_front(packet_size_in_pages);
                 }
-
-                tiles_read += num_pages_to_read;
-                cb_output.pop_front(packet_size_in_pages);
             }
         }
     }
