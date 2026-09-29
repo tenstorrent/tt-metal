@@ -1,0 +1,142 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# SC28 as SEVEN 4x32 BigMeshes, carved into sixteen 4x2 pipeline stages each.
+#
+#   7 BigMeshes x 16 stages/BigMesh = 112 ranks/stages
+#   4 hosts/BigMesh x 7 BigMeshes   = 28 allocated hosts
+#
+# This is the full SC28_4x2 spec-decode shape (the SC24 6-BigMesh MGD is this
+# reduced from seven quads to six). Both axes are RING and the test requests
+# FABRIC_2D_TORUS_XY. Every pair of BigMeshes has a relaxed inter-mesh
+# connection (all-to-all, 21 pairs), giving the resolver freedom to place the
+# 112-stage closed fabric tour across the seven physical quads.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 32 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 16 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph: fully connected seven-BigMesh graph (21 pairs) ------------------
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 16 policy: RELAXED }
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 16 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ---------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

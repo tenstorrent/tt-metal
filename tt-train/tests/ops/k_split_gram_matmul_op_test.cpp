@@ -15,14 +15,16 @@
 
 class KSplitGramMatmulTest : public ::testing::Test {
 protected:
-    void SetUp() override {
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+    void SetUp() override {
         if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "KSplitGramMatmul is only supported on Blackhole.";
         }
-    }
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -75,6 +77,47 @@ void check_tile(
     EXPECT_TRUE(xt::allclose(ref_xt, dev_xt, rtol, atol)) << label << " exceeded tolerance";
 }
 
+// Compare the whole device output against a CPU reference G = X @ X^T, tile by tile.
+// In UpperTriangle mode only tiles with tile_r <= tile_c are guaranteed written
+// (diagonal Mpc-blocks also contain written below-diagonal tiles, but their extent
+// depends on the device grid, so this check stays grid-agnostic); Full mode checks
+// every tile including the mirror.
+void check_full_gram(
+    const std::vector<float>& in_vec,
+    const std::vector<float>& out_vec,
+    uint32_t M,
+    uint32_t K,
+    bool full_output,
+    const char* label) {
+    xt::xarray<float> x = xt::adapt(in_vec, std::array<size_t, 2>{M, K});
+    xt::xarray<float> ref = xt::linalg::dot(x, xt::transpose(x));
+    xt::xarray<float> dev = xt::adapt(out_vec, std::array<size_t, 2>{M, M});
+
+    const uint32_t M_tiles = M / 32;
+    uint32_t bad_tiles = 0;
+    uint32_t first_bad_r = 0;
+    uint32_t first_bad_c = 0;
+    for (uint32_t tr = 0; tr < M_tiles; tr++) {
+        for (uint32_t tc = 0; tc < M_tiles; tc++) {
+            if (!full_output && tr > tc) {
+                continue;
+            }
+            const float atol = (tr == tc) ? kDiagAtol : kOffDiagAtol;
+            auto ref_t = xt::view(ref, xt::range(tr * 32, tr * 32 + 32), xt::range(tc * 32, tc * 32 + 32));
+            auto dev_t = xt::view(dev, xt::range(tr * 32, tr * 32 + 32), xt::range(tc * 32, tc * 32 + 32));
+            if (!xt::allclose(ref_t, dev_t, kRtol, atol)) {
+                if (bad_tiles == 0) {
+                    first_bad_r = tr;
+                    first_bad_c = tc;
+                }
+                bad_tiles++;
+            }
+        }
+    }
+    EXPECT_EQ(bad_tiles, 0u) << label << ": " << bad_tiles << " tiles exceeded tolerance, first at tile ("
+                             << first_bad_r << ", " << first_bad_c << ")";
+}
+
 }  // namespace
 
 struct VerifyCase {
@@ -87,14 +130,16 @@ struct VerifyCase {
 
 class KSplitGramMatmulVerifyTest : public ::testing::TestWithParam<VerifyCase> {
 protected:
-    void SetUp() override {
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+    void SetUp() override {
         if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "KSplitGramMatmul is only supported on Blackhole.";
         }
-    }
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -171,6 +216,49 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     uint32_t W = output.logical_shape()[-1];
 
     check_tile(in_vec, out_vec, K, W, 2, 15, kRtol, kOffDiagAtol, "Preallocated G[2,15]");
+}
+
+// Full-matrix verification of the cross-core reduction protocol in both output modes.
+// The shapes are chosen for a 10-wide compute grid:
+//   * M=8192 → Mpc=26 with M_block 13-14 → num_m_blocks=2: exercises the sub-block
+//     ordering between reduce senders and receivers (every off-diagonal sub-block
+//     pairing is order-sensitive).
+//   * M=5440 → Mpc=17 (prime): any M_block < 17 leaves a partial edge block,
+//     exercising the fixed-capacity CB protocol for partial blocks.
+// These must pass on device before this op is wired into Muon / Newton-Schulz.
+namespace {
+void run_full_matrix_case(uint32_t M, uint32_t K, const char* label) {
+    auto input = make_random_tensor(M, K);
+    auto in_vec = input.to_vector<float>();
+    {
+        auto output = ttml::metal::gram_matmul(input);
+        auto out_vec = output.to_vector<float>();
+        check_full_gram(in_vec, out_vec, M, K, /*full_output=*/false, label);
+    }
+    {
+        auto output = ttml::metal::gram_matmul(input, ttml::metal::OutputMode::Full);
+        auto out_vec = output.to_vector<float>();
+        check_full_gram(in_vec, out_vec, M, K, /*full_output=*/true, label);
+    }
+}
+}  // namespace
+
+TEST_F(KSplitGramMatmulTest, FullMatrixMultiBlock) {
+    run_full_matrix_case(8192, 512, "FullMatrixMultiBlock");
+}
+
+TEST_F(KSplitGramMatmulTest, FullMatrixPartialEdgeBlock) {
+    run_full_matrix_case(5440, 512, "FullMatrixPartialEdgeBlock");
+}
+
+// The kernels reduce whole K tiles and make no assumption about tile-padding contents
+// (upstream ops may leave garbage there), so the op must reject non-tile-aligned logical K
+// instead of silently accumulating out-of-shape columns. K_tiles must also be even.
+TEST_F(KSplitGramMatmulTest, RejectsUnsupportedK) {
+    // K=33 pads to 2 tiles (even), but logical K is not tile-aligned.
+    EXPECT_THROW(ttml::metal::gram_matmul(make_random_tensor(320, 33)), std::exception);
+    // K=96 is tile-aligned but K_tiles=3 is odd.
+    EXPECT_THROW(ttml::metal::gram_matmul(make_random_tensor(320, 96)), std::exception);
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {

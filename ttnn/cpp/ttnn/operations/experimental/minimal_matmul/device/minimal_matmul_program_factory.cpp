@@ -941,67 +941,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         two_input_split};
 }
 
-MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    const std::optional<const MinimalMatmulConfig>& config,
-    const Tensor& output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
-    bool fuse_swiglu) {
-    std::vector<Tensor> output_tensors = {output_tensor};
-    return minimal_matmul_factory_helper_common(
-        program,
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        fused_activation,
-        config,
-        output_tensors,
-        compute_kernel_config,
-        fused_op_signaler,
-        1,  // N_chunks = 1 for regular minimal_matmul
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        srs_fused_op_signaler,
-        fuse_swiglu);
-}
-
-MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
-    const MinimalMatmulParams& operation_attributes,
-    const MinimalMatmulInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
-
-    auto shared_vars = minimal_matmul_factory_helper_common(
-        program,
-        tensor_args.input_tensor,
-        tensor_args.weight_tensor,
-        tensor_args.bias_tensor,
-        operation_attributes.fused_activation,
-        operation_attributes.config,
-        tensor_return_value,
-        operation_attributes.compute_kernel_config,
-        empty_fused_op_signaler,
-        static_cast<uint32_t>(operation_attributes.chunks),
-        operation_attributes.fused_ternary_scalar,
-        tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b,
-        empty_srs_fused_op_signaler,
-        operation_attributes.fuse_swiglu,
-        tensor_args.optional_input_tensor);
-
-    return {std::move(program), std::move(shared_vars)};
-}
-
-// Common helper for override_runtime_arguments - works with both single and multiple output tensors
+// Cache-hit refresh for the fused CCL programs built via minimal_matmul_factory_helper_common.
+// Works with both single and multiple output tensors.
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const MinimalMatmulParams& operation_attributes,

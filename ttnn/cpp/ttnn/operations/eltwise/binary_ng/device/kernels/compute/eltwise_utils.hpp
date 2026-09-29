@@ -7,13 +7,14 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "eltwise_utils_common.hpp"
 
 // Reads `per_core_block_size` tiles from cb_pre, runs the per-operand activation chain
 // on each tile in DST, and writes the results into cb_post — i.e. produces the
 // "activated" input that the downstream binary op consumes. cb_out is passed in only
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
-// data format on the way out. FPU variant: also reconfigures the unpacker srca format
-// for the pre/post switch, since the FPU binary op will read from a different CB next.
+// data format on the way out. Restore the FPU SrcA operand format documented in
+// eltwise_utils_common.hpp (physical RHS for scalar-first operations).
 template <typename ActivationFn>
 ALWI void preprocess_fpu_impl(
     CircularBuffer cb_pre,
@@ -23,7 +24,8 @@ ALWI void preprocess_fpu_impl(
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
-    reconfig_data_format_srca(/*old*/ cb_post.get_cb_id(), /*new*/ cb_pre.get_cb_id());
+    // Preserve the FPU operand order; same-format switches are elided.
+    reconfig_data_format_srca(/*old*/ BINARY_FPU_SRCA_FORMAT_CB, /*new*/ cb_pre.get_cb_id());
     pack_reconfig_data_format(/*old*/ cb_out.get_cb_id(), /*new*/ cb_post.get_cb_id());
 
     cb_pre.wait_front(per_core_block_size);
@@ -31,7 +33,7 @@ ALWI void preprocess_fpu_impl(
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_tile_to_dst_init_short(cb_pre.get_cb_id());
+        copy_init(cb_pre.get_cb_id());
         copy_tile(cb_pre.get_cb_id(), i, i);
         process_activations(i);
     }
@@ -46,7 +48,7 @@ ALWI void preprocess_fpu_impl(
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
-    reconfig_data_format_srca(/*old*/ cb_pre.get_cb_id(), /*new*/ cb_post.get_cb_id());
+    reconfig_data_format_srca(/*old*/ cb_pre.get_cb_id(), /*new*/ BINARY_FPU_SRCA_FORMAT_CB);
     pack_reconfig_data_format(/*old*/ cb_post.get_cb_id(), /*new*/ cb_out.get_cb_id());
 }
 

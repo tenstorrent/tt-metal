@@ -120,6 +120,8 @@ void kernel_main() {
         }
         reader_offset_idx = 0;
 
-        start_reader_idx = reader_idx;
+        // +1: advance past the last segment word to the next block's count word (the inline loop
+        // above stops on the last segment; the shared read_sticks() helper does this increment).
+        start_reader_idx = reader_idx + 1;
     }
 }

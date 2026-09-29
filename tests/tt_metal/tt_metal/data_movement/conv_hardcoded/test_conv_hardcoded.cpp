@@ -31,14 +31,13 @@ struct ConvConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ConvConfig& test_config) {
+bool run_dm(distributed::MeshDevice& mesh_device, const ConvConfig& test_config) {
     // Program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    auto& cq = mesh_device->mesh_command_queue();
-    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device.mesh_command_queue();
 
     // Kernels
     auto receiver_kernel = CreateKernel(
@@ -58,7 +57,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const C
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program using slow dispatch
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids()[0]);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -66,11 +65,8 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const C
 }
 }  // namespace unit_tests::dm::conv_hardcoded
 
-TEST_F(MeshDeviceFixture, TensixDataMovementConvActHalo3x3) {
-    auto mesh_device = devices_.at(0);
-    auto arch_ = mesh_device->arch();
-
-    if (arch_ != ARCH::BLACKHOLE) {
+TEST_F(UnitMeshFixture, TensixDataMovementConvActHalo3x3) {
+    if (this->device().arch() != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
@@ -135,14 +131,11 @@ TEST_F(MeshDeviceFixture, TensixDataMovementConvActHalo3x3) {
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(this->device(), test_config));
 }
 
-TEST_F(MeshDeviceFixture, TensixDataMovementConvActHalo3x3Smaller) {
-    auto mesh_device = devices_.at(0);
-    auto arch_ = mesh_device->arch();
-
-    if (arch_ != ARCH::BLACKHOLE) {
+TEST_F(UnitMeshFixture, TensixDataMovementConvActHalo3x3Smaller) {
+    if (this->device().arch() != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
@@ -207,14 +200,11 @@ TEST_F(MeshDeviceFixture, TensixDataMovementConvActHalo3x3Smaller) {
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(this->device(), test_config));
 }
 
-TEST_F(MeshDeviceFixture, TensixDataMovementConvHaloGather) {
-    auto mesh_device = devices_.at(0);
-    auto arch_ = mesh_device->arch();
-
-    if (arch_ != ARCH::BLACKHOLE) {
+TEST_F(UnitMeshFixture, TensixDataMovementConvHaloGather) {
+    if (this->device().arch() != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
@@ -272,7 +262,7 @@ TEST_F(MeshDeviceFixture, TensixDataMovementConvHaloGather) {
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(this->device(), test_config));
 }
 
 }  // namespace tt::tt_metal

@@ -8,7 +8,6 @@ import importlib
 import os
 import pathlib
 import pkgutil
-import re
 import sys
 from types import ModuleType
 
@@ -25,56 +24,24 @@ if "TTNN_CONFIG_PATH" in os.environ:
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 
 
-def load_config_from_dictionary(config, from_file=False):
-    global CONFIG
-    for key, value in config.items():
-        if hasattr(CONFIG, key):
-            if getattr(CONFIG, key) is not None:
-                value = type(getattr(CONFIG, key))(value)
-            setattr(CONFIG, key, value)
-        elif from_file:
-            logger.warning(
-                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
-            )
-        else:
-            raise ValueError(f"Unknown configuration key: {key}")
+def load_config_from_dictionary(config, from_file=False, source=None):
+    try:
+        CONFIG.apply_json_overrides(json.dumps(config, default=str), strict=not from_file, source=str(source or ""))
+    except RuntimeError as e:
+        # Keep raising ValueError as this function always has; TT_THROW surfaces as RuntimeError.
+        raise ValueError(str(e)) from e
 
 
 def load_config_from_json_file(json_path):
-    global CONFIG
-    try:
-        with open(json_path, "r") as f:
-            config = json.load(f)
-        load_config_from_dictionary(config, from_file=True)
-    except Exception as e:
-        logger.warning(f"Failed to load ttnn configuration from {json_path}: {e}")
+    CONFIG.load_from_file(pathlib.Path(json_path))
 
 
 def save_config_to_json_file(json_path):
-    with open(json_path, "w") as f:
-        normalized_config = {}
-        for key in dir(CONFIG):
-            if re.match("^_.+_$", key):
-                continue
-            value = getattr(CONFIG, key)
-            if isinstance(value, pathlib.Path):
-                value = str(value)
-            normalized_config[key] = value
-        json.dump(normalized_config, f, indent=4)
+    CONFIG.save_to_file(pathlib.Path(json_path))
 
 
-if CONFIG_PATH is not None:
-    if CONFIG_PATH.exists():
-        logger.debug(f"Loading ttnn configuration from {CONFIG_PATH}")
-        load_config_from_json_file(CONFIG_PATH)
-    else:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        save_config_to_json_file(CONFIG_PATH)
-
-if CONFIG_OVERRIDES is not None:
-    logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
-    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
-
+# TTNN_CONFIG_PATH and TTNN_CONFIG_OVERRIDES are applied in C++ at _ttnn load, so that pure C++
+# consumers get the same configuration as Python; see ttnn/core/config.cpp.
 logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
@@ -84,21 +51,26 @@ def manage_config(name: str, value):
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
-    yield
     try:
-        setattr(CONFIG, name, original_value)
-        logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
-    except Exception as e:
-        # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
-        # afuller
-        if original_value is None:
-            try:
-                setattr(CONFIG, name, "")
-                logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
-            except Exception as e2:
-                logger.error(f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)")
-        else:
-            logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
+        yield
+    finally:
+        # Restore even when the block raises, or the value leaks into everything that runs afterwards.
+        try:
+            setattr(CONFIG, name, original_value)
+            logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+        except Exception as e:
+            # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
+            # afuller
+            if original_value is None:
+                try:
+                    setattr(CONFIG, name, "")
+                    logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+                except Exception as e2:
+                    logger.error(
+                        f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)"
+                    )
+            else:
+                logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
 
 
 from ttnn._ttnn.multi_device import (
@@ -160,53 +132,18 @@ from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
-from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
+from ttnn.tools import trace_allocation_tracker as _trace_allocation_tracker
 
-if TRACE_ALLOC_TRACKING:
-    from ttnn._ttnn.operations.trace import (
-        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
-        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
-    )
+if _trace_allocation_tracker.TRACE_ALLOC_TRACKING:
 
-    @contextlib.contextmanager
-    def corruptible_allocation_scope(mesh_device):
-        """Suppress accounting for intentionally corruptible allocations in this scope."""
-        _push_corruptible_allocation_scope(mesh_device)
-        try:
-            yield
-        finally:
-            _pop_corruptible_allocation_scope(mesh_device)
-
-else:
-
-    @contextlib.contextmanager
-    def corruptible_allocation_scope(mesh_device):
-        """No-op when trace allocation tracking is disabled."""
-        yield
-
-
-if TRACE_ALLOC_TRACKING:
-
-    def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
+    def execute_trace(mesh_device, trace_id, *, cq_id=None, blocking=True):
         """Execute a captured trace, with automatic allocation-safety verification."""
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
-
-        UnsafeAllocationTracker(device).verify_before_replay(trace_id)
-        return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
+        _trace_allocation_tracker.TraceAllocationTracker.verify_before_replay(mesh_device, trace_id)
+        return _ttnn_execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)
 
 else:
     # Preserve the original nanobind fast path when tracking is disabled.
     execute_trace = _ttnn_execute_trace
-
-
-def mark_corruptible(tensor):
-    """
-    Mark a specific tensor buffer as intentionally corruptible for trace
-    allocation safety checks.
-    """
-    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
-
-    return UnsafeAllocationTracker.mark_corruptible(tensor)
 
 
 from ttnn._ttnn.global_circular_buffer import (
@@ -381,6 +318,7 @@ from ttnn.device import (
     close_device,
     manage_device,
     synchronize_device,
+    is_trace_capture_active,
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
@@ -517,6 +455,10 @@ div_ = ttnn.divide_
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
+# Routed through subtract's scalar-first overload rather than ttnn.rsub: same op, one device
+# path shared with subtract(scalar, tensor), and RSUB additionally has no SFPU kernel on Quasar
+# and rejects a non-bfloat16 output under fast_and_approximate_mode=false.
+ttnn.Tensor.__rsub__ = lambda self, other, *args, **kwargs: ttnn.subtract(other, self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__truediv__ = lambda self, *args, **kwargs: ttnn.divide(self, *args, **kwargs)
@@ -538,7 +480,6 @@ from ttnn.operations.matmul import (
     MatmulParams,
     MatmulInputs,
     MatmulDeviceOperation,
-    MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
     matmul_select_program_factory,
 )
@@ -618,7 +559,7 @@ from ttnn.operations.pool import (
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
-from ttnn._ttnn.operations.experimental import RoutedExpertActivation
+from ttnn._ttnn.operations.experimental import RoutedExpertActivation, UNIFIED_ROUTED_EXPERT_CORE_GRID
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
@@ -642,11 +583,20 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
+from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
+
+experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
+experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
 
 transformer.SparseKVFormat = SparseKVFormat
+
+QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

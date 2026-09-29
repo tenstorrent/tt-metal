@@ -17,11 +17,11 @@ import ttml
 import ttnn
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, load_config
-from utils.llama_ttt_presets import (
+from grpo_remote_rollout.utils.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations,
     llama_stop_and_pad,
 )
-from utils.ttt_generation_worker import TttGenerationWorker
+from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
@@ -45,8 +45,9 @@ def open_device(device_config) -> Any:
     return the ``ttnn.MeshDevice``. Pair with :func:`close_device`.
 
     Only enables fabric when it isn't already configured. Under tt-run the
-    grpo_remote_rollout ``conftest.py`` autouse fixture sets FABRIC_2D on every
-    rank before any test body runs; calling ``enable_fabric`` again from just
+    grpo_remote_rollout ``conftest.py`` ``_set_fabric_2d`` fixture, which must
+    be requested via ``pytest.mark.usefixtures``, sets FABRIC_2D
+    on every rank before the test body runs; calling ``enable_fabric`` again from just
     this rank (asymmetrically with the peer rank, which reaches the same
     ControlPlane through ``ttnn.open_mesh_device``) triggers the non-idempotent
     ``SetFabricConfig`` reinit branch in ``MetalEnvImpl::set_fabric_config``.
