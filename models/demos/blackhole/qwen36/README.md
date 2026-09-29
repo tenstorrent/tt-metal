@@ -266,16 +266,16 @@ The 9B has no MTP path. The 27B MTP columns are speculative decode at K=7.
 
 | ISL | 9B / N300 TTFT | 9B decode | 27B / T3K TTFT | 27B decode | 27B MTP TTFT | 27B MTP decode | speedup | acceptance |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 128 | 0.22 s | 22.65 tok/s | 0.38 s | 17.08 tok/s | 1.10 s | 43.01 tok/s | 2.52x | 4.27/7 |
-| 4k | 0.85 s | 23.02 tok/s | 1.10 s | 16.98 tok/s | 1.81 s | 40.67 tok/s | 2.39x | 4.05/7 |
-| 8k | 1.94 s | 22.46 tok/s | 2.09 s | 16.63 tok/s | 2.79 s | 32.16 tok/s | 1.93x | 2.85/7 |
-| 16k | 4.03 s | 22.13 tok/s | 4.44 s | 16.45 tok/s | 5.35 s | 33.89 tok/s | 2.06x | 3.44/7 |
-| 32k | 8.82 s | 21.92 tok/s | 10.32 s | 16.00 tok/s | 11.65 s | 29.19 tok/s | 1.82x | 2.75/7 |
-| 64k | 20.96 s | 21.56 tok/s | 26.74 s | 15.26 tok/s | 28.66 s | 24.28 tok/s | 1.59x | 2.22/7 |
-| 128k | 39.63 s | 20.43 tok/s | 54.49 s | 14.35 tok/s | 58.61 s | 40.92 tok/s | 2.85x | 4.94/7 |
-| 256k | 165.97 s | 18.09 tok/s | 256.73 s | 11.57 tok/s | 274.40 s | 15.51 tok/s | 1.34x | 2.53/7 |
+| 128 | 0.19 s | 23.06 tok/s | 0.37 s | 16.95 tok/s | 0.99 s | 46.79 tok/s | 2.76x | 4.27/7 |
+| 4k | 0.82 s | 22.52 tok/s | 1.12 s | 16.87 tok/s | 1.66 s | 43.80 tok/s | 2.60x | 4.05/7 |
+| 8k | 1.94 s | 22.24 tok/s | 2.07 s | 16.90 tok/s | 2.72 s | 32.01 tok/s | 1.89x | 2.69/7 |
+| 16k | 4.04 s | 22.06 tok/s | 4.43 s | 16.44 tok/s | 5.07 s | 32.83 tok/s | 2.00x | 2.79/7 |
+| 32k | 8.82 s | 22.11 tok/s | 10.30 s | 16.12 tok/s | 11.13 s | 43.67 tok/s | 2.71x | 4.29/7 |
+| 64k | 20.96 s | 21.98 tok/s | 26.76 s | 15.28 tok/s | 28.77 s | 26.86 tok/s | 1.76x | 2.34/7 |
+| 128k | 39.66 s | 20.48 tok/s | 54.47 s | 14.36 tok/s | 58.38 s | 43.83 tok/s | 3.05x | 4.94/7 |
+| 256k | 166.22 s | 18.04 tok/s | 256.87 s | 11.59 tok/s | 274.48 s | 16.10 tok/s | 1.39x | 2.53/7 |
 
-Decode falls off at 256k as paged-KV attention grows (9B −20%, 27B −32%). TTFT is near-linear in ISL.
+Decode falls off at 256k as paged-KV attention grows (9B −22%, 27B −32%). TTFT is near-linear in ISL.
 
 ### Accuracy
 
