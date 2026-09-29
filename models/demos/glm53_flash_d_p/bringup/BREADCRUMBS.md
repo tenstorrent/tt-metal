@@ -1975,3 +1975,29 @@ Results:
 Watch: the all-CPU-block rel is 0.00241 of 0.003 (61 flips of 96). The router is next, and it adds routing flips.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_08_ffn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_moe.router test (attempt 1)
+Reviewed the rendered router component test for kda_moe layer 4. The rendered file was the bare `run_component_test`.
+I rebuilt it from the frozen `test_c_dsa_moe_router.py`: chunk 1 and chunk 0, and the same checks. The gated metric
+pcc_router_L04 (PCC >= 0.99, chunk 1) is unchanged.
+- One limit changed: mean selection overlap >= 0.99 (layer 3: 0.985). Layer 4's bias is smaller (5.26..5.54, choice
+  score <= 6.53, median 8th-9th gap 0.0040 vs 0.0015 at layer 3), so the reference reaches 0.99915. A TF32 choice
+  score (0.980, chunk 0 0.979) and 1% logit noise (0.980) would pass 0.985 by only 0.005. A recentred bf16 choice
+  (0.994) and bf16 logits (0.996) still pass 0.99. Known issue "Router mutations score differently per layer" covers
+  this.
+- Kept from layer 3: worst row >= 0.5, matched rel L2 <= 0.005, coefficient [0.998, 1.002], row sums 2.5 +- 0.015,
+  exactly 8 nonzeros, no negative weights.
+- Sensitivity: CPU host script /tmp/kmrouter/sens.py (not kept); the numbers are in the test docstring. PCC alone
+  passes a TF32 choice, a missing or x1.004 routed scale, logits x1.01, a zeroed, copied or rolled row, one row x1.02,
+  and the last 32 rows zeroed. Each of these fails at least one of the extra checks. Not caught: scale x0.998
+  (coefficient 0.99802, as at layer 3).
+Results:
+- Device (default mode) passes already, through the dsa_moe `tt/router.py:TtRouter` with layer 4 weights: PCC
+  0.999812, overlap 0.99908, worst row 0.875, matched rel 0.00134, coefficient 1.00003, row sums [2.4941, 2.5059].
+  Chunk 0: 0.999723 / 0.99908. About 14 s.
+- Reference passes (0.999802 / 0.99915 / 0.00173). Stub fails (PCC 0).
+- The first `FAIL pcc ... 0.000000` line in each run comes from the precompile collect pass.
+Next (implement): no module change is needed. Add router to `DEVICE_STEPS["kda_moe"]` (the set is still empty in
+hooks.py).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_router.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
