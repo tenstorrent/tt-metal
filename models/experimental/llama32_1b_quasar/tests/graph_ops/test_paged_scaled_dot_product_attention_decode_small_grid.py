@@ -115,15 +115,16 @@ def _case_with_grid(case_id, grid_xy):
 
 
 CASES = [
-    # 2core: the STOCK op packs 8 KV-heads / 2 cores = 4 KV-heads/core, which HANGS on Quasar (workers stall at
-    # WFW on the KV-mcast/DFB handshake) -- the no-hang path is 1 KV-head/core (the per-kv-head split, see
-    # test_..._split_small_grid below and _install_quasar_device_sdpa_split). run=False so it does NOT execute
-    # (a hang, not a catchable failure). Un-xfail once the op packs multiple heads/core.
+    # 2core: the STOCK op is designed for 1 KV-head/core, so with 8 KV-heads it cannot run on 2 cores -- forcing
+    # >1 KV-head/core hangs on Quasar (workers stall at WFW on the KV-mcast/DFB handshake). The supported path is
+    # the per-kv-head split (1 KV-head/core -- see test_..._split_small_grid below and
+    # _install_quasar_device_sdpa_split). run=False so it does NOT execute (a hang, not a catchable failure).
+    # Un-xfail once the op packs multiple heads/core.
     pytest.param(
         _case_with_grid("2core_2x1_bf16", (2, 1)),
         id="2core_2x1_bf16",
         marks=pytest.mark.xfail(
-            reason="stock paged decode SDPA hangs at >1 KV-head/core on Quasar (8 heads/2 cores); use the split",
+            reason="stock paged decode SDPA is designed for 1 KV-head/core; with 8 KV-heads it cannot run on 2 cores (use the split)",
             run=False,
         ),
     ),

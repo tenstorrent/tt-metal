@@ -1129,6 +1129,56 @@ def _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device):
         logger.warning(f"[llama-e2e][quasar] could not patch nlp_concat_heads_decode ({e})")
 
 
+def _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device):
+    """Route an L1 ttnn.concat output to DRAM when it won't fit L1 on this (small) device.
+
+    The lm_head concatenates 47 logit splits into the full-vocab [1,1,32,128256] output with an L1 output memcfg
+    (lm_head_1d.py:154, output_memcfg defaults to L1_MEMORY_CONFIG). On the 2-compute-node emulator that's ~8 MB
+    interleaved across 2 banks = ~4 MB/bank > the 3.88 MB bank size -> Out of Memory (bank_manager.cpp). The
+    full-vocab logits can't live in L1 on 2 cores. Coerce an OVERSIZED L1 concat output to DRAM interleaved;
+    small concats keep their L1 config. Downstream (sampling / argmax) accepts a DRAM tensor. Complements
+    _install_quasar_force_interleaved, which only handles oversized SHARDED configs (this is L1 INTERLEAVED)."""
+    orig = ttnn.concat
+    dev = mesh_device.compute_with_storage_grid_size()
+    ncores = max(int(dev.x) * int(dev.y), 1)
+    per_bank_budget = 3_800_000  # under the ~3.88 MB L1 bank size, leaving headroom for other allocations
+
+    def _l1_output_fits(tensors):
+        # concat output volume == sum of input volumes; L1-interleaved spreads it across `ncores` banks.
+        total_bytes = 0
+        for t in tensors:
+            try:
+                vol = 1
+                for d in t.shape:
+                    vol *= int(d)
+                total_bytes += vol * 2  # bf16 (the Quasar activation dtype)
+            except Exception:
+                return True  # can't estimate -> don't coerce
+        return (total_bytes / ncores) <= per_bank_budget
+
+    def _f(tensors, *args, **kwargs):
+        try:
+            mc = kwargs.get("memory_config")
+            if (
+                mc is not None
+                and getattr(mc, "buffer_type", None) == ttnn.BufferType.L1
+                and isinstance(tensors, (list, tuple))
+                and not _l1_output_fits(tensors)
+            ):
+                logger.warning(
+                    f"[llama-e2e][quasar] concat L1 output exceeds {ncores}-bank L1 budget -> DRAM interleaved"
+                )
+                kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] concat L1->DRAM check failed ({e}); passing through")
+        return orig(tensors, *args, **kwargs)
+
+    try:
+        monkeypatch.setattr(ttnn, "concat", _f)
+    except Exception as e:
+        logger.warning(f"[llama-e2e][quasar] could not patch ttnn.concat ({e})")
+
+
 def _install_quasar_force_interleaved(monkeypatch, mesh_device):
     """Force OVERSIZED sharded memory configs to DRAM-interleaved on Quasar; keep device-fitting shards.
 
@@ -1406,6 +1456,9 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         # num_heads-core grids (WH/BH) keep the stock op. On device, not a host fallback. The durable fix is the
         # op enhancement (pack heads/core) -- see debug_ops/test_quasar_nlp_concat_heads_decode.py.
         _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device)
+        # lm_head concat: the full-vocab [1,1,32,128256] logits (47 splits) use an L1 output memcfg (~8MB), which
+        # overflows L1 on the 2-node emulator (4MB/bank > 3.88MB). Route oversized L1 concat outputs to DRAM.
+        _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device)
         # Route eltwise add/mul/multiply/subtract to the Quasar-native ops: mainline binary_ng is Gen1-only
         # (DataMovementKernel FATAL on Quasar). Keeps residual adds + MLP gate mul on device.
         _install_quasar_eltwise(monkeypatch)
