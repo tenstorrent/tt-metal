@@ -1082,7 +1082,11 @@ class ChunkedPrefillPageTableGuardMixin:
             # it, which severs every lane's window at each chunk boundary —
             # the ladder's first corruption). The stash tensors are per-column
             # mesh tensors, so one key serves all four lanes' own tails.
-            req_key = int(page_tables[0, 0, 0]) + 1
+            # Call-unique key: block ids repeat across rungs/requests (slot 0
+            # always starts at block 1), and a colliding key would hand one
+            # request's boundary tail to the next (stale cross-chunk window).
+            self._g4_lane_prefill_calls = int(getattr(self, "_g4_lane_prefill_calls", 0)) + 1
+            req_key = (self._g4_lane_prefill_calls << 20) + int(page_tables[0, 0, 0]) + 1
             for _m in self.model:
                 for _layer in getattr(_m, "layers", []):
                     _cfg = getattr(getattr(_layer, "self_attn", None), "config", None)

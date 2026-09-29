@@ -2359,7 +2359,7 @@ class Gemma4Model:
             if self.hidden_size_per_layer_input and self.per_layer_input_weights:
                 raise NotImplementedError("lane-sharded decode with per-layer inputs (E2B/E4B) is not supported")
             lane_map = lambda d: self.mesh_config.lane_shard_mapper(self.mesh_device, d)  # noqa: E731
-            batch_local = 32
+            batch_local = lane_slots
         else:
             lanes = 1
             batch_local = batch
@@ -2383,7 +2383,12 @@ class Gemma4Model:
             if batch_local > pad_w:
                 raise ValueError(f"Decode batch {batch_local} exceeds token feedback width {pad_w}")
             if lane_sharded:
-                tok_host = tok_i64.reshape(1, 1, lanes, pad_w)
+                # Pad each lane's row up to the feedback width (local batches
+                # below 32 exist when lane_slots < 32, e.g. per-rung builds).
+                tok_lanes = tok_i64.reshape(lanes, batch_local)
+                if batch_local < pad_w:
+                    tok_lanes = F.pad(tok_lanes, (0, pad_w - batch_local), "constant", 0)
+                tok_host = tok_lanes.reshape(1, 1, lanes, pad_w)
                 tok_mapper = lane_map(2)
             else:
                 if batch < pad_w:
@@ -2607,7 +2612,11 @@ class Gemma4Model:
 
         if is_tokens or is_log_probs:
             if lane_sharded:
-                torch_out = torch.cat([t.reshape(-1) for t in _lane_shards()], dim=0)
+                # Each column's sample row is padded to the feedback width;
+                # keep only its lane_slots real entries or the concat's global
+                # truncation hands later lanes the first lane's padding.
+                _ls = int(getattr(self, "lane_slots", 0) or 32)
+                torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
                 torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
             else:
@@ -2615,7 +2624,8 @@ class Gemma4Model:
             return torch_out[:B]
 
         if lane_sharded:
-            torch_out = torch.cat(_lane_shards(), dim=2)
+            _ls = int(getattr(self, "lane_slots", 0) or 32)
+            torch_out = torch.cat([t[:, :, :_ls, :] for t in _lane_shards()], dim=2)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:

@@ -21,7 +21,7 @@ import torch
 
 from ...tests.test_factory import parametrize_mesh_with_fabric
 
-SLOTS_PER_LANE = 32
+SLOTS_PER_LANE = int(os.environ.get("G4_LADDER_LOCAL_BATCH", "32"))
 GEN_TOKENS = 24
 POOL_BLOCKS_PER_LANE = 12288  # 786,432 tokens at block 64 — serving parity
 import json as _json
@@ -77,6 +77,7 @@ def test_lanes_ladder(mesh_device, reset_seeds, request):
         users = lanes * per_lane
         bpu = isl // 64
         assert per_lane * bpu <= POOL_BLOCKS_PER_LANE
+        assert per_lane <= SLOTS_PER_LANE
         plen = isl - 64  # pads back to isl (power-of-2 grid), margin for decode
         codes = {}
         positions, cur_tok = {}, {}
@@ -102,6 +103,7 @@ def test_lanes_ladder(mesh_device, reset_seeds, request):
                 positions[(lane, s)] = plens[lane]
                 cur_tok[(lane, s)] = int(torch.argmax(logits4[lane]).item())
         prefill_total = time.perf_counter() - t_rung
+        print(f"[rung {isl//1024}K] prefill argmax r0: {[cur_tok[(lane, 0)] for lane in range(lanes)]}")
         med_round = sorted(round_walls)[len(round_walls) // 2]
         print(
             f"[rung {isl//1024}K x {users}] prefill: round med {med_round:.1f}s x {per_lane} rounds "
@@ -134,6 +136,48 @@ def test_lanes_ladder(mesh_device, reset_seeds, request):
                 ring_dec[rb] = rows
             per_layer_dec.append(ring_dec[rb])
         generator.model[0]._active_page_tables_per_layer = per_layer_dec
+        # New rung = new KV geometry: drop the previous rung's decode traces so
+        # the first decode step recaptures against the new bindings (mirrors
+        # the vLLM wrapper's reset after a page-table buffer grow); a replayed
+        # stale trace decodes garbage on every rung after the first.
+        from collections import defaultdict as _dd
+
+        import ttnn as _ttnn
+
+        def _release_all(obj):
+            if obj is None:
+                return
+            if isinstance(obj, _ttnn.Tensor):
+                try:
+                    obj.deallocate(True)
+                except Exception:
+                    pass
+            elif isinstance(obj, (list, tuple)):
+                for x in obj:
+                    _release_all(x)
+            elif isinstance(obj, dict):
+                for x in obj.values():
+                    _release_all(x)
+
+        # Release the previous rung's Metal traces AND their persistent input
+        # tensors — clearing the python dicts alone leaks the device buffers
+        # (~hundreds of MB per rung; rung 3 OOM'd a 704 MB prefill buffer).
+        for _tid in list(getattr(generator, "trace_ids_decode", {}).values()):
+            if _tid is not None:
+                try:
+                    _ttnn.release_trace(mesh_device, _tid)
+                except Exception:
+                    pass
+        for _key in ("trace_inputs_decode", "trace_output_decode"):
+            _release_all(dict(getattr(generator, _key, {}) or {}))
+        generator.trace_ids_decode = _dd(lambda: None)
+        generator.trace_inputs_decode = _dd(lambda: None)
+        generator.trace_output_decode = _dd(lambda: None)
+        generator._prev_decode_batch = None
+        for _m in generator.model:
+            _s = getattr(_m, "sampling", None)
+            if _s is not None and hasattr(_s, "reset_trace"):
+                _s.reset_trace()
         sp = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
         step_times = []
         for _step in range(GEN_TOKENS):
@@ -154,7 +198,7 @@ def test_lanes_ladder(mesh_device, reset_seeds, request):
                 pos_g,
                 page_table=pt_g,
                 kv_cache=tt_kv_cache,
-                enable_trace=True,
+                enable_trace=os.environ.get("G4_LADDER_EAGER_DECODE", "0") != "1",
                 read_from_device=True,
                 sampling_params=sp,
             )
