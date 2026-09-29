@@ -45,6 +45,11 @@
 // it announces rides on plain stores, ordered ahead of it in the same store stream, exactly as cb_push_back
 // announces tile data.
 
+// Before any include: the compile-time and runtime argument headers below branch on these.
+#define CMBF2D_OVERLAPPED 1
+// Overlapped, combine always takes the routed expert's bfloat8_b TILE output.
+#define TILE 1
+
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -52,9 +57,6 @@
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
-#define CMBF2D_OVERLAPPED 1
-// Overlapped, combine always takes the routed expert's bfloat8_b TILE output; there is no row-major path.
-#define TILE 1
 namespace cmbf2d_ns = hyb_cmbf2d;
 
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/reader_combine_fabric2d_body.hpp"
