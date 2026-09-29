@@ -3,21 +3,33 @@
 End-to-end narrow-row pack-untilize on Quasar: **stock hardware pack-untilize, then an iDMA
 gather to squeeze out the padding.** Every shape is verified datum for datum against a golden.
 
-**The performance claim is currently withdrawn pending a re-measure.** A development sweep
-over 23 row widths put the iDMA gather at 2.5–2.9× the NOC-read-per-row workaround, but that
-baseline was on the NOC *any-len* read path: the default `max_page_size` is
-`NOC_MAX_BURST_SIZE + 1`, so every call rewrote the length register and ran a burst-splitting
-loop. Rows here are at most 512 B against a 65536 B burst limit, so the one-packet path was
-always available; the kernel now selects it explicitly. The workaround is therefore faster
-than the 785 cyc/block that sweep recorded, and **every ratio derived from it is an
-overstatement of unknown size** — including the crossover width and the whole-operation
-figures further down.
+**The gather runs at about 2.8× the NOC-read-per-row workaround at 70 B/row and 2.5× at
+504 B.** A development sweep over 23 row widths first measured 2.5–2.9×, but its NOC baseline
+was on the *any-len* read path — the default `max_page_size` is `NOC_MAX_BURST_SIZE + 1`, so
+every call also wrote the length register and computed a packet count for the barrier. Rows
+here are at most 512 B against a 65536 B burst limit, so the one-packet path was always
+available, and the kernel now selects it explicitly. (Neither path chunks in software: the
+overlay packetizes via `MAX_BYTES_IN_PACKET`, so the whole difference is one register write
+plus a shift-and-add.)
 
-What should survive a re-measure is the *shape* of the result, which is structural rather than
-a matter of degree: both engines are issue-bound at these sizes, the workaround's cost is
-independent of payload, and a single iDMA channel becomes data-bound at one VC's 16 B/cycle
-and loses to the workaround on long rows. The numbers in "Development measurements" below are
-kept for that shape, clearly marked, and should not be quoted as a speed-up.
+Re-measuring on the corrected baseline moves the result by under 1%. Per-block cost
+difference between the two engines on the same shape:
+
+| B/row | any-len baseline | one-packet baseline |
+|---|---|---|
+| 64 / 70 | 505.9 | 508 |
+| 504 | 474.1 | 470 |
+
+**How solid these are.** The two ratios are reconstructed as `iDMA + delta`, not read off an
+isolated gather zone — the shipped test carries no profiler instrumentation, so the measured
+zone is the whole stage-2 kernel including its wait on the pack. They are also single samples:
+at 32 B/row one channel came out 210 cyc *faster* than eight, which cannot be real, so treat
+±200 cyc as the noise floor and disregard that row's delta. The two rows above are the
+trustworthy ones, and they agree with the sweep to within 1%.
+
+The shape of the result is firmer than the ratio, because it is structural: both engines are
+issue-bound at these sizes, the workaround's cost is independent of payload, and a single iDMA
+channel becomes data-bound at one VC's 16 B/cycle and loses to the workaround on long rows.
 
 ## The problem
 
@@ -104,7 +116,7 @@ neither iDMA example uses and which is worth 3.6× at 512 B/row.
   and on Quasar DM it carries `MEM_L1_UNCACHED_BASE`. The NOC API strips that alias itself;
   the overlay cmdbuf API does not. Hence `l1_phys()` in the kernel.
 
-## Development measurements (emu-quasar-1x3) — superseded baseline, see above
+## Development measurements (emu-quasar-1x3) — any-len NOC baseline, see above
 
 A 23-width sweep was run during development; it is not part of the shipped test, which keeps
 38 runs of correctness coverage. Two of three curves are flat, and that is the whole result:
