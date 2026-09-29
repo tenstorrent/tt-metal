@@ -802,6 +802,15 @@ class SdpaFwOp(Enum):
     Exp = 1  # calculate_exponential_first_column<scale>, _ckernel_sfpu_exp_accurate_
 
 
+class SdpaPerfOp(Enum):
+    """Selects which SDPA column-vector body sources/sfpu_sdpa_perf.cpp times (perf_sfpu_sdpa.py)."""
+
+    ExpAccurate = 0  # sdpa.h calculate_exponential_first_column<true, scale>
+    ExpPoly = 1  # sdpa.h calculate_exponential_first_column<false, scale>
+    Correction = 2  # sdpa.h calculate_fused_max_sub_exp_add_tile
+    FwExp = 3  # sdpa_fw.h calculate_exponential_first_column<scale>
+
+
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1

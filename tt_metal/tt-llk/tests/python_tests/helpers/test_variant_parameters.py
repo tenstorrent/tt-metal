@@ -32,6 +32,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
+    SdpaPerfOp,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -813,6 +814,14 @@ class SDPA_FW_OP(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int SDPA_FW_OP = {self.sdpa_fw_op.value};"
+
+
+@dataclass
+class SDPA_PERF_OP(TemplateParameter):
+    sdpa_perf_op: SdpaPerfOp = SdpaPerfOp.ExpAccurate
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SDPA_PERF_OP = {self.sdpa_perf_op.value};"
 
 
 @dataclass
