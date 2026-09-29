@@ -1874,3 +1874,39 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
+
+## S.moe_full.11 test (attempt 1)
+
+What
+- Replaced the rendered 32-line swap-11 test (moe_full layer 1, steps 1-11 on device, last: router) with swap 10's
+  reviewed test plus router checks. Every swap-10 check is kept at its limits.
+- New router checks on the swapped step: exactly 8 nonzeros per row, non-negative, row sum / 2.827 within 0.004;
+  vs golden overlap >= 0.99 (kept) and matched-row rel L2 <= 0.01; vs the CPU router on the same device ffn_norm
+  overlap >= 0.996, worst row overlap >= 0.75, matched-row rel L2 <= 0.004.
+- CPU mutation study in /tmp/hy4_sm11/{study,rows}.py (outside the repo; logs study.log, rows.log). Table in the test
+  docstring.
+
+Decisions
+- 20 of 26 router mutations pass the 0.98 out gate. Swap 10's out checks miss 9 of them: bf16 logits / sigmoid / choice
+  keys / all-bf16, weights from the biased choice, weights x 1.005, logits x 1.01, rows 1023 / 1024 swapped.
+  The vs-CPU limits of the component test catch all of them except the row swap: its mean overlap vs CPU is 0.99902.
+  So a worst-row overlap check was added. A precision flip costs 1 of 8, and two adjacent rows share at most 4 of 8
+  experts (measured). 0.75 splits them.
+- The vs-golden overlap stays 0.99, not the component's 0.995: the device ffn_norm alone drops the CPU router to
+  0.99347.
+- No scaled-input probe. At x 3 the precision mutations separate no better than at x 1.
+
+Results
+- BRINGUP_IMPL=reference: PASS (router vs CPU 1.0 / 0). BRINGUP_IMPL=stub: FAIL.
+- Gate (device, tt/router.py:TtHy4Router): PASS. pcc_swap_out 0.999984. Router vs golden overlap 0.99316, matched rel
+  0.00233. vs CPU overlap 0.99933, worst row 0.875, rel 0.000062. Row sums [1.00000, 1.00000]. Tail 0.0045.
+  Out rel 0.00594.
+
+Gotchas
+- Router overlap vs golden is 0.99316 against 0.99, a margin of 0.003. The device router is slightly below the CPU
+  router on the same device ffn_norm (0.99347). Upstream device error causes most of the loss.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
