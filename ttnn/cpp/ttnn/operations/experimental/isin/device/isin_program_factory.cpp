@@ -72,7 +72,8 @@ ProgramDescriptor IsInProgramFactory::create_descriptor(
     auto* device = elements_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    // Slots 0-2 are unused; TensorAccessorArgs starts at 11 and kernels read addresses from runtime args.
+    // Slots 0-2 stay unused so TensorAccessorArgs remains at index 11.
+    // IsInCTAs does not decode them; kernels read addresses from runtime args.
     std::vector<uint32_t> compile_time_args{
         0u,
         0u,
