@@ -1,0 +1,225 @@
+{
+    "metadata": {
+        "model_name": "gemma-4-26B-A4B-it",
+        "model_repo": "google/gemma-4-26B-A4B-it",
+        "device": "P300X2",
+        "generated_at": "2026-09-29T14:42:47+00:00",
+        "report_id": "google__gemma-4-26B-A4B-it_2026-09-29T144247+0000",
+        "workflow": "benchmarks",
+        "report_partial": false,
+        "report_blocks": 5,
+        "server_mode": "docker",
+        "run_command": "python run.py --model google/gemma-4-26B-A4B-it --workflow benchmarks --device p300x2 --docker-server --dev-mode --impl gemma4-autoport --ci-mode --override-docker-image ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:461668dba77e062db3a1dae6743f63dcb8ba1c9b5f88b582c332a5661c680e6f",
+        "runtime_model_spec_json": "/home/ubuntu/actions-runner/_work/tt-agentic-bringup-qb2/tt-agentic-bringup-qb2/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-09-29_14-24-31_id_gemma4-autoport_gemma-4-26B-A4B-it_p300x2_GKAirotr.json",
+        "model_id": "id_gemma4-autoport_gemma-4-26B-A4B-it_p300x2",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "model_impl": "gemma4-autoport"
+    },
+    "sections": [
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 2087.4354,
+                "p50_ttft": 2087.1639,
+                "p99_ttft": 2099.9475,
+                "mean_tpot_ms": 19.6809,
+                "mean_e2el_ms": 4586.9036,
+                "tps_input_throughput": 892.9255,
+                "tps_output_throughput": 27.9039,
+                "tps_total_throughput": 920.8295,
+                "request_throughput": 0.218,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 14:43:22"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 8,
+                "num_requests": 8,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 24322.0072,
+                "p50_ttft": 25111.441,
+                "p99_ttft": 25112.2099,
+                "mean_tpot_ms": 188.5385,
+                "mean_e2el_ms": 48266.4008,
+                "tps_input_throughput": 678.8825,
+                "tps_output_throughput": 21.2151,
+                "tps_total_throughput": 700.0975,
+                "request_throughput": 0.1657,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 14:44:23"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 16,
+                "num_requests": 16,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 41223.2837,
+                "p50_ttft": 41708.1051,
+                "p99_ttft": 41709.7087,
+                "mean_tpot_ms": 367.4961,
+                "mean_e2el_ms": 87895.283,
+                "tps_input_throughput": 745.5986,
+                "tps_output_throughput": 23.3,
+                "tps_total_throughput": 768.8986,
+                "request_throughput": 0.182,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 14:46:04"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 8,
+                "num_requests": 8,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 3408.242,
+                "p50_ttft": 3748.441,
+                "p99_ttft": 3749.0619,
+                "mean_tpot_ms": 180.5491,
+                "mean_e2el_ms": 26337.9786,
+                "tps_input_throughput": 38.8778,
+                "tps_output_throughput": 38.8778,
+                "tps_total_throughput": 77.7556,
+                "request_throughput": 0.3037,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 14:46:43"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 16,
+                "num_requests": 16,
+                "input_sequence_length": 128,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 6945.5704,
+                "p50_ttft": 7280.2224,
+                "p99_ttft": 7281.1153,
+                "mean_tpot_ms": 356.6026,
+                "mean_e2el_ms": 52234.1062,
+                "tps_input_throughput": 39.207,
+                "tps_output_throughput": 39.207,
+                "tps_total_throughput": 78.414,
+                "request_throughput": 0.3063,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 14:47:47"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "NA",
+                "total": 5,
+                "passed": 0,
+                "failed": 0,
+                "na": 5,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Agentic Targets",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \ud83d\udfe8 `NA` (0/5 passed, 5 NA)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- Agentic Targets: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+}

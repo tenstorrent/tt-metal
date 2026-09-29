@@ -463,7 +463,7 @@
     ]
   },
   "tsu_optimization": {
-    "status": "selected_default_local_clean_pass_remote_pending",
+    "status": "verified_optimization_checkpoint_full_matrix_not_run_remote_selected_blocked",
     "supported_context": 262144,
     "scheduler_slots": 32,
     "capability_reduction": false,
@@ -476,7 +476,7 @@
     "serving_profile": "Async scheduling selected for TSU; synchronous scheduling remains available with --no-async-scheduling. Report TTFT and E2EL alongside TPOT; high-concurrency setup phase shifts are not steady decode speedups.",
     "head_geometry": "BFP4/LoFi TP4 head on11x10 grid with in0_block_w1; dtype, fidelity, output shapes and persistent weights unchanged. Paired full-generator K4/K2/K1/K4 controls pass; final selected-default serving and qualitative controls pass.",
     "batched_shared_decode": {
-      "status": "selected_local_clean_pass_default_reproduced_remote_matrix_pending",
+      "status": "selected_local_default_reproduced_C8_C16_remote_checkout_blocked",
       "environment": "Default enabled; GEMMA4_BATCHED_SHARED_DECODE=0 restores the original serialized path",
       "scope": "Dense active batches8..32, Linear TP4, replicated residuals, grouped MoE and fused tail; all other cases retain the serialized path. Attention/cache/router/indexed experts remain per slot; shared decode MLP, paired MoE reduction and tail are batched.",
       "persistent_tensor_payload_delta_bytes": 0,
@@ -493,10 +493,12 @@
         "../readiness_vllm/tsu_optimization/batch32_final_contract.json",
         "../readiness_vllm/tsu_optimization/batch_shared_async/launch.json",
         "../readiness_vllm/tsu_optimization/batch_default_comparison.json",
+        "../readiness_vllm/tsu_optimization/c8c16_default_comparison.json",
+        "../readiness_vllm/tsu_optimization/batch16_tracked_contract.json",
         "tsu_optimization/review_batched_shared_local.md"
       ]
     },
-    "current_validation_scope": "Default CPU125 pass; final reduced Watcher31 and explicitly allocation-tracked Watcher11 pass with stable model/sampler trace identities, changed token/page values and context transitions. Full-capacity selected K1/default async server reproduces primary performance;20 primary/short/8K and38 long-output/32K/C32 guard texts+lengths exactly match controls. All18 official greedy and6 seeded sampled controls exactly match prior results. Independent selected-local review is clean-pass; new exact-image remote23-row matrix remains pending. Prior maximum-context correctness is inherited, not newly claimed from reduced probes.",
+    "current_validation_scope": "Default CPU125 pass; final reduced Watcher31 and explicitly allocation-tracked Watcher11 pass with stable model/sampler trace identities, changed token/page values and context transitions. Full-capacity selected K1/default async server reproduces primary performance;20 primary/short/8K and38 long-output/32K/C32 guard texts+lengths exactly match controls. All18 official greedy and6 seeded sampled controls exactly match prior results. Earlier C1 exact-image CI passes at50.678TSU. Final shared-batching local C1/C8/C16 two-repeat104-request comparison and18 C16 qualitative responses exactly match controls; six C16 Watcher/allocation-tracked full-KV cases pass. Selected remote36584709251 is blocked before image execution by p04 checkout EACCES. Full29-row C1/C8/C16 sweep is NOT RUN by closure direction; historical C32 evidence is not new qualification. See tsu_optimization/perf_summary.json for separate published-image local results. Prior maximum-context correctness is inherited, not newly claimed from reduced probes.",
     "review": "tsu_optimization/review_selected_local.md",
     "evidence": [
       "tsu_optimization/work_log.md",

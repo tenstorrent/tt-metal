@@ -1,0 +1,26 @@
+2026-09-29T14:23:00.0939575Z #30 DONE 0.4s
+2026-09-29T14:23:00.2050315Z
+2026-09-29T14:23:00.2060144Z #31 [runtime 16/17] COPY --chown=container_app_user:container_app_user     model_spec.json /home/container_app_user/model_specs/model_spec.json
+2026-09-29T14:23:00.2061474Z #31 DONE 0.1s
+2026-09-29T14:23:00.4245076Z
+2026-09-29T14:23:00.4246037Z #32 [runtime 17/17] WORKDIR /home/container_app_user/app/src
+2026-09-29T14:23:00.4246448Z #32 DONE 0.1s
+2026-09-29T14:23:00.4246589Z
+2026-09-29T14:23:00.4246699Z #33 exporting to image
+2026-09-29T14:23:00.4247121Z #33 exporting layers
+2026-09-29T14:36:43.6570715Z #33 exporting layers 823.4s done
+2026-09-29T14:36:43.8991813Z #33 exporting manifest sha256:ef6feeda5a04577a65ae2a3198a35823231e244bcb92ee1a3a3bae5a3395347e 0.0s done
+2026-09-29T14:36:43.8992842Z #33 exporting config sha256:5e82c5225f25bf1fd23b826887845e94c3885b83e09af56b80966821f4a3af5d 0.0s done
+2026-09-29T14:36:43.8993609Z #33 exporting attestation manifest sha256:40b3d1f0e14cf44494c52344b0dd67043d2418d3c67e4f64235aa5f5dd6d4e46 0.0s done
+2026-09-29T14:36:43.8994427Z #33 exporting manifest list sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd 0.0s done
+2026-09-29T14:36:43.8995647Z #33 naming to ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221 0.0s done
+2026-09-29T14:36:43.8997405Z #33 unpacking to ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221
+2026-09-29T14:38:52.2062007Z #33 unpacking to ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221 128.5s done
+2026-09-29T14:38:52.3461390Z #33 DONE 952.1s
+2026-09-29T14:38:53.0683436Z
+2026-09-29T14:38:53.0722652Z  [33m2 warnings found (use docker --debug to expand):
+2026-09-29T14:38:53.0724952Z [0m - InvalidDefaultArgInFrom: Default value for ARG ${TT_METAL_DOCKERFILE_URL} results in empty or invalid base image name (line 16)
+2026-09-29T14:38:53.0727829Z  - InvalidDefaultArgInFrom: Default value for ARG ${TT_METAL_DOCKERFILE_URL} results in empty or invalid base image name (line 176)
+2026-09-29T14:40:11.6072528Z ✅ Successfully built and pushed image:
+2026-09-29T14:40:11.6073543Z ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-c9ec3469f1b875e7e5e505660c4421e5126e8dad-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109433282221
+2026-09-29T14:40:11.6401515Z ##[group]Run # Consolidate outputs from different build steps

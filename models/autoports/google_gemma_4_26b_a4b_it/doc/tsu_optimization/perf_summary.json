@@ -1,5 +1,5 @@
 {
-  "status": "C1_exact_image_qualified_shared_batch_local_qualified_final_matrix_pending",
+  "status": "checkpoint_closure_requested_full_matrix_not_run_remote_selected_blocked",
   "workload": {
     "profile": "single_user_decode",
     "prompt_len": 4096,
@@ -26,14 +26,55 @@
   },
   "shared_batch_local_default": {
     "tt_metal_sha": "c9ec3469f1b875e7e5e505660c4421e5126e8dad",
-    "evidence": "../../readiness_vllm/tsu_optimization/batch_default_comparison.json",
-    "C32_tsu_gain_percent": 5.6962795568547,
-    "C8_tsu_gain_percent": 2.8589991114522872,
-    "C1_tsu_gain_percent": -0.006380601043620704,
+    "evidence": "../../readiness_vllm/tsu_optimization/c8c16_default_comparison.json",
+    "input4096_C1_tsu_gain_percent": 0.133650258,
+    "input4096_C8_tsu_gain_percent": 3.03458,
+    "input4096_C16_tsu_gain_percent": 4.44075,
+    "input128_C8_tsu_gain_percent": 2.96886,
+    "input128_C16_tsu_gain_percent": 4.58000,
+    "C1_interpretation": "unchanged within measurement noise",
     "exact_text_and_length_comparisons": 104,
-    "image_build_run_pending": 36576438888,
+    "image_build_run": 36576438888,
+    "shared_image_digest": "sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd",
+    "remote_focused_reuse_run": 36584709251,
+    "remote_focused_status": "blocked; all three attempts failed before image pull at runner120-qb2-p04t07 checkout EACCES .git/FETCH_HEAD",
     "C32_scope": "historical only; new qualification restricted to C1/C8/C16",
-    "C16_tracked_contract": "six exact outputs and all-rank full-KV comparisons pass"
+    "C16_tracked_contract": "six exact outputs and all-rank full-KV comparisons pass",
+    "qualitative": "18 C16 shared-suite responses exactly match pinned controls; inherited length caps and wording caveat retained",
+    "runtime_regime": "paired local development image with identical mounted selected source; separate exact published-image qualification recorded below"
+  },
+  "qualification_scope": {
+    "full_29_row_C1_C8_C16_sweep": "not run; closure requested before dispatch",
+    "selected_remote_qualification": "blocked before execution by p04 runner checkout EACCES",
+    "remote_control": "36581849489 attempt2 success, five rows and52 requests, zero failures; all builds skipped",
+    "selected_local_exact_image": "completed five-row two-repeat benchmark;104 responses,zero failures,all text/length/normalized-command checks pass;4KC8 first-use penalty retained",
+    "inference_server_full_matrix_sha": "6d88032ed5f8259333233c53db671cd29aad377d",
+    "capability": "unchanged262144 context,32 slots,1GB trace budget",
+    "closure_type": "verified optimization checkpoint, not full-matrix qualification or release pass"
+  },
+  "published_image_local": {
+    "image_digest": "sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd",
+    "evidence": "../../readiness_vllm/tsu_optimization/exact_default_async/bench/summary.json",
+    "comparison": "../../readiness_vllm/tsu_optimization/exact_image_comparison.json",
+    "scope": "Separate image-only local reproduction; not a matched before/after image performance claim",
+    "completed": 104,
+    "failed": 0,
+    "all_text_length_and_command_checks_pass": true,
+    "first_use_anomaly": "First4KC8 cohort TPOT188.44447ms and E2EL51765.29ms versus second180.14918ms/41584.16ms. One request has10.677s maxITL, other seven max0.242s; steady medianITL177.57346/177.52831ms agrees. Startup/capture is plausible, compilation attribution unproven. Both cohorts retained in pooled results; no extra run permitted at closure.",
+    "pooled_4K_C1_tpot_ms": 19.627900395403053,
+    "pooled_4K_C1_tsu": 50.94788438167359,
+    "pooled_4K_C1_ttft_ms": 2124.930273857899,
+    "pooled_4K_C8_tpot_ms": 184.29682708820184,
+    "pooled_4K_C8_tsu": 5.4260293885657305,
+    "pooled_4K_C8_ttft_ms": 23269.025804300327,
+    "pooled_4K_C16_tpot_ms": 351.7728078229019,
+    "pooled_4K_C16_tsu": 2.8427438896966835,
+    "pooled_4K_C16_ttft_ms": 39188.422934908886,
+    "pooled_short_C8_tpot_ms": 175.4349470207299,
+    "pooled_short_C8_tsu": 5.700118573763055,
+    "pooled_short_C16_tpot_ms": 341.98513376163544,
+    "pooled_short_C16_tsu": 2.9241037146866233,
+    "comparison_interpretation": "All104 output/harness checks pass, not a universal performance pass. Versus mounted-source selected run:4KC8 pooledTSU -2.042% and E2EL+11.68% with first-use transient; other TPOTs within0.173%. No matched exact-image shared-disabled run was performed."
   },
   "aggregation": "Eight measured requests: arithmetic mean of two equal-sized cohort mean TPOTs; TSU is1000/pooled meanTPOT, not aggregate output throughput",
   "ttft_ms": 2123.3878504717723,
@@ -63,12 +104,12 @@
   },
   "named_limitations": [
     "No serving device profiling; full-model device-only duration unmeasured",
-    "C1 checkpoint has exact-image evidence; newer shared batching is locally verified and its new image is building",
-    "Final long-output/context/concurrency guards and shared qualitative replay pass; remote matrix pending",
+    "Earlier C1 checkpoint has exact-image CI evidence; selected shared image was built once and reused locally",
+    "Earlier long-output/context guards pass, but final shared-runtime full29-row sweep is not run",
     "Async changes TTFT/TPOT phase attribution, especially at high concurrency; inspect E2EL and steady ITL",
     "Tiny K1 head gain verified in paired generator controls but not separately resolvable in serving noise",
     "Shared MLP/MoE collective/tail batching is selected; expert-union runtime was rejected/removed and tiny fabric work deprioritized",
     "User-selected final matrix has29 rows at only C1/C8/C16; unchanged full context and32-slot capacity",
-    "Reuse-only control CI hit runner checkout EACCES before model execution; retry pending"
+    "Reuse-only control CI attempt2 passes; selected remote qualification fails checkout on p04 in all three attempts"
   ]
 }

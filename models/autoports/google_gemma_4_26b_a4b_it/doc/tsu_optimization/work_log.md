@@ -66,6 +66,10 @@ pinned image, while using the existing user Docker config starts the pull.
 | Async concurrency guard | `--shape 128 128 32 32` |1 cohort|680.37688ms;1.46977TSU;14421.257ms TTFT;100829.121ms E2EL|all32 texts/lengths exactly match sync|TTFT/TPOT phase tradeoff; cold capture histories differ|
 | Full-model head K4/K2/K1/K4 | `measure_tsu_paths --head-blocks 4 2 1 4 --repeats 5` |5 steady per block,1 warmup excluded|19.641300/19.629814/19.628722/19.639584ms TPOT; generator only|all128 tokens exactly match control|K1 provisional; tiny0.06% full-model win, final serving/qualitative pending|
 | Selected default, async, K1 | same primary chat harness; no reuse environment override |2 cohorts|19.53948/19.76070ms;51.17844/50.60549TSU;2144.887/2101.889ms TTFT;4626.400/4611.498ms E2EL|all20 primary/short/8K texts and38 guard texts exactly match controls|local performance reproduced; qualitative/review/CI pending|
+| C1 selected exact-image qualification | run36564611976; TTeb1d2af;4096/128/C1/N4 |1 remote cohort|19.73241ms /50.67805TSU /2089.999ms;4596.015ms E2EL|all4 texts and lengths exact versus original remote|kept; remote+17.7352%TSU, local reviews/checks/qualitative pass|
+| Shared MLP/paired MoE CCL/tail | `GEMMA4_BATCHED_SHARED_DECODE=1` default; TTc9ec3469; matched `batch_default_async` |2 per shape|shortC8 180.45599->175.44016ms (+2.859%TSU); C1 unchanged|all104 historical texts/lengths exact; B8/B16/B32 cache contracts exact|selected; new C1/C8/C16 remote/local qualification underway|
+| Expert union B32-only extension | `GEMMA4_BATCHED_EXPERT_DECODE=1` archived source |2 shortC32,1 4KC32|short+0.10685%TSU,4K+0.31002%; C1/C8 fallback unchanged|all136 texts/lengths exact;36 qualitative exact|rejected/production hook removed; tiny serving gain and C32 excluded by user|
+| Fabric packet4352/12288/4352 | `measure_tsu_paths --reduced --fabric-payload N --repeats 3` |3 per condition|queued2.37768/2.37344/2.37733ms; not serving TSU|all128 generated tokens exact in all paths|deprioritized under user instruction: tiny isolated improvement, no production change|
 
 ### Same-image local baseline
 
@@ -862,3 +866,135 @@ modified. A bounded owned10-second poll watches build109433282221; on success
 it records publication artifacts and cancels only supersededrun36576438888,
 preventing its obsolete C32 benchmark. Production files remain exactly c9ec3469;
 the intervening archival/tool/test commits do not require a new runtime image.
+
+At14:34UTC the fresh local control finishes all10 cohorts/104 requests, then
+shuts down cleanly (ownedAPI169722, Engine169776; exec exits0, no device FDs).
+TPOT repeat pairs in ms:4KC1 19.52128/19.71934;4KC8 186.57833/185.44537;
+4KC16 367.97461/367.23584;shortC8 180.67855/180.54238;
+shortC16 357.70880/357.37512. `c8c16_default_async` launches with no shared
+batch environment override, same source/image/full capacity/async configuration.
+The exact same five shapes and two repeats will be used. The archive checkpoint
+bef4655425d839cc7aa3e811ddadd5fbb7e0502b is pushed and has zero production
+`tt/` diff from image-source c9ec3469. No additional image build is needed.
+
+At14:40:15UTC build109433282221 succeeds and publishes artifact11041072316.
+The watcher cancels run36576438888 at14:40:23; its spawned benchmark job
+109460738105 never reaches Run tests (checkout fails and Run tests is skipped).
+Thus no new C32 benchmark runs. The published image's manifest-list digest is
+sha256:ad58effd178b9d8c7689a392159532d30aea0c1fe24bec82c06dbc0d3ebf4bbd,
+platform manifest ef6feeda5a04577a65ae2a3198a35823231e244bcb92ee1a3a3bae5a3395347e.
+The exact tag/digest mapping and successful push are preserved in
+`ci_36576438888/image_publication.txt` and the build report. Local anonymous
+registry inspection gets401, so provenance uses the authenticated CI build log,
+not an invented local inspection result. Reuse-only selected run36584709251
+uses this digest and the same focused TTI5723918d as the control; source inputs,
+image URI and run IDs are recorded in `image_reuse.json`. No rebuild occurs.
+
+Selected reuse run36584709251 attempt1/job109461946997 fails at the same
+checkout EACCES on runner120-qb2-p04t07, before image pull or execution.
+One failed-job retry (attempt2/job109463261707) is running; all build jobs
+remain skipped. No runner-wide permission or deletion operation is performed.
+Local selected4KC8 repeats181.03429/180.03253ms versus186.57833/185.44537;
+4KC16 repeats352.27127/351.67851ms versus367.97461/367.23584. First4KC16
+all16 texts/input/output lengths already match; final whole-cohort comparison
+waits for the shortC16 rows. The shortC8 repeats175.42872/175.37727ms also
+reproduce the prior selected gain versus180.67855/180.54238ms controls.
+
+All10 local cohorts finish and `c8c16_default_comparison.json` passes every
+normalized-command, completion, text and input/output-length check (104 requests
+per condition). Pooled two-repeat selected results:
+
+| Shape ISL/OSL/C/N | Control->selected TPOT ms | TSU gain | Control->selected TTFT ms | Control->selected E2EL ms |
+|---|---|---|---|---|
+|4096/128/1/4|19.62031->19.59412|+0.134% (noise)|2122.55->2120.11|4614.33->4608.56|
+|4096/128/8/8|186.01185->180.53341|+3.035%|19143.45->18867.10|42766.95->41794.85|
+|4096/128/16/16|367.60522->351.97489|+4.441%|39293.37->37765.38|85979.24->82466.19|
+|128/128/8/8|180.61046->175.40299|+2.969%|3324.22->3132.77|26261.75->25408.95|
+|128/128/16/16|357.54196->341.88369|+4.580%|6951.44->6404.49|52359.27->49823.72|
+
+Steady medianITL also improves:4KC8 182.55686->177.55551ms and4KC16
+363.98228->348.72025ms, supporting a decode gain beyond capture/TTFT phase
+movement. No production changes occurred between control and selected launches;
+every implementation hash matches, with shared batching disabled only in control.
+The18-request shared qualitative suite now runs at concurrency16.
+
+Remote control36581849489 attempt2 succeeds, freeing healthy runner120-qb2-p03t02.
+Selected run36584709251 attempt2 had again failed pre-image checkout on p04t07.
+Read-only repository runner list is empty (inherited runners); org label lookup
+returns403, so no invented label or auth-scope escalation is used. With healthy
+capacity now free, one final retry (attempt3/job109464955726) is requested.
+If scheduling still selects the broken runner, owner repair/routing is needed;
+the same image digest is retained and no builds occur.
+
+Selected reuse attempt3 again lands on brokenp04t07 and fails at checkout;
+no further blind retries are dispatched. Healthy control CI completes all52
+requests/5 rows with zero failures:4KC1 19.68085ms=50.81081TSU;4KC8
+188.53853ms;4KC16 367.49606ms;shortC8 180.54911ms;shortC16 356.60264ms.
+Raw artifacts are archived under `ci_36581849489`. The selected local18-request
+qualitative suite atC16 passes all exact pinned texts/finish reasons/usage;
+all six actual texts are inspected, retaining the controlled256-token caps and
+inherited wording caveat described above.
+
+An in-scope image-reuse fallback is available: normal-user Docker registry
+configuration authenticates successfully (the earlier sudo inspection had no
+registry credentials). `sudo docker --config /home/mvasiljevic/.docker pull`
+fetches the exact published ad58effd digest; no credential contents, new scopes,
+new image build, runner rewrite or unrelated job action is involved. New owned
+container `gemma4-tsu-exact` uses UID/GID6002, same device/hugepage/cache mounts,
+full capacity, and image-only PYTHONPATH/TT_METAL_HOME/LD_LIBRARY_PATH. Workspace
+is mounted only for tools/evidence; actual model and native imports resolve to
+`/home/container_app_user/tt-metal`, verified in `exact_image_import.json`.
+Model source hash is the selected1635882a... and native `_ttnn.so` hash is
+be64dd1a0a62daae3c0ecac081f5b8ef4fdf0634080fe88c3fe3624a068e6fb2.
+The image strips `.git`; its exact revision is established by build provenance
+and source hashes, not an unsuccessful git-rev-parse. Container startup needs
+only a writable `build/profiler/build_wasm/traces` directory for TTNN import;
+that owned-container directory is created/chowned6002. No profiler is enabled.
+TT_METAL_CACHE and MPLCONFIGDIR use owned `/tmp/gemma4-exact-*` paths.
+After the old server/qualitative completion and empty device-FD checks, the
+exact-image server starts as `exact_default_async`. The old owned WASM HTTP
+viewer PID70594 is stopped; no unrelated service or device reset is touched.
+
+### 2026-09-29 15:07 UTC — requested checkpoint closure
+
+User direction via orchestrator: close the optimization agent now/soon; do not
+start the29-row sweep, any new benchmark/optimization work, or further CI.
+The exact-image five-row/two-repeat benchmark is already active (exec50382,
+server exec12753) and its first4KC1 cohort completes at19.51949msTPOT,
+51.23084TSU. This is preliminary, not the final pooled result. No new work is
+started beyond read-only independent evidence review and checkpoint packaging.
+The29-row C1/C8/C16 sweep is explicitly NOT RUN. Selected remote qualification
+36584709251 is BLOCKED before image execution by p04 checkout EACCES in all
+three attempts. Closing this verified optimization checkpoint does not claim
+full-matrix qualification, a release pass, or exhaustion of every possible
+optimization. No runner repair is attempted and SWE36530661132 is untouched.
+
+Fresh xhigh independent checkpoint review (`review_checkpoint_closure.md`)
+returns clean-pass for retained runtime/source evidence, explicitly excluding
+the unfinished exact-image benchmark, unrun full sweep and any release pass.
+It independently re-derives all104 paired output/length checks, pooled gains,
+per-request TPOT/E2EL accounting,18 pinned qualitative responses and unchanged
+capacity. Stale context/summary status strings are corrected. Eight comparator
+CPU tests and all staged pre-commit checks pass; raw JSON newline normalization
+does not change parsed evidence. No further production change is selected.
+
+### 2026-09-29 15:16 UTC — final exact-image focused evidence
+
+The already-running five-row/two-repeat benchmark exits0:104completed,
+zero failures. `exact_image_comparison.json` passes all normalized-command,
+text/input/output-length/model/tokenizer comparisons against selected mounted
+source. Pooled exact-image TPOT/TSU:4KC1 19.62790ms/50.94788;
+4KC8 184.29683ms/5.42603;4KC16 351.77281ms/2.84274;
+shortC8 175.43495ms/5.70012;shortC16 341.98513ms/2.92410.
+4KC1 TTFT2124.930ms/E2EL4617.674ms. Both4KC8 cohorts are retained:
+188.44447/180.14918ms TPOT, TTFT27832.838/18705.213ms,
+E2EL51765.286/41584.159ms. First cohort has one10.677s ITL while
+seven other requests have maxima0.242s; medianITL177.57346/177.52831ms
+matches the selected steady path. Startup/capture is plausible, compilation
+attribution unproven. Pooled4KC8 is2.042% lowerTSU and11.68% higherE2EL
+than mounted-source selected evidence, so output-check pass is not a universal
+performance pass. Other TPOTs reproduce within0.173%. This run has no matched
+exact-image shared-disabled control. No extra rerun or qualitative request is
+started. OwnedAPI176 receivesTERM after benchmark completion; serverexec12753
+exits0 and the owned container has no remaining device file descriptors.
+Only evidence/docs/tooling differ from runtimec9ec3469; no new image is needed.
