@@ -297,6 +297,7 @@ class ttMLA:
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
+        attn_form: Optional[str] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -313,6 +314,14 @@ class ttMLA:
         self.layer_idx = layer_idx
         self.kv_only = kv_only
         self.is_balanced = is_balanced
+        # "absorbed": Q absorbs W_UK and attends to the latent cache (ring_mla). "expanded": the latent
+        # prefix is expanded to per-head K/V every chunk and attended with ring_joint_sdpa (dense chunked only).
+        # Unset -> MLA_ATTN_FORM env (default absorbed), so the existing chunked tests can exercise either.
+        attn_form = attn_form or os.environ.get("MLA_ATTN_FORM", "absorbed")
+        assert attn_form in ("absorbed", "expanded"), f"attn_form {attn_form!r}"
+        self.attn_form = attn_form
+        self.sdpa_chunk_override: Optional[tuple[int, int]] = None
+        self.cfg_num_heads = config.num_attention_heads
         self.weight_cache_path = weight_cache_path
         self.is_chunked = is_chunked
         self.max_seq_len = seq_len
@@ -557,6 +566,10 @@ class ttMLA:
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
+        if self.attn_form == "expanded":
+            assert is_chunked and not kv_only and not self._has_indexer, "expanded MLA: dense chunked path only"
+            self._build_expanded_kv_weights(state_dict)
+            self._expanded_gather_bufs = {}
 
         # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
         # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
@@ -681,6 +694,8 @@ class ttMLA:
             self._attention = self._sparse_chunked_attn
         else:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
+            if self.attn_form == "expanded":
+                self._attention = self._expanded_chunked_attn
 
     def release_sparse_mla_overlap_manager(self) -> None:
         """Forward shared sparse-MLA overlap teardown to the model-wide TT_CCL owner."""
@@ -755,7 +770,12 @@ class ttMLA:
         # 64 heads; several program_configs overflow the grid at DeepSeek's 128). A config may declare
         # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
         # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
-        if cfg.get("num_heads") not in (None, self.num_heads):
+        # cfg_num_heads: the head count configs are matched against. A Galaxy-shape proxy (fewer global
+        # heads on a narrower TP, same heads/chip) sets it to the Galaxy model's count.
+        if cfg.get("num_heads") not in (None, self.cfg_num_heads):
+            return False
+        cap = cfg.get("dense_head_cap_non_dsa")
+        if cap is not None and self.cfg_num_heads > cap and not self._is_dsa_family:
             return False
         # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
         # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
@@ -770,9 +790,6 @@ class ttMLA:
             return False
         # Dense-path head ceiling: above dense_head_cap_non_dsa, non-DSA models fall back rather than
         # use this tiling. Empirically derived (V3.1 at 128 heads); DSA-family models are exempt.
-        cap = cfg.get("dense_head_cap_non_dsa")
-        if cap is not None and self.num_heads > cap and not self._is_dsa_family:
-            return False
         # K. The table is keyed on (weight_name, seq_len_local), so one slot is shared by variants
         # with different K. A tiling whose in0_block_w does not divide this model's per-device Kt
         # cannot run here at all -- the matmul dies with "Kt (32) must be divisible by in0_block_w
@@ -888,6 +905,10 @@ class ttMLA:
         cfg = self._select_cfg(self.sdpa_configs.get(seq_len_local))
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
+        if self.sdpa_chunk_override is not None:  # (q_chunk, k_chunk) for perf sweeps
+            q_chunk_size, k_chunk_size = self.sdpa_chunk_override
+        elif os.environ.get("MLA_SDPA_QK"):  # "QxK" -- lets the correctness tests run a swept config
+            q_chunk_size, k_chunk_size = map(int, os.environ["MLA_SDPA_QK"].split("x"))
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
             q_chunk_size=q_chunk_size,
@@ -1137,12 +1158,13 @@ class ttMLA:
         )
         ttnn.deallocate(tt_q)
 
-        tt_q_nope = ttnn.linear(
-            tt_q_nope,
-            self.wkv_b1_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b1", seq_len_local),
-        )
+        if self.attn_form == "absorbed":
+            tt_q_nope = ttnn.linear(
+                tt_q_nope,
+                self.wkv_b1_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("wkv_b1", seq_len_local),
+            )
 
         tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata)
 
@@ -1704,6 +1726,137 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
+
+    def _build_expanded_kv_weights(self, state_dict: dict) -> None:
+        """Per-head expansion weights that read the packed [latent 512 | k_pe 64] cache row directly, so no
+        slice/concat is needed: K_h = kvpe @ [[W_UK_h^T, 0], [0, I]] -> [k_nope 128 | k_pe 64], and
+        V_h = kvpe @ [[W_UV_h^T], [0]] -> 128. The identity block copies k_pe exactly (single nonzero term)."""
+        assert state_dict and "kv_b_proj.weight" in state_dict, "expanded MLA needs host kv_b_proj weights"
+        H, nope, v, r, rope = (
+            self.num_heads,
+            self.qk_nope_head_dim,
+            self.v_head_dim,
+            self.kv_lora_rank,
+            self.qk_rope_head_dim,
+        )
+        kv_b = state_dict["kv_b_proj.weight"].reshape(H, nope + v, r).float()
+        wk = torch.zeros(1, H, r + rope, nope + rope)
+        wk[0, :, :r, :nope] = kv_b[:, :nope, :].transpose(-2, -1)
+        wk[0, :, r:, nope:] = torch.eye(rope)
+        wv = torch.zeros(1, H, r + rope, v)
+        wv[0, :, :r, :] = kv_b[:, nope:, :].transpose(-2, -1)
+        dims = [None, None]
+        dims[self.tp_axis] = 1
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims)
+        self.wk_expand_weight, self.wv_expand_weight = (
+            ttnn.as_tensor(
+                w,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            for w in (wk, wv)
+        )
+
+    def _expanded_chunked_attn(
+        self,
+        *,
+        tt_q,
+        tt_kvpe,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        actual_end=None,
+        metadata=None,
+        **_,
+    ):
+        """Expanded-form chunked attention. The latent cache stays the persistent (migrated) representation:
+        the chunk is written to it exactly as in the absorbed path, then this user's slab window (prefix +
+        chunk, same block-cyclic layout) is expanded to per-head K [.., 192] / V [.., 128] and attended with
+        ring_joint_sdpa in KV-cache mode, which applies the same rotation/causal offsets as ring_mla.
+        Returns attn_out already in v_head_dim space (no wkv_b2 epilogue)."""
+        assert metadata is None, "expanded MLA: scalar (host kv_actual) path only"
+        assert not self.tp_shard_kv, "expanded MLA: TP-replicated latent cache only"
+        self._update_kv_cache(
+            kvpe_cache,
+            tt_kvpe,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
+            actual_end=actual_end,
+        )
+        chunk = seq_len_local * self.sp_factor
+        cap_local = kvpe_cache.storage.shape[2]
+        n_local = min(-(-(kv_actual_isl + chunk) // chunk) * seq_len_local, cap_local)
+        kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+        b = self._cache_batch_idx(cache_user_id, cache_layer_idx)
+        latent = ttnn.slice(
+            kvpe_cache.storage, [b, 0, 0, 0], [b + 1, 1, n_local, kvpe_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_k = ttnn.matmul(
+            latent,
+            self.wk_expand_weight,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        tt_v = ttnn.matmul(
+            latent,
+            self.wv_expand_weight,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        ttnn.deallocate(latent)
+
+        heads_local = self.num_heads // self.tp_factor
+        if n_local not in self._expanded_gather_bufs:
+            self._expanded_gather_bufs[n_local] = tuple(
+                ttnn.empty(
+                    [1, heads_local, n_local * self.sp_factor, d],
+                    ttnn.bfloat8_b,
+                    ttnn.TILE_LAYOUT,
+                    self.mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for d in (self.qk_head_dim, self.v_head_dim)
+            )
+        buf_k, buf_v = self._expanded_gather_bufs[n_local]
+        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=buf_k,
+            persistent_output_buffer_v=buf_v,
+            joint_strategy="rear",
+            logical_n=kv_actual_isl + chunk,
+            program_config=self._get_sdpa_program_config(seq_len_local),
+            compute_kernel_config=self.default_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.sp_ccl_topology,
+            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=self.scale,
+            is_balanced=False,
+            # A one-slab window means kv_actual == 0: plain causal ring attention over the chunk (the op's
+            # KV-cache mode requires K longer than Q).
+            **({} if n_local == seq_len_local else {"kv_cache_batch_idx": 0, "kv_actual_isl": kv_actual_isl}),
+        )
+        ttnn.deallocate(tt_k)
+        ttnn.deallocate(tt_v)
+        return attn_out
 
     def _sparse_chunked_attn(
         self,
