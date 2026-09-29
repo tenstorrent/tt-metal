@@ -374,8 +374,8 @@ bool supported_by_codegen(
     if (std::any_of(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r == 0; })) {
         return false;
     }
-    // A sharded output with no shard_spec leaves the spec to native's derivation, which this path does
-    // not reproduce.
+    // The router resolves a sharded output's spec before asking; one still missing here has no page
+    // grid for the final leg to write.
     if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
         return false;
     }

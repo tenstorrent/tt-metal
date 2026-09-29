@@ -274,6 +274,61 @@ MemoryConfig interleaved_in(BufferType buffer_type) {
     return MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
 }
 
+// A sharded output with no shard_spec -- what a sharded input gets when no memory_config is passed --
+// is given the spec native lands it in: the input's spec resized for the repeat when native repeats
+// that input in place, otherwise one synthesized for the repeated shape, otherwise interleaved in the
+// same buffer type. The codegen legs need the spec up front to decide where the final leg writes.
+MemoryConfig resolve_codegen_output_mem_config(
+    const ttnn::Tensor& working_tensor,
+    const ttsl::SmallVector<uint32_t>& working_repetition_vector,
+    const MemoryConfig& output_mem_config) {
+    if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value() ||
+        working_tensor.storage_type() != StorageType::DEVICE) {
+        return output_mem_config;
+    }
+    const auto& shape = working_tensor.logical_shape();
+    if (working_repetition_vector.size() != shape.rank()) {
+        return output_mem_config;
+    }
+    auto out_shape = shape;
+    int32_t only_dim = -1;
+    uint32_t repeated_dims = 0;
+    for (size_t i = 0; i < working_repetition_vector.size(); ++i) {
+        out_shape[i] *= working_repetition_vector[i];
+        if (working_repetition_vector[i] != 1) {
+            only_dim = static_cast<int32_t>(i);
+            ++repeated_dims;
+        }
+    }
+    const auto& input_shard_spec = working_tensor.shard_spec();
+    if (repeated_dims == 1 && input_shard_spec.has_value() &&
+        repeat::is_native_repeat_sharding(
+            working_tensor.tensor_spec(), output_mem_config, only_dim, working_repetition_vector[only_dim])) {
+        const auto adjusted = repeat::adjust_repeat_shard_spec_to_shape(
+            *input_shard_spec, shape, out_shape, only_dim, working_repetition_vector[only_dim]);
+        if (adjusted.has_value()) {
+            return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), adjusted);
+        }
+    }
+
+    const tt::tt_metal::PageConfig page_config =
+        working_tensor.layout() == ttnn::TILE_LAYOUT
+            ? tt::tt_metal::PageConfig(working_tensor.layout(), working_tensor.tensor_spec().tile())
+            : tt::tt_metal::PageConfig(working_tensor.layout());
+    const tt::tt_metal::TensorSpec out_spec(
+        out_shape,
+        tt::tt_metal::TensorLayout(
+            working_tensor.dtype(), page_config, interleaved_in(output_mem_config.buffer_type())));
+    const std::optional<ShardOrientation> orientation_hint =
+        input_shard_spec.has_value() ? std::optional{input_shard_spec->orientation} : std::nullopt;
+    const auto synthesized = repeat::generate_repeat_shard_spec(
+        working_tensor, out_spec.padded_shape(), output_mem_config.memory_layout(), orientation_hint);
+    if (synthesized.has_value()) {
+        return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), synthesized);
+    }
+    return interleaved_in(output_mem_config.buffer_type());
+}
+
 // Decomposes a (possibly multi-dim) repeat into single-dim prim::repeat_codegen legs. Each leg is
 // independent (orthogonal axes), so leg order affects only intermediate sizes, never the result.
 // Intermediate legs are interleaved in the input's buffer type, since a repeated shape does not tile
@@ -570,14 +625,15 @@ ttnn::Tensor repeat_force_codegen(
     const ttsl::SmallVector<uint32_t>& repetition_vector,
     const std::optional<MemoryConfig>& memory_config) {
     auto [working_tensor, working_repetition_vector] = match_input_rank(input_tensor, repetition_vector);
-    const MemoryConfig output_mem_config = derive_output_mem_config(input_tensor, memory_config);
+    const MemoryConfig output_mem_config = resolve_codegen_output_mem_config(
+        working_tensor, working_repetition_vector, derive_output_mem_config(input_tensor, memory_config));
     // Never falls back to native: a forced leg that quietly served native would make any
     // comparison against native vacuous. Perf demotion is deliberately not consulted here.
     TT_FATAL(
         repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, output_mem_config),
         "repeat_force_codegen invoked for a case the codegen path does not support (requires a "
         "rank-2..4 input with a default untransposed tile, at least one dim repeated more than once "
-        "and none repeated zero times, an explicit shard_spec on a sharded output, and no row-major "
+        "and none repeated zero times, and no row-major "
         "leg over bfloat8_b or with a stick too wide for its CB -- a TILE input whose sub-tile H/W "
         "axis is repeated runs row-major). Use ttnn::repeat if you want the case routed.");
     return repeat_via_codegen(working_tensor, working_repetition_vector, output_mem_config);
@@ -598,6 +654,9 @@ ttnn::Tensor repeat(
     auto [working_tensor, working_repetition_vector] = detail::match_input_rank(input_tensor, repetition_vector);
     const MemoryConfig output_mem_config =
         detail::derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
+    // Native derives its own spec from output_mem_config; only the codegen route needs it resolved.
+    const MemoryConfig codegen_output_mem_config =
+        detail::resolve_codegen_output_mem_config(working_tensor, working_repetition_vector, output_mem_config);
     // Ahead of the routing decision, so a rejected preallocated output raises the same way whichever
     // route the case would have taken.
     detail::validate_optional_output(
@@ -608,13 +667,13 @@ ttnn::Tensor repeat(
     const bool output_page_ok = !optional_output_tensor.has_value() ||
                                 repeat_codegen::output_matches_input_page(input_tensor, *optional_output_tensor);
     if (output_page_ok &&
-        repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, output_mem_config) &&
-        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, output_mem_config)) {
+        repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
+        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, codegen_output_mem_config)) {
         // The final leg lands in the prealloc when it can write that placement directly; otherwise the
         // result is copied in.
         return detail::finalize_into_preallocated(
             detail::repeat_via_codegen(
-                working_tensor, working_repetition_vector, output_mem_config, optional_output_tensor),
+                working_tensor, working_repetition_vector, codegen_output_mem_config, optional_output_tensor),
             optional_output_tensor);
     }
 
