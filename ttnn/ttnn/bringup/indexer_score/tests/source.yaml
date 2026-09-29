@@ -1,0 +1,25 @@
+# The source op's own tests, run in place against this fork (models/demos/common/bringup/testing/fork_source.py).
+# Best-effort selection: see the bringup-fork-op skill, "Carry the source op's tests".
+#
+# Carried: the single-device nightly file (the classic indexer_score_dsa / indexer_score_msa frontend). It runs the
+# same compute kernel and the same device-op validation as ring_indexer_score_dsa, which is where the fork's change
+# sits (the kernel's per-column and blocked mul paths, masks, knobs, shapes, indexed caches, compute_kernel_config).
+# The ttnn sanity tier runs its "accuracy and rank7" subset; the perf case is skipped (wall-clock, not a check).
+#
+# Not carried: the multi-device files. On this box (4x Blackhole p150b) their ring cases open FABRIC_1D (the 4d
+# file's _open_ccl default) or a torus (FABRIC_2D_TORUS_XY), which the bring-up owner rule forbids; the 1x4 carve of
+# ring_indexer_score_test_utils needs a >= 1x4 system mesh; the classic multi-device cases open a 2x2 mesh with the
+# fabric disabled. The fork's own tests/unit/test_fp32_dest.py covers the ring op on the 2x2 FABRIC_2D mesh.
+#
+# Expected divergence: test_indexer_score_rejects_fp32_dest_acc passes on the original and fails on the fork. It
+# asserts that fp32_dest_acc_en=True (DSA, k_chunk 32) is rejected; accepting it is the fork's change (CHANGELOG).
+upstream_sha: 2761111778f18601772ccce3a8e03b8c0fe8ea8d
+swap:
+  ttnn.experimental.indexer_score_dsa: ttnn.bringup.indexer_score_dsa
+  ttnn.experimental.indexer_score_msa: ttnn.bringup.indexer_score_msa
+  ttnn.experimental.ring_indexer_score_dsa: ttnn.bringup.ring_indexer_score_dsa
+  ttnn.IndexerScoreProgramConfig: ttnn.bringup.IndexerScoreProgramConfig
+tests:
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py
+    k: "not perf"
+    why: "classic DSA / MSA scorer vs the torch reference on one chip: weights and their shape checks, accuracy at every sp rank (bf16 / bfp8 q and k), q / k chunk and head-group knobs, odd shapes, indexed and ND-sharded caches and their refusals, runtime kv_len, determinism, MSA compute paths and multi-group planes, compute_kernel_config fidelities and the fp32-DEST refusal"

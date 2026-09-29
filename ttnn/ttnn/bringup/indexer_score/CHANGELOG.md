@@ -1,0 +1,50 @@
+# indexer_score (fork)
+
+- Source: `ttnn/cpp/ttnn/operations/experimental/indexer_score`
+- Source SHA: `2761111778f18601772ccce3a8e03b8c0fe8ea8d`
+- Python: `ttnn.bringup.*` (was `ttnn.experimental.*`)
+- Forked for: hy4_preview_d_p C.dense_full.indexer
+- Used by: hy4_preview_d_p
+
+Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_indexer_score`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
+
+## Changes
+
+<!-- One entry per change, newest last:
+### <short title>
+- What: the change, and the switch or argument that turns it on (default = source behaviour).
+- Why: the symptom it fixes or the feature it adds.
+- Needed by: <model> <task>
+- Files: <paths inside this folder>
+-->
+
+### fp32 DEST for DSA scoring (opt-in), with the mask srcA reconfig it needs
+- What: `indexer_score_dsa` / `ring_indexer_score_dsa` accept `compute_kernel_config.fp32_dest_acc_en=True` for DSA
+  scoring (num_groups 1, block_size 0, learned gates); MSA and block pooling still reject it. The factories already
+  sized DEST (4 tiles half-sync) and the qk / accumulator CBs (Float32) for fp32 DEST; the device op only forbade it.
+  The compute kernel gains one `reconfig_data_format_srca(cb_qk, cb_mask)` before the causal mask on the non-fused
+  path, compiled only under `INDEXER_SCORE_FP32_DEST`, a define the host sets only when fp32 DEST is on. Default
+  (fp32_dest_acc_en False) = the source behaviour, the same kernels, defines, compile args and CBs.
+- Why: on the Hy4 layer-0 indexer golden (s4096 chunk 1, 32 heads x 128, top-2048 of 4096 keys) the source op's
+  logits have rel error 0.024 vs fp32 (every row ~1.7% low: the bf16 DEST MAC truncates; plus ~1.5% per product from
+  the blocked custom multiply, see below) and the top-k set overlap is 0.985, under the 0.99 gate. With fp32 DEST
+  alone the mask broke: the mul phase leaves srcA in cb_qk's format (Float32 under fp32 DEST) and the bf16 -inf mask
+  tiles were unpacked as fp32 (rows 16..31 of full tiles unmasked, diagonal tiles wrong, -inf in causal cells). With
+  the reconfig, at k_chunk 32: logits rel 0.0036, overlap 0.99708 (fp32 scores rounded to bf16: 0.99705).
+- Note (unchanged, documented): with k_chunk_size > 32 the head reduction uses the blocked custom bcast-col multiply
+  (`_llk_math_bcast_cols_reuse_custom_`), which issues one ELWMUL per face with no fidelity phases, so it multiplies
+  at LoFi-like precision whatever the requested fidelity (HiFi2 and HiFi4 gave the same logits). k_chunk_size 32
+  takes the per-column path, whose `mul_tiles_bcast_cols` honours the fidelity. Random inputs, 32 heads: per-column
+  fp32 DEST rel 0.0019, bf16 DEST 0.0118; blocked fp32 DEST 0.029, bf16 DEST 0.023.
+- Needed by: hy4_preview_d_p C.dense_full.indexer
+- Files: device/indexer_score_device_operation.cpp (validate), device/indexer_score_program_factory.cpp and
+  device/ring_indexer_score_dsa_program_factory.cpp (the define), device/kernels/compute_indexer_score.cpp (the
+  reconfig), tests/unit/test_fp32_dest.py; tests/source.yaml (source selection; the one expected divergence is
+  test_indexer_score_rejects_fp32_dest_acc).
+
+### Build fix after fork_op.py
+- What: `ttnn::experimental::bringup::ccl::` back to `ttnn::experimental::ccl::` (FusedOpSignalerMode,
+  AllGatherFusedOpSignaler) in device/ring_indexer_score_dsa_program_factory.cpp: fork_op.py nested a sibling op's
+  namespace reference.
+- Needed by: hy4_preview_d_p C.dense_full.indexer
+- Files: device/ring_indexer_score_dsa_program_factory.cpp
