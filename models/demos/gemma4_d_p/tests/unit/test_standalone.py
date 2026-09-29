@@ -35,9 +35,11 @@ def test_smaller_or_multiple_galaxies_are_rejected(shape, expect_error):
         MeshConfig(SimpleNamespace(shape=shape))
 
 
-@pytest.mark.parametrize("chunk_size, max_seq_len", [(0, 32768), (-8192, 32768), (8193, 32768), (2048, 3072)])
+@pytest.mark.parametrize(
+    "chunk_size, max_seq_len", [(0, 32768), (-8192, 32768), (8193, 32768), (2048, 3072), (3328, 26624)]
+)
 def test_invalid_chunk_geometry_fails_before_weight_loading(chunk_size, max_seq_len, expect_error):
-    with expect_error(ValueError, "positive|whole CP-local tiles"):
+    with expect_error(ValueError, "positive|must divide|sequence-parallel residual"):
         create_tt_model(
             MeshConfig(SimpleNamespace(shape=(8, 4))), max_seq_len=max_seq_len, prefill_chunk_size=chunk_size
         )
