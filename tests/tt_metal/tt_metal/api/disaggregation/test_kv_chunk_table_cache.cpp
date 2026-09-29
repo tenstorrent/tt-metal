@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "internal/disaggregation/kv_chunk_table_cache.hpp"
 
@@ -26,10 +27,14 @@ std::string read_file(const fs::path& path) {
     return contents.str();
 }
 
-// Points TT_METAL_CACHE at a fresh per-test directory and restores it afterwards.
+// Points TT_METAL_CACHE at a fresh per-test directory and restores it afterwards. Runs on Blackhole
+// only (ARCH_NAME, set by the build/test scripts).
 class KvChunkTableCache : public ::testing::Test {
 protected:
     void SetUp() override {
+        if (const char* arch = std::getenv("ARCH_NAME"); arch == nullptr || std::string_view(arch) != "blackhole") {
+            GTEST_SKIP() << "Blackhole-only";
+        }
         const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
         root_ = fs::temp_directory_path() / "kv-chunk-table-cache-test" / info->name();
         fs::remove_all(root_);
@@ -41,6 +46,9 @@ protected:
     }
 
     void TearDown() override {
+        if (root_.empty()) {
+            return;
+        }
         if (saved_env_) {
             setenv("TT_METAL_CACHE", saved_env_->c_str(), 1);
         } else {
