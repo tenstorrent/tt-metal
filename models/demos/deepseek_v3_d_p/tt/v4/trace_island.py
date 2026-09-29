@@ -25,6 +25,16 @@ from typing import Callable, Optional, Sequence
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
+_ANY_CAPTURED = False
+
+
+def any_captured() -> bool:
+    """True once any island in this process began a capture. A lazily-filled cache of DEVICE tensors must not store an
+    entry first built after this point: the entry can sit in a captured island's freed intermediate range and every
+    later replay overwrites it (the rule above; DS4F-0271: the ring-select one-hot, the MoE padding config and the
+    compressor's prior index were all cached on first use by a request and reused, stale, by a later one)."""
+    return _ANY_CAPTURED
+
 
 class TraceIsland:
     def __init__(self, mesh_device, fn: Callable, inputs: Sequence, *, moe=None, name: str = ""):
@@ -39,6 +49,8 @@ class TraceIsland:
     def capture(self) -> tuple:
         """Run ``fn(*inputs)`` once under capture; its return value becomes the persistent outputs."""
         assert self.controller is None, f"island {self.name} already captured"
+        global _ANY_CAPTURED
+        _ANY_CAPTURED = True
         controller = SubDeviceTraceController(self.mesh_device)
         if self.moe is not None:
             self.moe.set_trace_controller(controller)

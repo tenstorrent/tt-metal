@@ -726,7 +726,12 @@ class TtMoEGatePrefill(LightweightModule):
                 mesh_shape=self.mesh_device.shape,
             ),
         )
-        self._padding_config_cache[cache_key] = config_tensor
+        from models.demos.deepseek_v3_d_p.tt.v4.trace_island import any_captured
+
+        # DS4F-0271: a key first seen after a trace capture (an eager chunk of a new real length) is TRANSIENT -- cached, it
+        # could sit on a captured island's intermediate addresses and be overwritten by the replays before its next use
+        if not any_captured():
+            self._padding_config_cache[cache_key] = config_tensor
         return config_tensor
 
     def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:

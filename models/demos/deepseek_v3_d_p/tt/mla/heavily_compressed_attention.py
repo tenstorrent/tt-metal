@@ -1319,7 +1319,7 @@ class TtHCA(_TtHCABase):
         a = min(((chunk - sw) // sw) * sw, chunk - 2 * sw)
         if a < 0:
             return
-        self._ring_select(chunk, a, 0)
+        self._ring_select(chunk, a, 0, precreate=True)
 
         def idx(vals):
             return self._from_torch(
@@ -1335,41 +1335,39 @@ class TtHCA(_TtHCABase):
                     idx([1, 1, a_any + 2 * sw, self.head_dim]),
                 )
 
-    def _ring_select(self, r: int, a: int, k_prev: int, cache: bool = True):
-        """One-hot [128, 256]: from a slab window of 256 rows starting at slab row ``a`` (token E_prev + a), pick
-        the rows of tokens [E-128, E) (slab rows [r-128, r), E = E_prev + r) into ring order (row = token % 128;
-        only k_prev = E_prev % 128 matters). Built on first use (64 KB), then data for a matmul -- no recompiles.
-        ``cache=False`` (a ragged final chunk on the traced path, DS4F-0268): build a TRANSIENT copy the caller
-        deallocates -- a persistent tensor allocated after the islands were captured can sit on a replay's
-        intermediate addresses (DS4F-0262 class)."""
+    def _ring_select(self, r: int, a: int, k_prev: int, precreate: bool = False):
+        """``(m, owned)``: one-hot [128, 256] ``m`` that, from a slab window of 256 rows starting at slab row ``a``
+        (token E_prev + a), picks the rows of tokens [E-128, E) (slab rows [r-128, r), E = E_prev + r) into ring order
+        (row = token % 128; only k_prev = E_prev % 128 matters). Only ``precreate_ring_consts`` (allocation time, before
+        any trace capture) stores into the cache; every other key is built TRANSIENT (``owned``: the caller deallocates
+        it). DS4F-0271: this used to cache on first use, so the 1k prompt's eager chunk 0 cached key (1024, 896, 0)
+        AFTER the islands were captured, replays overwrote it (DS4F-0262 class), and the 16k prompt's ragged tail (real
+        length 1024, same key) got the stale tensor back -- and then deallocated it while it was still cached."""
         key = (int(r), int(a), int(k_prev))
         m = self._ring_select_cache.get(key)
-        if m is None:
-            sw = self.sliding_window
-            S = torch.zeros(1, 1, sw, 2 * sw)
-            for i in range(r - sw, r):
-                S[0, 0, (k_prev + i) % sw, i - a] = 1.0
-            m = self._from_torch(S)
-            if cache:
-                self._ring_select_cache[key] = m
-        return m
+        if m is not None:
+            return m, False
+        sw = self.sliding_window
+        S = torch.zeros(1, 1, sw, 2 * sw)
+        for i in range(r - sw, r):
+            S[0, 0, (k_prev + i) % sw, i - a] = 1.0
+        m = self._from_torch(S)
+        if precreate:
+            self._ring_select_cache[key] = m
+            return m, False
+        return m, True
 
-    def _ring_merge_matrix(self, r: int, k_prev: int, cache: bool = True):
-        """One-hot [128, 256] for a final chunk shorter than a window: x = [prev carry (tokens [E_prev-128, E_prev))
-        | slab head (tokens E_prev..E_prev+127)], ring row t % 128 takes x row t - E_prev + 128 for t in
-        [E_prev + r - 128, E_prev + r). Only k_prev = E_prev % 128 matters. ``cache=False``: see ``_ring_select``."""
-        key = (int(r), int(k_prev))
-        m = self._ring_merge.get(key)
-        if m is None:
-            sw = self.sliding_window
-            S = torch.zeros(1, 1, sw, 2 * sw)
-            for i in range(sw):
-                t_rel = k_prev + r - sw + i  # token minus (E_prev - k_prev): only its residue mod 128 matters
-                S[0, 0, t_rel % sw, r + i] = 1.0
-            m = self._from_torch(S)
-            if cache:
-                self._ring_merge[key] = m
-        return m
+    def _ring_merge_matrix(self, r: int, k_prev: int):
+        """``(m, owned=True)``: one-hot [128, 256] for a final chunk shorter than a window: x = [prev carry (tokens
+        [E_prev-128, E_prev)) | slab head (tokens E_prev..E_prev+127)], ring row t % 128 takes x row t - E_prev + 128
+        for t in [E_prev + r - 128, E_prev + r). Only k_prev = E_prev % 128 matters. Always TRANSIENT: it is only ever
+        needed after the captures (see ``_ring_select``)."""
+        sw = self.sliding_window
+        S = torch.zeros(1, 1, sw, 2 * sw)
+        for i in range(sw):
+            t_rel = k_prev + r - sw + i  # token minus (E_prev - k_prev): only its residue mod 128 matters
+            S[0, 0, t_rel % sw, r + i] = 1.0
+        return self._from_torch(S), True
 
     def _slab_window(self, slab, a: int):
         """Rows [a, a + 256) of the SP-gathered slab, the start carried as a device tensor (MEASURED 2026-09-24: this
@@ -1391,25 +1389,25 @@ class TtHCA(_TtHCABase):
 
     def _ring_rows(self, slab, prev_carry, kv_actual_before: int, real_len: int, transient: bool = False):
         """The last 128 REAL tokens' K rows (tokens [E-128, E), E = kv_actual_before + real_len) in ring order
-        (row = token % 128), as a [1, 1, 128, head_dim] TILE tensor in the module dtype. ``transient``: the one-hot
-        select matrix is built for this call only and freed (the eager re-derivation of a ragged final chunk's ring
-        after the islands ran on the padded chunk, DS4F-0268)."""
+        (row = token % 128), as a [1, 1, 128, head_dim] TILE tensor in the module dtype. A one-hot that was not
+        precreated is built for this call only and freed (``_ring_select``); ``transient`` is kept for the callers'
+        readability (the eager re-derivation of a ragged final chunk's ring, DS4F-0268) and changes nothing."""
         sw = self.sliding_window
         k_prev = int(kv_actual_before) % sw
         if real_len >= sw:
             rows = int(slab.shape[2])
             a = min(((real_len - sw) // sw) * sw, rows - 2 * sw)  # 256-row window containing slab rows [r-128, r)
             assert 0 <= a and a + 2 * sw <= rows and a <= real_len - sw and real_len <= a + 2 * sw
-            sel = self._ring_select(real_len, a, k_prev, cache=not transient)
+            sel, owned = self._ring_select(real_len, a, k_prev)
             out = ttnn.matmul(sel, self._slab_window(slab, a), memory_config=self.memory_config)
-            if transient:
+            if owned:
                 ttnn.deallocate(sel)
             return out
         head = ttnn.slice(slab, [0, 0, 0, 0], [1, 1, sw, self.head_dim])
         x = ttnn.concat([prev_carry, head], dim=2)  # [1, 1, 256, head_dim]
-        mm = self._ring_merge_matrix(real_len, k_prev, cache=not transient)
+        mm, owned = self._ring_merge_matrix(real_len, k_prev)
         out = ttnn.matmul(mm, x, memory_config=self.memory_config)
-        if transient:
+        if owned:
             ttnn.deallocate(mm)
         return out
 

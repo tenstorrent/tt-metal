@@ -193,16 +193,16 @@ class TtCSACompressor(TtHCACompressor):
         assert real_len % C.TILE == 0 and C.TILE <= real_len <= S, real_len
         pair = self._prior_index.get(int(real_len))
         if pair is None:
+            from models.demos.deepseek_v3_d_p.tt.v4.trace_island import any_captured
 
             def idx(vals):
                 return self._from_torch(
                     torch.tensor(vals, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
                 )
 
-            pair = self._prior_index[int(real_len)] = (
-                idx([0, 0, real_len - C.TILE, 0]),
-                idx([1, 1, real_len, x.shape[3]]),
-            )
+            pair = (idx([0, 0, real_len - C.TILE, 0]), idx([1, 1, real_len, x.shape[3]]))
+            if not any_captured():  # DS4F-0271: a length first seen after a capture stays transient (see any_captured)
+                self._prior_index[int(real_len)] = pair
         return ttnn.slice(x, pair[0], pair[1], slice_dim=2, num_devices=S // C.TILE)
 
     def _stabilised_exp(self, g_a, g_b, pg, K, S: int, W: int):
