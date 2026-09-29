@@ -108,6 +108,8 @@ struct DramBuffers {
     tt::tt_metal::Buffer* counts = nullptr;
     tt::tt_metal::Buffer* region = nullptr;
     tt::tt_metal::Buffer* expert_offsets = nullptr;
+    // Null unless combine runs overlapped: only then is there an id table to read the walk order from.
+    tt::tt_metal::Buffer* expert_table = nullptr;
 };
 
 // The per-chip values that had to be worked out rather than read off the arguments, plus the stream.

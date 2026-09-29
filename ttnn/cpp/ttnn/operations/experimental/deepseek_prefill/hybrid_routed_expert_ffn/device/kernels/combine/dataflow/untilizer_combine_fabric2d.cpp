@@ -20,6 +20,9 @@
 // no untilize and has no compute kernel, so the rows go straight into the batch and only the ones the walk
 // asked for are read at all.
 
+// Before any include: the compile-time and runtime argument headers below branch on these.
+#define CMBF2D_OVERLAPPED 1
+
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -28,7 +31,6 @@
 #include "combine_fabric2d_untilizer_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
-#define CMBF2D_OVERLAPPED 1
 namespace cmbf2d_ns = hyb_cmbf2d;
 
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/untilizer_combine_fabric2d_body.hpp"
