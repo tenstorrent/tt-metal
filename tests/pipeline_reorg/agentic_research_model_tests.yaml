@@ -283,10 +283,16 @@
     export QWEN_IMAGE_SERVER_URL=http://127.0.0.1:20000
     uv pip install -r "$model_dir/requirements.txt"
     if ! snapshot=$(python -c 'from models.experimental.qwen_image_2_1.common.config import snapshot_dir; print(snapshot_dir())'); then
-        export HF_HUB_CACHE="$work/hf"
-        snapshot=$(hf download Qwen/Qwen-Image-2.1 --revision 790c92633540aa0cb11d9abf19eb46d861714758)
+        # The runner's shared cache is read-only and offline. Download only into task-local caches.
+        export HF_HOME="$work/hf-home" HF_HUB_CACHE="$work/hf" HF_XET_CACHE="$work/xet"
+        snapshot=$(HF_HUB_OFFLINE=0 python - <<'PY_SNAPSHOT'
+    from huggingface_hub import snapshot_download
+    print(snapshot_download("Qwen/Qwen-Image-2.1", revision="790c92633540aa0cb11d9abf19eb46d861714758"))
+    PY_SNAPSHOT
+        )
     fi
     export QWEN_IMAGE_SNAPSHOT="$snapshot"
+    printf 'Qwen Image checkpoint=%s setup_elapsed_seconds=%s\n' "$snapshot" "$((SECONDS - run_started))"
     mkdir -p "$QWEN_IMAGE_FIXTURES"
     for asset in reference_rtx5090.png edit_demo_p150.png edit_ref_llama.jpg edit_ref_gongnyang.jpg; do
         curl --fail --silent --show-error --location --retry 3 \
@@ -332,7 +338,7 @@
   model_family: Qwen Image
   skus:
     bh_p150:
-      # Exact cold-cache recipe measured18m01s on P150; allow setup/runner variance.
+      # Warm weights/dependencies with cold TT kernel cache measured18m01s; cold download is under validation.
       timeout: 30
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
