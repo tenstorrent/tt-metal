@@ -157,9 +157,9 @@ void validate_no_service_cores(MeshWorkload& workload, MeshDevice& mesh_device) 
 class CommandListBuilder::Impl {
 public:
     explicit Impl(MeshDevice& mesh_device) :
-        mesh_device(mesh_device), sub_device_manager_id(mesh_device.impl().acquire_command_list_builder()) {
-        lock_held = true;
-    }
+        mesh_device(mesh_device),
+        sub_device_manager_id(mesh_device.impl().acquire_command_list_builder()),
+        lock_held(true) {}
     ~Impl() {
         if (lock_held) {
             mesh_device.impl().release_command_list_builder();

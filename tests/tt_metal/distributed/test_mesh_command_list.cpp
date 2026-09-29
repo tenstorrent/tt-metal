@@ -427,7 +427,7 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
     // the destination and releases the reservation for a replacement builder.
     CommandListBuilder moved_builder(std::move(builder));
     EXPECT_THAT(
-        [&] { builder.add(workload); },
+        [&] { builder.add(workload); },  // NOLINT(bugprone-use-after-move)
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
     EXPECT_EQ(&moved_builder.device(), mesh_device_.get());
     moved_builder.deallocate();
@@ -463,7 +463,7 @@ TEST_F(CommandListTest, CommandListMoveAndDeallocateInvalidateTheHandle) {
 
     CommandList moved_list(std::move(command_list));
     EXPECT_THAT(
-        [&] { command_list.replay(/*blocking=*/true); },
+        [&] { command_list.replay(/*blocking=*/true); },  // NOLINT(bugprone-use-after-move)
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
 
     write_l1(mesh_device_, kAddressA, 0);
