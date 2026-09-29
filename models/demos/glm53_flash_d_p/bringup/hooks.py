@@ -407,7 +407,7 @@ class _RefState:
 
 class HybridDeviceModel:
     """CPU reference model with the steps in DEVICE_STEPS swapped for device modules (host in / host out per step).
-    Hidden states stay on the host until the assemble step builds the all-device model."""
+    Selected with BRINGUP_HYBRID=1 (debugging); the default device model is GlmDeviceModel."""
 
     def __init__(self, mesh, spec, layers, lm_head=True):
         import time
@@ -463,6 +463,107 @@ class HybridDeviceModel:
         pass
 
 
+class _DeviceState:
+    """Per-layer state held by the device blocks (KDA carries, indexer pooled keys, MLA latent cache)."""
+
+    def __init__(self, blocks):
+        self.blocks = blocks
+
+    def load_prefix(self, layer, tensors, length):
+        self.blocks[layer].load_state(tensors, length)
+
+    def to_torch(self, layer, length):
+        return self.blocks[layer].state_torch(length)
+
+
+class GlmDeviceModel:
+    """Ladder / profile adapter over tt/model.py:TtGlmModel.
+
+    The residual is a replicated [1, 1, S, 4 H] bf16 device tensor (4 mHC streams packed on the last dim) from the
+    embedding to the final norm. Each layer is TtGlmBlock.__call__: run_block over the reference block graph with the
+    validated device modules (one profiler section per step). Only the LM head runs on the host (ladder logits on
+    sampled rows, when the stack ends at the model's last layer)."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.common.bringup.reference.golden import hf_path
+        from models.demos.glm53_flash_d_p.tt.model import TtGlmModel
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        self.path = hf_path(spec)
+        self.model = TtGlmModel(mesh, self.path, max_seq=_max_seq(spec), chunks=_chunks(spec), layers=list(layers))
+        self.cfg = self.model.cfg
+        self.n = self.cfg.hc_mult
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = None
+        if lm_head:
+            from models.demos.glm53_flash_d_p.reference.weights import WeightLoader
+
+            self._lm_head = WeightLoader(self.path).get("lm_head.weight").float()  # untied
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _DeviceState(self.blocks)
+
+    def embed(self, tokens):
+        import ttnn
+
+        ids = ttnn.from_torch(
+            tokens.reshape(1, 1, -1).to(torch.int64).to(torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        """Reference residual [S * 4, H] -> device [1, 1, S, 4 H] (harness boundary)."""
+        from models.demos.glm53_flash_d_p.tt.common import replicate
+
+        s = h.shape[0] // self.n
+        return replicate(self.mesh, h.reshape(1, 1, s, self.n * h.shape[-1]).to(torch.bfloat16))
+
+    def to_host(self, h):
+        """Device [1, 1, S, 4 H] -> reference [S * 4, H]; [1, 1, S, H] (the final norm) -> [S, H]."""
+        from models.demos.glm53_flash_d_p.tt.common import replicated_to_host
+
+        t = replicated_to_host(h).float()
+        s, w = t.shape[-2], t.shape[-1]
+        hidden = self.cfg.hidden_size
+        return t.reshape(s * (w // hidden), hidden)
+
+    def layer(self, i, h, start, state):
+        return self.blocks[i](h, start)
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        return torch.nn.functional.linear(self.to_host(hidden)[rows], self._lm_head)
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    """Hybrid model (CPU reference + DEVICE_STEPS on the device) until the assemble step."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
+    device, host in / host out per step) for debugging."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return GlmDeviceModel(mesh, spec, layers, lm_head=lm_head)
