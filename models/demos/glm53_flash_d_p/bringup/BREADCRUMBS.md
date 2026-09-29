@@ -1703,3 +1703,29 @@ Results:
 Next step: implement only needs to add attn_norm to `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.03 test (attempt 1)
+Reviewed the rendered swap test (kda_moe layer 4, with attn_hc, attn_collapse and attn_norm on device). The rendered
+file was the bare `run_swap_test`. I rebuilt it from the dsa_moe swap 03 test (norm checks, norm share, and a collapse
+share through the device norm) with the kda_moe swap 02 limits, kept unchanged. Every comparison is `not x <= lim`
+(NaN fails), and every share also bounds the flipped-row ratio at [0.9, 1.1]. The four block runs now share one
+`_share` helper; metric names are the same as dsa_moe swap 03.
+- attn_norm vs golden: the component test's limits (0.01 / [0.99, 1.01] / worst row 0.015 / coefficient
+  [0.996, 1.004]).
+- attn_norm vs the fp32 CPU norm of the same device attn_in: 0.0045 / [0.996, 1.004] / 0.008, plus a new coefficient
+  bound [0.999, 1.001].
+- Norm share: much tighter than layer 3's, at flips <= 20, rel 0.0004, ratio [0.998, 1.002]. Layer 4's KDA passes the
+  norm scale into v, and post is not saturated. Re-measured on the CPU (host script /tmp/kmoe03/sens.py, not kept;
+  the numbers are in the docstring): x1.003 gives 24 / 0.00049 / 1.0038, and bf16 noise 11 / 0.00021.
+  Known issues Proposed has the entry.
+Results:
+- Device passes: PCC 0.999994. Norm same-input 0.0017 / [0.9991, 1.0006] / coefficient 0.99993. Vs golden 0.0039 /
+  [0.9945, 1.0004] / 0.99872, low because of the upstream attn_hc column bias. Norm share 8 / 0.00016 /
+  [0.9995, 1.0004]. Collapse share 0 / 0.0, because the device norm rounds its input to bf16. Vs the CPU block: 37 /
+  0.0012.
+- Reference passes (every same-input and share check 0). Stub fails (PCC 0 and every check; norm-share ratio 0).
+  About 60 s for the real pass.
+Watch: the norm-share rel margin is 2.5x (0.00016 of 0.0004). The flips vs the CPU block are 37 of 64, and they grow
+as device steps join (known issue).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_03_attn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
