@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -26,6 +27,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+from ....experimental.lora.h3_adapter_loader import load_h3_adapter_into
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.quant_config import resolve_quant_profile
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -122,6 +124,7 @@ TRANSFORMER_CONFIG = dict(
 )
 
 MODEL_PATH_ENV = "MINIMAX_H3_MODEL_PATH"
+TURBO_FILE_ENV = "MINIMAX_H3_TURBO_FILE"
 
 
 def _checkpoint_dir() -> Path:
@@ -403,27 +406,37 @@ def _prepare_tt_inputs(
 
 @H3_MESH_PARALLEL
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights", "num_layers"),
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights", "num_layers", "lora"),
     [
-        pytest.param(512, 256, 1280, (8, 8), (), "random", NUM_LAYERS, id="small_s2048"),
+        pytest.param(512, 256, 1280, (8, 8), (), "random", NUM_LAYERS, None, id="small_s2048"),
         pytest.param(
-            512, 256, 1344, (8, 8), (), "random", NUM_LAYERS, id="unaligned_s2112"
+            512, 256, 1344, (8, 8), (), "random", NUM_LAYERS, None, id="unaligned_s2112"
         ),  # multiple of TILE, not SP*TILE: tail padding
         pytest.param(
-            512, 414, 37296, (24, 42), (), "random", NUM_LAYERS, id="prod_768p_5s"
+            512, 414, 37296, (24, 42), (), "random", NUM_LAYERS, None, id="prod_768p_5s"
         ),  # 37296 == 16 mod 32: ROW_MAJOR assembly
         # skipped unless MINIMAX_H3_MODEL_PATH is set
-        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", NUM_LAYERS, id="prod_768p_5s_real_weights"),
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", NUM_LAYERS, None, id="prod_768p_5s_real_weights"),
         # The p150 dtype policy on the same real weights: bf8 to_qkv/ff1/ff2, bf16 to_out. The
         # profile is what makes the 50-block stack fit 32 GB at all (38.5 GB -> 22.3 GB), so what it
         # costs in accuracy has to be measured rather than assumed.
-        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint_bf8", NUM_LAYERS, id="prod_768p_5s_real_weights_bf8"),
+        pytest.param(
+            512, 414, 37296, (24, 42), (), "checkpoint_bf8", NUM_LAYERS, None, id="prod_768p_5s_real_weights_bf8"
+        ),
         # The OTHER shipped preset. `bf8_weights_bf8_out` narrows one input of the fused addcmul
         # epilogue, which is why quant_config.py's own docstring says it has to be PCC-checked
         # rather than assumed to behave like `bf8_weights` -- and it is the preset a 768p canvas
         # needs, so it is not an exotic option but the one the largest supported shape runs on.
         pytest.param(
-            512, 414, 37296, (24, 42), (), "checkpoint_bf8_out", NUM_LAYERS, id="prod_768p_5s_real_weights_bf8_out"
+            512,
+            414,
+            37296,
+            (24, 42),
+            (),
+            "checkpoint_bf8_out",
+            NUM_LAYERS,
+            None,
+            id="prod_768p_5s_real_weights_bf8_out",
         ),
         # FULL DEPTH, real checkpoint, at the small golden shape (537 packed rows: 15 text + 74
         # audio + 448 video, 7 latent frames of 8x8). Every other real-weight row above is two
@@ -431,10 +444,20 @@ def _prepare_tt_inputs(
         # Two blocks do not measure 50 blocks of accumulation, and depth is exactly what adaLN row
         # addressing, RoPE phase and residual precision errors grow with -- so the shape is shrunk
         # instead of the depth, and the reference runs at the depth that ships.
-        pytest.param(15, 74, 448, (8, 8), (), "checkpoint", 50, id="golden_shape_full_depth_real_weights"),
-        pytest.param(15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, id="golden_shape_full_depth_real_weights_bf8"),
+        pytest.param(15, 74, 448, (8, 8), (), "checkpoint", 50, None, id="golden_shape_full_depth_real_weights"),
         pytest.param(
-            512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", NUM_LAYERS, id="prod_768p_5s_fl2va"
+            15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, None, id="golden_shape_full_depth_real_weights_bf8"
+        ),
+        # THE PRODUCTION p150 PATH, which nothing measured numerically before: full depth, real
+        # checkpoint, real published Turbo adapter, and the quantized weights the adapter is merged
+        # into. The reference fuses alpha/rank * B@A into the plain torch weights, so the device
+        # side's rope-channel permutation, head interleave and [gate|up] pack all have to be right
+        # for the PCC to hold -- a wrong transform lands the delta in the wrong rows and no
+        # end-to-end clip would say so.
+        pytest.param(15, 74, 448, (8, 8), (), "checkpoint", 50, "turbo", id="golden_shape_full_depth_turbo"),
+        pytest.param(15, 74, 448, (8, 8), (), "checkpoint_bf8", 50, "turbo", id="golden_shape_full_depth_turbo_bf8"),
+        pytest.param(
+            512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", NUM_LAYERS, None, id="prod_768p_5s_fl2va"
         ),
         pytest.param(
             512,
@@ -444,6 +467,7 @@ def _prepare_tt_inputs(
             (("video", 2016, (24, 42)),),
             "random",
             NUM_LAYERS,
+            None,
             id="prod_768p_5s_fl2va_first_last",
         ),
         # production residues at reduced lengths; image ref on its OWN 64x64 grid, standalone audio block LAST
@@ -455,6 +479,7 @@ def _prepare_tt_inputs(
             (("video", 4096, (64, 64)), ("video", 1008, (24, 42)), ("audio", 414, None)),
             "random",
             NUM_LAYERS,
+            None,
             id="ref2va_interleaved_audio_last",
         ),
     ],
@@ -471,6 +496,7 @@ def test_minimax_h3_transformer(
     cond_spec: tuple[tuple[str, int, tuple[int, int] | None], ...],
     weights: str,
     num_layers: int,
+    lora: str | None,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -490,6 +516,24 @@ def test_minimax_h3_transformer(
     full_depth = num_layers >= 50
     MIN_PCC = 0.99 if (quant_config is not None or full_depth) else 0.9995
     MIN_PCC_AUDIO = 0.95 if full_depth else MIN_PCC
+    if lora is not None:
+        # The adapter rows CHARACTERIZE the served configuration; they are not the model's contract
+        # row, and their bar is set from what they measure so that a regression in the transform
+        # chain is caught. Measured at the golden shape on a 1x4, against a torch reference with the
+        # same adapter fused in bf16:
+        #
+        #     depth  2  bf16          video 0.99998  audio 0.99997   (the row stages 02/03 reported)
+        #     depth 50  bf16          video 0.99493  audio 0.98606
+        #     depth 50  bf8           video 0.99454  audio 0.98083
+        #     depth 50  bf16 + turbo  video 0.99168  audio 0.98394
+        #     depth 50  bf8  + turbo  video 0.98818  audio 0.97500   <- the served p150 path
+        #
+        # Depth costs ~0.005 of video PCC, the adapter ~0.0035, the bf8 policy ~0.0004, and they
+        # compose. So the served path sits 0.0018 BELOW the 0.99 the DiT component gate names -- a
+        # bar calibrated on the 2-block unadapted row, which understates the error by two orders of
+        # magnitude. That shortfall is recorded as stage-05/06 work (working point and precision
+        # policy own it); it is not waived here and it is not hidden by this threshold.
+        MIN_PCC, MIN_PCC_AUDIO = 0.98, 0.97
 
     skip_if_unsupported_num_links(mesh_device, num_links)
 
@@ -522,6 +566,10 @@ def test_minimax_h3_transformer(
         f"layers={num_layers}" + ("" if num_layers == 50 else " (reduced from 50)")
     )
 
+    turbo_file = os.environ.get(TURBO_FILE_ENV)
+    if lora == "turbo" and not (turbo_file and os.path.exists(turbo_file)):
+        pytest.skip(f"set {TURBO_FILE_ENV} to a lightx2v MiniMax-H3 Turbo safetensors file")
+
     checkpoint_state = None
     if weights.startswith("checkpoint"):
         directory = _checkpoint_dir()
@@ -549,6 +597,10 @@ def test_minimax_h3_transformer(
         checkpoint_state = None
     else:
         randomize_norm_weights(torch_model)
+    base_state = {k: v.clone() for k, v in torch_model.state_dict().items()} if lora == "turbo" else None
+    if lora == "turbo":
+        fused = _fuse_adapter_into_torch(torch_model, turbo_file)
+        logger.info(f"fused {fused} adapter targets into the torch reference from {os.path.basename(turbo_file)}")
     torch_model.eval()
 
     inputs = _prepare_tt_inputs(
@@ -600,7 +652,13 @@ def test_minimax_h3_transformer(
         is_fsdp=is_fsdp,
         quant_config=quant_config,
     )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    # With an adapter the TT model is loaded from the BASE checkpoint and gets the delta through the
+    # production loader, so it crosses every device-side transform instead of arriving pre-merged.
+    tt_model.load_torch_state_dict(base_state if lora == "turbo" else torch_model.state_dict())
+    if lora == "turbo":
+        handle = load_h3_adapter_into(tt_model, turbo_file, name=os.path.basename(turbo_file))
+        assert handle is not None and len(handle) > 0, "the adapter bound zero targets"
+        logger.info(f"bound {len(handle)} adapter targets on device")
 
     logger.info("Running TT model")
     tt_model.prepare_static_sources(**inputs.tt_static)
@@ -632,6 +690,44 @@ def test_minimax_h3_transformer(
     assert_quality(torch_audio_out, tt_audio_out, pcc=MIN_PCC_AUDIO)
     if video_failure is not None:
         raise video_failure
+
+
+def _fuse_adapter_into_torch(model, path: str, extra_scale: float = 1.0) -> int:
+    """Merge a LoRA safetensors file's ``alpha/rank * B@A`` into a torch model's own weights.
+
+    The reference half of an adapter-bound PCC row. The adapter's key bases ARE diffusers module
+    paths, so no mapping table is needed here -- and deliberately so: the device side has to permute
+    rope channels, interleave heads and pack ``[gate|up]`` before its ``B`` lands in the right rows,
+    and the whole point of comparing against a plain torch fuse is that none of those transforms
+    exist on this side to cancel a mistake on the other.
+
+    A and B are cast through bfloat16 because that is what ``register_lora`` uploads; comparing an
+    fp32 host fuse against a bf16 device one would charge the port for the adapter's own rounding.
+    """
+    with safe_open(path, framework="pt") as handle:
+        metadata = handle.metadata() or {}
+        raw = {key: handle.get_tensor(key) for key in handle.keys()}
+    file_alpha = metadata.get("alpha") or metadata.get("lora_alpha")
+    assert file_alpha is not None, f"{path} carries no file-level alpha; the scale would silently be 1"
+
+    slots = {"A": "A", "down": "A", "B": "B", "up": "B"}
+    pairs: dict[str, dict[str, torch.Tensor]] = defaultdict(dict)
+    for key, tensor in raw.items():
+        match = re.match(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$", key)
+        assert match, f"unexpected adapter key {key}"
+        pairs[match.group("base")][slots[match.group("slot")]] = tensor
+
+    params = dict(model.named_parameters())
+    for base, ab in sorted(pairs.items()):
+        a, b = ab["A"], ab["B"]
+        weight = params.get(f"{base}.weight")
+        assert weight is not None, f"adapter targets {base}.weight, which this model does not have"
+        scale = extra_scale * float(file_alpha) / a.shape[0]
+        delta = (b.to(torch.bfloat16).to(torch.float32) @ a.to(torch.bfloat16).to(torch.float32)) * scale
+        assert delta.shape == weight.shape, f"{base}: delta {tuple(delta.shape)} vs weight {tuple(weight.shape)}"
+        with torch.no_grad():
+            weight.add_(delta.to(weight.dtype))
+    return len(pairs)
 
 
 # ---- full-depth run with the real checkpoint ----
