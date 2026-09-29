@@ -425,6 +425,10 @@ def _assert_against_contract(
     unenrolled op resolves to today's per-format tolerance unchanged. Enrolment is then
     a table edit rather than a driver edit.
 
+    The whole contract, step budget included: every binary row was measured over this
+    file's own sweeps, so unlike a unary budget from the exhaustive sweep it describes
+    the stimuli it gates.
+
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
     one would claim a measurement taken for a mode that path does not select. Where the
     kernel does compile it, passing it is required: a row keyed ``approx: "No"`` would
@@ -442,7 +446,7 @@ def _assert_against_contract(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **contract.passed_test_kwargs(),
     ), "Assert against golden failed"
 
 

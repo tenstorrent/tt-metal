@@ -119,11 +119,13 @@ class AccuracyContract:
     def tolerance_kwargs(self) -> Dict[str, Any]:
         """The contract as ``passed_test`` arguments for a *tolerance-only* caller.
 
-        The functional drivers gate on tolerance and PCC. A step budget is measured by
-        the exhaustive sweep over every value the format has, so it is far wider than
-        the few thousand values a driver samples warrant, and feeding it back would
-        loosen the driver's gate rather than tighten it. An op on the ULP metric
-        therefore keeps today's per-format tolerance here.
+        The unary functional driver gates on tolerance and PCC. A unary step budget is
+        measured by the exhaustive sweep over every value the format has, so it is far
+        wider than the few thousand values that driver samples warrant, and feeding it
+        back would loosen its gate rather than tighten it. An op on the ULP metric
+        therefore keeps today's per-format tolerance here. The binary and ternary
+        drivers take :meth:`passed_test_kwargs`: their rows were measured over their own
+        sweeps.
         """
         if self.metric is Metric.ULP:
             return {}
