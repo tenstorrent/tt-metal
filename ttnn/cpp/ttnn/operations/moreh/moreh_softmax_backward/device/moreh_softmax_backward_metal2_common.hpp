@@ -17,7 +17,7 @@
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_softmax_backward {
+namespace ttnn::operations::moreh::moreh_softmax_backward::metal2 {
 
 // Metal 2.0 named resources and small builders shared by all five moreh_softmax_backward
 // factories.
@@ -25,9 +25,8 @@ namespace ttnn::operations::moreh::moreh_softmax_backward {
 // These live in one header with inline linkage rather than in per-factory anonymous namespaces
 // because ttnn_op_moreh is a unity build: the anonymous namespaces of the five factory .cpp files
 // merge into one scope, where same-named constants would collide.
-namespace metal2 {
 
-using tt::tt_metal::experimental::ComputeUnpackModes;
+using tt::tt_metal::experimental::ComputeHardwareConfig;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DFBSpecName;
 using tt::tt_metal::experimental::KernelSpec;
@@ -112,9 +111,9 @@ inline KernelSpec::CompilerOptions::Defines MakeComputeDefines(MorehSoftmaxBackw
 // Pass every DFB the compute kernel consumes, with the format its spec declares. A self-looped
 // buffer counts as consumed (its CONSUMER binding is what the requirement keys on); a buffer the
 // kernel only produces does not.
-inline ComputeUnpackModes MakeUnpackModes(
+inline ComputeHardwareConfig::ComputeUnpackModes MakeUnpackModes(
     bool fp32_dest_acc_en, std::initializer_list<std::pair<DFBSpecName, tt::DataFormat>> consumed_dfbs) {
-    ComputeUnpackModes unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (!fp32_dest_acc_en) {
         return unpack_modes;
     }
@@ -126,6 +125,4 @@ inline ComputeUnpackModes MakeUnpackModes(
     return unpack_modes;
 }
 
-}  // namespace metal2
-
-}  // namespace ttnn::operations::moreh::moreh_softmax_backward
+}  // namespace ttnn::operations::moreh::moreh_softmax_backward::metal2

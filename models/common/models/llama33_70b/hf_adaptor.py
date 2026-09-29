@@ -17,6 +17,7 @@ import ttnn
 from models.common.models.llama33_70b import weight_utils
 from models.common.models.llama33_70b.model import (
     LLAMA33_70B_ACCURACY,
+    LLAMA33_70B_BH_TP4_CLUSTER_TYPES,
     LLAMA33_70B_PERFORMANCE,
     Llama33_70BLayerWeights,
     Llama33_70BModelParameters,
@@ -24,6 +25,7 @@ from models.common.models.llama33_70b.model import (
     Llama33_70BPrecisionConfig,
     Llama33_70BTransformer1D,
     Llama33_70BWeights,
+    _llama33_70b_ccl_topology,
     build_llama33_70b_transformer_1d_config,
 )
 
@@ -145,25 +147,49 @@ def load_tokenizer(hf_model: str):
 
 
 def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
-    if num_devices != 8:
-        raise ValueError(f"Llama-3.3-70B supports exactly 8 devices (T3K), got {num_devices}")
+    if num_devices not in (4, 8):
+        raise ValueError(f"Llama-3.3-70B supports T3K (8 devices) or P150x4 (4 devices), got {num_devices}")
+    if num_devices == 4:
+        return (128,) if max_seq_len >= 128 else ()
     return tuple(length for length in (128, max_prefill_chunk_size) if length <= max_seq_len)
 
 
-def _trace_warmup_seq_lens(max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
-    """Return logical representatives for regular and fixed-chunk traces."""
+def _trace_warmup_seq_lens(
+    max_prefill_chunk_size: int,
+    max_seq_len: int,
+    supported_seq_lens: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Return logical representatives whose first invocation has a trace family."""
 
     candidates = (128, max_prefill_chunk_size, 2 * max_prefill_chunk_size)
-    return tuple(dict.fromkeys(length for length in candidates if length <= max_seq_len))
+    return tuple(
+        dict.fromkeys(
+            length
+            for length in candidates
+            if length <= max_seq_len and min(length, max_prefill_chunk_size) in supported_seq_lens
+        )
+    )
 
 
-def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None) -> Path:
+def _resolve_supported_sku(*, arch, cluster_type, num_devices: int) -> str:
+    if arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8:
+        return "T3K"
+    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type in LLAMA33_70B_BH_TP4_CLUSTER_TYPES and num_devices == 4:
+        return "P150x4"
+    raise ValueError(
+        "Llama-3.3-70B supports physical Wormhole T3K (8 devices) or "
+        "BlackHole P150_X4/P300_X2 as logical P150x4 (4 devices); "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
+    )
+
+
+def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None, *, sku: str) -> Path:
     if cache_dir is not None:
         path = Path(cache_dir)
     elif os.getenv("TT_CACHE_PATH"):
         path = Path(os.environ["TT_CACHE_PATH"])
     else:
-        path = Path("model_cache") / hf_model / "T3K"
+        path = Path("model_cache") / hf_model / sku
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -231,8 +257,13 @@ def from_pretrained(
 ) -> Llama33_70BForCausalLM:
     del dtype
     num_devices = mesh_device.get_num_devices()
-    if num_devices != 8:
-        raise ValueError(f"Llama-3.3-70B supports exactly 8 devices (T3K), got {num_devices}")
+    arch = mesh_device.arch()
+    sku = _resolve_supported_sku(
+        arch=arch,
+        cluster_type=ttnn.cluster.get_cluster_type(),
+        num_devices=num_devices,
+    )
+    _llama33_70b_ccl_topology(mesh_device)
     ttnn.SetDefaultDevice(mesh_device)
     load_kwargs = {"local_files_only": os.getenv("CI") == "true"}
     hf_config = AutoConfig.from_pretrained(hf_model, **load_kwargs)
@@ -251,7 +282,7 @@ def from_pretrained(
     )
     if not isinstance(precision, Llama33_70BPrecisionConfig):
         raise TypeError("optimizations must be 'accuracy', 'performance', or Llama33_70BPrecisionConfig")
-    cache_path = _cache_path(hf_model, mesh_device, cache_dir)
+    cache_path = _cache_path(hf_model, mesh_device, cache_dir, sku=sku)
     if paged_attention_config is None:
         block_size = 32
         paged_attention_config = Llama33_70BPagedAttentionConfig(
@@ -292,14 +323,19 @@ def from_pretrained(
     stop_token_ids = _stop_token_ids(hf)
     if stop_token_ids:
         tokenizer.stop_tokens = list(stop_token_ids)
+    trace_prefill_supported_seq_lens = _trace_seq_lens(num_devices, 2048, max_seq_len)
     runtime_config = Llama33_70BRuntimeConfig(
         model_name=Path(hf_model).name,
         model_cache_path=cache_path,
         max_prefill_chunk_size=2048,
         max_context_len=int(hf_config.max_position_embeddings),
         max_seq_len=max_seq_len,
-        trace_prefill_supported_seq_lens=_trace_seq_lens(num_devices, 2048, max_seq_len),
-        trace_prefill_warmup_seq_lens=_trace_warmup_seq_lens(2048, max_seq_len),
+        trace_prefill_supported_seq_lens=trace_prefill_supported_seq_lens,
+        trace_prefill_warmup_seq_lens=_trace_warmup_seq_lens(
+            2048,
+            max_seq_len,
+            trace_prefill_supported_seq_lens,
+        ),
         disable_batched_prefill=bool(os.getenv("DISABLE_BATCHED_PREFILL")),
     )
     del hf

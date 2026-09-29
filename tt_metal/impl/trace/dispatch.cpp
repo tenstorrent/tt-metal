@@ -85,12 +85,13 @@ void issue_trace_commands(
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
-    HugepageDeviceCommand command_sequence(cmd_region, dispatch_md.cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, dispatch_md.cmd_sequence_sizeB);
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         uint16_t index_bitmask = 0;
         for (const auto& id : dispatch_md.sub_device_ids) {
             index_bitmask |= 1 << *id;
@@ -110,13 +111,13 @@ void issue_trace_commands(
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
-            MetalContext::instance().hal().make_go_msg_u32(
+            metal_ctx.hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_REPLAY_TRACE,
                 dispatch_core.x,
                 dispatch_core.y,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index) +
-                    MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id)),
-            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
+                metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index) +
+                    metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
@@ -138,11 +139,11 @@ void issue_trace_commands(
             expected_num_workers += mesh_device->impl().num_virtual_eth_cores(id);
         }
 
-        if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
+        if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
+                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
                 cq_id,
                 1);
@@ -150,7 +151,7 @@ void issue_trace_commands(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
+            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
             expected_num_workers,
             cq_id);
     }
@@ -171,14 +172,15 @@ void issue_trace_commands(
     sysmem_manager.fetch_queue_write(dispatch_md.cmd_sequence_sizeB, cq_id, stall_prefetcher);
 }
 
-uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
-    const auto& hal = MetalContext::instance().hal();
+uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices) {
+    MetalContext& metal_ctx = MetalContext::instance(context_id);
+    const auto& hal = metal_ctx.hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t go_signals_cmd_size =
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
 
     uint32_t cmd_sequence_sizeB =
-        (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() *
+        (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled() *
          hal.get_alignment(
              HalMemType::HOST)) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +      // go signal cmd
@@ -188,8 +190,7 @@ uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
                                    // dispatch_s is responsible for resetting worker count and giving dispatch_d the
                                    // latest worker state. This is encapsulated in the dispatch_s wait command (only to
                                    // be sent when dispatch is distributed on 2 cores)
-          (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) *
-              hal.get_alignment(HalMemType::HOST)) *
+          (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) * hal.get_alignment(HalMemType::HOST)) *
          num_sub_devices) +
         hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
 

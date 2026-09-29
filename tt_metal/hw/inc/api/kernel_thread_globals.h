@@ -89,7 +89,7 @@ inline void thread_sync_init() {
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
-inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
+inline void wait_threads(uint32_t participants, [[maybe_unused]] uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;
     }
@@ -102,7 +102,8 @@ inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
         __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
     } else {
-        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {}
+        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {
+        }
     }
 #endif
 }

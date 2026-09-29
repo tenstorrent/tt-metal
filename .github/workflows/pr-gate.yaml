@@ -75,6 +75,7 @@ permissions:
   pull-requests: write
   checks: write
   packages: write
+  actions: read
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
@@ -189,7 +190,78 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
-  runtime-smoke-tests:
+  # The ONE place team time budgets are enforced. It has to see every tests yaml
+  # at once: several yamls charge the same (team, budget_type, sku) budget, so the
+  # allowance is the sum across all of them. The per-pipeline checks this replaced
+  # each saw a single yaml, which let every yaml claim the full budget on its own.
+  verify-time-budgets:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against team time budgets
+        uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
+        with:
+          # The action is pinned to @main so the check logic is always current, but that
+          # means GITHUB_ACTION_PATH resolves inside a separate main-pinned checkout, not
+          # this job's own checkout above. Point it explicitly at $GITHUB_WORKSPACE so it
+          # verifies this branch's test yamls and budget file, not main's.
+          args: >-
+            --tests-dir "$GITHUB_WORKSPACE/tests/pipeline_reorg"
+            --budget-file "$GITHUB_WORKSPACE/.github/time_budget.yaml"
+            --comment-file "${{ runner.temp }}/budget-report.md"
+      # Every failure kind gets explained on the PR, not just an over-budget bucket:
+      # a missing budget_type or an undeclared bucket is just as opaque to the author.
+      # One comment is kept up to date across pushes rather than stacking per run, and
+      # a run that passes edits an existing comment to say so instead of leaving a
+      # stale failure behind. A pass with no prior comment posts nothing.
+      - name: Explain a time budget failure on the PR
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          REPO: ${{ github.repository }}
+          BODY_FILE: ${{ runner.temp }}/budget-report.md
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$BODY_FILE" ]; then
+            echo "No report was written (the check did not get far enough); nothing to post."
+            exit 0
+          fi
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+              --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "No open PR for '$BRANCH'; nothing to post."
+            exit 0
+          fi
+
+          existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- time-budget-check"))) | .id] | first // empty')
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
+              -F "body=@$BODY_FILE" >/dev/null
+            echo "Updated time-budget comment $existing on PR #$PR_NUMBER."
+          elif grep -q "status=fail" "$BODY_FILE"; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+            echo "Posted a new time-budget comment on PR #$PR_NUMBER."
+          else
+            echo "Check passed and no existing comment to clear; nothing to post."
+          fi
+
+  build-runtime-smoke-image:
     needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
@@ -197,9 +269,36 @@ jobs:
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-smoke-tests:
+    needs: [asan-build, build-docker-images, find-changed-files, build-runtime-smoke-image]
+    # Gate on asan-build rather than on nothing having failed. A skipped image
+    # build (forks) or a failed one (a registry or buildx blip) must still let
+    # smoke run on the artifact path: it is in optional-jobs, and
+    # workflow-status counts a skipped optional job as success, so skipping here
+    # would take hardware coverage out of the gate without failing it.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.cmake-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
+      # Empty on forks, where smoke falls back to downloading the artifact.
+      prebuilt-image: ${{ needs.build-runtime-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       # github_hosted_cpu runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from
@@ -208,11 +307,13 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
-  ttnn-smoke-tests:
-    needs: [asan-build, find-changed-files]
+  # A second image because the tag reflects build-args, and smoke installs a
+  # different package set per product. The two builds run in parallel, so this
+  # costs no extra time on the critical path.
+  build-ttnn-smoke-image:
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -220,14 +321,41 @@ jobs:
       needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-smoke-tests:
+    needs: [asan-build, build-docker-images, find-changed-files, build-ttnn-smoke-image]
+    # Gate on asan-build rather than on nothing having failed. A skipped image
+    # build (forks) or a failed one (a registry or buildx blip) must still let
+    # smoke run on the artifact path: it is in optional-jobs, and
+    # workflow-status counts a skipped optional job as success, so skipping here
+    # would take hardware coverage out of the gate without failing it.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.cmake-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
+      # Empty on forks, where smoke falls back to downloading the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
       test-category: pr_gate
-      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
 
@@ -245,39 +373,88 @@ jobs:
       ttnn-import-artifact-id: ${{ needs.asan-build.outputs.ttnn-import-artifact-id }}
       build-type: 'ASan'
 
-  runtime-examples:
-    needs: [ asan-build, find-changed-files ]
+  build-runtime-examples-image:
+    needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-metalium
+        PROFILE=examples
+
+  runtime-examples:
+    needs: [ asan-build, find-changed-files, build-docker-images, build-runtime-examples-image ]
+    # Not !failure(): a failed image build must still let examples use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true')
+      }}
     uses: ./.github/workflows/sdk-examples.yaml
     with:
+      # Empty on forks or a failed build; examples then use the artifact.
+      prebuilt-image: ${{ needs.build-runtime-examples-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
-      per-test-timeout: 15
     secrets: inherit
 
-  ttnn-examples:
-    needs: [ asan-build, find-changed-files ]
+  build-ttnn-examples-image:
+    needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-nn
+        PROFILE=examples
+
+  ttnn-examples:
+    needs: [ asan-build, find-changed-files, build-docker-images, build-ttnn-examples-image ]
+    # Not !failure(): a failed image build must still let examples use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true')
+      }}
     uses: ./.github/workflows/sdk-examples.yaml
     with:
+      # Empty on forks or a failed build; examples then use the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-examples-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
-      per-test-timeout: 15
     secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
@@ -424,7 +601,6 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      per-test-timeout: 15
       enabled-skus: ALL_SKUS_IN_TESTS
       # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
       sku-allowlist: ${{
@@ -488,6 +664,7 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
+      - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -497,7 +674,9 @@ jobs:
       - name: Check if all jobs passed
         uses: ./.github/actions/workflow-status
         with:
-          required-jobs: ""
+          # verify-time-budgets is required, not optional: it has no build dependency
+          # and never skips, so a skip would mean it silently stopped gating.
+          required-jobs: "verify-time-budgets"
           optional-jobs: >-
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,

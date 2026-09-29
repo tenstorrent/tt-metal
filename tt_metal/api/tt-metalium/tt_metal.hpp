@@ -33,6 +33,7 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
+[[deprecated("Use distributed::MeshDevice::create_unit_meshes instead. This API will be removed after 2026-09-27.")]]
 std::map<ChipId, IDevice*> CreateDevices(
     // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
@@ -54,6 +55,7 @@ std::map<ChipId, IDevice*> CreateDevices(
  *
  * Return value: void
  */
+[[deprecated("Use MeshDevice RAII or MeshDevice::close instead. This API will be removed after 2026-09-27.")]]
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
@@ -235,6 +237,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * | is_host_fallback_op  | (Optional): Specifies if this op runs entirely on host                              | bool
  * |                          | no       |
  */
+// The profiler keeps a lightweight declaration to avoid the full API include.
+// NOLINTNEXTLINE(readability-redundant-declaration)
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
 
 // clang-format off

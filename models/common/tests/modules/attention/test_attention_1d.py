@@ -18,7 +18,8 @@ Test coverage notes:
 
 import inspect
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -26,7 +27,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, LlamaConfig, LlamaForCausalLM
 
 from models.common.utility_functions import hf_cache_layer_kv, hf_cache_num_layers
 
@@ -52,6 +53,9 @@ from models.common.tensor_utils import (
 )
 from models.common.tests.utils import stable_model_seed
 from models.common.utility_functions import comp_allclose, comp_pcc
+
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
 
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)
@@ -654,7 +658,6 @@ def test_attention_1d_config_power_user_overrides():
     """Test that Attention1DConfig accepts power-user overrides for program configs."""
     mock_prg_config = MagicMock()
     mock_mem_config = MagicMock()
-    mock_compute_kernel = MagicMock()
 
     config = Attention1DConfig(
         wqkv=MagicMock(),
@@ -663,7 +666,6 @@ def test_attention_1d_config_power_user_overrides():
         decode_sdpa_prg_config=mock_prg_config,
         decode_attn_output_prg_config=mock_prg_config,
         decode_residual_memcfg=mock_mem_config,
-        li_qkv_decode_compute_kernel_cfg=mock_compute_kernel,
         activation_dtype=ttnn.bfloat16,
         scale=0.08838834764831843,  # 1/sqrt(128)
     )
@@ -673,7 +675,6 @@ def test_attention_1d_config_power_user_overrides():
     assert config.decode_sdpa_prg_config is mock_prg_config
     assert config.decode_attn_output_prg_config is mock_prg_config
     assert config.decode_residual_memcfg is mock_mem_config
-    assert config.li_qkv_decode_compute_kernel_cfg is mock_compute_kernel
     assert config.activation_dtype == ttnn.bfloat16
     assert config.scale == pytest.approx(0.08838834764831843)
 
@@ -2080,6 +2081,379 @@ def test_attention_1d_prefill_decode_transition(ttnn_mesh_device: ttnn.MeshDevic
     logger.info(
         f"test_attention_1d_prefill_decode_transition: PASSED ({paged_str}, "
         f"prefill={prefill_seq_len}, decode={num_decode_after_prefill})"
+    )
+
+
+# =============================================================================
+# Focused Blackhole hardware gates
+# =============================================================================
+
+
+def _attention_gate_kernel(fidelity, *, approximate, fp32):
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=approximate,
+        fp32_dest_acc_en=fp32,
+        packer_l1_acc=True,
+    )
+
+
+def _build_synthetic_attention_gate(mesh_device, *, paged: bool, is_blackhole: bool):
+    """Build a reduced Llama layer with explicit common-config requests."""
+    torch.manual_seed(2026)
+    num_devices = mesh_device.get_num_devices()
+    # Preserve Llama-3.1-8B attention geometry while reducing unrelated MLP
+    # and vocabulary allocations in the host reference model.
+    dim = 4096
+    n_heads = 32
+    n_kv_heads = 8
+    head_dim = 128
+    max_batch_size = 1
+    max_seq_len = 320
+    hf_config = LlamaConfig(
+        vocab_size=256,
+        hidden_size=dim,
+        intermediate_size=512,
+        num_hidden_layers=1,
+        num_attention_heads=n_heads,
+        num_key_value_heads=n_kv_heads,
+        head_dim=head_dim,
+        max_position_embeddings=max_seq_len,
+        torch_dtype=torch.bfloat16,
+    )
+    reference_model = LlamaForCausalLM(hf_config).to(torch.bfloat16)
+    reference_attention = reference_model.model.layers[0].self_attn
+    rotary_emb = reference_model.model.rotary_emb
+    reference = HfAttentionWrapper(reference_attention, head_dim, rotary_emb)
+    wqkv, wo, _, _, _ = get_attention_weights_from_ref_model(reference_attention, num_devices)
+
+    page_config = PagedAttentionConfig(block_size=64, max_num_blocks=32) if paged else None
+    common = Attention1DConfig(
+        wqkv=LazyWeight(source=wqkv, dtype=ttnn.bfloat8_b),
+        wo=LazyWeight(source=wo, dtype=ttnn.bfloat8_b),
+        mesh_device=mesh_device,
+        tt_ccl=TT_CCL(mesh_device) if num_devices > 1 else None,
+        topology=ttnn.Topology.Ring if num_devices > 1 else None,
+        dim=dim,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        head_dim=head_dim,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        scale=head_dim**-0.5,
+        paged_attention_config=page_config,
+        kv_cache_dtype=ttnn.bfloat8_b,
+        wqkv_dtype=ttnn.bfloat8_b,
+        wo_dtype=ttnn.bfloat8_b,
+        activation_dtype=ttnn.bfloat16,
+        prefill_qkv_minimal_matmul=is_blackhole,
+    )
+    ordinary_slots = {
+        name: _attention_gate_kernel(
+            ttnn.MathFidelity.HiFi2,
+            approximate=is_blackhole,
+            fp32=is_blackhole,
+        )
+        for name in (
+            "li_qkv_decode_compute_kernel_cfg",
+            "sdpa_decode_compute_kernel_cfg",
+            "li_o_decode_compute_kernel_cfg",
+            "li_qkv_prefill_compute_kernel_cfg",
+            "li_o_prefill_compute_kernel_cfg",
+        )
+    }
+    common = replace(
+        common,
+        **ordinary_slots,
+        sdpa_prefill_compute_kernel_cfg=_attention_gate_kernel(ttnn.MathFidelity.HiFi4, approximate=False, fp32=True),
+        prefill_qkv_grid=(8, 10) if is_blackhole else (8, 8),
+        dram_shard_grid_width=mesh_device.dram_grid_size().x if is_blackhole else 8,
+        decode_create_qkv_head_grid=ttnn.CoreGrid(y=4, x=8) if is_blackhole else None,
+        decode_transformation_core_grid=(
+            ttnn.CoreCoord(8, 8) if is_blackhole else mesh_device.compute_with_storage_grid_size()
+        ),
+    )
+    model = Attention1D.from_config(common)
+    assert model.config.prefill_qkv_grid == ((8, 10) if is_blackhole else (8, 8))
+    if is_blackhole:
+        assert model.config.decode_create_qkv_head_grid.x == 8
+        assert model.config.decode_create_qkv_head_grid.y == 4
+    else:
+        assert model.config.decode_create_qkv_head_grid is None
+    assert model.config.use_minimal_qkv_matmul(256) is is_blackhole
+    assert not model.config.use_minimal_qkv_matmul(128)
+    for slot in (
+        "li_qkv_decode_compute_kernel_cfg",
+        "sdpa_decode_compute_kernel_cfg",
+        "li_o_decode_compute_kernel_cfg",
+        "li_qkv_prefill_compute_kernel_cfg",
+        "sdpa_prefill_compute_kernel_cfg",
+        "li_o_prefill_compute_kernel_cfg",
+    ):
+        assert getattr(model.config, slot) is not None
+    return model, reference, rotary_emb, page_config
+
+
+def _run_attention_standard_gate(model, reference, rotary_emb, mesh_device, *, mode):
+    dim = model.config.dim
+    mesh_shape = tuple(mesh_device.shape)
+    if mode == "prefill":
+        _run_prefill_test(
+            tt_model=model,
+            reference_wrapper=reference,
+            ttnn_mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            batch_size=1,
+            seq_len=256,
+            dim=dim,
+            n_heads=model.config.n_heads,
+            n_kv_heads=model.config.n_kv_heads,
+            head_dim=model.config.head_dim,
+            act_dtype=ttnn.bfloat16,
+            page_block_size=None,
+            chunked_prefill=False,
+            chunk_size=None,
+            paged_attention_config=None,
+            page_table=None,
+            page_table_tt=None,
+            pcc=0.98,
+        )
+    else:
+        _run_decode_test(
+            tt_model=model,
+            reference_wrapper=reference,
+            ttnn_mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            batch_size=1,
+            dim=dim,
+            n_heads=model.config.n_heads,
+            n_kv_heads=model.config.n_kv_heads,
+            head_dim=model.config.head_dim,
+            max_seq_len=model.config.max_seq_len,
+            act_dtype=ttnn.bfloat16,
+            page_block_size=None,
+            page_table_tt=None,
+            num_decode_iterations=2,
+            pcc=0.98,
+        )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        pytest.param((1, 1), id="p150-1x1"),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            id="p150x4-1x4",
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
+def test_attention_1d_blackhole_common_config_standard_correctness_cache_and_timing(
+    request, ttnn_mesh_device, require_blackhole_mesh_device, mode
+):
+    """Correctness/cache gate; synchronized timings are evidence without a threshold."""
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    request.addfinalizer(lambda: ttnn.SetDefaultDevice(None))
+    model, reference, rotary_emb, _ = _build_synthetic_attention_gate(ttnn_mesh_device, paged=False, is_blackhole=True)
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+
+    _run_attention_standard_gate(model, reference, rotary_emb, ttnn_mesh_device, mode=mode)
+    ttnn.synchronize_device(ttnn_mesh_device)
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+
+    timings_ms = []
+    for _ in range(2):
+        reference.reset_cache()
+        start = time.perf_counter()
+        _run_attention_standard_gate(model, reference, rotary_emb, ttnn_mesh_device, mode=mode)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+    logger.info(
+        "BH Attention1D standard measurement mode={} mesh={}: warm-cache mean={:.3f} ms, samples={}",
+        mode,
+        tuple(ttnn_mesh_device.shape),
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
+
+
+def _run_attention_paged_transition_gate(model, reference, rotary_emb, page_config, mesh_device):
+    dim = model.config.dim
+    mesh_shape = tuple(mesh_device.shape)
+    seq_len = 256
+    torch_input = torch.randn(1, seq_len, dim, dtype=torch.bfloat16)
+    page_table = torch.randperm(page_config.max_num_blocks).reshape(1, -1)
+    page_table_tt = ttnn.from_torch(
+        page_table,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+    prefill_rot = get_rot_mats_from_hf(rotary_emb, seq_len, model.config.head_dim, mesh_device)
+    tt_prefill = model.forward(tt_input, None, prefill_rot, mode="prefill", page_table=page_table_tt)
+    tt_prefill_torch = to_torch_auto_compose(tt_prefill)[:, 0, :seq_len, :dim]
+    reference_prefill = reference(torch_input, start_pos=0)
+    passing, message = comp_pcc(reference_prefill, tt_prefill_torch.to(reference_prefill.dtype), 0.98)
+    assert passing, f"Blackhole paged prefill PCC failed: {message}"
+
+    decode_input = torch.randn(1, 1, dim, dtype=torch.bfloat16)
+    tt_decode_input = ttnn.from_torch(
+        decode_input.unsqueeze(0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+    tt_decode_input = ttnn.to_memory_config(tt_decode_input, model.config.decode_input_memcfg)
+    rope = RotarySetupHelper(mesh_device, 1, model.config.head_dim, model.config.max_seq_len, rotary_emb)
+    position = torch.tensor([seq_len], dtype=torch.long)
+    current_pos = ttnn.from_torch(
+        position,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+    )
+    tt_decode = model.forward(
+        tt_decode_input,
+        current_pos,
+        rope.get_rot_mats(position),
+        mode="decode",
+        page_table=page_table_tt,
+    )
+    tt_decode_torch = to_torch_auto_compose(tt_decode)[:, 0, :1, :dim].view(1, 1, dim)
+    reference_decode = reference(decode_input, start_pos=seq_len)
+    passing, message = comp_pcc(reference_decode, tt_decode_torch.to(reference_decode.dtype), 0.98)
+    assert passing, f"Blackhole paged decode PCC failed: {message}"
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        pytest.param((1, 1), id="p150-1x1"),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            id="p150x4-1x4",
+        ),
+    ],
+    indirect=True,
+)
+def test_attention_1d_blackhole_common_config_paged_prefill_decode_transition_cache_and_timing(
+    request, ttnn_mesh_device, require_blackhole_mesh_device
+):
+    """Paged transition gate with synchronized timing evidence and stable cache count."""
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    request.addfinalizer(lambda: ttnn.SetDefaultDevice(None))
+    model, reference, rotary_emb, page_config = _build_synthetic_attention_gate(
+        ttnn_mesh_device, paged=True, is_blackhole=True
+    )
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+
+    _run_attention_paged_transition_gate(model, reference, rotary_emb, page_config, ttnn_mesh_device)
+    ttnn.synchronize_device(ttnn_mesh_device)
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+
+    reference.reset_cache()
+    start = time.perf_counter()
+    _run_attention_paged_transition_gate(model, reference, rotary_emb, page_config, ttnn_mesh_device)
+    ttnn.synchronize_device(ttnn_mesh_device)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+    logger.info(
+        "BH Attention1D paged transition measurement mesh={}: warm-cache elapsed={:.3f} ms",
+        tuple(ttnn_mesh_device.shape),
+        elapsed_ms,
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [pytest.param((1, 1), id="n150-1x1")],
+    indirect=True,
+)
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
+def test_attention_1d_wormhole_common_config_correctness_cache_and_timing(request, ttnn_mesh_device, mode):
+    """Focused WH correctness/cache gate using all six explicit compute slots."""
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    request.addfinalizer(lambda: ttnn.SetDefaultDevice(None))
+    model, reference, rotary_emb, _ = _build_synthetic_attention_gate(ttnn_mesh_device, paged=False, is_blackhole=False)
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+
+    _run_attention_standard_gate(model, reference, rotary_emb, ttnn_mesh_device, mode=mode)
+    ttnn.synchronize_device(ttnn_mesh_device)
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+
+    timings_ms = []
+    for _ in range(2):
+        reference.reset_cache()
+        start = time.perf_counter()
+        _run_attention_standard_gate(model, reference, rotary_emb, ttnn_mesh_device, mode=mode)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+    logger.info(
+        "WH Attention1D standard measurement mode={} mesh={}: warm-cache mean={:.3f} ms, samples={}",
+        mode,
+        tuple(ttnn_mesh_device.shape),
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [pytest.param((1, 1), id="n150-1x1")],
+    indirect=True,
+)
+def test_attention_1d_wormhole_common_config_paged_prefill_decode_transition_cache_and_timing(
+    request, ttnn_mesh_device
+):
+    """Focused WH paged transition gate with stable program-cache evidence."""
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    request.addfinalizer(lambda: ttnn.SetDefaultDevice(None))
+    model, reference, rotary_emb, page_config = _build_synthetic_attention_gate(
+        ttnn_mesh_device, paged=True, is_blackhole=False
+    )
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+
+    _run_attention_paged_transition_gate(model, reference, rotary_emb, page_config, ttnn_mesh_device)
+    ttnn.synchronize_device(ttnn_mesh_device)
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+
+    reference.reset_cache()
+    start = time.perf_counter()
+    _run_attention_paged_transition_gate(model, reference, rotary_emb, page_config, ttnn_mesh_device)
+    ttnn.synchronize_device(ttnn_mesh_device)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+    logger.info(
+        "WH Attention1D paged transition measurement mesh={}: warm-cache elapsed={:.3f} ms",
+        tuple(ttnn_mesh_device.shape),
+        elapsed_ms,
     )
 
 

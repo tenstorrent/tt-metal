@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/compute/common.h"
@@ -46,7 +48,8 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
         for (uint32_t n = 0; n < Vt; n += subblock_cols) {
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(state_id, affine_id);
+            reconfig_data_format_srca(state_id, affine_id);
+            copy_init(affine_id);
             for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                 for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                     copy_tile(
@@ -107,7 +110,8 @@ FORCE_INLINE void matmul_affine(
         for (uint32_t n = 0; n < Nt; n += subblock_cols) {
             tile_regs_acquire();
             if (n >= At) {
-                copy_tile_to_dst_init_short_with_dt(affine_id, local_b_id);
+                reconfig_data_format_srca(affine_id, local_b_id);
+                copy_init(local_b_id);
                 for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                     for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                         copy_tile(
@@ -149,7 +153,7 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     const uint32_t out_id = out.get_id();
     out.reserve_back(tiles);
     reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     for (uint32_t first_tile = 0; first_tile < tiles; first_tile += dst_tiles) {
         const uint32_t batch_tiles = first_tile + dst_tiles <= tiles ? dst_tiles : tiles - first_tile;
         tile_regs_acquire();
@@ -168,6 +172,8 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
+
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
@@ -179,16 +185,52 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
+    DataflowBuffer tail_affine(dfb::tail_affine);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
+    DataflowBuffer reset_b(dfb::reset_b);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
+    }
+    const uint32_t active = topology.active_groups(G);
+    if (group >= active) {
+        return;
+    }
+    const uint32_t reset_group = topology.reset_group(G);
     initial_a.wait_front(affine_a_tiles);
-    initial_b.wait_front(affine_b_tiles);
-    copy(initial_a, to_remote_a, affine_a_tiles);
-    copy(initial_b, to_remote_b, affine_b_tiles);
+    const bool reset_worker = group == reset_group;
+    if (!reset_worker) {
+        initial_b.wait_front(affine_b_tiles);
+    }
+    if (reset_worker) {
+        const bool aligned_reset = topology.split_in_group(G) == 0;
+        tail_entry_states.wait_front(affine_b_tiles);
+        if (aligned_reset) {
+            copy(tail_entry_states, reset_b, affine_b_tiles);
+        } else {
+            tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
+            matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_entry_states, reset_b);
+        }
+        reset_b.wait_front(affine_b_tiles);
+        copy(initial_a, to_remote_a, affine_a_tiles);
+        copy(reset_b, to_remote_b, affine_b_tiles);
+        reset_b.pop_front(affine_b_tiles);
+        if (!aligned_reset) {
+            tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
+        }
+        tail_entry_states.pop_front(affine_b_tiles);
+    } else {
+        copy(initial_a, to_remote_a, affine_a_tiles);
+        copy(initial_b, to_remote_b, affine_b_tiles);
+    }
     initial_a.pop_front(affine_a_tiles);
-    initial_b.pop_front(affine_b_tiles);
+    if (!reset_worker) {
+        initial_b.pop_front(affine_b_tiles);
+    }
 
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         if (group < distance) {
             continue;
         }

@@ -8,6 +8,8 @@
 
 #include "overlapped_tensor_generated.h"
 
+#include "tensor/flatbuffer/tensor_file_layout.hpp"
+
 #include "ttnn/tensor/overlapped_tensor.hpp"
 
 namespace ttnn {
@@ -15,7 +17,7 @@ namespace ttnn {
 flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuffer(
     const std::vector<ttnn::OverlappedTensorView>& views,
     flatbuffers::FlatBufferBuilder& builder,
-    std::vector<tt::tt_metal::HostBuffer>& buffers);
+    std::vector<SerializedTensorBuffer>& buffers);
 
 std::vector<ttnn::OverlappedTensorView> overlapped_tensors_from_flatbuffer(
     const flatbuffer::OverlappedTensors* fb,

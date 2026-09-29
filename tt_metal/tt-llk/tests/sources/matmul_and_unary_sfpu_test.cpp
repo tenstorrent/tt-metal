@@ -88,6 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_matmul_<MATH_FIDELITY>(0);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_matmul_uninit_();
 
     // Start of second math kernel to perform matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array

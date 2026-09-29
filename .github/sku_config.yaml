@@ -158,20 +158,9 @@ skus:
       - in-service
     weights-cache-mode: lfc
 
-  bh_loudbox_civ2_viommu:
-    runs_on:
-      - tt-ubuntu-2204-BH-LoudBox-viommu-stable
-
   bh_quietbox_2:
     runs_on:
       - BH-Quietbox-2
-      - pipeline-perf
-      - in-service
-    weights-cache-mode: yyz4-mnt-models
-
-  bh_quietbox_2_iommu:
-    runs_on:
-      - BH-Quietbox-2-iommu
       - pipeline-perf
       - in-service
     weights-cache-mode: yyz4-mnt-models

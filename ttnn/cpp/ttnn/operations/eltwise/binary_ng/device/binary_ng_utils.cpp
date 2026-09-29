@@ -247,19 +247,27 @@ OpConfig::OpConfig(
             process_rhs = unary::UnaryOpType::EXP2;
             binary_op = EnumT::MUL;
             break;
-        // log( exp(a) + exp(b) )
+        // max(a, b) + log1p(exp(-|a - b|)), in the fused SFPU kernel. There is no FPU form:
+        // the composed log(exp(a) + exp(b)) overflows at |x| > 88.7 even though the result
+        // is bounded by its inputs, so the FPU arm refuses instead of building it. Today that
+        // arm is unreachable -- LOGADDEXP is float_only, supports_mixed_float_inputs is false
+        // for it, and the SFPU gate accepts exactly that set -- and the throw keeps a future
+        // widening of either set from silently bringing the overflow back.
         case BinaryOpType::LOGADDEXP:
-            process_lhs = unary::UnaryOpType::EXP;
-            process_rhs = unary::UnaryOpType::EXP;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
-        // log2( 2**a + 2**b )
+        // max(a, b) + log2(1 + 2**-|a - b|): same reasoning, the composed log2(2**a + 2**b)
+        // overflowing at |x| > 127.
         case BinaryOpType::LOGADDEXP2:
-            process_lhs = unary::UnaryOpType::EXP2;
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG2;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP2;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (is_sfpu_op()) {
@@ -366,6 +374,13 @@ OpConfig::OpConfig(
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::NEXTAFTER:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::NEXTAFTER;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::ATAN2:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::ATAN2;
@@ -461,6 +476,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
+        case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
+        case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
         case LEFT_SHIFT:
             return {
                 "binary_shift_tile_init();",
@@ -508,6 +525,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
+        case NEXTAFTER:
+            // One ULP of bfloat16 is a wider step in the fp32 dest register than one ULP of
+            // float32, so the destination format picks the entry point.
+            if (dtype == DataType::FLOAT32) {
+                return {"nextafter_binary_tile_init();", "nextafter_binary_tile"};
+            } else {
+                return {"nextafter_bf16_binary_tile_init();", "nextafter_bf16_binary_tile"};
+            }
         case LT:
             if (int_data_format) {
                 return {
@@ -596,6 +621,11 @@ void add_activation_defines(
             unary::utils::update_macro_defines(a.type(), defines);
             return std::move(process);
         });
+    // The activations run in the SFPU kernels the unary op uses; give them the same input-dtype define so the
+    // float32 variants are compiled for float32 operands.
+    if (!activations.empty() && dtype.has_value()) {
+        unary::utils::add_input_dtype_defines(*dtype, defines);
+    }
 }
 
 std::map<std::string, std::string> make_dataflow_defines(

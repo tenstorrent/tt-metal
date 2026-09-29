@@ -171,6 +171,7 @@ class TorchMoe(nn.Module):
         n_limited_groups: int = None,
         route_scale: float = None,
         routed_emb_dim: int = None,
+        topk_method: str = "noaux_tc",
         shared_hidden_dim: int = None,
         latent_weights: dict = None,
         latent_use_norm: bool = True,
@@ -204,7 +205,9 @@ class TorchMoe(nn.Module):
             num_dispatch_groups: Number of dispatch groups (default: 1)
             routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj per expert
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj for shared expert
-            gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_weights: Optional dict with "weight" and optional "e_score_correction_bias" keys for
+                gate. A missing/None bias zeros the router's bias, expressing a bias-free router
+                (e.g. Mistral) instead of requiring the caller to pass a pre-zeroed tensor.
             routed_emb_dim: LatentMoE routed-side width. Defaults to emb_dim (no latent space).
                 When set (Kimi-K3: 3584), dispatch / experts / combine / reduce all run at this
                 width and the latent projections wrap them.
@@ -243,11 +246,40 @@ class TorchMoe(nn.Module):
                 norm_topk_prob=True,
                 hidden_size=emb_dim,
             )
-            self.gate = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
-            self.gate.weight.data = gate_weights["weight"]
-            self.gate.e_score_correction_bias.data = gate_weights["e_score_correction_bias"]
+            gate_weight = gate_weights["weight"]
+            gate_bias = gate_weights.get("e_score_correction_bias")
+            if gate_bias is None:
+                # Must follow the weight, not the parameter's init dtype: F.linear rejects a float32
+                # bias against a bfloat16 weight.
+                gate_bias = torch.zeros(num_routed_experts, dtype=gate_weight.dtype, device=gate_weight.device)
+            if topk_method == "noaux_tc":
+                self.gate = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
+                self.gate.weight.data = gate_weight
+                self.gate.e_score_correction_bias.data = gate_bias
+            elif topk_method == "gpt_softmax":
+                # top-k on the raw logits, then softmax over the selection. For a bias-free router
+                # that is identically softmax -> top-k -> renormalize, which is what Mistral does.
+                from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
+
+                self.gate = GptOssTopKRouter(
+                    SimpleNamespace(
+                        num_experts_per_tok=num_experts_per_tok,
+                        num_local_experts=num_routed_experts,
+                        hidden_size=emb_dim,
+                    )
+                )
+                # The equality with softmax -> top-k -> renormalize holds only at these values;
+                # this router ignores grouping and scaling, so a mismatch is a silently wrong golden.
+                assert route_scale in (None, 1.0), f"gpt_softmax needs route_scale 1.0, got {route_scale}"
+                assert (n_expert_groups or 1) == 1 and (n_limited_groups or 1) == 1, "gpt_softmax needs no grouping"
+                self.gate.weight.data = gate_weight
+                self.gate.bias.data = gate_bias
+            else:
+                raise ValueError(f"unknown topk_method {topk_method!r}")
+            self._gate_returns_logits = topk_method == "gpt_softmax"
         else:
             self.gate = None
+            self._gate_returns_logits = False
         self.dispatch_group_size = dispatch_group_size
         self.experts_per_chip = experts_per_chip
         self.num_routed_experts = num_routed_experts
@@ -374,8 +406,12 @@ class TorchMoe(nn.Module):
             # doing it manually because we dont want to change reference module at the moemnt; this is without activation function;
             gate_logits = x_flat @ self.gate.weight.T  # (total_tokens, n_routed_experts)
             with torch.no_grad():
-                # ReferenceMoEGate returns (topk_idx, topk_weight) — indices first, weights second
-                indices, weights = self.gate(x_flat.unsqueeze(0))
+                if self._gate_returns_logits:
+                    # GptOssTopKRouter takes 2D and returns (logits, weights, indices)
+                    _, weights, indices = self.gate(x_flat)
+                else:
+                    # ReferenceMoEGate returns (topk_idx, topk_weight) — indices first, weights second
+                    indices, weights = self.gate(x_flat.unsqueeze(0))
             # Reshape to (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
             weights = weights.view(self.dispatch_group_size, self.seq_len_per_chip, self.num_experts_per_tok)
             indices = indices.view(self.dispatch_group_size, self.seq_len_per_chip, self.num_experts_per_tok).to(

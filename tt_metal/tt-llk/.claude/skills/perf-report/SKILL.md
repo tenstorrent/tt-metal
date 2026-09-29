@@ -70,7 +70,7 @@ Rules:
   It also writes to the same `<module>.csv` path, overwriting the timing
   report. Move the timing report out of the way first (see Refresh and
   compare), run counters as a separate sweep, and validate the result as a
-  counter report. `--dump-csv-counters`
+  counter report. `--dump-perf-counters`
   additionally writes raw counter values to `<module>.counters.csv`.
 - Perf counters are unavailable on Quasar. The build gate keeps the define off
   there and `counters.h` `#error`s if it ever slips through, so the flag
@@ -114,7 +114,7 @@ finish, or every selected test was skipped.
    two ops share one module. Fix the test; do not work around it.
 2. **Row count.** Reconcile rather than assert equality. Start from
    `selected variants × markers`, then subtract skipped or deselected
-   variants and any rows merged by duplicate-key collapse. Markers are the
+   variants; duplicate keys are rejected, never merged. Markers are the
    zones the kernel declares — `INIT` and `TILE_LOOP` in the perf sources,
    plus the `KERNEL` zone that `trisc.cpp` wraps around every profiler build.
    A counter report has no profiler-derived rows, so expect only the counter

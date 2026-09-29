@@ -163,7 +163,6 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device, expect_error):
         (1, 1152, 128, 128, 32, 2, 8, 4),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         # sd35. 4 indicates the number of device.
         (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),

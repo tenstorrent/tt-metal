@@ -225,6 +225,8 @@ void gelu_init() {
         // departures: exponent 31 encodes **zero** rather than inf/NaN, and exponent 0 is an
         // ordinary normal, so there are no denormals and the smallest magnitude is 2^-15.
         // Hence 0x7C00 for the two zero intercepts -- 0x0000 would silently mean 3.05e-5.
+        // vLut16ss / vLut16ii encode 0.0f as 0x7C00. Every value below is an exact binary16
+        // value, so the encoding is exact.
         //
         // The first intercept is pinned to zero because gelu(0) = 0 exactly. The table this
         // replaced carried -1.044e-4 there, so gelu(0) came back negative and small inputs
@@ -233,17 +235,14 @@ void gelu_init() {
         // instructions, same 222.76 cycles/tile -- and takes the worst-case error from
         // 0.023887 to 0.018938 and RMS from 2.079e-3 to 1.517e-3 over all 65536 bfloat16
         // patterns.
-        //
-        // vUInt(uint32_t) emits a full 32-bit immediate load, equivalent to the two
-        // 16-bit halves that _sfpu_load_imm32_ previously wrote.
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37DC311Au);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB1037C00u);
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.159423828125f, 0.4912109375f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, -0.1566162109375f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E038EFu);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB435B46Eu);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.61669921875f, 0.609375f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(-0.27685546875f, -0.262939453125f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003855u);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7C00AFEBu);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.54150390625f, 0.5f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(-0.12371826171875f, 0.0f);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
@@ -263,31 +262,31 @@ void gelu_init() {
 
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;
         sfpi::vFloat half_in = in * half;
-        sfpi::vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
         result = half_in + result;
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 
-    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.

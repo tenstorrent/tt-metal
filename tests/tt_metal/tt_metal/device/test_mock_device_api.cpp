@@ -146,7 +146,7 @@ bool mock_fabric_compile_is_disabled() { return !llrt::RunTimeOptions{}.get_eris
 // router count is itself proof the compile ran.
 void expect_mock_fabric_compiles_on_2_chips() {
     const std::vector<ChipId> device_ids{0, 1};
-    auto devices = detail::CreateDevices(device_ids);
+    auto devices = distributed::MeshDevice::create_unit_meshes(device_ids);
     ASSERT_EQ(devices.size(), device_ids.size());
 
     const auto& builder_context =
@@ -155,8 +155,6 @@ void expect_mock_fabric_compiles_on_2_chips() {
         EXPECT_GT(builder_context.get_num_fabric_initialized_routers(device_id), 0u)
             << "no fabric routers were built on mock device " << device_id;
     }
-
-    detail::CloseDevices(devices);
 }
 
 }  // namespace
@@ -316,7 +314,7 @@ TEST_F(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
         << "getDeviceProfilerState() must be false for a mock context even when profiling is "
            "requested";
 
-    auto devices = detail::CreateDevices({0});
+    auto devices = distributed::MeshDevice::create_unit_meshes({0});
     ASSERT_FALSE(devices.empty());
     const ChipId mock_device_id = devices.begin()->first;
 
@@ -326,8 +324,6 @@ TEST_F(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
     EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(mock_device_id))
         << "Device profiler was started on mock device " << mock_device_id
         << " -- the profiler must be skipped for mock/emulated clusters";
-
-    detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal

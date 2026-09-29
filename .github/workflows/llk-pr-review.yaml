@@ -217,8 +217,8 @@ jobs:
             echo "relevant changed line or contiguous right-side range, with file/line fallback."
             echo
             echo "Keep all worktrees read-only. Never use Write/Edit or temporary files. Use"
-            echo "Bash only for one direct gh api command, the intake agent's one complete"
-            echo "gh pr diff call, or an allowlisted read-only"
+            echo "Bash only for one direct gh api command, the intake agent's one gh pr view"
+            echo "metadata call, one complete gh pr diff call, or an allowlisted read-only"
             echo "git diff/show/log/rev-parse command per call, with no pipes, redirects, shell"
             echo "composition, substitution, or inline environment assignment. Never run"
             echo "find / or read Claude execution/tool-result files. Repeat these constraints"
@@ -265,7 +265,7 @@ jobs:
           # no effort argument). gh is used for both PR inspection and posting.
           claude_args: |
             --effort ${{ inputs.effort || 'max' }}
-            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
+            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
             --max-turns 150
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
@@ -356,6 +356,11 @@ jobs:
       # Re-read GitHub instead of trusting process success. A session that exits
       # cleanly without executing its posting contract is a failed review; never
       # mask that failure by manufacturing a workflow-level "No issues found".
+      # Match only this reviewer's comments by their signature footer (the marker
+      # plus the footer line as the body suffix), not any github-actions[bot]
+      # comment: several bots share that login, and one could even quote the marker
+      # mid-body, so a login-or-substring check could mistake another bot's comment
+      # for this review's output.
       - name: Verify review output was posted
         if: steps.llk_code_review.outcome == 'success'
         env:
@@ -372,12 +377,12 @@ jobs:
             inline_count="$(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+                --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- llk-pr-reviewer -->")) and ((.body // "") | gsub("\\s+$"; "") | endswith("_Posted by the **LLK PR Reviewer**._")))] | length'
             )"
             issue_count="$(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+                --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- llk-pr-reviewer -->")) and ((.body // "") | gsub("\\s+$"; "") | endswith("_Posted by the **LLK PR Reviewer**._")))] | length'
             )"
             if (( inline_count + issue_count > 0 )); then
               echo "LLK review posted ${inline_count} inline and ${issue_count} issue-level comment(s)"
