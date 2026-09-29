@@ -27,6 +27,7 @@ Rows are appended; the header is written when the file is new.
 import argparse
 import csv
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -87,7 +88,7 @@ def load_map(path):
 
 def roofline(mesh, segments):
     tool = HERE / "roofline_ops.js"
-    node = shutil.which("node")
+    node = os.environ.get("NODE") or shutil.which("node")
     if not node or not tool.is_file():
         print(f"[per_op] no roofline ({'node missing' if not node else f'{tool} missing'}): roof/eff left empty")
         return {}

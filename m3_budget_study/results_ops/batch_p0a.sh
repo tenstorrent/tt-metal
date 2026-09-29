@@ -33,6 +33,7 @@ CODE="$RES/inputs/code_m3/metadata.json"
 WRAPPER="${WRAPPER:-$TT_METAL_HOME/models/demos/minimax_m3/scripts/run_prefill_profile.sh}"
 PARSE="$TT_METAL_HOME/models/demos/minimax_m3/tests/perf/parse_zone_perf.py"
 PER_OP="$RES/tools/zones_to_per_op.py"
+export NODE="${NODE:-$(ls ~/.vscode-server/cli/servers/*/server/node 2>/dev/null | head -1)}"
 RUNS="$RES/p0a_runs.csv"
 mkdir -p "$RES/logs" "$RES/profiles" "$RES/profiler_tmp"
 
