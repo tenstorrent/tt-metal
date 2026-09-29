@@ -270,6 +270,45 @@ class _BucketState:
 # axis 0 is intra-host, while SP hides its KV all-gather inside ring attention and tolerates the
 # inter-host hop. TP=4 also fits the shapes -- 56 // 4 = 14 heads, 5376 % (32 * 4) == 0 for the norms.
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
+    # One Blackhole p150 / a single p300 chip. SP is the size-1 axis, so `use_ring` is false and
+    # attention runs plain SDPA over the padded sequence -- which is why every SP=1 mesh needs the
+    # block-diagonal window the transformer now derives from `logical_n`.
+    #
+    # `coresident: False` is arithmetic, not caution: the DiT is ~16.6 GB with its adaLN projections
+    # resident, the text encoder cannot FSDP here (the non-TP axis is size 1) so it is its full
+    # ~12.6 GB, and the video VAE replicates ~9.8 GB of fp32 weights. Only one of the three fits at a
+    # time on a 32 GB part, so each stage evicts the others. That also rules out tracing.
+    #
+    # `vae_output_type: "uint8"`: the device stitch asserts one output tile per device, which a
+    # 1-device mesh cannot satisfy. uint8 reads back 0..255 per pixel -- a third of the float path's
+    # PCIe traffic -- and stitches on host.
+    (1, 1): {
+        "tp_axis": 0,
+        "sp_axis": 1,
+        "num_links": 1,
+        "topology": ttnn.Topology.Linear,
+        "coresident": False,
+        "vae_output_type": "uint8",
+    },
+    # The QB2: two p300 boards, 4 chips on a line. TP takes the full mesh on axis 1 (14 heads and
+    # 5376 / (32 * 4) both divide) and SP is the size-1 axis 0 -- the same assignment Wan's (1, 4)
+    # preset makes, and the one Blackhole's line fabric supports: `Topology.Linear` with FABRIC_1D,
+    # because a ring collective on a line cannot resolve a forwarding direction.
+    #
+    # Residency is the same arithmetic as (1, 1) -- TP=4 divides the DiT to ~16.6 GB/chip and the text
+    # encoder to ~12.6 GB/chip, but the VAE's fp32 weights are replicated at ~9.8 GB and the three
+    # sum past 32 GB -- so `coresident: False` here too.
+    #
+    # The audio decoder's depthwise chain shards over T on the TP axis (factor 4).
+    (1, 4): {
+        "tp_axis": 1,
+        "sp_axis": 0,
+        "num_links": 2,
+        "topology": ttnn.Topology.Linear,
+        "coresident": False,
+        "audio_t_shard": True,
+        "vae_output_type": "uint8",
+    },
     # One Blackhole Galaxy: the working point MiniMaxH3.md documents.
     (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "coresident": True},
     # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
@@ -454,7 +493,7 @@ class MiniMaxH3Pipeline:
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
-        vae_output_type: str = "yuv420",
+        vae_output_type: str | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
     ) -> None:
@@ -574,6 +613,8 @@ class MiniMaxH3Pipeline:
         self._host_vae_encoder_loaded = False
         self._host_vae_decoder_loaded = False
         self._image_processor = None
+        if vae_output_type is None:
+            vae_output_type = preset.get("vae_output_type", "yuv420")
         if vae_output_type not in ("float", "uint8", "yuv420"):
             raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
         self.vae_output_type = vae_output_type
@@ -656,7 +697,7 @@ class MiniMaxH3Pipeline:
         bucket_denoise: bool | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
-        vae_output_type: str = "yuv420",
+        vae_output_type: str | None = None,
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
