@@ -593,10 +593,18 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
     if (use_bias) {
         compute_kernel_args.push_back(1u);  // Broadcast row 0 of each group's bias over its M rows.
     }
+    // Bias reads partials through SrcA; FP32 reloads need a separate UnpackToDest view of the same
+    // SRAM. c_6 and c_7 hold sparse metadata, so use c_8 for the reload alias.
+    constexpr auto cb_intermed0_alias = tt::CBIndex::c_8;
+    const bool bias_reload_alias = use_bias && fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+    }
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        const auto reload_cb = bias_reload_alias ? cb_intermed0_alias : tt::CBIndex::c_5;
+        unpack_to_dest_mode[reload_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
@@ -617,8 +625,6 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
     };
-    // Preserve the FP32 partial-reload behavior: the Float32 intermediate CB must use
-    // UnpackToDestFp32, while all other CB entries retain the legacy Default mode.
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -731,6 +737,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
                 .tile = output_tile_desc});
+            if (bias_reload_alias) {
+                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = cb_intermed0_alias,
+                    .data_format = interm0_data_format,
+                    .page_size = interm0_single_tile_size,
+                    .tile = output_tile_desc});
+            }
             desc.cbs.push_back(std::move(cb_desc));
         }
         log_debug(
@@ -767,6 +780,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
+        if (bias_reload_alias) {
+            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = cb_intermed0_alias,
+                .data_format = interm0_data_format,
+                .page_size = interm0_single_tile_size,
+                .tile = output_tile_desc});
+        }
         desc.cbs.push_back(std::move(cb_desc));
     }
     log_debug(
