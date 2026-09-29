@@ -290,8 +290,9 @@ def test_pinned_indexer_window_admits_a_32_row_query_against_the_generic_cache()
     assert chunk_start + CHUNK_ROWS <= RESIDENT_BLOCKS + window_rows
     assert CHUNK_ROWS == window_rows  # a wider chunk would need a wider cache window
     nanobind = _cpp("ttnn/cpp/ttnn/operations/experimental/indexer_score/indexer_score_nanobind.cpp")
-    # The gate is [B, Hi, Sq, 1]: the module's index_gate is already the 32-row tile the chunk needs.
-    assert "weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates" in nanobind
+    # Current upstream uses [B, 1, Sq, Hi]; TP4 gives this model one local index head.
+    # Its [1, 1, Sq, 1] gate therefore has the same layout under both contracts.
+    assert "weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates" in nanobind
     assert "q: [B, Hi, Sq, D] bf16 or bfp8_b tiled" in nanobind
 
 

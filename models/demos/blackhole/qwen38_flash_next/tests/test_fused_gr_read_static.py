@@ -74,7 +74,7 @@ def test_compute_kernels_pin_the_cb_indices_the_python_side_allocates():
     ):
         assert f"c_{name} = {index};" in norm
     assert "c_out = get_compile_time_arg_val(3);" in norm
-    assert "mul_binary_tile<true>" in norm and "rsqrt_tile<false>" in norm and "mul_tiles_bcast_cols" in norm
+    assert "mul_binary_tile<true>" in norm and "rsqrt_tile" in norm and "mul_tiles_bcast_cols" in norm
     down = _source("down_compute.cpp")
     assert "SrcOrder::Reverse" in down and "matmul_block(c_in0, c_in1, k + kk, kk, 0, 0, 1, 1, 1)" in down
     assert (

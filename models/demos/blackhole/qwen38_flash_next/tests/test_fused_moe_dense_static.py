@@ -135,7 +135,7 @@ def test_down_kernel_is_the_gr_read_down_kernel_with_an_output_tile_loop():
 
     assert block(DOWN_KERNEL) == block(GR_DOWN_KERNEL)
     assert "for (uint32_t n = 0; n < n_tiles; ++n) {" in DOWN_KERNEL
-    assert "pack_reconfig_data_format(c_interm);" in DOWN_KERNEL  # before each tile's spills
+    assert "pack_reconfig_data_format(c_interm);" in re.sub(r"\s+", "", DOWN_KERNEL)  # before each tile's spills
     assert DOWN_KERNEL.index("in0.wait_front(Kt);") < DOWN_KERNEL.index("for (uint32_t n = 0")
     assert DOWN_KERNEL.index("in0.pop_front(Kt);") > DOWN_KERNEL.rindex("out.push_back(1);")
     for call in (
@@ -191,7 +191,9 @@ def test_model_switch_sites():
     assert composite.index("self.weights.shared_gate_up_scalar") < composite.index("fused.moe_dense.moe_dense(")
     forward = MOE[MOE.index("    def forward(") :]
     assert "routing, shared, sparse_rows = self._dense_composite(" in forward
-    assert 'sparse_rows=temporaries["sparse_rows"],' in forward and 'release("sparse_rows")' in forward
+    assert (
+        'sparse_rows=temporaries["sparse_rows"],' in re.sub(r"\s+", "", forward) and 'release("sparse_rows")' in forward
+    )
     assert (
         '"shared_partial",\n                "sparse_rows",\n                "hidden_tiles",' in forward
     )  # the failure cleanup

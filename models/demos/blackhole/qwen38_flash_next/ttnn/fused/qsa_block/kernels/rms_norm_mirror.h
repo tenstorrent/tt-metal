@@ -80,8 +80,8 @@ inline void rms_norm_rows(uint32_t rows) {
         tile_regs_acquire();
         add_init(c_ex2, c_eps);
         add_tiles(c_ex2, c_eps, 0, 0, dst0);
-        rsqrt_tile_init<false>();
-        rsqrt_tile<false>(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         tile_regs_commit();
         ex2.pop_front(1);
         ex2pe.reserve_back(1);

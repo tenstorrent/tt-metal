@@ -95,9 +95,9 @@ def present_device_nodes(device_root: Path = DEVICE_ROOT) -> tuple[int, ...]:
         return ()
 
 
-# QuietBox: 4x p150b, KMD nodes 0-3 on one NUMA node, chips in an ethernet ring; the 1x4 LINE mesh graph
-# descriptor opens them in the fabric's line order (0, 2, 1, 3) = nodes (1, 3, 2, 0), which is also the ring walk
-# from chip 0 there.  Verified 2026-09-04 (fw 19.4.1.0); the fabric-order derivation re-checked 2026-09-18.
+# QuietBox: four p150b devices in an ethernet ring. The current fabric solver's
+# validated line order is derived and recorded at startup; logical and KMD IDs
+# vary between boxes and runtime versions. Never pin a public SKU to one host's IDs.
 QUIETBOX = ResidentHardwareProfile(
     host="tt-quietbox",
     partition="qb",
@@ -105,8 +105,8 @@ QUIETBOX = ResidentHardwareProfile(
     device_nodes=(0, 1, 2, 3),
     numa_node=None,
     ethernet_graph="ring",
-    route=(0, 2, 1, 3),
-    route_nodes=(1, 3, 2, 0),
+    route=None,
+    route_nodes=None,
     system_mesh_local_shape=(1, 4),
     lan_serving=True,
     mesh_graph_descriptor="qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto",

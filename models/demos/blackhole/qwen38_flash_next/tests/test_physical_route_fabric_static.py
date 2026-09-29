@@ -69,16 +69,13 @@ def _lookup(table):
     return fabric_node_unique_id
 
 
-def test_quietbox_fabric_order_is_the_pinned_route_and_equals_its_ring_walk():
+def test_quietbox_fabric_order_is_derived_and_equals_this_fixture_ring_walk():
     chips = parse_chips_with_mmio(QUIETBOX_DESCRIPTOR)
     route = derive_fabric_line_route(QUIETBOX_DESCRIPTOR, chips, _lookup(QUIETBOX_FABRIC))
     assert route == (0, 2, 1, 3) == derive_ring_walk_route(QUIETBOX_DESCRIPTOR, chips)
     profile = HARDWARE_PROFILES["tt-quietbox"]
-    assert (
-        (route, route_device_nodes(route, chips))
-        == (profile.route, profile.route_nodes)
-        == ((0, 2, 1, 3), (1, 3, 2, 0))
-    )
+    assert (route, route_device_nodes(route, chips)) == ((0, 2, 1, 3), (1, 3, 2, 0))
+    assert profile.route is None and profile.route_nodes is None  # derived on each host, never pinned to these IDs
 
 
 def test_quietbox_2_fabric_order_differs_from_the_ring_walk():

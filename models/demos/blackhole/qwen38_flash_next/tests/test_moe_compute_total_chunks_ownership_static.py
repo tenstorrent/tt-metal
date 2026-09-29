@@ -198,10 +198,8 @@ def test_streaming_decode_ring_gets_one_more_weight_cb_block() -> None:
     rule = common[common.index("constexpr uint32_t weight_cb_slots(uint32_t tiles_per_txn) {") :]
     rule = rule[: rule.index("\n}\n")]
     assert "return fit < 3 ? 3 : fit;" in rule and "ALT_TILES_PER_TXN" not in rule
-    assert (
-        "const uint32_t weight_slots =\n        a2a_pipeline ? moe_ring::weight_cb_slots(weight_tiles_per_txn) + 1 :"
-        " moe_ring::weight_cb_slots(weight_tiles_per_txn);"
-    ) in factory
+    expected = "const uint32_t weight_slots = a2a_pipeline ? moe_ring::weight_cb_slots(weight_tiles_per_txn) + 1 : moe_ring::weight_cb_slots(weight_tiles_per_txn);"
+    assert "".join(expected.split()) in "".join(factory.split())
     assert "weight_cb_config(weight_slots * weight_tiles_per_block)" in factory
     assert '{"weight_slots", weight_slots},' in factory
     assert '#define NUM_SLOTS (get_named_compile_time_arg_val("weight_slots"))' in _source("dm0.cpp")

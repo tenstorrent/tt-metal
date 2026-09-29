@@ -246,7 +246,7 @@ ALWI void rms_norm_unit() {
     tile_regs_acquire();
     add_init(CB_EX2, CB_EPS);
     add_tiles(CB_EX2, CB_EPS, 0, 0, dst0);
-    // rsqrt_tile_init<false>() / rsqrt_tile<false>() of layernorm.cpp, again with the op's APPROX = true written out
+    // rsqrt_tile_init() / rsqrt_tile() of layernorm.cpp, again with the op's APPROX = true written out
     // through the macros (rsqrt.h:18-20 init, :37-43 call; SFPU_UNARY_INIT_FN at macros.h:78-80): the 10-bit
     // approximate reciprocal square root, not the accurate one this kernel's APPROX = false would select.
     MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */, false /* legacy_compat */)));

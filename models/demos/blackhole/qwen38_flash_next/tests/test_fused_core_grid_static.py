@@ -87,7 +87,7 @@ def test_score_merge_kernels_take_a_chunk_range():
     assert "for (uint32_t chunk = first_chunk; chunk < first_chunk + chunks; ++chunk) {" in reader
     assert (
         "const uint32_t chunks = get_arg_val<uint32_t>(1);" in compute
-        and "for (uint32_t r = 0; r < rows * chunks; ++r) {" in compute
+        and "for(uint32_tr=0;r<rows*chunks;++r){" in "".join(compute.split())
     )
     assert (
         "const uint32_t first_chunk = get_arg_val<uint32_t>(2);" in writer

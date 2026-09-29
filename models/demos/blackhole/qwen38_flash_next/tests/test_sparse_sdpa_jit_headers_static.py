@@ -240,7 +240,10 @@ def test_moe_compute_readyseed_relative_header_closure_is_installed_without_flat
     ring = MOE_RING_HEADER.read_text(encoding="utf-8")
 
     assert cmake.count("moe_compute/device/hostdevcommon/*.hpp") == 1
-    assert cmake.count("moe_gpt/device/kernels/swiglu_sfpu.h") == 1
+    # Current upstream installs this relative include through the separate MoEGPT target.
+    moe_gpt_cmake = (EXPERIMENTAL_CCL_CMAKE.parent / "moe_gpt/CMakeLists.txt").read_text()
+    assert "device/kernels/*.h" in moe_gpt_cmake
+    assert "${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt" in moe_gpt_cmake
     assert compute.count('#include "moe_ring_common.h"') == 1
     assert compute.count('#include "../../../moe_gpt/device/kernels/swiglu_sfpu.h"') == 1
     assert ring.count('#include "../hostdevcommon/config.hpp"') == 1

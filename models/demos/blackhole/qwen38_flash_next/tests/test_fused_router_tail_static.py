@@ -75,7 +75,7 @@ def test_compute_kernel_pins_the_replaced_ops_instruction_sequences():
         "sub_tiles_bcast_cols(cb_in0, cb_max" in compute
         and "mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recip" in compute
     )
-    assert "recip_tile_init();\n                recip_tile(0);" in compute
+    assert "qwen38_recip_tile_init();\n                qwen38_recip_tile(0);" in compute
     # topk.cpp single core: unstable network, largest, end phase 5, values DST 0/1, indices DST 2/3
     assert "topk_local_sort<false>(0, 0 /* largest */, 5 /* end_phase */)" in compute
     assert "transpose_tile(cb_probs, w, slot)" in compute and "copy_tile(cb_index, w, slot + 2)" in compute
@@ -128,16 +128,27 @@ def _llk_sort_with_pass_guard() -> str:
     return "\n".join(body[: col_open + 1] + guard + inner + ["            }"] + body[close:])
 
 
+def _code(text):
+    return re.sub(r"\s+", "", re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S))
+
+
 def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
     header = (fp.REPO_ROOT / rt.LANES_HEADER).read_text()
     expected = _llk_sort_with_pass_guard()
-    assert expected in header, "kernels/topk_lanes.h no longer matches the LLK's _bitonic_topk_phases_steps + guard"
+    assert _code(expected) in _code(
+        header
+    ), "kernels/topk_lanes.h no longer matches the LLK's _bitonic_topk_phases_steps + guard"
     assert expected.count("if (pass_mask & (1u << (face * 2 + col)))") == 1  # one guard, around each pass's phase loop
-    assert header.index("#ifdef TRISC_MATH") < header.index(expected) < header.index("#endif  // TRISC_MATH")
-    assert "topk_replay_init = -1;" in header  # the replay-buffer bookkeeping is the LLK's
     assert (
+        _code(header).index(_code("#ifdef TRISC_MATH"))
+        < _code(header).index(_code(expected))
+        < _code(header).rindex("#endif")
+    )
+    assert "topk_replay_init = -1;" in header  # the replay-buffer bookkeeping is the LLK's
+    assert _code(
         "uint32_t idst, int idir, int i_end_phase, uint32_t pass_mask, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0)"
-        in header
+    ) in _code(
+        header
     )  # the LLK's phase / step window passes through, defaulted as topk_local_sort defaults it
     assert "        i_start_phase,\n        i_end_step,\n        i_start_step,\n        pass_mask));" in header
     assert "VectorMode::RC_custom" in header and "calculate_bitonic_topk_phases_steps_lanes" in header
@@ -294,13 +305,19 @@ def test_live_exp_is_the_llk_precise_loop_with_a_vector_guard():
     # the face step the trailing skip relies on: a carriage-return SETRWC (D = CR + 8, twice), not an increment of D
     common = (fp.REPO_ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/cmath_common.h").read_text()
     assert "TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, num_rows, 0, 0, p_setrwc::SET_D);" in common
-    assert header.index("#ifdef TRISC_MATH") < header.index(expected) < header.index("#endif  // TRISC_MATH")
+    assert (
+        _code(header).index(_code("#ifdef TRISC_MATH"))
+        < _code(header).index(_code(expected))
+        < _code(header).rindex("#endif")
+    )
     # the fp32-dest path is the loop, not the bf16 replay body: pinned on the LLK source and on the copy
     llk = (fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h").read_text()
     assert (
         "_sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>" in llk
     )  # the other branch
-    assert 'static_assert(is_fp32_dest_acc_en, "the live-vector exp is the precise fp32-dest path' in header
+    assert _code('static_assert(is_fp32_dest_acc_en, "the live-vector exp is the precise fp32-dest path') in _code(
+        header
+    )
     # the face loop is the LLK's VectorMode::RC dispatch: start, four faces each followed by the face increment, done
     common = (fp.REPO_ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_sfpu_common.h").read_text()
     rc = common[

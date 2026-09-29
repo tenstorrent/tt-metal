@@ -129,7 +129,7 @@ void kernel_main() {
             tile_regs_acquire();
             add_init(CB_EX2, CB_EPS);
             add_tiles(CB_EX2, CB_EPS, 0, 0, dst0);
-            // rsqrt_tile_init<false>() / rsqrt_tile<false>(dst0) as layernorm.cpp calls them, with the op's
+            // rsqrt_tile_init() / rsqrt_tile(dst0) as layernorm.cpp calls them, with the op's
             // APPROX = true written in place of the kernel's: rsqrt.h:18-20 and :37-43 pass APPROX into
             // sfpu::rsqrt_init and
             // sfpu::calculate_rsqrt through SFPU_UNARY_INIT_FN / SFPU_UNARY_CALL, so these two lines instantiate

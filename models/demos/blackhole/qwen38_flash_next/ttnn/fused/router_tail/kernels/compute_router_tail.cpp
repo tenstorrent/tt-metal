@@ -23,6 +23,7 @@
 
 #include "api/compile_time_args.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"
@@ -37,6 +38,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "topk_lanes.h"
 #include "../../kernels/zones.h"
+#include "../../kernels/source_reciprocal.h"
 #include "exp_live.h"
 
 // One tile of the insertion chain into DST: the probabilities tile transposed into value slot `slot`, its
@@ -213,8 +215,8 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
             [](uint32_t) {
-                recip_tile_init();
-                recip_tile(0);
+                qwen38_recip_tile_init();
+                qwen38_recip_tile(0);
             });
 
         recips.wait_front(1);

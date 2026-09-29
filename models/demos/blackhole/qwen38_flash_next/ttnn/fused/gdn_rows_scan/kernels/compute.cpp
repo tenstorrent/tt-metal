@@ -31,7 +31,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/sqrt.h"
-#include "api/compute/eltwise_unary/recip.h"
+#include "../../kernels/source_reciprocal.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "../../kernels/zones.h"
 
@@ -159,7 +159,7 @@ ALWI void l2_norm(uint32_t base, uint32_t out_cb) {
             binop_with_scalar_tile_init();
         } else {
             sqrt_tile_init();
-            recip_tile_init();
+            qwen38_recip_tile_init();
         }
         tile_regs_acquire();
         copy_tile(CB_CONVSUM, 0, 0);
@@ -167,7 +167,7 @@ ALWI void l2_norm(uint32_t base, uint32_t out_cb) {
             add_unary_tile(0, EPS_1E6);
         } else {
             sqrt_tile(0);
-            recip_tile(0);
+            qwen38_recip_tile(0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -515,14 +515,14 @@ ALWI void gated_norm() {
     pack_reconfig_data_format(CB_RS);
     binop_with_scalar_tile_init();
     sqrt_tile_init();
-    recip_tile_init();
+    qwen38_recip_tile_init();
     tile_regs_acquire();
     for (uint32_t j = 0; j < HT; ++j) {
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(CB_SQO, CB_SCALER, j, 1, 0);
     }
     add_unary_tile(0, EPS_1E6);
     sqrt_tile(0);
-    recip_tile(0);
+    qwen38_recip_tile(0);
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(CB_RS, 1);
