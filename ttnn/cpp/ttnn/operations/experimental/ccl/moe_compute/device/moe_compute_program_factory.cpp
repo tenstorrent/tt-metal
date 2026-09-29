@@ -1285,7 +1285,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             const std::string point = item.substr(0, colon);
             std::size_t value_end = 0;
             const unsigned long iterations = std::stoul(item.substr(colon + 1), &value_end);
-            const bool parameter = point.size() > 4 && point.compare(point.size() - 4, 4, "_POS") == 0;
+            const bool parameter = point.size() > 4 && point.ends_with("_POS");
             TT_FATAL(
                 colon + 1 + value_end == item.size() && (iterations > 0 || parameter),
                 "TTNN_MOE_COMPUTE_STUDY_DELAYS item must be POINT:iterations (iterations > 0), got '{}'",
