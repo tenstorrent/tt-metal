@@ -41,10 +41,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     // bound by the step-to-step dependency chain instead.
     const auto grid = device.compute_with_storage_grid_size();
     TT_FATAL(BH <= grid.x * grid.y, "chain_affine_transforms: {} heads exceed {} compute cores", BH, grid.x * grid.y);
-    const uint32_t value_blocks = 1;
-    const uint32_t Vc = Vt / value_blocks;
-    const uint32_t workers = BH * value_blocks;
-    const auto cores = tt::tt_metal::num_cores_to_corerangeset(workers, grid, /*row_wise=*/true);
+    const uint32_t Vc = Vt;
+    const auto cores = tt::tt_metal::num_cores_to_corerangeset(BH, grid, /*row_wise=*/true);
 
     const m2::KernelSpecName dataflow_kernel_name{"dataflow"};
     const m2::KernelSpecName compute_kernel_name{"compute"};
@@ -132,12 +130,9 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     };
 
     m2::KernelRunArgs dataflow_run{.kernel = dataflow_kernel_name};
-    for (uint32_t index = 0; index < workers; ++index) {
-        const tt::tt_metal::CoreCoord core{index % grid.x, index / grid.x};
-        m2::AddRuntimeArgsForNode(
-            dataflow_run.runtime_arg_values,
-            core,
-            {{"head", index / value_blocks}, {"value_block", index % value_blocks}});
+    for (uint32_t head = 0; head < BH; ++head) {
+        const tt::tt_metal::CoreCoord core{head % grid.x, head / grid.x};
+        m2::AddRuntimeArgsForNode(dataflow_run.runtime_arg_values, core, {{"head", head}, {"value_block", 0}});
     }
     m2::KernelRunArgs compute_run{.kernel = compute_kernel_name};
 
