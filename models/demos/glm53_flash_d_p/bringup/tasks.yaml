@@ -695,6 +695,13 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-29T05:55:42'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py: 09a2a8a55ea416a98e3b8dc4ea5adede2af7de0b090d083117d743006dfde714
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.kda_dense.10
   title: 'kda_dense block with steps 1-10 on device (last: ffn_residual)'
   step: implement
