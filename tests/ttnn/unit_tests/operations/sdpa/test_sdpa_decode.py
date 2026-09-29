@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     num_to_corerange,
     run_test_sdpa_decode_single_iter,
@@ -28,6 +30,48 @@ def reset_seeds():
     np.random.seed(213919)
     random.seed(213919)
     yield
+
+
+def test_sdpa_decode_fp32_half_sync_cross_core_reduction(device):
+    """#56171: merging two KV chunks used five DST slots, but FP32 half-sync has four."""
+    torch.manual_seed(0)
+    heads, kv_heads, head_dim, cache = 8, 2, 128, 128
+    q = torch.randn(1, 1, heads, head_dim)
+    k = torch.randn(1, kv_heads, cache, head_dim)
+    v = torch.randn(1, kv_heads, cache, head_dim)
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+        q_chunk_size=32,
+        k_chunk_size=32,
+        max_cores_per_head_batch=2,  # Two cores per KV head force cross-core correction at position 32.
+        exp_approx_mode=False,
+    )
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+    )
+    # Position 31 stays within one chunk; position 32 activates the second core
+    # and previously corrupted the result in the fused softmax correction.
+    for cur_pos in (31, 32):
+        out = ttnn.transformer.scaled_dot_product_attention_decode(
+            tq,
+            tk,
+            tv,
+            cur_pos=[cur_pos],
+            is_causal=True,
+            program_config=program_config,
+            compute_kernel_config=compute_config,
+        )
+        valid_k = k[:, :, : cur_pos + 1].repeat_interleave(heads // kv_heads, dim=1)
+        valid_v = v[:, :, : cur_pos + 1].repeat_interleave(heads // kv_heads, dim=1)
+        ref = torch.nn.functional.scaled_dot_product_attention(q.permute(0, 2, 1, 3), valid_k, valid_v)
+        actual = ttnn.to_torch(out)[:, :, :heads]
+        assert_with_pcc(ref.permute(0, 2, 1, 3), actual, 0.999)
+        ttnn.deallocate(out)
 
 
 @pytest.mark.parametrize(
@@ -112,6 +156,42 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False, causal=False
         )
     assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("num_chunks", [1, 2, 3], ids=["inactive-core", "one-per-core", "multiple-per-core"])
+def test_sdpa_decode_non_causal_chunk_distribution(device, num_chunks):
+    """Exercise both sides of the single-local-chunk specialization with two cores per KV head."""
+    torch.manual_seed(1234)
+    heads, kv_heads, head_dim, chunk_size = 8, 2, 64, 32
+    q = torch.randn(1, 1, heads, head_dim)
+    k = torch.randn(1, kv_heads, num_chunks * chunk_size, head_dim)
+    v = torch.randn_like(k)
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(2, 2),
+            q_chunk_size=32,
+            k_chunk_size=chunk_size,
+            max_cores_per_head_batch=2,
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        ),
+    )
+    ref = torch.nn.functional.scaled_dot_product_attention(
+        q.permute(0, 2, 1, 3),
+        k.repeat_interleave(heads // kv_heads, dim=1),
+        v.repeat_interleave(heads // kv_heads, dim=1),
+    )
+    assert_with_pcc(ref.permute(0, 2, 1, 3), ttnn.to_torch(out), 0.999)
 
 
 @pytest.mark.parametrize(

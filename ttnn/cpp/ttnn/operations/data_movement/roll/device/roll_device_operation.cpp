@@ -4,6 +4,8 @@
 
 #include "roll_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -27,6 +29,17 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
     TT_FATAL(
         input.shard_spec().value().grid.ranges().size() == 1,
         "Native sharded roll requires a single contiguous rectangular CoreRange");
+    if (input.layout() == Layout::TILE) {
+        // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, and the
+        // tile is absent from compute_program_hash, so a non-standard tile would both compile a
+        // mis-sized program and alias onto a cached 32x32 one.
+        const auto tile = input.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "roll does not currently support tiles other than 32x32, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
+    }
 }
 
 }  // namespace
@@ -43,8 +56,18 @@ void RollDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t RollDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
+    // padded_shape drives the N-D decomposition the factory writes into per-core runtime args, and it
+    // changes their count, which override_runtime_arguments cannot resize. output_mem_config supplies
+    // the output shard grid and orientation, which become the kernels' core ranges and select the
+    // shard-linear mapping; only the shard shape is re-checked on a hit.
     return tt::tt_metal::operation::hash_operation<RollDeviceOperation>(
-        attrs.shift, attrs.dim, args.input.memory_config(), args.input.dtype(), args.input.layout());
+        attrs.shift,
+        attrs.dim,
+        attrs.output_mem_config,
+        args.input.memory_config(),
+        args.input.dtype(),
+        args.input.layout(),
+        args.input.padded_shape());
 }
 
 RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_specs(

@@ -36,14 +36,9 @@ the layout DOES matter: pass --ds-kpe-layout vllm to reindex our k_pe to vLLM's
 half-split layout (interleaved_to_halfsplit_perm in tt/mla/rope.py) and assert a hard
 element-wise k_pe PCC (~0.99997) instead of the frame-invariant L2.
 
-Runtime (Blackhole 1x4, layer shard already downloaded — measured layer 0):
-  host_*  (CPU only)            ~25 s for all 3 (shared module fixture: weight load +
-                                one 5120 forward; the 3 asserts are ~0 s each)
-  device indexer                ~45 s  (10 s mesh setup + 30 s device stems/score/topk)
-  device kv                     ~65 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-  device mla                    ~50 s  (forward + sparse_mla host fallback, ~24 GB RAM)
-First run adds one-time JIT kernel compile (~1-2 min) and, if uncached, a multi-GB
-HF shard download. All are correctness gates → marked `gate`; @timeout(0).
+Device rows use only the supported Fabric2D 2x2, 2x4, 4x2, or 8x4 profiles. Runtime depends on
+mesh and cache warmth; first run adds one-time JIT compilation and, if uncached, a multi-GB HF
+shard download. All are correctness gates → marked `gate`; @timeout(0).
 
 ────────────────────────────────────────────────────────────────────────────────
 GLM-5.1 (model id `glm_5_1`)
@@ -72,7 +67,8 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference, pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config  # GLM dims + HF config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import (
-    parametrize_mesh_device,
+    detect_num_devices,
+    parametrize_mesh_and_device_params,
     skip_if_seq_too_small_for_sp,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
@@ -257,14 +253,14 @@ def _assert_kv(ref_kv: torch.Tensor, kvpe: torch.Tensor, tag: str, kpe_layout: s
 
 
 # ----------------------------------------------------------------------------
-# Device: the TT implementation vs the official reference (Blackhole 1x4).
+# Device: the TT implementation vs the official reference on supported Fabric2D profiles.
 # ----------------------------------------------------------------------------
-_DEVICE_PARAMS = [
-    {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-    }
-]
+_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+_TORUS_XY_CERTIFIED = (
+    detect_num_devices() == 32
+    and os.environ.get("PREFILL_TORUS_XY_CERTIFIED") == "1"
+    and bool(os.environ.get("TT_MESH_GRAPH_DESC_PATH"))
+)
 
 
 def _config_for(model: str):
@@ -286,9 +282,11 @@ def _skip_unsupported(model: str, mesh_device) -> None:
         pytest.skip(f"GLM sparse_sdpa needs per-chip H=64/tp≥32 → tp≤2 (mesh tp={mesh_device.shape[1]})")
 
 
-def _make_mla(model, config, layer, mesh_device, is_chunked=False):
+def _make_mla(model, config, layer, mesh_device):
     config.max_seq_len = SEQ_LEN  # rope-table length (same hack as v3 run_model / test_mla)
     weights = _weights_for(model, config, layer)  # canonical dict — same tensors the CPU truth uses
+    # Sparse has no single-shot path (ttMLA binds the block-cyclic ops from _has_indexer alone), so
+    # build chunked explicitly: the reference capture is one full-sequence chunk at offset 0.
     return ttMLA(
         config,
         weights,
@@ -297,7 +295,8 @@ def _make_mla(model, config, layer, mesh_device, is_chunked=False):
         seq_len=SEQ_LEN,
         sp_axis=0,
         tp_axis=1,
-        is_chunked=is_chunked,
+        is_chunked=True,
+        active_seq_len=SEQ_LEN,
         layer_num=1,
     )
 
@@ -315,8 +314,7 @@ def _shard_idx_input(t, mesh_device):
     )
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, monkeypatch):
@@ -332,9 +330,9 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
     # the partials before top-k. So capture top-k's input by patching the ttnn op the indexer calls.
     orig_topk = ttnn.experimental.topk_large_indices
 
-    def _capture_topk(logits, k):
+    def _capture_topk(logits, k, **kwargs):
         captured["logits"] = logits
-        return orig_topk(logits, k=k)
+        return orig_topk(logits, k=k, **kwargs)
 
     monkeypatch.setattr(ttnn.experimental, "topk_large_indices", _capture_topk)
     # _indexer.forward takes the per-chip (SP-local) sequence; it all-gathers back to the global glob.
@@ -353,11 +351,14 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
         num_kvpe_cache_layers=1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
+        tp_axis=1,
     )
     idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
-    idx = mla._indexer.forward(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
+    selection_state = mla._indexer.score(xs, qr, sl, rope_tensors=idx_rope, index_kv_cache=idx_kv_cache)
+    local_idx = mla._indexer.select_local(selection_state)
+    idx = mla._indexer.finalize_distribution(local_idx, selection_state)
 
     # The indexer is now query-SP-sharded: top-k input is [1,1,S/sp,end_pos] (TP-replicated) and idx is
     # [1,1,S/sp,k]. Reassemble the full S by concatenating the SP shards (tp=0 column) along the query dim.
@@ -382,12 +383,12 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
 
 
 def _run_device_forward(model, config, layer, mesh_device):
-    """Single-shot ttMLA forward over the reference input; returns (ref, output[1,S,hidden], kvpe[S,576])."""
+    """One full-sequence ttMLA chunk over the reference input; returns (ref, output[1,S,hidden], kvpe[S,576])."""
     ref = load_reference(model, layer)
     mla = _make_mla(model, config, layer, mesh_device)
     sp_axis, tp_axis = 0, 1
     # Sparse: uncompressed bf16/ROW_MAJOR KVPE cache + indexed rope + a caller-owned indexer key cache.
-    # Single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0).
+    # The module is built chunked; the capture is one full-seq chunk at offset 0.
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,
         hf_config=config,
@@ -396,6 +397,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        tp_axis=1,
     )
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
@@ -406,6 +408,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         num_kvpe_cache_layers=1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
+        tp_axis=1,
     )
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
@@ -421,7 +424,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    out = mla.forward(tt_x, rope_tensors, kvpe_cache, index_kv_cache=index_kv_cache)
+    out = mla.forward(tt_x, rope_tensors, kvpe_cache, actual_start=0, index_kv_cache=index_kv_cache)
     out_t = ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
     ).to(torch.bfloat16)[
@@ -437,8 +440,7 @@ def _run_device_forward(model, config, layer, mesh_device):
     return ref, out_t, kvpe_t
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, ds_kpe_layout):
@@ -449,8 +451,7 @@ def test_kv_cache_device_vs_reference(mesh_device, model, layer, device_params, 
     ttnn.synchronize_device(mesh_device)
 
 
-@parametrize_mesh_device()
-@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, ids=["line"], indirect=True)
+@parametrize_mesh_and_device_params(worker_l1_size=_WORKER_L1_SIZE, torus_xy_certified=_TORUS_XY_CERTIFIED)
 @pytest.mark.parametrize("model, layer", _CASES, ids=_CASE_IDS)
 @pytest.mark.timeout(0)
 def test_mla_output_device_vs_reference(mesh_device, model, layer, device_params):

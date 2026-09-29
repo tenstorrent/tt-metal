@@ -169,7 +169,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     static std::optional<tt::tt_metal::GlobalSemaphore> gsem_done;
     if (!gsem_done) {
         tt::tt_metal::CoreRangeSet rx_core_one(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
-        gsem_done = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_one, /*initial_value=*/0);
+        gsem_done = tt::tt_metal::GlobalSemaphore(*mesh, rx_core_one, /*initial_value=*/0);
     }
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";

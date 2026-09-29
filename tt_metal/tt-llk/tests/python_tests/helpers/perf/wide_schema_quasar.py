@@ -49,7 +49,8 @@ DB_SCHEMA = [
     Column("formats.output", "string", True, "formats"),
     Column("formats.register_A", "string", True, "formats"),
     Column("formats.register_B", "string", True, "formats"),
-    Column("formats.sfpu_math", "string", True, "formats"),
+    Column("formats.sfpu_src", "string", True, "formats"),
+    Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
     Column("speed_of_light", "bool", True, "flags"),
@@ -108,6 +109,7 @@ DB_SCHEMA = [
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
     Column("unpacker_engine_sel", "string", True, "configuration"),
+    Column("vector_mode", "string", True, "configuration"),
     Column("zero_point_bits", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
@@ -117,8 +119,11 @@ DB_SCHEMA = [
     Column("arch", "string", False, "provenance", origin="ci"),
     Column("run_id", "string", False, "provenance", origin="ci"),
     Column("timestamp", "string", False, "provenance", origin="ci"),
-    Column("pipeline", "string", False, "provenance", origin="ci"),  # PR | nightly
-    Column("pr_number", "string", True, "provenance", origin="ci"),  # NULL for nightly
+    # PR | nightly | baseline
+    Column("pipeline", "string", False, "provenance", origin="ci"),
+    Column(
+        "pr_number", "string", True, "provenance", origin="ci"
+    ),  # NULL for nightly and baseline runs
 ]
 
 OUTPUT_SCHEMA = [c for c in DB_SCHEMA if c.origin == "test"]

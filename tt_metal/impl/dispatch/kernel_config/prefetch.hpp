@@ -25,7 +25,6 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> prefetch_q_base;
     std::optional<uint32_t> prefetch_q_size;
     std::optional<uint32_t> prefetch_q_rd_ptr_addr;
-    std::optional<uint32_t> prefetch_q_pcie_rd_ptr_addr;
 
     std::optional<uint32_t> cmddat_q_base;
     std::optional<uint32_t> cmddat_q_size;

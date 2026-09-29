@@ -47,6 +47,9 @@ cd $TT_METAL_HOME/tt_metal/tt-llk/tests/python_tests
 pytest -v --run-simulator --timeout=600 test_eltwise_unary_datacopy.py
 ```
 
+Quasar ttsim only: ttsim does not implement NOC API v2, so also export
+`TT_METAL_QUASAR_NOC_API_VERSION=1` (ignored for wormhole/blackhole).
+
 `TT_METAL_SIMULATOR` is the canonical env var — the same one tt-metal
 runtime and the ttsim project docs use. `TT_UMD_SIMULATOR_PATH` is
 accepted as an alias for back-compat with the RTL-simulator flow; when
@@ -80,6 +83,9 @@ the most common format and no SFPU/tilize paths.
   `TT_METAL_SLOW_DISPATCH_MODE=1`.
 - **SFPLOADMACRO** is not implemented. Set
   `TT_METAL_DISABLE_SFPLOADMACRO=1` if your test hits the SFPU.
+- **NOC API v2 is not supported** (Quasar ttsim only). Set
+  `TT_METAL_QUASAR_NOC_API_VERSION=1` so Quasar kernels compile
+  against NOC API v1. Wormhole/Blackhole JIT does not use this define.
 - **Not all ISA is modeled.** Unimplemented opcodes surface as
   `UnimplementedFunctionality` errors from the simulator. See the
   [ttsim README](https://github.com/tenstorrent/ttsim) for the error

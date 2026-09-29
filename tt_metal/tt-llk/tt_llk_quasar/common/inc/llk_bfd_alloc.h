@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-#include "ckernel_trisc_common.h"
+#include "ckernel_buf_desc.h"
 #include "ckernel_trisc_id.h"
 #include "llk_assert.h"
 
@@ -42,18 +42,6 @@
 
 namespace ckernel::trisc
 {
-
-// Real UNPACR/PACR hardware engines that consume buffer descriptors. One "current id" slot each;
-// compile-time ownership ties each engine to a TRISC role (see bfd_engine_owned_by_trisc).
-enum class BfdResource : std::uint8_t
-{
-    Unp0 = 0,
-    Unp1,
-    Pack0,
-    Pack1,
-    Count
-};
-
 // Sentinel for "no id allocated yet" in current[]. Real ids are 0..31, so 128 is safely out of
 // range and fits uint8_t. current[] is bss zero-init on device (0 is a valid id), so it must be
 // set to this sentinel inside the lazy-init block, not via a static initializer.
@@ -69,6 +57,8 @@ constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::ui
         case BfdResource::Pack0:
             return trisc == 2;
         case BfdResource::Pack1:
+        case BfdResource::Unp2_Slice0:
+        case BfdResource::Unp2_Slice1:
             return trisc == 3;
         default:
             return false;
@@ -113,8 +103,18 @@ struct BfdAllocatorState
     bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
 };
 
-// One instance per TRISC binary (each TRISC compiles its own image with COMPILE_FOR_TRISC).
-inline BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the partition base
+// One instance per hardware TRISC thread (one per Neo and TRISC role). thread_local gives each Neo's
+// TRISC its own allocator, matching the per-TRISC partitioning of each Neo's BFD table. A
+// single shared instance races the id allocator two ways when num_threads > 1 (see tt-llk#1678):
+// an unfenced read-modify-write on next hands the same id to two threads, and the unfenced lazy
+// init lets one role hand out ids from another role's partition. Mirrors trisc::dest_register_offset:
+// ENV_LLK_INFRA (standalone LLK infra, no firmware TU) uses a plain static; the metal build
+// declares it extern thread_local and defines it in firmware (tt_metal/hw/firmware/src/tt-2xx/trisc.cc).
+#ifdef ENV_LLK_INFRA
+static BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the partition base
+#else
+extern thread_local BfdAllocatorState bfd_state; // defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
+#endif
 
 /**
  * @brief Allocate the next buffer descriptor id for this thread's partition and record it as the

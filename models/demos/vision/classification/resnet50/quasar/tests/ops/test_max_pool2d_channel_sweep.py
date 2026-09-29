@@ -5,13 +5,11 @@
 """
 Quasar max_pool2d 3x3 CHANNEL sweep (channel-tile / block_ct_dim stress).
 
-Sweeps the per-core channel count 32, 64, 96, ... 256 (= 1..8 channel tiles) on a fixed 3x3
-stride-2 pad-1 HEIGHT_SHARDED pool. Because the pool is height-sharded, every core holds ALL
-`channels`, so channels/32 is exactly the number of channel tiles (block_ct_dim) the reduce sees.
-Geometry is 32x32 -> out 16x16 (out_w=16 >= 2), so later output columns exercise the row-to-row
-L1 stride: the exact path the unpack_tilizeA_B l1-index fix (PR #49485, replacing the retired
-438b29b6e20 block_ct_dim workaround) corrects. Without a correct block_ct_dim scaling, C>=64 with
-out_col>=2 aliases an earlier column's data (wrong-window max).
+Sweeps the per-core channel count 32..256 (1..8 channel tiles) plus 480 (15 tiles, wide
+reduction with multiple c-blocks) on a fixed 3x3 stride-2 pad-1 HEIGHT_SHARDED pool.
+Because the pool is height-sharded, every core holds ALL `channels`, so channels/32 is
+exactly the number of channel tiles (block_ct_dim) the reduce sees. Geometry is 32x32 ->
+out 16x16 (out_w=16 >= 2), so later output columns exercise the row-to-row L1 stride.
 
 Checks per case (identical to test_max_pool2d_correctness.py):
   1. HARD leak invariant: got.max() <= input.max() + eps.
@@ -30,8 +28,9 @@ import ttnn
 from models.common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# per-core channels = total channels (height-sharded); 32*n for n = 1..8 channel tiles.
-CHANNELS = [32, 64, 96, 128, 160, 192, 224, 256]
+# per-core channels = total channels (height-sharded); 32*n for n = 1..8 channel tiles,
+# plus 480 (15 tiles) which exercises the wide-reduction path (>8 tiles, multiple c-blocks).
+CHANNELS = [32, 64, 96, 128, 160, 192, 224, 256, 480]
 
 # fixed 3x3 pool geometry; 32x32 in -> 16x16 out (out_w >= 2 stresses the multi-column stride).
 IN_H = IN_W = 32
@@ -104,7 +103,7 @@ def _run_max_pool_channels(mesh_device, channels):
     assert_with_pcc(golden_flat, got, pcc=0.99)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("channels", CHANNELS, ids=[f"{c}c_{c // 32}tiles" for c in CHANNELS])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_max_pool2d_channel_sweep(mesh_device, channels):

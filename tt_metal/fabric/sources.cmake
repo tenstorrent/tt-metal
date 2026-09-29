@@ -72,4 +72,5 @@ set(FABRIC_SOURCES
     physical_grouping_descriptor_core.cpp
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp
+    physical_descriptor_builder.cpp
 )

@@ -4,31 +4,123 @@
 
 #include "all_to_all_async_generic_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 
 namespace ttnn::experimental::prim {
+
+DrainCoreMapping gather_drain_virtual_cores(
+    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    struct DrainCoreRecord {
+        uint32_t valid = 0;
+        uint32_t x = 0;
+        uint32_t y = 0;
+    };
+
+    auto* mesh_device = input_tensor.device();
+    const auto subdevice = sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto available_core_count =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice).num_cores();
+    TT_FATAL(available_core_count > 0, "All-to-all cannot select its drain synchronization core");
+    // Direct schedules drain on selected core 0. Mux schedules place the mux on core 0 and drain on sender core 1.
+    // Use the same allocation helper as the program factory so non-rectangular subdevices produce the same prefix.
+    auto [candidate_core_range, logical_core_candidates] =
+        ttnn::ccl::choose_worker_cores(1, std::min<size_t>(2, available_core_count), mesh_device, sub_device_id);
+    (void)candidate_core_range;
+    const auto mesh_shape = mesh_device->shape();
+    const size_t candidates_per_node = logical_core_candidates.size();
+
+    std::vector<DrainCoreRecord> local_records(mesh_shape.mesh_size() * candidates_per_node);
+    auto maybe_device_it = mesh_device->get_view().begin();
+    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
+        const auto& maybe_coordinate_device = *maybe_device_it++;
+        if (maybe_coordinate_device.is_remote()) {
+            continue;
+        }
+        const size_t node_index = coord.to_linear_index(mesh_shape);
+        for (size_t candidate = 0; candidate < candidates_per_node; ++candidate) {
+            const auto drain_virtual_core =
+                maybe_coordinate_device.value()->worker_core_from_logical_core(logical_core_candidates[candidate]);
+            local_records[node_index * candidates_per_node + candidate] = {
+                .valid = 1,
+                .x = static_cast<uint32_t>(drain_virtual_core.x),
+                .y = static_cast<uint32_t>(drain_virtual_core.y)};
+        }
+    }
+
+    // Multi-host ranks enter this exchange on every Fabric2D invocation, independently of local
+    // program-cache state: skipping it on only some ranks would deadlock the collective. In a
+    // single-process world, the factory calls this on a cache miss and no exchange is needed.
+    // Exchanging the two possible drain coordinates per mesh node handles heterogeneous harvesting
+    // without exposing remote device translation through MeshDevice.
+    const auto distributed_context = tt::tt_metal::DistributedHostBuffer::create(mesh_device->get_view()).context();
+    const size_t world_size = *distributed_context->size();
+    std::vector<DrainCoreRecord> gathered_records(local_records.size() * world_size);
+    if (world_size == 1) {
+        gathered_records = local_records;
+    } else {
+        distributed_context->all_gather(
+            ttsl::as_writable_bytes(ttsl::Span<DrainCoreRecord>{local_records}),
+            ttsl::as_writable_bytes(ttsl::Span<DrainCoreRecord>{gathered_records}));
+    }
+
+    std::vector<ttnn::CoreCoord> drain_virtual_cores(local_records.size());
+    std::vector<uint32_t> owner_counts(local_records.size(), 0);
+    for (size_t rank = 0; rank < world_size; ++rank) {
+        for (size_t node = 0; node < local_records.size(); ++node) {
+            const auto& record = gathered_records[rank * local_records.size() + node];
+            if (record.valid == 0) {
+                continue;
+            }
+            TT_FATAL(
+                owner_counts[node] == 0,
+                "All-to-all mesh node {} drain candidate {} is owned by more than one distributed rank",
+                node / candidates_per_node,
+                node % candidates_per_node);
+            drain_virtual_cores[node] = {record.x, record.y};
+            owner_counts[node] = 1;
+        }
+    }
+    for (size_t node = 0; node < owner_counts.size(); ++node) {
+        TT_FATAL(
+            owner_counts[node] == 1,
+            "No distributed rank owns all-to-all mesh node {} drain candidate {}",
+            node / candidates_per_node,
+            node % candidates_per_node);
+    }
+    return {
+        .logical_core_candidates = std::move(logical_core_candidates), .virtual_cores = std::move(drain_virtual_cores)};
+}
 
 void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
-        TT_FATAL(
-            operation_attributes.cluster_axis.has_value(),
-            "all_to_all_async_generic on FABRIC_2D requires a cluster_axis");
-    }
-
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
 
+    auto* mesh_device = input_tensor.device();
+    const uint32_t num_links =
+        operation_attributes.num_links.has_value()
+            ? *operation_attributes.num_links
+            : ttnn::operations::ccl::common::get_num_links(*mesh_device, operation_attributes.cluster_axis);
+    TT_FATAL(num_links > 0, "all_to_all_async requires at least one fabric link");
+    const auto subdevice = operation_attributes.sub_device_id.has_value() ? *operation_attributes.sub_device_id
+                                                                          : mesh_device->get_sub_device_ids().at(0);
+    const auto available_core_count =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice).num_cores();
+    TT_FATAL(
+        available_core_count >= num_links,
+        "All-to-all requires at least one worker per link: requested {} links, but subdevice has {} workers",
+        num_links,
+        available_core_count);
+
     const auto& page_size = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
-    auto* mesh_device = input_tensor.device();
-    const auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    const auto available_worker_cores =
-        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id).num_cores();
     const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     TT_FATAL(operation_attributes.in_dim >= 0 && operation_attributes.in_dim < rank, "in_dim out of range");
@@ -36,11 +128,6 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
-    TT_FATAL(
-        available_worker_cores >= operation_attributes.num_links,
-        "All-to-all requires at least one worker per link: requested {} links, but subdevice has {} workers",
-        operation_attributes.num_links,
-        available_worker_cores);
     TT_FATAL(
         max_payload_size >= page_size,
         "Fabric maximum payload {} must fit at least one tensor page of size {}",
@@ -92,6 +179,12 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
 void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        TT_FATAL(
+            operation_attributes.cluster_axis.has_value(),
+            "all_to_all_async_generic on FABRIC_2D requires a cluster_axis");
+    }
+
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& persistent_output_buffer = tensor_args.persistent_output_buffer;
 
@@ -158,24 +251,25 @@ ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    const auto axis_topology = ttnn::ccl::get_axis_topology(
-        tensor_args.input_tensor, fabric_config, operation_attributes.cluster_axis.value_or(0));
     const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     // The cached program contains the fabric mux kernel and client ABI. Bump this whenever either changes.
     constexpr uint32_t fabric_mux_implementation_version = 2;
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncGenericDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
-        operation_attributes.num_links,
+        operation_attributes.num_links,  // Keep automatic and explicit link selection in separate cache entries.
         operation_attributes.num_devices,
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
         fabric_config,
-        axis_topology,
+        mesh_device->shape(),
+        mesh_device->get_view().get_fabric_node_ids(),
         max_payload_size,
         fabric_mux_implementation_version,
+        operation_attributes.drain_logical_core_candidates,
+        operation_attributes.drain_virtual_cores,
         tensor_args);
 }
 
@@ -184,18 +278,27 @@ Tensor all_to_all_async_generic(
     const std::optional<Tensor>& persistent_output_buffer,
     int32_t in_dim,
     int32_t out_dim,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis) {
     using OperationType = AllToAllAsyncGenericDeviceOperation;
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    TT_FATAL(num_links > 0, "all_to_all_async requires at least one fabric link");
+    TT_FATAL(!num_links.has_value() || *num_links > 0, "all_to_all_async requires at least one fabric link");
     TT_FATAL(
         num_devices > 1,
         "all_to_all_async is a collective operation and requires more than 1 device, but has {}",
         num_devices);
+
+    DrainCoreMapping drain_core_mapping;
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    // Only a single-process world may defer mapping to the program-cache miss. Multi-host
+    // ranks must all enter the exchange even when their local cache states differ.
+    if (is_fabric_2d && *tt::tt_metal::distributed::multihost::DistributedContext::get_world_context()->size() > 1) {
+        drain_core_mapping = gather_drain_virtual_cores(input_tensor, sub_device_id);
+    }
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .in_dim = static_cast<uint32_t>(in_dim),
@@ -205,7 +308,9 @@ Tensor all_to_all_async_generic(
         .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
         .topology = topology,
         .sub_device_id = sub_device_id,
-        .cluster_axis = cluster_axis};
+        .cluster_axis = cluster_axis,
+        .drain_logical_core_candidates = std::move(drain_core_mapping.logical_core_candidates),
+        .drain_virtual_cores = std::move(drain_core_mapping.virtual_cores)};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer};
 
@@ -221,7 +326,7 @@ Tensor all_to_all_async_generic(
     const std::optional<Tensor>& persistent_output_buffer,
     int32_t in_dim,
     int32_t out_dim,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,

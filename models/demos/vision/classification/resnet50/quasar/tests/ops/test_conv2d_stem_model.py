@@ -14,7 +14,7 @@ ON-DEVICE `fold` output (folded small-face geometry) with the model's real `self
 mirrors the model's ACTUAL stem path verbatim so the fault reproduces in seconds instead of a ~28-min run.
 
 Mirrored verbatim from ttnn_functional_resnet50.py (__init__ stem setup + run() lines ~940-1004) and
-resnet50_test_infra.setup_l1_sharded_input (Quasar branch):
+resnet50_test_infra.setup_input (Quasar branch):
   * input image (batch=1): torch (1,3,224,224) -> NHWC, host-padded C 3->nearest_y(3,8)=8 -> (1,224,224,8)
     bf16 ROW_MAJOR, interleaved L1.
   * fold: stride=2, padding=[3,3,3,3,0,5] (fold_pad_h/w=kernel_size=3, fold_pad_c=C-c=5),
@@ -42,13 +42,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_quasar_conv2d_stem_model(mesh_device):
+# batch=1 (emulator / small-grid) PASSES: the stem fits L1 in one slice (num_slices=1 -> L1_FULL). batch=16
+# (the WH full-model config) does NOT fit, so the stem takes the DRAM height-slicing path -- which is where
+# the WH full-model stem diverges (op002 stem_conv1 PCC ~0.52). Run the batch-16 case on WH to reproduce.
+@pytest.mark.parametrize("batch_size", [1, 16])
+def test_quasar_conv2d_stem_model(mesh_device, batch_size):
     device = mesh_device
     torch.manual_seed(0)
 
     # --- original stem params (resnet50_test_infra: input_shape=(bs,3,224,224), first-conv kernel_size=3,
-    #     stride=2). batch=1 for the emulator. ---
-    batch_size = 1
+    #     stride=2). batch_size comes from the parametrize above. ---
     c, h, w = 3, 224, 224
     fold_kernel_size = 3  # resnet50_first_conv_kernel_size
     fold_stride = 2  # resnet50_first_conv_stride

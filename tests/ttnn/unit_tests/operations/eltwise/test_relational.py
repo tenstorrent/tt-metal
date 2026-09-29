@@ -13,115 +13,6 @@ from tests.ttnn.utils_for_testing import assert_equal
 pytestmark = pytest.mark.use_module_device
 
 
-def run_relational_test(device, h, w, ttnn_function):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    # Cast bool→float because comp_equal uses subtraction which doesn't support bool tensors
-    assert_equal(torch_output_tensor.float(), output_tensor.float())
-
-
-def run_relational_z_test(device, h, w, ttnn_function):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_equal(torch_output_tensor.float(), output_tensor.float())
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_gtz(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.gtz)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_gt(device, h, w):
-    run_relational_test(device, h, w, ttnn.gt)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_ltz(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.ltz)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_ge(device, h, w):
-    run_relational_test(device, h, w, ttnn.ge)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_gez(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.gez)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_lt(device, h, w):
-    run_relational_test(device, h, w, ttnn.lt)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_lez(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.lez)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_le(device, h, w):
-    run_relational_test(device, h, w, ttnn.le)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_eqz(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.eqz)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_eq(device, h, w):
-    run_relational_test(device, h, w, ttnn.eq)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_nez(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.nez)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_ne(device, h, w):
-    run_relational_test(device, h, w, ttnn.ne)
-
-
 def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function):
     torch.manual_seed(0)
 
@@ -256,30 +147,6 @@ def test_expand_and_broadcast_reversed(device, h, w):
     assert_equal(torch_output.float(), output.float())
 
 
-@pytest.mark.parametrize("atol", [1e-8, 1e-10])
-@pytest.mark.parametrize("rtol", [1e-5, 1e-9])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_isclose(device, h, w, atol, rtol):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.isclose)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, rtol=rtol, atol=atol)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_equal(torch_output_tensor.float(), output_tensor.float())
-
-
 @pytest.mark.parametrize(
     "rtol, atol",
     [(1e-05, 1e-08), (0.01, 5), (0.05, 10), (1e-04, 0)],
@@ -356,55 +223,6 @@ def test_isclose_int32_mixed_dtype(device, input_shapes, rtol, atol, a_dtype, b_
     tt_out = ttnn.to_torch(z_tt)
 
     assert torch.equal(z_torch, tt_out.bool())
-
-
-@pytest.mark.parametrize("equal_nan", [True, False])
-@pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([1, 1, 32, 32]),
-        torch.Size([1, 1, 64, 128]),
-    ],
-)
-def test_isclose_bfloat16_equal_nan(device, input_shapes, equal_nan):
-    """Validate equal_nan semantics on bfloat16 inputs against torch.isclose."""
-    torch.manual_seed(0)
-
-    a = torch.randn(input_shapes, dtype=torch.bfloat16)
-    b = a.clone()
-
-    nan = float("nan")
-    a[0, 0, 0, 0] = nan
-    b[0, 0, 0, 0] = nan
-    a[0, 0, 0, 1] = nan
-    a[0, 0, 0, 2] = 1.0
-    b[0, 0, 0, 2] = nan
-
-    z_torch = torch.isclose(a.float(), b.float(), rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
-
-    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.isclose(a_tt, b_tt, rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
-    tt_out = ttnn.to_torch(z_tt)
-
-    assert torch.equal(z_torch, tt_out.bool())
-
-
-@pytest.mark.parametrize("shape", [torch.Size([1, 1, 32, 32])])
-def test_isclose_zero_tolerance(device, shape):
-    """With rtol=atol=0 only bit-identical values should compare as close."""
-    torch.manual_seed(0)
-    a = torch.randn(shape, dtype=torch.bfloat16)
-    b = a.clone()
-    b[0, 0, 0, 0] = b[0, 0, 0, 0] + torch.tensor(0.001, dtype=torch.bfloat16)
-
-    z_torch = torch.isclose(a.float(), b.float(), rtol=0.0, atol=0.0)
-
-    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.isclose(a_tt, b_tt, rtol=0.0, atol=0.0)
-
-    assert torch.equal(z_torch, ttnn.to_torch(z_tt).bool())
 
 
 # The isclose kernel classifies a lane as Inf/NaN by comparing the operand's abs

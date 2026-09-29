@@ -258,13 +258,11 @@ def compute_ttnn_distributed_norm(
     if use_legacy:
         program_config = ttnn.LayerNormDefaultProgramConfig(
             legacy_reduction=True,
-            legacy_rsqrt=True,
             use_welford=False,
         )
     else:
         program_config = ttnn.LayerNormDefaultProgramConfig(
             legacy_reduction=False,
-            legacy_rsqrt=False,
             use_welford=use_welford,
         )
 

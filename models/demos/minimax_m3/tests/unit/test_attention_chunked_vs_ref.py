@@ -32,7 +32,7 @@ from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
-from ..test_factory import parametrize_mesh_with_fabric
+from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
 NIDX, INDEX_DIM = 4, 128
@@ -40,13 +40,7 @@ NIDX, INDEX_DIM = 4, 128
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("chunk_local", [640], ids=["chunk640"])  # chunk=5120; 2 chunks -> T=10240 (40 blocks)
-# TODO(block-aware): re-add "sparse" once the indexer/sparse_sdpa_msa kernels read the block-cyclic
-# NdShard cache directly (slab-aware in-kernel cache-read, like ring_joint). Until then the sparse
-# chunked path goes through msa_sp_attention's host-side to_memory_config+slice gather, which (a) crashes
-# on the single-layer whole-tensor-slice alias and (b) with random weights would flip the MSA top-k block
-# selection chunked-vs-single-shot. MSA compute is covered by test_msa_layer_vs_ref (real weights); real
-# chunked MSA end-to-end by galaxy_prefill_kv_pcc. It's a small kernel change to enable this.
-@pytest.mark.parametrize("layer_kind", ["dense"])
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
 def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
@@ -157,9 +151,10 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
         return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, user_id=0, cached_len=cached_len)
 
     def gather_seq(out):
-        # out: SP-sharded on rows (seq), full hidden on each TP col after o_proj reduce. Take col 0.
+        # out: SP-sharded on rows (seq). Hidden is full-emb on each TP col (replicated residual) or
+        # emb/tp per col (sharded residual). Concat SP on seq and TP on hidden as needed.
         dts = ttnn.get_device_tensors(out)
-        return torch.cat([ttnn.to_torch(dts[r * cols + 0]).float() for r in range(rows)], dim=2)  # [1,1,S,H]
+        return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)  # [1,1,S,H]
 
     # --- single-shot golden over the full sequence (fresh cache) ---
     kvc_ss = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=1)
@@ -183,13 +178,7 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
 @pytest.mark.parametrize(
     "chunk_local", [256], ids=["chunk256"]
 )  # chunk=2048, T=4096 (32 blocks) — keeps the fp32 CPU ref fast
-# TODO(block-aware): re-add "sparse" once the indexer/sparse_sdpa_msa kernels read the block-cyclic
-# NdShard cache directly (slab-aware in-kernel cache-read, like ring_joint). Until then the sparse
-# chunked path goes through msa_sp_attention's host-side to_memory_config+slice gather, which (a) crashes
-# on the single-layer whole-tensor-slice alias and (b) with random weights would flip the MSA top-k block
-# selection chunked-vs-single-shot. MSA compute is covered by test_msa_layer_vs_ref (real weights); real
-# chunked MSA end-to-end by galaxy_prefill_kv_pcc. It's a small kernel change to enable this.
-@pytest.mark.parametrize("layer_kind", ["dense"])
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
 def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
     """Chunked-prefill chunk-1 output vs the self-contained torch CPU reference (absolute correctness).
 
@@ -331,7 +320,7 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
 
     def gather_seq(out):
         dts = ttnn.get_device_tensors(out)
-        return torch.cat([ttnn.to_torch(dts[r * cols + 0]).float() for r in range(rows)], dim=2)
+        return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)
 
     kvc = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=1)
     run(x[:, :chunk], 0, chunk, 0, kvc)
