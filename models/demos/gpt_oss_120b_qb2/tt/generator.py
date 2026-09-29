@@ -977,21 +977,38 @@ class Generator:
         can_sample_on_device: bool,
         skip_trace_precompile: bool = False,
     ):
-        """Delegate vLLM's decode compile/capture sweep to the canonical generator."""
+        """Compile both routes eagerly, then warm only device-sampling traces."""
 
-        return self._inner.warmup_model_decode(
-            kv_cache=self._outer_cache(kv_cache),
-            enable_trace=enable_trace,
-            max_batch_size=max_batch_size,
-            num_blocks=num_blocks,
-            can_sample_on_device=can_sample_on_device,
-            read_from_device=False,
-            # Compile the optional host/full-logits graph before traces exist,
-            # but do not reserve a second full-model trace for it. Serving
-            # performance always uses the canonical on-device token-out trace.
-            include_host_sampling=not enable_trace,
-            skip_trace_precompile=skip_trace_precompile,
-        )
+        outer_cache = self._outer_cache(kv_cache)
+        if not enable_trace:
+            return self._inner.warmup_model_decode(
+                kv_cache=outer_cache,
+                enable_trace=False,
+                max_batch_size=max_batch_size,
+                num_blocks=num_blocks,
+                can_sample_on_device=can_sample_on_device,
+                read_from_device=False,
+                skip_trace_precompile=skip_trace_precompile,
+            )
+        # Host logits always run eagerly after releasing the resident device
+        # traces. Capturing a second full-model host graph would waste its trace
+        # region and contradict that lifecycle. Reuse the shared sampling sweep
+        # and input construction, but select only the routes this model traces.
+        tokens, positions, table = self._inner._create_decode_warmup_inputs(max_batch_size, num_blocks)
+        for params in self._inner._create_sampling_params(can_sample_on_device, max_batch_size):
+            if params is not None:
+                self._inner.decode_forward(
+                    tokens=tokens,
+                    start_pos=positions,
+                    page_table=table,
+                    kv_cache=outer_cache,
+                    enable_trace=True,
+                    read_from_device=False,
+                    sampling_params=params,
+                    reset_batch=True,
+                    prompt_tokens=tokens,
+                    skip_trace_precompile=skip_trace_precompile,
+                )
 
     def prepare_model_decode_trace(
         self,

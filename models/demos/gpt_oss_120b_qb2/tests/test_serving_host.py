@@ -113,6 +113,33 @@ def test_shared_generator_resumes_at_model_alignment_without_changing_other_mode
     assert SharedGenerator.model_capabilities == defaults
 
 
+@pytest.mark.parametrize("device_sampling", [False, True])
+def test_decode_warmup_uses_current_interface_and_only_traces_device_routes(device_sampling, monkeypatch):
+    monkeypatch.delenv("TT_LEAN_DECODE_WARMUP", raising=False)
+    model = SimpleNamespace(mesh_device=None, kv_cache=[], n_layers=1)
+    generator = Generator(model, SimpleNamespace(tokenizer=None), cache_owner="vllm")
+    generator._inner.decode_forward = Mock()
+    for trace in (False, True):
+        generator._inner.decode_forward.reset_mock()
+        generator.warmup_model_decode(
+            kv_cache=[object()],
+            enable_trace=trace,
+            max_batch_size=4,
+            num_blocks=16,
+            can_sample_on_device=device_sampling,
+            skip_trace_precompile=trace,
+        )
+        calls = generator._inner.decode_forward.call_args_list
+        assert len(calls) == (5 if device_sampling else 0) + int(not trace)
+        assert sum(call.kwargs["sampling_params"] is None for call in calls) == int(not trace)
+        for call in calls:
+            assert call.kwargs["tokens"].shape == (4, 1)
+            assert call.kwargs["start_pos"].shape == (4,)
+            assert call.kwargs["page_table"].shape == (4, 16)
+            assert call.kwargs["enable_trace"] is trace
+            assert call.kwargs["read_from_device"] is False
+
+
 def test_host_prefill_trims_each_layer_table_using_its_cache_block_axis():
     generator = object.__new__(Generator)
     generator.model_args = SimpleNamespace(max_batch_size=32, max_context_len=131072)

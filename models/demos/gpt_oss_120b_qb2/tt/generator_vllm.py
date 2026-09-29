@@ -206,7 +206,7 @@ class TTGptOssForCausalLM:
         "supports_async_decode": True,
         "supports_decode_output_batch_size": True,
         "supports_sample_on_device": True,
-        "max_device_sampling_top_k": 32,
+        "max_device_top_k": 32,
         "supports_batched_prefill": True,
         "supports_chunked_prefill": True,
         "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
