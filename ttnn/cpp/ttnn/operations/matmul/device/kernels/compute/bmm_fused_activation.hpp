@@ -36,7 +36,12 @@ struct ActivationInitHelper {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::GELU_TANH) {
-            gelu_tanh_tile_init_pack();
+            // PARAM0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            if constexpr (PARAM0 != 0) {
+                gelu_tanh_fast_tile_init_pack();
+            } else {
+                gelu_tanh_tile_init_pack();
+            }
         } else if constexpr (ACT == KernelActivation::RELU6) {
             relu_max_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
@@ -79,7 +84,12 @@ struct ActivationApplyHelper {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_pack<PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::GELU_TANH) {
-            gelu_tanh_tile_pack(tile_index);
+            // PARAM0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            if constexpr (PARAM0 != 0) {
+                gelu_tanh_fast_tile_pack(tile_index);
+            } else {
+                gelu_tanh_tile_pack(tile_index);
+            }
         } else if constexpr (ACT == KernelActivation::RELU6) {
             // PARAM0 is the max value (as uint32_t bit pattern)
             // Default to 6.0 if PARAM0 is 0

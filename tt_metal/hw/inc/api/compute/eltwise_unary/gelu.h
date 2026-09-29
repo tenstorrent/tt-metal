@@ -89,6 +89,32 @@ ALWI void gelu_tanh_tile_pack(uint32_t idst) {
 }
 
 /**
+ * Init for gelu_tanh_fast_tile. See gelu_tanh_fast_tile() for semantics.
+ */
+ALWI void gelu_tanh_fast_tile_init() {
+    MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
+}
+
+ALWI void gelu_tanh_fast_tile_init_pack() {
+    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
+}
+
+/**
+ * Faster GELU using the tanh approximation, for BF16 outputs: the same function as gelu_tanh_tile(),
+ * computed as x / (1 + exp(-2u)) with a polynomial exp and one Newton step on the reciprocal.
+ * Max error vs torch gelu(approximate="tanh") is <= 1 BF16 ULP; use gelu_tanh_tile() for FP32 outputs.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void gelu_tanh_fast_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void gelu_tanh_fast_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+}
+
+/**
  * Please refer to documentation for any_init.
  */
 template <bool fast_and_approx = false>
