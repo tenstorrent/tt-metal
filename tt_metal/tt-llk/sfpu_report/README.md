@@ -26,6 +26,57 @@ Three workflows take it from there:
 
 `llk-sfpu-report` can also be dispatched by hand from the Actions tab.
 
+## End-to-end flow
+
+```
+reviewer: "/llk-sfpu-test tanh --arch bh"
+   │
+   ▼
+llk-sfpu-test.md (gh-aw, issue_comment, write access only)            ubuntu runners
+   1. 👀 on the comment
+   2. pre-agent: PR metadata, changed files, diff, the bounty issue(s) it closes,
+      the valid MathOperation names; PR number + head SHA written as facts outside
+      the agent sandbox
+   3. agent (claude-sonnet-5): turns the request into inputs -- ops (empty = auto),
+      arch, base -- and extracts the bounty issue's targets and the PR's claims
+   4. post-step: rewrites the dispatch from the facts (PR number, head SHA, ref main),
+      validates ops/arch/base, fails closed
+   5. safe outputs: dispatch llk-sfpu-report on main; one "running" comment
+   │
+   ▼
+llk-sfpu-report.yaml (workflow_dispatch on main)
+   plan              ubuntu-slim   pins the head SHA; merge-base from the compare API;
+                                   notes if the PR moved since; picks the SKUs
+   build-images      LLK CI image
+   load-test-matrix  tests/pipeline_reorg/llk_sfpu_report_tests.yaml (one leg per arch)
+   measure (per arch) N150 / P150b, LLK container, read-only token, no secrets
+      ci_run.sh: checkout main, fetch the PR head + merge-base by SHA, then cli.py run:
+        overlay   base and head trees (device C++ only from the PR)
+        detect    compile every unary / typecast / binary perf variant on both sides,
+                  compare math .text -> the ops whose code changed (max 8, own kernel first)
+        perf      compile once per side and schedule, 3 interleaved device runs per side,
+                  L1_TO_L1 + MATH_ISOLATE, SFPLOADMACRO on/off; gate comparer
+        accuracy  test_sfpu_report_accuracy.py on both sides; host-side ULP / exact
+                  comparison, special-input diff
+        -> summary-<arch>.json, report-<arch>.md
+   collect           ubuntu-slim   renders one report.md for all archs; meta.json
+                                   (PR, SHA, run, agent context); artifact llk-sfpu-report
+   │  (workflow_run: completed)
+   ▼
+llk-sfpu-summary.md (gh-aw)
+   1. pre-agent: downloads the artifact; the PR number comes from meta.json
+   2. agent: 3-6 sentences -- perf and accuracy verdicts, against the bounty targets
+   3. post-step: the comment is the rendered report, with the agent's text placed in
+      a labelled box at the marker; the agent never carries the tables
+   4. safe outputs: one comment on the PR; hides older reports and the "running" note
+```
+
+What runs where, and with what: only the `measure` legs touch hardware; they run
+main's host code and compile the PR's device C++, with `contents: read`, no secrets
+and no persisted credentials. The two agents see PR text only as data and can only
+emit a dispatch (the first) or a comment (the second), both rewritten by
+deterministic post-steps.
+
 ## Locally
 
 On a machine with a Wormhole or Blackhole card, from the tt-llk test venv
@@ -100,3 +151,27 @@ attribute to a covered op is listed under the report's notes.
 silicon's. ttsim does not model every format the report measures (Int32 and fp32
 binary SFPU inputs abort it), so a simulator run is a check of the tool, not of a PR.
 The hardware-free tests are `tests/python_tests/test_sfpu_report_hw_free.py`.
+
+## Testing on GitHub
+
+Nothing of the GitHub side has run yet. To get there:
+
+1. **Push the branch and open a draft PR.** Nothing is pushed today.
+2. **Make `llk-sfpu-report.yaml` runnable before it is on main.** `workflow_dispatch`
+   only works for workflows on the default branch. Either merge that one file first
+   in a small PR and dispatch it with `--ref <branch>`, or add a temporary
+   `pull_request` trigger on the draft PR that measures a fixed PR number (e.g.
+   #54080, #58251), and drop it before merge.
+3. **The two gh-aw workflows only run from main** (`issue_comment` and `workflow_run`
+   use the default branch's file). Test them after merge on a real PR, or in a
+   sandbox fork of the repo with the measuring job stubbed (no hardware there).
+4. **Hardware checks still owed:** the new binary perf tests
+   (`test_perf_eltwise_binary_sfpu_{float,int}_extended`: 86 WH / 85 BH variants,
+   compiled but never run on silicon), Int32 and fp32 binary accuracy (ttsim cannot
+   run them), and every Blackhole leg.
+5. **Repo plumbing:** `owner_id` in `tests/pipeline_reorg/llk_sfpu_report_tests.yaml`
+   (a Slack ID), the `llk.on_demand` budget in `.github/time_budget.yaml`, lock files
+   regenerated with the repo's gh-aw version (`gh aw compile`, v0.89.21).
+6. **Sign-offs:** infra for the on-demand budget and runner use; security for
+   running fork device code from a comment; the LLK perf owners for the new nightly
+   perf variants; Lazar's P4-P7 merged first (the accuracy side needs them).
