@@ -157,7 +157,8 @@ def test_sequential_layer_pages_select_request_not_physical_slot():
 
 
 @pytest.mark.parametrize("compact", [False, True])
-def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, compact):
+@pytest.mark.parametrize("sample", [False, True], ids=["host_logits", "device_sampling_contract"])
+def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, compact, sample):
     from models.tt_transformers.tt import generator as generator_module
 
     generator = object.__new__(Generator)
@@ -174,7 +175,34 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
     model = SimpleNamespace(
         process_logits_after_prefill_trace=lambda hidden, last: hidden[:, :, last : last + 1],
         process_output_prefill=lambda logits, **kwargs: logits.reshape(1, 1),
+        mesh_device=object(),
     )
+    if sample:
+        sampler = SimpleNamespace(
+            tt_sampling=SimpleNamespace(
+                max_batch_size=32,
+                log_probs_calculator=SimpleNamespace(enable_log_probs=False),
+                force_argmax_sampling=True,
+            ),
+            _penalties_active=False,
+            apply_prefill_state=Mock(),
+            sample=lambda logits, **kwargs: (logits.long() + 100, None),
+        )
+
+        def extract(hidden, last, padded_batch, seq_len, target_batch, slot_map=None):
+            assert slot_map == ([31, 4, 17] if compact else None)
+            output = torch.zeros(target_batch, 1, dtype=torch.long)
+            for row, slot in enumerate(slot_map if slot_map is not None else range(padded_batch)):
+                output[slot] = hidden[row, 0, last[row], 0]
+            return output
+
+        model.sampling = sampler
+        model._supports_on_device_sampling = True
+        model.extract_last_tokens_batched_prefill = extract
+        model._apply_norm_and_lm_head = lambda hidden: hidden
+        monkeypatch.setattr(generator_module.ttnn, "synchronize_device", lambda *args: None)
+        monkeypatch.setattr(generator_module.ttnn, "get_device_tensors", lambda tensor: [tensor])
+        monkeypatch.setattr(generator_module.ttnn, "to_torch", lambda tensor: tensor)
     generator.model = [model]
     generator._will_row_shard_prefill = lambda *args: False
     observed = []
@@ -197,9 +225,19 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
         empty_slots=[31, 4, 17],
         enable_trace=False,
         warmup_prefill=False,
+        sampling_params=SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7])
+        if sample
+        else None,
         page_tables_per_layer=[pages],
     )
-    assert output.flatten().tolist() == [11, 22, 33]
+    if sample:
+        assert output[0].flatten().tolist() == [111, 122, 133]
+        state = sampler.apply_prefill_state.call_args.kwargs
+        assert state["prompt_tokens"][[31, 4, 17], 64].tolist() == [11, 22, 33]
+        # The sampler contract stores inverse temperatures.
+        assert [state["sampling_params"].temperature[i] for i in [31, 4, 17]] == pytest.approx([10, 5, 10 / 3])
+    else:
+        assert output.flatten().tolist() == [11, 22, 33]
     packed, args = observed[0]
     rows = [0, 1, 2] if compact else [31, 4, 17]
     assert packed.shape == (4 if compact else 32, 128)
@@ -211,6 +249,7 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
 
 def test_single_user_forward_passes_explicit_layer_tables():
     generator = object.__new__(Generator)
+    generator.data_parallel = 1
     generator.model_args = [SimpleNamespace(max_prefill_chunk_size=8192)]
     model = SimpleNamespace(
         prepare_inputs_prefill=Mock(return_value=(object(), object(), object(), object())),
