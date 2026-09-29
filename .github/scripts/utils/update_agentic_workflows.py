@@ -32,16 +32,13 @@ out of sync; a newly created lock file (first compile of a new workflow) is call
 explicitly below since pre-commit can't detect changes to a file it doesn't know about
 yet.
 
-No-op on a merge_group run (GITHUB_EVENT_NAME=merge_group). Recompiling there is
-structurally racy: a merge queue re-evaluates a PR against whatever main looks like at
-attempt time, which can be later — sometimes much later, behind other queued PRs — than
-when this PR's lock file was last verified and pushed. Any unrelated PR that lands
-ahead in the queue and touches a shared dispatch-target list can make an
-already-correct lock file drift again with zero action from, or visibility to, this
-PR's own author. The authoritative run of this check is the one against the actual
-`pull_request` event, where a human can see a failure and push a fix; failing the same
-check again in merge_group just blocks a merge over drift nobody queued for review can
-act on.
+Runs the same way on a merge_group event as on a real pull_request — no special-casing.
+GitHub's merge queue tests the exact commit it will merge (the merge-group branch's
+HEAD *is* what lands on the target branch if checks pass), so if two queued PRs touch
+the same workflow and the second one's checked-in lock file no longer matches what
+compiling produces once combined with the first, that's a genuine problem: merging as
+scheduled would land a stale lock file. Failing here is correct — it dequeues the PR so
+its author can pull latest, let this hook recompile locally, and re-push.
 """
 
 import argparse
@@ -187,10 +184,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("files", nargs="+", help=".github/workflows/<name>.md and/or <name>.lock.yml paths")
     args = parser.parse_args()
-
-    if os.environ.get("GITHUB_EVENT_NAME") == "merge_group":
-        print("compile-agentic-workflows: no-op on merge_group (see module docstring for why).")
-        return
 
     names = sorted({workflow_name_for(f) for f in args.files if workflow_name_for(f)})
     if not names:
