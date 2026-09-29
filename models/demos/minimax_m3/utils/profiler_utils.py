@@ -125,9 +125,19 @@ def zone(name: str, level: int = MEDIUM):
     local (``"indexer"``, not ``"attn/indexer"``). The same name is entered once per layer and the
     parser accumulates across layers.
     """
-    if not ZONES_ENABLED or level > LEVEL:
+    if not ZONES_ENABLED or level > LEVEL or not _ACTIVE[0]:
         return _NULL_ZONE
     return _zone(name)
+
+
+# Runtime mute on top of M3_PROFILE_ZONES: a harness can silence the zones of forwards it does not report
+# (warm-up, cache prefix) so their signposts never reach the capture. On by default.
+_ACTIVE = [True]
+
+
+def set_zones_active(active: bool) -> None:
+    """Mute (False) or unmute (True) every zone from now on; M3_PROFILE_ZONES still has to be set."""
+    _ACTIVE[0] = bool(active)
 
 
 def read_profiler(mesh_device) -> None:

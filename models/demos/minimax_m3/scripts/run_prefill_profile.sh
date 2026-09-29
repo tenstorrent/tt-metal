@@ -48,6 +48,18 @@
 #   NOC_TRACES=1    + tt-npe DRAM/NOC utilization per op (needs tt-npe installed).
 #   SKIP_PREFIX=1   skip the cache prefill and attend a zeroed cache. Fast, but MoE routing is then
 #                   unrepresentative — bring-up only.
+#   PREFIX_QUIET=1  real prefix, small capture (PROFILE_PREFIX_QUIET in the harness): no op records and no
+#                   zones before the profiled forward, one profiler drain per forward analysed mid-run
+#                   (--dump-device-data-mid-run), no per-core device log (--disable-device-data-dump-to-files)
+#                   and no device zones in the .tracy (--disable-device-data-push-to-tracy). The ops report
+#                   then holds only the last two forwards (a recorded warm-up, dropped by the parser, and the
+#                   profiled one); not compatible with NOC_TRACES=1.
+#   SEGMENTS=spec   profile one packed forward instead of one chunk (PROFILE_SEGMENTS, budget_packed.py
+#                   syntax, e.g. "prose@141312:2048,code@0:2048"); CHUNK/CACHE are then ignored. Named inputs
+#                   come from INPUTS="prose=<metadata.json>;code=<metadata.json>" (PROFILE_INPUTS); the
+#                   default input is SRC_TRACE.
+#   WARM_POINT=N    repeat the first cache-read forward N times before going deeper (PROFILE_WARM_POINT;
+#                   avoids the W=8192 "slow mode").
 #
 # Then visualize:  python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <csv printed below>
 set -uo pipefail
@@ -61,6 +73,7 @@ export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 STAGES="${STAGES:-1}"
 STAGE="${STAGE:-0}"
 export M3_FABRIC="${M3_FABRIC:-1d}"
+FABRIC="${FABRIC:-$M3_FABRIC}"   # label only (log / results names); the harness reads M3_FABRIC
 export PROFILE_STAGES="$STAGES" PROFILE_STAGE="$STAGE"
 # TODO(profiling): 1d_ring / 2d / 2d_torus_xy are passed through but not yet validated on a carved sub-mesh.
 # FABRIC_1D_RING refuses a plain mesh descriptor on Blackhole (tt_metal/fabric/topology_mapper.cpp,
@@ -104,6 +117,10 @@ export M3_PROFILE_LEVEL="${LEVEL:-${M3_PROFILE_LEVEL:-2}}"
 [ -n "${LAYER_IDS:-}" ] && export PROFILE_LAYER_IDS="$LAYER_IDS"
 [ -n "${CACHE:-}" ] && PROFILE_CACHE="$CACHE"
 [ -n "${SKIP_PREFIX:-}" ] && export PROFILE_SKIP_PREFIX="$SKIP_PREFIX"
+[ -n "${PREFIX_QUIET:-}" ] && export PROFILE_PREFIX_QUIET="$PREFIX_QUIET"
+[ -n "${SEGMENTS:-}" ] && export PROFILE_SEGMENTS="$SEGMENTS"
+[ -n "${INPUTS:-}" ] && export PROFILE_INPUTS="$INPUTS"
+[ -n "${WARM_POINT:-}" ] && export PROFILE_WARM_POINT="$WARM_POINT"
 # Layer tag for the results folder name: "0+3" for LAYER_IDS=0,3, "first6" for LAYERS=6.
 LAYER_TAG="${LAYER_IDS:+${LAYER_IDS//,/+}}"
 LAYER_TAG="${LAYER_TAG:-first${LAYERS:-}}"
@@ -120,6 +137,9 @@ die () { echo "ERROR: $*" >&2; exit 1; }
   die "no venv at $TT_METAL_HOME/python_env — run ./create_venv.sh first"
 [ -d "$HF_MODEL" ]               || die "HF_MODEL does not exist: $HF_MODEL (set HF_MODEL=<weights dir>)"
 [ -f "$SRC_TRACE" ]              || die "source trace not found: $SRC_TRACE (set GOLDEN_DIR or SRC_TRACE)"
+case "$SRC_TRACE" in *_nopad*) echo "WARNING: $SRC_TRACE holds DeepSeek-R1 token ids, not M3 ones" >&2 ;; esac
+[ "${PROFILE_PREFIX_QUIET:-0}" = "1" ] && [ "${NOC_TRACES:-0}" = "1" ] && \
+  die "PREFIX_QUIET=1 turns off the device log files that NOC_TRACES=1 needs"
 command -v tt-smi >/dev/null     || die "tt-smi not on PATH — needed to reset the galaxy between runs"
 case "$STAGES" in 1|2|4) ;; *) die "STAGES must be 1, 2 or 4 (got $STAGES)" ;; esac
 [ "$STAGE" -ge 0 ] && [ "$STAGE" -lt "$STAGES" ] || die "STAGE=$STAGE out of range for STAGES=$STAGES"
@@ -179,6 +199,9 @@ TRACY_OPTS=(-v -r -p)
 # is the only way to tell "no host<->device movement" from "movement not measured".
 TRACY_OPTS+=(--child-functions "HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
 [ "${NOC_TRACES:-0}" = "1" ] && TRACY_OPTS+=(--collect-noc-traces)
+if [ "${PROFILE_PREFIX_QUIET:-0}" = "1" ]; then
+  TRACY_OPTS+=(--dump-device-data-mid-run --disable-device-data-dump-to-files --disable-device-data-push-to-tracy)
+fi
 
 run_cfg () {  # $1=label  $2=cache_tokens
   local label="$1" cache="$2"
@@ -188,18 +211,28 @@ run_cfg () {  # $1=label  $2=cache_tokens
   before="${before:-0}"
   # cache capacity the harness will allocate: prefix chunks + the profiled chunk
   local total=$(( (cache / CHUNK + 1) * CHUNK ))
-  local trace; trace="$(make_trace "$total")"
+  local trace
+  if [ -n "${PROFILE_SEGMENTS:-}" ]; then
+    trace="$(dirname "$SRC_TRACE")"   # packed: the harness indexes the source itself (budget_packed streams)
+  else
+    trace="$(make_trace "$total")"
+  fi
   {
     echo ""
     echo "############################################################"
     echo "# $label"
-    echo "#   chunk=$CHUNK cache=$cache total=$total trace=$trace"
+    if [ -n "${PROFILE_SEGMENTS:-}" ]; then
+      echo "#   segments=$PROFILE_SEGMENTS inputs=${PROFILE_INPUTS:-} default=$trace"
+    else
+      echo "#   chunk=$CHUNK cache=$cache total=$total trace=$trace"
+    fi
     echo "#   $(date '+%Y-%m-%d %H:%M:%S')"
     echo "############################################################"
   } | tee -a "$LOG"
   # A failed reset leaves the galaxy in whatever state the previous run left it; profiling through
   # that produces numbers nobody can trust, so skip the config instead of pretending.
-  if ! tt-smi -glx_reset; then
+  # env -u: a TT_VISIBLE_DEVICES left in the environment would reset only the chips it lists.
+  if ! env -u TT_VISIBLE_DEVICES tt-smi -glx_reset; then
     echo "# [$label] SKIPPED: tt-smi -glx_reset failed" | tee -a "$LOG"
     FAILED=1
     return 1
@@ -226,7 +259,9 @@ run_cfg () {  # $1=label  $2=cache_tokens
   if [ -n "$csv" ]; then
     # Park the CSV under RESULTS_DIR so generated/profiler/ can be wiped between experiments. The log
     # is copied in once the whole run has finished (see the end of the script).
-    local dest="$RESULTS_DIR/${STAMP}_stages${STAGES}_stage${STAGE}_layers${LAYER_TAG}_cache${cache}_${FABRIC}_${EXPERT_DTYPE}"
+    local ctag="cache${cache}"
+    [ -n "${PROFILE_SEGMENTS:-}" ] && ctag="packed"
+    local dest="$RESULTS_DIR/${STAMP}_stages${STAGES}_stage${STAGE}_layers${LAYER_TAG}_${ctag}_${FABRIC}_${EXPERT_DTYPE}"
     if mkdir -p "$dest" && mv "$csv" "$dest/"; then
       csv="$dest/$(basename "$csv")"
       DESTS+=("$dest")
@@ -249,13 +284,16 @@ echo "logging to $LOG"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
   echo "  LAYERS=${PROFILE_LAYER_IDS:-${PROFILE_NUM_LAYERS:-all}}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
   echo "  STAGES=$STAGES  STAGE=$STAGE  M3_FABRIC=$M3_FABRIC  MESH=($STAGE_ROWS, 4)  CACHE_DIR=$STAGE_CACHE"
+  echo "  PREFIX_QUIET=${PROFILE_PREFIX_QUIET:-0}  SEGMENTS=${PROFILE_SEGMENTS:-}  WARM_POINT=${PROFILE_WARM_POINT:-0}  SRC_TRACE=$SRC_TRACE"
   echo "  TT_MESH_GRAPH_DESC_PATH=$TT_MESH_GRAPH_DESC_PATH"
   echo "  RESULTS_DIR=$RESULTS_DIR"
   echo "  RLIMIT_NPROC soft=$(ulimit -Su) hard=$NPROC_HARD  user threads in use=$NPROC_IN_USE"
 } | tee "$LOG"
 
 STAGE_LABEL="stage $STAGE/$STAGES $FABRIC"
-if [ -n "${PROFILE_CACHE:-}" ]; then
+if [ -n "${PROFILE_SEGMENTS:-}" ]; then
+  run_cfg "$STAGE_LABEL packed ${PROFILE_SEGMENTS}" 0   # the harness sizes a packed run itself
+elif [ -n "${PROFILE_CACHE:-}" ]; then
   run_cfg "$STAGE_LABEL 5k at ${PROFILE_CACHE}" "$PROFILE_CACHE"
 else
   run_cfg "$STAGE_LABEL 5k at 25k" 25600   # 5 prefix chunks + 1 profiled = 30720 capacity
@@ -265,7 +303,7 @@ fi
 {
   echo ""
   echo "==================== SUMMARY ===================="
-  grep -E "^# |PROFILED CHUNK|wall-clock" "$LOG"
+  grep -E "^# |PROFILED CHUNK|PROFILED FORWARD|wall-clock" "$LOG"
 } | tee -a "$LOG"
 echo ""
 echo "full log: $LOG"

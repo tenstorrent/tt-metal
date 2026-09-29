@@ -47,6 +47,33 @@ Env:
                       profiled chunk. Keeps the tracy capture small at deep caches   [default 0]
   PROFILE_SKIP_PREFIX "1" -> skip the prefix fill and attend a ZEROED cache. Shapes (and op costs)
                       are identical but MoE routing is not representative — bring-up only  [default 0]
+  PROFILE_PREFIX_QUIET "1" -> real prefix, small capture: only the last two forwards reach the capture.
+                      Unset TTNN_OP_PROFILER (no op records) and mute the zones until the profiled
+                      forward; drain the device profiler once per un-profiled forward instead of per layer,
+                      each drain analysed and released (TT_METAL_PROFILER_MID_RUN_DUMP); no per-core device
+                      log (TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES), no device zones in the tracy file
+                      (TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY); delete the prefix's rows of
+                      .logs/cpp_device_perf_report.csv, then run one recorded (still un-zoned) warm forward
+                      before the profiled one, so op-metadata serialisation stays out of its op-to-op gaps.
+                      Needs the C++ post-process (the tracy default); excludes --collect-noc-traces [default 0]
+  PROFILE_PREFIX_READ_EVERY  with PROFILE_PREFIX_QUIET: drain every N un-profiled forwards   [default 1]
+  PROFILE_PROGRESS_EVERY  N > 0: log a line every N un-profiled forwards (watchdog heartbeat)  [default 0]
+  PROFILE_WARM_ITERS  warm forwards of the profiled chunk / composition before it is profiled
+                      (PROFILE_SKIP_COMPILE=1 or PROFILE_SEGMENTS)                              [default 2]
+  PROFILE_WARM_POINT  N > 0: repeat the process's 2nd forward (the first cache-read one) N more times
+                      before going deeper — the warm point that avoids the W=8192 "slow mode"    [default 0]
+  PROFILE_SEGMENTS    profile ONE packed forward (TtPrefillRuntime.prefill_segments, 2048-token segments)
+                      instead of one chunk, e.g. "prose@141312:2048,code@0:2048". Syntax of budget_packed.py's
+                      BUDGET_COMPOS entries: comma-separated entries map to slots 0..; "+" keeps consecutive
+                      segments in one slot; an optional "X@" prefix picks the tokens: an integer = stream X of
+                      the default input, a name = that PROFILE_INPUTS input from its start (stream 0),
+                      "name.s" = both.
+                      Each slot's history before its first segment is filled with real tokens through packed
+                      forwards of that slot (padded with cold segments of a scratch slot), as budget_packed
+                      does. Overrides PROFILE_CHUNK / PROFILE_CACHE / PROFILE_N_REAL; never runs compile()
+  PROFILE_INPUTS      named token sources for PROFILE_SEGMENTS: "prose=<metadata.json>;code=<metadata.json>"
+                      (a directory means its metadata.json). "default" = PREFILL_TRACE_DIR. Token stream s at
+                      position p of an input is token_ids[(p + 7919*s) % len], as in budget_packed.py
   PROFILE_STAGES      intra-galaxy pipeline depth: 1 (whole 8x4 galaxy), 2 ((4,4) sub-meshes, EP16) or
                       4 ((2,4) sub-meshes, EP8). The galaxy is opened whole and stage PROFILE_STAGE's
                       sub-mesh is carved out of it, so one process profiles one stage           [default 1]
@@ -99,6 +126,21 @@ os.environ.setdefault("M3_PROFILE_ZONES", "1")
 # The programmatic per-program perf API (ttnn.get_latest_programs_perf_data) needs these; harmless when
 # unused, and they make mid-run ReadDeviceProfiler calls actually flush.
 os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
+
+# PROFILE_PREFIX_QUIET: `python -m tracy -r` sets TTNN_OP_PROFILER=1, which makes every enqueued op send its
+# metadata to the capture. The C++ side latches the flag the first time an op sees it set, so it is removed
+# here, before any op runs, and restored right before the profiled forward. The rtoptions below are read when
+# the device opens, so they must be set before that too. Without MID_RUN_DUMP a ReadDeviceProfiler only moves
+# the device markers into host RAM and everything is post-processed at close (the whole prefix at once);
+# with it, every read is analysed into cpp_device_perf_report.csv and released.
+PREFIX_QUIET = os.getenv("PROFILE_PREFIX_QUIET", "0") == "1"
+_OP_PROFILER_ENV = os.environ.get("TTNN_OP_PROFILER")
+if PREFIX_QUIET:
+    os.environ.pop("TTNN_OP_PROFILER", None)
+    os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
+    os.environ.setdefault("TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES", "1")
+    os.environ.setdefault("TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY", "1")
+    os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 
 from loguru import logger  # noqa: E402
 
@@ -168,9 +210,79 @@ def plan(chunk: int, cache: int):
     return n_chunks, cache_aligned, n_chunks * chunk
 
 
-def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stages=1, stage=0):
+SEG = 2048  # packed-forward segment size (budget_packed.py)
+STREAM_STRIDE = 7919  # token-stream offset, as in budget_packed.py
+
+
+def load_inputs():
+    """PROFILE_INPUTS ("name=path;...") + "default" (PREFILL_TRACE_DIR) -> {name: token_ids}."""
+    specs = {}
+    if os.getenv("PREFILL_TRACE_DIR"):
+        specs["default"] = os.environ["PREFILL_TRACE_DIR"]
+    for item in os.getenv("PROFILE_INPUTS", "").split(";"):
+        if item.strip():
+            name, _, path = item.partition("=")
+            specs[name.strip()] = path.strip()
+    inputs = {}
+    for name, path in specs.items():
+        p = Path(path)
+        p = p / "metadata.json" if p.is_dir() else p
+        inputs[name] = json.load(open(p))["token_ids"]
+        assert inputs[name], f"input {name} ({p}) has no tokens"
+        print(f"[zone-prof] input {name}: {len(inputs[name])} tokens from {p}", flush=True)
+    return inputs
+
+
+def parse_segments(spec, inputs):
+    """'prose@141312:2048,code@0:2048' -> [(slot, input, stream, h, n), ...] in forward order.
+
+    Same grammar as budget_packed.parse_compo, with the "X@" token selector extended to input names."""
+    segs = []
+    for slot, entry in enumerate(spec.split(",")):
+        name, stream = "default", slot
+        if "@" in entry:
+            sel, entry = entry.split("@", 1)
+            head, _, tail = sel.partition(".")
+            if head.isdigit():
+                stream = int(head)
+            else:
+                name = head
+                stream = int(tail) if tail else 0  # a named input reads as the document itself
+        assert name in inputs, f"PROFILE_SEGMENTS input {name!r} unknown (have {sorted(inputs)}; see PROFILE_INPUTS)"
+        for part in entry.split("+"):
+            h, _, n = part.partition(":")
+            h, n = int(h), int(n or SEG)
+            assert h % SEG == 0 and 0 < n <= SEG, f"bad segment {part!r} (h % {SEG} == 0, 0 < n <= {SEG})"
+            segs.append((slot, name, stream, h, n))
+    return segs
+
+
+def segment_tokens(inputs, name, stream, p):
+    src = inputs[name]
+    return [src[(p + STREAM_STRIDE * stream + i) % len(src)] for i in range(SEG)]
+
+
+def drop_device_perf_report():
+    """Delete the C++ per-program report the un-profiled forwards appended to. The runtime re-creates it
+    (with its header) on the next profiler read, so the report tracy -r joins holds only what follows."""
+    root = os.environ.get("TT_METAL_PROFILER_DIR") or os.path.join(
+        os.environ.get("TT_METAL_HOME", "."), "generated/profiler"
+    )
+    path = Path(root) / ".logs" / "cpp_device_perf_report.csv"
+    if path.is_file():
+        size = path.stat().st_size
+        path.unlink()
+        print(f"[zone-prof] dropped {size / 2**20:.1f} MiB of un-profiled rows: {path}", flush=True)
+    else:
+        print(f"[zone-prof] WARNING: no {path} to drop (TT_METAL_PROFILER_CPP_POST_PROCESS unset?)", flush=True)
+
+
+def build_runtime(
+    mesh, chunk, total, num_layers_override, layer_ids=None, stages=1, stage=0, segment_size=None, num_users=1
+):
     """Build the real-weights model + KV cache for pipeline stage `stage` of `stages` on `mesh` (the
-    whole galaxy or one carved sub-mesh). Returns (runtime, kv_cache, hf_config, global_layer_indices)."""
+    whole galaxy or one carved sub-mesh). Returns (runtime, kv_cache, hf_config, global_layer_indices).
+    segment_size / num_users: packed forwards (PROFILE_SEGMENTS)."""
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
     from models.demos.minimax_m3.tt.model_config import ModelArgs
     from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
@@ -257,7 +369,8 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
         max_seq_len=total,
         mesh_shape=tuple(mesh.shape),
         chunk_size=chunk,
-        num_users=1,
+        segment_size=segment_size,
+        num_users=num_users,
         expert_weight_dtype=expert_dtype,
         weight_cache_path=cache_path,
         first_layer_idx=first_layer_idx,
@@ -270,7 +383,7 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
     del state_dict
 
     kv_cache = allocate_kv_caches(
-        mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
+        mesh, num_layers=num_layers, max_seq_len=total, num_users=num_users, head_dim=hf_config.head_dim
     )
     return runtime, kv_cache, hf_config, global_layer_indices
 
@@ -288,16 +401,52 @@ def main():
     assert stages in (1, 2, 4), f"PROFILE_STAGES must be 1, 2 or 4 (got {stages})"
     assert 0 <= stage < stages, f"PROFILE_STAGE={stage} out of range for {stages} stages"
     fabric_config = fabric_config_from_env()
+    warm_iters = int(os.getenv("PROFILE_WARM_ITERS", "2"))
+    warm_point = int(os.getenv("PROFILE_WARM_POINT", "0"))
+    prefix_read_every = max(1, int(os.getenv("PROFILE_PREFIX_READ_EVERY", "1")))
+    progress_every = int(os.getenv("PROFILE_PROGRESS_EVERY", "0"))
+    skip_prefix = os.getenv("PROFILE_SKIP_PREFIX") == "1"
+    skip_compile = os.getenv("PROFILE_SKIP_COMPILE") == "1"
 
-    n_chunks, cache, total = plan(chunk, cache_req)
-    print(
-        f"[zone-prof] PROFILING one {chunk}-token chunk attending {cache} cached tokens "
-        f"({n_chunks} chunks total, cache capacity {total})"
-        + (f"  [requested cache {cache_req} -> aligned down to {cache}]" if cache != cache_req else ""),
-        flush=True,
-    )
+    seg_spec = os.getenv("PROFILE_SEGMENTS", "").strip()
+    packed = bool(seg_spec)
+    if packed:
+        inputs = load_inputs()
+        segs = parse_segments(seg_spec, inputs)
+        n_slots = max(s for s, *_ in segs) + 1
+        scratch = n_slots  # cold filler segments of the fill forwards
+        chunk = len(segs) * SEG
+        total = -(-max(h + SEG for *_, h, _ in segs) // SEG) * SEG
+        cache = max(h for *_, h, _ in segs)
+        fills = {}  # slot -> (input, stream, h) of its first segment: history [0, h) is filled before
+        for slot, name, stream, h, _ in segs:
+            fills.setdefault(slot, (name, stream, h))
+        n_fill = sum(-(-h // SEG) for _, _, h in fills.values())
+        print(
+            f"[zone-prof] PROFILING one packed forward: {len(segs)} x {SEG} = {chunk} tokens, {n_slots} slot(s) + 1 "
+            f"scratch, capacity {total}; segments (slot, input, stream, h, n) = {segs}; history fill {n_fill} "
+            f"segments ({'skipped: PROFILE_SKIP_PREFIX=1' if skip_prefix else 'real tokens'})",
+            flush=True,
+        )
+    else:
+        n_chunks, cache, total = plan(chunk, cache_req)
+        print(
+            f"[zone-prof] PROFILING one {chunk}-token chunk attending {cache} cached tokens "
+            f"({n_chunks} chunks total, cache capacity {total})"
+            + (f"  [requested cache {cache_req} -> aligned down to {cache}]" if cache != cache_req else ""),
+            flush=True,
+        )
+    if PREFIX_QUIET:
+        print(
+            "[zone-prof] PROFILE_PREFIX_QUIET=1: op records + zones off until the profiled forward, one profiler "
+            f"drain per {prefix_read_every} un-profiled forward(s), no device log / tracy device zones",
+            flush=True,
+        )
+        if os.getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS") == "1":
+            raise SystemExit("ERROR: PROFILE_PREFIX_QUIET=1 disables the device log files NOC traces are written with")
     if os.getenv("PROFILE_DRY_RUN") == "1":
-        load_tokens(total)
+        if not packed:
+            load_tokens(total)
         print("[zone-prof] PROFILE_DRY_RUN=1 -> chunk math + tokens only, exiting before device open", flush=True)
         return 0
 
@@ -315,7 +464,13 @@ def main():
     )
     mesh = galaxy
     try:
-        from models.demos.minimax_m3.utils.profiler_utils import COARSE, ZONES_ENABLED, read_profiler, zone
+        from models.demos.minimax_m3.utils.profiler_utils import (
+            COARSE,
+            ZONES_ENABLED,
+            read_profiler,
+            set_zones_active,
+            zone,
+        )
 
         if stages > 1:
             # Contiguous row-block sub-meshes, in the same order the pipeline bindings assign stages.
@@ -327,7 +482,15 @@ def main():
         sp, tp = tuple(mesh.shape)
 
         runtime, kv_cache, hf_config, global_layer_indices = build_runtime(
-            mesh, chunk, total, num_layers_override, layer_ids, stages=stages, stage=stage
+            mesh,
+            chunk,
+            total,
+            num_layers_override,
+            layer_ids,
+            stages=stages,
+            stage=stage,
+            segment_size=SEG if packed else None,
+            num_users=n_slots + 1 if packed else 1,
         )
         num_layers = len(global_layer_indices)
 
@@ -341,11 +504,16 @@ def main():
         # That means the profiled chunk's ops must all fit in the buffer at once
         # (num_layers x ~72 ops). Size it with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT — the default is
         # only 1000 (tt_metal/impl/profiler/profiler_state_manager.cpp).
+        #
+        # PROFILE_PREFIX_QUIET drains once per un-profiled forward instead (see unprofiled() below): a
+        # forward is ~num_layers x 75 programs, far below the 20000 the wrapper sizes the buffer for.
         read_in_chunk = os.getenv("PROFILE_READ_IN_CHUNK", "0") == "1"
-        state = {"reads": 0, "in_chunk": False}
+        state = {"reads": 0, "in_chunk": False, "fwd": 0}
 
         def on_layer_complete(layer_idx):
             if state["in_chunk"] and not read_in_chunk:
+                return
+            if PREFIX_QUIET and not state["in_chunk"]:
                 return
             if read_every > 0 and (layer_idx + 1) % read_every == 0:
                 read_profiler(mesh)
@@ -353,83 +521,165 @@ def main():
 
         runtime._on_layer_complete = on_layer_complete
 
+        def unprofiled(fn):
+            """Run one un-profiled forward; apply PROFILE_WARM_POINT and the quiet-mode drain."""
+            fn()
+            state["fwd"] += 1
+            if state["fwd"] == 2 and warm_point > 0:
+                # The process's first cache-read forward: repeat it (same tokens, same KV positions, so
+                # the cache is unchanged) before any deeper one — the budget harness's warm point.
+                for _ in range(warm_point):
+                    fn()
+                print(f"[zone-prof] warm point: forward #2 repeated {warm_point}x", flush=True)
+            if PREFIX_QUIET and state["fwd"] % prefix_read_every == 0:
+                read_profiler(mesh)
+                state["reads"] += 1
+            if progress_every > 0 and state["fwd"] % progress_every == 0:
+                print(f"[zone-prof] {state['fwd']} un-profiled forwards done", flush=True)
+
+        if PREFIX_QUIET:
+            set_zones_active(False)
+
         # --- 1. WARMUP: JIT-compiles every op and populates the program cache. Its ops land in the CSV
         # too, but outside the `profiled_chunk` zone, so the parser drops them.
         print(f"[zone-prof] warmup / compile ({num_layers}L, SP={sp} x TP={tp} + EP={sp * tp}) ...", flush=True)
         t0 = time.perf_counter()
-        skip_compile = os.getenv("PROFILE_SKIP_COMPILE") == "1"
-        if not skip_compile:
+        if packed and not skip_compile:
+            print("[zone-prof] PROFILE_SEGMENTS: runtime.compile() is chunk-path only; warming the composition instead")
+        elif not skip_compile:
             runtime.compile(kv_cache)
+            if PREFIX_QUIET:
+                read_profiler(mesh)
+                state["reads"] += 1
         print(f"[zone-prof] warmup done in {(time.perf_counter()-t0):.1f}s", flush=True)
 
-        tokens = load_tokens(total)
+        if packed:
 
-        n_real = int(os.getenv("PROFILE_N_REAL", str(chunk)))
-        assert 0 < n_real <= chunk, f"PROFILE_N_REAL={n_real} must be in (0, {chunk}]"
+            def run_segments(group):
+                """group: [(slot, input, stream, h, n)] -> one prefill_segments forward."""
+                inp = runtime.make_segments_input([segment_tokens(inputs, nm, st, h) for _, nm, st, h, _ in group])
+                out = runtime.prefill_segments(inp, kv_cache, [(slot, h, n) for slot, _, _, h, n in group])
+                if out is not None:
+                    out.deallocate(True)
 
-        def prefill_chunk(c, n=chunk):
-            a = c * chunk
-            inp = runtime.make_chunk_input(tokens[a : a + chunk])
-            out = runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=a + n)
-            if out is not None:  # a non-last stage returns the hidden state meant for the next stage
-                out.deallocate(True)
+            B = len(segs)
+            profiled = lambda: run_segments(segs)
+            warm = profiled
+            if skip_prefix:
+                print(
+                    f"[zone-prof] PROFILE_SKIP_PREFIX=1 -> skipping the {n_fill}-segment history fill; attention "
+                    "reads a ZEROED cache (shapes real, MoE routing NOT representative)",
+                    flush=True,
+                )
+            elif n_fill:
+                print(f"[zone-prof] filling history: {n_fill} segments in forwards of {B} ...", flush=True)
+                t0 = time.perf_counter()
+                fill_fwds = 0
+                for slot, (name, stream, h) in fills.items():
+                    todo = [(slot, name, stream, p, SEG) for p in range(0, h, SEG)]
+                    while todo:
+                        group, todo = todo[:B], todo[B:]
+                        group += [(scratch, "default" if "default" in inputs else name, 0, 0, SEG)] * (B - len(group))
+                        unprofiled(lambda g=group: run_segments(g))
+                        fill_fwds += 1
+                ttnn.synchronize_device(mesh)
+                print(
+                    f"[zone-prof] history filled in {(time.perf_counter()-t0):.1f}s ({fill_fwds} forwards)", flush=True
+                )
+            n_warm = warm_iters
+        else:
+            tokens = load_tokens(total)
 
-        # --- 2. fill the cache to `cache` tokens. Not inside the `profiled_chunk` zone, so these ops are
-        # excluded from the report; synced before the profiled chunk so it pays for no leftover barrier.
-        skip_prefix = os.getenv("PROFILE_SKIP_PREFIX") == "1"
-        if skip_prefix:
-            # FAST/APPROXIMATE: run the profiled chunk at actual_start=`cache` against a still-ZEROED
-            # cache. Shapes (and therefore every op's cost) are identical, but the attention outputs are
-            # garbage, so the hidden states feeding the MoE router are unrealistic -> the expert load
-            # imbalance (dispatch / experts_mm / combine) is NOT representative. Use for bring-up only.
-            print(
-                f"[zone-prof] PROFILE_SKIP_PREFIX=1 -> skipping the {n_chunks-1}-chunk prefix fill; "
-                f"attention reads a ZEROED cache (shapes real, MoE routing NOT representative)",
-                flush=True,
-            )
-        elif n_chunks > 1:
-            print(f"[zone-prof] pre-filling {n_chunks-1} chunks -> {cache} cached tokens ...", flush=True)
-            t0 = time.perf_counter()
-            for c in range(n_chunks - 1):
-                prefill_chunk(c)
+            n_real = int(os.getenv("PROFILE_N_REAL", str(chunk)))
+            assert 0 < n_real <= chunk, f"PROFILE_N_REAL={n_real} must be in (0, {chunk}]"
+
+            def prefill_chunk(c, n=chunk):
+                a = c * chunk
+                inp = runtime.make_chunk_input(tokens[a : a + chunk])
+                out = runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=a + n)
+                if out is not None:  # a non-last stage returns the hidden state meant for the next stage
+                    out.deallocate(True)
+
+            profiled = lambda: prefill_chunk(n_chunks - 1, n_real)
+            warm = lambda: prefill_chunk(n_chunks - 1)
+
+            # --- 2. fill the cache to `cache` tokens. Not inside the `profiled_chunk` zone, so these ops are
+            # excluded from the report; synced before the profiled chunk so it pays for no leftover barrier.
+            if skip_prefix:
+                # FAST/APPROXIMATE: run the profiled chunk at actual_start=`cache` against a still-ZEROED
+                # cache. Shapes (and therefore every op's cost) are identical, but the attention outputs are
+                # garbage, so the hidden states feeding the MoE router are unrealistic -> the expert load
+                # imbalance (dispatch / experts_mm / combine) is NOT representative. Use for bring-up only.
+                print(
+                    f"[zone-prof] PROFILE_SKIP_PREFIX=1 -> skipping the {n_chunks-1}-chunk prefix fill; "
+                    f"attention reads a ZEROED cache (shapes real, MoE routing NOT representative)",
+                    flush=True,
+                )
+            elif n_chunks > 1:
+                print(f"[zone-prof] pre-filling {n_chunks-1} chunks -> {cache} cached tokens ...", flush=True)
+                t0 = time.perf_counter()
+                for c in range(n_chunks - 1):
+                    unprofiled(lambda c=c: prefill_chunk(c))
+                ttnn.synchronize_device(mesh)
+                print(f"[zone-prof] prefix filled in {(time.perf_counter()-t0):.1f}s", flush=True)
+            n_warm = warm_iters if skip_compile else 0
+
+        # No bucket sweep: warm the profiled forward's own programs instead (twice, like the timing harness).
+        for _ in range(n_warm):
+            unprofiled(warm)
+        if n_warm:
             ttnn.synchronize_device(mesh)
-            print(f"[zone-prof] prefix filled in {(time.perf_counter()-t0):.1f}s", flush=True)
-
-        if skip_compile:
-            # No bucket sweep: warm the profiled chunk's own programs instead (twice, like the timing harness).
-            for _ in range(2):
-                prefill_chunk(n_chunks - 1)
-            ttnn.synchronize_device(mesh)
-        if n_real < chunk:
+        if not packed and n_real < chunk:
             # A short chunk builds a different MoE padding config: warm it here, not inside the profile.
-            prefill_chunk(n_chunks - 1, n_real)
+            unprofiled(profiled)
             ttnn.synchronize_device(mesh)
 
-        # --- 3. the profiled chunk, bracketed by the `profiled_chunk` zone. Everything the parser
-        # reports is nested under it, which is what separates this chunk from warmup + prefix.
+        if PREFIX_QUIET:
+            # Everything before this line is out of the report: drain it and drop the per-program rows it
+            # left in the C++ report. Then turn op records back on for ONE more un-profiled forward of the
+            # profiled programs: the first time an op is recorded its metadata is serialised in full (slow
+            # host work), later records reuse it, so this keeps that cost out of the profiled forward's
+            # op-to-op gaps. Its ops and device rows are both kept (tracy -r needs device rows for every
+            # recorded op) and it runs outside the profiled_chunk zone, so the parser drops it.
+            ttnn.synchronize_device(mesh)
+            read_profiler(mesh)
+            state["reads"] += 1
+            drop_device_perf_report()
+            if _OP_PROFILER_ENV is not None:
+                os.environ["TTNN_OP_PROFILER"] = _OP_PROFILER_ENV
+            unprofiled(profiled)
+            ttnn.synchronize_device(mesh)
+            set_zones_active(True)
+
+        # --- 3. the profiled forward, bracketed by the `profiled_chunk` zone. Everything the parser
+        # reports is nested under it, which is what separates it from warmup + prefix.
         read_note = (
             "per-layer reads INSIDE the chunk — op-to-op latency will be meaningless"
             if read_in_chunk
             else "no reads inside the chunk — op-to-op latency is clean"
         )
+        what = f"packed {len(segs)}x{SEG} forward" if packed else f"final chunk: {chunk} tok @ {cache} cache"
         print(
-            f"[zone-prof] profiling the final chunk: {chunk} tok @ {cache} cache "
-            f"(zones {'ON' if ZONES_ENABLED else 'OFF'}, {read_note}) ...",
-            flush=True,
+            f"[zone-prof] profiling the {what} (zones {'ON' if ZONES_ENABLED else 'OFF'}, {read_note}) ...", flush=True
         )
         prefix_reads = state["reads"]
         state["in_chunk"] = True
         t0 = time.perf_counter()
         with zone("profiled_chunk", COARSE):
-            prefill_chunk(n_chunks - 1, n_real)
+            profiled()
             ttnn.synchronize_device(mesh)
         wall = time.perf_counter() - t0
         state["in_chunk"] = False
         read_profiler(mesh)  # single flush of the whole profiled chunk
         chunk_reads = state["reads"] - prefix_reads
 
+        head = (
+            f"PROFILED FORWARD: packed {len(segs)} x {SEG} = {chunk} tok, segments {[(s, nm, h, n) for s, nm, _, h, n in segs]}"
+            if packed
+            else f"PROFILED CHUNK: {chunk} tok @ {cache} cache"
+        )
         print(
-            f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers "
+            f"\n[zone-prof] {head}, {num_layers} layers "
             f"(stage {stage}/{stages}, mesh {sp}x{tp}, fabric {fabric_config})\n"
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"

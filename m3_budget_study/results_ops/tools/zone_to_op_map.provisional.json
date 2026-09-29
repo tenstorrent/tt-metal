@@ -1,0 +1,30 @@
+{
+  "_comment": "Provisional zone -> op map for zones_to_per_op.py (used only when zone_to_op_map.json is absent). Op names follow Pavlo's table / roofline_ops.js; zone paths are relative to the layer zone (parse_zone_perf.py, M3_PROFILE_LEVEL=2), taken from roofline_ops.js check(). A list sums its zones; '__rest__' = the layer total minus every other op of that layer type. Zones that do not appear in a run contribute nothing.",
+  "sparse": {
+    "norm_ag": ["input_norm_allgather", "post_attn_norm_allgather"],
+    "qkv": ["attn/qkv_proj"],
+    "idx_branch": ["attn/index_branch"],
+    "ag_kv": ["attn/ag_kv"],
+    "ag_idx": ["attn/ag_index_k"],
+    "indexer": ["attn/indexer"],
+    "sparse": ["attn/sparse_sdpa"],
+    "o_proj": ["attn/o_proj", "attn/o_proj_fused_rs"],
+    "attn_rs": ["attn/ccl_out_reduce_scatter", "attn/ccl_out_allreduce", "attn/ccl_out_allgather"],
+    "shared": ["mlp/shared_expert"],
+    "router": ["mlp/router_topk"],
+    "dispatch": ["mlp/dispatch"],
+    "experts": ["mlp/experts_mm"],
+    "combine": ["mlp/combine"],
+    "moe_reduce": ["mlp/moe_reduce"],
+    "misc": "__rest__"
+  },
+  "dense": {
+    "norm_ag": ["input_norm_allgather", "post_attn_norm_allgather"],
+    "qkv": ["attn/qkv_proj"],
+    "ring": ["attn/ring_joint_sdpa", "attn/sdpa"],
+    "o_proj": ["attn/o_proj", "attn/o_proj_fused_rs"],
+    "attn_rs": ["attn/ccl_out_reduce_scatter", "attn/ccl_out_allreduce", "attn/ccl_out_allgather"],
+    "dense_mlp": ["mlp"],
+    "misc": "__rest__"
+  }
+}
