@@ -1,6 +1,6 @@
 intake:
   by: dnijemcevic
-  at: '2026-09-29T00:16:25'
+  at: '2026-09-29T00:28:09'
   files:
-    models/demos/glm53_flash_d_p/bringup/spec.yaml: af15b825cdf0daa8ba0e38a23d47d0c571d706e1e624718c4ac5bf74af2672af
+    models/demos/glm53_flash_d_p/bringup/spec.yaml: 96c6f0426cc59ae8711aa43b1f37913d7bf4c11dabb8e417ffc21cc2c8f90a9e
   note: ''

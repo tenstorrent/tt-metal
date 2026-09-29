@@ -16,3 +16,9 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
   dashboards. Correction to the study: the minimum is 0-4, not 0-3 (0-3 has no kda_moe).
 - Owner approved the spec ("let's do 0-4"); intake approved 00:16; ledger --early 9 tasks; run1.
 - Launch waits for the full download (R.1's checkpoint counts and R.2's sanity need every shard).
+
+## 2026-09-29 run1 start
+- 00:23 launched (tmux `glmorch`) after the download finished (62/62 shards, 306 GiB).
+- 00:24 R.1 FAIL: shape_mismatches 45 = `layers.*.hc_attn_fn` expected `"*"` in the spec (not a wildcard for shapes;
+  real shape [24, 16384]). Classified: spec error (intake). Paused, killed the fix agent before it edited anything.
+  Owner approved the one-line spec fix ("yes"); intake re-approved; resume.
