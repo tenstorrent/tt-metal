@@ -15,9 +15,6 @@ is "every `DFBBinding::dfb_spec_name` names a declared DataflowBufferSpec", whic
 `dataflow_buffers`. The structural invariants are listed at the top of `ProgramSpec` in `program_spec.hpp` and
 tested in `program_spec/`.
 
-Each header directory's README maps the header's invariant comments to the tests that cover them, and lists the
-invariants that no test covers yet.
-
 ## Directories
 
 | Directory | Header | Covers |
