@@ -473,8 +473,29 @@ def test_indexed_bias_and_cache_rebinding(
             cache_entries = device.num_program_cache_entries()
         else:
             assert device.num_program_cache_entries() == cache_entries
+        if not fp32_dest_acc_en:
+            unbiased_tt = ttnn.sparse_matmul(
+                a_tt,
+                b_tt,
+                sparsity=sparsity,
+                indices=indices,
+                is_input_a_sparse=compact_a,
+                is_input_b_sparse=True,
+                program_config=config,
+                compute_kernel_config=kernel_config,
+            )
+            unbiased = ttnn.to_torch(unbiased_tt).reshape(active, m, n).float()
+            unbiased_tt.deallocate(True)
+            cache_entries = device.num_program_cache_entries()
         for slot, expert in enumerate(ids):
-            expected = a[0, slot if compact_a else 0].float() @ b_quantized[0, expert] + bias[expert].float()
+            matmul_reference = a[0, slot if compact_a else 0].float() @ b_quantized[0, expert]
+            expected = matmul_reference + bias[expert].float()
+            if not fp32_dest_acc_en:
+                # Diagnose BF16 K-block accumulation separately from the added bias path.
+                baseline_error = (unbiased[slot] - matmul_reference).abs().max().item()
+                fused_error = (actual[slot] - expected).abs().max().item()
+                bias_delta_error = (actual[slot] - unbiased[slot] - bias[expert].float()).abs().max().item()
+                print(f"BF16 error: baseline={baseline_error}, fused={fused_error}, bias_delta={bias_delta_error}")
             torch.testing.assert_close(actual[slot], expected, atol=0.3, rtol=0.03)
 
 
