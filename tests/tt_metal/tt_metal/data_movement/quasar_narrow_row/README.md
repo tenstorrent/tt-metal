@@ -107,7 +107,7 @@ neither iDMA example uses and which is worth 3.6× at 512 B/row.
 ## Development measurements (emu-quasar-1x3) — superseded baseline, see above
 
 A 23-width sweep was run during development; it is not part of the shipped test, which keeps
-37 runs of correctness coverage. Two of three curves are flat, and that is the whole result:
+38 runs of correctness coverage. Two of three curves are flat, and that is the whole result:
 
 **The workaround is payload-blind.** 781.6–790.2 cycles for a 32-row block across a **256×
 span in payload** — 24.5 cyc/row at every width. Entirely issue-bound; the bytes are free. So
@@ -194,10 +194,10 @@ face-size and banking registers it does not; a reset that inherited their state 
 under the filter above and fail only in the full suite. (`HostHugepagePcieLoopback`, from
 main, hangs on this emulator — exclude it with `:-*HostHugepagePcieLoopback*`.)
 
-37 runs. The 1x3 emu has no fast-dispatch cores, hence slow dispatch.
+38 runs. The 1x3 emu has no fast-dispatch cores, hence slow dispatch.
 
 | test | |
 |---|---|
 | `WidthAndTileRowSweep` | `ct_dim` 1/2/4/8 × `last_tile_w` 8/16/24/32 — the layout contract |
 | `SubFaceWidths` | `last_tile_w` 1/2/3/4/12/20 at `ct_dim` 1 **and** 2 — below the RV_PACR floor. `ct_dim` 1 is the case that tests the claim: it produces 2 B to 40 B rows, where `ct_dim` 2's leading full tile would keep every row at 66 B or wider. The odd widths make `matrix_w` odd, so every other destination row starts at a 2 mod 4 byte offset |
-| `EngineParity` | iDMA at 8 and 1 channels, and the NOC workaround, at 32 / 70 / 504 B rows. 70 B (`ct_dim` 2, `last_tile_w` 3) puts every odd destination row at a 2 mod 4 offset, so the NOC arm cross-checks the byte-granular placement instead of only covering 8-byte multiples |
+| `EngineParity` | iDMA at all-channels and 1 channel, and the NOC workaround, at 32 / 70 / 504 B rows, plus one over-range channel request that exercises the kernel's clamp. 70 B (`ct_dim` 2, `last_tile_w` 3) puts every odd destination row at a 2 mod 4 offset, so the NOC arm cross-checks the byte-granular placement instead of only covering 8-byte multiples |

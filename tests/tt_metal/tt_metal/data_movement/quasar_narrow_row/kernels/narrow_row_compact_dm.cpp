@@ -48,6 +48,12 @@ using namespace overlay;
 using narrow_row::CHANNELS_ALL;
 using narrow_row::EngineMode;
 
+// This is what keeps the host's CHANNELS_MAX honest: it is the only place both it and the
+// real constant are visible at once.
+static_assert(
+    narrow_row::CHANNELS_MAX == CMDBUF_NUM_IDMA_VCS,
+    "CHANNELS_MAX no longer mirrors CMDBUF_NUM_IDMA_VCS; update the shared header");
+
 namespace {
 
 // The whole of this kernel's addressing rests on this. On a non-TRISC core

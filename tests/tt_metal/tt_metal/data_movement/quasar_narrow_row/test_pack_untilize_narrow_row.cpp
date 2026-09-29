@@ -57,6 +57,7 @@ using narrow_row::EngineMode;
 // one VC's 16 B/cycle and loses to the workaround it replaces. CHANNELS_ALL is a sentinel the
 // kernel resolves against the real VC count, so the 8 is not repeated here.
 using narrow_row::CHANNELS_ALL;
+using narrow_row::CHANNELS_MAX;
 
 // The reference workload: a 32 x 252 Float16_b matrix. 252 datums needs 8 tiles to cover
 // (7 x 32 = 224, + 28), so ct_dim 8 -- the half-sync 16-bit DEST limit for pack_untilize --
@@ -479,6 +480,16 @@ TEST_F(QuasarNarrowRowUntilize, EngineParity) {
         workaround.engine_mode = EngineMode::NocPerRow;
         EXPECT_TRUE(run_narrow_row(devices_[0], buffers, workaround)) << "NOC, " << row_bytes << " B/row";
     }
+
+    // The clamp's over-range branch, which nothing else in the suite reaches: every other
+    // iDMA run asks for CHANNELS_ALL or 1, both already inside the valid range. CHANNELS_MAX
+    // + 1 is deliberately the exact boundary rather than some large value -- an off-by-one
+    // clamp would pass it through and set req_end_vc one past the last VC, where a merely
+    // huge request would still be caught. (The CHANNELS_ALL sentinel needs no case of its
+    // own: every default iDMA run above sends it, and an unresolved 0 would underflow
+    // req_end_vc to 0xFFFFFFFF.)
+    const RunConfig over_range{.ct_dim = 8, .last_tile_w = LAST_W_252, .num_channels = CHANNELS_MAX + 1};
+    EXPECT_TRUE(run_narrow_row(devices_[0], buffers, over_range)) << "iDMA over-range channel request";
 }
 
 }  // namespace tt::tt_metal

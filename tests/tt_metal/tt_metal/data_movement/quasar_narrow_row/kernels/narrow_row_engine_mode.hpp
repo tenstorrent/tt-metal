@@ -52,4 +52,11 @@ static_assert(static_cast<std::uint32_t>(EngineMode::NocPerRow) == 1u);
 // The VC count then lives in exactly one place instead of as a literal 8 on each side.
 constexpr std::uint32_t CHANNELS_ALL = 0;
 
+// Host-visible mirror of overlay::CMDBUF_NUM_IDMA_VCS, so the test can name the clamp's
+// boundary (CHANNELS_MAX + 1) without including the device header. This is a duplicated
+// constant, but not a silent one: the kernel static_asserts it against the real value, so
+// drift is a compile error in the kernel build rather than a wrong VC window on device.
+// Nothing in the kernel uses it -- the kernel clamps against CMDBUF_NUM_IDMA_VCS itself.
+constexpr std::uint32_t CHANNELS_MAX = 8;
+
 }  // namespace narrow_row
