@@ -47,13 +47,18 @@ def _reference_lm(path: str):
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
     [
         pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
+        # The QB2. TP takes the whole 4-chip line on axis 1, matching `_PRESETS_BH[(1, 4)]`; the
+        # submesh is the mesh, so this opens no submesh at all.
+        pytest.param((1, 4), (1, 4), 1, 2, id="tp4_axis1"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
-@pytest.mark.parametrize("seq_len", [128])
+# Three lengths rather than one: the tap is padded to a tile multiple, so a short prompt and a long
+# one exercise different padding fractions of the same conditioner.
+@pytest.mark.parametrize("seq_len", [13, 128, 512])
 def test_minimax_h3_text_conditioner(
     *, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis, num_links: int, seq_len: int
 ) -> None:
