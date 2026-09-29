@@ -610,3 +610,27 @@ Results: reference passes (L0 rel 0.0034, L1 0.0028). Stub fails (PCC 0). Device
 rel 0.0021 / 0.0014; L1 rel 0.0032, post term rel 0.0055.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_residual.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_dense.10 test (attempt 1)
+
+Reviewed the rendered swap test (all ten kda_dense steps on device, layer 0). I rewrote it from swap 09's test. It keeps
+every swap-09 check (limits unchanged) and the gated pcc_swap_out. Changes:
+- The collapse-, norm- and mlp-share tails now end in the device ffn_residual (`muts["ffn_residual"]`) instead of the
+  CPU one, so each still isolates one step. Device: 1e-4, 0.0017 / [0.9971, 1.0026], 0.0025 / [0.9985, 1.0005].
+  cpu_tail (all-CPU ffn tail, now five device steps' share) is unchanged at 0.005 / [0.975, 1.025]; device 0.0038 /
+  [0.9873, 1.0131].
+- New: ffn_residual vs the fp32 CPU residual of the (h_mid, ffn_hc, mlp_out) it actually got, and the module on
+  layer 1's golden inputs vs the CPU residual of those inputs. Both check rel L2, per-row ratio, per-stream rel, worst
+  row, and each term on its own. Limits: rel <= 0.0035, ratio [0.9975, 1.0025], stream <= 0.005, row <= 0.008,
+  term coefficient [0.998, 1.002], term rel <= 0.012. These are tighter than the component test's because the
+  reference is exact fp32, not the bf16 golden.
+Sensitivity (CPU host script /tmp/s10/sens.py, not kept), vs the exact residual: bf16 output (what the device does)
+0.0017 / [0.9998, 1.0002]; all-bf16 mix 0.0029 / [0.9980, 1.0018] / row 0.0054 / L1 term rel 0.0082 (passes). These
+fail: post x1.005 (L0 ratio 1.0079, coefficient 1.005 on both layers), comb x1.005 (0.0059), 7-bit output (ratio
+0.994), last row x1.02 (ratio 1.02), and last row zeroed.
+Results: device passes (out PCC 0.999977, rel 0.0077, ratio [0.9797, 1.0082]; ffn_residual same input 0.0017, coef
+1.0000; L1 0.0017). Reference passes (out rel 0.0017, same-input checks 0). Stub fails (PCC 0 and every golden check).
+On layer 0 the same-input checks score 0 for the stub, because the CPU steps of zero inputs are zero; layer 1 fails.
+Watch: cpu_tail is at 0.0038 of 0.005 (0.0035 in swap 09); block out rel 0.0077 of 0.01.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_10_ffn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
