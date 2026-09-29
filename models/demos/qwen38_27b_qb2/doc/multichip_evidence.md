@@ -134,8 +134,9 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
 - No performance measurement for this mesh: no warmed TTFT, no decode tokens/s/user, no
   single-chip-versus-multichip speedup, and no host-work counter dump from the traced decode
   loop. The one timing figure quoted above is a stability observation, not a benchmark.
-- No qualitative suite. This is a chat checkpoint and the only generated evidence comes from a
-  raw continuation prompt, so prompt-format coverage is missing entirely.
+- The qualitative suite is in `readiness_qualitative/`, covering prompt format and answer
+  quality on the shared six prompts at 256 tokens against a native-bfloat16 control. It is not
+  an accuracy gate: no top-1/top-5/top-100 and no AIME24 reference exist yet.
 - Stage 5 optimization families were not measured on this mesh. `num_links` is 1 here against
   QB2's 2, which halves collective bandwidth and makes the collective families the dominant
   question, yet `ccl_dtype`, residual layout and the fused CCL paths are carried over from the
