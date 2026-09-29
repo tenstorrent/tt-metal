@@ -3264,3 +3264,36 @@ Gotchas
 Re-run
     PYTHONPATH=$PWD BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
     BRINGUP_HYBRID=1 ... (same command) for the hybrid harness
+
+## K.1 contract (serving through the prefill engine API)
+
+What
+- `tt/runners/adapter.py`: Hy4PrefillAdapter (registered as `hy4_preview_d_p` in `common/prefill/adapter.py`
+  ADAPTER_PATHS) + Hy4PrefillRuntime over the all-device TtHy4Model (`final_norm=False`: the last rank's output is the
+  cache). Served layers: `PREFILL_HY4_LAYERS`, else the spec's subset (BRINGUP_SPEC or bringup/spec.yaml); acks carry
+  the global layer index, after `event_synchronize(record_event)` per layer.
+- `tt/runners/kv_contract.py`: Hy4ContractKV. kvpe [users*6, 1, max_seq/4, 576] bf16 RM and index [users*3, 1,
+  max_seq/4, 128] bf16 TILE (full layers 0, 1, 5), both `init_kvpe_cache(tp_axis=1)`: the same layout the modules
+  allocate for themselves. Table config "0" kvpe, "1" index on the same layer axis (shared layers 2-4 unset), one-chip
+  device groups, 32-token entries (32 x 1152 B rows / 4 bf16 tiles). Read-back through `read_dram_umd` vs the golden
+  kv_latent / index_key (the adapter's `read_slot_kv_and_check_pcc`).
+- `tt/attention.py`, `tt/indexer.py`: `bind_cache(cache, slot, row, rows)` / `unbind_cache()`. Bound, the KV write
+  (`update_padded_kv_cache` slot/layer/num_layers) and the gather (`high_bw_all_gather input_batch_index`) use the
+  engine cache; unbound (the default) is the old path (geometry cache, batch 0).
+
+Decisions
+- The engine cache is the model's state (no contract copy): nothing extra to write, and an ack only needs the layer's
+  device work finished.
+- Own table walk: the DeepSeek builders assume a 5120 block-cyclic period; Hy4's period is the served chunk.
+- Engine input needs no gather: [2, 1, chunk/2] sharded over axis 0 is the embedding's row split already. Pad ids are
+  clamped on the device with `ttnn.minimum(ids, V - 1)` (V = 120832).
+
+Result (gate): PASS. contract_checks_failed 0, acks_early 0 (48 blocks checked), pcc_producer_kv_kv_latent 0.99999,
+pcc_producer_kv_index_key 0.99997 (slot 1, [0, 4064)). Ladder s4096 re-run after the bind change: PASS.
+
+Gotchas
+- `ttnn.Shape` does not slice (`shape[1:]` raises TypeError); use `tuple(t.shape)[1:]`.
+- compile() warms both chunk offsets in slot 0 (junk KV there).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py

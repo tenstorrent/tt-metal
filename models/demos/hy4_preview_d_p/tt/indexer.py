@@ -253,8 +253,25 @@ class TtHy4Indexer:
         self.q_chunk, self.k_chunk = (Q_CHUNK, K_CHUNK) if score_impl == "bringup" else (64, K_CHUNK_BF16_DEST)
         self._geoms: dict = {}
         self.geom: _Geometry | None = None
+        self.slot = None  # serving binding (bind_cache); None = the geometry's own single-sequence cache
 
     # ---- load time
+    def bind_cache(self, cache, slot: int, row: int, rows: int) -> None:
+        """Serving option: write / read this layer's index keys in an external multi-slot cache (the prefill
+        engine's, tt/runners/kv_contract.py) instead of the geometry's own. ``cache`` is laid out like the geometry's
+        (init_kvpe_cache, tp_axis=1, same max_seq and chunk) with batch = slot * rows + row. ``unbind_cache``
+        (the default) restores the geometry cache at batch 0."""
+        assert tuple(cache.shape)[1:] == tuple(self.geom.cache.shape)[1:], (cache.shape, self.geom.cache.shape)
+        assert 0 <= row < rows and (slot + 1) * rows <= cache.shape[0], (slot, row, rows, cache.shape)
+        self.slot = (cache, int(slot), int(row), int(rows))
+
+    def unbind_cache(self) -> None:
+        self.slot = None
+
+    def _cache(self):
+        """(cache, slot_idx, layer_idx, num_layers) the chunk writes and gathers."""
+        return self.slot if self.slot is not None else (self.geom.cache, 0, 0, 1)
+
     def setup(self, chunk: int, max_seq: int) -> _Geometry:
         key = (chunk, max_seq)
         if key not in self._geoms:
@@ -307,12 +324,13 @@ class TtHy4Indexer:
             kn = kb
         kr = self._rope(kn, start)
         ttnn.deallocate(kn)
+        cache, slot, row, rows = self._cache()
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            g.cache,
+            cache,
             kr,
-            slot_idx=0,
-            layer_idx=0,
-            num_layers=1,
+            slot_idx=slot,
+            layer_idx=row,
+            num_layers=rows,
             kv_actual_global=start,
             cluster_axis=self.sp_axis,
             tp_axis=self.tp_axis,
@@ -347,13 +365,14 @@ class TtHy4Indexer:
         ttnn.deallocate(wl)
 
         # This SP row's key slab (the two TP stripes, block-cyclic order kept), then the fused ring score over SP.
+        cache, slot, row, rows = self._cache()
         ttnn.experimental.high_bw_all_gather(
-            g.cache,
+            cache,
             dim=2,
             output_tensor=g.k_local,
             num_links=self.num_links,
             cluster_axis=self.tp_axis,
-            input_batch_index=0,
+            input_batch_index=slot * rows + row,
         )
         logits = self.score_op(
             qh_r,

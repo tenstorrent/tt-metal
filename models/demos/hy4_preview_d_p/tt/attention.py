@@ -229,8 +229,25 @@ class TtHy4Attention:
         )
         self._geoms: dict = {}
         self.geom: _Geometry | None = None
+        self.slot = None  # serving binding (bind_cache); None = the geometry's own single-sequence cache
 
     # ---- load time
+    def bind_cache(self, cache, slot: int, row: int, rows: int) -> None:
+        """Serving option: write / read this layer's latent rows in an external multi-slot cache (the prefill
+        engine's, tt/runners/kv_contract.py) instead of the geometry's own. ``cache`` is laid out like the geometry's
+        (init_kvpe_cache, tp_axis=1, same max_seq and chunk) with batch = slot * rows + row. ``unbind_cache``
+        (the default) restores the geometry cache at batch 0."""
+        assert tuple(cache.shape)[1:] == tuple(self.geom.cache.shape)[1:], (cache.shape, self.geom.cache.shape)
+        assert 0 <= row < rows and (slot + 1) * rows <= cache.shape[0], (slot, row, rows, cache.shape)
+        self.slot = (cache, int(slot), int(row), int(rows))
+
+    def unbind_cache(self) -> None:
+        self.slot = None
+
+    def _cache(self):
+        """(cache, slot_idx, layer_idx, num_layers) the chunk writes and gathers."""
+        return self.slot if self.slot is not None else (self.geom.cache, 0, 0, 1)
+
     def setup(self, chunk: int, max_seq: int) -> _Geometry:
         key = (chunk, max_seq)
         if key not in self._geoms:
@@ -283,12 +300,13 @@ class TtHy4Attention:
         ttnn.deallocate(rr)
         kvpe_rm = ttnn.to_layout(kvpe, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
         ttnn.deallocate(kvpe)
+        cache, slot, row, rows = self._cache()
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            self.geom.cache,
+            cache,
             kvpe_rm,
-            slot_idx=0,
-            layer_idx=0,
-            num_layers=1,
+            slot_idx=slot,
+            layer_idx=row,
+            num_layers=rows,
             kv_actual_global=start,
             cluster_axis=self.sp_axis,
             tp_axis=self.tp_axis,
@@ -322,13 +340,14 @@ class TtHy4Attention:
 
         # The populated prefix [0, end) of the block-cyclic cache (whole slabs), from all 4 chips into one
         # replicated scratch (one snake over both axes: FABRIC_2D).
+        cache, slot, row, rows = self._cache()
         kv_all = ttnn.experimental.high_bw_all_gather(
-            g.cache,
+            cache,
             dim=2,
             output_tensor=g.kv_all,
             num_links=self.num_links,
             cluster_axis=None,
-            input_batch_index=0,
+            input_batch_index=slot * rows + row,
             gathered_dim_size=min(g.max_seq, -(-end // g.chunk) * g.chunk),
         )
         q_rm = ttnn.to_layout(q_abs, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)  # the op is ROW_MAJOR only
