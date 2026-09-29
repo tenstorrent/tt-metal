@@ -218,3 +218,20 @@ Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run
   boundary); `attn_norm` added to `DEVICE_STEPS["kda_dense"]`.
 - Gate: PCC 0.999996, rel L2 0.0028, row norm ratio [0.9993, 1.0006], worst row 0.0037 (fp32 CPU reference 0.0023).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attn_norm.py`
+
+## S.kda_dense.03 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc + attn_collapse + attn_norm on device, layer 0). Rewrote it from swap 02's
+test: kept the gated pcc_swap_out and every swap-02 check (block out rel L2 <= 0.01 / ratio [0.97, 1.03], attn_hc
+per-part checks, collapse vs golden / vs CPU same input / layer 1). Added attn_norm checks at the component test's
+limits (rel L2 <= 0.01, per-token ratio [0.98, 1.02], worst row rel <= 0.03), both vs golden attn_norm and vs the CPU
+norm of the device collapse output it actually got. No new sensitivity run: the reason is in the attn_norm
+component review (eps / mean-subtraction bugs hide under rel 0.03) and the known issue that the block out misses norm
+bugs at layer 0.
+Gotcha: the stock test failed on the device at once (bf16 device output into the fp32 CPU KDA attention matmul). The
+test now casts each override's floating output to fp32 (`_f32`).
+Results: reference passes (out 0.999999, norm rel 0.0017). Stub fails (PCC 0, every check). Device passes: out PCC
+0.999997, rel 0.0026, ratio [0.9954, 1.0047]; attn_norm vs golden rel 0.0028 / [0.9991, 1.0005] / worst row 0.0033,
+vs CPU same input 0.0017.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_03_attn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
