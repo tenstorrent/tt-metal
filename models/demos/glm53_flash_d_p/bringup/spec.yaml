@@ -71,7 +71,7 @@ checkpoint:
     "model.language_model.layers.*.mlp.gate.e_score_correction_bias": [288]
     "model.language_model.layers.*.mlp.experts.*.gate_proj.weight": [2048, 4096]
     "model.language_model.layers.*.mlp.experts.*.down_proj.weight": [4096, 2048]
-    "model.language_model.layers.*.hc_attn_fn": "*"
+    "model.language_model.layers.*.hc_attn_fn": [24, 16384]                        # mHC: 2*4 + 4*4 rows, 4*4096 cols
   config:
     num_hidden_layers: 45
     hidden_size: 4096
