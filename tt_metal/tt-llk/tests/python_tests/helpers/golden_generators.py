@@ -4041,6 +4041,19 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         return (flush(t1) / flush(t2)).to(t1.dtype)
 
+    @staticmethod
+    def _div_nan_divisor_16bit_dest(t1, t2, quotient):
+        # What calculate_sfpu_binary_div does today, pinned rather than IEEE. Its 32-bit Dest
+        # path forwards a NaN divisor explicitly; its 16-bit path is in0 * (1/in1) with no such
+        # arm, and the reciprocal of a NaN is +0: the Reciprocal divergence recorded in
+        # test_eltwise_unary_sfpu.py and left unfixed for its cost. So a NaN divisor gives
+        # in0 * 0: zero for a finite dividend, NaN for an infinite or NaN one. Modelled per lane
+        # rather than as an xfail over the variant, so the other lanes stay asserted and a
+        # kernel that starts propagating the NaN fails here.
+        if torch.isnan(t2):
+            return t1.to(torch.float32) * 0.0
+        return quotient
+
     def _gt_int(self, t1, t2):
         return (t1 > t2).to(torch.int32)
 
@@ -4282,6 +4295,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 self.ops[operation](src1_row[i], src2_row[i])
                 for i in range(elements_per_row)
             ]
+
+            if (
+                operation == MathOperation.SfpuElwdiv
+                and model_dest
+                and dest_acc == DestAccumulation.No
+            ):
+                row_values = [
+                    self._div_nan_divisor_16bit_dest(src1_row[i], src2_row[i], v)
+                    for i, v in enumerate(row_values)
+                ]
 
             if model_dest:
                 result_row = torch.tensor(
