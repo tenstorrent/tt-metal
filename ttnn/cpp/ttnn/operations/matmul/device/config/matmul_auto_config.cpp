@@ -148,8 +148,19 @@ bool is_block_float(tt::DataFormat format) {
     }
 }
 
-uint32_t k_depth_limit(const Problem& p, const EmpiricalDefaults& d, Family family) {
-    return std::min(max_in0_block_w(p.Kt, family), d.max_in0_block_w);
+// K block depth limit. The best depth balances a per-K-block cost against the exposed first K block (see
+// EmpiricalDefaults::max_in0_block_w). In 2D each core's first block arrives by multicast: one DRAM read per
+// grid row (A) or column (B) serves every core in it. When a core reads an operand from DRAM by itself (B's slice
+// in 1D in0-mcast, A's rows in 1D in1-mcast, both in Reuse), that read serves only the core, so its first block
+// arrives at the core's share of DRAM bandwidth: roughly a grid side's worth (sqrt(cores)) slower per byte. The
+// balance point scales as 1 / sqrt(fill cost), so those layouts' cap is the 2D one over sqrt(grid side).
+uint32_t k_depth_limit(const Problem& p, const HardwareDesc& hw, const EmpiricalDefaults& d, Family family) {
+    uint32_t cap = d.max_in0_block_w;
+    if (family != Family::Mcast2D) {
+        const double grid_side = std::sqrt(static_cast<double>(hw.grid.x) * hw.grid.y);
+        cap = std::max(1u, static_cast<uint32_t>(d.max_in0_block_w / std::sqrt(grid_side)));
+    }
+    return std::min(max_in0_block_w(p.Kt, family), cap);
 }
 
 }  // namespace
@@ -257,9 +268,9 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 }  // namespace
 
 // 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1 (among
-// blocks at the layout's preferred in0_block_w, if any fit), the work per K step. Ties go to the deeper K block
-// (fewer steps), then the squarer output block (each loaded A and B tile is reused across the block's width and
-// height, so a square block reuses the most for its area).
+// blocks at the layout's preferred in0_block_w, if any fit), the work per K step. Ties go to the larger output
+// block, then the squarer one: the block sets how often A and B are re-sent (each loaded tile is reused across the
+// block's width and height), a first-order traffic cost, while K depth only amortizes per-block overhead.
 std::optional<Blocking> block_2d(
     const Problem& p,
     const HardwareDesc& hw,
@@ -275,7 +286,7 @@ std::optional<Blocking> block_2d(
     for (uint32_t h : divisors_desc(per_core_M)) {
         for (uint32_t w : divisors_desc(per_core_N)) {
             const uint64_t area = static_cast<uint64_t>(h) * w;
-            const uint32_t k_max = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, d, Family::Mcast2D);
+            const uint32_t k_max = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, hw, d, Family::Mcast2D);
             if (best && !rules.prefers_other(best->in0_block_w) &&
                 area * std::max(k_max, rules.k_preferred) < best_product) {
                 break;  // narrower blocks for this h can't win
@@ -292,12 +303,12 @@ std::optional<Blocking> block_2d(
                     continue;
                 }
                 const uint64_t product = area * k;
+                const uint64_t best_area = best ? static_cast<uint64_t>(best->out_block_h) * best->out_block_w : 0;
                 const bool preference = best && rules.prefers(k) != rules.prefers(best->in0_block_w);
-                if (preference
-                        ? rules.prefers(k)
-                        : (!best || product > best_product || (product == best_product && k > best->in0_block_w) ||
-                           (product == best_product && k == best->in0_block_w &&
-                            skew(h, w) < skew(best->out_block_h, best->out_block_w)))) {
+                if (preference ? rules.prefers(k)
+                               : (!best || product > best_product || (product == best_product && area > best_area) ||
+                                  (product == best_product && area == best_area &&
+                                   skew(h, w) < skew(best->out_block_h, best->out_block_w)))) {
                     best = b;
                     best_product = product;
                 }
@@ -335,7 +346,7 @@ std::optional<Blocking> block_1d(
         if (!block_allowed(rules, per_core_N, out_block_w)) {
             return std::nullopt;
         }
-        const uint32_t k_limit = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, d, family);
+        const uint32_t k_limit = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, hw, d, family);
         for (uint32_t k : divisors_desc(p.Kt)) {
             if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
                 continue;
@@ -426,7 +437,7 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw, co
             continue;
         }
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if (single_k_block ? k != p.Kt : k > k_depth_limit(p, d, Family::Reuse)) {
+            if (single_k_block ? k != p.Kt : k > k_depth_limit(p, hw, d, Family::Reuse)) {
                 continue;
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
