@@ -20,14 +20,21 @@ def exchange_convolution_carry(
     selects the caller's initial history at the logical sequence start.
     """
     outgoing = selections.select_outgoing_history(projected_qkv)
-    gathered_outgoing_history = ttnn.all_gather(
-        outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    predecessor = selections.select_predecessor_history(gathered_outgoing_history)
     physical_tail_history = selections.select_local_final_history(
         projected_qkv, tuple(projected_qkv.device().shape)[sequence_parallel_axis]
     )
-    broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
-    candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    final_carry = selections.select_final_history(candidates)
+    # One collective carries both histories side by side: gathering along rows keeps the rank-major
+    # [rank * 3 + row] layout both selections index, so each selection reads its own half.
+    width = outgoing.shape[-1]
+    packed = ttnn.concat([outgoing, physical_tail_history], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    gathered = ttnn.all_gather(
+        packed, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    predecessor = _columns(selections.select_predecessor_history(gathered), 0, width)
+    final_carry = _columns(selections.select_final_history(gathered), width, 2 * width)
     return predecessor, final_carry
+
+
+def _columns(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+    batch, rows, _ = tensor.shape
+    return ttnn.slice(tensor, (0, 0, start), (batch, rows, end), memory_config=ttnn.DRAM_MEMORY_CONFIG)
