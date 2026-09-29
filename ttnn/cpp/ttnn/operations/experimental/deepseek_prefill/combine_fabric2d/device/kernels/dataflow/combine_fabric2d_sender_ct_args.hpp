@@ -91,6 +91,20 @@ struct SenderCtArgs {
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)) {}
+
+    // The ring counters live at hand-placed L1 addresses here, so this kernel owns their lifetime and
+    // must hand the next launch a zeroed pair. Safe only at the very end: the reader's last act was
+    // publishing the CMD_END slot the sender has just drained, so nothing still reads or bumps them.
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_addr);
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
+    }
+    void reset_ring_counters() const {
+        noc_semaphore_set(filled_ptr(), 0);
+        noc_semaphore_set(freed_ptr(), 0);
+    }
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
