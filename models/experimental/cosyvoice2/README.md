@@ -23,6 +23,7 @@ tree yet.
 
 - Each verdict is recorded in [`tests/perf/gates.py`](tests/perf/gates.py). The RTF and token-accuracy gates are
   enforced by tests.
+- A second N150 (2026-09-29) reproduced these figures, with the same tokens and scores.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) has the per-utterance tables and how each figure was produced.
 - [`PERF.md`](PERF.md) has the timing, including start-up.
 

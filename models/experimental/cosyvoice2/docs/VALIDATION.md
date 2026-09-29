@@ -76,6 +76,30 @@ The same protocol, re-run after chunked HiFT (below) and the cap lift, on a new,
   moved by about 0.1 in SIM (93.63 → 93.52 and 98.26 → 98.30).
 - **Token accuracy on this configuration:** 95.94 % over 5,003 positions ("Token accuracy" below).
 
+### Re-verified on a second N150 (2026-09-29)
+
+**The setup.** A different board, KMD 2.9.0 (the runs above used 2.3.0), firmware 19.11.0, and the same commit.
+The reference side was rebuilt from the committed requirements: upstream at `074ca6dc9e80`, the checkpoint at
+revision `eec1ae6c`.
+
+**The regenerated PyTorch reference matches the one above:**
+- the same audio length for every case;
+- the same WER and SIM per case, to 0.01;
+- teacher-forced sequences of the same lengths, 5,003 positions.
+
+**The package's tests:**
+- **The suite:** 204 passed and 3 skipped (the opt-in tracker and the two reference-venv tests), from an empty
+  kernel cache in 73 minutes.
+  - Token accuracy is 95.94 % again.
+  - The chunked-HiFT seam gate reproduced "Chunked HiFT" below to the last printed digit.
+- **The perf test**, in its own process, passed: worst 0.634, aggregate 0.479. It compiled 5,214 binaries: its
+  process allocates differently from the suite's, so this start-up was neither cold nor warm.
+
+**The demo** (Stage 1 protocol), on the kernel cache the perf test left:
+- 0 binaries compiled; the warm-up took 182.3 s;
+- the same tokens as the table above, and the same scores: WER 0.68 %, SIM 95.87;
+- RTF 0.436–0.620, aggregate 0.476.
+
 ## Stage 1 under the protocol: distinct utterances, warmed buckets (2026-09-28, before chunked HiFT)
 
 `demo/demo.py --inputs <prepare_inputs dir> --out <dir>`: the reported configuration, `--warmup buckets`, seed 1986.
