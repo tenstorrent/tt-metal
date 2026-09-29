@@ -14,6 +14,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -103,6 +104,13 @@ constexpr uint32_t sliding_q_plan_max_source_ranges =
         ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops, 1);
 #endif
 
+// Set by ring joint SDPA: put the local slab first only when the halo spans several hops (see the program factory).
+#ifdef SLIDING_LOCAL_FIRST
+constexpr bool sliding_local_first = SLIDING_LOCAL_FIRST;
+#else
+constexpr bool sliding_local_first = false;
+#endif
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -185,6 +193,8 @@ struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
     // K chunks the last single-Q-chunk sdpa_ring_v2 call accumulated (0: it left no state in prev).
     uint32_t last_call_k_chunks = 0;
+    // Sliding only: work items in the last Q chunk's plan, which a K split divides into bands.
+    uint32_t sliding_plan_k_chunks = 0;
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
@@ -2486,7 +2496,10 @@ void sdpa_ring_v2(
     [[maybe_unused]] const RotatedQSlots& rotated_slots = {},
     // K split only: the local K chunks this core attends to (the reader skips the same).
     const uint32_t k_split_begin = 0,
-    const uint32_t k_split_end = 0xFFFFFFFFu) {
+    const uint32_t k_split_end = 0xFFFFFFFFu,
+    // Sliding K split only: this core's band of the work plan (ring_joint_ksplit.hpp).
+    const uint32_t sliding_split_idx = 0,
+    const uint32_t sliding_split_count = 1) {
     init_sdpa_streaming_semaphores();
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2699,13 +2712,17 @@ void sdpa_ring_v2(
                 Sk_chunk_t,
                 logical_nt,
                 circular_kv_slab_count,
-                kv_pad_rotation_enabled ? &q_mapping : nullptr);
+                kv_pad_rotation_enabled ? &q_mapping : nullptr,
+                sliding_local_first && sliding_split_count == 1);
             ASSERT(sliding_q_plan.is_valid);
+            acc_state.sliding_plan_k_chunks = sliding_q_plan.total_k_chunk_count;
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }
         // Per-Q pre-scan: count K chunks that will actually be processed.
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
-        uint32_t per_q_valid_kv = has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0;
+        const auto sliding_band = ttnn::operations::transformer::sdpa::ring_joint::sliding_ksplit_range(
+            sliding_q_plan.total_k_chunk_count, sliding_split_idx, sliding_split_count);
+        uint32_t per_q_valid_kv = has_sliding_window ? sliding_band.end - sliding_band.begin : 0;
         for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
             const uint32_t source_ring_id = ring_id;
             const uint32_t source_k_chunk = k;
@@ -2742,8 +2759,8 @@ void sdpa_ring_v2(
 
         uint32_t KV_chunks_processed = 0;
 
-        const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
-        for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
+        const uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : num_kv_chunks;
+        for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
             // Circular cache: the mask's K origin is the plan's absolute K-chunk index (inverting local
             // cache rows is ambiguous once several chunk groups alias one local slab); unbounded caches
