@@ -330,7 +330,7 @@ def synthetic_engram_rows(
     """Rows ``rows`` of the synthetic Engram table of checkpoint layer ``layer_id``, in the table format
     (float8_e4m3fn [n, head_dim], E8M0 [n, head_dim/32]). Each row is N(0, 1) (as testing.init_weights
     draws tables) from its own generator, so it depends only on (seed, layer, row)."""
-    w = torch.empty(len(rows), head_dim)
+    w = torch.empty(len(rows), head_dim, dtype=torch.float32)  # independent of the caller's default dtype
     for i, r in enumerate(rows.tolist()):
         row_seed = _unit_seed(seed, f"layers.{layer_id}.engram.embed.{r}")
         torch.randn(head_dim, generator=torch.Generator().manual_seed(row_seed), out=w[i])

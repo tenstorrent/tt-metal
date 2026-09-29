@@ -96,7 +96,6 @@ def engram_case(
     started = time.time()
     with torch.inference_mode():
         ids = model.engram_hash(tokens[None], 0, None if mask is None else mask[None])[0, :, engram.layer_hash_index]
-    # outside set_dtype, as oracle.load_engram_rows: synthetic rows are drawn in the default dtype
     table = _load_rows(engram.embed, spec.seed, spec.layer_ids[0], ids)
     with v41.set_dtype(torch.bfloat16), torch.inference_mode():
         rows = engram.embed(ids).flatten(-2)
