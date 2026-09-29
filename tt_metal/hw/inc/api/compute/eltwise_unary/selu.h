@@ -6,15 +6,12 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_selu.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Performs element-wise computation of selu = scale * (max(0,x) + min(0, alpha * (exp(x)-1))), where x is each
@@ -44,6 +41,7 @@ ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
         alpha));
 }
 
+#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
     PACK(SFPU_UNARY_CALL(
@@ -56,13 +54,15 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
         scale,
         alpha));
 }
+#endif
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 
+#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
-#endif  // !ARCH_QUASAR
+#endif
 
 }  // namespace ckernel

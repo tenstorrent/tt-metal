@@ -6,19 +6,16 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_softsign.h"
 #include "ckernel_sfpu_softshrink.h"
 #include "ckernel_sfpu_hardshrink.h"
 #include "ckernel_sfpu_celu.h"
 #include "ckernel_sfpu_activations.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
 // clang-format off
 /**
 * Performs element-wise hardsigmoid operation. The DST
@@ -42,6 +39,7 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
         VectorMode::RC));
 }
 
+#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -51,13 +49,16 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
+#endif
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
+#ifndef ARCH_QUASAR  // Quasar has no pack-thread SFPU
 ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+#endif
 
 // clang-format off
 /**
@@ -177,6 +178,5 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void hardshrink_tile_init() { MATH(SFPU_UNARY_INIT(hardshrink)); }
-#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

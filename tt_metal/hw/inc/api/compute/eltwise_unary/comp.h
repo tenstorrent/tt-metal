@@ -13,13 +13,13 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #else
 #include "ckernel_sfpu_comp.h"
+#include "ckernel_sfpu_unary_comp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 #endif
 
 namespace ckernel {
 
-#ifndef ARCH_QUASAR
 // unary ne : if x != value --> 1.0, else 0.0
 // clang-format off
 /**
@@ -62,6 +62,7 @@ ALWI void unary_ne_tile_init() { MATH(SFPU_UNARY_INIT(unary_ne)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR  // the int32 unary compare kernel is not ported to Quasar
 ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -72,6 +73,7 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+#endif
 
 // unary eq : if x == value --> 1.0, else 0.0
 // clang-format off
@@ -115,6 +117,7 @@ ALWI void unary_eq_tile_init() { MATH(SFPU_UNARY_INIT(unary_eq)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR  // the int32 unary compare kernel is not ported to Quasar
 ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -125,6 +128,7 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+#endif
 
 // unary gt : if x > value --> 1.0, else 0.0
 // clang-format off
@@ -168,6 +172,7 @@ ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_INIT(unary_gt)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR  // the int32 unary compare kernel is not ported to Quasar
 ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -178,6 +183,7 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+#endif
 
 // unary ge : if x >= value --> 1.0, else 0.0
 // clang-format off
@@ -221,6 +227,7 @@ ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_INIT(unary_ge)); }
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR  // the int32 unary compare kernel is not ported to Quasar
 ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -231,6 +238,7 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+#endif
 
 // unary lt : if x < value --> 1.0, else 0.0
 // clang-format off
@@ -269,6 +277,7 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR  // the int32 unary compare kernel is not ported to Quasar
 ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -279,6 +288,7 @@ ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+#endif
 
 /**
  * Please refer to documentation for any_init.
@@ -322,6 +332,7 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR  // the int32 unary compare kernel is not ported to Quasar
 ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -332,12 +343,12 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
         VectorMode::RC,
         param0));
 }
+#endif
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
-#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
