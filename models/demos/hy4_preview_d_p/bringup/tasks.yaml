@@ -2321,6 +2321,13 @@ tasks:
     - ffn_hc
     - ffn_hc_pre
     layer: 2
+  frozen:
+    at: '2026-09-29T19:36:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py: 7a3efbc53a82bee8307bce8de40186dae529c87761aa9109db07e39b384117af
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_shared.ffn_norm
   title: moe_shared ffn_norm (norm) on device, layer 2
   step: implement
