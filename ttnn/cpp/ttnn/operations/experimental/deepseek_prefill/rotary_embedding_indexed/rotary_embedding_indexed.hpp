@@ -22,6 +22,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 // for every global position it will carry). The op then derives the chunk's start row in that
 // shard the same way the per-chip kv-cache writer derives its `update_idxt`, so the boundary chip's
 // older-then-wrap token layout is read with a single contiguous offset.
+// Optional seq_subshard_axis subdivides input query rows along the other mesh axis. Cos/sin remain
+// replicated there. The caller must supply input equivalent to an exact mesh_partition of the full
+// SP slab along dim=-2 and seq_subshard_axis, and cos/sin built for
+// chunk_local = input sequence length * subshard axis size. These layout preconditions cannot be
+// validated by the op; replicated or differently partitioned input, or mismatched cache slab geometry,
+// produces incorrect per-rank rotation offsets without an error. The reader derives the original
+// rotated SP offset before adding this rank's query window within the slab.
 //
 // `kv_actual_global` (tokens, tile-aligned) stays out of the program hash, so successive chunks reuse
 // one cached program. Returns a new tensor with the same spec as `input`. Two call forms (identical
@@ -37,7 +44,8 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<uint32_t>& seq_subshard_axis = std::nullopt);
 
 // (2) Tensor form (traceable): `kv_actual_global` is its OWN 1-element uint32 DRAM tensor that the reader
 //     reads on-device (element [0]). Off the host dispatch path, so one captured program replays across
@@ -50,7 +58,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<uint32_t>& seq_subshard_axis = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed
 

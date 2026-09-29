@@ -320,13 +320,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(fused_stream_k ? 1u : 0u);        // fused: stream k (no mcast) vs whole mcast block
     reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
     reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
+    // invP KEY remap: keyed on key_stripes()/key_stripe_chunk(), NOT block_cyclic->{sp, chunk_local} -- under KV
+    // dedup the keys are striped finer than the queries, and the causal geometry above stays on the query pair.
     const auto block_cyclic_ct = [&args, Tt]() {
         std::array<uint32_t, 5> ct{0, 1, 1, 0, 0};
         if (!args.has_block_cyclic()) {
             return ct;
         }
-        const uint32_t sp = args.block_cyclic->sp;
-        const uint32_t chunk_local = args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH;
+        const uint32_t sp = args.key_stripes();
+        const uint32_t chunk_local = args.key_stripe_chunk() / tt::constants::TILE_WIDTH;
         ct = {
             1,
             chunk_local,
@@ -337,6 +339,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // Keep the shared reader's full-mesh rank-mapping CT tail canonical for the classic path.
+    reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
+    reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
+    reader_ct.push_back(1u);  // unused physical SP size
+    // Chunk-start metadata is fused-ring only (validate rejects it here), but the SAME reader binary
+    // serves both factories, so the block must exist on this path too -- an absent compile arg is a hard
+    // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
+    // flag, then a placeholder accessor. Pushed AFTER partial readiness AND after #55617's physical SP
+    // size, matching the reader's meta_ct_base.
+    reader_ct.push_back(0u);
+    // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
+    // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
+    reader_ct.insert(reader_ct.end(), 6, 0u);
+    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    // Cache-slot metadata, same reasoning and the same fixed-width discipline: flag, rt base,
+    // pages-per-slot, mailbox CB, then a placeholder accessor.
+    reader_ct.push_back(0u);
+    reader_ct.insert(reader_ct.end(), 3, 0u);
+    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -344,7 +365,13 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
     const uint32_t out_row_elems = block_pool ? nblocks : T;
     writer_ct.push_back(out_row_elems * out_elem_bytes);
+    writer_ct.push_back(0u);  // shard-major mapping off
+    writer_ct.push_back(1u);  // unused block-cyclic run width
+    writer_ct.push_back(1u);  // unused logical key stripe count
+    writer_ct.push_back(1u);  // unused physical SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
+    writer_ct.push_back(0u);
+    writer_ct.push_back(0u);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -356,6 +383,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(fuse_single ? 1u : 0u);
     compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
     compute_ct.push_back(0u);                        // fused_ring off
+    compute_ct.push_back(0u);                        // shard-major block-cyclic mapping off
+    compute_ct.push_back(1u);                        // unused block-cyclic run width
+    compute_ct.push_back(1u);                        // unused logical key stripe count
+    compute_ct.push_back(1u);                        // unused physical SP size
+    compute_ct.push_back(0u);                        // trace-safe metadata off
+    compute_ct.push_back(0u);                        // metadata CB unused
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(

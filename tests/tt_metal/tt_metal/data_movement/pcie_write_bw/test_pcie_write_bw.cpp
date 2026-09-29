@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -108,7 +108,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeWr
 }  // namespace unit_tests::dm::pcie_write_bw
 
 /* ========== Sweep 1M transactions with varying transaction sizes; Test id = 604 ========== */
-TEST_F(GenericMeshDeviceFixture, PCIeWriteBandwidthSweep) {
+TEST_F(UnitMeshFastDispatchFixture, PCIeWriteBandwidthSweep) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -141,7 +141,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeWriteBandwidthSweep) {
 }
 
 /* ========== Host-side H2D (WriteShard) bandwidth sweep; Test id = 606 ========== */
-TEST_F(GenericMeshDeviceFixture, PCIeHostWriteBandwidthSweep) {
+TEST_F(UnitMeshFastDispatchFixture, PCIeHostWriteBandwidthSweep) {
     // Remove GTEST_SKIP to run the test
     GTEST_SKIP() << "Skipping: CLI timeout with large iteration count";
     auto mesh_device = get_mesh_device();

@@ -110,10 +110,12 @@ cases:
   Dropping it manufactures pairs across unlike configurations and charges their
   combined difference to `P`.
 
-Quasar matmul is the standing example: `matmul_dimensions()` halves the
-destination tile budget when `dest_acc=Yes`, so geometry is not free to match
-across `dest_acc`. Pairing while ignoring geometry compares different shapes
-and calls the difference a `dest_acc` effect.
+Quasar matmul is the standing example: `matmul_dimensions()` still halves the
+destination tile budget when `dest_acc=Yes`. Perf keeps dest-full tall and
+wide (`(1, max_tiles)` and `(max_tiles, 1)` × `kt={1, 4}`), so dest_acc=No
+is an 8-tile grid and dest_acc=Yes is a 4-tile grid. Geometry is not free to
+match across `dest_acc`. Pairing while ignoring geometry compares different
+shapes and calls the difference a `dest_acc` effect.
 
 For a linked axis, do one of the following, in order of preference:
 
@@ -229,20 +231,25 @@ Order the report:
 For matmul-style reports with format, fidelity, and destination-accumulation
 axes, use this design unless the user requests another:
 
-1. Add four clickable fidelity options: `LoFi`, `HiFi2`, `HiFi3`, and `HiFi4`.
+1. Add clickable fidelity options for values the **current sweep actually
+   emits**. Quasar matmul keeps LoFi–HiFi4 for Float16 / Float16_b and
+   LoFi-only for MX; do not show empty HiFi2/3/4 MX panels as if they were
+   measured.
 2. Under the selected fidelity, show absolute cycles by composite
    input/register mode, output format, and geometry/destination accumulation.
+   Geometry labels should name dest-full **tall vs wide** and `kt=1` vs
+   `kt=4`, not the old 12/9 dest-fill factorization set.
 3. Before placing `dest_acc=No` and `Yes` bars side by side, audit whether both
    arms contain identical geometries and other relevant configurations.
 4. If common geometry exists, restrict the split bars to that common support,
    state the reduced coverage, and use the same color for each metric pair with
    `dest_acc` distinguished by opacity or another restrained treatment.
-5. If no common geometry exists, as in the current Quasar matmul sweep, do not
-   split input/register or output-format categories into adjacent `dest_acc`
-   bars. Either omit that split in favor of the geometry chart or use separate
-   panels labeled **observed bundled population: dest_acc + geometry**. Explicitly
-   state that gaps between panels are descriptive and are not a `dest_acc`
-   effect.
+5. If no common geometry exists, as in the current Quasar matmul sweep (8-tile
+   vs 4-tile dest-full), do not split input/register or output-format
+   categories into adjacent `dest_acc` bars. Either omit that split in favor of
+   the geometry chart or use separate panels labeled **observed bundled
+   population: dest_acc + geometry**. Explicitly state that gaps between
+   panels are descriptive and are not a `dest_acc` effect.
 6. In the geometry chart, encode both geometry and destination accumulation in
    the x-axis label. Keep four metric bars per composite category and do not
    split them again.

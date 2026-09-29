@@ -21,6 +21,13 @@ struct DevicePrintMemoryLayout {
 #else
     DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 1> buffer;
 #endif
+#elif defined(COMPILE_FOR_DISPATCH_ENGINE)
+    // Dispatch engine cores are DM-only (no TRISCs), so one buffer covers all 8 processors.
+#if !defined(DEVICE_PRINT_BUFFER_SIZE)
+    DevicePrintBuffer<1632, 8> buffer;
+#else
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 8> buffer;
+#endif
 #else
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
     static constexpr uint32_t buffer_size_triscs = 3264;

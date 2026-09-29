@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -329,7 +328,7 @@ void custom_test(
 
 /* ========== TEST CASES ========== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         // subordinate_core_coord {1, 0} requires at least 2 columns in the compute grid
@@ -357,7 +356,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     unit_tests::dm::core_from_core::packet_sizes_test(mesh_device, test_id, master_core_coord, subordinate_core_coord);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         // subordinate_core_coord {1, 0} requires at least 2 columns in the compute grid
@@ -386,7 +385,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
         mesh_device, test_id, master_core_coord, subordinate_core_coord);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
     uint32_t test_id = 152;
@@ -399,7 +398,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
     );
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneCustom) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 153;
 
@@ -418,7 +417,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
         num_virtual_channels);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     if (device->arch() == ARCH::QUASAR) {
@@ -451,7 +450,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes2_0) {
     unit_tests::dm::core_from_core::packet_sizes_test(mesh_device, test_id, CoreCoord(0, 0), CoreCoord(1, 1));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     if (device->arch() == ARCH::QUASAR) {

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -483,7 +483,7 @@ void grid_packet_sizes_test(
 /* ======== DIRECTED IDEAL ======== */
 
 /* ======== All to All ======== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -502,7 +502,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
 
 /* ======== PACKET SIZES ======== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllPacketSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -520,7 +520,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
 }
 
 /* ======== 2x2 to 1x1 ======== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
     uint32_t test_case_id = 302;
 
     /* Parameters */
@@ -535,7 +535,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal
 }
 
 /* ======== 4x4 to 1x1 ======== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal) {
     uint32_t test_case_id = 303;
 
     /* Parameters */
@@ -550,7 +550,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal
 }
 
 /* ======== 1x1 to 2x2 ======== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal) {
     uint32_t test_case_id = 304;
 
     /* Parameters */
@@ -565,7 +565,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal
 }
 
 /* ======== 1x1 to 4x4 ======== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal) {
     uint32_t test_case_id = 305;
 
     /* Parameters */
@@ -580,7 +580,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal
 }
 
 /* ======== 2x2 to 2x2 ======== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal) {
     uint32_t test_case_id = 306;
 
     /* Parameters */
@@ -596,7 +596,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal
 
 /* ======== VIRTUAL CHANNELS ======== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllVirtualChannels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 307;
@@ -604,7 +604,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllVirtualChannels) {
     unit_tests::dm::all_to_all::virtual_channels_test(get_mesh_device(), test_case_id);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllCustom) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllCustom) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 308;
@@ -618,7 +618,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllCustom) {
         get_mesh_device(), test_case_id, num_of_transactions, pages_per_transaction, num_virtual_channels);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllPacketSizes2_0) {
     uint32_t test_id = 309;
 
     auto mesh_device = get_mesh_device();
@@ -642,7 +642,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes2_0) {
         mesh_device, test_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllDirectedIdeal_2_0) {
     uint32_t test_id = 310;
 
     auto mesh_device = get_mesh_device();
@@ -707,29 +707,29 @@ void all_to_all_grid_directed_ideal_2_0(
 }
 }  // namespace
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal_2_0) {
     all_to_all_grid_directed_ideal_2_0(get_mesh_device(), 311, {0, 0}, {4, 4}, {2, 2}, {1, 1});
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal_2_0) {
     all_to_all_grid_directed_ideal_2_0(get_mesh_device(), 312, {0, 0}, {0, 0}, {4, 4}, {1, 1});
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal_2_0) {
     all_to_all_grid_directed_ideal_2_0(get_mesh_device(), 313, {0, 0}, {4, 4}, {1, 1}, {2, 2});
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal_2_0) {
     all_to_all_grid_directed_ideal_2_0(get_mesh_device(), 314, {0, 0}, {0, 0}, {1, 1}, {4, 4});
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal_2_0) {
     all_to_all_grid_directed_ideal_2_0(get_mesh_device(), 315, {0, 0}, {0, 0}, {2, 2}, {2, 2});
 }
 
 /* ======== GRID + PACKET SIZE SWEEP ======== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllGridSweepPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllGridSweepPacketSizes2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_device(0);
     auto grid = device->compute_with_storage_grid_size();

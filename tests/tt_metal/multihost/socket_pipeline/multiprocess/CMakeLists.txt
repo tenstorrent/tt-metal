@@ -32,3 +32,7 @@ endfunction()
 setup_metal_pipeline_test(unit_tests_single_host_pipeline single_host_pipeline_tests.cpp)
 # Metal-level multi-host pipeline test (closet box + single galaxy)
 setup_metal_pipeline_test(unit_tests_pipeline multi_host_pipeline.cpp)
+
+# Reuse the shared test PCH (gtest + heavy tt-metalium headers).
+target_precompile_headers(unit_tests_single_host_pipeline REUSE_FROM metal_test_pch)
+target_precompile_headers(unit_tests_pipeline REUSE_FROM metal_test_pch)

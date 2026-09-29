@@ -28,7 +28,7 @@ target_link_libraries(
 )
 
 TT_ENABLE_UNITY_BUILD(unit_tests_api_lib)
-target_precompile_headers(unit_tests_api_lib REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_api_lib REUSE_FROM metal_test_pch)
 
 # Create the test executable
 add_executable(unit_tests_api)
@@ -67,7 +67,7 @@ target_link_libraries(
         Boost::smart_ptr
 )
 TT_ENABLE_UNITY_BUILD(unit_tests_tensor_lib)
-target_precompile_headers(unit_tests_tensor_lib REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_tensor_lib REUSE_FROM metal_test_pch)
 
 add_executable(unit_tests_tensor)
 target_link_libraries(unit_tests_tensor PRIVATE unit_tests_tensor_lib)
@@ -78,21 +78,26 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 
-# Per-core allocation tests need their own binary so TT_METAL_ALLOCATOR_MODE_HYBRID
-# env var is set before the RunTimeOptions singleton caches it.
-add_executable(unit_tests_per_core_allocation allocator/test_per_core_allocation.cpp)
+# One binary for every suite that needs TT_METAL_ALLOCATOR_MODE_HYBRID set before the
+# RunTimeOptions singleton caches it, so they can all be run in one go.
+add_executable(
+    unit_tests_hybrid_allocator
+    allocator/test_per_core_allocation.cpp
+    allocator/test_range_lockstep_allocation.cpp
+    allocator/test_range_lockstep_allocation_host.cpp
+)
 target_include_directories(
-    unit_tests_per_core_allocation
+    unit_tests_hybrid_allocator
     BEFORE
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${PROJECT_SOURCE_DIR}
 )
-target_link_libraries(unit_tests_per_core_allocation PRIVATE test_metal_common_libs)
-target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_common_pch)
+target_link_libraries(unit_tests_hybrid_allocator PRIVATE test_metal_common_libs)
+target_precompile_headers(unit_tests_hybrid_allocator REUSE_FROM metal_test_pch)
 set_target_properties(
-    unit_tests_per_core_allocation
+    unit_tests_hybrid_allocator
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
@@ -116,7 +121,7 @@ target_link_libraries(
         test_metal_common_libs
         Boost::smart_ptr
 )
-target_precompile_headers(dfb_init_timing_bench REUSE_FROM metal_common_pch)
+target_precompile_headers(dfb_init_timing_bench REUSE_FROM metal_test_pch)
 set_target_properties(
     dfb_init_timing_bench
     PROPERTIES
@@ -143,7 +148,7 @@ if(TT_METAL_USE_EMULE)
             ${TT_EMULE_PATH}/include
     )
     target_link_libraries(unit_tests_fiber_asan PRIVATE test_metal_common_libs)
-    target_precompile_headers(unit_tests_fiber_asan REUSE_FROM metal_common_pch)
+    target_precompile_headers(unit_tests_fiber_asan REUSE_FROM metal_test_pch)
     target_link_options(unit_tests_fiber_asan PRIVATE -rdynamic)
     set_target_properties(
         unit_tests_fiber_asan

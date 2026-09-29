@@ -424,6 +424,12 @@ class SpeculativeDecoder:
             off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
             embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
 
+        # -1, not 0: ``hot_pt`` feeds ``paged_fill_cache`` with no ``valid_seq_len``
+        # cap (see attention/decode.py ``_packed_fill_kv_loopfree_embed``), so its
+        # contract is "-1 = skip". Metal reserves no null page, so a 0 here makes
+        # every idle slot write staging KV into physical page 0 and corrupts the
+        # committed cache. Chunked prefill can pad with 0 because valid_seq_len
+        # bounds that fill; this path has no such bound.
         hot = torch.full((1, BLK), -1, dtype=torch.int32)
         hot[0, 0] = int(self._pv_pages[a])
         if off + P > bs:

@@ -93,6 +93,34 @@ void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const H
     }
 }
 
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    const std::vector<uint32_t>& mem_map_sizes,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name) {
+    assert_kernel_config_no_overlap(
+        mem_map_bases,
+        mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)],
+        free_region_type,
+        core_name);
+}
+
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    uint32_t kernel_config_size,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name) {
+    const DeviceAddr kernel_config_base = mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)];
+    const DeviceAddr free_region_base = mem_map_bases[static_cast<std::size_t>(free_region_type)];
+    TT_FATAL(
+        free_region_base >= kernel_config_base + kernel_config_size,
+        "{} free region base {} overlaps KERNEL_CONFIG [{}, {})",
+        core_name,
+        free_region_base,
+        kernel_config_base,
+        kernel_config_base + kernel_config_size);
+}
+
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
     uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
 

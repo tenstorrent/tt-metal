@@ -54,6 +54,7 @@ void SGD::step() {
         auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
 
         std::optional<ttnn::Tensor> momentum_buffer;
+        bool first_momentum_update = false;
         if (m_config.momentum > 0.0) {
             auto it = m_momentum.find(name);
             if (it == m_momentum.end()) {
@@ -62,11 +63,13 @@ void SGD::step() {
                     /* requires_grad */ false);
                 it = m_momentum.emplace(name, std::move(buf)).first;
             }
+            first_momentum_update = m_momentum_initialized.insert(name).second;
             momentum_buffer = it->second->get_value(autograd::PreferredPrecision::HALF);
         }
 
-        // The first step should not apply dampening
-        float dampening = m_steps == 0 ? 0.0f : m_config.dampening;
+        // A buffer's first update must produce buf = g (PyTorch seeds fresh buffers with the raw
+        // gradient); the buffer is zero at that point, so skipping dampening is sufficient.
+        float dampening = first_momentum_update ? 0.0f : m_config.dampening;
         ttml::metal::sgd(
             param,
             gradients,
@@ -100,6 +103,15 @@ void SGD::set_state_dict(const serialization::StateDict& dict) {
     m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
     m_config.nesterov = serialization::get_value_type<bool>(dict, "nesterov");
     m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
+    // Restored buffers are treated as past their first update. Buffers are preallocated
+    // for every trainable parameter, so a buffer that never received a gradient before the
+    // checkpoint (frozen parameter, or a checkpoint saved before any step) is also marked,
+    // and its first resumed update applies dampening to a zero buffer — an accepted corner
+    // case, since distinguishing it would require serializing this set.
+    m_momentum_initialized.clear();
+    for (const auto& [name, tensor_ptr] : m_momentum) {
+        m_momentum_initialized.insert(name);
+    }
 }
 
 size_t SGD::get_steps() const {

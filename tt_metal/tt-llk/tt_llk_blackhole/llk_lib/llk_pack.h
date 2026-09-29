@@ -13,7 +13,6 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -432,10 +431,10 @@ inline void pack_init_apply(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param face_r_dim: Number of rows per face; sizes the BFP exponent section for partial faces.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
@@ -444,26 +443,12 @@ inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t tile_size,
     const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const bool partial_face        = false,
+    const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    llk::san::pack_operand_configure<true>(
-        is_fp32_dest_acc_en, pack_src_format, pack_dst_format, llk::san::IGNORE, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
-
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
-}
-
-/**
- * @brief Enable or disable reading the destination register as 32-bit data for the packer.
- *
- * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
- * @note Stalls on the pack pipe before modifying the PCK_DEST_RD_CTRL config register.
- */
-inline void _llk_pack_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face, face_r_dim);
 }
 
 /**
@@ -497,9 +482,6 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-
-    // sstanisic todo: partial face, narrow tile are weird (see #47440)
-    llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
@@ -562,9 +544,6 @@ inline void _llk_pack_init_(
         LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
     }
 
-    llk::san::pack_operand_check(llk::san::IGNORE, pack_src_format, llk::san::IGNORE, face_r_dim, tile_c_dim, num_faces, llk::san::IGNORE, llk::san::IGNORE);
-    llk::san::operation_init<llk::san::Operation::Pack>();
-
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
@@ -589,9 +568,6 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
-    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
-    // llk::san::operation_uninit<llk::san::Operation::Pack>();
-
     // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
@@ -617,8 +593,6 @@ inline void _llk_pack_uninit_()
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
-    llk::san::operation_check<llk::san::Operation::Pack>();
-
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
     static_assert(

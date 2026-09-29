@@ -5,7 +5,9 @@
 #pragma once
 
 #include <stdint.h>
-#include <limits>
+#include <cstddef>
+#include <type_traits>
+#include <utility>
 #include "noc_parameters.h"
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"

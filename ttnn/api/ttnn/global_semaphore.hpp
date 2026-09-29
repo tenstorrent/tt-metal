@@ -8,10 +8,6 @@
 
 namespace ttnn::global_semaphore {
 
-// Single Device Creation API
-GlobalSemaphore create_global_semaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
-
 // MeshDevice Creation API
 GlobalSemaphore create_global_semaphore(
     MeshDevice* mesh_device,

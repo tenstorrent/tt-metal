@@ -97,7 +97,7 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
     cb_reserve_back(packet_header_cb_id, 1);
-    uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
+    uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);

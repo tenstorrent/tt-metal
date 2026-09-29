@@ -1,0 +1,11 @@
+{
+  "env": {
+    "PREFILL_MODEL": "llama_3p1_8b",
+    "PREFILL_NUM_LAYERS": "32",
+    "PREFILL_SP": "4",
+    "PREFILL_TP": "8",
+    "PREFILL_CHUNK_SIZE": "1024",
+    "PREFILL_MAX_SEQ_LEN": "2048",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32"
+  }
+}

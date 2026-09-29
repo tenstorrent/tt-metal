@@ -93,6 +93,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
+    bool is_quasar = (input.device()->arch() == tt::ARCH::QUASAR);
 
     if (input.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_data_format);
@@ -175,7 +176,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
-    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
+    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned) {
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
         // This is done to mitigate the alignment issues.
         // See issue #34414.
@@ -355,7 +356,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             bool aligned = false;
             if (src_is_dram) {
                 aligned = (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0);
-            } else if (is_blackhole) {
+            } else if (is_blackhole || is_quasar) {
                 aligned = (curr_idx_w % l1_alignment == 0) && (padded_offset_bytes % l1_alignment == 0);
             } else {
                 aligned = true;
@@ -365,7 +366,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             uint32_t aligned_offset = 0;
             if (!aligned) {
                 // TODO: is this right, leaving non BH case the same for now, should investigate
-                if (!is_blackhole) {
+                if (!(is_blackhole || is_quasar)) {
                     aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
                 } else {
                     if (src_is_dram) {

@@ -73,8 +73,8 @@ operations:
   # Step 1: E[x] partial reduce — row-reduce(AVG) the input
   - math:
       - type: "Fpu"
-        src_a: "x"
-        src_b: "scaler"
+        in0: "x"
+        in1: "scaler"
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
@@ -90,8 +90,8 @@ operations:
   # Step 2: x - E[x] — subtract mean (broadcast col)
   - math:
       - type: "Fpu"
-        src_a: "x"
-        src_b: "ex_partial"
+        in0: "x"
+        in1: "ex_partial"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
@@ -105,8 +105,8 @@ operations:
   # Step 3: (x - E[x])^2 — self-multiply
   - math:
       - type: "Fpu"
-        src_a: "xmm"
-        src_b: "xmm"
+        in0: "xmm"
+        in1: "xmm"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "HiFi4"
@@ -118,8 +118,8 @@ operations:
   # Step 4: Var(x) partial reduce — row-reduce(AVG) the squared deviations
   - math:
       - type: "Fpu"
-        src_a: "xmm2"
-        src_b: "scaler"
+        in0: "xmm2"
+        in1: "scaler"
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
@@ -135,8 +135,8 @@ operations:
   # Step 5: 1/sqrt(Var + eps) — add eps then rsqrt
   - math:
       - type: "Fpu"
-        src_a: "var_partial"
-        src_b: "eps"
+        in0: "var_partial"
+        in1: "eps"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
@@ -151,8 +151,8 @@ operations:
   # Step 6: (x - E[x]) * 1/sqrt(Var+eps) — normalize (broadcast col)
   - math:
       - type: "Fpu"
-        src_a: "xmm"
-        src_b: "ex2pe"
+        in0: "xmm"
+        in1: "ex2pe"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
@@ -166,8 +166,8 @@ operations:
   # Step 7: normalized * gamma — scale (broadcast row)
   - math:
       - type: "Fpu"
-        src_a: "normalized"
-        src_b: "gamma"
+        in0: "normalized"
+        in1: "gamma"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
@@ -180,8 +180,8 @@ operations:
   # Step 8: gamma_out + beta — bias (broadcast row)
   - math:
       - type: "Fpu"
-        src_a: "gamma_out"
-        src_b: "beta"
+        in0: "gamma_out"
+        in1: "beta"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"

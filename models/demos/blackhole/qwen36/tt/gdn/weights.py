@@ -77,15 +77,15 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
     norm_eps = config.norm_eps
 
     def load_weight_2d(name):
-        """Load 2D weight, transpose to [in, out] for ttnn.linear."""
-        t = state_dict[name].T.contiguous()
+        """Load 2D weight, transposed to [in, out] for ttnn.linear (on a tensor-cache miss only)."""
         return ttnn.as_tensor(
-            t,
+            state_dict[name],
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"linear_attn.{name}") if tensor_cache_path else None,
+            preprocess=lambda t: t.T.contiguous(),
         )
 
     def load_conv_weight(name):
@@ -112,14 +112,14 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
             f"DeltaNet layer requires the combined qkv_proj weight "
             f"(key '{qkv_key}' missing; the split q/k/v_proj were removed in the weight refactor)."
         )
-    t = state_dict[qkv_key].T.contiguous()  # [4096, 8192]
     qkv_proj_weight = ttnn.as_tensor(
-        t,
+        state_dict[qkv_key],
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=(tensor_cache_path / "linear_attn.qkv_proj.weight") if tensor_cache_path else None,
+        preprocess=lambda t: t.T.contiguous(),  # [4096, 8192]; cache-miss only
     )
     # The split q/k/v_proj are dead (the op runs the fused QKV from the combined weight; it
     # reads the splits only in a fallback reached when qkv_proj_weight is None). Not created,

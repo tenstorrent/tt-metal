@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::detail {
 CoreType resolve_dispatch_core_type(
@@ -17,22 +15,6 @@ CoreType resolve_dispatch_core_type(
 }  // namespace tt::tt_metal::detail
 
 namespace tt::tt_metal {
-
-DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
-    // All internal callers should use resolve_dispatch_core_axis(arch, fabric_tensix_config) instead.
-
-    // Check if the instance exists to prevent implicit init of a second cluster
-    // if we already have one in MetalEnv
-    // TOOD: https://github.com/tenstorrent/tt-metal/issues/39974
-    if (MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-            if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
-                return DispatchCoreAxis::COL;
-            }
-        }
-    }
-    return DispatchCoreAxis::ROW;
-}
 
 DispatchCoreAxis resolve_dispatch_core_axis(
     const DispatchCoreConfig& config, tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config) {
@@ -44,6 +26,19 @@ DispatchCoreAxis resolve_dispatch_core_axis(
         return DispatchCoreAxis::COL;
     }
     return DispatchCoreAxis::ROW;
+}
+
+DispatchCoreConfig resolve_dispatch_core_config(
+    tt::ARCH arch,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    std::optional<DispatchCoreType> type,
+    std::optional<DispatchCoreAxis> axis) {
+    const auto resolved_type = type.value_or(DispatchCoreType::WORKER);
+    const auto resolved_axis = axis.value_or(
+        arch == tt::ARCH::BLACKHOLE && fabric_tensix_config == tt_fabric::FabricTensixConfig::DISABLED
+            ? DispatchCoreAxis::COL
+            : DispatchCoreAxis::ROW);
+    return DispatchCoreConfig{resolved_type, resolved_axis};
 }
 
 CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
@@ -59,14 +54,12 @@ CoreType resolve_dispatch_core_type(
     return ::tt::tt_metal::detail::resolve_dispatch_core_type(env, device_id, dispatch_core_config);
 }
 
-DispatchCoreConfig get_dispatch_core_config() {
-    // Check if the instance exists to prevent implicit init of a second cluster
-    // if we already have one in MetalEnv
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-    if (MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    }
-    return DispatchCoreConfig();
+CoreType resolve_dispatch_core_type(tt::ARCH arch, DispatchCoreType dispatch_core_type) {
+    TT_FATAL(
+        arch != tt::ARCH::QUASAR,
+        "Offline dispatch-core resolution is not implemented for Quasar; DISPATCH vs WORKER "
+        "depends on the SoC descriptor and TT_METAL_TENSIX_DISPATCH_CORES");
+    return get_core_type_from_config(DispatchCoreConfig{dispatch_core_type});
 }
 
 }  // namespace tt::tt_metal

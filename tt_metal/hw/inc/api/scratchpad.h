@@ -9,33 +9,8 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
-
-// Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
-// The user will never directly interact with this type.
-//
-// The user's host code declares an accessor_name when binding a scratchpad to a kernel.
-// The user then uses that accessor_name to construct a Scratchpad in the kernel code.
-//
-// Usage example:
-//   // (Host code declares "my_scratchpad_name" as the scratchpad accessor name for this kernel.)
-//   // In the kernel code:
-//   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
-//
-// Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
-// kernel_bindings_generated.h.
-class ScratchpadBindingToken {
-public:
-    explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
-        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
-
-private:
-    template <typename T>
-    friend class Scratchpad;
-
-    uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
-    uint32_t size_in_bytes_;  // static per-node size
-};
 
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
@@ -205,4 +180,9 @@ struct noc_traits_t<Scratchpad<T>> {
         static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
     }
 };
+
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v<Scratchpad<T>> = true;
+template <typename T>
+inline constexpr bool is_scratchpad_v<Scratchpad<T>> = true;
 #endif  // !defined(COMPILE_FOR_TRISC)

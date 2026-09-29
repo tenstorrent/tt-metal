@@ -213,7 +213,11 @@ def run(
             # Best-effort: tolerate this failure so the sweep can continue.
             pass
         out = ttnn.transpose(tensor_a, dim0, dim1, **kw)
-        return mesh_tensor_to_torch(out, device if is_mesh_device else None)
+        return mesh_tensor_to_torch(
+            out,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
 
     start_time = start_measuring_time()
     _last_exc = None

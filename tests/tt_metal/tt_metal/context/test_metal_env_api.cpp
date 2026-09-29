@@ -198,16 +198,7 @@ TEST(MetalEnv, AccessorFabricConfigMatchesDescriptor) {
     EXPECT_EQ(accessor.get_fabric_udm_mode(), tt_fabric::FabricUDMMode::ENABLED);
 }
 
-// --- Control plane and system mesh tests ---
-
-TEST(MetalEnv, ControlPlaneAccessibleOnMock) {
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
-    MetalEnvDescriptor settings(mock_path);
-    MetalEnv env(settings);
-
-    auto& cp = env.get_control_plane();
-    EXPECT_EQ(cp.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
-}
+// --- System mesh tests ---
 
 TEST(MetalEnv, SystemMeshAccessibleOnMock) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
@@ -218,26 +209,10 @@ TEST(MetalEnv, SystemMeshAccessibleOnMock) {
     EXPECT_GT(mesh.shape().mesh_size(), 0);
 }
 
-TEST(MetalEnv, ControlPlaneReflectsFabricConfig) {
-    FabricConfigDescriptor fc;
-    fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
-
-    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2);
-    MetalEnvDescriptor settings(mock_path, fc);
-    MetalEnv env(settings);
-
-    auto& cp = env.get_control_plane();
-    EXPECT_EQ(cp.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
-}
-
-TEST(MetalEnv, ControlPlaneAndSystemMeshSameEnv) {
+TEST(MetalEnv, SystemMeshSameEnv) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2);
     MetalEnvDescriptor settings(mock_path);
     MetalEnv env(settings);
-
-    auto& cp1 = env.get_control_plane();
-    auto& cp2 = env.get_control_plane();
-    EXPECT_EQ(&cp1, &cp2);
 
     auto& mesh1 = env.get_system_mesh();
     auto& mesh2 = env.get_system_mesh();
@@ -257,7 +232,7 @@ TEST(MetalEnv, ReconfigureFabricForDispatch) {
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
 
-    auto& cp_before = env.get_control_plane();
+    auto& cp_before = accessor.get_control_plane();
     EXPECT_EQ(cp_before.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
 
     auto& mesh_before = env.get_system_mesh();
@@ -269,7 +244,7 @@ TEST(MetalEnv, ReconfigureFabricForDispatch) {
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
 
-    auto& cp_after = env.get_control_plane();
+    auto& cp_after = accessor.get_control_plane();
     EXPECT_EQ(cp_after.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
     EXPECT_NE(cp_ptr_before, &cp_after);
 

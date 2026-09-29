@@ -5,7 +5,8 @@
 // sparse_sdpa writer: per token, drain the untilized [H, V_DIM] row-major block from compute (Sqt*vDHt
 // tile-sized pages, row-major bytes inside) and write each head-row to the ROW-MAJOR [1,H,S,V_DIM] output.
 // Also builds the three persistent compute-input tiles once at startup (the reader is busier): the reduce
-// identity scaler, the col-identity (row-sum finalize), and the all-(-inf) mask tile.
+// identity scaler, the col-identity (row-sum finalize), and the all-(-inf) mask tile. Optional per-head
+// attention sinks are gathered once here too, while the reader loads Q and indices.
 // Uses the object-based NoC + circular-buffer APIs.
 
 #include <stdint.h>
@@ -43,15 +44,13 @@ void kernel_main() {
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KACK);
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PACKED_ROW_BYTES);
-    constexpr uint32_t cb_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK);
-    constexpr bool use_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::USE_SINK) != 0;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_ATTENTION_SINK);
+    constexpr uint32_t cb_sink_scratch = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK_SCRATCH);
     constexpr auto out_args = TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, 0>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
-    // attention sink [1,1,H,32] bf16 TILE (always described so the arg layout is fixed; read only when use_sink)
-    constexpr auto sink_args =
-        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t tok_start = get_arg_val<uint32_t>(1);
@@ -59,7 +58,6 @@ void kernel_main() {
     const uint32_t kv_addr = get_arg_val<uint32_t>(3);  // dual-NoC K-half gather
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(4);
-    const uint32_t sink_addr = get_arg_val<uint32_t>(5);  // attention sink tensor (0 when unused)
 
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
     constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
@@ -103,21 +101,38 @@ void kernel_main() {
         neginf_cb.push_back(1);
     }
 
-    // Attention sink column tiles: tile t holds heads [32t, 32t+32) down its rows, the sink logit / scale in
-    // column 0 (the host expands it across the 32 columns). Copied in once; compute reads it for every token
-    // (normalize_row_streaming's column variant) and never pops it.
-    if constexpr (use_sink) {
-        constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;
-        constexpr uint32_t sink_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
-        const auto sink = TensorAccessor(sink_args, sink_addr);
-        experimental::CB sink_cb(cb_sink);
-        sink_cb.reserve_back(Sqt);
-        const uint32_t sink_l1 = sink_cb.get_write_ptr();
-        for (uint32_t t = 0; t < Sqt; ++t) {
-            noc_async_read_page(t, sink, sink_l1 + t * sink_tile_bytes);
+    if constexpr (use_attention_sink) {
+        if (tok_count > 0) {
+            constexpr auto sink_args = TensorAccessorArgs<
+                kv_args.next_compile_time_args_offset(),
+                kv_args.next_common_runtime_args_offset()>();
+            const auto sink = TensorAccessor(sink_args, get_arg_val<uint32_t>(5));
+            experimental::CB sink_cb(cb_attention_sink), scratch(cb_sink_scratch);
+            constexpr uint32_t sink_bytes = H * sizeof(uint16_t);
+            constexpr uint32_t tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
+            constexpr uint32_t faces_per_row = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
+            static_assert(H % tt::constants::TILE_HEIGHT == 0);
+            static_assert(sink_bytes % NOC_DRAM_READ_ALIGNMENT_BYTES == 0);
+            constexpr uint32_t sink_tiles = H / tt::constants::TILE_HEIGHT;
+            sink_cb.reserve_back(sink_tiles);
+            scratch.reserve_back(1);
+            noc.async_write_zeros(sink_cb, sink_tiles * tile_bytes);
+            // [1,1,1,H] BF16 stores all heads in one row. Read once, then pack the scalars
+            // into the first column of the compute tiles (one head per row).
+            noc.async_read(sink, scratch, sink_bytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.write_zeros_l1_barrier();
+            auto* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sink_cb.get_write_ptr());
+            auto* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
+            for (uint32_t h = 0; h < H; ++h) {
+                const uint32_t row = h % tt::constants::TILE_HEIGHT;
+                const uint32_t offset = (h / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HW +
+                                        (row / tt::constants::FACE_HEIGHT) * faces_per_row * tt::constants::FACE_HW +
+                                        (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+                dst[offset] = src[h];
+            }
+            sink_cb.push_back(sink_tiles);  // reused by every token on this core
         }
-        noc_async_read_barrier();
-        sink_cb.push_back(Sqt);
     }
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {

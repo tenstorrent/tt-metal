@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand.h"
@@ -35,13 +36,13 @@
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    [[maybe_unused]] bool acc_to_dest = false,
+    bool acc_to_dest /*maybe_unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
-    const std::uint32_t transpose_of_faces = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t operand = 0) {
+    const std::uint32_t transpose_of_faces,
+    const std::uint32_t within_face_16x16_transpose,
+    const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
@@ -50,11 +51,16 @@ inline void llk_unpack_A_init(
         static_assert(BType == BroadcastType::NONE, "On Quasar, only BroadcastType::NONE is supported for dest reuse");
 
         // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
+        // CB_UNP in the reuse-dest MOP is UNP_B for DEST_TO_SRCA, UNP_A otherwise — program Unp1/Unp0 accordingly
+        constexpr ckernel::trisc::BfdResource engine = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA
+                                                           ? ckernel::trisc::BfdResource::Unp1
+                                                           : ckernel::trisc::BfdResource::Unp0;
+        llk_unpack_program_bfd<engine>(operand_id);
         _llk_unpack_unary_operand_init_<
             p_unpacr::UNP_A,
             false /* TRANSPOSE_EN */,
             false /* IS_32b_DEST_EN */,
-            binary_reuse_dest>(operand_id, tensor_shape, 1);
+            binary_reuse_dest>(ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
     } else {
         if constexpr (BType == BroadcastType::NONE) {
             LLK_ASSERT(
@@ -64,20 +70,22 @@ inline void llk_unpack_A_init(
             // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
             // operand is unpacked to DEST here too when the op writer requested it.
             if constexpr (unpack_to_dest) {
+                llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
                 _llk_unpack_unary_operand_init_<
                     p_unpacr::UNP_DEST,
                     false /*transpose*/,
                     DST_ACCUM_MODE,
                     binary_reuse_dest,
-                    true>(operand_id, tensor_shape, 1);
+                    true>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
                 return;
             }
+            llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
             if (transpose_of_faces && within_face_16x16_transpose) {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest, false>(
-                    operand_id, tensor_shape, 1);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
             } else {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest, false>(
-                    operand_id, tensor_shape, 1);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
             }
         } else {
             static_assert(
@@ -90,7 +98,11 @@ inline void llk_unpack_A_init(
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(operand_id, 1);
+            constexpr ckernel::trisc::BfdResource engine =
+                unpack_to_dest ? ckernel::trisc::BfdResource::Unp0 : ckernel::trisc::BfdResource::Unp1;
+            llk_unpack_program_bfd<engine>(operand_id);
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(
+                ckernel::trisc::bfd_current<engine>(), 1);
         }
     }
 }
@@ -112,7 +124,7 @@ inline void llk_unpack_A_init(
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    [[maybe_unused]] bool acc_to_dest = false,
+    bool acc_to_dest /*maybe_unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
@@ -153,7 +165,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
     BroadcastType BType = BroadcastType::NONE,
-    [[maybe_unused]] bool acc_to_dest = false,
+    bool acc_to_dest /*maybe_unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
@@ -179,6 +191,26 @@ inline void llk_unpack_A_block(
         }
         WAYPOINT("UPAD");
     }
+}
+
+/**
+ * @brief Toggle the unpacker engine to order a POP after its WAIT: STALLWAIT on SrcA-clear then a
+ *        clear-SrcA UNPACR_NOP (no CB read, no DEST write, no pop). Reads nothing from L1.
+ *
+ * Call between llk_wait_tiles and llk_pop_tiles on a buffer that is being drained (by llk_pop_tiles) but
+ * whose data is not needed. Unlike the WH/BH version -- a debug-only SrcA flush with no ordering role --
+ * this is a required Quasar primitive: the UNPACR_NOP is a real unpacker TDMA that orders the POP_TILES
+ * after its WAIT_TILES on dfb_id (TEN-4746 / #48552). Because it reads nothing, PACKER_L1_ACC is
+ * undisturbed. The STALLWAIT ensures SrcA is free before the clear, so it cannot clobber a SrcA bank
+ * still owned by an in-flight op; SrcA is cleared only (the next op re-unpacks it).
+ *
+ * @param dfb_id  The dataflow buffer whose WAIT/POP this orders. Disarms the TEN-4746 tile-counter guard
+ *                that llk_wait_tiles armed for it (llk_pop_tiles asserts the buffer was disarmed).
+ */
+inline void llk_unpack_dummy(const std::uint32_t dfb_id) {
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);
+    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    LLK_TDMA_GUARD_NOTE_TDMA(dfb_id);  // TEN-4746: UNPACR_NOP orders POP after WAIT -> disarm this dfb
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

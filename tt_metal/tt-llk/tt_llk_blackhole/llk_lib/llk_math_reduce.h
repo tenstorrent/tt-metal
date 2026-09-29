@@ -40,7 +40,7 @@ inline void reduce_row_perform_transpose()
     // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
     // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
     // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_mov_ops_zero_flag_state_();
+    math::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_int_fpu_en)
     {
@@ -72,7 +72,7 @@ inline void reduce_row_perform_transpose()
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
 
     // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -255,7 +255,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
-inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
 
@@ -486,6 +486,12 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
+    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
+    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
+    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**

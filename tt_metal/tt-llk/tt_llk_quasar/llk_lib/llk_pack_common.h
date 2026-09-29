@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
 #include "llk_assert.h"
@@ -63,16 +64,19 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
 /**
  * @brief Programs the packer input data format (THCON) for the selected packer and the packer ReLU (mode and threshold).
  *
+ * L1 output encoding is not programmed here: it lives in buffer descriptors, which op inits
+ * program via the per-TRISC allocator (see llk_bfd_alloc.h).
+ *
  * PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ / _llk_pack_srcs_ in
  * llk_srcs.h — do not drive Packer 1 via the llk_pack.h MOP APIs.
  *
  * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1> (PACK0 = math dest -> L1, PACK1 = SrcS -> L1)
  * @tparam EN_32BIT_DEST: Dest register 32-bit/16-bit mode, values = <true/false>
- * @param tdma_desc: Contains destination register format.
+ * @param pack_src_format: Packer input (dest register) data format.
  * @param relu_config: ReLU config (mode + threshold).
  */
 template <std::uint32_t PACK_SEL, bool EN_32BIT_DEST>
-inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc, const ckernel::ReluConfig& relu_config)
+inline void _llk_pack_hw_configure_(const DataFormat pack_src_format, const ckernel::ReluConfig& relu_config)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 
@@ -80,11 +84,11 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc, const ck
     // Program math destination register format
     if constexpr (PACK_SEL == p_pacr::PACK0)
     {
-        cfg_rmw(THCON_PACKER0_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc.reg_data_format));
+        cfg_rmw(THCON_PACKER0_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(pack_src_format));
     }
     else
     {
-        cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc.reg_data_format));
+        cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(pack_src_format));
     }
     _llk_pack_relu_config_<PACK_SEL, EN_32BIT_DEST>(relu_config);
 }
@@ -171,9 +175,6 @@ inline void _llk_pack_dest_dvalid_section_done_()
 template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 {
-    // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
 
     // This register specifies which datums will not have the mask applied
@@ -218,9 +219,6 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
             cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ROW0_MASK_1);
         }
     }
-
-    // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**
@@ -230,9 +228,6 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
  */
 inline void _llk_pack_reduce_mask_clear_()
 {
-    // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-
     // Edge mask mode is disabled
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
 
@@ -241,9 +236,6 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
-
-    // Stall until all config instructions are done
-    TTI_STALLWAIT(p_stall::PACK0, 0, 0, p_stall::TRISC_CFG);
 }
 
 /**

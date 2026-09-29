@@ -31,6 +31,7 @@ on:
           - mixtral-8x7b
           - gpt-oss-20b
           - sdxl
+          - qwenimage
           - vit
           - motif
           - bge_m3

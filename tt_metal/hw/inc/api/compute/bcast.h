@@ -34,7 +34,7 @@ template <BroadcastType bcast_type>
 constexpr DataCopyType unary_bcast_data_copy_type =
     (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
 
-template <BroadcastType bcast_type>
+template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_bcast_init(uint32_t icb) {
     // NOTE: no call_line parameter here — a defaulted call_line would make this 1-arg overload
     // ambiguous with the [[deprecated]] (icb, ocb) full init below. The sentinel still tracks the
@@ -52,11 +52,11 @@ ALWI void unary_bcast_init(uint32_t icb) {
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
             false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, bcast_type>(icb)));
     } else {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
             false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<unary_bcast_data_copy_type<bcast_type>, DST_ACCUM_MODE, bcast_type>(
+        MATH((llk_math_eltwise_unary_datacopy_init<unary_bcast_data_copy_type<bcast_type>, is_fp32_dest_acc_en, bcast_type>(
             icb)));
     }
 #endif
@@ -84,14 +84,14 @@ ALWI void unary_bcast_init(uint32_t icb) {
 template <BroadcastType bcast_type>
 [[deprecated(
     "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then unary_bcast_init(icb). "
-    "The unary_bcast_init(icb, ocb) full init will be removed after September 15th, 2026 (tt-metal#49924).")]]
+    "The unary_bcast_init(icb, ocb) full init will be removed after September 20th, 2026.")]]
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     compute_kernel_hw_startup(icb, ocb);
     unary_bcast_init<bcast_type>(icb);
 }
 
-template <BroadcastType bcast_type>
+template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
@@ -104,12 +104,12 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
         MATH((
-            llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
+            llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, bcast_type, true>(dst_tile_index, icb)));
     } else {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
         MATH((llk_math_eltwise_unary_datacopy<
               unary_bcast_data_copy_type<bcast_type>,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               bcast_type,
               false>(dst_tile_index, icb)));
     }
@@ -155,7 +155,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
 }
 
 #ifndef ARCH_QUASAR
-template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
+template <BroadcastType old_bcast_type, BroadcastType new_bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Switch broadcast operands with the generic reconfig_data_format_srca / reconfig_data_format_srcb + "
     "pack_reconfig_data_format, then unary_bcast_init(new_icb). This will be removed after September 15th, "
@@ -173,7 +173,7 @@ reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, ui
 
     if (unpacker_src_format_change || unpacker_dst_format_change) {
         // Will configure A & B in similar way
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(new_icb)));
+        UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(new_icb)));
     }
 
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
@@ -182,26 +182,27 @@ reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, ui
     }
 
     if (unpacker_dst_format_change) {
-        MATH((llk_math_hw_configure<DST_ACCUM_MODE>(new_icb, new_icb)));
+        MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(new_icb, new_icb)));
     }
 
     if (unpacker_dst_format_change || bcast_type_change) {
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, new_bcast_type>(new_icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, is_fp32_dest_acc_en, new_bcast_type>(new_icb)));
     }
 #endif
 
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_ocb, new_ocb)));
 }
 #endif
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::COL,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
@@ -210,11 +211,12 @@ ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::SCALAR,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
@@ -223,11 +225,12 @@ ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
 /**
  * Shorthand template instantiation of mul_tiles_bcast.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::COL,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
@@ -236,6 +239,7 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 /**
  * Shorthand template instantiation of mul_tiles_bcast.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
@@ -244,7 +248,7 @@ ALWI void mul_tiles_bcast_rows(
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::ROW,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
@@ -253,6 +257,7 @@ ALWI void mul_tiles_bcast_rows(
 /**
  * Please refer to documentation for add_tiles_bcast
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
@@ -261,7 +266,7 @@ ALWI void add_tiles_bcast_rows(
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::ROW,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
@@ -270,6 +275,7 @@ ALWI void add_tiles_bcast_rows(
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
@@ -278,7 +284,7 @@ ALWI void sub_tiles_bcast_rows(
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::ROW,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
@@ -287,11 +293,12 @@ ALWI void sub_tiles_bcast_rows(
 /**
  * Please refer to documentation for add_tiles_bcast
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::COL,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
@@ -300,11 +307,12 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 /**
  * Please refer to documentation for add_tiles_bcast
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::SCALAR,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
@@ -324,7 +332,7 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t      | 0 to 31     | False    |
  */
 // clang-format on
-template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
+template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Use compute_kernel_hw_startup(icb0, icb1, ocb) once at kernel start, then "
     "bcast_init<tBcastOp, tBcastDim>(icb0, icb1). This will be removed after September 15th, 2026.")]] void
@@ -332,32 +340,32 @@ init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __bu
     state_configure(icb0, icb1, ocb, call_line);
     MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>(icb0, icb1)));
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
 
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
 #else
     UNPACK((llk_unpack_hw_configure(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
 
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb0, icb1)));
 #endif
 }
 
 /*
 Internal helper function for all broadcast ops
 */
-template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
+template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void any_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
@@ -366,7 +374,7 @@ ALWI void any_tiles_bcast(
         LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
     }
 #endif
-    MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+    MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
@@ -412,28 +420,31 @@ ALWI void any_tiles_bcast(
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <BroadcastType tBcastDim>
+template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim, is_fp32_dest_acc_en>(
+        icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
  * Please refer to documentation for *add_tiles_bcast*.
  */
-template <BroadcastType tBcastDim>
+template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim, is_fp32_dest_acc_en>(
+        icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
  * Please refer to documentation for *add_tiles_bcast*.
  */
-template <BroadcastType tBcastDim>
+template <BroadcastType tBcastDim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim, is_fp32_dest_acc_en>(
+        icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
@@ -494,11 +505,12 @@ ALWI void mul_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line
 /**
  * Performs a broadcast-multiply of a tile from icb0[itile0] with a scalar encoded as a tile from icb1[itile1].
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::SCALAR,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));

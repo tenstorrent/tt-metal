@@ -27,6 +27,22 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const auto& idx = t.indices;
     TT_FATAL(
         q.device() == kv.device() && q.device() == idx.device(), "sparse_sdpa: all inputs must be on the same device");
+    if (t.attention_sink.has_value()) {
+        const auto& sink = t.attention_sink.value();
+        TT_FATAL(
+            sink.storage_type() == StorageType::DEVICE && sink.buffer() != nullptr,
+            "Attention sink tensor must be on device");
+        TT_FATAL(sink.device() == q.device(), "Attention sink must be on the same device as Q");
+        TT_FATAL(sink.dtype() == DataType::BFLOAT16, "Attention sink must be BF16");
+        TT_FATAL(sink.layout() == Layout::ROW_MAJOR, "Attention sink must be ROW_MAJOR");
+        TT_FATAL(sink.memory_config().buffer_type() == BufferType::DRAM, "Attention sink must be in DRAM");
+        TT_FATAL(!sink.memory_config().is_sharded(), "Attention sink must be interleaved");
+        TT_FATAL(
+            sink.logical_shape() == ttnn::Shape({1, 1, 1, q.logical_shape()[1]}),
+            "Attention sink must have shape [1, 1, 1, H] matching Q heads");
+        TT_FATAL(sink.padded_shape() == sink.logical_shape(), "Attention sink must not be padded");
+    }
+
     // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
     for (const Tensor* tp : {&q, &idx}) {
         TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
@@ -118,18 +134,6 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // scale with H — so a too-large H simply fails CB allocation at program creation rather than here.
     constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
     TT_FATAL(H % tile_h == 0 && H >= tile_h, "sparse_sdpa: H must be a multiple of {} (got {})", tile_h, H);
-    if (t.attention_sink.has_value()) {
-        const auto& sk = t.attention_sink.value();
-        TT_FATAL(sk.layout() == Layout::TILE, "sparse_sdpa attention_sink must be TILE layout");
-        TT_FATAL(sk.dtype() == DataType::BFLOAT16, "sparse_sdpa attention_sink must be bfloat16");
-        TT_FATAL(
-            sk.memory_config().buffer_type() == BufferType::DRAM && !sk.memory_config().is_sharded(),
-            "sparse_sdpa attention_sink must be DRAM interleaved");
-        TT_FATAL(
-            sk.logical_shape() == tt::tt_metal::Shape({1, 1, H, tt::constants::TILE_WIDTH}),
-            "sparse_sdpa attention_sink must be [1,1,H,32] (got {})",
-            sk.logical_shape());
-    }
     // Validate v_dim before validate_non_hashed derives the packed mixed-format row width. In particular,
     // reject v_dim > K_DIM before the unsigned RoPE-width subtraction.
     TT_FATAL(attrs.v_dim > 0 && attrs.v_dim <= K_DIM, "v_dim must be in (0, K_DIM={}] (got {})", K_DIM, attrs.v_dim);
@@ -263,8 +267,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        // the sink adds a CB, a writer copy and the denominator term: a distinct program
-        t.attention_sink.has_value());
+        t.attention_sink);
 }
 
 Tensor sparse_sdpa(
@@ -278,7 +281,7 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    std::optional<Tensor> attention_sink) {
+    const std::optional<Tensor>& attention_sink) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -294,7 +297,7 @@ Tensor sparse_sdpa(
             .q = q,
             .kv = kv,
             .indices = indices,
-            .attention_sink = std::move(attention_sink),
+            .attention_sink = attention_sink,
         });
 }
 

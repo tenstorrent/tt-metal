@@ -169,18 +169,25 @@ class SubDeviceTraceController:
         return mv.total_bytes_allocated_per_bank * mv.num_banks
 
     def release(self):
-        """Release every captured trace UNDER THE SUB-DEVICE MANAGER THAT OWNS IT. A trace captured while a manager was
-        loaded lives in that manager's registry; releasing it with a different (or no) manager loaded leaves the
-        MeshTraceBuffer registered, and MeshDevice::close then destroys it after the allocator -> SIGSEGV in
-        BankManager::deallocate_buffer (DS4F-0258: seen on every traced runner exit until this walked the LOAD/CLEAR
-        switches too). Ends with no manager loaded. Safe to call repeatedly."""
-        for kind, payload in self._program:
-            if kind == self._TRACE:
-                ttnn.release_trace(self.mesh_device, payload)
-            elif kind == self._LOAD:
-                self.mesh_device.load_sub_device_manager(payload)
-            elif kind == self._CLEAR:
+        """Release every captured trace. Safe to call repeatedly."""
+        if self._capturing:
+            raise RuntimeError("cannot release traces while capture is active")
+
+        # Trace buffers belong to the sub-device manager that was active during their capture. Walk
+        # the same manager transitions used by replay so every trace ID is resolved under its owner.
+        # ACKs are replay-only side effects and must not fire during cleanup.
+        manager_loaded = False
+        try:
+            for kind, payload in self._program:
+                if kind == self._TRACE:
+                    ttnn.release_trace(self.mesh_device, payload)
+                elif kind == self._LOAD:
+                    self.mesh_device.load_sub_device_manager(payload)
+                    manager_loaded = True
+                elif kind == self._CLEAR:
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                    manager_loaded = False
+        finally:
+            if manager_loaded:
                 self.mesh_device.clear_loaded_sub_device_manager()
-        if self._program:
-            self.mesh_device.clear_loaded_sub_device_manager()
-        self._program = []
+            self._program = []

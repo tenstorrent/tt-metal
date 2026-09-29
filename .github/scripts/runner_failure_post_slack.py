@@ -263,7 +263,7 @@ def slack_runner_table_header() -> list[dict[str, str]]:
 
 
 def failure_summary_for_slack_cell(result: JobScanResult) -> str:
-    if not result.log_checked or not result.signature_labels:
+    if not result.signature_labels:
         # Slack table raw_text cells reject truly empty strings.
         return " "
 

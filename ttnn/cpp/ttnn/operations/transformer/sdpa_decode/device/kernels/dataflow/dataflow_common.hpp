@@ -423,6 +423,28 @@ uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writ
     return barrier_count;
 }
 
+// Counterpart of write_tiles_to_memory for a ROW_MAJOR output buffer, which is paged by row rather
+// than by tile. Compute has already untilized cb_out, so its contents are contiguous rows and one
+// NOC write per row lands exactly one page.
+template <uint32_t cb_out, uint32_t out_row_size_bytes, uint32_t barrier_threshold, typename WriterType>
+uint32_t write_rows_to_memory(
+    uint32_t& out_row_id, uint32_t num_rows, const WriterType& out_writer, uint32_t& barrier_count) {
+    Noc noc;
+    CircularBuffer cb(cb_out);
+    uint32_t l1_read_addr = cb.get_read_ptr();
+    for (uint32_t row = 0; row < num_rows; ++row) {
+        noc.async_write(
+            CoreLocalMem<uint32_t>(l1_read_addr), out_writer, out_row_size_bytes, {}, {.page_id = out_row_id});
+        ++out_row_id;
+        l1_read_addr += out_row_size_bytes;
+        if (++barrier_count == barrier_threshold) {
+            noc.async_writes_flushed();
+            barrier_count = 0;
+        }
+    }
+    return barrier_count;
+}
+
 template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, uint32_t PNHt, typename WriterType>
 uint32_t write_partial_tiles_to_memory(
     uint32_t& out_tile_id,  // base tile index in DRAM for this batch
@@ -505,7 +527,8 @@ void read_q(
     uint32_t q_chunk_size_bytes,
     const QArgsType& q_args,
     uint32_t q_page_size_bytes,
-    uint32_t q_batch_offset) {
+    uint32_t q_batch_offset,
+    uint32_t q_num_rows) {
     Noc noc;
     CircularBuffer cb_q(cb_q_in);
     CircularBuffer cb_q_rm_buf(cb_q_rm);
@@ -565,6 +588,30 @@ void read_q(
         } else {
             cb_q.push_back(q_chunk_tiles);
         }
+    } else if constexpr (tilize_q) {
+        // Q is ROW_MAJOR in DRAM: the buffer is paged by head row, so read one page per row into
+        // cb_q_rm and let compute tilize it. q_page_size_bytes is the row size here; addressing
+        // this buffer at tile granularity would resolve to the wrong bank, since interleaved pages
+        // are distributed round-robin and a tile spans several of them.
+        const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
+        uint32_t q_row_id = q_batch_offset;
+
+        cb_q_rm_buf.reserve_back(q_chunk_tiles);
+        uint32_t q_write_ptr = cb_q_rm_buf.get_write_ptr();
+        uint32_t barrier_count = 0;
+
+        for (uint32_t row = 0; row < q_num_rows; ++row) {
+            noc.async_read(q_reader, CoreLocalMem<uint32_t>(q_write_ptr), q_page_size_bytes, {.page_id = q_row_id}, {});
+            q_row_id += 1;
+            q_write_ptr += q_page_size_bytes;
+
+            if (++barrier_count == barrier_threshold) {
+                noc.async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+        noc.async_read_barrier();
+        cb_q_rm_buf.push_back(q_chunk_tiles);
     } else {
         // Q is not sharded - read tiles from DRAM
         // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale

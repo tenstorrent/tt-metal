@@ -310,10 +310,15 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
 
 # Mesh tensor helpers
 def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat8_b):
-    """Torch weight [out,in] -> sharded mesh tensor. Transpose to [in,out]; dim=-1 column, dim=0 row."""
-    w = torch_tensor.to(torch.bfloat16).T.contiguous()
+    """Torch weight [out,in] -> sharded mesh tensor. Transpose to [in,out]; dim=-1 column, dim=0 row.
+
+    The bf16 cast + transpose runs as the as_tensor preprocess, so it only executes on a tensor-cache
+    miss. On a hit the checkpoint tensor is never materialised (it may be a memory-mapped safetensor
+    on a network mount, and reading 27B parameters through it is what pushed the CI weight load past
+    its 1200 s pytest timeout)."""
     return ttnn.as_tensor(
-        w,
+        torch_tensor,
+        preprocess=lambda t: t.to(torch.bfloat16).T.contiguous(),
         dtype=dtype,
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),

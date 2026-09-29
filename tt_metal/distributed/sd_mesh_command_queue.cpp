@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt_stl/fmt.hpp>
+#include <mutex>
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
@@ -15,25 +17,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emule_deferred_mesh_dispatch.hpp"
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
 #endif
 #include <utility>
-#include <cstdlib>
-#include <string>
-
-namespace {
-// TT_METAL_SD_COEXIST_PERSISTENT=1 (Blaze, DS4F-0129 step 3): this process co-resides with a PERSISTENT program that
-// was launched non-blocking on this mesh (the pipeline's passthrough forwarder on the pipelining cores) and now runs
-// its own blocking programs and host<->device copies on DISJOINT cores / private buffers. The slow-dispatch queue would
-// otherwise wait_for_idle() on the recorded "previous workload" cores before every write, read and launch -- cores that
-// never go idle (measured: a 20-minute spin in dd1, a bus error inside the mailbox read in dd2). Read per call: the
-// worker sets it after the pipeline is up, before its first tensor write.
-bool sd_coexist_persistent() {
-    const char* v = std::getenv("TT_METAL_SD_COEXIST_PERSISTENT");
-    return v != nullptr && v[0] == '1';
-}
-
-}  // namespace
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
@@ -43,72 +30,6 @@ bool sd_coexist_persistent() {
 #endif
 
 namespace {
-
-// v2 (dd5, 2026-09-09 14:26): skipping the wait ENTIRELY was wrong. Blaze enables asynchronous slow dispatch, so a
-// non-blocking launch is serialized against the next launch / host read ONLY by the "previous workload" wait -- with
-// the wait skipped, the worker read a program's output before the program finished (device drafts 0/5 vs the CPU).
-// TT_METAL_SD_COEXIST_PERSISTENT_CORES="12-8,12-7" names the persistent program's logical cores: the wait now runs on
-// the recorded cores MINUS these (which never go idle). Unset: the pre-v2 skip (kept for A/B; racy).
-const std::vector<tt::tt_metal::CoreCoord>& sd_coexist_persistent_cores() {
-    static const std::vector<tt::tt_metal::CoreCoord> cores = [] {
-        std::vector<tt::tt_metal::CoreCoord> out;
-        const char* v = std::getenv("TT_METAL_SD_COEXIST_PERSISTENT_CORES");
-        if (v == nullptr) {
-            return out;
-        }
-        std::string spec(v);
-        size_t start = 0;
-        while (start < spec.size()) {
-            size_t end = spec.find(',', start);
-            if (end == std::string::npos) {
-                end = spec.size();
-            }
-            std::string tok = spec.substr(start, end - start);
-            size_t dash = tok.find('-');
-            if (dash != std::string::npos) {
-                out.emplace_back(std::stoul(tok.substr(0, dash)), std::stoul(tok.substr(dash + 1)));
-            }
-            start = end + 1;
-        }
-        return out;
-    }();
-    return cores;
-}
-
-// The recorded cores without the persistent program's; empty inner vectors are kept (wait_for_idle tolerates them).
-std::vector<std::vector<tt::tt_metal::CoreCoord>> sd_without_persistent_cores(
-    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& cores) {
-    const auto& skip = sd_coexist_persistent_cores();
-    std::vector<std::vector<tt::tt_metal::CoreCoord>> out;
-    out.reserve(cores.size());
-    for (const auto& group : cores) {
-        std::vector<tt::tt_metal::CoreCoord> kept;
-        kept.reserve(group.size());
-        for (const auto& c : group) {
-            bool is_persistent = false;
-            for (const auto& s : skip) {
-                if (s.x == c.x && s.y == c.y) {
-                    is_persistent = true;
-                    break;
-                }
-            }
-            if (!is_persistent) {
-                kept.push_back(c);
-            }
-        }
-        out.push_back(std::move(kept));
-    }
-    return out;
-}
-
-bool sd_any_core(const std::vector<std::vector<tt::tt_metal::CoreCoord>>& cores) {
-    for (const auto& group : cores) {
-        if (!group.empty()) {
-            return true;
-        }
-    }
-    return false;
-}
 
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
@@ -140,6 +61,7 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     if (target != tt::TargetDevice::Emule) {
         return;
     }
+    tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
     device_ids.reserve(mesh_device->get_devices().size());
     for (const auto& device : mesh_device->get_devices()) {
@@ -201,15 +123,14 @@ bool SDMeshCommandQueue::write_shard_to_device(
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
-    auto shard_view = device_buffer->view(region_value);
+    auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return false;
     }
 
-    auto payload =
-        ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -236,7 +157,8 @@ void SDMeshCommandQueue::read_shard_from_device(
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto shard_view =
+        device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
@@ -256,27 +178,19 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    if (sd_coexist_persistent() && sd_coexist_persistent_cores().empty()) {
-        return;  // pre-v2 behaviour (no core list): skip -- racy for non-blocking launches, kept for A/B only
-    }
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
-            if (sd_coexist_persistent()) {
-                auto own = sd_without_persistent_cores(logical_cores);  // never wait on the forwarder's cores
-                if (sd_any_core(own)) {
-                    tt::llrt::internal_::wait_for_idle(device_id, own);
-                }
-            } else {
-                tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
-            }
+            tt::llrt::internal_::wait_for_idle(context, device_id, logical_cores);
         }
         logical_cores_for_previous_workload_.clear();
     }
 }
 
 void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     const auto& program_cores = program.impl().logical_cores();
 
     // Collect local devices for this program, handling async idle checks
@@ -309,16 +223,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         }
 
         if (need_wait) {
-            if (sd_coexist_persistent()) {
-                if (!sd_coexist_persistent_cores().empty()) {
-                    auto own = sd_without_persistent_cores(cores_to_wait);
-                    if (sd_any_core(own)) {
-                        tt::llrt::internal_::wait_for_idle(device_id, own);
-                    }
-                }
-            } else {
-                tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
-            }
+            tt::llrt::internal_::wait_for_idle(context, device_id, cores_to_wait);
         }
 
         local_devices.push_back(device);
@@ -332,6 +237,16 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
     // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+
+    if (configure_only_) {
+        log_warning(tt::LogMetal, "DISPATCH_PROGRAM cfg_only={}", configure_only_);
+        // Configure every device and stop: no go signal, nothing runs, nothing to wait for. These
+        // cores are not registered as busy, so a later dispatch does not wait on them.
+        for (auto* device : local_devices) {
+            tt_metal::experimental::ConfigureProgramWithoutLaunch(device, program);
+        }
+        return;
+    }
 
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
@@ -394,10 +309,28 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
         // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
         // Excludes the socket feeders' pump_device(): a dispatch onto a parked run resumes it.
+        bool already_registered = false;
+        if (tt::tt_metal::emule::deferred_mesh_dispatch_enabled() && !blocking) {
+            already_registered = tt::tt_metal::emule::deferred_mesh_dispatch_has_queue(this);
+        }
+        if (already_registered) {
+            // This queue already registered into the pending generation; running it now keeps that
+            // registration's core state intact (see emule_pending_queues).
+            tt::tt_metal::emule::flush_deferred_mesh_dispatch();
+        }
         tt::tt_metal::emule::MeshDispatchLock dispatch_lock;
         tt::tt_metal::emule::begin_mesh_dispatch();
         for (auto& [coord_range, program] : range_program_map) {
             dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)
+        }
+        if (tt::tt_metal::emule::deferred_mesh_dispatch_enabled() && !blocking) {
+            // Leave the programs registered so a peer queue's workload can join this generation;
+            // the run happens at the next fence (see emule_flush_deferred). A blocking enqueue must
+            // still run here — its caller is entitled to assume the work completed on return.
+            tt::tt_metal::emule::register_deferred_mesh_dispatch_queue(this);
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+            logical_cores_for_previous_workload_.clear();
+            return;
         }
         tt::tt_metal::emule::run_mesh_dispatch();  // one concurrent run across all programs/chips
         // run_until_idle completed every program synchronously, so all cores are idle now; keep the

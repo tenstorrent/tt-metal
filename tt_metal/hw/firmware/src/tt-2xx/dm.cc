@@ -9,6 +9,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/ring_buffer.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
@@ -52,6 +53,7 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 // temporary for things to build
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+thread_local uint32_t hw_thread_idx __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
@@ -124,8 +126,7 @@ void deassert_trisc() {
         trisc_print->aux.lock = 0;
         uint32_t wpos = trisc_print->aux.wpos;
         if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
-            trisc_print->aux.wpos = 0;
-            trisc_print->aux.rpos = 0;
+            trisc_print->aux.wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC;
         }
     }
 #endif
@@ -229,16 +230,30 @@ inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_S
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        // Must precede the ready flag below, which releases the other pushers.
+        WATCHER_RING_BUFFER_INIT();
+        // There might be dirty lines in the cache at boot, so we discard them first (so they can't write
+        // back over the zeros) and then write the zeros.
+        constexpr uint32_t sem_words_size = MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE;
+        invalidate_l2_cache_range(MEM_NOC_CAS_RET_BASE, sem_words_size);
+        // Zero these words used for semaphores at boot
+        for (uint32_t w = 0; w < sem_words_size / 4; w++) {
+            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
+        }
         // Originally initalized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
 
     // Remapper can always stay enabled even if no remapper pairs are configured.
     // The default mirroring scheme is used if a particular remapper entry's clientR[0] valid bit is not set.

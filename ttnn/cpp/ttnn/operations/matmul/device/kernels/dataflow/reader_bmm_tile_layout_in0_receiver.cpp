@@ -24,16 +24,16 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
     // in0 mcast args
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
+    const uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     // batch args
     constexpr uint32_t batch = get_compile_time_arg_val(6);
     // sparsity args
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(7);
+    constexpr bool get_batch_from_reader = static_cast<bool>(get_compile_time_arg_val(7));
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
@@ -57,9 +57,9 @@ void kernel_main() {
             const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
-            ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
-            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
-            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+            ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
 
             // Skip sending the input tensor for this batch as it is not valid.
             if (!is_batch_valid) {

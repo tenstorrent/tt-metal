@@ -43,7 +43,7 @@ void kernel_main() {
 
     // Local input-shard base L1 address from the resident input TensorAccessor (no borrowed self-loop CB).
     const auto s = TensorAccessor(tensor::input);
-    uint32_t src_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
+    uint32_t src_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {

@@ -1,0 +1,1220 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Quasar-native Metal 2.0 / DataflowBuffer program factory for binary_ng.
+//
+// Starts as a mechanical copy of binary_ng_metal_v2_factory.cpp so later commits read as a diff of
+// what "Quasar-native" means (>2 of 6 user DM cores, >1 of 4 Tensix). Four intentional deviations at
+// copy time: the out-of-class definition names ProgramFactoryQuasarNative (external linkage, else a
+// duplicate symbol); the anonymous namespace is wrapped in CMAKE_UNIQUE_NAMESPACE (unity build);
+// kernel paths point at kernels_qsr/ except kComputeIncludeCommon (a shared third tree); and a local
+// ProgramSpecFactoryConcept static_assert so a declaration slip blames this file.
+//
+// Reachable only via matches_quasar_native_slice (needs TTNN_QSR_NATIVE). Only that slice's four
+// kernels were copied, so the bcast/scalar/SFPU sources named below point at files absent from
+// kernels_qsr/ -- deliberate; see the note above select_dfb_kernel_sources.
+//
+// Source blobs. `git rev-parse HEAD:<path>` is NOT sufficient for the two DM kernels: they carried
+// uncommitted instrumentation in the worktree copied from, so worktree= is authoritative.
+//   binary_ng_metal_v2_factory.cpp        a408b467b0b8f7d171c080e1b05f0ba8b700842c
+//   kernels_dfb/dataflow/reader_no_bcast_dfb.cpp   b83178421a46df8245b488c675859462d7022717 (worktree)
+//   kernels_dfb/dataflow/writer_no_bcast_dfb.cpp   a697a76af899ee405956ee65344a36679b5c1a7a (worktree)
+//   kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp  76a1164705d8c6c145b05a284aa66c31991e0b85
+//   kernels_dfb/compute/eltwise_utils_dfb.hpp     ae2189c8429528b4a88c8220afc0e267b8c0d1ac
+// (recorded 2026-08-21 at repo HEAD 0cf20188874)
+//
+// --- inherited description of the original follows ---
+//
+// Metal 2.0 / DataflowBuffer (DFB) program factory for binary_ng's no-broadcast (SubtileBroadcastType::
+// NONE), tiled path.
+//
+// This is a generic, faithful port of the descriptor factory's NONE-tiled path
+// (binary_ng_program_factory.cpp::create_descriptor). It inherits that factory's logic — per-operand
+// layout, FPU/SFPU OpConfig, the full lhs/rhs/post activation machinery, fp32_dest_acc_en,
+// unpack_modes, num_tiles_per_cycle, and the per-core arg derivation — and differs from it ONLY
+// in the CB->DFB translation:
+//   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
+//     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
+//   - The decisive property is BORROWED vs NoC-READ, all-or-nothing. An operand is BORROWED only when the
+//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, all sharded
+//     grids == the output grid, all buffers L1) AND every operand is itself L1-sharded with a shard spec.
+//     is_native_L1_sharding can hold with an L1-interleaved input (a single sharded operand satisfies it),
+//     and an interleaved operand has no shard spec to back a DFB, so any interleaved operand forces the
+//     whole op to the NoC path. When borrowed, all three are co-resident L1 shards on one grid with
+//     identical per-core tile partitions: each CB `.buffer = tensor.buffer()` ->
+//     DataflowBufferSpec::borrowed_from (reader/writer do no NoC work). Otherwise NONE are borrowed:
+//     every operand's CB -> a real ring + a KernelSpec TensorBinding (TensorAccessor(tensor::name),
+//     sharding-aware), and the buffer-address runtime arg the descriptor passed is dropped (the binding
+//     injects the address). Placement and has_sharding follow the same all-or-nothing borrow decision.
+//     The descriptor borrows per-operand and gates placement on get_shard_volumes().has_value()
+//     (is_native_L1_sharding plus an uneven-shard all-specs-match guard); this factory's all-or-nothing
+//     borrow is the stricter subset.
+//   - Positional get_arg_val<>(idx) / get_compile_time_arg_val(idx) -> named get_arg(args::name). The
+//     reader's 19 named args / writer's 9 named args are the descriptor's 21 / 11 arg vectors minus
+//     the buffer-address args (reader src0@0 / src1@15, writer dst@0, writer trailing pad).
+//   - KernelDescriptor::core_ranges + per-core dummy args on unused cores -> WorkUnitSpec::target_nodes
+//     scoped to exactly the active cores (DFB places only on target_nodes, so no dummy args needed).
+//   - The descriptor's `has_sharding` TensorAccessor CTA -> a HAS_SHARDING #define (the DFB kernels
+//     read it as a macro).
+//
+// Deferred to the descriptor (rejected by the ORIGINAL's matches_metal_v2_slice; the native gate
+// matches_quasar_native_slice is strictly narrower still -- see below): row-major (non-tile)
+// layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
+// sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
+// three operands are co-resident L1 shards on one matching grid; everything else (interleaved output OR
+// input, mixed strategies, divergent grids) takes the NoC path via sharding-aware TensorAccessors. A
+// borrowed operand is L1-sharded-tiled (height/block/width).
+
+#include "binary_ng_device_operation.hpp"
+#include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/experimental/quasar/binary/common/binary_op_utils.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <filesystem>
+#include <map>
+#include <set>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
+using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
+
+namespace ttnn::operations::experimental::quasar::binary_ng {
+
+// Assert the concept HERE rather than relying on AllFactoriesValid: that concept is checked against
+// the whole program_factory_t variant, so any slip in ProgramFactoryQuasarNative's declaration
+// surfaces as a failure pointing at BinaryNgDeviceOperation (the operation) instead of at this
+// factory. See ttnn/api/ttnn/operation_concepts.hpp.
+static_assert(
+    ttnn::device_operation::ProgramSpecFactoryConcept<BinaryNgDeviceOperation::ProgramFactoryQuasarNative>,
+    "ProgramFactoryQuasarNative does not satisfy ProgramSpecFactoryConcept");
+
+namespace {
+// Everything in this file's anonymous namespace is a name-for-name copy of
+// binary_ng_metal_v2_factory.cpp's. This target is a unity build (TT_ENABLE_UNITY_BUILD in
+// quasar/CMakeLists.txt), which concatenates translation units, so all 31 of those names would
+// collide. CMAKE_UNIQUE_NAMESPACE expands to a per-source-file unique id under a unity build and to
+// a plain (harmless) identifier otherwise -- the same idiom binary_ng_program_factory.cpp uses.
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+using ttnn::device_operation::ProgramArtifacts;
+
+// Kernel sources for the no-broadcast DFB path (dual-mode: a sharded operand publishes its borrowed
+// shard, an interleaved operand reads/writes over the NoC via a tensor binding).
+constexpr const char* kReaderDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/reader_no_bcast_dfb.cpp";
+constexpr const char* kWriterDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/writer_no_bcast_dfb.cpp";
+constexpr const char* kComputeFpuDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/eltwise_binary_no_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_sfpu_no_bcast_dfb.cpp";
+// Tensor-SCALAR DFB kernels. The writer becomes the producer of the RHS input DFB (in1) and fills it
+// once with the packed scalar (coherent uncached-L1-alias store on Quasar DM cores); the reader
+// produces in0 only; the compute waits on in1 once and reuses tile index 0. FPU handles bf16
+// add/subtract; the SFPU compute file is added in a later task (referenced but not yet exercised).
+constexpr const char* kReaderScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/reader_scalar_op_dfb.cpp";
+constexpr const char* kWriterScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/writer_scalar_dfb.cpp";
+constexpr const char* kComputeFpuScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/eltwise_binary_scalar_dfb.cpp";
+constexpr const char* kComputeSfpuScalarDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_sfpu_scalar_dfb.cpp";  // added in a later task; only the FPU path runs here
+// Subtile-broadcast DFB kernels. The bcast reader delivers the partial tile (BCAST_LLK path, no fill);
+// the row-bcast compute expands it via unary_bcast<ROW> through the intermediate llk_post DFB.
+constexpr const char* kReaderBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/reader_bcast_dfb.cpp";
+constexpr const char* kComputeFpuRowBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_row_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuRowBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_sfpu_row_bcast_dfb.cpp";
+// COL subtile broadcast: a dedicated reader (the broadcast operand's column tile is read once per
+// tile-row and reused across the row) + the col-bcast compute (unary_bcast<COL>, which lowers to the
+// same MOVB2D LLK datacopy as ROW/SCALAR, keyed by COL's broadcast constants; freq=Wt reuse loop).
+constexpr const char* kReaderColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/reader_col_bcast_dfb.cpp";
+constexpr const char* kComputeFpuColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_col_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_sfpu_col_bcast_dfb.cpp";
+// SCALAR subtile broadcast: a dedicated reader (the broadcast operand's single-element tile is read once
+// per (N,C) slab and reused across the whole Ht * Wt block) + the scalar-bcast compute (unary_bcast<
+// SCALAR>, which lowers to the same MOVB2D LLK datacopy as ROW/COL, keyed by SCALAR's broadcast constants;
+// freq=Ht*Wt reuse loop).
+constexpr const char* kReaderScalarBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/"
+    "reader_scalar_bcast_dfb.cpp";
+constexpr const char* kComputeFpuScalarBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_scalar_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuScalarBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_sfpu_scalar_bcast_dfb.cpp";
+// MIXED subtile broadcast (ROW_A_COL_B / ROW_B_COL_A): a dedicated reader that software-fills the COL
+// operand (FILL_TILE_WITH_FIRST_COLUMN, once per tile-row) and delivers the ROW operand as a raw partial
+// tile (BCAST_LLK, per column) + the mixed compute (a HYBRID: unary_bcast<ROW> in compute for the ROW
+// operand, reader software-fill for the COL operand; freq=Wt reuse loop). The COL-via-reader-fill split
+// keeps compute at 2 LLK passes -- a deliberate reader/compute load-balance, NOT a fallback.
+constexpr const char* kReaderRowColMixedBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/"
+    "reader_row_col_mixed_bcast_dfb.cpp";
+constexpr const char* kComputeFpuRowColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_row_col_bcast_dfb.cpp";
+constexpr const char* kComputeSfpuRowColBcastDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute/"
+    "eltwise_binary_sfpu_row_col_bcast_dfb.cpp";
+
+// The compute kernel includes eltwise_utils_common.hpp (in kernels/compute) and its DFB preprocess
+// helper (in kernels_qsr/compute) by bare name; both directories go on the compute include path.
+constexpr const char* kComputeIncludeCommon =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute";
+constexpr const char* kComputeIncludeDfb =
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/compute";
+
+// Per-broadcast-type kernel-source seam (the DFB analogue of the descriptor's BinaryNgKernelConfig):
+// it maps a SubtileBroadcastType to the reader/writer/compute kernel sources. NONE, ROW_A/ROW_B,
+// COL_A/COL_B, and SCALAR_A/SCALAR_B are wired; the remaining (mixed ROW/COL) broadcast variants follow
+// when their DFB kernels are added.
+struct DfbKernelSources {
+    const char* reader = nullptr;
+    const char* writer = nullptr;
+    const char* compute = nullptr;
+};
+
+// IMPORTANT for this (native) copy: only the NONE + FPU arm is reachable. matches_quasar_native_slice
+// admits no subtile broadcast and no SFPU op, and only the four no-broadcast FPU kernels were copied
+// into kernels_qsr/, so every literal returned by the other arms names a file that does not exist in
+// that tree. That is DELIBERATE: widening the gate without first copying those kernels then fails loudly
+// at JIT naming exactly the file that was forgotten, instead of silently succeeding on non-native
+// kernels from kernels_dfb/ under a factory called "native". create_no_bcast_artifacts asserts the same
+// precondition on the host, before any JIT work. Hardening this file means deleting these branches.
+DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcast_type, bool is_sfpu) {
+    switch (subtile_broadcast_type) {
+        case SubtileBroadcastType::NONE:
+            return DfbKernelSources{
+                .reader = kReaderDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuDfb : kComputeFpuDfb,
+            };
+        case SubtileBroadcastType::ROW_A:
+        case SubtileBroadcastType::ROW_B:
+            // ROW subtile broadcast: the bcast reader delivers the partial tile and the row-bcast
+            // compute expands it via unary_bcast<ROW>, then runs the binary op -- FPU (add/subtract) or
+            // SFPU (multiply/divide). UNREACHABLE here (the native gate rejects every broadcast type);
+            // in the metal_v2 original its gate restricts this path to bf16.
+            return DfbKernelSources{
+                .reader = kReaderBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuRowBcastDfb : kComputeFpuRowBcastDfb,
+            };
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+            // COL subtile broadcast: the col reader delivers the partial column tile (once per tile-row)
+            // and the col-bcast compute expands it via unary_bcast<COL> (MOVB2D LLK datacopy, same as
+            // ROW/SCALAR), reusing it across the row (freq=Wt), then runs the binary op -- FPU
+            // (add/subtract) or SFPU (multiply/divide/maximum). UNREACHABLE here (the native gate rejects
+            // every broadcast type); in the metal_v2 original its gate restricts this to bf16.
+            return DfbKernelSources{
+                .reader = kReaderColBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuColBcastDfb : kComputeFpuColBcastDfb,
+            };
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B:
+            // SCALAR subtile broadcast: the scalar reader delivers the single-element tile (once per
+            // (N,C) slab) and the scalar-bcast compute expands it via unary_bcast<SCALAR> (MOVB2D LLK
+            // datacopy, same as ROW/COL), reusing it across the whole slab (freq=Ht*Wt), then runs the
+            // binary op -- FPU (add/subtract) or SFPU (multiply/divide/maximum). UNREACHABLE here (the
+            // native gate rejects every broadcast type); in the metal_v2 original its gate restricts this
+            // to bf16.
+            return DfbKernelSources{
+                .reader = kReaderScalarBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuScalarBcastDfb : kComputeFpuScalarBcastDfb,
+            };
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A:
+            // MIXED subtile broadcast: the mixed reader software-fills the COL operand and delivers the ROW
+            // operand as a raw partial tile; the mixed compute expands the ROW operand via unary_bcast<ROW>
+            // (through llk_post, freq=Wt reuse loop) and reads the reader-filled COL operand directly, then
+            // runs the binary op -- FPU (add/subtract) or SFPU (multiply/divide/maximum/minimum). The COL
+            // operand uses reader software-fill (NOT a compute unary_bcast<COL>) as a deliberate reader/compute
+            // load-balance keeping compute at 2 LLK passes. On Quasar the reader fill uses a COHERENT store
+            // (non-cacheable L1 alias) because the DM core's write-back L1 D$ is incoherent with the TL1 SRAM
+            // the compute consumer reads -- a plain cacheable fill is invisible to the consumer and corrupts
+            // the neighbor llk_post DFB (see reader_row_col_mixed_bcast_dfb.cpp). UNREACHABLE here (the
+            // native gate rejects every broadcast type); in the metal_v2 original its gate restricts this
+            // to bf16, and both orientations reach it (llk_post is the binary srcA for ROW_A_COL_B, srcB
+            // for ROW_B_COL_A).
+            return DfbKernelSources{
+                .reader = kReaderRowColMixedBcastDfb,
+                .writer = kWriterDfb,
+                .compute = is_sfpu ? kComputeSfpuRowColBcastDfb : kComputeFpuRowColBcastDfb,
+            };
+    }
+    TT_THROW(
+        "binary_ng Quasar-native factory: unsupported subtile broadcast type {}",
+        static_cast<int>(subtile_broadcast_type));
+}
+
+// --- Small pure helpers mirrored from the descriptor factory's anonymous namespace. They live in
+// that .cpp's anonymous namespace (not the shared header), so they are reimplemented here to avoid
+// touching the proven descriptor path. Keep behavior identical to binary_ng_program_factory.cpp. ---
+
+// For rank > 5, dims are collapsed into a single dim. Mirrors extract_nD_dims in the descriptor factory.
+uint32_t extract_nD_dims(const Tensor& x, int out_rank) {
+    const auto& shape = x.logical_shape();
+    uint32_t nD_dim = 1;
+    if (out_rank >= 6 && shape.rank() >= 6) {
+        for (int i = -6; i >= -out_rank; --i) {
+            nD_dim *= shape[i];
+        }
+    }
+    return nD_dim;
+}
+
+// (D, N, C, Ht, Wt) with Ht/Wt in tiles. Mirrors get_shape_dims in the descriptor factory.
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
+    const auto& shape = x.padded_shape();
+    const auto& tile = x.tensor_spec().tile();
+    return {
+        shape.rank() >= 5 ? shape[-5] : 1,
+        shape[-4],
+        shape[-3],
+        tt::div_up(shape[-2], tile.get_height()),
+        tt::div_up(shape[-1], tile.get_width())};
+}
+
+// Compute-kernel {freq, tile_start} for the subtile-broadcast reuse loop. Mirrors
+// calculate_compute_kernel_args in binary_ng_program_factory.cpp (anonymous namespace there, so
+// reimplemented here like the other small helpers). For COL it returns {Wt, start_tw}: the compute
+// broadcasts the column tile once and reuses it across a full tile-row (freq = Wt), starting at this
+// core's column offset (start_tw). ROW/NONE need no reuse ({1, 0}); SCALAR reuses across the whole
+// HtWt block. Kept as a full switch so a later SCALAR/mixed wiring reuses it unchanged.
+std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
+    SubtileBroadcastType broadcast_type, uint32_t start_tile_id, uint32_t Ht, uint32_t Wt) {
+    const uint32_t start_t = start_tile_id % (Ht * Wt);
+    const uint32_t start_tw = start_t % Wt;
+    switch (broadcast_type) {
+        case SubtileBroadcastType::NONE:
+        case SubtileBroadcastType::ROW_A:
+        case SubtileBroadcastType::ROW_B: return {1, 0};
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B: return {Ht * Wt, start_t};
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A: return {Wt, start_tw};
+    }
+    TT_THROW("binary_ng Quasar-native factory: unreachable subtile broadcast type in calculate_compute_kernel_args");
+}
+
+// Number of shards spanning the output width. Mirrors get_shards_per_width in the descriptor factory.
+uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
+    const auto num_cores = shard_spec.grid.num_cores();
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        return 1;
+    }
+    if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        return num_cores;
+    }
+    const auto& bbox = shard_spec.grid.bounding_box();
+    const auto& start = bbox.start_coord;
+    const auto& end = bbox.end_coord;
+    return (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) + 1;
+}
+
+// Tile count for one full (tile-rounded) shard. Every core processes this same count, including a
+// partial end core under an uneven shard: a sharded buffer allocates the full rounded-up shard on
+// every core, so the trailing tiles on a partial core are allocated L1 with no host page mapped —
+// computing on them is in-bounds and never reaches the logical output. The gate pins equal shard
+// specs across a/b/c, so the three tensors over-allocate identically (mirrors the descriptor's
+// all_same_shard_spec path, which uses the uniform full shard tile count).
+uint32_t full_shard_tiles(const Tensor& tensor, const ShardSpec& shard_spec) {
+    const uint32_t tile_h = tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_w = tensor.tensor_spec().tile().get_width();
+    const uint32_t shard_ht = tt::round_up(shard_spec.shape[0], tile_h) / tile_h;
+    const uint32_t shard_wt = tt::round_up(shard_spec.shape[1], tile_w) / tile_w;
+    return shard_ht * shard_wt;
+}
+
+m2::DataflowBufferSpec make_dfb(
+    const m2::DFBSpecName& name,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    tt::DataFormat df,
+    const tt::tt_metal::Tile& tile,
+    std::optional<m2::TensorParamName> borrowed) {
+    return m2::DataflowBufferSpec{
+        .unique_id = name,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = df,
+        .tile_format_metadata = tile,
+        .borrowed_from = std::move(borrowed),
+    };
+}
+
+ProgramArtifacts create_no_bcast_artifacts(
+    const BinaryNgDeviceOperation::operation_attributes_t& op,
+    const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
+    Tensor& c) {
+    const Tensor& a = tensor_args.input_tensor_a;
+    // Tensor-scalar: no input_tensor_b. The writer fills the RHS DFB (in1) once from the packed scalar,
+    // so `b` is absent -- every b-derived value below is guarded on is_scalar (b_dtype is derived, the
+    // in1 DFB is a 1-tile non-borrowed ring, and the reader drops its in1 producer/binding).
+    const bool is_scalar = !tensor_args.input_tensor_b.has_value();
+    // NOTE vs the descriptor factory this was copied from: it also asserted
+    // `is_scalar || input_tensor_b.has_value()` here. Since is_scalar IS !has_value(), that reads
+    // `!x || x` -- vacuously true, so it was already dead there. The precondition below asserts
+    // !is_scalar outright, which subsumes it. Dropped rather than carried, so the diff against the
+    // descriptor factory stays a diff of real behaviour.
+    TT_FATAL(
+        !is_scalar || op.scalar.has_value(),
+        "binary_ng Quasar-native no-bcast factory tensor-scalar path requires a scalar value");
+    // The kernels_qsr/ tree holds ONLY the four no-broadcast FPU tensor-tensor sources. Turning the
+    // dangling bcast/scalar/SFPU path literals from a JIT "file not found" into a named host-side
+    // precondition: fires before any JIT work and says what to do about it. This mirrors
+    // matches_quasar_native_slice, which is the only admitting caller.
+    TT_FATAL(
+        op.subtile_broadcast_type == SubtileBroadcastType::NONE && !op.is_sfpu && !is_scalar,
+        "ProgramFactoryQuasarNative supports only the no-broadcast FPU tensor-tensor path; kernels_qsr/ "
+        "holds no bcast/scalar/SFPU sources. Copy them before widening matches_quasar_native_slice. Got "
+        "subtile_broadcast_type={}, is_sfpu={}, is_scalar={}",
+        static_cast<int>(op.subtile_broadcast_type),
+        op.is_sfpu,
+        is_scalar);
+    const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
+
+    // Thread counts and ring depth. Same cached instance matches_quasar_native_slice gated on, so the
+    // divisibility it checked holds for exactly these values.
+    const NativeTuning& t = native_tuning();
+
+    const bool is_sfpu = op.is_sfpu;
+    const DataType input_dtype = op.input_dtype;
+    const auto op_type = op.binary_op_type;
+
+    Buffer* a_buffer = a.buffer();
+    Buffer* b_buffer = is_scalar ? nullptr : b_opt->buffer();
+    Buffer* c_buffer = c.buffer();
+    TT_FATAL(
+        a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
+        "binary_ng Quasar-native no-bcast factory requires allocated device buffers");
+
+    // --- Borrow vs NoC routing. The borrow facts come from the shared get_shard_volumes helper -- the
+    // same one the descriptor factory and compute_program_hash use -- so this factory and the descriptor
+    // agree on what "native L1 sharding" means: get_shard_volumes is is_native_L1_sharding plus an
+    // uneven-shard guard (an unevenly-sharded output additionally requires all three operands to share one
+    // shard spec), so it returns nullopt both for a non-native config and for an uneven output the
+    // all-or-nothing borrow cannot serve; it reports a per-operand shard volume only for an operand that is
+    // itself L1-sharded with a shard spec. The per-operand a/b/c_sharded flags are derived
+    // from it, but this no-broadcast slice collapses borrow to all-or-nothing: an operand is BORROWED (its
+    // resident L1 shard backs the DFB; reader/writer do no NoC work) only when EVERY operand is sharded, so
+    // all three are co-resident L1 shards on one grid with identical per-core tile partitions. Otherwise --
+    // an interleaved output OR input, mixed strategies, or a divergent grid -- NONE are borrowed and every
+    // operand is read/written through its own sharding-aware TensorAccessor over a linear page-id walk (the
+    // get_shard_volumes == nullopt / single-or-partial-sharded case). The per-operand a/b/c_borrowed flags
+    // are kept separate (the DFB specs, SRC_SHARDED defines, tensor bindings and placement already branch
+    // on them), so enabling per-operand borrow for broadcast later is a one-line change here. The all-NoC
+    // path is correct for any layout mix; borrowing is a throughput optimization for the fully co-resident
+    // case (a block-sharded residual add). ---
+    const auto shard_volumes = get_shard_volumes(
+        a.tensor_spec(),
+        is_scalar ? std::optional<tt::tt_metal::TensorSpec>{}
+                  : std::optional<tt::tt_metal::TensorSpec>{b_opt->tensor_spec()},
+        c.tensor_spec());
+    const bool native = shard_volumes.has_value();
+    const bool a_sharded = native && shard_volumes->a_shard_volume.has_value();
+    const bool b_sharded = native && shard_volumes->b_shard_volume.has_value();
+    const bool c_sharded = native && shard_volumes->c_shard_volume.has_value();
+    const bool borrow_shards = a_sharded && b_sharded && c_sharded;
+
+    const bool a_borrowed = borrow_shards;
+    const bool b_borrowed = borrow_shards;
+    const bool c_borrowed = borrow_shards;
+
+    // HAS_SHARDING gates the borrow-path one-shard-per-core placement + per-shard tile-walk wrap. Off the
+    // borrow path every operand (including a sharded output) is NoC-read/written via TensorAccessor over a
+    // linear page-id walk. The reader/writer read it as a #define.
+    const bool has_sharding = borrow_shards;
+
+    // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
+    // `b`, so b_dtype is derived exactly as the descriptor does (binary_ng_program_factory.cpp): the
+    // scalar is packed as bf16 for block-float a, else the sfpu path keeps a_dtype, else bf16. b_tile
+    // borrows a's tile geometry (a single bf16 scalar tile). ---
+    const DataType a_dtype = a.dtype();
+    const DataType b_dtype =
+        is_scalar ? ((op.is_sfpu && !is_block_float(a_dtype)) ? a_dtype : DataType::BFLOAT16) : b_opt->dtype();
+    const DataType c_dtype = c.dtype();
+    const tt::DataFormat a_df = datatype_to_dataformat_converter(a_dtype);
+    const tt::DataFormat b_df = datatype_to_dataformat_converter(b_dtype);
+    const tt::DataFormat c_df = datatype_to_dataformat_converter(c_dtype);
+    const tt::tt_metal::Tile a_tile = a.tensor_spec().tile();
+    const tt::tt_metal::Tile b_tile = is_scalar ? a_tile : b_opt->tensor_spec().tile();
+    const tt::tt_metal::Tile c_tile = c.tensor_spec().tile();
+    const uint32_t a_tile_bytes = static_cast<uint32_t>(a_tile.get_tile_size(a_df));
+    const uint32_t b_tile_bytes = static_cast<uint32_t>(b_tile.get_tile_size(b_df));
+    const uint32_t c_tile_bytes = static_cast<uint32_t>(c_tile.get_tile_size(c_df));
+
+    // --- OpConfig + compute defines (mirrors the descriptor factory). ---
+    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
+                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    std::map<std::string, std::string> compute_defines = op_config.as_defines(a_dtype);
+
+    // ISCLOSE: the DFB SFPU kernel reads rtol/atol as named args (args::rtol_bits/atol_bits), so the
+    // positional ISCLOSE_*_RT_ARG_IDX defines the descriptor emits are not needed here (mirrors the
+    // descriptor factory's ISCLOSE handling, minus the positional-index defines).
+    if (op_type == BinaryOpType::ISCLOSE) {
+        compute_defines["ISCLOSE_OP"] = "1";
+        compute_defines["ISCLOSE_EQUAL_NAN"] = op.equal_nan ? "1" : "0";
+    }
+
+    // --- Activation assembly (faithful copy of the descriptor factory). ---
+    {
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
+
+        if (op_config.process_lhs.has_value()) {
+            lhs_activations.push_back(*op_config.process_lhs);
+        }
+        if (op_config.process_rhs.has_value()) {
+            rhs_activations.push_back(*op_config.process_rhs);
+        }
+
+        // LDEXP on the FPU path leaves LHS in its block-float format while RHS becomes Float16_b; force
+        // LHS through a Float16_b intermediate so both operands share a format (as in the descriptor factory).
+        if (!is_sfpu && lhs_activations.empty() && !rhs_activations.empty() && op_type == BinaryOpType::LDEXP &&
+            (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B)) {
+            lhs_activations.push_back({
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<int>(a_dtype), static_cast<int>(DataType::BFLOAT16)},
+            });
+        }
+
+        if (op_config.postprocess.has_value()) {
+            post_activations.insert(post_activations.begin(), *op_config.postprocess);
+        }
+
+        const bool is_integer_division =
+            (op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 && b_dtype == DataType::INT32);
+        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division) {
+            post_activations.push_back({
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
+            });
+        }
+
+        add_activation_defines(compute_defines, lhs_activations, "LHS", a_dtype);
+        add_activation_defines(compute_defines, rhs_activations, "RHS", b_dtype);
+
+        // The descriptor disables the PACK_RELU fast path under subtile broadcast: a broadcast compute
+        // kernel does a per-iteration intermediate pack + pack_reconfig that clears the packer's ZERO_RELU
+        // state, silently dropping the RELU clip on the final pack. This factory mirrors that guard; the
+        // no-broadcast slice admits only NONE, so is_subtile_broadcast is always false and the guard is a
+        // safe no-op unless broadcast types are added.
+        const bool is_subtile_broadcast = op.subtile_broadcast_type != SubtileBroadcastType::NONE;
+
+        // PACK_RELU fast path (no-broadcast only). Other single post-acts expand to the SFPU post chain
+        // (as in the descriptor factory; ZERO_POINT/quant routes to the descriptor).
+        if (lhs_activations.empty() && rhs_activations.empty() && post_activations.size() == 1) {
+            compute_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
+            if (post_activations[0].type() == unary::UnaryOpType::RELU && !is_subtile_broadcast) {
+                compute_defines["PACK_RELU"] = "1";
+                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_defines);
+            } else {
+                add_activation_defines(compute_defines, post_activations, "POST", input_dtype);
+            }
+        } else {
+            add_activation_defines(compute_defines, post_activations, "POST", input_dtype);
+        }
+    }
+
+    const bool has_lhs_act = !compute_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty();
+    const bool has_rhs_act = !compute_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
+    const bool op_has_exp =
+        op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+
+    // --- num_tiles_per_cycle: DST register capacity per tile_regs_acquire (mirrors the descriptor
+    // factory + the shipped factory's min(.,shard_tiles) cap). Multi-tile only when EVERY operand is borrowed
+    // (the whole pipeline is a single bulk reserve/push of full shards); any NoC-read operand uses a
+    // 2-entry ring, so the chunk size must be 1. SFPU uses 2 (double-DST stride), FPU uses 8. ---
+    const bool all_borrowed = a_borrowed && b_borrowed && c_borrowed;
+    const uint32_t c_full_shard_tiles = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : 0u;
+    uint32_t num_tiles_per_cycle = 1;
+    if (all_borrowed) {
+        num_tiles_per_cycle = std::min<uint32_t>(is_sfpu ? 2u : 8u, c_full_shard_tiles);
+    }
+
+    // --- DFB names. compute uses pre_lhs/pre_rhs/out (+post_lhs/post_rhs when activations); reader/
+    // writer use in0/in1/out. The SAME DFBSpecs (c_0/c_1/c_2) are bound under per-kernel accessor
+    // names. ---
+    const m2::TensorParamName T_A{"binary_ng_a"};
+    const m2::TensorParamName T_B{"binary_ng_b"};
+    const m2::TensorParamName T_C{"binary_ng_c"};
+    const m2::DFBSpecName IN0{"binary_ng_in0_dfb"};                    // CBIndex::c_0
+    const m2::DFBSpecName IN1{"binary_ng_in1_dfb"};                    // CBIndex::c_1
+    const m2::DFBSpecName OUT{"binary_ng_out_dfb"};                    // CBIndex::c_2
+    const m2::DFBSpecName POST_LHS{"binary_ng_post_lhs_dfb"};          // CBIndex::c_3 (LHS activations)
+    const m2::DFBSpecName POST_RHS{"binary_ng_post_rhs_dfb"};          // CBIndex::c_4 (RHS activations)
+    const m2::DFBSpecName LLK_POST_LHS{"binary_ng_llk_post_lhs_dfb"};  // CBIndex::c_5 (unary_bcast out, LHS bcast)
+    const m2::DFBSpecName LLK_POST_RHS{"binary_ng_llk_post_rhs_dfb"};  // CBIndex::c_6 (unary_bcast out, RHS bcast)
+    const m2::KernelSpecName READER{"binary_ng_reader"};
+    const m2::KernelSpecName WRITER{"binary_ng_writer"};
+    const m2::KernelSpecName COMPUTE{"binary_ng_compute"};
+
+    // Per-broadcast-type kernel-source selection (the descriptor's BinaryNgKernelConfig analogue): the
+    // no-broadcast (NONE) triple, the ROW subtile-broadcast reader/compute for ROW_A / ROW_B, the COL
+    // subtile-broadcast reader/compute for COL_A / COL_B, and the SCALAR subtile-broadcast reader/compute
+    // for SCALAR_A / SCALAR_B.
+    // Tensor-scalar selects the in0-only reader + scalar-fill writer + wait-once/reuse-0 compute (FPU
+    // for bf16 add/subtract; the SFPU scalar compute file is added in a later task). Tensor-tensor
+    // dispatches per subtile-broadcast type as before.
+    const DfbKernelSources kernel_sources =
+        is_scalar ? DfbKernelSources{
+                        .reader = kReaderScalarDfb,
+                        .writer = kWriterScalarDfb,
+                        .compute = is_sfpu ? kComputeSfpuScalarDfb : kComputeFpuScalarDfb,
+                    }
+                  : select_dfb_kernel_sources(op.subtile_broadcast_type, is_sfpu);
+
+    // bcast_lhs / bcast_rhs mark which operand owns the compute unary_bcast -> llk_post intermediate
+    // (c_5 / c_6). Single-operand: the broadcast operand itself (ROW_A / COL_A / SCALAR_A -> a; ROW_B /
+    // COL_B / SCALAR_B -> b). MIXED (ROW_A_COL_B / ROW_B_COL_A): the ROW operand -- the only one expanded
+    // in compute (unary_bcast<ROW>); the COL operand is reader-software-filled and owns no llk_post. So
+    // ROW_A_COL_B (a is ROW) -> bcast_lhs (c_5); ROW_B_COL_A (b is ROW) -> bcast_rhs (c_6). Exactly one
+    // holds on the bcast path; both false on no-broadcast. is_mixed_bcast distinguishes the mixed types
+    // (their define set differs -- see below). uses_tile_freq_reuse selects the COL/SCALAR/MIXED
+    // freq/tile_start reuse loop (compute args); ROW's compute is a flat per-tile loop (freq always 1).
+    const bool is_mixed_bcast = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+                                op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A;
+    const bool bcast_lhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B;
+    const bool bcast_rhs = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ||
+                           op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A;
+    const bool uses_tile_freq_reuse = op.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+                                      op.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+                                      op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+                                      op.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B || is_mixed_bcast;
+
+    // The bcast compute processes exactly ONE tile per cycle (unary_bcast -> pack -> binary op on DST
+    // index 0) while advancing every DFB by num_tiles_per_cycle; that is only correct at
+    // num_tiles_per_cycle == 1 (the interleaved / non-borrowed path this task wires). A future borrowed
+    // or multi-tile broadcast path MUST revisit the kernel's per-tile loop before relaxing this.
+    TT_FATAL(
+        !(bcast_lhs || bcast_rhs) || num_tiles_per_cycle == 1,
+        "binary_ng Quasar-native factory: subtile broadcast requires num_tiles_per_cycle == 1, got {}",
+        num_tiles_per_cycle);
+
+    // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
+    // with its resident L1 shard (num_entries == full shard, borrowed_from set); any NoC-read operand
+    // (interleaved, or sharded on a non-matching grid) is a derived-depth ring filled over the NoC.
+    // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
+    // Float16_b intermediate on the FPU path, else the operand's own format. ---
+    // capacity = num_entries / max(producers, consumers) is what reaches the credit register, so the
+    // knob is PER-THREAD and num_entries is derived. A global depth is meaningless: depth 2 is illegal
+    // at R=4 (must divide by max(R,C)) and depth 4 at R=C=4 gives capacity 1, i.e. no double buffering.
+    // in0/in1 endpoints are (R, C); out endpoints are (C, W).
+    const uint32_t in_producers_consumers = std::max(t.reader_threads, t.compute_threads);
+    const uint32_t out_producers_consumers = std::max(t.compute_threads, t.writer_threads);
+    const uint32_t in_entries = t.entries_per_thread * in_producers_consumers;
+    const uint32_t out_entries = t.entries_per_thread * out_producers_consumers;
+    // threshold and num_entries_per_txn_id are uint8_t with NO guard, and the only TT_FATAL there checks
+    // divisibility, which 0 % anything == 0 passes. num_txn_ids falls back to 1 when no n in [2,4]
+    // divides, so the cliff is at 255 entries -- not 510 as a "num_txn_ids >= 2" assumption would suggest.
+    TT_FATAL(
+        in_entries <= 255 && out_entries <= 255,
+        "binary_ng Quasar-native: num_entries must be <= 255 (unguarded uint8_t threshold), got in={} out={}",
+        in_entries,
+        out_entries);
+    // num_tiles_per_cycle > 1 batches n tiles per reserve/push, which a strided multi-thread ring cannot
+    // express. Reachable only if the gate ever admits a borrowed shard.
+    TT_FATAL(
+        num_tiles_per_cycle == 1 || (in_producers_consumers == 1 && out_producers_consumers == 1),
+        "binary_ng Quasar-native: num_tiles_per_cycle {} > 1 requires stride 1 on EVERY DFB "
+        "(in: max(R,C)={}, out: max(C,W)={})",
+        num_tiles_per_cycle,
+        in_producers_consumers,
+        out_producers_consumers);
+
+    const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : in_entries;
+    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or the
+    // derived NoC ring.
+    const uint32_t b_entries =
+        is_scalar ? 1u : (b_borrowed ? full_shard_tiles(*b_opt, *b_opt->shard_spec()) : in_entries);
+    const uint32_t c_entries = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : out_entries;
+
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    constexpr uint32_t num_mandatory_dfbs = 3;  // in0, in1, out
+    dfbs.reserve(num_mandatory_dfbs + (has_lhs_act ? 1 : 0) + (has_rhs_act ? 1 : 0));
+    dfbs.push_back(
+        make_dfb(IN0, a_tile_bytes, a_entries, a_df, a_tile, a_borrowed ? std::optional{T_A} : std::nullopt));
+    dfbs.push_back(
+        make_dfb(IN1, b_tile_bytes, b_entries, b_df, b_tile, b_borrowed ? std::optional{T_B} : std::nullopt));
+    dfbs.push_back(
+        make_dfb(OUT, c_tile_bytes, c_entries, c_df, c_tile, c_borrowed ? std::optional{T_C} : std::nullopt));
+
+    const tt::DataFormat a_inter_df = is_sfpu ? a_df : (op_has_exp ? tt::DataFormat::Float16_b : a_df);
+    const tt::DataFormat b_inter_df = is_sfpu ? b_df : (op_has_exp ? tt::DataFormat::Float16_b : b_df);
+    // post_lhs/post_rhs intermediate rings (c_3/c_4): num_tiles_per_cycle entries, matching the
+    // descriptor factory's intermediate CBs. Allocated only when that operand has an activation chain.
+    // The compute kernel both produces (PREPROCESS) and consumes (binary op) these in strict program
+    // order on a single thread, so one chunk's worth of entries is sufficient.
+    if (has_lhs_act) {
+        dfbs.push_back(make_dfb(
+            POST_LHS,
+            static_cast<uint32_t>(a_tile.get_tile_size(a_inter_df)),
+            num_tiles_per_cycle,
+            a_inter_df,
+            a_tile,
+            std::nullopt));
+    }
+    if (has_rhs_act) {
+        dfbs.push_back(make_dfb(
+            POST_RHS,
+            static_cast<uint32_t>(b_tile.get_tile_size(b_inter_df)),
+            num_tiles_per_cycle,
+            b_inter_df,
+            b_tile,
+            std::nullopt));
+    }
+
+    // llk_post intermediate DFB for the subtile broadcast (c_5 for LHS bcast, c_6 for RHS bcast): the
+    // compute both produces (unary_bcast<ROW|COL|SCALAR> -> pack) and consumes (binary op) it in program
+    // order on one thread, so num_tiles_per_cycle entries suffice -- the same self-loop precedent as the
+    // POST_LHS/POST_RHS activation DFBs. (COL reuses the single expanded tile across a tile-row, SCALAR
+    // across the whole (N,C) slab: produced once, read freq times, popped once -- still one live entry.)
+    // Format is the broadcast operand's own format (bf16 on this path; op_has_exp never reaches the LLK
+    // bcast path). Allocated only for the operand being broadcast.
+    if (bcast_lhs) {
+        dfbs.push_back(make_dfb(
+            LLK_POST_LHS,
+            static_cast<uint32_t>(a_tile.get_tile_size(a_inter_df)),
+            num_tiles_per_cycle,
+            a_inter_df,
+            a_tile,
+            std::nullopt));
+    }
+    if (bcast_rhs) {
+        dfbs.push_back(make_dfb(
+            LLK_POST_RHS,
+            static_cast<uint32_t>(b_tile.get_tile_size(b_inter_df)),
+            num_tiles_per_cycle,
+            b_inter_df,
+            b_tile,
+            std::nullopt));
+    }
+
+    // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident
+    // shard, no NoC) vs NoC-read code path per operand. HAS_SHARDING follows the OUTPUT layout: it tells
+    // a NoC-read operand's tile walk to wrap each row onto one output-shard width (the descriptor passed
+    // has_sharding as a TensorAccessor CTA; the DFB kernels read the macro). ---
+    std::map<std::string, std::string> reader_defines = make_dataflow_defines(a_dtype, b_dtype);
+    reader_defines["SRC_SHARDED"] = a_borrowed ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = b_borrowed ? "1" : "0";
+    reader_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
+
+    std::map<std::string, std::string> writer_defines = make_dataflow_defines(b_dtype);
+    writer_defines["DST_SHARDED"] = c_borrowed ? "1" : "0";
+    writer_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
+
+    // Subtile-broadcast defines. Set only on the bcast path so the no-broadcast define set is untouched.
+    //
+    // Single-operand (ROW / COL / SCALAR): the reader keys the partial-tile walk off SRC_BCAST /
+    // SRC_BCAST_B; BCAST_LLK=1 means it delivers the partial (or, for SCALAR, single-element) tile (no
+    // FILL_TILE), leaving the broadcast to the compute's unary_bcast<ROW|COL|SCALAR>. The compute selects
+    // its c_5/c_6 llk_post mapping off SRC_BCAST[_B]. BCAST_INPUT (0 = LHS bcast, 1 = RHS bcast) mirrors the
+    // descriptor's compute define (COL/SCALAR preprocess the broadcast operand once and stream the other).
+    //
+    // MIXED (ROW_A_COL_B / ROW_B_COL_A) is a HYBRID and uses a DIFFERENT define set: the reader keys off
+    // SRC_BCAST_COL (which operand is the reader-software-filled COL operand -- FILL_TILE_WITH_FIRST_COLUMN,
+    // UNCONDITIONAL) and SRC_BCAST_ROW_B (which is the raw-partial ROW operand), with BCAST_LLK=1 keeping
+    // the ROW operand a partial tile (the compute's unary_bcast<ROW> expands it; only the ROW fill is
+    // BCAST_LLK-gated). The mixed compute selects the COL (once-per-row BCAST_OP) vs ROW (streamed
+    // OTHER_OP) operand off BCAST_INPUT (1 = ROW_A_COL_B, 0 = ROW_B_COL_A) and reads the ROW operand's
+    // llk_post via the dfb::llk_post accessor (bound to c_5 / c_6 by bcast_lhs / bcast_rhs above), so it
+    // needs no SRC_BCAST[_B]. SRC_BCAST_COL and SRC_BCAST_ROW_B carry the same value (a is COL <=> b is
+    // ROW, and vice versa), matching the descriptor factory (binary_ng_program_factory.cpp).
+    if (is_mixed_bcast) {
+        const std::string src_bcast_col = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_COL"] = src_bcast_col;
+        reader_defines["SRC_BCAST_ROW_B"] = src_bcast_col;
+        reader_defines["BCAST_LLK"] = "1";
+        compute_defines["BCAST_INPUT"] = op.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ? "1" : "0";
+    } else if (bcast_lhs || bcast_rhs) {
+        const std::string src_bcast = bcast_lhs ? "1" : "0";
+        const std::string src_bcast_b = bcast_rhs ? "1" : "0";
+        const std::string bcast_input = bcast_lhs ? "0" : "1";
+        for (auto* defines : {&reader_defines, &compute_defines}) {
+            (*defines)["SRC_BCAST"] = src_bcast;
+            (*defines)["SRC_BCAST_B"] = src_bcast_b;
+            (*defines)["BCAST_LLK"] = "1";
+            (*defines)["BCAST_INPUT"] = bcast_input;
+        }
+    }
+
+    // --- Compute config (mirrors the descriptor factory). ---
+    const bool fp32_dest_acc_en = c_df == tt::DataFormat::UInt32 || c_df == tt::DataFormat::Int32 ||
+                                  c_df == tt::DataFormat::Float32 || a_df == tt::DataFormat::Float32 ||
+                                  b_df == tt::DataFormat::Float32 ||
+                                  (a_df == tt::DataFormat::Int32 && b_df == tt::DataFormat::Int32) ||
+                                  (a_df == tt::DataFormat::UInt32 && b_df == tt::DataFormat::UInt32);
+
+    // unpack_modes: the descriptor sets UnpackToDest on all SFPU consumer CBs, but that is inert for
+    // non-Float32 entries (and the DFB validator rejects UnpackToDest on a 32-bit format unless
+    // enable_32_bit_dest is true). So set it only on compute-consumer DFBs whose format is Float32
+    // (which forces fp32_dest_acc_en true). A Float32 FPU consumer must still carry an explicit entry,
+    // which is UnpackToSrc. compute consumers: in0(pre_lhs), in1(pre_rhs), post_lhs, post_rhs.
+    m2::ComputeUnpackModes unpack_modes;
+    auto set_unpack_mode = [&](const m2::DFBSpecName& dfb, tt::DataFormat df) {
+        if (df == tt::DataFormat::Float32) {
+            unpack_modes.emplace(dfb, is_sfpu ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
+        }
+    };
+    set_unpack_mode(IN0, a_df);
+    set_unpack_mode(IN1, b_df);
+    if (has_lhs_act) {
+        set_unpack_mode(POST_LHS, a_inter_df);
+    }
+    if (has_rhs_act) {
+        set_unpack_mode(POST_RHS, b_inter_df);
+    }
+
+    // --- Kernels. ---
+    m2::KernelSpec::CompilerOptions::Defines reader_defines_tbl;
+    for (const auto& [k, v] : reader_defines) {
+        reader_defines_tbl.emplace(k, v);
+    }
+    m2::KernelSpec::CompilerOptions::Defines writer_defines_tbl;
+    for (const auto& [k, v] : writer_defines) {
+        writer_defines_tbl.emplace(k, v);
+    }
+    m2::KernelSpec::CompilerOptions::Defines compute_defines_tbl;
+    for (const auto& [k, v] : compute_defines) {
+        compute_defines_tbl.emplace(k, v);
+    }
+
+    // Reader: publishes a borrowed shard (borrowed operand) or reads it over the NoC (via
+    // TensorAccessor(tensor::in0/in1)). A borrowed operand needs no tensor binding (its tensor::
+    // reference is compiled out under SRC_SHARDED) and borrows via the DFB; every NoC-read operand is
+    // bound — including a sharded input on a non-matching grid, whose accessor is sharding-aware.
+    m2::Group<m2::TensorBinding> reader_tensor_bindings;
+    if (!a_borrowed) {
+        reader_tensor_bindings.push_back(m2::TensorBinding{T_A, "in0"});
+    }
+    // Scalar: the reader produces in0 only; in1 is produced by the writer (the scalar fill), so it gets
+    // neither a "in1" DFB producer binding nor a T_B tensor binding.
+    if (!is_scalar && !b_borrowed) {
+        reader_tensor_bindings.push_back(m2::TensorBinding{T_B, "in1"});
+    }
+    m2::Group<m2::DFBBinding> reader_dfb_bindings = {m2::ProducerOf(IN0, "in0")};
+    if (!is_scalar) {
+        reader_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
+    }
+    m2::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = std::filesystem::path(kernel_sources.reader),
+        .num_threads = t.reader_threads,
+        .compiler_options = {.defines = reader_defines_tbl},
+        .dfb_bindings = reader_dfb_bindings,
+        .tensor_bindings = reader_tensor_bindings,
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"start_tile_id",
+                  "src_num_tiles",
+                  "dst_num_tiles",
+                  "dst_shard_width",
+                  "nD_stride",
+                  "d_stride",
+                  "n_stride",
+                  "c_stride",
+                  "D",
+                  "N",
+                  "C",
+                  "Ht",
+                  "Wt",
+                  "cND",
+                  "nD_stride_b",
+                  "d_stride_b",
+                  "n_stride_b",
+                  "c_stride_b",
+                  "src_num_tiles_b"}},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    m2::Group<m2::TensorBinding> writer_tensor_bindings;
+    if (!c_borrowed) {
+        writer_tensor_bindings.push_back(m2::TensorBinding{T_C, "out"});
+    }
+    // Scalar: the writer is ALSO the producer of the in1 DFB (it fills the single scalar tile), so it
+    // gets a "in1" producer binding and a leading "packed_scalar" runtime arg. Tensor-tensor keeps the
+    // out-drain-only writer unchanged.
+    m2::Group<m2::DFBBinding> writer_dfb_bindings = {m2::ConsumerOf(OUT, "out")};
+    if (is_scalar) {
+        writer_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
+    }
+    m2::Group<std::string> writer_rt_names = {
+        "start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"};
+    if (is_scalar) {
+        writer_rt_names.insert(writer_rt_names.begin(), "packed_scalar");
+    }
+    m2::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(kernel_sources.writer),
+        .num_threads = t.writer_threads,
+        .compiler_options = {.defines = writer_defines_tbl},
+        .dfb_bindings = writer_dfb_bindings,
+        .tensor_bindings = writer_tensor_bindings,
+        .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both
+    // produces (PREPROCESS writes) and consumes (binary op reads) its post DFB — a self-loop pair
+    // (one PRODUCER + one CONSUMER binding on the same DFB, resolved intra-thread by default).
+    m2::Group<m2::DFBBinding> compute_dfb_bindings = {
+        m2::ConsumerOf(IN0, "pre_lhs"), m2::ConsumerOf(IN1, "pre_rhs"), m2::ProducerOf(OUT, "out")};
+    if (has_lhs_act) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(POST_LHS, "post_lhs"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(POST_LHS, "post_lhs"));
+    }
+    if (has_rhs_act) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(POST_RHS, "post_rhs"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(POST_RHS, "post_rhs"));
+    }
+    // Subtile broadcast (ROW/COL/SCALAR): the compute both produces (unary_bcast<ROW|COL|SCALAR> -> pack)
+    // and consumes (binary op) the llk_post intermediate — the same self-loop pair as post_lhs/post_rhs.
+    // Exactly one of LLK_POST_LHS (c_5, ROW_A/COL_A/SCALAR_A) / LLK_POST_RHS (c_6, ROW_B/COL_B/SCALAR_B) is
+    // allocated per op; whichever it is binds under the accessor name "llk_post", and that accessor-name
+    // binding is what lets the single compute kernel read either as dfb::llk_post.
+    if (bcast_lhs) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(LLK_POST_LHS, "llk_post"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(LLK_POST_LHS, "llk_post"));
+    }
+    if (bcast_rhs) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(LLK_POST_RHS, "llk_post"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(LLK_POST_RHS, "llk_post"));
+    }
+
+    m2::Group<std::string> compute_rt_names = {"num_tiles"};
+    // COL/SCALAR broadcast reuse the expanded tile across a freq/tile_start loop (COL: freq = Wt, one
+    // tile-row; SCALAR: freq = Ht * Wt, the whole (N,C) slab); the compute reads freq and the per-core
+    // tile offset as runtime args. ROW/NONE do not (their compute is a flat per-tile loop), so the args
+    // are added only on the COL/SCALAR path.
+    if (uses_tile_freq_reuse) {
+        compute_rt_names.push_back("tile_freq");
+        compute_rt_names.push_back("tile_start");
+    }
+    if (op_type == BinaryOpType::ISCLOSE) {
+        compute_rt_names.push_back("rtol_bits");
+        compute_rt_names.push_back("atol_bits");
+    }
+
+    // to_compute_hardware_config maps the common knobs and picks the arch's variant (ComputeGen1Config on
+    // Wormhole, ComputeGen2Config on Quasar); it deliberately leaves the per-DFB unpack_modes
+    // default, so set it here via std::visit — the arch-agnostic pattern main's quasar untilize factories use.
+    auto compute_hw = ttnn::to_compute_hardware_config(
+        a.device()->arch(),
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .math_approx_mode = false,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+        });
+    std::visit([&](auto& cfg) { cfg.unpack_modes = unpack_modes; }, compute_hw);
+
+    m2::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = std::filesystem::path(kernel_sources.compute),
+        .num_threads = t.compute_threads,
+        .compiler_options =
+            {.include_paths = {std::filesystem::path(kComputeIncludeCommon), std::filesystem::path(kComputeIncludeDfb)},
+             .defines = compute_defines_tbl},
+        .dfb_bindings = compute_dfb_bindings,
+        .compile_time_args = {{"num_tiles_per_cycle", num_tiles_per_cycle}},
+        .runtime_arg_schema = {.runtime_arg_names = compute_rt_names},
+        .hw_config = compute_hw,
+    };
+
+    // --- Placement + per-core runtime args (mirrors the descriptor factory's per-core loop). Sharded:
+    // place on the shard grid, uniform full-shard counts. Interleaved: split_work_to_cores over the
+    // worker grid; per-node num_tiles by group. Either way target_nodes is exactly the active cores
+    // (no dummy args). ---
+    const int out_rank = c.logical_shape().rank();
+    const uint32_t aND = extract_nD_dims(a, out_rank);
+    // Scalar has no `b`: its dims are all 1 so every b stride below collapses to 0 (unread by the
+    // scalar reader, which drops the *_b args, but the reader arg schema still carries them).
+    const uint32_t bND = is_scalar ? 1u : extract_nD_dims(*b_opt, out_rank);
+    const uint32_t cND = extract_nD_dims(c, out_rank);
+    const auto [aD, aN, aC, aHt, aWt] = get_shape_dims(a);
+    uint32_t bD = 1, bN = 1, bC = 1, bHt = 1, bWt = 1;
+    if (!is_scalar) {
+        std::tie(bD, bN, bC, bHt, bWt) = get_shape_dims(*b_opt);
+    }
+    const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(c);
+
+    // a/b input strides (the (dim>1) gate zeroes a stride for a unit dim). Same on every core.
+    const uint32_t nD_stride = aHt * aWt * aC * aN * aD * (aND > 1);
+    const uint32_t d_stride = aHt * aWt * aC * aN * (aD > 1);
+    const uint32_t n_stride = aHt * aWt * aC * (aN > 1);
+    const uint32_t c_stride = aHt * aWt * (aC > 1);
+    const uint32_t nD_stride_b = bHt * bWt * bC * bN * bD * (bND > 1);
+    const uint32_t d_stride_b = bHt * bWt * bC * bN * (bD > 1);
+    const uint32_t n_stride_b = bHt * bWt * bC * (bN > 1);
+    const uint32_t c_stride_b = bHt * bWt * (bC > 1);
+
+    // These strides are the INPUT's while the loop bounds are the OUTPUT's, so a zeroed stride makes an
+    // operand re-read one tile across that dim -- outer-dim broadcast ("no_bcast" means no SUBTILE
+    // broadcast). kernels_qsr/ collapses the cascade to page = start_tile_id + k and ignores them, which
+    // is the identity only while every input dim equals the output's.
+    const bool a_dims_are_output_dims = aND == cND && aD == cD && aN == cN && aC == cC && aHt == cHt && aWt == cWt;
+    const bool b_dims_are_output_dims = bND == cND && bD == cD && bN == cN && bC == cC && bHt == cHt && bWt == cWt;
+    TT_FATAL(
+        a_dims_are_output_dims && b_dims_are_output_dims,
+        "Quasar-native binary_ng requires both inputs to have the output's dims; the collapsed kernel "
+        "traversal cannot express outer-dim broadcast. a=({},{},{},{},{},{}) b=({},{},{},{},{},{}) "
+        "out=({},{},{},{},{},{}).",
+        aND,
+        aD,
+        aN,
+        aC,
+        aHt,
+        aWt,
+        bND,
+        bD,
+        bN,
+        bC,
+        bHt,
+        bWt,
+        cND,
+        cD,
+        cN,
+        cC,
+        cHt,
+        cWt);
+
+    std::vector<CoreCoord> cores;
+    CoreRangeSet core_group_1, core_group_2;
+    uint32_t num_tiles_per_core_group_1 = 0, num_tiles_per_core_group_2 = 0;
+    uint32_t c_shard_height = 0, c_shard_width = 0, num_shards_per_width = 1;
+    bool row_major = true;
+
+    // Placement is driven by borrow_shards. The borrow path places one output shard per core on the
+    // output shard grid (each core's output shard is its work), with the per-shard tile counts and the
+    // per-core output start tile derived from the output shard geometry. Off the borrow path,
+    // split_work_to_cores spreads the output tiles linearly across all of op.worker_grid (the full
+    // sub-device TENSIX worker set returned by get_worker_grid, NOT the output shard grid); for a
+    // NoC-written sharded output the sharding-aware TensorAccessor maps each global output tile id to its
+    // shard core, so the linear split need not be shard-aligned. (The descriptor instead places one output
+    // shard per core on the shard grid; the all-NoC sharded-output path is unique to this factory.)
+    // Equal-shape no-broadcast means each core processes the same tile count of all three operands -- its
+    // output-shard count on the borrow path, its split_work_to_cores share otherwise.
+    if (borrow_shards) {
+        const ShardSpec c_shard = *c.shard_spec();
+        row_major = c_shard.orientation == ShardOrientation::ROW_MAJOR;
+        cores = corerange_to_cores(c_shard.grid, std::nullopt, row_major);
+        c_shard_height = tt::round_up(c_shard.shape[0], c_tile.get_height()) / c_tile.get_height();
+        c_shard_width = tt::round_up(c_shard.shape[1], c_tile.get_width()) / c_tile.get_width();
+        const TensorMemoryLayout memory_layout = c.memory_config().memory_layout();
+        num_shards_per_width = get_shards_per_width(c_shard, memory_layout);
+    } else {
+        row_major = true;
+        const uint32_t tile_hw = c.tensor_spec().tile().get_height() * c.tensor_spec().tile().get_width();
+        const uint32_t rt_c_num_tiles = c.physical_volume() / tile_hw;
+        CoreRangeSet all_cores;
+        std::tie(
+            std::ignore,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_tiles_per_core_group_1,
+            num_tiles_per_core_group_2) = tt::tt_metal::split_work_to_cores(op.worker_grid, rt_c_num_tiles, row_major);
+        cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    }
+    TT_FATAL(!cores.empty(), "binary_ng Quasar-native no-bcast factory: empty core set");
+
+    m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args, compute_args;
+
+    const uint32_t isclose_rtol_bits = std::bit_cast<uint32_t>(op.rtol);
+    const uint32_t isclose_atol_bits = std::bit_cast<uint32_t>(op.atol);
+
+    // Scalar packed to the in1 data format for the writer's one-time fill (mirrors the descriptor
+    // scalar packing). Same value on every core. Quant never reaches this factory (gated out).
+    const uint32_t packed_scalar = is_scalar ? pack_scalar_runtime_arg(*op.scalar, a.dtype(), /*is_quant*/ false) : 0u;
+
+    std::set<CoreRange> target_ranges;
+    uint32_t start_tile_id = 0;
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const CoreCoord& core = cores[i];
+        target_ranges.insert(CoreRange(core, core));
+        const m2::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
+
+        uint32_t a_num_tiles = 0, b_num_tiles = 0, c_num_tiles_core = 0;
+        uint32_t c_start_id = 0, c_current_shard_width = 0;
+        if (borrow_shards) {
+            // Borrow path: each core owns one output shard. Equal-shape no-broadcast => a/b per-core
+            // counts equal the output-shard tile count (every operand is borrowed and publishes its own
+            // matching shard). c_start_id is the global tile id of this output shard's top-left tile.
+            c_num_tiles_core = c_shard_height * c_shard_width;
+            a_num_tiles = c_num_tiles_core;
+            b_num_tiles = c_num_tiles_core;
+            c_current_shard_width = c_shard_width;
+            c_start_id =
+                (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
+        } else {
+            // Off the borrow path: split_work_to_cores gives this core's output tile count, walked
+            // linearly from start_tile_id. Nothing is borrowed here, so every operand is NoC-read/written
+            // and ignores src_num_tiles, walking dst_num_tiles instead; src_num_tiles is still set to the
+            // per-core count for arg-shape parity. (c_current_shard_width stays 0, which the kernels read
+            // only under HAS_SHARDING, i.e. never off the borrow path.)
+            c_num_tiles_core = core_group_1.contains(core) ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
+            a_num_tiles = c_num_tiles_core;
+            b_num_tiles = c_num_tiles_core;
+            c_start_id = start_tile_id;
+            start_tile_id += c_num_tiles_core;
+        }
+
+        reader_args["start_tile_id"][node] = c_start_id;
+        reader_args["src_num_tiles"][node] = a_num_tiles;
+        reader_args["dst_num_tiles"][node] = c_num_tiles_core;
+        reader_args["dst_shard_width"][node] = c_current_shard_width;
+        reader_args["nD_stride"][node] = nD_stride;
+        reader_args["d_stride"][node] = d_stride;
+        reader_args["n_stride"][node] = n_stride;
+        reader_args["c_stride"][node] = c_stride;
+        reader_args["D"][node] = cD;
+        reader_args["N"][node] = cN;
+        reader_args["C"][node] = cC;
+        reader_args["Ht"][node] = cHt;
+        reader_args["Wt"][node] = cWt;
+        reader_args["cND"][node] = cND;
+        reader_args["nD_stride_b"][node] = nD_stride_b;
+        reader_args["d_stride_b"][node] = d_stride_b;
+        reader_args["n_stride_b"][node] = n_stride_b;
+        reader_args["c_stride_b"][node] = c_stride_b;
+        reader_args["src_num_tiles_b"][node] = b_num_tiles;
+
+        if (is_scalar) {
+            writer_args["packed_scalar"][node] = packed_scalar;
+        }
+        writer_args["start_tile_id"][node] = c_start_id;
+        writer_args["dst_num_tiles"][node] = c_num_tiles_core;
+        writer_args["dst_shard_width"][node] = c_current_shard_width;
+        writer_args["D"][node] = cD;
+        writer_args["N"][node] = cN;
+        writer_args["C"][node] = cC;
+        writer_args["Ht"][node] = cHt;
+        writer_args["Wt"][node] = cWt;
+        writer_args["cND"][node] = cND;
+
+        compute_args["num_tiles"][node] = c_num_tiles_core;
+        if (uses_tile_freq_reuse) {
+            // COL: {freq = Wt, tile_start = this core's column offset} -- broadcasts the column tile once
+            // per tile-row and reuses it across the row (freq iterations). SCALAR: {freq = Ht * Wt,
+            // tile_start = this core's offset into the (N,C) slab} -- broadcasts the single-element tile
+            // once per slab and reuses it across the whole slab. Either way tile_start is where this
+            // core's tile range begins within one broadcast period.
+            const auto [tile_freq, tile_start] =
+                calculate_compute_kernel_args(op.subtile_broadcast_type, c_start_id, cHt, cWt);
+            compute_args["tile_freq"][node] = tile_freq;
+            compute_args["tile_start"][node] = tile_start;
+        }
+        if (op_type == BinaryOpType::ISCLOSE) {
+            compute_args["rtol_bits"][node] = isclose_rtol_bits;
+            compute_args["atol_bits"][node] = isclose_atol_bits;
+        }
+    }
+    m2::NodeRangeSet target_nodes(target_ranges);
+
+    // --- Assemble the spec. ---
+    m2::WorkUnitSpec wu{
+        .name = "binary_ng_quasar_native_no_bcast",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = target_nodes,
+    };
+
+    // Scalar has no `b` tensor, so it declares only T_A / T_C (the in1 DFB is writer-filled, not
+    // backed by a TensorParameter).
+    m2::Group<m2::TensorParameter> tensor_params = {{.unique_id = T_A, .spec = a.tensor_spec()}};
+    if (!is_scalar) {
+        tensor_params.push_back({.unique_id = T_B, .spec = b_opt->tensor_spec()});
+    }
+    tensor_params.push_back({.unique_id = T_C, .spec = c.tensor_spec()});
+
+    m2::ProgramSpec spec{
+        .name = "binary_ng_quasar_native_no_bcast",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = dfbs,
+        .tensor_parameters = tensor_params,
+        .work_units = {wu},
+    };
+
+    m2::ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE, .runtime_arg_values = std::move(compute_args)},
+    };
+    // Bind each TensorParameter to its MeshTensor. For in-place add_ (a aliases c) both bindings
+    // resolve to the same MeshTensor; the borrowed DFBs alias the same shard (permitted).
+    run_params.tensor_args.emplace(T_A, m2::ProgramRunArgs::TensorArgument{a.mesh_tensor()});
+    if (!is_scalar) {
+        run_params.tensor_args.emplace(T_B, m2::ProgramRunArgs::TensorArgument{b_opt->mesh_tensor()});
+    }
+    run_params.tensor_args.emplace(T_C, m2::ProgramRunArgs::TensorArgument{c.mesh_tensor()});
+
+    return ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_params),
+        .op_owned_tensors = {},
+    };
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts BinaryNgDeviceOperation::ProgramFactoryQuasarNative::create_program_artifacts(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
+    return CMAKE_UNIQUE_NAMESPACE::create_no_bcast_artifacts(operation_attributes, tensor_args, c);
+}
+
+}  // namespace ttnn::operations::experimental::quasar::binary_ng

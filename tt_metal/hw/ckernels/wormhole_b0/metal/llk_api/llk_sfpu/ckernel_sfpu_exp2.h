@@ -110,7 +110,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
     if constexpr (is_fp32_dest_acc_en) {
         // fp32 path is a hand-scheduled ILP-interleaved body — leave it rolled so
@@ -132,7 +132,7 @@ inline void calculate_exp2() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void exp2_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {

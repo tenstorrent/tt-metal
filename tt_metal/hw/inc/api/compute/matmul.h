@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
@@ -25,9 +26,10 @@ namespace ckernel {
 // defines the FW-controlled throttle level for block matmul kernels on Blackhole
 #define MM_THROTTLE_MAX 5
 // 4-byte word at MEM_L1_ARC_FW_SCRATCH written by FW - even means no throttle, odd means throttle
-volatile tt_l1_ptr uint32_t* throttle_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
+volatile tt_l1_ptr std::uint32_t* throttle_ptr =
+    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
-static uint32_t throttled_mop_status = 0;
+static std::uint32_t throttled_mop_status = 0;
 
 // clang-format off
 /**
@@ -50,12 +52,17 @@ static uint32_t throttled_mop_status = 0;
  */
 // clang-format on
 ALWI void matmul_block_math_dynamic_throttle(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t idst, const uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
-    volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    volatile std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
             MATH((
@@ -98,16 +105,43 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void matmul_init(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
-    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
+#endif
+}
+
+// clang-format off
+/**
+ * (Quasar) Undo the automatic MxFp4 -> MxFp4_2x_B src-format selection applied by matmul_init.
+ *
+ * matmul_init overrides an MxFp4 operand's unpacker OUT_DATA_FORMAT and ALU format to the 2x-packed
+ * MxFp4_2x_B, diverging from the op-agnostic unpack_dst_format[] table. That override PERSISTS: the
+ * non-matmul unpack inits never reprogram OUT_DATA_FORMAT, and reconfig_data_format is silently
+ * skipped for a same-format operand. So a kernel that feeds the SAME MxFp4 buffer to matmul and then
+ * to a non-matmul op (datacopy/SFPU/eltwise) MUST call mm_uninit(in0, in1) after the matmuls and
+ * before the next op, or that op will keep unpacking the buffer as MxFp4_2x_B and produce garbage.
+ * A no-op on non-MxFp4 operands and on non-Quasar architectures.
+ *
+ * | Argument  | Description                                            | Type     | Valid Range | Required |
+ * |-----------|--------------------------------------------------------|----------|-------------|----------|
+ * | in0_cb_id | First input CB used in the matmul (same as matmul_init)| uint32_t | 0 to 31     | True     |
+ * | in1_cb_id | Second input CB used in the matmul                     | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void mm_uninit(std::uint32_t in0_cb_id, std::uint32_t in1_cb_id) {
+#ifdef ARCH_QUASAR
+    UNPACK((llk_unpack_AB_matmul_uninit(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_matmul_uninit(in0_cb_id, in1_cb_id)));
 #endif
 }
 
@@ -130,7 +164,11 @@ ALWI void matmul_init(
  */
 // clang-format on
 ALWI void matmul_tiles(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst) {
     LLK_SAN_FUNCTION();
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
 #ifndef ARCH_QUASAR
@@ -168,13 +206,13 @@ ALWI void matmul_tiles(
  */
 // clang-format on
 ALWI void matmul_block_init(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    const uint32_t transpose = 0,
-    uint32_t ct_dim = 1,
-    uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t ct_dim = 1,
+    std::uint32_t rt_dim = 1,
+    std::uint32_t kt_dim = 1,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
@@ -185,8 +223,7 @@ ALWI void matmul_block_init(
     MATH((throttled_mop_status = 0));
 #endif
 #else
-    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 #endif
 }
@@ -219,16 +256,16 @@ ALWI void matmul_block_init(
  */
 // clang-format on
 ALWI void matmul_block(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t kt_dim,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
@@ -240,7 +277,6 @@ ALWI void matmul_block(
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 #endif
 #else
-    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
     LLK_ASSERT(idst == 0, "non-default idst not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_block(ct_dim, rt_dim)));

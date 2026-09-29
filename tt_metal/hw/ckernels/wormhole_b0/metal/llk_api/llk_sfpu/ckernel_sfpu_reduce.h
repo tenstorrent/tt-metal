@@ -1249,8 +1249,8 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
 
     // Dummy loads to increment dest counters
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_5, 0);
+    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_2, 0);
+    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_1, 0);
 }
 
 /**

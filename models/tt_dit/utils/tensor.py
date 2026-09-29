@@ -406,6 +406,16 @@ def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType)
     return raw.view(torch_dtype).reshape(padded_shape)
 
 
+def as_bf16(t: ttnn.Tensor) -> ttnn.Tensor:
+    """Cast to bf16, skipping the op if the tensor already is bf16.
+
+    `ttnn.typecast` has no same-dtype early-out — it always dispatches a full elementwise copy
+    program — so a redundant cast costs a program launch per call, including on every trace
+    replay. Use this wherever a tensor may already have been cast by the caller.
+    """
+    return t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, dtype=ttnn.bfloat16)
+
+
 def float_to_unit_range(t: ttnn.Tensor) -> ttnn.Tensor:
     """On-device denormalization: map from [-1.0, 1.0] to [0.0, 1.0]."""
     t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)

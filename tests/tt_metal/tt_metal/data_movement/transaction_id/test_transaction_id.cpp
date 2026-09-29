@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -228,7 +227,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
 
 /* ========== TEST CASES ========== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWrite) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -295,7 +294,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) 
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket) {
     // Test ID
     uint32_t test_id = 601;
 
@@ -342,7 +341,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful) {
     // Test ID
     uint32_t test_id = 602;
 
@@ -390,7 +389,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterRead) {
     // Test ID
     uint32_t test_id = 610;
 
@@ -439,7 +438,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead) 
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful) {
     // Test ID
     uint32_t test_id = 611;
 
@@ -498,7 +497,7 @@ inline bool quasar_grid_ok(IDevice* device) {
 }
 }  // namespace unit_tests::dm::transaction_id
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWrite_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto arch_ = device->arch();
@@ -552,7 +551,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite_2
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacket_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto arch_ = device->arch();
@@ -606,7 +605,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto arch_ = device->arch();
@@ -662,7 +661,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterRead_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto arch_ = device->arch();
@@ -716,7 +715,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead_2
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementTransactionIdWriteAfterReadOnePacketStateful_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto arch_ = device->arch();

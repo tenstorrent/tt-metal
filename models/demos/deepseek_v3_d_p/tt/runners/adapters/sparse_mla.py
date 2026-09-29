@@ -40,6 +40,7 @@ class SparseMLAPrefillAdapter(MLAPrefillAdapter):
     """
 
     supports_pretrained = False
+    pretrained_mla_layer = None  # no reachable checkpoint, hence no MLA weights and no GPU trace
     # No golden prefill trace: these variants are exercised only by the sparse-MLA reference
     # tests, which build their own traces. Set explicitly so ``.prefill_trace_default`` is always
     # readable (the base declares it annotation-only).

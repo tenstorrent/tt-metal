@@ -42,6 +42,9 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
     default_gate_mode = "DEVICE_FP32"
     # Single expert group + device gate like GLM/Kimi: the routing all-gather's semaphores go to L1_SMALL.
     l1_small_size = 1152
+    # prefill_runner: the tail (hyper-connection head + final norm, no LM head, no host sync) is inside the trace islands,
+    # so PREFILL_USE_TRACE=1 with PREFILL_KV_ONLY_LAST_LAYER=0 is safe (tail_hidden_row reads one row after the replay)
+    traced_tail_ok = True
     routing_use_l1_small_for_semaphores = True
     supports_dflash = False
 

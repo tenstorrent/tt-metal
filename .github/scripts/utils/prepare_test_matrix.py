@@ -35,7 +35,6 @@ it is copied into each output matrix entry.
 
 Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
-    python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
     python prepare_test_matrix.py tests/pipeline_reorg/blackhole_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml --event merge_group
 """
 
@@ -286,6 +285,12 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             for key, value in sku_test_config.items():
                 if key != "timeout" and value is not None:
                     entry[key] = value
+            # ai_summary is the authoring surface in the tests yaml; flatten it so an impl
+            # reads a plain key instead of guarding on the section. Only the impls that
+            # forward authoritative_job_status act on it -- setting it on a test under any
+            # other impl is computed here and then dropped.
+            ai_summary = entry.pop("ai_summary", None) or {}
+            entry["authoritative_job_status"] = bool(ai_summary.get("authoritative_job_status", False))
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]

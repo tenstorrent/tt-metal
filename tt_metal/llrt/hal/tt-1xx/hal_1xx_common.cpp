@@ -5,6 +5,9 @@
 #include "hal_1xx_common.hpp"
 #include "hal_types.hpp"
 #include "rtoptions.hpp"
+
+#include <filesystem>
+
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::hal_1xx {
@@ -87,7 +90,23 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                     switch (params.processor_id) {
                         case 0:
                             if (params.is_fw) {
-                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
+                                switch (params.rtoptions.get_brisc_firmware_variant()) {
+                                    case tt::llrt::BriscFirmwareVariant::Default:
+                                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
+                                        break;
+                                    case tt::llrt::BriscFirmwareVariant::Blaze: {
+                                        const auto tt_metal_root =
+                                            std::filesystem::weakly_canonical(params.rtoptions.get_root_dir());
+                                        const auto blaze_brisc =
+                                            tt_metal_root.parent_path() / "blaze/firmware/brisc.cc";
+                                        TT_FATAL(
+                                            std::filesystem::is_regular_file(blaze_brisc),
+                                            "TT_METAL_FW_SRC_BRISC=blaze requires {}",
+                                            blaze_brisc.string());
+                                        srcs.push_back(blaze_brisc.string());
+                                        break;
+                                    }
+                                }
                             } else {
                                 srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisck.cc");
                             }

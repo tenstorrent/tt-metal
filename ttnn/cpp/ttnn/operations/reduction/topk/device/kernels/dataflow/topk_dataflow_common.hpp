@@ -29,11 +29,11 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
     constexpr uint32_t one_tile = 1;
 
     // Reserve space
-    DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(one_tile);
 
     // Writer config
-    CoreLocalMem<volatile T> ptr(dfb.get_write_ptr());
+    const CoreLocalMem<volatile T> ptr(dfb.get_write_ptr());
     const uint32_t w = wt << 5;  // wt * 2^(5)
 
     // Writer loop
@@ -49,7 +49,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
         for (uint32_t j = 0; j < tile_faces; ++j) {
             for (uint32_t k = 0; k < face_size; ++k) {
                 for (uint32_t l = 0; l < face_size; l++) {
-                    const T value = l + face_size * j + w;
+                    const T value = static_cast<T>(l + (face_size * j) + w);
                     ptr[count] = value;
                     count++;
                 }  // l loop

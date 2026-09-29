@@ -158,6 +158,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(KERNEL_PATHS[1]),
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {m2::DFBBinding{
                  .dfb_spec_name = START, .accessor_name = "start", .endpoint_type = m2::DFBEndpointType::CONSUMER},

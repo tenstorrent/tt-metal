@@ -108,8 +108,9 @@ enum : uint32_t {
     CB_KREQ,
     CB_KACK,
     PACKED_ROW_BYTES,
-    CB_SINK,   // attention sink column tiles [Sqt, 1] (writer-built once from the sink tensor)
-    USE_SINK,  // 1 when an attention_sink tensor was given
+    USE_ATTENTION_SINK,
+    CB_ATTENTION_SINK,
+    CB_SINK_SCRATCH,
     END,
 };
 }  // namespace writer_ct_arg
@@ -149,8 +150,8 @@ enum : uint32_t {
     MATH_APPROX_MODE,
     QUERY_SUBBLOCK,
     PACKED_ROW_BYTES,
-    CB_SINK,   // attention sink column tiles [Sqt, 1]
-    USE_SINK,  // 1 when the softmax denominator gets the per-head sink term
+    USE_ATTENTION_SINK,
+    CB_ATTENTION_SINK,
     END,
 };
 }  // namespace compute_ct_arg

@@ -299,6 +299,7 @@ class TtV4PrefillRuntime:
         d2h_service=None,
         record_dev=None,
         warmup: bool = False,
+        metadata_msg=None,  # main's runner passes the chunk's metadata message (d93cf9e1c31); unused by V4
     ):
         c = self.config
         assert d2h_service is None, "the V4 runtime acks through set_layer_ack_channel / set_layer_completion_sink"

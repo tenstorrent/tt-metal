@@ -112,32 +112,11 @@ private:
     DEVICE_OP_MAP map;
 };
 
-class thread_safe_call_stack {
-public:
-    void push(const TracyCZoneCtx& ctx) {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        call_stack.push(ctx);
-    }
-    bool empty() {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        return call_stack.empty();
-    }
-    void pop() {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        call_stack.pop();
-    }
-    TracyCZoneCtx& top() {
-        std::scoped_lock<std::mutex> lock(stack_mutex);
-        return call_stack.top();
-    }
-
-private:
-    std::mutex stack_mutex;
-    std::stack<TracyCZoneCtx> call_stack;
-};
-
+// Zone nesting is inherently per-thread (Tracy's own ZoneScopedN uses a per-thread stack
+// internally); a single shared stack here would let two threads pop each other's context and
+// silently corrupt zone durations, so this stack must stay thread_local rather than mutex-shared.
 inline thread_safe_cached_ops_map cached_ops{};
-inline thread_safe_call_stack call_stack;
+inline thread_local std::stack<TracyCZoneCtx> call_stack;
 inline bool op_profiler_is_enabled = false;
 
 #endif  // TRACY_ENABLE

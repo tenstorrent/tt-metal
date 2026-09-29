@@ -661,6 +661,20 @@ PERF_MEASURE_ITERS = 1
 # ---------------------------------------------------------------------------
 
 
+def get_dispatch_drain_core(mesh_device):
+    """Pick the core that holds all_to_all_dispatch_metadata's indices/scores shard.
+
+    Has to come from the compute grid so the L1 allocator owns the core: on Galaxy the
+    grid is 7x10 when the dispatch cores take the last column and 8x9 when they take the
+    last row, so a fixed (6, 9) is the bottom-right compute core in the first case and a
+    dispatch core in the second.  Bottom-right also keeps the shard away from the
+    DRAM-bank cores moe_gpt runs its matmuls on, which is where its tilize cores read
+    this shard from.
+    """
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    return ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+
+
 def get_moe_gpt_combine_core_range(mesh_device, combine_w=3, combine_h=4):
     """Find the COMBINE_W×COMBINE_H rectangle that moe_gpt uses for combine output.
 
@@ -852,7 +866,7 @@ def run_test_dispatch(mesh_device, tokens_global, hidden_size, selected_experts_
     tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
 
     # Pre-allocate dispatch outputs
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    dispatch_drain_core = get_dispatch_drain_core(mesh_device)
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [tokens_global, selected_experts_k],
@@ -1056,7 +1070,7 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     )
     tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
 
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    dispatch_drain_core = get_dispatch_drain_core(mesh_device)
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],
@@ -1405,7 +1419,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     )
     tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
 
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    dispatch_drain_core = get_dispatch_drain_core(mesh_device)
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],
@@ -1969,7 +1983,7 @@ def run_test_moe_gpt_e2e(
     # Dispatch writes one row per ring device (ring_devices * total_tokens total rows globally).
     # moe_gpt needs [total_tokens, K] (2D), so we reshape AFTER converting to L1.
     # ------------------------------------------------------------------
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    dispatch_drain_core = get_dispatch_drain_core(mesh_device)
 
     # Sparse buffer: [ring_devices, total_tokens, K] → [1, 128, 2880] per device (DRAM)
     dispatch_sparse_shape = torch.zeros(ring_devices, total_tokens, K, dtype=torch.bfloat16)
@@ -2592,7 +2606,7 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
     tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
 
     # Dispatch output tensors
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    dispatch_drain_core = get_dispatch_drain_core(mesh_device)
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],
@@ -2934,7 +2948,7 @@ def run_test_full_pipeline_multi_iter(
     )
     input_indices_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    dispatch_drain_core = get_dispatch_drain_core(mesh_device)
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],

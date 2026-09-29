@@ -35,6 +35,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig + CreateKernel(DramConfig)
+#include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"  // receiver_socket_md (for L1 layout sizing)
 
@@ -401,20 +402,42 @@ TensorPrefetcherManager::TensorPrefetcherManager(
 TensorPrefetcherManager::~TensorPrefetcherManager() { stop(); }
 
 void TensorPrefetcherManager::enumerate_dram_senders() {
-    const auto context_id = mesh_device_->impl().get_context_id();
-    const auto& soc_desc = MetalContext::instance(context_id)
-                               .get_cluster()
-                               .get_soc_desc(mesh_device_->get_view().get_devices().front()->id());
-    const uint32_t num_banks = soc_desc.get_num_dram_views();
-    num_banks_ = num_banks;
-    sender_logical_cores_.clear();
-    sender_logical_cores_.reserve(2 * num_banks);
-    for (uint32_t b = 0; b < num_banks; ++b) {
-        // Two senders per bank: the free subchannel then the NOC1-endpoint subchannel.
-        // A queued GCB may use the primary only or both; PREFETCH fan-out targets its mapping.
-        for (const CoreCoord& core : mesh_device_->impl().dram_sender_logical_cores(b)) {
-            sender_logical_cores_.push_back(core);
+    TT_FATAL(!devices_.empty(), "Tensor prefetcher requires at least one device");
+    // dram_grid_size() already TT_FATALs unless every device in the mesh reports the same bank count.
+    num_banks_ = mesh_device_->dram_grid_size().x;
+
+    // Logical DRAM coords name an endpoint role, so a bank's two senders have the same logical
+    // coords on every device even when their DRAM harvest masks differ; only the physical
+    // subchannel each one resolves to changes. Build the list from the reference device and check
+    // the rest agree, because everything downstream (socket placement, kernel placement, GCB sender
+    // indices) indexes senders by slot and would otherwise silently drive another device's wrong
+    // DRISC core.
+    const auto senders_on = [this](const IDevice* device) {
+        std::vector<CoreCoord> senders;
+        senders.reserve(2 * num_banks_);
+        for (uint32_t b = 0; b < num_banks_; ++b) {
+            // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
+            const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
+            TT_FATAL(
+                bank_senders.size() == 2,
+                "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
+                b,
+                device->id(),
+                bank_senders.size());
+            senders.insert(senders.end(), bank_senders.begin(), bank_senders.end());
         }
+        return senders;
+    };
+
+    const IDevice* reference_device = devices_.front();
+    sender_logical_cores_ = senders_on(reference_device);
+    for (size_t d = 1; d < devices_.size(); ++d) {
+        TT_FATAL(
+            senders_on(devices_[d]) == sender_logical_cores_,
+            "Tensor prefetcher: DRAM sender slots on device {} name different logical cores than on reference "
+            "device {}; every device must resolve slot s to the same (bank, role)",
+            devices_[d]->id(),
+            reference_device->id());
     }
     num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
@@ -516,8 +539,18 @@ void TensorPrefetcherManager::start() {
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
+        ">= 19.12.0.0");
 
+    // Populate devices_ before resolving sender slots: enumerate_dram_senders checks the slots
+    // against every device's DRAM topology. Build the coord->index map at the same time so
+    // worker_loop fan-out is O(targets).
+    devices_.clear();
+    device_index_by_coord_.clear();
+    for (auto* device : mesh_device_->get_view().get_devices()) {
+        const uint32_t d = static_cast<uint32_t>(devices_.size());
+        devices_.push_back(device);
+        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
+    }
     enumerate_dram_senders();
 
     // DRISC L1 layout: the kernel working region (above the GCB zone) is now
@@ -578,22 +611,12 @@ void TensorPrefetcherManager::start() {
     ring_half_ = stage_ring_size_ / 2;
     stage_third_ = stage_ring_size_ / 3;
 
-    // Populate devices_ list once; both allocate_sockets and build_and_launch_programs use it.
-    // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
-    devices_.clear();
-    device_index_by_coord_.clear();
-    for (auto* device : mesh_device_->get_view().get_devices()) {
-        const uint32_t d = static_cast<uint32_t>(devices_.size());
-        devices_.push_back(device);
-        device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
-    }
-
     allocate_sockets();
     build_and_launch_programs(stage_ring_base_, stage_ring_size_);
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::detail::CompileProgram(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
+        programs_[d]->impl().compile(devices_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(devices_[d], *programs_[d], /*force_slow_dispatch=*/true);
         ::tt::tt_metal::detail::LaunchProgram(
             devices_[d], *programs_[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
@@ -1059,6 +1082,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     for (const auto& coord : target_devices) {
         IDevice* device = devices_[device_index_by_coord_.at(coord)];
         for (uint32_t s = 0; s < num_senders_; ++s) {
+            // Per-device translation; see metal_SocDescriptor::dram_bank_endpoint_coords.
             const CoreCoord virtual_core =
                 device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
             targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
@@ -1114,6 +1138,10 @@ void TensorPrefetcherManager::worker_loop() {
         {
             std::unique_lock<std::mutex> lk(queue_mu_);
             queue_cv_.wait(lk, [&] { return !pending_.empty() || stop_requested_.load(); });
+            if (abort_requested_.load()) {
+                // Forced stop: drop whatever is still queued rather than trying to place it.
+                return;
+            }
             if (pending_.empty()) {
                 // Stop with empty queue → break out, the main thread handles
                 // sentinel broadcast outside the lock.
@@ -1184,6 +1212,11 @@ void TensorPrefetcherManager::worker_loop() {
             // If no socket drained this pass, every remaining target is back-pressured;
             // yield rather than busy-spinning at 100% CPU until a receiver frees a page.
             if (next_pending.size() == still_pending.size()) {
+                if (abort_requested_.load()) {
+                    // A wedged kernel never drains its socket, so this loop would otherwise
+                    // never terminate and stop() could never join us.
+                    return;
+                }
                 std::this_thread::yield();
             }
             still_pending = std::move(next_pending);
@@ -1191,12 +1224,45 @@ void TensorPrefetcherManager::worker_loop() {
     }
 }
 
-void TensorPrefetcherManager::stop() {
+void TensorPrefetcherManager::stop(bool force) {
     // Note: the MeshDevice close path (close_impl) calls stop() without holding
     // api_mutex_, and the destructor only reaches here after active_ is already
     // false, so taking the lock here never self-deadlocks.
     auto lock = lock_api_function_();
     if (!active_) {
+        return;
+    }
+    if (force) {
+        // Abandon rather than handshake: see the header for why the clean path cannot retire a
+        // prefetcher that has undrained requests. Drop the queue and wake the worker, which
+        // checks abort_requested_ both before taking a request and inside its try_write spin.
+        abort_requested_.store(true);
+        {
+            std::lock_guard<std::mutex> lk(queue_mu_);
+            pending_.clear();
+            stop_requested_.store(true);
+        }
+        queue_cv_.notify_all();
+        if (host_worker_.joinable()) {
+            host_worker_.join();
+        }
+        // No sentinel and no WaitProgramDone: the kernels are presumed wedged, and both of those
+        // would block forever. They keep running until the device is closed or reset, which is
+        // why this path is documented as last-resort. Host state is released so the close path
+        // sees an inactive prefetcher and does not try to stop it again (which would hang).
+        sockets_.clear();
+        programs_.clear();
+        devices_.clear();
+        device_index_by_coord_.clear();
+        sender_logical_cores_.clear();
+        trace_requests_.clear();
+        num_senders_ = 0;
+        active_ = false;
+        abort_requested_.store(false);
+        log_warning(
+            tt::LogMetal,
+            "Tensor prefetcher force-stopped: pending requests were dropped and the DRISC kernels "
+            "abandoned. The device must be closed or reset before starting another prefetcher.");
         return;
     }
     // Stop = a zero-filled page broadcast to every device in the mesh. The leading
@@ -1244,6 +1310,7 @@ void TensorPrefetcherManager::stop() {
     sender_logical_cores_.clear();
     trace_requests_.clear();
     num_senders_ = 0;
+    num_banks_ = 0;
     active_ = false;
 }
 
@@ -1255,11 +1322,26 @@ void TensorPrefetcherManager::stop() {
 namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
-    const auto& hal = MetalContext::instance(mesh_device.impl().get_context_id()).hal();
-    return hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    const auto& metal = MetalContext::instance(mesh_device.impl().get_context_id());
+    // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
+    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
+    // relay takes that same free subchannel with BOTH of its NIUs in stream mode
+    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
+    // wins and the prefetcher reports unsupported rather than racing it for the core.
+    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+        return false;
+    }
+    return metal.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig&) {
+    TT_FATAL(
+        IsTensorPrefetcherSupported(mesh_device),
+        "Tensor prefetcher is not supported on this mesh device. Either programmable DRAM cores are "
+        "unavailable (they auto-enable on Blackhole with firmware >= 19.12.0.0), or the streaming profiler "
+        "is enabled (TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the prefetcher needs. Unset "
+        "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
+        "skip the prefetcher path.");
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.start();
 }
@@ -1281,9 +1363,9 @@ void WaitForCqOnTensorPrefetcher(
     manager.enqueue_cq_signal_and_wait(cq, device_subset);
 }
 
-void StopTensorPrefetcher(distributed::MeshDevice& mesh_device) {
+void StopTensorPrefetcher(distributed::MeshDevice& mesh_device, bool force) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.stop();
+    manager.stop(force);
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -72,7 +72,7 @@ void kernel_main() {
         reconfig_data_format(dfb_inp_id, dfb_inp_id);
         pack_reconfig_data_format(dfb::x2);
         if constexpr (unpack_fp32_active) {
-            copy_tile_to_dst_init_short(dfb_inp_id);
+            copy_init(dfb_inp_id);
             square_tile_init();
         } else {
             mul_init(dfb_inp_id, dfb_inp_id);
@@ -146,7 +146,7 @@ void kernel_main() {
         // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
         // add_tiles would pull each through SrcA/SrcB and round it to TF32.
         if constexpr (unpack_fp32_active) {
-            copy_tile_to_dst_init_short(dfb::x2_merge);
+            copy_init(dfb::x2_merge);
             add_binary_tile_init();
         } else {
             add_init(dfb::x2_merge, dfb::zero, true);

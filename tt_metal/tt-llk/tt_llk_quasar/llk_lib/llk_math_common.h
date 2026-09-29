@@ -321,7 +321,7 @@ inline void _llk_math_pack_sync_init_()
     // Wait for previous packs to finish before claiming all dest
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
-    };
+    }
 
     _reset_dest_register_offset_();
     _set_dest_section_base_<TRISC_ID>(_get_dest_buffer_base_());

@@ -22,6 +22,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from models.common.utility_functions import skip_for_blackhole
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
@@ -643,6 +646,8 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
@@ -681,6 +686,8 @@ def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, element
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
@@ -831,3 +838,38 @@ def test_moreh_layer_norm_rstd_only_mean_none(device):
     pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=0.09, atol=0.06)
     logger.debug(f"rstd's {out_rstd}")
     assert pass_rstd
+
+
+# The input_grad factory picks between a small and a large algorithm on whether its dataflow buffers
+# fit in L1, and only the large one binds reader_moreh_layer_norm_backward_input_grad_large.cpp. Every
+# other shape in this file is small enough that the large path is never selected, so this case exists to
+# exercise it. The two terms that scale are the dycopy and y buffers, both num_inner tiles deep:
+#     dfb_usage = (8 + gamma + mask) * tile + (2*num_inner + 6) * intermed_tile
+# so num_inner has to clear roughly 330 tiles on Wormhole. Ht*Wt = 16*32 = 512 here, comfortably past
+# it. The unaligned 500 and 1000 extents additionally make both mask predicates true, which is the only
+# configuration that binds mask_h_w on the large path; normalized_dims=2 is what lets do_mask_h fire at
+# all (it is gated on !is_lastdim_layer_norm). fp32_dest_acc_en=True additionally puts the intermediate
+# buffers in Float32, the case that requires explicit unpack modes.
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
+@pytest.mark.parametrize(
+    "elementwise_affine",
+    [False, True],
+    ids=["elementwise_affine=False", "elementwise_affine=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([1, 2, 500, 1000], 2),
+    ],
+    ids=["[1,2,500,1000]-normalized_dims=2"],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_layer_norm_backward_large_algorithm(
+    input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, dtype, device
+):
+    torch.manual_seed(2024)
+    run_moreh_layer_norm_backward(
+        input_shape_normalized_dims, elementwise_affine, eps, dtype, device, compute_kernel_options
+    )

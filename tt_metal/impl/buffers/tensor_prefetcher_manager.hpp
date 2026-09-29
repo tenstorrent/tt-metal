@@ -107,7 +107,19 @@ public:
     // must be within [0, kNumCqSignalSlots).
     void enqueue_cq_signal_and_wait(MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset);
 
-    void stop();
+    // Retire the senders. The normal path (`force == false`) is a clean handshake: broadcast the
+    // stop sentinel and wait for every kernel to exit on it.
+    //
+    // `force` abandons the kernels instead, and exists for one situation: an error path where
+    // requests have been queued that nothing will ever consume. The clean path cannot serve that
+    // case by construction -- the sentinel goes on the *back* of the same FIFO the orphaned
+    // requests are in, so the kernel blocks on a full GCB long before it reaches the sentinel and
+    // the wait never returns. That turns any failure between queueing a request and running its
+    // matmul into a hang that buries the original error. A forced stop drops the pending queue,
+    // unblocks the host worker, and skips the kernel wait, so the caller's exception propagates.
+    // It leaves DRISC kernels running on the device: only use it when the device is about to be
+    // closed or reset.
+    void stop(bool force = false);
 
     bool is_active() const { return active_; }
 
@@ -179,9 +191,11 @@ private:
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] = logical DRAM core for sender s. Both available
-    // sender cores per bank are provisioned at start. Each queued GCB may map either
-    // the primary sender only or both senders; PREFETCH requests target that subset.
+    // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
+    // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
+    // queued GCB may map the primary only or both, and PREFETCH requests target that subset.
+    // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
+    // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;
@@ -203,6 +217,9 @@ private:
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
     std::atomic<bool> stop_requested_{false};
+    // Set by a forced stop() to break worker_loop out of its round-robin try_write spin, which
+    // has no other exit: a wedged kernel never drains its socket, so the write never lands.
+    std::atomic<bool> abort_requested_{false};
 
     // Requests captured during trace capture, keyed by the recording trace's id. Populated by
     // queue() when its command queue is mid-capture; drained back onto pending_ by

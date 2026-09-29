@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "../dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -257,7 +257,7 @@ void directed_performance_test(
 
 /* ========== TEST CASES ========== */
 
-TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreAdjacentIncrementValueSweep) {
+TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreAdjacentIncrementValueSweep) {
     uint32_t test_id = 340;
 
     unit_tests::dm::atomics::increment_value_sweep_test(
@@ -268,7 +268,7 @@ TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreAdjacentIncrementValueSweep) {
     );
 }
 
-TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) {
+TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) {
     uint32_t test_id = 341;
 
     auto logical_grid_size = get_mesh_device()->logical_grid_size();

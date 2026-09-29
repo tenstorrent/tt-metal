@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <cerrno>
 #include <string>
-#include <string_view>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -24,34 +23,14 @@
 #include <tt_stl/cleanup.hpp>
 
 #include "tensor/tensor_spec.hpp"
+#include "tensor/flatbuffer/tensor_file_layout.hpp"
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn {
-using tt::tt_metal::HostBuffer;
 using tt::tt_metal::MemoryPin;
 
 namespace {
-
-void safe_fwrite_bytes(
-    const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {
-    TT_FATAL(bytes > 0, "Expected to write > 0 bytes to file");
-
-    // Use byte-wise fwrite so we can detect partial writes
-    const size_t written = fwrite(buffer, /*size=*/1, /*count=*/bytes, file);
-    TT_FATAL(
-        written == bytes,
-        "Failed to write {} to \"{}\": wrote {}/{} bytes (ferror={}, errno={} \"{}\")",
-        what,
-        filename,
-        written,
-        bytes,
-        ferror(file),
-        errno,
-        strerror(errno));
-}
-
-constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
 void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
     Tensor cpu_tensor = tensor.cpu();
@@ -95,25 +74,13 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         }
     });
 
-    std::vector<HostBuffer> buffers;
+    std::vector<SerializedTensorBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
-    // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
-    // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
-    // which is already what we need for `mmap` to work.
-    builder.Align(kFlatbufferAlignment);
     builder.Finish(tensor_offset);
 
-    const uint64_t header_size = builder.GetSize();
-    safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, temp_file_name, "tensor header size");
-    safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, temp_file_name, "tensor header");
-
-    for (const auto& buffer : buffers) {
-        auto buffer_view = buffer.view_bytes();
-        TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
-        safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, temp_file_name, "tensor data");
-    }
-
+    // main's 64-byte-aligned file layout (#56434), written to OUR per-process temp path and renamed into place
+    write_tensor_file(output_file, temp_file_name, builder, buffers);
     TT_FATAL(
         fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
     // Atomically publish. Only now is the path safe for a concurrent reader.
@@ -180,8 +147,9 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
 
     std::byte* data_region = file_data + data_offset;
     TT_FATAL(
-        (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
-        "Tensor data pointer must be 8-byte aligned!");
+        (reinterpret_cast<uintptr_t>(data_region) & (kMinTensorDataAlignment - 1)) == 0,
+        "Tensor data pointer must be {}-byte aligned!",
+        kMinTensorDataAlignment);
 
     Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {

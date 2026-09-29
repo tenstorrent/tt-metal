@@ -39,20 +39,13 @@ inline void generalized_moe_gate_merge16_to_run() {
     _gmg_merge16_to_run<APPROXIMATION_MODE, is_fp32_dest_acc_en, store_lo, store_hi, idx_offset>();
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    bool is_fp32_dest_acc_en,
-    uint32_t from_lo,
-    uint32_t from_hi,
-    uint32_t to_lo,
-    uint32_t to_hi>
+template <bool APPROXIMATION_MODE, uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
 inline void generalized_moe_gate_copy_topk_run() {
     _gmg_copy_topk_run<from_lo, from_hi, to_lo, to_hi>();
 }
 
 template <
     bool APPROXIMATION_MODE,
-    bool is_fp32_dest_acc_en,
     uint32_t field,
     uint32_t src_lo,
     uint32_t src_hi,

@@ -22,7 +22,6 @@ MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig = (
 MatmulParams = ttnn._ttnn.operations.matmul.MatmulParams
 MatmulInputs = ttnn._ttnn.operations.matmul.MatmulInputs
 MatmulDeviceOperation = ttnn._ttnn.operations.matmul.MatmulDeviceOperation
-MatmulMultiCoreReuseOptimizedProgramFactory = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory
 create_matmul_attributes = ttnn._ttnn.operations.matmul.create_matmul_attributes
 matmul_select_program_factory = ttnn._ttnn.operations.matmul.matmul_select_program_factory
 

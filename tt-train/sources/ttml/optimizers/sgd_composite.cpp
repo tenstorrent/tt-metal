@@ -59,23 +59,24 @@ void SGDComposite::step() {
         }
 
         if (m_config.momentum != 0.0F) {
-            if (m_steps != 0) {
-                // apply momentum
+            // A buffer's first update must produce theta = g (PyTorch seeds fresh buffers with
+            // the raw gradient); the buffer is zero at that point, so momentum and dampening
+            // are skipped for it.
+            const bool first_momentum_update = m_theta_initialized.insert(name).second;
+            if (!first_momentum_update) {
                 theta = ttnn::multiply(
                     theta,
                     m_config.momentum,
                     /* fast_and_approximate_mode*/ true);
-                // dampening
-                if (m_config.dampening != 0.0F) {
-                    theta = ttnn::add(
-                        theta,
-                        ttnn::multiply(
-                            gradients,
-                            1 - m_config.dampening,
-                            /* fast_and_approximate_mode*/ true));
-                } else {
-                    theta = ttnn::add(theta, gradients);
-                }
+            }
+            const float dampening = first_momentum_update ? 0.0F : m_config.dampening;
+            if (dampening != 0.0F) {
+                theta = ttnn::add(
+                    theta,
+                    ttnn::multiply(
+                        gradients,
+                        1 - dampening,
+                        /* fast_and_approximate_mode*/ true));
             } else {
                 theta = ttnn::add(theta, gradients);
             }
@@ -114,6 +115,15 @@ void SGDComposite::set_state_dict(const serialization::StateDict& dict) {
     m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    // Restored buffers are treated as past their first update. Buffers are preallocated
+    // for every trainable parameter, so a buffer that never received a gradient before the
+    // checkpoint (frozen parameter, or a checkpoint saved before any step) is also marked,
+    // and its first resumed update applies dampening to a zero buffer — an accepted corner
+    // case, since distinguishing it would require serializing this set.
+    m_theta_initialized.clear();
+    for (const auto& [name, tensor_ptr] : m_theta) {
+        m_theta_initialized.insert(name);
+    }
 }
 
 size_t SGDComposite::get_steps() const {

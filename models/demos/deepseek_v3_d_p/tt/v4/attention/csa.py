@@ -440,7 +440,8 @@ class TtCSAIndexer(_TtHCABase):
         # hidden_states is TP-sharded on the model dim: the gate weights stay input-sharded partials + one tiny
         # all-reduce ([1, 1, S_l, H]); only wq_b (which consumes the replicated q latent) is replicated
         w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
-        w = ttnn.permute(ttnn.multiply(w, self.scale), (0, 3, 2, 1))  # [1, H, S_l, 1], scale pre-folded
+        # main's indexer_score_dsa (#55614) takes the weights as [B, 1, Sq, Hi]: the linear's own layout, no permute
+        w = ttnn.multiply(w, self.scale)  # [1, 1, S_l, H], scale pre-folded
         E = entry_count + n_new
         E_tiles = -(-E // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         # The op's token causality (key t visible to query s of SP device r iff t <= chunk_start + r*Sq + s) is defeated
@@ -495,7 +496,7 @@ class TtCSAIndexer(_TtHCABase):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         q = ttnn.concat([nope, rope], dim=-1)
         w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
-        w = ttnn.permute(ttnn.multiply(w, self.scale), (0, 3, 2, 1))
+        w = ttnn.multiply(w, self.scale)  # [1, 1, S_l, H] (indexer_score_dsa's [B, 1, Sq, Hi] contract, main #55614)
         cap = int(index_k.shape[2])
         sp = self.sp_factor
         kv_len = (cap // 64) * 64
@@ -1206,17 +1207,19 @@ class TtCSA(TtHCA):
         self._write_rm_pieces(state.slab_rm, [rm_block], 0, row)
 
     def _sink_column(self, all_heads: bool):
-        """[1, 1, H, 32] bf16 TILE: each head's sink / scale in column 0 (sparse_sdpa's attention_sink contract). All
+        """[1, 1, 1, H] bf16 ROW_MAJOR DRAM interleaved: each head's sink / scale (main's sparse_sdpa attention_sink
+        contract, #55755 -- the op multiplies by scale, so the model's already-scaled sink goes in as sink / scale). All
         heads replicated when the op runs on the head-gathered q, else this chip's TP shard of heads."""
         dev = self._sink_col_dev.get(all_heads) if isinstance(self._sink_col_dev, dict) else None
         if dev is None:
             if not isinstance(self._sink_col_dev, dict):
                 self._sink_col_dev = {}
-            col = (
-                self._sinks_over_scale_host.view(1, 1, self.num_heads, 1).expand(1, 1, self.num_heads, 32).contiguous()
-            )
+            col = self._sinks_over_scale_host.view(1, 1, 1, self.num_heads).to(torch.bfloat16).contiguous()
             dev = self._sink_col_dev[all_heads] = self._from_torch(
-                col, mesh_mapper=None if all_heads else self._mesh_mapper(tp_dim=2)
+                col,
+                mesh_mapper=None if all_heads else self._mesh_mapper(tp_dim=3),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
         return dev
 
