@@ -63,7 +63,7 @@ def hf_layers(model):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a", "indexer"},
+    "dense_full": {"attn_hc", "attn_hc_pre", "attn_norm", "q_a", "indexer", "attention"},
     "moe_full": set(),
     "moe_shared": set(),
 }
@@ -78,6 +78,8 @@ _NORM_STEPS = {"attn_norm": "input_layernorm"}
 _QA_STEPS = {"q_a"}
 # DSA indexer (tt/indexer.py:TtHy4Indexer), stateful: owns the layer's device index-key cache.
 _INDEXER_STEPS = {"indexer"}
+# Gated sparse MLA (tt/attention.py:TtHy4Attention), stateful: owns the layer's device MLA latent cache.
+_ATTENTION_STEPS = {"attention"}
 
 
 def _loader(spec):
@@ -228,6 +230,7 @@ class _IndexerHostFn:
     ``load_prefix`` / ``read_state``."""
 
     stateful = True
+    state_key = "index_key"
 
     def __init__(self, mesh, module):
         self.mesh, self.mod = mesh, module
@@ -263,6 +266,92 @@ class _IndexerHostFn:
         return torch.where(out == 0xFFFFFFFF, torch.full_like(out, -1), out)
 
 
+def _attention_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtHy4Attention: q_b / linear_gate column (head) split, kv_b per head, o_proj row-parallel, kv_a K-split (all
+    bf16 as stored); kv_a_layernorm eps 1e-6; sink x 16 with scale 1/16; bf16 block-cyclic latent cache."""
+    from models.demos.hy4_preview_d_p.reference.hy4_ref import LATENT_NORM_EPS
+    from models.demos.hy4_preview_d_p.tt.attention import TtHy4Attention
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    p = f"model.layers.{layer}.self_attn."
+    w = lambda n: loader.get(p + n).float()  # noqa: E731
+    return TtHy4Attention(
+        mesh,
+        w("q_b_proj.weight"),
+        w("kv_a_proj_with_mqa.weight"),
+        w("kv_a_layernorm.weight"),
+        w("kv_b_proj.weight"),
+        w("linear_gate.weight"),
+        w("o_proj.weight"),
+        w("learnable_sink_param"),
+        n_heads=cfg.num_attention_heads,
+        nope_dim=cfg.qk_nope_head_dim,
+        rope_dim=cfg.qk_rope_head_dim,
+        v_dim=cfg.v_head_dim,
+        kv_lora_rank=cfg.kv_lora_rank,
+        rope_theta=cfg.rope_theta,
+        eps=LATENT_NORM_EPS,
+        scale=cfg.scale,
+    )
+
+
+class _AttentionHostFn:
+    """fn(ctx, attn_norm_host [S, H], q_resid_host [S, 2048], topk_host [S, 2048] int64 -1 padded) -> attn_out host
+    [S, H] fp32.
+
+    Harness boundary around TtHy4Attention, which keeps the layer's MLA latent cache on the device. With a device
+    ctx (component / swap tests: ``state_prefix``, ``prefix_len``, ``max_seq`` in ctx.extra) every call reloads the
+    golden kv_latent prefix. In the hybrid model the cache persists across chunks; the hybrid state calls ``reset``
+    / ``load_prefix`` / ``read_state``."""
+
+    stateful = True
+    state_key = "kv_latent"
+
+    def __init__(self, mesh, module):
+        self.mesh, self.mod = mesh, module
+        self.reset()
+
+    def reset(self):
+        self._pending, self._fresh = None, True
+
+    def load_prefix(self, kv_latent):
+        self._pending, self._fresh = kv_latent, True
+
+    def read_state(self, length):
+        return self.mod.read_state(length)
+
+    def __call__(self, ctx, x, q_resid, topk):
+        import ttnn
+        from models.demos.hy4_preview_d_p.tt.layout import col_split_to_device, col_split_to_host, row_split_to_device
+
+        if "state_prefix" in ctx.extra:
+            self.mod.setup(ctx.length, ctx.extra["max_seq"])
+            self.mod.load_state(ctx.extra["state_prefix"]["kv_latent"][: ctx.extra["prefix_len"]])
+        else:
+            self.mod.setup(ctx.length, ctx.state.max_seq)
+            if self._fresh:
+                self.mod.load_state(self._pending)
+                self._fresh = False
+        xd = col_split_to_device(self.mesh, x, dtype=ttnn.bfloat16)
+        qd = row_split_to_device(self.mesh, q_resid, dtype=ttnn.bfloat16)
+        s, k = topk.shape
+        tk = torch.where(topk < 0, torch.full_like(topk, -1), topk).to(torch.int32).reshape(1, 1, s, k)
+        td = ttnn.from_torch(
+            tk,  # -1 -> 0xFFFFFFFF, the sparse_sdpa sentinel (a contiguous tail, as the indexer emits)
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, None)),
+        )
+        od = self.mod(xd, qd, td, ctx.start)
+        out = col_split_to_host(self.mesh, od).float()
+        for t in (xd, qd, td, od):
+            ttnn.deallocate(t)
+        return out
+
+
 def _col_split_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> host [S, H] fp32 for a module on column-split [1, 1, S/2, H/2] tensors (harness
     boundary)."""
@@ -289,6 +378,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _qa_host_fn(mesh, _qa_module(mesh, spec, layer, loader, cfg))
     if step in _INDEXER_STEPS:
         return _IndexerHostFn(mesh, _indexer_module(mesh, spec, layer, loader, cfg))
+    if step in _ATTENTION_STEPS:
+        return _AttentionHostFn(mesh, _attention_module(mesh, spec, layer, loader, cfg))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -297,30 +388,34 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
 
 
 def device_component(mesh, spec, layer, step):
-    if step in _HC_STEPS or step in _HC_PRE_STEPS or step in _NORM_STEPS or step in _QA_STEPS or step in _INDEXER_STEPS:
+    if any(
+        step in steps for steps in (_HC_STEPS, _HC_PRE_STEPS, _NORM_STEPS, _QA_STEPS, _INDEXER_STEPS, _ATTENTION_STEPS)
+    ):
         loader = _loader(spec)
         return _device_step_fn(mesh, spec, layer, step, loader, _cfg(loader))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
 class _HybridState:
-    """The CPU reference state, with the index-key cache of a device indexer (``_IndexerHostFn``) on the device."""
+    """The CPU reference state, with the caches of the device's stateful steps (``_IndexerHostFn``: index_key,
+    ``_AttentionHostFn``: kv_latent) on the device."""
 
     def __init__(self, ref, max_seq, device_state=None):
         self.ref, self.s = ref, ref.new_state(max_seq)
-        self.dev = device_state or {}  # layer -> _IndexerHostFn
-        for fn in self.dev.values():
-            fn.reset()
+        self.dev = device_state or {}  # layer -> [stateful host fns], each owning ``state_key``
+        for fns in self.dev.values():
+            for fn in fns:
+                fn.reset()
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
-        if layer in self.dev:
-            self.dev[layer].load_prefix(tensors["index_key"][:length])
+        for fn in self.dev.get(layer, ()):
+            fn.load_prefix(tensors[fn.state_key][:length])
 
     def to_torch(self, layer, length):
         d = self.ref.state_tensors(self.s, layer, length)
-        if layer in self.dev:
-            d["index_key"] = self.dev[layer].read_state(length)
+        for fn in self.dev.get(layer, ()):
+            d[fn.state_key] = fn.read_state(length)
         return d
 
 
@@ -359,7 +454,10 @@ class HybridDeviceModel:
         return run
 
     def new_state(self, max_seq):
-        dev = {i: o["indexer"].device_fn for i, o in self.overrides.items() if "indexer" in o}
+        dev = {}
+        for i, o in self.overrides.items():
+            fns = [getattr(f, "device_fn", f) for f in o.values()]
+            dev[i] = [f for f in fns if getattr(f, "stateful", False)]
         return _HybridState(self.ref, max_seq, dev)
 
     def embed(self, tokens):
