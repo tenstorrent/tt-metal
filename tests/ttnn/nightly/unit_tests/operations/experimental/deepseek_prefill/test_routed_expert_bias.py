@@ -38,9 +38,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SITU, apply_glu_activation
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
-
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip"),
@@ -65,8 +66,32 @@ def _torch_swigluoai_expert_with_bias(x, w, b, alpha=SWIGLU_ALPHA, limit=SWIGLU_
     return F.linear(activated, w["down_proj"], b["down_proj_bias"])
 
 
-def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
-    """1 chip, 1 expert. Compares the fused op (SwiGLU-OAI + biases) vs a torch reference."""
+def _torch_situglu_expert_with_bias(x, w, b):
+    """SiTU-GLU FFN WITH gate/up/down biases (Kimi K3), fp32. Weights HF (out, in)."""
+    gate = F.linear(x, w["gate_proj"], b["gate_proj_bias"])
+    up = F.linear(x, w["up_proj"], b["up_proj_bias"])
+    activated = apply_glu_activation(
+        gate,
+        up,
+        activation=ACTIVATION_SITU,
+        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+    )
+    return F.linear(activated, w["down_proj"], b["down_proj_bias"])
+
+
+# Bias-capable activation -> its torch reference. The kernel's bias branch lives in the
+# shared binary-activation phase, so every fused binary activation supports biases.
+_BIAS_REFERENCE = {
+    ttnn.RoutedExpertActivation.SwiGluOai: _torch_swigluoai_expert_with_bias,
+    ttnn.RoutedExpertActivation.SituGlu: _torch_situglu_expert_with_bias,
+}
+
+
+def run_bias_routed_expert(
+    mesh_device, num_tokens, emb_dim, hidden_dim, activation=ttnn.RoutedExpertActivation.SwiGluOai
+):
+    """1 chip, 1 expert. Compares the fused op (activation + biases) vs a torch reference."""
     torch.manual_seed(42)
 
     weights = {
@@ -83,8 +108,11 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
     }
 
     torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
+    reference = _BIAS_REFERENCE.get(activation)
+    if reference is None:
+        raise ValueError(f"no bias reference for {activation}; supported: {list(_BIAS_REFERENCE)}")
     with torch.no_grad():
-        torch_output = _torch_swigluoai_expert_with_bias(torch_input, weights, biases)
+        torch_output = reference(torch_input, weights, biases)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -116,7 +144,7 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
         torch_biases=[biases],  # PROPOSED — bias support is the subject of this PR
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        activation=ttnn.RoutedExpertActivation.SwiGluOai,
+        activation=activation,
     )
 
     tt_output = tt_expert(tt_input, _idx([num_tokens]), _idx([0]))
@@ -126,7 +154,7 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
     )[:num_tokens]
 
     passing, pcc = comp_pcc(torch_output, tt_output_torch, 0.97)
-    logger.info(f"bias routed expert num_tokens={num_tokens}: PCC={pcc}")
+    logger.info(f"bias routed expert {activation} num_tokens={num_tokens}: PCC={pcc}")
     assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
     assert not torch.isinf(tt_output_torch).any(), "Output contains Inf"
     assert passing, f"PCC below threshold: {pcc}"
@@ -140,6 +168,27 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
 def test_gptoss_bias_routed_expert(mesh_device, device_params, num_tokens):
     """gpt-oss expert biases (gate/up/down) + SwiGLU-OAI vs torch. SPEC — skipped until kernel support lands."""
     run_bias_routed_expert(mesh_device, num_tokens=num_tokens, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
+@pytest.mark.parametrize("num_tokens", [128, 1024], ids=["t128", "t1k"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_situglu_bias_routed_expert(mesh_device, device_params, num_tokens):
+    """Expert biases + SiTU-GLU at Kimi K3 routed-expert dims.
+
+    The kernel's bias branch sits inside the shared binary-activation phase, so it applies to
+    SiTU-GLU as much as to SwiGLU-OAI; the host validation permits both. This covers the
+    SiTU-GLU half so that permission is backed by a measurement rather than by inspection.
+    """
+    run_bias_routed_expert(
+        mesh_device,
+        num_tokens=num_tokens,
+        emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+        hidden_dim=KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        activation=ttnn.RoutedExpertActivation.SituGlu,
+    )
 
 
 # Multiple experts on ONE chip. Different real token count per expert (all multiples of TILE=32,
@@ -332,6 +381,97 @@ def test_gptoss_bias_cache_hit(mesh_device, device_params):
     run_bias_cache_hit(mesh_device, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_gptoss_routed_expert_cache_bindings(mesh_device, device_params):
+    """Cache hits must refresh activations, routing metadata, all weights, and biases."""
+    torch.manual_seed(19)
+    emb_dim, hidden_dim = GPT_OSS_EMB, GPT_OSS_HIDDEN
+    max_tokens = 128
+    # Change each routing table independently: local expert -> global id -> buffer region.
+    routing = [([0, 1], [32, 96], [0, 128]), ([1, 0], [64, 128], [128, 0])]
+    retained_buffers = []
+    cache_entries = None
+
+    def idx(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+
+    for invocation, (expert_ids, counts, offsets) in enumerate(routing):
+        weights = [
+            {
+                "gate_proj": torch.randn(hidden_dim, emb_dim) * 0.08,
+                "up_proj": torch.randn(hidden_dim, emb_dim) * 0.08,
+                "down_proj": torch.randn(emb_dim, hidden_dim) * 0.05,
+            }
+            for _ in expert_ids
+        ]
+        biases = [
+            {
+                "gate_proj_bias": torch.randn(hidden_dim) * 0.5,
+                "up_proj_bias": torch.randn(hidden_dim) * 0.5,
+                "down_proj_bias": torch.randn(emb_dim) * 0.5,
+            }
+            for _ in expert_ids
+        ]
+        inputs = torch.randn(len(expert_ids) * max_tokens, emb_dim)
+        with torch.no_grad():
+            references = [
+                _torch_swigluoai_expert_with_bias(
+                    inputs[offsets[global_id] : offsets[global_id] + counts[global_id]], weights[e], biases[e]
+                )
+                for e, global_id in enumerate(expert_ids)
+            ]
+        tt_ids, tt_counts, tt_offsets = idx(expert_ids), idx(counts), idx(offsets)
+        expert = TtRoutedExpert(
+            mesh_device=mesh_device,
+            experts_per_chip=len(expert_ids),
+            global_expert_idx_table=tt_ids,
+            emb_dim=emb_dim,
+            hidden_dim=hidden_dim,
+            max_tokens=max_tokens,
+            torch_weights=weights,
+            torch_biases=biases,
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat4_b,
+            activation=ttnn.RoutedExpertActivation.SwiGluOai,
+        )
+        tt_input = ttnn.from_torch(
+            inputs,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+        )
+        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        before = ttnn.to_torch(tt_input, mesh_composer=composer).clone()
+        # Keep all first-call allocations alive so fresh tensors cannot reuse their addresses.
+        retained_buffers.append((expert, tt_input, tt_ids, tt_counts, tt_offsets))
+        output = expert(tt_input, tt_counts, tt_offsets)
+        actual = ttnn.to_torch(output, mesh_composer=composer)
+        entries = mesh_device.num_program_cache_entries()
+        if cache_entries is None:
+            assert entries > 0, "Program caching must be enabled"
+            cache_entries = entries
+        else:
+            assert entries == cache_entries, "Second invocation must reuse the cached programs"
+
+        for e, global_id in enumerate(expert_ids):
+            start, count = offsets[global_id], counts[global_id]
+            region = actual[start : start + count]
+            assert torch.isfinite(region).all(), f"call {invocation}, expert {e}: non-finite output"
+            passing, pcc = comp_pcc(references[e], region, 0.97)
+            assert passing, f"call {invocation}, expert {e}: PCC={pcc} — stale cache binding?"
+            # TILE mode writes in place; rows beyond the runtime count must remain untouched.
+            assert torch.equal(actual[start + count : start + max_tokens], before[start + count : start + max_tokens])
+
+
 def test_gptoss_bias_torch_reference_smoke():
     """Host-only (no device): guards the bias SwiGLU-OAI reference math and documents the gpt-oss
     expert formula. Not skipped — proves bias actually changes the output vs the bias-free path, so
@@ -355,3 +495,50 @@ def test_gptoss_bias_torch_reference_smoke():
         out_nobias = _torch_swigluoai_expert_with_bias(x, w, zero_b)
     assert out_bias.shape == (n, emb)
     assert not torch.allclose(out_bias, out_nobias), "bias must change the expert output"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="off Blackhole the non-SiLU activation check fires first")
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_clamped_silu_glu_biases_rejected(mesh_device, device_params, expect_error):
+    """Biased experts are refused for ClampedSiluGlu.
+
+    DeepSeek-V4's experts are bias-free, so the combination is not enabled even though the
+    kernel's bias branch would serve it. The assertion is on the Python guard because
+    TtRoutedExpert is the only caller of unified_routed_expert_moe and rejects the combination
+    before the device op's matching TT_FATAL can run.
+    """
+    # Rejected before any weight is converted, so the shapes only have to be tile-aligned.
+    emb = hidden = 32
+    weights = {
+        "gate_proj": torch.zeros(hidden, emb, dtype=torch.float32),
+        "up_proj": torch.zeros(hidden, emb, dtype=torch.float32),
+        "down_proj": torch.zeros(emb, hidden, dtype=torch.float32),
+    }
+    biases = {
+        "gate_proj_bias": torch.zeros(hidden, dtype=torch.float32),
+        "up_proj_bias": torch.zeros(hidden, dtype=torch.float32),
+        "down_proj_bias": torch.zeros(emb, dtype=torch.float32),
+    }
+    idx = ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+    )
+
+    with expect_error(ValueError, "expert biases are enabled only for"):
+        TtRoutedExpert(
+            mesh_device=mesh_device,
+            experts_per_chip=1,
+            global_expert_idx_table=idx,
+            emb_dim=emb,
+            hidden_dim=hidden,
+            max_tokens=32,
+            torch_weights=[weights],
+            torch_biases=[biases],
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat4_b,
+            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+        )

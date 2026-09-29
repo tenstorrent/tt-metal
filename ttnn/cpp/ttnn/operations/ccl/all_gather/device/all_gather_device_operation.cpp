@@ -31,8 +31,12 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
 
     // Constraints on other inputs
-    int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
-    TT_FATAL(args.dim >= -rank && args.dim < rank, "Invalid gather dim {} for {}D input tensor", args.dim, rank);
+    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    TT_FATAL(
+        args.dim_from_end >= -rank && args.dim_from_end < 0,
+        "Invalid (normalized) gather dim {} for {}D input tensor",
+        rank + args.dim_from_end,
+        rank);
     TT_FATAL(
         args.num_devices > 1, "all_gather collective will only work for num_devices > 1, got {}", args.num_devices);
 
@@ -68,8 +72,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         auto output_shape = output_tensor.padded_shape();
         auto input_shape = input_tensor.padded_shape();
         auto expected_output_shape = input_shape;
-        const int32_t rank_diff = static_cast<int32_t>(input_shape.rank()) - rank;
-        expected_output_shape[args.dim + rank_diff] *= args.num_devices;
+        expected_output_shape[args.dim_from_end] *= args.num_devices;
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -88,14 +91,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
-    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto shape = input_tensor.logical_shape();
-    shape[args.dim] *= args.num_devices;
-    return tt::tt_metal::TensorSpec(
-        shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
+    const AllGatherParams& args, const AllGatherInputs& /*tensor_args*/) {
+    return args.output_spec;
 }
 
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
@@ -105,9 +102,18 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
     auto output_placements = input_topology.placements();
 
     // For each distribution dimension, if sharded on the gather dim, make it replicated
+    const auto& logical_shape = input_tensor.logical_shape();
+    const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
+    const int32_t rank = static_cast<int32_t>(logical_shape.rank());
     for (auto& output_placement : output_placements) {
         if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
-            if (shard->dim == static_cast<int>(args.dim)) {
+            // Temp workaround for #52331:
+            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims
+            if (shard->dim >= rank || shard->dim < -rank) {
+                continue;
+            }
+            // Shard::dim is always unnormalized by construction, so normalize here
+            if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
                 output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             }
         }
@@ -122,8 +128,7 @@ AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create
     if (tensor_args.persistent_output_tensor.has_value()) {
         return tensor_args.persistent_output_tensor.value();
     }
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    return create_device_tensor(args.output_spec, tensor_args.input_tensor.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>
@@ -222,18 +227,20 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    // Heuristics to pick the kernel algorithm.
-    // Multicast supports all Fabric topologies, unicast only supports (effectively) 1D topologies.
-    // Unicast is empirically found to be faster for large tensors.
+    // Pick the kernel algorithm based on limitations and heuristics
     bool use_unicast = false;
     if (args.is_true_2d()) {
-        // Unicast algorithm currently does not support true Fabric 2D topologies
+        // Limitation: Unicast algorithm currently does not support true 2D topologies
         use_unicast = false;
+        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
+    } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
+        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
+        use_unicast = true;
     } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
-        // NeighborExchange only permits 1-hop unicast
+        // Limitation: NeighborExchange only permits 1-hop unicast
         use_unicast = true;
     } else {
-        // Decide between multicast or unicast algorithm
+        // Heuristics: Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
@@ -252,7 +259,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
                 // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
                 const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-                const uint64_t out_page = compute_output_specs(args, tensor_args).compute_page_size_bytes();
+                const uint64_t out_page = args.output_spec.compute_page_size_bytes();
                 const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
 
                 // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
@@ -275,6 +282,24 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
 }
 
+tt::tt_metal::TensorSpec compute_output_specs_helper(
+    const Tensor& input_tensor,
+    int32_t gather_dim_from_end,
+    uint32_t num_devices,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    if (output_mem_config.created_with_nd_shard_spec()) {
+        // Forward only the nd_shard_spec: the legacy 2D spec that TensorSpec back-fills describes the
+        // *input* shape, and its one-shard-per-core rule rejects valid ND configs for the larger output.
+        output_mem_config = MemoryConfig(output_mem_config.buffer_type(), output_mem_config.nd_shard_spec());
+    }
+    auto shape = input_tensor.logical_shape();
+    shape[gather_dim_from_end] *= num_devices;
+    return tt::tt_metal::TensorSpec(
+        shape,
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
+}
+
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
@@ -294,6 +319,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::array<bool, 2> axis_is_straight{true, true};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
     std::array<uint32_t, 2> axis_num_links{0u, 0u};
     for (uint32_t axis = 0; axis < 2; ++axis) {
@@ -302,6 +328,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        axis_is_straight[axis] = ::ttnn::ccl::is_axis_straight(*mesh_device, axis);
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
@@ -317,17 +344,19 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         axis_num_links,
         packet_size);
 
-    // Resolve negative gather dim
-    uint32_t rank = input_tensor.logical_shape().rank();
-    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+    // Resolve the user's gather dim to a from-the-end index (see AllGatherParams::dim_from_end)
+    const auto& logical_shape = input_tensor.logical_shape();
+    const int32_t gather_dim_from_end =
+        static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
 
     return {
         AllGatherParams{
-            gather_dim,
-            memory_config.value_or(input_tensor.memory_config()),
+            gather_dim_from_end,
+            compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, memory_config),
             cluster_axis,
             fabric_config,
             axis_topology,
+            axis_is_straight,
             axis_num_devices,
             axis_num_links,
             num_devices,

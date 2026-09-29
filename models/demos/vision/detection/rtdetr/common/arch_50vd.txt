@@ -1,0 +1,631 @@
+RTDetrForObjectDetection(
+  (model): RTDetrModel(
+    (backbone): RTDetrConvEncoder(
+      (model): RTDetrResNetBackbone(
+        (embedder): RTDetrResNetEmbeddings(
+          (embedder): Sequential(
+            (0): RTDetrResNetConvLayer(
+              (convolution): Conv2d(3, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+              (normalization): RTDetrFrozenBatchNorm2d()
+              (activation): ReLU()
+            )
+            (1): RTDetrResNetConvLayer(
+              (convolution): Conv2d(32, 32, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+              (normalization): RTDetrFrozenBatchNorm2d()
+              (activation): ReLU()
+            )
+            (2): RTDetrResNetConvLayer(
+              (convolution): Conv2d(32, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+              (normalization): RTDetrFrozenBatchNorm2d()
+              (activation): ReLU()
+            )
+          )
+          (pooler): MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
+        )
+        (encoder): RTDetrResNetEncoder(
+          (stages): ModuleList(
+            (0): RTDetrResNetStage(
+              (layers): Sequential(
+                (0): RTDetrResNetBottleNeckLayer(
+                  (shortcut): RTDetrResNetShortCut(
+                    (convolution): Conv2d(64, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                    (normalization): RTDetrFrozenBatchNorm2d()
+                  )
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (1): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (2): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(64, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+              )
+            )
+            (1): RTDetrResNetStage(
+              (layers): Sequential(
+                (0): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Sequential(
+                    (0): AvgPool2d(kernel_size=2, stride=2, padding=0)
+                    (1): RTDetrResNetShortCut(
+                      (convolution): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                    )
+                  )
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (1): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (2): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (3): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(128, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+              )
+            )
+            (2): RTDetrResNetStage(
+              (layers): Sequential(
+                (0): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Sequential(
+                    (0): AvgPool2d(kernel_size=2, stride=2, padding=0)
+                    (1): RTDetrResNetShortCut(
+                      (convolution): Conv2d(512, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                    )
+                  )
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (1): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (2): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (3): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (4): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (5): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(256, 1024, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+              )
+            )
+            (3): RTDetrResNetStage(
+              (layers): Sequential(
+                (0): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Sequential(
+                    (0): AvgPool2d(kernel_size=2, stride=2, padding=0)
+                    (1): RTDetrResNetShortCut(
+                      (convolution): Conv2d(1024, 2048, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                    )
+                  )
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(1024, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 2048, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (1): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(2048, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 2048, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+                (2): RTDetrResNetBottleNeckLayer(
+                  (shortcut): Identity()
+                  (layer): Sequential(
+                    (0): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(2048, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (1): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): ReLU()
+                    )
+                    (2): RTDetrResNetConvLayer(
+                      (convolution): Conv2d(512, 2048, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                      (normalization): RTDetrFrozenBatchNorm2d()
+                      (activation): Identity()
+                    )
+                  )
+                  (activation): ReLU()
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+    (encoder_input_proj): ModuleList(
+      (0): Sequential(
+        (0): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (1): Sequential(
+        (0): Conv2d(1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+      (2): Sequential(
+        (0): Conv2d(2048, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+    (encoder): RTDetrHybridEncoder(
+      (aifi): ModuleList(
+        (0): RTDetrAIFILayer(
+          (position_embedding): RTDetrSinePositionEmbedding()
+          (layers): ModuleList(
+            (0): RTDetrEncoderLayer(
+              (self_attn): RTDetrSelfAttention(
+                (k_proj): Linear(in_features=256, out_features=256, bias=True)
+                (v_proj): Linear(in_features=256, out_features=256, bias=True)
+                (q_proj): Linear(in_features=256, out_features=256, bias=True)
+                (o_proj): Linear(in_features=256, out_features=256, bias=True)
+              )
+              (self_attn_layer_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+              (mlp): RTDetrMLP(
+                (fc1): Linear(in_features=256, out_features=1024, bias=True)
+                (fc2): Linear(in_features=1024, out_features=256, bias=True)
+                (activation_fn): GELUActivation()
+              )
+              (final_layer_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+            )
+          )
+        )
+      )
+      (lateral_convs): ModuleList(
+        (0-1): 2 x RTDetrConvNormLayer(
+          (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+          (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (activation): SiLUActivation()
+        )
+      )
+      (fpn_blocks): ModuleList(
+        (0-1): 2 x RTDetrCSPRepLayer(
+          (conv1): RTDetrConvNormLayer(
+            (conv): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+            (activation): SiLUActivation()
+          )
+          (conv2): RTDetrConvNormLayer(
+            (conv): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+            (activation): SiLUActivation()
+          )
+          (bottlenecks): Sequential(
+            (0): RTDetrRepVggBlock(
+              (conv1): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (conv2): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (activation): SiLUActivation()
+            )
+            (1): RTDetrRepVggBlock(
+              (conv1): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (conv2): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (activation): SiLUActivation()
+            )
+            (2): RTDetrRepVggBlock(
+              (conv1): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (conv2): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (activation): SiLUActivation()
+            )
+          )
+          (conv3): Identity()
+        )
+      )
+      (downsample_convs): ModuleList(
+        (0-1): 2 x RTDetrConvNormLayer(
+          (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+          (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (activation): SiLUActivation()
+        )
+      )
+      (pan_blocks): ModuleList(
+        (0-1): 2 x RTDetrCSPRepLayer(
+          (conv1): RTDetrConvNormLayer(
+            (conv): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+            (activation): SiLUActivation()
+          )
+          (conv2): RTDetrConvNormLayer(
+            (conv): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+            (activation): SiLUActivation()
+          )
+          (bottlenecks): Sequential(
+            (0): RTDetrRepVggBlock(
+              (conv1): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (conv2): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (activation): SiLUActivation()
+            )
+            (1): RTDetrRepVggBlock(
+              (conv1): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (conv2): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (activation): SiLUActivation()
+            )
+            (2): RTDetrRepVggBlock(
+              (conv1): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (conv2): RTDetrConvNormLayer(
+                (conv): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+                (norm): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+                (activation): Identity()
+              )
+              (activation): SiLUActivation()
+            )
+          )
+          (conv3): Identity()
+        )
+      )
+    )
+    (denoising_class_embed): Embedding(81, 256, padding_idx=80)
+    (enc_output): Sequential(
+      (0): Linear(in_features=256, out_features=256, bias=True)
+      (1): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+    )
+    (enc_score_head): Linear(in_features=256, out_features=80, bias=True)
+    (enc_bbox_head): RTDetrMLPPredictionHead(
+      (layers): ModuleList(
+        (0-1): 2 x Linear(in_features=256, out_features=256, bias=True)
+        (2): Linear(in_features=256, out_features=4, bias=True)
+      )
+    )
+    (decoder_input_proj): ModuleList(
+      (0-2): 3 x Sequential(
+        (0): Conv2d(256, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+    (decoder): RTDetrDecoder(
+      (layers): ModuleList(
+        (0-5): 6 x RTDetrDecoderLayer(
+          (self_attn): RTDetrSelfAttention(
+            (k_proj): Linear(in_features=256, out_features=256, bias=True)
+            (v_proj): Linear(in_features=256, out_features=256, bias=True)
+            (q_proj): Linear(in_features=256, out_features=256, bias=True)
+            (o_proj): Linear(in_features=256, out_features=256, bias=True)
+          )
+          (self_attn_layer_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (encoder_attn): RTDetrMultiscaleDeformableAttention(
+            (attn): MultiScaleDeformableAttention()
+            (sampling_offsets): Linear(in_features=256, out_features=192, bias=True)
+            (attention_weights): Linear(in_features=256, out_features=96, bias=True)
+            (value_proj): Linear(in_features=256, out_features=256, bias=True)
+            (output_proj): Linear(in_features=256, out_features=256, bias=True)
+          )
+          (encoder_attn_layer_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+          (mlp): RTDetrMLP(
+            (fc1): Linear(in_features=256, out_features=1024, bias=True)
+            (fc2): Linear(in_features=1024, out_features=256, bias=True)
+            (activation_fn): ReLU()
+          )
+          (final_layer_norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True)
+        )
+      )
+      (query_pos_head): RTDetrMLPPredictionHead(
+        (layers): ModuleList(
+          (0): Linear(in_features=4, out_features=512, bias=True)
+          (1): Linear(in_features=512, out_features=256, bias=True)
+        )
+      )
+      (class_embed): ModuleList(
+        (0-5): 6 x Linear(in_features=256, out_features=80, bias=True)
+      )
+      (bbox_embed): ModuleList(
+        (0-5): 6 x RTDetrMLPPredictionHead(
+          (layers): ModuleList(
+            (0-1): 2 x Linear(in_features=256, out_features=256, bias=True)
+            (2): Linear(in_features=256, out_features=4, bias=True)
+          )
+        )
+      )
+    )
+  )
+)

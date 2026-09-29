@@ -202,8 +202,8 @@ The compute kernel performs the actual elementwise addition. It initializes the 
 
         constexpr uint32_t dst_reg_id = 0;
 
-        binary_op_init_common(cb_in0, cb_in1, cb_out0);
-        add_tiles_init(cb_in0, cb_in1);
+        compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+        add_init(cb_in0, cb_in1);
 
         // Loop over all the tiles and perform the computation
         for (uint32_t i = 0; i < n_tiles; i++) {

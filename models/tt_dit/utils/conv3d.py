@@ -148,6 +148,27 @@ def compute_encoder_dims(height, width, h_factor, w_factor, encoder_t_chunk_size
 # Each production (mesh, resolution, temporal-mode, layer) combination gets its own entry.
 # Blockings are (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
 _BLOCKINGS = {
+    # === LTX-2.3 22B, 1920x1088, 153 frames @ 25 fps (latent T=20) — swept 2026-08-19
+    # NOTE: that sweep ran H/W two smaller than production (input/output dim mixup, since fixed);
+    # winners are valid at the true shapes but timings are approximate — re-sweep to confirm.
+    (4, 8, 128, 128, (3, 3, 3), 155, 68, 60): (128, 64, 6, 2, 16),  # 5810us, 3.7x vs fallback
+    (4, 8, 128, 48, (3, 3, 3), 155, 68, 60): (128, 64, 6, 2, 16),  # 2973us, 3.9x vs fallback
+    (4, 8, 512, 512, (3, 3, 3), 79, 34, 30): (64, 256, 1, 16, 2),  # 8679us, 31.8x vs fallback
+    (4, 8, 256, 512, (3, 3, 3), 155, 34, 30): (64, 256, 1, 16, 2),  # 8590us, 3.1x vs fallback
+    (4, 8, 256, 256, (3, 3, 3), 155, 34, 30): (64, 256, 1, 16, 2),  # 4537us, 7.2x vs fallback
+    (4, 8, 512, 4096, (3, 3, 3), 41, 17, 15): (128, 64, 5, 16, 2),  # 11489us, 23.5x vs fallback
+    (4, 8, 512, 512, (3, 3, 3), 41, 17, 15): (64, 256, 1, 16, 2),  # 1301us, 23.2x vs fallback
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (64, 256, 2, 8, 4),  # 1414us, 17.3x vs fallback
+    (4, 8, 1024, 128, (3, 3, 3), 22, 10, 8): (128, 64, 3, 4, 8),  # 178us, 11.0x vs fallback
+    (4, 8, 1024, 4096, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 3887us, 13.9x vs fallback
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 1373us, 15.6x vs fallback
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 5, 2, 2),  # 485us, 6.9x vs fallback, partial sweep 350/500
+    # Unswept at 153f: carried from the 145f winners at identical spatial shape (T +1 only);
+    # without them these sites hit the worst-case fallbacks. Re-sweep to replace.
+    (4, 8, 1024, 4096, (1, 3, 3), 20, 5, 4): (256, 64, 1, 4, 4),  # ups_ups — 1235us @ T=19
+    (4, 8, 128, 1024, (3, 3, 3), 22, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us @ T=21
+    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us @ T=21
+    # === end LTX-2.3 153f ===
     # ===================================================================
     # BH Galaxy 6U 4x32, 480p, 81 frames full-T (latent T=21)
     # Per-device (H,W): stage0(15,3) stage1(30,6) stage2(60,12) stage3(120,24)
@@ -419,7 +440,13 @@ _BLOCKINGS = {
     (2, 4, 512, 512, (3, 3, 3), 75, 68, 60): (64, 256, 1, 8, 4),  # ltx_s2_res — 60810us
     (2, 4, 256, 256, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_res — 25688us
     (2, 4, 256, 512, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_chg — 48772us
-    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (64, 128, 6, 4, 8),  # ltx_s4_res — 22798us
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (
+        64,
+        128,
+        12,
+        4,
+        8,
+    ),  # ltx_s4_res — fused halo_last 23.1ms (T_out_block 12: fewer larger matmuls; beats force_spatial -4.9%)
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
     # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
     (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
@@ -439,7 +466,8 @@ _BLOCKINGS = {
     (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4),  # ltx_s2_res — 13752us
     (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_res — 6145us
     (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_chg — 12013us
-    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us
+    # This table feeds standalone conv3d (LTX VAE)
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us standalone
     (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
     # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
@@ -575,6 +603,28 @@ def register_conv3d_configs(configs: dict) -> None:
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
+# Shapes that run fastest with force_spatial_parallel
+_FORCE_SPATIAL_KEYS = {
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 120),  # ltx_s4_out (128->48): light C_out matmul
+    # s4_res (4x8): force_spatial beats halo_last at the fused-only finer block 6,4,4 (below)
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60),  # ltx_s4_res (4x8)
+}
+
+
+# Fused shapes fastest with halo_last
+_HALO_LAST_KEYS = {
+    # s4_res_2x4 (large per-dev 136x120): halo_last 23100us vs force_spatial 24282us (-4.9%, MIN FW)
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120),  # ltx_s4_res (2x4)
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 60),  # ltx_s3_res (2x4)
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 60),  # ltx_s3_chg (2x4)
+    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30),  # ltx_s2_res (4x8)
+    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30),  # ltx_s3_res (4x8)
+    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30),  # ltx_s3_chg (4x8)
+    # ltx_s1_up (512->4096): the fused conv pipeline runs ~250us faster than standalone conv on the small 4x8 per-dev
+    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15),  # ltx_s1_up (4x8)
+}
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -588,7 +638,6 @@ def get_conv3d_config(
         fp32_blk = _FP32_BLOCKINGS.get((in_channels, out_channels, kernel_size))
         if fp32_blk is not None:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fp32_blk
-            logger.debug(f"conv3d fp32 blocking [exact] ({in_channels},{out_channels},{kernel_size}) -> {fp32_blk}")
         else:
             # Conservative default — unchanged from the prior hardcoded fp32 path.
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = 32, 32, 1, 1, 1
@@ -609,10 +658,6 @@ def get_conv3d_config(
     exact = _BLOCKINGS.get(blocking_key)
     if exact is not None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = exact
-        logger.debug(
-            f"conv3d blocking [exact] {blocking_key} -> "
-            f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-        )
     else:
         fallback = _DEFAULT_BLOCKINGS.get(channel_key)
         if fallback is not None:

@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // X = output width
@@ -29,35 +30,34 @@ void kernel_main() {
     // 1) Compile-time arguments
     // ------------------------------------------------------------------------
 
-    constexpr uint32_t RANK = get_named_compile_time_arg_val("rank");
-    // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
-    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
-    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
-    constexpr uint32_t FACE_HEIGHT = get_named_compile_time_arg_val("face_height");
-    constexpr uint32_t FACE_WIDTH = get_named_compile_time_arg_val("face_width");
-    constexpr uint32_t x_dim_index_in_input = get_named_compile_time_arg_val("x_dim_index_in_input");
-    constexpr uint32_t X = get_named_compile_time_arg_val("X");
-    constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t H = get_named_compile_time_arg_val("H");
-    constexpr uint32_t X_p = get_named_compile_time_arg_val("X_p");
-    constexpr uint32_t W_p = get_named_compile_time_arg_val("W_p");
-    constexpr uint32_t H_p = get_named_compile_time_arg_val("H_p");
-    constexpr uint32_t H_t = get_named_compile_time_arg_val("H_t");
-    constexpr uint32_t W_t = get_named_compile_time_arg_val("W_t");
-    constexpr uint32_t final_tile_real_w = get_named_compile_time_arg_val("final_tile_real_w");
-    constexpr uint32_t final_tile_real_faces_w = get_named_compile_time_arg_val("final_tile_real_faces_w");
-    constexpr uint32_t xw_blocks = get_named_compile_time_arg_val("xw_blocks");
-    constexpr uint32_t x_blocks = get_named_compile_time_arg_val("x_blocks");
-    constexpr uint32_t w_blocks = get_named_compile_time_arg_val("w_blocks");
-    constexpr uint32_t num_writes = get_named_compile_time_arg_val("num_writes");
-    constexpr uint32_t padding_val_packed = get_named_compile_time_arg_val("padding_val_packed");
-    constexpr bool needs_x_padding = static_cast<bool>(get_named_compile_time_arg_val("needs_x_padding"));
-    constexpr bool needs_y_padding = static_cast<bool>(get_named_compile_time_arg_val("needs_y_padding"));
-    constexpr uint32_t rows_per_x = get_named_compile_time_arg_val("rows_per_x");
-    constexpr uint32_t misalignment = get_named_compile_time_arg_val("misalignment");
-    constexpr uint32_t read_alignment = get_named_compile_time_arg_val("read_alignment");
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr uint32_t RANK = get_arg(args::rank);
+    constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t TILE_HEIGHT = get_arg(args::tile_height);
+    constexpr uint32_t TILE_WIDTH = get_arg(args::tile_width);
+    constexpr uint32_t FACE_HEIGHT = get_arg(args::face_height);
+    constexpr uint32_t FACE_WIDTH = get_arg(args::face_width);
+    constexpr uint32_t x_dim_index_in_input = get_arg(args::x_dim_index_in_input);
+    constexpr uint32_t X = get_arg(args::X);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t X_p = get_arg(args::X_p);
+    constexpr uint32_t W_p = get_arg(args::W_p);
+    constexpr uint32_t H_p = get_arg(args::H_p);
+    constexpr uint32_t H_t = get_arg(args::H_t);
+    constexpr uint32_t W_t = get_arg(args::W_t);
+    constexpr uint32_t final_tile_real_w = get_arg(args::final_tile_real_w);
+    constexpr uint32_t final_tile_real_faces_w = get_arg(args::final_tile_real_faces_w);
+    constexpr uint32_t xw_blocks = get_arg(args::xw_blocks);
+    constexpr uint32_t x_blocks = get_arg(args::x_blocks);
+    constexpr uint32_t w_blocks = get_arg(args::w_blocks);
+    constexpr uint32_t num_writes = get_arg(args::num_writes);
+    constexpr uint32_t padding_val_packed = get_arg(args::padding_val_packed);
+    constexpr bool needs_x_padding = static_cast<bool>(get_arg(args::needs_x_padding));
+    // needs_y_padding is promoted to the NEEDS_Y_PADDING preprocessor define (it gates the
+    // conditionally-bound cb_pad DFB — see the #ifdef block below).
+    constexpr uint32_t rows_per_x = get_arg(args::rows_per_x);
+    constexpr uint32_t misalignment = get_arg(args::misalignment);
+    constexpr uint32_t read_alignment = get_arg(args::read_alignment);
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -84,15 +84,16 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 3) Runtime Args
     // ------------------------------------------------------------------------
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_block = get_arg_val<uint32_t>(1);
-    uint32_t end_block = get_arg_val<uint32_t>(2);
+    uint32_t start_block = get_arg(args::start_block);
+    uint32_t end_block = get_arg(args::end_block);
 
+    // Rank-length arrays (count = RANK, a CTA) delivered as runtime varargs:
+    // input_shape in varargs [0, RANK), dims in [RANK, 2*RANK).
     uint32_t input_shape[RANK];
     [[maybe_unused]] uint32_t dims[RANK];
     for (uint32_t i = 0; i < RANK; i++) {
-        input_shape[i] = get_arg_val<uint32_t>(i + 3);
-        dims[i] = get_arg_val<uint32_t>(i + RANK + 3);
+        input_shape[i] = get_vararg(i);
+        dims[i] = get_vararg(i + RANK);
     }
 
     // ------------------------------------------------------------------------
@@ -114,7 +115,7 @@ void kernel_main() {
     for (int i = RANK - 2; i >= 0; i--) {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::input);
     Noc noc;
 
     // Stride for stepping along x_dim_index_in_input
@@ -184,7 +185,7 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        DataflowBuffer dfb(tt::CBIndex::c_0);
+        DataflowBuffer dfb(dfb::cb_in);
         dfb.reserve_back(1);
         uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
@@ -283,14 +284,16 @@ void kernel_main() {
     }
 
     // ------------------------------------------------------------------------
-    // 6) Y Padding
+    // 6) Y Padding (only when NEEDS_Y_PADDING — cb_pad is conditionally bound)
     // ------------------------------------------------------------------------
-    if constexpr (needs_y_padding) {
-        // We store one chunk of padding in c_3
-        DataflowBuffer dfb3(tt::CBIndex::c_3);
+#ifdef NEEDS_Y_PADDING
+    {
+        // We store one chunk of padding in cb_pad (legacy c_3)
+        DataflowBuffer dfb3(dfb::cb_pad);
         dfb3.reserve_back(1);
         uint32_t l1_write_addr = dfb3.get_write_ptr();
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         dfb3.push_back(1);
     }
+#endif
 }

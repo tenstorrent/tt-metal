@@ -6,15 +6,18 @@ from typing import List
 
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.reduce_block_max_row import reduce_block_max_row_golden
+from fuser.indexing import InvocationGranularity
+from fuser.l1_operation import L1Operation
 
 from .reduce_block_max import ReduceBlockMaxFpu
 
 
 class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
-    loop: FusedLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
+
+    golden_fn = staticmethod(reduce_block_max_row_golden)
 
     def get_headers(self) -> List[str]:
         return [
@@ -24,32 +27,30 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         dest_acc = config.dest_acc.cpp_enum_value
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, {tensor_shape_instantiation});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, {tensor_shape});\n"
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block}, {tensor_shape_instantiation});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_dest}, {tensor_shape});\n"
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

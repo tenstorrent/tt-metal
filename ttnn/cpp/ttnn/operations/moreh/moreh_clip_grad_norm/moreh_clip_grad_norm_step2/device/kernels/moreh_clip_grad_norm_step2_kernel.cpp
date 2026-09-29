@@ -36,9 +36,9 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
 
     if (num_tiles > 1) {
-        binary_op_init_common(cb_input, cb_x, cb_y);
+        compute_kernel_hw_startup(cb_input, cb_x, cb_y);
     } else {
-        binary_op_init_common(cb_logx, cb_decimal, cb_y);
+        compute_kernel_hw_startup(cb_logx, cb_decimal, cb_y);
     }
 
     dfb_decimal_obj.wait_front(onetile);  // comes from the reader
@@ -50,7 +50,7 @@ void kernel_main() {
             dfb_input_obj.wait_front(onetile);  // comes from the reader
             dfb_x_obj.reserve_back(onetile);
 
-            copy_tile_init(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, 0, dst0);
             dfb_input_obj.pop_front(onetile);
             tile_regs_commit();
@@ -65,7 +65,7 @@ void kernel_main() {
             dfb_x_obj.wait_front(onetile);
             dfb_x_obj.reserve_back(onetile);
 
-            add_tiles_init(cb_input, cb_x);
+            add_init(cb_input, cb_x);
             add_tiles(cb_input, cb_x, 0, 0, dst0);
             dfb_x_obj.pop_front(onetile);
             dfb_input_obj.pop_front(onetile);

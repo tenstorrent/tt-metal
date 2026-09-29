@@ -217,9 +217,11 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
     }
 
     crs.clear();
+    std::vector<CoreRange> ranges;
+    ranges.reserve(max_x - min_x + 1);
     for (unsigned y = min_y; y <= max_y; y++) {
         std::set<CoreRange> filter_set, tmp, new_crs;
-        std::vector<CoreRange> ranges;
+        ranges.clear();
         for (unsigned x = min_x; x <= max_x + 1; x++) {
             if (grid[y][x]) {
                 unsigned x_start = x;
@@ -286,6 +288,9 @@ bool CoreRangeSet::intersects(const CoreRangeSet& other) const {
 
 CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet& other) const {
     std::vector<CoreRange> intersection;
+    // Only estimate the likely result size: the Cartesian-product upper bound would over-allocate
+    // heavily for sparse or disjoint range sets.
+    intersection.reserve(std::max(this->ranges_.size(), other.ranges().size()));
     for (const auto& local_cr : this->ranges_) {
         for (const auto& other_cr : other.ranges()) {
             if (auto intersect = local_cr.intersection(other_cr); intersect.has_value()) {
@@ -420,12 +425,14 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
     }
 
     std::vector<CoreRange> result_ranges;
+    result_ranges.reserve(this_merged.ranges_.size());
 
     for (const auto& current_range : this_merged.ranges_) {
         std::vector<CoreRange> current_remaining = {current_range};
 
         for (const auto& subtract_range : other_merged.ranges_) {
             std::vector<CoreRange> new_remaining;
+            new_remaining.reserve(current_remaining.size());
 
             for (const auto& remaining : current_remaining) {
                 auto intersection_opt = remaining.intersection(subtract_range);
@@ -466,7 +473,7 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
                     new_remaining.push_back(top);
                 }
             }
-            current_remaining = new_remaining;
+            current_remaining = std::move(new_remaining);
         }
         result_ranges.insert(result_ranges.end(), current_remaining.begin(), current_remaining.end());
     }
@@ -624,10 +631,11 @@ CoreRangeSet select_from_corerangeset(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
     auto all_cores = corerange_to_cores(crs, end_index + 1, row_wise);
     std::vector<CoreRange> selected_cores;
+    selected_cores.reserve(end_index - start_index + 1);
     for (uint32_t i = start_index; i <= end_index; i++) {
         selected_cores.push_back(CoreRange(all_cores[i], all_cores[i]));
     }
-    return CoreRangeSet(selected_cores);
+    return CoreRangeSet(std::move(selected_cores));
 }
 std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y) {
     for (const auto& core_range : crs.ranges()) {
@@ -673,29 +681,27 @@ using tt::tt_metal::RelativeCoreCoord;
 
 std::size_t hash<RelativeCoreCoord>::operator()(const RelativeCoreCoord& o) const {
     std::size_t seed = 0;
-    seed ^= std::hash<std::size_t>()(o.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>()(o.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    ttsl::hash::hash_combine(seed, o.x);
+    ttsl::hash::hash_combine(seed, o.y);
     return seed;
 }
 
 std::size_t hash<CoreRange>::operator()(const CoreRange& core_range) const {
-    // Hash x and y components individually using boost-style hash combine to avoid
-    // collisions from the weak std::hash<CoreCoord> (x ^ (y << 1)) in UMD.
-    // E.g. CoreCoord(3,0) and CoreCoord(1,1) both hash to 3 with the weak hash.
-    // TODO: Roll back to std::hash<CoreCoord> once we have a strong hash for xy_pair in UMD.
+    // Hash x/y, not CoreCoord: UMD's std::hash<CoreCoord> is x ^ (y << 1)
     std::size_t seed = 0;
-    seed ^= std::hash<std::size_t>{}(core_range.start_coord.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.start_coord.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.end_coord.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.end_coord.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    ttsl::hash::hash_combine(seed, core_range.start_coord.x);
+    ttsl::hash::hash_combine(seed, core_range.start_coord.y);
+    ttsl::hash::hash_combine(seed, core_range.end_coord.x);
+    ttsl::hash::hash_combine(seed, core_range.end_coord.y);
     return seed;
 }
 
 std::size_t hash<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) const {
     std::size_t seed = 0;
-    for (const auto& core_range : core_range_set.ranges()) {
-        seed = std::hash<CoreRange>{}(core_range) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    }
+    ttsl::hash::hash_combine(seed, core_range_set.ranges().size());
+    std::for_each(core_range_set.ranges().begin(), core_range_set.ranges().end(), [&](const auto& core_range) {
+        ttsl::hash::hash_combine(seed, core_range);
+    });
     return seed;
 }
 

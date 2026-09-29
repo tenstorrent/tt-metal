@@ -117,6 +117,7 @@ std::optional<CoreRange> find_dense_combine_rectangle_avoiding(
     const uint32_t y_limit = std::min(max_y_inclusive + 1, static_cast<uint32_t>(worker_grid.y));
 
     std::vector<std::pair<uint32_t, uint32_t>> factorizations;
+    factorizations.reserve(num_cores);
     for (uint32_t width = 1; width <= num_cores; ++width) {
         if (num_cores % width != 0) {
             continue;

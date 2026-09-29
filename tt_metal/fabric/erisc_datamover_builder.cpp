@@ -431,6 +431,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             i,
             sender_channels_producer_terminate_connection_address[i],
             eth_word_l1_alignment);
+        // Load-bearing: the producer reads this block as a whole SenderChannelProducerCursor in a
+        // single NOC read at connection open, so it must be aligned, not merely 4B aligned.
+        TT_FATAL(
+            (sender_channels_buffer_index_semaphore_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_buffer_index_semaphore_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_buffer_index_semaphore_address[i],
+            eth_word_l1_alignment);
     }
     TT_FATAL(
         std::unordered_set<size_t>(
@@ -1068,7 +1076,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // peer that makes the speedy receiver path safe on this link.
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
-    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    // Inter-mesh routers never enable deadlock avoidance, whichever direction: both ends of an inter-mesh
+    // link must agree on Deadlock avoidance polarity and the far end may be a plain Mesh (FABRIC_2D) rank. Intra-mesh
+    // routers follow the direction-based policy, unchanged. See #56298.
+    const bool base_enable_deadlock_avoidance =
+        !this->is_inter_mesh && fabric_context.need_deadlock_avoidance_support(this->direction_);
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;

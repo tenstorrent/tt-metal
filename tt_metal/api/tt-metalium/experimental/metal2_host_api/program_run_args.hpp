@@ -19,7 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -131,6 +131,13 @@ struct ProgramRunArgs {
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
     Group<DFBRunOverrides> dfb_run_overrides;
+
+    ////////////////////////////////////////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    ////////////////////////////////////////////////////////////////////////
+    // Companion to ProgramAdvancedOptions on the schema side; holds the
+    // experimental PrefetcherPipe arguments.
+    AdvancedProgramRunArgs advanced_options;
 };
 
 //-----------------------------------------------------

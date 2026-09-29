@@ -32,7 +32,6 @@ class ResnetBlock:
         self.norm1_num_blocks = norm1_num_blocks
         self.norm1_grid_core = ttnn.CoreGrid(y=4, x=8) if in_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
-            self.norm1_input_mask,
             self.norm1_weights,
             self.norm1_bias,
         ) = prepare_group_norm(
@@ -57,7 +56,6 @@ class ResnetBlock:
         self.norm2_num_blocks = norm2_num_blocks
         self.norm2_grid_core = ttnn.CoreGrid(y=4, x=8) if out_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
-            self.norm2_input_mask,
             self.norm2_weights,
             self.norm2_bias,
         ) = prepare_group_norm(
@@ -105,7 +103,6 @@ class ResnetBlock:
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=GROUPNORM_GROUPS,
-            input_mask=self.norm1_input_mask,
             weight=self.norm1_weights,
             bias=self.norm1_bias,
             epsilon=GROUPNORM_EPSILON,
@@ -123,7 +120,6 @@ class ResnetBlock:
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=GROUPNORM_GROUPS,
-            input_mask=self.norm2_input_mask,
             weight=self.norm2_weights,
             bias=self.norm2_bias,
             epsilon=GROUPNORM_EPSILON,

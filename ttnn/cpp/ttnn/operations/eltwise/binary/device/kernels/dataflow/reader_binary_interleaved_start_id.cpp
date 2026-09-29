@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_binary_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file
+// serves the consumers still on the legacy API. Until the last of them migrates and this file is
+// retired, changes here likely belong in the fork too.
+
 // This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.

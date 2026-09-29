@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <vector>
 
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tile.hpp>

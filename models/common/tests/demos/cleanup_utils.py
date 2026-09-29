@@ -75,3 +75,39 @@ def cleanup_model_case(model, mesh_device):
         cleanup_object_graph(model)
     ttnn.synchronize_device(mesh_device)
     gc.collect()
+
+
+def cleanup_dp_model_case(group, lanes, models, parent_mesh, submeshes):
+    """Release one carved DP case and restore command-queue ownership to its parent."""
+
+    failures = []
+
+    def run(action):
+        try:
+            action()
+        except Exception as error:
+            failures.append(error)
+
+    if group is not None:
+        run(group.cleanup)
+    else:
+        for lane in lanes:
+            run(lane.cleanup)
+
+    for model, submesh in models:
+        run(lambda model=model, submesh=submesh: cleanup_model_case(model, submesh))
+
+    # A carved child owns a distinct MeshCommandQueue over its parent's physical
+    # devices. Drain every live child through the parent before closing the child
+    # handles and returning command-queue ownership to the fixture-owned parent.
+    run(parent_mesh.quiesce_devices)
+    for submesh in submeshes:
+        run(lambda submesh=submesh: ttnn.close_mesh_device(submesh))
+
+    if failures:
+        primary = failures[0]
+        add_note = getattr(primary, "add_note", None)
+        if add_note is not None:
+            for failure in failures[1:]:
+                add_note(f"additional DP cleanup failure: {type(failure).__name__}: {failure}")
+        raise primary

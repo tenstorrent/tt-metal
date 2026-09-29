@@ -85,15 +85,24 @@ void kernel_main() {
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
             cb_in0.reserve_back(num_tiles_per_row);
-            uint32_t l1_write_addr = cb_in0.get_write_ptr();
-            // pad the tile by reading values from zero buffer in L1
-            fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
-            // [avgpool #50329 fix] fill_with_val is a RISC CPU store; on Quasar it lands in the DM core's
-            // private L1 D$/L2 and is NOT visible to the tilize UNPACK (which reads TL1) unless flushed.
-            // Flush the whole tile-row to TL1 before push_back so the pad is coherent (no-op on WH/BH).
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-            flush_l2_cache_range(l1_write_addr, padded_X_size << 5);
-#endif
+            if (pad_value == 0) {
+                // [port of amokan/avgpool_write_zeroes 3ddffac] Zero the whole tile-row with the iDMA zero
+                // device: writes TL1 directly, so NO scoped_write_lock and NO D$/L2 flush -- those CPU-side
+                // coherency ops are the slow reader work that stalls the tilize compute MOP and trips
+                // 0x19/0x119. Zero is the sum/mean pad identity (avgpool); non-zero pads keep the lock+fill.
+                noc.async_write_zeros(cb_in0, padded_X_size << 5);  // "<< 5" = "* tile_height"
+                noc.write_zeros_l1_barrier();
+            } else {
+                // Scoped write lock over the whole tile-row: caching and store ordering are handled by
+                // it, so the tilize UNPACK sees the fill and it is ordered ahead of the push_back. No
+                // NOC traffic in this block, so the lock can cover the entire fill.
+                const auto lock = cb_in0.scoped_write_lock(num_tiles_per_row);
+                // pad the tile by reading values from zero buffer in L1
+                fill_with_val<elem_size>(
+                    static_cast<uint32_t>(lock.get_ptr().get_address()),
+                    padded_X_size << 5,
+                    pad_value);  // "<< 5" = "* tile_height"
+            }
             cb_in0.push_back(num_tiles_per_row);
         }
     };
@@ -101,48 +110,84 @@ void kernel_main() {
     auto read_block = [&](uint32_t base_page_id, uint32_t num_rows) {
         uint32_t padding_rows = (tile_height - num_rows) & 31;
         bool has_rows = (num_rows + padding_rows) > 0;
+        // The pad value is the reduction's identity (0 for sum/mean, ±inf for max/min), so zero is the
+        // common case but not the only one -- keep the lock + CPU-store path for the rest.
+        const bool zero_pad = (pad_value == 0);
 
         cb_in0.reserve_back(num_tiles_per_row * has_rows);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
-        uint32_t dst_offset = 0;
-        for (uint32_t k = 0; k < num_rows; k++) {
-            uint32_t start_of_row_l1_write_addr = l1_write_addr;
-            for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
+        if (zero_pad) {
+            // [port of amokan/avgpool_write_zeroes 3ddffac] NOC reads write the valid data straight to TL1
+            // and the iDMA zero device zeros the pad columns/rows (also TL1) -- no scoped_write_lock and no
+            // D$/L2 flush, the CPU-side coherency ops that stall the tilize compute MOP (0x19/0x119). The pad
+            // zeros are left in flight; write_zeros_l1_barrier after the loop drains them at once. Reads and
+            // zeros target disjoint bytes.
+            uint32_t dst_offset = 0;
+            for (uint32_t k = 0; k < num_rows; k++) {
+                for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
+                    noc.async_read(
+                        s,
+                        cb_in0,
+                        page_size,
+                        {.page_id = base_page_id + k * num_pages_in_row + i, .offset_bytes = 0},
+                        {.offset_bytes = dst_offset});
+                    dst_offset += page_size;
+                }
+                // Process the last page in a row separately, as it may have padding at the end
                 noc.async_read(
                     s,
                     cb_in0,
-                    page_size,
-                    {.page_id = base_page_id + k * num_pages_in_row + i, .offset_bytes = 0},
+                    size_of_valid_data_in_last_page_in_row,
+                    {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
                     {.offset_bytes = dst_offset});
-                dst_offset += page_size;
-                l1_write_addr += page_size;
+                const uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
+                // Zero this row's padding columns (offset past the just-read valid payload). Left in flight.
+                noc.async_write_zeros(
+                    cb_in0,
+                    size_of_padding_columns,
+                    {.offset_bytes = dst_offset + size_of_valid_data_in_last_page_in_row});
+                dst_offset += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
             }
-            // Process the last page in a row separately, as it may have padding at the end
-            noc.async_read(
-                s,
-                cb_in0,
-                size_of_valid_data_in_last_page_in_row,
-                {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
-                {.offset_bytes = dst_offset});
-            uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
-            fill_with_val<elem_size>(start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
-            dst_offset += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
-            l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
-        }
+            // Trailing pad rows (padding_rows is 0 for a full 32-row block -> zero-length iDMA, tolerated).
+            noc.async_write_zeros(cb_in0, padding_rows * padded_X_size, {.offset_bytes = dst_offset});
+            noc.write_zeros_l1_barrier();
+            noc.async_read_barrier();
+        } else {
+            // One write lock over the whole reserved tile-row, covering both the NOC reads and the CPU
+            // pad fills. The lock also handles caching and orders the fills ahead of the push_back.
+            // The loop walks l1_write_addr itself, so the addressing is unchanged -- get_ptr() only
+            // exposes the start of the run.
+            const auto lock = cb_in0.scoped_write_lock(num_tiles_per_row * has_rows);
+            uint32_t l1_write_addr = static_cast<uint32_t>(lock.get_ptr().get_address());
+            uint32_t dst_offset = 0;
+            for (uint32_t k = 0; k < num_rows; k++) {
+                uint32_t start_of_row_l1_write_addr = l1_write_addr;
+                for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
+                    noc.async_read(
+                        s,
+                        cb_in0,
+                        page_size,
+                        {.page_id = base_page_id + k * num_pages_in_row + i, .offset_bytes = 0},
+                        {.offset_bytes = dst_offset});
+                    dst_offset += page_size;
+                    l1_write_addr += page_size;
+                }
+                // Process the last page in a row separately, as it may have padding at the end
+                noc.async_read(
+                    s,
+                    cb_in0,
+                    size_of_valid_data_in_last_page_in_row,
+                    {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
+                    {.offset_bytes = dst_offset});
+                uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
+                fill_with_val<elem_size>(
+                    start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+                dst_offset += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
+                l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
+            }
 
-        fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
-        noc.async_read_barrier();
-        // [avgpool #50329 fix] async_read_barrier fences only the NOC data-row reads. The column pad
-        // (above) and the row pad (just above) are RISC CPU stores (fill_with_val); on Quasar they linger
-        // in the DM core's private L1 D$/L2 and the tilize UNPACK reads STALE TL1 for the padding rows
-        // (leftover block-0 data) -> wrong tilize output. Flush the whole tile-row block through to TL1
-        // before push_back. NOC data rows are unaffected (already written directly to TL1 by the NOC
-        // engine; flushing clean D$ lines is a no-op). No-op on WH/BH. Mirrors prepare_reduce_scaler.
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        if (has_rows) {
-            flush_l2_cache_range(cb_in0.get_write_ptr(), padded_X_size << 5);
+            fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+            noc.async_read_barrier();
         }
-#endif
         cb_in0.push_back(num_tiles_per_row * has_rows);
     };
 

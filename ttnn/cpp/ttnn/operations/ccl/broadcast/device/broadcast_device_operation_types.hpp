@@ -40,6 +40,7 @@ struct BroadcastParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(6);
         attrs.emplace_back("sender_coord", sender_coord);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);

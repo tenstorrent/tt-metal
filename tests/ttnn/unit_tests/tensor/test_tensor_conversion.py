@@ -27,6 +27,7 @@ pytestmark = pytest.mark.use_module_device
     "tt_dtype",
     [
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -95,6 +96,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
 
 string_to_torch_dtype = {
     "uint8": torch.uint8,
+    "int8": torch.int8,
     "int16": torch.int16,
     "int32": torch.int32,
     "int64": torch.int64,
@@ -105,6 +107,7 @@ string_to_torch_dtype = {
 
 string_to_np_dtype = {
     "uint8": np.ubyte,
+    "int8": np.byte,
     "int16": np.int16,
     "int32": np.int32,
     "int64": np.int64,
@@ -118,6 +121,7 @@ string_to_np_dtype = {
     "python_dtype_str",
     [
         "uint8",
+        "int8",
         "int16",
         "int32",
         "int64",

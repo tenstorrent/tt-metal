@@ -34,7 +34,8 @@ OptimizerRegistry::OptimizerRegistry() {
                 .epsilon = config["epsilon"].as<float>(1e-8F),
                 .weight_decay = config["weight_decay"].as<float>(1e-2F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
-                .stochastic_rounding = config["stochastic_rounding"].as<bool>(false)});
+                .stochastic_rounding = config["stochastic_rounding"].as<bool>(false),
+                .weight_decay_skip_1d = config["weight_decay_skip_1d"].as<bool>(false)});
     });
 
     register_optimizer("MorehAdamW", [](const YAML::Node& config, serialization::NamedParameters params) {
@@ -117,6 +118,11 @@ std::unique_ptr<OptimizerBase> OptimizerRegistry::create(
     auto it = m_creators.find(type);
     if (it == m_creators.end()) {
         throw std::runtime_error("Unknown optimizer type: " + type);
+    }
+    // Only AdamW implements this. yaml-cpp ignores unrecognized keys, so without this check the
+    // flag would parse and do nothing, leaving 1-D params decaying against the config's intent.
+    if (type != "AdamW" && config["weight_decay_skip_1d"].as<bool>(false)) {
+        throw std::runtime_error("weight_decay_skip_1d is only supported by AdamW, got optimizer type: " + type);
     }
     return it->second(config, std::move(params));
 }

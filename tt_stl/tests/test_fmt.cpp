@@ -34,7 +34,7 @@ namespace {
 using ::testing::HasSubstr;
 
 // Test std::vector<int> formatting
-TEST(FmtTest, VectorInt) {
+TEST(FmtTest, CPU_VectorInt) {
     std::vector<int> vec = {1, 2, 3, 4, 5};
     std::string result = fmt::format("{}", vec);
     EXPECT_THAT(result, HasSubstr("1"));
@@ -45,7 +45,7 @@ TEST(FmtTest, VectorInt) {
 // Test std::vector<bool> formatting (proxy reference edge case)
 // vector<bool> uses bit-packing; operator[] returns a proxy type, not a real bool.
 // This test guards against fmt 11's unformattable-type hard error regressing.
-TEST(FmtTest, VectorBool) {
+TEST(FmtTest, CPU_VectorBool) {
     // Mixed values
     std::vector<bool> mixed = {true, false, true};
     std::string result = fmt::format("{}", mixed);
@@ -65,7 +65,7 @@ TEST(FmtTest, VectorBool) {
 }
 
 // Test std::optional<T> formatting
-TEST(FmtTest, Optional) {
+TEST(FmtTest, CPU_Optional) {
     std::optional<int> opt_val = 42;
     std::string result1 = fmt::format("{}", opt_val);
     EXPECT_THAT(result1, HasSubstr("42"));
@@ -79,14 +79,14 @@ TEST(FmtTest, Optional) {
 }
 
 // Test std::optional<const T> (edge case mentioned in fmt.hpp comments)
-TEST(FmtTest, OptionalConst) {
+TEST(FmtTest, CPU_OptionalConst) {
     std::optional<const bool> opt_const = true;
     std::string result = fmt::format("{}", opt_const);
     EXPECT_TRUE(result.find("true") != std::string::npos || result.find('1') != std::string::npos);
 }
 
 // Test container of non-void pointers (critical edge case)
-TEST(FmtTest, VectorOfPointers) {
+TEST(FmtTest, CPU_VectorOfPointers) {
     MockDevice d1{1}, d2{2}, d3{3};
     std::vector<MockDevice*> ptrs = {&d1, &d2, &d3};
     std::string result = fmt::format("{}", ptrs);
@@ -97,7 +97,7 @@ TEST(FmtTest, VectorOfPointers) {
 }
 
 // Test std::array
-TEST(FmtTest, Array) {
+TEST(FmtTest, CPU_Array) {
     std::array<int, 3> arr = {10, 20, 30};
     std::string result = fmt::format("{}", arr);
     EXPECT_THAT(result, HasSubstr("10"));
@@ -106,7 +106,7 @@ TEST(FmtTest, Array) {
 }
 
 // Test std::map
-TEST(FmtTest, Map) {
+TEST(FmtTest, CPU_Map) {
     std::map<std::string, int> m = {{"a", 1}, {"b", 2}, {"c", 3}};
     std::string result = fmt::format("{}", m);
     EXPECT_TRUE(result.find('a') != std::string::npos || result.find("\"a\"") != std::string::npos);
@@ -114,7 +114,7 @@ TEST(FmtTest, Map) {
 }
 
 // Test std::set
-TEST(FmtTest, Set) {
+TEST(FmtTest, CPU_Set) {
     std::set<int> s = {3, 1, 4, 1, 5};
     std::string result = fmt::format("{}", s);
     EXPECT_THAT(result, HasSubstr("1"));
@@ -124,7 +124,7 @@ TEST(FmtTest, Set) {
 }
 
 // Test std::unordered_map
-TEST(FmtTest, UnorderedMap) {
+TEST(FmtTest, CPU_UnorderedMap) {
     std::unordered_map<std::string, int> um = {{"x", 10}, {"y", 20}};
     std::string result = fmt::format("{}", um);
     EXPECT_TRUE(result.find('x') != std::string::npos || result.find("\"x\"") != std::string::npos);
@@ -132,7 +132,7 @@ TEST(FmtTest, UnorderedMap) {
 }
 
 // Test std::tuple
-TEST(FmtTest, Tuple) {
+TEST(FmtTest, CPU_Tuple) {
     std::tuple<int, std::string, bool> t = {42, "test", true};
     std::string result = fmt::format("{}", t);
     EXPECT_THAT(result, HasSubstr("42"));
@@ -141,7 +141,7 @@ TEST(FmtTest, Tuple) {
 }
 
 // Test std::variant
-TEST(FmtTest, Variant) {
+TEST(FmtTest, CPU_Variant) {
     std::variant<int, std::string> v1 = 100;
     std::string result1 = fmt::format("{}", v1);
     EXPECT_THAT(result1, HasSubstr("100"));
@@ -152,7 +152,7 @@ TEST(FmtTest, Variant) {
 }
 
 // Test enum formatting (via enchantum)
-TEST(FmtTest, Enum) {
+TEST(FmtTest, CPU_Enum) {
     TestEnum e = TestEnum::Value2;
     std::string result = fmt::format("{}", e);
     EXPECT_FALSE(result.empty());
@@ -163,14 +163,14 @@ TEST(FmtTest, Enum) {
 }
 
 // Test std::filesystem::path
-TEST(FmtTest, FilesystemPath) {
+TEST(FmtTest, CPU_FilesystemPath) {
     std::filesystem::path p = "/some/path/to/file.txt";
     std::string result = fmt::format("{}", p);
     EXPECT_TRUE(result.find("file.txt") != std::string::npos || result.find("path") != std::string::npos);
 }
 
 // Test ttsl::SmallVector
-TEST(FmtTest, SmallVector) {
+TEST(FmtTest, CPU_SmallVector) {
     ttsl::SmallVector<int, 4> sv = {1, 2, 3};
     std::string result = fmt::format("{}", sv);
     EXPECT_THAT(result, HasSubstr("1"));
@@ -179,7 +179,7 @@ TEST(FmtTest, SmallVector) {
 }
 
 // Test ttsl::StrongType
-TEST(FmtTest, StrongType) {
+TEST(FmtTest, CPU_StrongType) {
     using UserId = ttsl::StrongType<int, struct UserIdTag>;
     UserId id{12345};
     std::string result = fmt::format("{}", id);
@@ -187,7 +187,7 @@ TEST(FmtTest, StrongType) {
 }
 
 // Test nested containers
-TEST(FmtTest, NestedContainers) {
+TEST(FmtTest, CPU_NestedContainers) {
     std::vector<std::vector<int>> nested = {{1, 2}, {3, 4}, {5}};
     std::string result = fmt::format("{}", nested);
     EXPECT_THAT(result, HasSubstr("1"));
@@ -196,7 +196,7 @@ TEST(FmtTest, NestedContainers) {
 }
 
 // Test empty containers
-TEST(FmtTest, EmptyContainers) {
+TEST(FmtTest, CPU_EmptyContainers) {
     std::vector<int> empty_vec;
     std::string result = fmt::format("{}", empty_vec);
     EXPECT_FALSE(result.empty());  // Should format something, even if empty

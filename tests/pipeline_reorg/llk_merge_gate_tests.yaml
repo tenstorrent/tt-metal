@@ -11,6 +11,8 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
   gtest_shard_total: 4
@@ -22,6 +24,8 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
   gtest_shard_total: 4
@@ -33,6 +37,8 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
   gtest_shard_total: 4
@@ -44,6 +50,8 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
   gtest_shard_total: 4
@@ -55,6 +63,8 @@
     bh_p150b_civ2_viommu:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: fd
   gtest_shard_total: 2
@@ -66,6 +76,8 @@
     bh_p150b_civ2_viommu:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: fd
   gtest_shard_total: 2
@@ -73,19 +85,23 @@
 
 # --- SD-only / Quasar slice ---
 - name: LLK SD wormhole (Quasar slice)
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
   skus:
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: sd
 
 - name: LLK SD blackhole (Quasar slice)
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
   skus:
     bh_p150b_civ2_viommu:
       timeout: 10
   team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: sd

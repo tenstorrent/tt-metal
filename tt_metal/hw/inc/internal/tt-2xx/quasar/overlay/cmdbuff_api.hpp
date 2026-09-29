@@ -55,13 +55,19 @@ constexpr uint32_t CMDBUF_RD_REQ_VC = 1;
 /* Read response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_RD_RESP_VC = 12;
 /* Write request virtual channel - used by both command buffers */
-constexpr uint32_t CMDBUF_WR_REQ_VC = 2;
+constexpr uint32_t CMDBUF_WR_REQ_VC = 1;
 /* Write response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
 /* Multicast request virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
 /* Multicast response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+/* First of the 8 iDMA backend request virtual channels (CMDBUF_FIRST_IDMA_VC..+7).
+ * Kept independent of CMDBUF_WR_REQ_VC so that moving the unicast write VC cannot
+ * walk the iDMA VC-autoincrement range into the multicast request VCs. */
+constexpr uint32_t CMDBUF_FIRST_IDMA_VC = 0;
+/* Number of iDMA backend engines the cmdbuf round-robins packets across */
+constexpr uint32_t CMDBUF_NUM_IDMA_VCS = 8;
 
 #define DEFINE_CMD_BUFS(buf_name, cmdbuf)                                                                              \
                                                                                                                        \

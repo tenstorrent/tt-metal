@@ -23,12 +23,6 @@ void kernel_main() {
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
     };
-    std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
-        get_semaphore(fused_op_receiver_signal_semaphore_id[0]),
-        get_semaphore(fused_op_receiver_signal_semaphore_id[1]),
-        get_semaphore(fused_op_receiver_signal_semaphore_id[2]),
-        get_semaphore(fused_op_receiver_signal_semaphore_id[3]),
-    };
     // runtime args
     size_t arg_idx = 0;
     const uint32_t signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -83,8 +77,7 @@ void kernel_main() {
     noc_async_write_multicast_loopback_src(
         l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
 
-    uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr[core_id];
-    noc_semaphore_set_multicast_loopback_src(
-        fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size, false);
+    fused_op_receiver_signal_semaphore.set_multicast<NocOptions::MCAST_INCL_SRC>(
+        noc_obj, bbox_start_x, bbox_start_y, bbox_end_x, bbox_end_y, bbox_size, /*linked=*/false);
     noc_obj.async_write_barrier();
 }

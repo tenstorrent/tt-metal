@@ -93,8 +93,8 @@ void kernel_main() {
         get_arg(args::mcast_dest_noc_end_y)};
     const uint32_t weights_mcast_num_dests = get_arg(args::weights_mcast_num_dests);
     const uint32_t weights_mcast_num_cores = get_arg(args::weights_mcast_num_cores);
-    Semaphore<> weights_mcast_sender_sem(sem::weights_mcast_sender);
-    Semaphore<> weights_mcast_receiver_sem(sem::weights_mcast_receiver);
+    Semaphore weights_mcast_sender_sem(sem::weights_mcast_sender);
+    Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     MulticastEndpoint mcast_ep;
     DataflowBuffer cb_weight_obj(dfb::weights);
 #ifdef SPLIT_READER
@@ -253,7 +253,6 @@ void kernel_main() {
                     uint32_t weight_tile_id = weight_row_start_tile_id;
                     // loop over weight block tiles along w
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        // DPRINT("weight_tile_id={}\n", weight_tile_id);
                         noc.async_read(
                             s_weight,
                             cb_weight_obj,

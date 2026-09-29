@@ -3,6 +3,9 @@
 
 set(TTNN_OP_ELTWISE_UNARY_BACKWARD_SRCS
     unary_backward.cpp
+    device/unary_backward_device_operation.cpp
+    device/unary_backward_op_utils.cpp
+    device/unary_backward_program_factory.cpp
     tanh_bw/device/tanh_bw_device_operation.cpp
     tanh_bw/device/tanh_bw_program_factory.cpp
     gelu_bw/device/gelu_bw_device_operation.cpp

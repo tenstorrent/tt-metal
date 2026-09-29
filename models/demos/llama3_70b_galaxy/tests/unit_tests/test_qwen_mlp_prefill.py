@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Single parametrized prefill test. Wormhole runs the original (main) prefetcher path; Blackhole
+# Galaxy runs the no-prefetcher bring-up path. The architecture is detected once at import so the
+# fabric config and in-body setup select the right path automatically.
 import torch
 import pytest
 from loguru import logger
@@ -18,6 +21,12 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 
 
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
+    IS_BLACKHOLE as _IS_BLACKHOLE,
+    PREFILL_FABRIC_CONFIG as _PREFILL_FABRIC_CONFIG,
+)
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
@@ -28,18 +37,19 @@ from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128,),
+    (128, 1024, 4096),
 )
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": _PREFILL_FABRIC_CONFIG}],
     indirect=True,
 )
-def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
+def test_qwen_mlp_inference_prefill(seq_len, input_dtype, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -69,14 +79,22 @@ def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seed
     # Load Qwen model
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=False, max_seq_len=128)
     model_args.n_layers = 1
-    model_args.use_prefetcher = False
+    # Exercise the production Wormhole ring CCL and its persistent FF2 buffers.
+    model_args.use_prefetcher = not _IS_BLACKHOLE
     state_dict = model_args.load_state_dict()
 
     logger.info(f"Qwen Model Loaded")
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
-    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill", is_qwen=True)
+    # Blackhole runs prefill on the full compute grid (no narrow prefetcher worker sub-device);
+    # Wormhole keeps main's prefill prefetcher setup so the worker sub-device matches production.
+    if _IS_BLACKHOLE:
+        prefetcher_setup = None
+        worker_sub_device_id = None
+    else:
+        prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        worker_sub_device_id = prefetcher_setup.worker_sub_device_id
+    tt_ccl = TT_CCL(mesh_device, model_args, worker_sub_device_id, mode="prefill", is_qwen=True)
 
     model_args.WEIGHTS_DTYPE = dtype
     tt_model = TtLlamaMLP(
@@ -103,12 +121,13 @@ def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seed
                 dims=(None, 3),
                 mesh_shape=model_args.cluster_shape,
             ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
-            dtype=ttnn.bfloat8_b,
+            dtype=input_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
         logger.info("Run Qwen_MLP")
         tt_output = tt_model.forward_prefill(tt_input, batch_size)
+        assert tt_output.dtype == ttnn.bfloat16
 
         tt_output_torch = ttnn.to_torch(
             tt_output,
@@ -126,6 +145,7 @@ def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seed
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
+        assert passing, f"Qwen MLP prefill output does not meet PCC requirement {pcc_required}: {pcc_message}."
     if passing:
         logger.info("Qwen_MLP Prefill Passed!")
     else:

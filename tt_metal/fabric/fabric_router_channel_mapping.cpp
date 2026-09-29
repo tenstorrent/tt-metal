@@ -281,6 +281,12 @@ uint32_t FabricRouterChannelMapping::get_num_receiver_channels_for_vc(uint32_t v
 std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings() const {
     std::vector<InternalSenderChannelMapping> result;
 
+    uint32_t total_sender_channels = 0;
+    for (uint32_t vc = 0; vc < get_num_virtual_channels(); ++vc) {
+        total_sender_channels += get_num_sender_channels_for_vc(vc);
+    }
+    result.reserve(total_sender_channels);
+
     // Iterate through VCs in order and flatten
     for (uint32_t vc = 0; vc < get_num_virtual_channels(); ++vc) {
         for (uint32_t ch_idx = 0; ch_idx < get_num_sender_channels_for_vc(vc); ++ch_idx) {

@@ -5,6 +5,7 @@
 // Base single-DFB config sweep (full Metal 2.0 matrix).
 
 #include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -37,7 +38,7 @@ static std::string M2ImplicitSyncParamName(const ::testing::TestParamInfo<bool>&
             .implicit_sync = GetParam(),                                       \
             .num_entries = default_num_entries((num_p), (num_c)),              \
         };                                                                     \
-        run_single_dfb_program_2_0(this->devices_.at(0), params);              \
+        run_single_dfb_program_2_0(this->device(), params);                    \
     }
 
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)

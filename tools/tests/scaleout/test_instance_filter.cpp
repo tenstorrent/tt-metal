@@ -143,6 +143,21 @@ TEST(InstanceFilterTest, RelativeIncludeSelectsNameUnderEveryParent) {
     EXPECT_EQ(cross_host_pairs(gen).size(), 1u);
 }
 
+TEST(InstanceFilterTest, RelativeNameSpansMultipleParentsMatchesAll) {
+    // "node1" occurs under every superpod, so a relative include matches ALL of them under 4 distinct
+    // parents. This is intended fan-out, not the nested-lineage ambiguity case.
+    auto gen = make_gen();
+    gen.apply_instance_filter({{"node1"}}, {});
+    auto paths = instance_paths(gen);
+    ASSERT_EQ(paths.size(), 4u);
+    EXPECT_THAT(paths, Each(ElementsAre("n300_lb_cluster", _, "node1")));
+    std::set<std::string> parents;
+    for (const auto& p : paths) {
+        parents.insert(p[1]);
+    }
+    EXPECT_EQ(parents.size(), 4u);
+}
+
 TEST(InstanceFilterTest, RootLevelNameDoesNotMatchDeeperInstances) {
     // "superpod1" is a suffix only of the top-level instance, never of a deeper node path.
     auto gen = make_gen();

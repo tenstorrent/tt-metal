@@ -77,7 +77,56 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
-    TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
+    if (tensor_args.optional_input_tensor.has_value()) {
+        // Fused concat: in0's K = input_tensor (prefix) + optional_input_tensor (suffix); the split
+        // point is input_tensor's K width. The two sources must be concatenable on K (differ only on
+        // the last axis) and their K's must sum to the weight's K (weight stacked [W_prefix; W_suffix]).
+        const auto& second_input = tensor_args.optional_input_tensor.value();
+        TT_FATAL(
+            second_input.device() == act_tensor.device(),
+            "minimal_matmul fused concat: second input must be on the same device as activation");
+        // The suffix is read tile-by-tile through the same in0 path (in3), so it must be TILE layout
+        // and share the activation's dtype (the in0 reads use the activation's tile size for both
+        // sources — a differing dtype would read the wrong number of bytes per tile).
+        TT_FATAL(
+            second_input.layout() == Layout::TILE, "minimal_matmul fused concat requires TILE layout for second input");
+        TT_FATAL(
+            dtype_supported(second_input.dtype()),
+            "minimal_matmul fused concat supports only BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32 for second input");
+        TT_FATAL(
+            second_input.dtype() == act_tensor.dtype(),
+            "minimal_matmul fused concat: second-input dtype ({}) must match activation dtype ({})",
+            second_input.dtype(),
+            act_tensor.dtype());
+        const auto& opt_logical = second_input.logical_shape();
+        TT_FATAL(
+            opt_logical.rank() == a_logical.rank(),
+            "minimal_matmul fused concat: second-input rank ({}) must match input rank ({})",
+            opt_logical.rank(),
+            a_logical.rank());
+        for (int i = 0; i < static_cast<int>(a_logical.rank()) - 1; ++i) {
+            TT_FATAL(
+                opt_logical[i] == a_logical[i],
+                "minimal_matmul fused concat: inputs must differ only on the K (last) axis; dim {} "
+                "differs (input={}, second={})",
+                i,
+                a_logical[i],
+                opt_logical[i]);
+        }
+        // Seam lands at prefix's padded-K tile boundary: weight must be per-segment tile-padded.
+        const uint32_t prefix_padded_K = act_tensor.padded_shape()[-1];
+        const uint32_t suffix_padded_K = second_input.padded_shape()[-1];
+        const uint32_t weight_padded_K = weight_tensor.padded_shape()[-2];
+        TT_FATAL(
+            prefix_padded_K + suffix_padded_K == weight_padded_K,
+            "minimal_matmul fused concat: prefix_padded_K({}) + suffix_padded_K({}) must equal "
+            "weight_padded_K({}) — use prepare_weight_for_concatenated_input to build the weight.",
+            prefix_padded_K,
+            suffix_padded_K,
+            weight_padded_K);
+    } else {
+        TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
+    }
     TT_FATAL(M > 0 && K > 0 && N > 0, "minimal_matmul dimensions must be positive");
 
     // Validate chunks and dim parameters
@@ -296,7 +345,8 @@ std::vector<Tensor> minimal_matmul(
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::optional<Tensor>& optional_input_tensor) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -323,7 +373,7 @@ std::vector<Tensor> minimal_matmul(
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .bias_tensor = bias_tensor,
-            .optional_input_tensor = std::nullopt,
+            .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
             .fused_ternary_input_b = fused_ternary_input_b});
 }

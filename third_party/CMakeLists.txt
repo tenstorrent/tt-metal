@@ -221,11 +221,28 @@ CPMAddPackage(
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
+# GTest's own CMake (googletest/cmake/internal_utils.cmake) already calls
+# find_package(Python COMPONENTS Interpreter), which defines a Python::Interpreter target but no
+# Python::Module target. nanobind >= 2.13 only self-detects Python when *both* Python::Interpreter
+# and Python::Module are missing (previously: *either*), so with a partial Python::Interpreter
+# target already in scope, nanobind skips its own find_package(Python) call and fails when
+# nanobind-config.cmake asserts that Python::Module also exists. Find both components explicitly
+# here so nanobind sees a complete target set.
+find_package(
+    Python
+    REQUIRED
+    COMPONENTS
+        Interpreter
+        Development.Module
+    OPTIONAL_COMPONENTS
+        Development.SABIModule
+)
+
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        2a61ad2494d09fecb2e13322c1383342c299900d # 2.12.0
+        86e5626728fc282637a6c338597120913dded1bb # 2.14.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
@@ -463,15 +480,11 @@ CPMAddPackage(
 )
 
 ############################################################################################################################
-# tt-emule (software emulation, header-only consumption)
+# tt-emule (software emulation runtime, sourced from a local TT_EMULE_PATH)
 ############################################################################################################################
 if(TT_METAL_USE_EMULE)
-    CPMAddPackage(
-        NAME tt_emule
-        GITHUB_REPOSITORY tenstorrent/tt-emule
-        GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
-        EXCLUDE_FROM_ALL YES
-    )
+    # No public fetch: cmake/project_options.cmake requires TT_EMULE_PATH and points CPM at that checkout.
+    CPMAddPackage(NAME tt_emule EXCLUDE_FROM_ALL YES)
 endif()
 
 ############################################################################################################################

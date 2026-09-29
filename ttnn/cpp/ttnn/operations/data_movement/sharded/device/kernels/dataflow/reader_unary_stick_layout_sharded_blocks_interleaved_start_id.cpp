@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_unary_stick_layout_sharded_blocks_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -30,13 +35,21 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in1(cb_id_in1);
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
+    // The accessor base must stay the unshifted buffer base: Metal 2.0 supplies it from the tensor
+    // binding and offers no seam for a pre-offset base. The per-core column shift rides each read
+    // as a source `offset_bytes` instead, which resolves to the same NoC address.
+    const auto s0 = TensorAccessor(src_args, src_addr);
     uint32_t stick_id = start_id;
     dfb_in0.reserve_back(block_height);
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
-            noc.async_read(s0, dfb_in0, block_width_bytes, {.page_id = stick_id}, {.offset_bytes = dest_off});
+            noc.async_read(
+                s0,
+                dfb_in0,
+                block_width_bytes,
+                {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
+                {.offset_bytes = dest_off});
             stick_id++;
             dest_off += padded_block_width_bytes;
         }
@@ -84,7 +97,7 @@ void kernel_main() {
                         s0,
                         dfb_in1,
                         aligned_block_width_bytes,
-                        {.page_id = stick_id},
+                        {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                         {.offset_bytes = scratch_offsets[slot]},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
                     dest_offsets[slot] = dest_off;

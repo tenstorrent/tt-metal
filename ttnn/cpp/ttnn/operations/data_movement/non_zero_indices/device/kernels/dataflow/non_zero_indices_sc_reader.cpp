@@ -46,52 +46,45 @@ void kernel_main() {
     // iteration bound and the column-index stride.
     uint32_t last_dim = get_arg_val<uint32_t>(5);
     uint32_t aligned_page_size = get_arg_val<uint32_t>(6);
-    uint32_t pages_per_bank = get_arg_val<uint32_t>(7);
     uint32_t grid_w = get_arg_val<uint32_t>(8);
     uint32_t logical_N = get_arg_val<uint32_t>(9);
     uint32_t logical_H = get_arg_val<uint32_t>(10);
-    uint32_t grid_h = get_arg_val<uint32_t>(11);
-    uint32_t is_col_major = get_arg_val<uint32_t>(12);
 
     // TensorAccessor computes a page's NOC address as: bank_base + bank_page_id * page_size_bytes.
-    // For INTERLEAVED buffers the allocator pads each page to aligned_page_size, so the stride
-    // between pages is aligned_page_size — pass that value.
-    // For SHARDED L1 buffers the shards are packed with NO inter-page padding, so the stride
-    // between pages equals the raw physical page size (last_dim * NUM_BYTES).  Passing
-    // aligned_page_size here would overshoot into zero-padding and produce incorrect addresses
-    // whenever phys_page_bytes < aligned_page_size (e.g. BLOCK_SHARDED with small shard width).
+    // Buffers are addressed with allocator-aligned page spacing, even when only the
+    // first last_dim * NUM_BYTES bytes of a row-major shard page are valid payload.
     constexpr bool input_is_sharded = src0_args.is_sharded;
-    const uint32_t input_ta_page_size = input_is_sharded ? (last_dim * NUM_BYTES) : aligned_page_size;
-    const auto s0 = TensorAccessor(src0_args, input_addr, input_ta_page_size);
+    const uint32_t input_page_bytes = last_dim * NUM_BYTES;
+    const auto s0 = TensorAccessor(src0_args, input_addr, aligned_page_size);
 
     // Iterate in logical row-major order so that (b,n,h,c) index tuples are emitted in
     // strictly increasing order, matching torch.nonzero() output. Row r decomposes as:
     //   h = r % logical_H, n = (r / logical_H) % logical_N, b = r / (logical_H * logical_N)
-    // For INTERLEAVED/HEIGHT_SHARDED (grid_w=1, pages_per_bank=1) this reduces to a simple
-    // sequential page scan. For WIDTH/BLOCK_SHARDED (grid_w>1), each logical row r is split
-    // across grid_w column shards whose TensorAccessor page_ids are interleaved in bank-major
-    // order — the formula below reconstructs the correct page_id for each shard piece.
+    // For WIDTH/BLOCK_SHARDED (grid_w>1), each logical row r is split across grid_w
+    // column shards. TensorAccessor maps logical page_ids to the correct physical
+    // shard bank and offset.
     const uint32_t total_rows = num_pages / grid_w;
     for (uint32_t r = 0; r < total_rows; ++r) {
         const uint32_t h = r % logical_H;
         const uint32_t n = (r / logical_H) % logical_N;
         const uint32_t b = r / (logical_H * logical_N);
 
-        const uint32_t core_row_idx = r / pages_per_bank;
-        const uint32_t bank_page_idx = r % pages_per_bank;
         for (uint32_t core_col = 0; core_col < grid_w; ++core_col) {
-            // ROW_MAJOR: banks are ordered left-to-right across rows (row * grid_w + col).
-            // COL_MAJOR: banks are ordered top-to-bottom across columns (col * grid_h + row).
-            const uint32_t bank =
-                is_col_major ? (core_col * grid_h + core_row_idx) : (core_row_idx * grid_w + core_col);
-            const uint32_t page_id = bank * pages_per_bank + bank_page_idx;
+            const uint32_t page_id = r * grid_w + core_col;
 
             input_cb.reserve_back(1);
-            noc.async_read(s0, input_cb, aligned_page_size, {.page_id = page_id}, {.offset_bytes = 0});
+            uint32_t input_l1_offset = 0;
+            if constexpr (input_is_sharded) {
+                const uint64_t input_noc_addr = s0.get_noc_addr(page_id);
+                input_l1_offset = input_noc_addr & 15;
+                noc_async_read(input_noc_addr, input_cb.get_write_ptr() + input_l1_offset, input_page_bytes);
+            } else {
+                noc.async_read(s0, input_cb, aligned_page_size, {.page_id = page_id}, {.offset_bytes = 0});
+            }
             noc.async_read_barrier();
             input_cb.push_back(1);
 
-            uint32_t input_l1_addr = input_cb.get_read_ptr();
+            uint32_t input_l1_addr = input_cb.get_read_ptr() + input_l1_offset;
 // nonzero_mask strips the IEEE sign bit for float dtypes so that -0.0
 // (sign bit set, all others clear) compares equal to zero.  For integer
 // dtypes IS_FLOAT is not defined and the mask is all-ones (no-op).

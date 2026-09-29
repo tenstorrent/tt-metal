@@ -150,6 +150,7 @@ void py_module(nb::module_& mod) {
             result.reserve(mapping.all_cores.size());
             for (size_t i = 0; i < mapping.all_cores.size(); i++) {
                 std::vector<uint32_t> pages;
+                pages.reserve(mapping.core_host_page_indices[i].size());
                 for (auto p : mapping.core_host_page_indices[i]) {
                     if (p != tt::tt_metal::UncompressedBufferPageMapping::PADDING) {
                         pages.push_back(p);

@@ -452,22 +452,22 @@ private:
         // TODO: Fix this to account for actual dst size
         static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
 
-        reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_local, CTArgs::cb_remote);
+        reconfig_full_operand(CTArgs::cb_local, CTArgs::cb_remote);
         pack_reconfig_data_format<true>(CTArgs::cb_out);
         pack_block_contiguous_init(CTArgs::cb_out);
 
         if constexpr (CTArgs::has_residual) {
-            copy_tile_to_dst_init_short(CTArgs::cb_residual);
+            copy_init(CTArgs::cb_residual);
             cb_wait_front(CTArgs::cb_residual, CTArgs::num_tiles);
             tile_regs_acquire();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 copy_tile(CTArgs::cb_residual, i, i);
             }
             cb_pop_front(CTArgs::cb_residual, CTArgs::num_tiles);
-            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote, true);
+            add_init(CTArgs::cb_local, CTArgs::cb_remote, true);
             batched_add<false>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         } else {
-            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote);
+            add_init(CTArgs::cb_local, CTArgs::cb_remote);
             batched_add<true>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         }
 #endif

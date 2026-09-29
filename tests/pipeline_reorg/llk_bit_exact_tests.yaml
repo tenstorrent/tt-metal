@@ -12,6 +12,7 @@
 - name: llk_bit_exact_wormhole
   split_group: 1
   team: llk
+  budget_type: bit_exact
   coverage: false
   cmd: |
     set -euo pipefail
@@ -24,11 +25,12 @@
   skus:
     wh_n150_civ2:
       timeout: 90
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_bit_exact_blackhole group 1/2
   split_group: 1
   team: llk
+  budget_type: bit_exact
   coverage: false
   cmd: |
     set -euo pipefail
@@ -42,11 +44,12 @@
   skus:
     bh_p150b_civ2:
       timeout: 90
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_bit_exact_blackhole group 2/2
   split_group: 2
   team: llk
+  budget_type: bit_exact
   coverage: false
   cmd: |
     set -euo pipefail
@@ -60,4 +63,4 @@
   skus:
     bh_p150b_civ2:
       timeout: 90
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic

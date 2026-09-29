@@ -17,10 +17,10 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
@@ -59,7 +59,7 @@ void check_program_is_mapped_to_correct_cores(
 }
 
 void check_semaphores_are_initialized(
-    IDevice* device,
+    distributed::MeshDevice& unit_mesh,
     Program& program,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& golden_sem_values) {
@@ -68,12 +68,12 @@ void check_semaphores_are_initialized(
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
-                auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
-                detail::ReadFromDeviceL1(
-                    device,
+                auto sem_base_addr = program.impl().get_sem_base_addr(&unit_mesh, logical_core, CoreType::WORKER);
+                slow_dispatch::ReadFromL1(
+                    unit_mesh,
                     logical_core,
                     sem_base_addr,
-                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
+                    program.impl().get_sem_size(&unit_mesh, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
@@ -90,9 +90,11 @@ void check_semaphores_are_initialized(
 
 }  // namespace
 
-TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    Program program = CreateProgram();
+TEST_F(UnitMeshFixture, CoreRangeSet) {
+    auto device_range = distributed::MeshCoordinateRange(this->device().shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, CreateProgram());
+    Program& program = workload.get_programs().at(device_range);
 
     CoreRange core_range_one({0, 0}, {1, 1});
     CoreRange core_range_two({2, 2}, {3, 3});
@@ -102,21 +104,19 @@ TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
     uint32_t num_tiles = 4;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+    auto src_dram_buffer = distributed::MeshBuffer::create(
+        buffer_config, {.page_size = buffer_size, .buffer_type = BufferType::DRAM}, &this->device());
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
-
-    std::map<CoreCoord, std::shared_ptr<Buffer>> core_to_l1_buffer;
+    std::map<CoreCoord, std::shared_ptr<distributed::MeshBuffer>> core_to_l1_buffer;
     for (auto core_range : core_ranges.ranges()) {
         auto start = core_range.start_coord;
         auto end = core_range.end_coord;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core(x, y);
-                InterleavedBufferConfig l1_config{
-                    .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
-                auto dst_l1_buffer = CreateBuffer(l1_config);
+                auto dst_l1_buffer = distributed::MeshBuffer::create(
+                    buffer_config, {.page_size = buffer_size, .buffer_type = BufferType::L1}, &this->device());
                 core_to_l1_buffer.emplace(logical_core, dst_l1_buffer);
             }
         }
@@ -165,33 +165,36 @@ TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
 
     check_program_is_mapped_to_correct_cores(program, core_ranges, compute_kernel_args);
 
-    detail::CompileProgram(dev, program);
+    program.impl().compile(&this->device());
 
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    slow_dispatch::WriteToBuffer(*src_dram_buffer, src_vec);
 
-    const std::array reader_rt_args = {src_dram_buffer->address(), uint(0), num_tiles};
+    const std::array reader_rt_args = {(uint32_t)src_dram_buffer->address(), uint(0), num_tiles};
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
         SetRuntimeArgs(program, unary_reader_kernel, core, reader_rt_args);
 
-        auto l1_dst_noc_xy = dev->virtual_core_from_logical_core(
-            dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
+        auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
+            dst_l1_buffer->get_reference_buffer()->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
         SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
-            {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
+            {(std::uint32_t)dst_l1_buffer->address(),
+             (std::uint32_t)l1_dst_noc_xy.x,
+             (std::uint32_t)l1_dst_noc_xy.y,
+             num_tiles});
     }
 
-    detail::LaunchProgram(dev, program);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
-    check_semaphores_are_initialized(dev, program, core_ranges, golden_sem_values);
+    check_semaphores_are_initialized(this->device(), program, core_ranges, golden_sem_values);
 
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
         std::vector<uint32_t> result_vec;
-        detail::ReadFromBuffer(dst_l1_buffer, result_vec);
+        slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
         EXPECT_EQ(src_vec, result_vec) << "Mismatch on core " << core.x << "," << core.y;
     }
 }

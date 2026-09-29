@@ -37,14 +37,23 @@ from ...models.vae.vae_ltx import LTXVideoVAEAdapter, upsample_latent
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.fuse_loras import LoraSpec
+from ...utils.host_affinity import pin_one_thread_per_core
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+
+# Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
+# LTX_QUANT=all_bf8_lofi to opt into the shipped bf8 1080p tier (its perf/VBench floors are calibrated
+# against it), or LTX_QUANT=all_bf4_lofi for the bf4 probe tier (measurement only — bf4 activations
+# destroy quality). _resolve_quant_config resolves this once and threads the tag into the transformer
+# cache name, so a quantized cache stays separate from the baseline.
+LTX_QUANT_DEFAULT = ""
 
 DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
@@ -105,7 +114,7 @@ class LTXTransformerState:
         self._tt_video_padding_mask = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
-        return object.__getattribute__(self, f"_{name}")._value
+        return object.__getattribute__(self, f"_{name}").value
 
 
 # =============================================================================
@@ -196,6 +205,10 @@ class LTXPipeline:
     """
 
     HAS_UPSAMPLER: bool = False
+    # Set by subclasses that capture traces of their own after construction: the encode trace has to
+    # be the last one taken, or a later capture reclaims its activation region. See
+    # ``GemmaTokenizerEncoderPair.defer_trace_capture``.
+    DEFERS_ENCODE_TRACE: bool = False
 
     def __init__(
         self,
@@ -220,6 +233,7 @@ class LTXPipeline:
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
+        fps: float = 24.0,
         run_warmup: bool = False,
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
@@ -227,6 +241,10 @@ class LTXPipeline:
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
+        # Host affinity, explicit (not an import side effect): in a process re-execed by
+        # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
+        # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.
+        pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -234,6 +252,11 @@ class LTXPipeline:
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
         self._traced = traced
+        # FPS is pipeline-level state, not a per-request argument: it sets the audio latent
+        # length (audio_frames = round(num_frames / fps * 25)) and scales the A/V cross-PE's
+        # temporal axis into seconds. Both are baked into the captured traces, so changing it
+        # per request would silently replay a trace built for a different shape.
+        self.fps = float(fps)
         self._trace_state: dict[str, LTXTransformerState] = {}
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -290,6 +313,8 @@ class LTXPipeline:
             mode=self.mode,
             dynamic_load=self.dynamic_load,
         )
+        if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
+            self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
         self.transformer: LTXTransformerModel | None = None
@@ -307,6 +332,10 @@ class LTXPipeline:
         self._image_conditioning: bool = bool(image_conditioning)
 
         if self.checkpoint_name is not None:
+            # Resolved before construction so the LtxQuantProfile is baked into the transformer modules
+            # (Parameter.load typecasts DiT-linear weights to the preset dtype as they load), rather
+            # than typecast afterward by a post-load hook.
+            self._resolve_quant_config()
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
             self._prime_caches()
@@ -330,6 +359,8 @@ class LTXPipeline:
             self.tt_vocoder_with_bwe.release_trace()
         if self.tt_mel_decoder is not None:
             self.tt_mel_decoder.release_trace()
+        if self.vae_decoder is not None:
+            self.vae_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -390,6 +421,7 @@ class LTXPipeline:
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
+        fps: float = 24.0,
         **extra_pipeline_kwargs,
     ) -> "LTXPipeline":
         """Auto-configure mesh-shape defaults and forward into ``__init__``.
@@ -480,6 +512,7 @@ class LTXPipeline:
             num_frames=num_frames,
             height=height,
             width=width,
+            fps=fps,
             run_warmup=run_warmup,
             traced=traced,
             **extra_pipeline_kwargs,
@@ -507,6 +540,7 @@ class LTXPipeline:
             # auto-detected from the conditioning-image path or forced by the caller). Pure T2V keeps
             # the fast scalar-AdaLN path — no separate on/off flag.
             image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
+            quant_config=getattr(self, "_quant_config", None),
             lora_enabled=self.lora_enabled,
         )
 
@@ -613,14 +647,44 @@ class LTXPipeline:
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
+    def _resolve_quant_config(self) -> None:
+        """Resolve the DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+
+        LTX_QUANT="" selects the bf16 baseline. Runs before ``_instantiate_modules`` so the resolved
+        ``LtxQuantProfile`` is baked into transformer construction (weights load direct-to-quant)."""
+        self._quant_cache_tag = None
+        self._quant_config = None
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
+        if not preset:
+            return
+        from ...models.transformers.ltx.quant_config import LtxQuantProfile
+
+        # Explicit registry, not getattr(LtxQuantProfile, preset): the profile's instance methods
+        # (linear_kwargs, ...) are class attributes too, so getattr would resolve LTX_QUANT=linear_kwargs
+        # to a callable and crash instead of falling back to bf16.
+        presets = {"all_bf8_lofi": LtxQuantProfile.all_bf8_lofi, "all_bf4_lofi": LtxQuantProfile.all_bf4_lofi}
+        factory = presets.get(preset)
+        if factory is None:
+            logger.warning(f"LTX_QUANT='{preset}' is not a quant preset; running baseline (bf16/HiFi2)")
+            return
+        logger.info(f"LTX_QUANT='{preset}': building the transformer with the DiT-linear quant config")
+        # _quant_cache_tag routes cache writes/reads to a preset-tagged dir; it must equal the resolved
+        # preset or a run poisons the wrong-precision cache (cached tensorbins carry their dtype).
+        self._quant_cache_tag = preset
+        self._quant_config = factory()
+
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
+        # The transformer is built with the quant config, so a cache miss loads weights direct-to-quant
+        # and the write holds the quantized tensorbins. quant_tag keeps that cache separate from the
+        # bf16 baseline.
         state.checkpoint.load(
             state.model,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
             lora_specs=state.lora_specs,
+            quant_tag=getattr(self, "_quant_cache_tag", None),
         )
         self.transformer = state.model
         # dynamic_load restores the cached (LoRA-free) base weights on every
@@ -717,7 +781,8 @@ class LTXPipeline:
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        results = self.gemma_encoder_pair.encode(prompts)
+        with Watchdog("gemma text-encode"):
+            results = self.gemma_encoder_pair.encode(prompts)
 
         if use_cache:
             torch.save(results, cache_path)
@@ -768,7 +833,10 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        video = self.vae_decoder(latent_spatial, output_type=output_type)
+        with Watchdog("vae decode"):
+            video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type == "yuv":
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
             return video.numpy()
         return video
@@ -814,12 +882,33 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
-    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> None:
+    def _resolve_fps(self, fps: float | None) -> float:
+        """Resolve a per-call ``fps`` against the pipeline's own rate.
+
+        ``None`` means "use the pipeline's rate". A differing value is rejected rather
+        than substituted: FPS sets the audio latent length and scales the A/V cross-PE
+        temporal axis, both of which are baked into the captured traces, so honouring a
+        per-call rate would replay a trace built for another shape while the container
+        claims the requested one -- the desync this plumbing exists to prevent.
+        """
+        if fps is None:
+            return self.fps
+        if float(fps) != self.fps:
+            msg = (
+                f"fps={fps} does not match the pipeline's fps={self.fps}. FPS is fixed at "
+                "pipeline construction (it sets the audio latent length and the A/V cross-PE, "
+                "both baked into the captured traces). Build a pipeline with the desired fps."
+            )
+            raise ValueError(msg)
+        return self.fps
+
+    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float | None = None) -> None:
         """Eager (untraced) audio decode at the real shape: compiles kernels, warms lazy device
         state, and frees back to a deterministic allocator free-list so a later traced decode
         captures cleanly. No-op if the audio decoder is not configured."""
         if self.tt_mel_decoder is None or self.tt_vocoder_with_bwe is None:
             return
+        fps = self.fps if fps is None else fps
         mel_d, voc = self.tt_mel_decoder, self.tt_vocoder_with_bwe
         saved = (mel_d.use_trace, voc.use_trace, voc.use_trace_bwe)
         mel_d.use_trace = voc.use_trace = voc.use_trace_bwe = False
@@ -969,7 +1058,7 @@ class LTXPipeline:
                 denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
                 logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
 
-        vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
+        vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=self.fps)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
         audio_N = self._sp_pad_len(audio_N_real)
@@ -989,6 +1078,7 @@ class LTXPipeline:
             max_pos=self.positional_embedding_max_pos,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=self.fps,
         )
         a_cos, a_sin = prepare_audio_rope(
             audio_N,
@@ -1013,6 +1103,7 @@ class LTXPipeline:
             theta=self.positional_embedding_theta,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=self.fps,
         )
         trans_mat = self._prepare_trans_mat()
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -1275,23 +1366,27 @@ class LTXPipeline:
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
         _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
-        if _time_stages:
-            import time as _t
+        # Watchdog wraps both branches so the stall heartbeat fires during mel-VAE/vocoder regardless of
+        # the stage-timing toggle — LTX_TIME_STAGES=1 must not reintroduce the silent gap.
+        with Watchdog("audio decode (mel-VAE + vocoder)"):
+            if _time_stages:
+                import time as _t
 
-            ttnn.synchronize_device(self.mesh_device)
-            _t0 = _t.perf_counter()
-            mel = self._decode_mel(audio_spatial)
-            ttnn.synchronize_device(self.mesh_device)
-            _t_vae = _t.perf_counter()
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            ttnn.synchronize_device(self.mesh_device)
-            _t_voc = _t.perf_counter()
-            logger.info(
-                f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
-            )
-        else:
-            mel = self._decode_mel(audio_spatial)
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.mesh_device)
+                _t0 = _t.perf_counter()
+                mel = self._decode_mel(audio_spatial)
+                ttnn.synchronize_device(self.mesh_device)
+                _t_vae = _t.perf_counter()
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.mesh_device)
+                _t_voc = _t.perf_counter()
+                logger.info(
+                    f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms "
+                    f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
+                )
+            else:
+                mel = self._decode_mel(audio_spatial)
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
         # Trim to video duration.

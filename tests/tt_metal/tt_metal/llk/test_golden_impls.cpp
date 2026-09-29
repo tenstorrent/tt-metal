@@ -12,10 +12,12 @@
 
 #include <tt_stl/assert.hpp>
 #include <cstdint>
+#include <tt-metalium/constants.hpp>
 #include "test_golden_impls.hpp"
 #include "tests/tt_metal/test_utils/packing.hpp"
 
 using std::vector;
+using namespace tt::constants;
 
 namespace unit_tests::compute {
 
@@ -27,11 +29,12 @@ std::vector<std::uint32_t> gold_standard_untilize(
     int num_tile_cols = config.num_tiles_c_dim;
     // Number of uint32 words per face row: face_c_dim elements × datum_bytes / 4 bytes per uint32
     // BF16 (datum_bytes=2): 16*2/4 = 8  FP8 (datum_bytes=1): 16*1/4 = 4
-    int num_c_dim = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
+    int num_c_dim = config.face_c_dim * static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
     // Face size in uint32 words. A tiny tile is stored compactly: its faces are only face_r_dim
     // rows tall and sit back to back, rather than occupying full 16x16 slots inside a 32x32 tile.
-    int face_size = (config.tiny_tile ? config.face_r_dim : 16) * 16 * static_cast<int>(config.datum_bytes) / 4;
-    int tile_size = face_size * (config.tiny_tile ? config.num_faces : 4);
+    int face_size = (config.tiny_tile ? config.face_r_dim : FACE_HEIGHT) * FACE_WIDTH *
+                    static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
+    int tile_size = face_size * (config.tiny_tile ? config.num_faces : TILE_HW / FACE_HW);
 
     std::set<int> ind;
 
@@ -80,10 +83,10 @@ std::vector<std::uint32_t> gold_standard_tilize(const std::vector<std::uint32_t>
     // Number of uint32 words per row: face_c_dim elements × (faces across) × datum_bytes / 4 bytes per uint32
     // BF16 (datum_bytes=2): (nc*16*2)*2/4 = nc*16   FP8 (datum_bytes=1): (nc*16*2)*1/4 = nc*8
     int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) *
-                   static_cast<int>(config.datum_bytes) / 4;
+                   static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
     // Half-face width in uint32 words: face_c_dim/2 elements × datum_bytes / 4 bytes per uint32
     // BF16: 16*2/4 = 8   FP8: 16*1/4 = 4
-    const int half_face_w = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
+    const int half_face_w = config.face_c_dim * static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
     // Rows per tile-row: 32 for a full 32x32 tile (2 face-rows), 16 for a 16x32 tiny tile (1 face-row).
     const int tile_r = config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
     for (int x = 0; x < num_rows; x += tile_r) {
@@ -164,7 +167,7 @@ std::vector<std::uint16_t> gold_reduce_h(
     vector<std::uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
     TT_FATAL(shape[2] > 0, "Error");
     if (zeropad) {
-        shape_dst[2] = 32;
+        shape_dst[2] = TILE_HEIGHT;
     }
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
@@ -201,7 +204,7 @@ std::vector<std::uint16_t> gold_reduce_w(
     bool zeropad) {
     vector<std::uint32_t> shape_dst{shape[0], shape[1], shape[2], 1};
     if (zeropad) {
-        shape_dst[3] = 32;
+        shape_dst[3] = TILE_WIDTH;
     }
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
@@ -237,8 +240,8 @@ std::vector<std::uint16_t> gold_reduce_hw(
     bool zeropad) {
     vector<std::uint32_t> shape_dst{shape[0], shape[1], 1, 1};
     if (zeropad) {
-        shape_dst[2] = 32;
-        shape_dst[3] = 32;
+        shape_dst[2] = TILE_HEIGHT;
+        shape_dst[3] = TILE_WIDTH;
     }
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);

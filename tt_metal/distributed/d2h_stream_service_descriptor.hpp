@@ -11,8 +11,7 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape.hpp>
@@ -22,7 +21,10 @@
 namespace tt::tt_metal::distributed {
 
 struct D2HStreamServiceDescriptor {
-    static constexpr uint32_t kVersion = 2;
+    // v3: INT8 was appended to DataType at ordinal 9, moving INVALID 9->10.
+    // global_dtype is serialized as a raw DataType ordinal, so the bump forces a version mismatch (hard error)
+    // between old/new processes instead of an old peer decoding ordinal 9 as INVALID rather than INT8.
+    static constexpr uint32_t kVersion = 3;
 
     tt::tt_metal::Shape global_shape;
     DataType global_dtype = DataType::INVALID;

@@ -10,13 +10,11 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_prefill_rot_mat,
     HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -91,13 +89,15 @@ def test_llama_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
+    # Use dummy (random) 1-layer weights so we don't materialize the full 70B checkpoint twice
+    # (once in load_state_dict and once in reference_transformer). The tokenizer is created
+    # explicitly since TtModelArgs skips tokenizer creation when dummy_weights=True.
     model_args = TtModelArgs(
         mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, dummy_weights=True
     )
     model_args.use_prefetcher = False
     model_args.n_layers = 1
-    tokenizer = Tokenizer(model_args.tokenizer_path)
-
+    model_args.tokenizer = model_args.create_tokenizer()
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     state_dict = model_args.load_state_dict()
@@ -123,14 +123,12 @@ def test_llama_model_inference(
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()
 
-    if instruct:
-        encoded_prompt = encode_prompt_llama_instruct(tokenizer, prompt)[:seq_len]
-    else:
-        encoded_prompt = tokenizer.encode(prompt, bos=True, eos=False)[:seq_len]
+    encoded_prompt = model_args.encode_prompt(prompt, instruct=instruct)[:seq_len]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+        ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
     # Embedding on host
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
@@ -214,7 +212,7 @@ def test_llama_model_inference(
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
 
         if run_ref_pt:  # Run reference model
-            ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")
+            ref_output = reference_model(pt_prefill_input.to(ref_dtype), start_pos, mode="prefill")
 
         # Measure PCC if also running reference model
         if run_ref_pt:
@@ -234,11 +232,11 @@ def test_llama_model_inference(
             if cache_pcc:
                 for i in range(model_args.n_layers):
                     pytorch_layer_present = [
-                        reference_model.layers[i]
-                        .attention.cache_k.clone()
+                        reference_model.cache_k[i]
+                        .clone()
                         .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                        reference_model.layers[i]
-                        .attention.cache_v.clone()
+                        reference_model.cache_v[i]
+                        .clone()
                         .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                     ]
 

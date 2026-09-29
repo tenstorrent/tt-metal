@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "full_device_operation_types.hpp"
 
 namespace ttnn::operations::full {
 
 struct FullNDShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output);

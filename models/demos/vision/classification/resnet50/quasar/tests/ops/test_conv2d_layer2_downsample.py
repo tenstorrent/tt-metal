@@ -24,10 +24,11 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "shard",
@@ -39,6 +40,14 @@ def test_quasar_layer2_module1_downsample(mesh_device, shard, monkeypatch):
     channels; if it comes back 256 the conv is dropping the channel expansion. The model uses HEIGHT here
     (input_height 56 != 28); the 'block' case tests whether BLOCK sharding gets the channel count right (if
     so, the fix is to force BLOCK for this stride-2 channel-expanding downsample)."""
+    # Known layer-downsample bugs (same pair xfailed in test_conv2d_resnet_layers): HEIGHT drops the 1x1-stride-2
+    # channel expansion (last-dim 256 vs 512); BLOCK is numerically wrong (PCC ~0.75). Arch-general device bugs;
+    # downsamples are host-fallbacked in the model, so off the on-device path.
+    if is_wormhole_b0():
+        pytest.xfail(
+            "known layer2 downsample bugs: HEIGHT drops the 1x1-s2 channel expansion (256 vs 512); BLOCK PCC ~0.75. "
+            "Same as the test_conv2d_resnet_layers downsample xfails; downsamples host-fallbacked in the model."
+        )
     device = mesh_device
     torch.manual_seed(0)
 

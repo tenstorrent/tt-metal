@@ -26,7 +26,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "program_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>

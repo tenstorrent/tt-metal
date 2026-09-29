@@ -42,6 +42,8 @@ constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to tr
 [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
     get_compile_time_arg_val(8);  // multi-tile K/V chunking factor (1 = single-tile inner loop)
 constexpr uint32_t pv_block_size = get_compile_time_arg_val(9);  // PV matmul_block ct_dim (cap = dst_size)
+constexpr uint32_t scaler_bf16_bits =
+    get_compile_time_arg_val(10);  // host-side RNE BF16 of scaler_bits, for the WH fused scale+exp
 constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -172,7 +174,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_reserve_back(cb_attention_weights, Sk_chunk_t);
 
             // Unpacker → mask CB (BF16); packer stays on cb_attention_weights (FP32).
-            copy_tile_to_dst_init_short(cb_attn_mask);
+            copy_init(cb_attn_mask);
             pack_reconfig_l1_acc(1);
             for (uint32_t n = diag_pos_in_chunk; n < Sk_chunk_t; ++n) {
                 // n == diag_pos_in_chunk → mask[0] (causal diagonal pattern).
@@ -192,7 +194,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_push_back(cb_attention_weights, Sk_chunk_t);
         }
 #else
-        // USE_ATTN_MASK (provided mask) — uses a per-`n` matmul_tiles + apply_mask_on_reg path.
+        // USE_ATTN_MASK (provided mask) and no-mask — a per-`n` matmul_tiles path.
         // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
         // on a single DST tile + scratch, which fits comfortably here. K is laid out col-major
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
@@ -209,7 +211,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                     tile_idx * Sk_chunk_t + n,
                     /* dst */ matmul_accum_reg);
             }
+#ifdef USE_ATTN_MASK
             apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits, /* mask_tile_idx */ n);
+#endif
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_attention_weights, onetile);
@@ -218,9 +222,11 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_push_back(cb_attention_weights, onetile);
         }
 
+#ifdef USE_ATTN_MASK
         // Every mask tile is unique per (row, k tile). Pop the whole chunk's worth so the
         // reader can stage the next chunk.
         cb_pop_front(cb_attn_mask, Sk_chunk_t);
+#endif
 #endif
         // CAUSAL_MASK/BALANCED_PARALLELISM: the two mask tiles stay permanently fronted; no pop.
 
@@ -235,7 +241,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             alias_cb_prev_max,
             /* do_eltwise_max */ k_chunk > 0);
 
-        apply_exp_inplace_and_find_exp_sum<scaler_bits, Sk_chunk_t>(
+        apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, Sk_chunk_t>(
             cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
         matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
@@ -245,7 +251,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
         // Online correction against the previous chunk's running stats.
         if (k_chunk > 0) {
-            update_exp_max_diff<scaler_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
+            update_exp_max_diff<scaler_bits, scaler_bf16_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
             cb_pop_front(alias_cb_prev_max, onetile);
 
             update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff);
@@ -285,7 +291,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
         // Load mm_out tiles via UnpackToDestFp32 (full FP32 in DST)
         reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_mm_out);
-        copy_tile_init(alias_cb_prev_mm_out);
+        copy_init(alias_cb_prev_mm_out);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(alias_cb_prev_mm_out, tile_idx + block_idx, block_idx);
         }
@@ -325,9 +331,9 @@ void kernel_main() {
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);  // Runtime arg for balanced mode
 #endif
 
-    init_sfpu(cb_query, cb_output);
-    binary_op_init_common(cb_query, cb_key, cb_value);
-    // binary_op_init_common above does the one-time HW config; each matmul site below
+    compute_kernel_hw_startup(cb_query, cb_key, cb_value);
+    copy_init(cb_query);
+    // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
 

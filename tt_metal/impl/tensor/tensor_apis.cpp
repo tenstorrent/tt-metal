@@ -17,15 +17,15 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
-#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -54,7 +54,7 @@ bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t s
 //                                Uniform Data movement APIs
 // ======================================================================================
 
-HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
+HostTensor distributed::MeshCommandQueue::enqueue_read_tensor(const MeshTensor& device_tensor, bool blocking) {
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& device = device_tensor.device();
 
@@ -69,45 +69,47 @@ HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTens
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     return host_tensor_from_buffer_with_topology(
         std::move(distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
 }
 
-MeshTensor enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    distributed::MeshDevice& mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config) {
+MeshTensor distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_tensor) {
+    auto& mesh_device = *device();
     TT_FATAL(
         is_uniform_write(host_tensor, mesh_device),
         "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
         "non-uniform data movement APIs.");
-    std::optional<TensorSpec> tensor_spec_overriden_memory_config;
-    if (memory_config) {
-        const auto& old_spec = host_tensor.tensor_spec();
-        tensor_spec_overriden_memory_config = TensorSpec(
-            old_spec.logical_shape(),
-            TensorLayout(
-                old_spec.tensor_layout().get_data_type(),
-                old_spec.tensor_layout().get_page_config(),
-                *memory_config,
-                old_spec.tensor_layout().get_alignment()));
-    }
-
-    const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
-                                  ? &tensor_spec_overriden_memory_config.value()
-                                  : &host_tensor.tensor_spec();
-
-    auto result =
-        allocate_mesh_tensor_on_device_with_topology(mesh_device, *tensor_spec, get_tensor_topology(host_tensor));
-    enqueue_write_tensor(cq, host_tensor, result);
+    auto result = allocate_mesh_tensor_on_device_with_topology(
+        mesh_device, host_tensor.tensor_spec(), get_tensor_topology(host_tensor));
+    enqueue_write_tensor(host_tensor, result);
     return result;
 }
 
-void enqueue_read_tensor(
-    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
+MeshTensor distributed::MeshCommandQueue::enqueue_write_tensor(
+    const HostTensor& host_tensor, const MemoryConfig& memory_config) {
+    auto& mesh_device = *device();
+    TT_FATAL(
+        is_uniform_write(host_tensor, mesh_device),
+        "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
+        "non-uniform data movement APIs.");
+    const auto& old_spec = host_tensor.tensor_spec();
+    TensorSpec tensor_spec(
+        old_spec.logical_shape(),
+        TensorLayout(
+            old_spec.tensor_layout().get_data_type(),
+            old_spec.tensor_layout().get_page_config(),
+            memory_config,
+            old_spec.tensor_layout().get_alignment()));
+    auto result =
+        allocate_mesh_tensor_on_device_with_topology(mesh_device, tensor_spec, get_tensor_topology(host_tensor));
+    enqueue_write_tensor(host_tensor, result);
+    return result;
+}
+
+void distributed::MeshCommandQueue::enqueue_read_tensor(
+    const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
@@ -135,18 +137,22 @@ void enqueue_read_tensor(
 
             auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
             if (auto pinned = experimental::PinnedMemoryCache::instance().try_pin(
-                    *device, coord_range, *host_buffer, /*map_to_noc=*/true)) {
+                    *device,
+                    coord_range,
+                    *host_buffer,
+                    /*map_to_noc=*/true,
+                    experimental::PinnedMemoryDeviceAccess::ReadWrite)) {
                 experimental::HostBufferSetPinnedMemory(*host_buffer, std::move(pinned));
             }
             return *host_buffer;
         });
     }
 
-    cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
     update_tensor_topology(host_tensor, get_tensor_topology(device_tensor));
 }
 
-void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
+void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_tensor, MeshTensor& device_tensor) {
     TT_FATAL(
         is_uniform_write(host_tensor, device_tensor.device()),
         "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
@@ -160,59 +166,42 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
 
-    size_t total_size = 0;
-    for (const auto& coord : distributed_host_buffer.shard_coords()) {
-        auto buf = distributed_host_buffer.get_shard(coord);
-        if (buf) {
-            total_size += buf->view_bytes().size();
-        }
-    }
+    auto* mesh_device = mesh_buffer->device();
+    auto local_shards = tensor_impl::select_local_host_shards(distributed_host_buffer, *mesh_device);
 
-    const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), total_size);
+    const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*device(), local_shards.size_bytes);
 
     if (use_pinned) {
-        auto* mesh_device = mesh_buffer->device();
-        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
-        transfers.reserve(distributed_host_buffer.shard_coords().size());
+        transfers.reserve(local_shards.shards.size());
         bool any_pinned = false;
 
-        for (const auto& coord : distributed_host_buffer.shard_coords()) {
-            // get_shard yields a buffer only for shards owned by this host, so remote chips are
-            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
-            auto buf = distributed_host_buffer.get_shard(coord);
-            if (buf) {
-                // The host buffer's distribution must agree with the device's: host memory can only
-                // be pinned to MMIO devices local to this process, so a populated shard for a coord
-                // the device owns on another host must never reach try_pin (which would fault while
-                // resolving the remote device).
-                TT_FATAL(
-                    view.impl().is_local(coord),
-                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
-                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
-                    coord);
-                auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
-                HostBuffer pinned_buf(*buf);
-                auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+        for (auto& [coord, buf] : local_shards.shards) {
+            auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+            HostBuffer pinned_buf(buf);
+            auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
+                *mesh_device,
+                coord_range,
+                pinned_buf,
+                /*map_to_noc=*/true,
+                experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
-                auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
-                                .host_data(buf->view_bytes().data())
-                                .region(BufferRegion(0, buf->view_bytes().size()));
-                if (pinned_memory) {
-                    experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
-                    any_pinned = true;
-                }
-                transfers.push_back(std::move(xfer));
+            auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
+                            .host_data(buf.view_bytes().data())
+                            .region(BufferRegion(0, buf.view_bytes().size()));
+            if (pinned_memory) {
+                experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
+                any_pinned = true;
             }
+            transfers.push_back(std::move(xfer));
         }
         if (any_pinned) {
-            cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+            enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
         }
     } else {
-        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
     device_tensor = mesh_tensor_from_buffer_with_topology(
@@ -541,6 +530,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::UINT8: return with_src_and_dst.operator()<SrcType, uint8_t>();
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
+                case DataType::INT8: return with_src_and_dst.operator()<SrcType, int8_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
                 case DataType::FP8_E4M3: return with_src_and_dst.operator()<SrcType, float8_e4m3>();
                 case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
@@ -556,6 +546,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::UINT8: return with_src.operator()<uint8_t>();
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
+            case DataType::INT8: return with_src.operator()<int8_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
             case DataType::FP8_E4M3: return with_src.operator()<float8_e4m3>();
             case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
@@ -599,6 +590,8 @@ void validate_datatype(DataType dtype) {
             dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {
         TT_FATAL(dtype == DataType::INT32, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, int8_t>) {
+        TT_FATAL(dtype == DataType::INT8, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, float>) {
         TT_FATAL(dtype == DataType::FLOAT32, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, bfloat16>) {
@@ -666,6 +659,7 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(int8_t)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 

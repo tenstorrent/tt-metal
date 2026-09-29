@@ -115,6 +115,16 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             operation_attributes.use_multicore,
             "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
+        // The sub_core_grid factory parallelizes over columns, and its writer derives its tile count
+        // from the tensor-wide stick count -- so it only agrees with the reader's per-core tile count
+        // when the tensor is one tile row tall. Taller tensors deadlock in the writer's wait_front
+        // rather than failing, so reject them here. `get_pf_type` holds the same restriction for the
+        // non-sub-core column-parallel factory this one derives from.
+        TT_FATAL(
+            tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
+            "sub_core_grid untilize only supports tensors one tile row tall, got height {} with tile height {}",
+            tensor_height,
+            input_tensor_a.tensor_spec().tile().get_tile_shape()[0]);
     }
 
     // If input is sharded, then the shard shape must be in multiples of tiles
@@ -259,7 +269,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input;
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype());
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
@@ -317,7 +327,10 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
                                  output_tensor.nd_shard_spec().has_value() &&
                                  input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
-        if (identical_shard_specs) {
+        // The ND-identical factory is a Gen1 (ProgramDescriptor / DataMovementKernel) zero-copy path not
+        // ported to Quasar; on Quasar fall through to the general ND-shard-input factory (ported, non
+        // zero-copy) selected below.
+        if (identical_shard_specs && input_tensor_a.device()->arch() != tt::ARCH::QUASAR) {
             return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }
@@ -402,7 +415,6 @@ Tensor untilize(
     bool use_multicore,
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type) {
     return ttnn::device_operation::launch<UntilizeDeviceOperation>(
@@ -411,7 +423,6 @@ Tensor untilize(
             .use_multicore = use_multicore,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},
         UntilizeTensorArgs{.input = input});

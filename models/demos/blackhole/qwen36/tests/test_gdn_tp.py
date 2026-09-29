@@ -1,24 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole mesh.
-
-One file per component (decode / chunk-prefill), sharing the loaders and mesh
-parametrization from ``test_factory``:
-
-* ``test_gdn_tp``         — decode PCC @ pos0 (recurrent state starts at zero, so
-  o = beta*(q̂·k̂)*v); the torch reference covers the sharded QKV/Z/AB reorder,
-  per-channel conv, GQA head expansion, L2 norm, gated RMSNorm, Z-gate, output
-  projection, and reduce-scatter. Plus a second decode step for shape/NaN.
-* ``test_gdn_tp_prefill`` — chunk-prefill (FIR conv + shared chunk kernel) must
-  agree with step-by-step decode over the same tokens (zero init state). An
-  internal-consistency check across two code paths; no hand-written reference.
-
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
 import os
 
+import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -38,6 +27,9 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
 )
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    recurrent_gated_delta_rule_decode_ttnn,
+)
 
 
 @torch.no_grad()
@@ -48,6 +40,7 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
 
     Checks PCC for the full GDN forward pass (QKV proj, conv tap, L2 norm, beta gating,
     gated RMSNorm, output proj) and runs a second decode step to catch shape/NaN regressions.
+
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -108,6 +101,77 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     out2_t = ttnn.to_torch(out2, mesh_composer=tp_composer(mesh_device))
     assert not torch.isnan(out2_t).any() and out2_t.abs().max() > 0
     logger.info("PASSED: GDN TP decode (pos0 PCC + pos1 shape/NaN)")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("high_precision", [pytest.param(True, id="fp32"), pytest.param(False, id="bf16")])
+def test_gdn_tp_decode_recurrence_state(mesh_device, high_precision, reset_seeds, ensure_gc, request):
+    """Multi-step T=1 decode: output AND recurrent state vs a torch reference each step.
+
+    ``test_gdn_tp`` validates pos0 only, where the recurrent state is zero and the
+    state-decay multiply (h * exp(g), fused as an EXP pre-activation on the multiply)
+    is invisible. This test drives ``recurrent_gated_delta_rule_decode_ttnn`` — the
+    exact T=1 function ``forward_decode`` dispatches to — for several steps from a
+    NONZERO initial state, checking both the step output and the carried state, so a
+    broken decay (or an ignored fused activation) collapses the PCC immediately.
+    fp32 mirrors the TP default (``high_precision=True``); bf16 covers the
+    ``QWEN35_GDN_DECODE_BF16=1`` fallback.
+    """
+    B, H, K, V = 2, 8, 128, 128
+    steps = 4
+    # One threshold per node via pcc_thresholds.json; fp32/bf16 defaults differ (bf16
+    # accumulates state quantization error over the 4 steps).
+    thr = get_pcc_threshold(request, default=0.9999 if high_precision else 0.99)
+
+    # Pre-quantize inputs to bf16 so device and reference consume identical values —
+    # the remaining error is device math, not input rounding.
+    def _bf16(t):
+        return t.to(torch.bfloat16).float()
+
+    q = _bf16(torch.randn(steps, B, H, K))
+    k = _bf16(torch.randn(steps, B, H, K))
+    v = _bf16(torch.randn(steps, B, H, V))
+    beta = _bf16(torch.sigmoid(torch.randn(steps, B, H)))
+    g = _bf16(-F.softplus(torch.randn(steps, B, H)))  # log-decay <= 0, exp(g) in (0,1]
+    h0 = _bf16(torch.randn(B, H, K, V))  # nonzero: decay must actually act on it
+
+    state_dtype = ttnn.float32 if high_precision else ttnn.bfloat16
+    h_tt = replicate_to_device(mesh_device, h0, dtype=state_dtype)
+    h_ref = h0.clone()
+
+    def _first_shard(t):
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+    for s in range(steps):
+        o_tt, h_tt = recurrent_gated_delta_rule_decode_ttnn(
+            replicate_to_device(mesh_device, q[s].reshape(B, 1, H, K)),
+            replicate_to_device(mesh_device, k[s].reshape(B, 1, H, K)),
+            replicate_to_device(mesh_device, v[s].reshape(B, 1, H, V)),
+            replicate_to_device(mesh_device, beta[s].reshape(B, 1, H)),
+            replicate_to_device(mesh_device, g[s].reshape(B, 1, H)),
+            initial_state=h_tt,
+            device=mesh_device,
+            high_precision=high_precision,
+        )
+
+        # ---- torch reference: mirrors the ttnn function step-for-step ----
+        qh = F.normalize(q[s], dim=-1) * (K**-0.5)  # [B,H,K]
+        kh = F.normalize(k[s], dim=-1)
+        h_ref = h_ref * torch.exp(g[s])[..., None, None]  # decay BEFORE read
+        v_read = kh.unsqueeze(-2) @ h_ref  # [B,H,1,V]
+        delta = v[s].unsqueeze(-2) - v_read
+        h_ref = h_ref + beta[s][..., None, None] * (kh.unsqueeze(-1) @ delta)
+        o_ref = (qh.unsqueeze(-2) @ h_ref).reshape(B, H, V)
+
+        o_t = _first_shard(o_tt).reshape(B, H, V)
+        pcc_o = compute_pcc(o_ref, o_t)
+        pcc_h = compute_pcc(h_ref, _first_shard(h_tt))
+        logger.info(f"step {s}: out PCC={pcc_o:.6f} state PCC={pcc_h:.6f}")
+        assert pcc_o >= thr, f"step {s} output PCC {pcc_o:.6f} < {thr}"
+        assert pcc_h >= thr, f"step {s} state PCC {pcc_h:.6f} < {thr}"
+
+    logger.info(f"PASSED: GDN TP decode recurrence ({steps} steps, {'fp32' if high_precision else 'bf16'})")
 
 
 @torch.no_grad()
@@ -481,3 +545,126 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     passing_fd, pcc_fd = comp_pcc(dec, fused, thr)
     logger.info(f"GDN fused-chunk prefill vs step-decode PCC (T={T}) = {pcc_fd}")
     assert passing_fd, f"fused chunk prefill disagrees with step-by-step decode: PCC {pcc_fd} < {thr}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize(
+    "OUTER_CHUNK_SIZE",
+    [64, 512, 2048],
+    ids=["OUTER_CHUNK_SIZE64", "OUTER_CHUNK_SIZE512", "OUTER_CHUNK_SIZE2048"],
+)
+def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure_gc):
+    """GDN prefill out-projection: column-parallel AG+matmul vs the row-parallel matmul+reduce-scatter.
+    Runs one forward_prefill with out-AGMM prefill enabled and disabled, and PCCs the two outputs against each other.
+
+    OUTER_CHUNK_SIZE: how the prompt is split; one forward_prefill call receives one outer chunk as input;
+    64 covers a short prefill that is not a multiple of 128 (reachable: the TP paged prefill passes the
+    raw prompt length). T <= TILE_SIZE is not tested: on TP such a prefill already fails in the QKV
+    in-proj, whose S <= TILE_SIZE branch needs a full-width x while prefill hands GDN a K-sharded one.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    nd = mesh_device.get_num_devices()
+    if nd == 1:
+        pytest.skip("TP-only")
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device)
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    composer = tp_composer(mesh_device)
+
+    x = torch.randn(1, 1, OUTER_CHUNK_SIZE, args.dim, dtype=torch.bfloat16)
+    x_tt = shard_to_device(mesh_device, x, dim=-1)
+
+    # CHUNK_SIZE: how the input to forward_prefill is split and processed by the GDN kernel;
+    # The parameter is used by the sequential GDN kernel only. The (default and used here)
+    # fused/phased kernel hardcodes 32.
+    CHUNK_SIZE = 128
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} starting AGMM out-proj arm")
+    gdn.reset_state()
+    o = gdn.forward_prefill(x_tt, chunk_size=CHUNK_SIZE)
+    got = ttnn.to_torch(o, mesh_composer=composer).reshape(OUTER_CHUNK_SIZE, -1).float()
+    ttnn.deallocate(o)
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} AGMM arm OK, out shape {tuple(got.shape)}")
+
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} starting MMRS reference arm")
+    gdn._out_colpar_prefill = False
+    gdn.reset_state()
+    o2 = gdn.forward_prefill(x_tt, chunk_size=CHUNK_SIZE)
+    ref = ttnn.to_torch(o2, mesh_composer=composer).reshape(OUTER_CHUNK_SIZE, -1).float()
+    ttnn.deallocate(o2)
+    gdn._out_colpar_prefill = True
+    logger.info(f"[AGMM] OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE} MMRS arm OK")
+
+    passing, pcc = comp_pcc(ref, got, 0.99)
+    logger.info(f"GDN out-proj AGMM vs MMRS PCC (OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}) = {pcc}")
+    assert passing, f"AGMM/MMRS mismatch at OUTER_CHUNK_SIZE={OUTER_CHUNK_SIZE}: {pcc}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """The column-parallel out-projection must not depend on device timing.
+
+    all_gather_minimal_matmul_async writes each device's K-slice straight into its peers' gather buffer, with
+    no receiver-ready handshake. A per-call gather buffer is allocated on the host from L1 the previous ops
+    just freed (here: the gate multiply's fp32 input), so a device that reaches the op early overwrites data a
+    lagging peer's gate multiply is still reading. Delay each device in turn right before the gate
+    (ttnn.apply_device_delay) and require every run to be bit-identical to a reference computed with the
+    devices synchronized before the out-projection."""
+    import models.demos.blackhole.qwen36.tt.gdn.tp as gdn_tp
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    os.environ.setdefault("HF_MODEL", model_path())
+    nd = mesh_device.get_num_devices()
+    if nd == 1:
+        pytest.skip("TP-only")
+    T = 2048
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
+    assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
+    composer = tp_composer(mesh_device)
+    x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
+
+    def run():
+        gdn.reset_state()
+        o = gdn.forward_prefill(x_tt)
+        out = ttnn.to_torch(o, mesh_composer=composer)[0, 0].float().clone()
+        ttnn.deallocate(o)
+        return out
+
+    agmm, silu_mul = tpc.all_gather_matmul_prefill, gdn_tp._silu_mul
+
+    def synced_agmm(*a, **kw):
+        ttnn.synchronize_device(mesh_device)
+        return agmm(*a, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr(tpc, "all_gather_matmul_prefill", synced_agmm)
+        ref = run()
+
+    for late in range(nd):
+        delays = [[600_000 if d == late else 0 for d in range(nd)]]
+
+        def delayed_silu_mul(x, z, memory_config, dtype=None):
+            if dtype is not None:  # the column-parallel arm only
+                ttnn.apply_device_delay(mesh_device, delays)
+            return silu_mul(x, z, memory_config, dtype)
+
+        with monkeypatch.context() as m:
+            m.setattr(gdn_tp, "_silu_mul", delayed_silu_mul)
+            got = run()
+        bad = torch.nonzero((got - ref).abs().sum(-1)).flatten()
+        assert bad.numel() == 0, (
+            f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
+            f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
+        )

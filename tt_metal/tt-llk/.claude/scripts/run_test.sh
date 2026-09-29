@@ -464,8 +464,11 @@ _collect_tests() {
   local collection_log="${EVIDENCE_DIR}/collection.log"
   rm -f "$COLLECTION_JSON" "$collection_log"
   local rc
-  if grep -Fq -- '"--codegen-collection-json"' \
-      "${WORKTREE}/tests/python_tests/conftest.py"; then
+  # The harness hooks moved from conftest.py into helpers/llk_pytest_plugin.py;
+  # probe both so either layout keeps the structured collection path.
+  if grep -Fqs -- '"--codegen-collection-json"' \
+      "${WORKTREE}/tests/python_tests/conftest.py" \
+      "${WORKTREE}/tests/python_tests/helpers/llk_pytest_plugin.py"; then
     ( CHIP_ARCH="$ARCH" pytest --collect-only -q \
         --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" ) \
         >"$collection_log" 2>&1

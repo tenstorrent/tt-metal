@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <utility>
+
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -33,6 +35,9 @@ struct AllGatherMinimalMatmulAsyncParams {
 
     int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
     int32_t dim = -1;    // Dimension to split along (default -1)
+
+    // Per-chunk output widths along `dim`, in ELEMENTS
+    std::vector<uint32_t> chunk_sizes;
 
     // FSDP fusion: when set, the weight tensor is sharded along its K dim across
     // `fsdp_cluster_axis` with size `fsdp_ring_size`, and the op all-gathers it
@@ -72,10 +77,11 @@ struct AllGatherMinimalMatmulAsyncParams {
         std::vector<GlobalSemaphore> fsdp_semaphore,
         bool using_persistent_weight_buffer,
         ttnn::ccl::Topology fsdp_topology,
-        bool fuse_swiglu = false) :
+        bool fuse_swiglu = false,
+        std::vector<uint32_t> chunk_sizes = {}) :
         config(config),
-        fused_activation(fused_activation),
-        output_mem_config(output_mem_config),
+        fused_activation(std::move(fused_activation)),
+        output_mem_config(std::move(output_mem_config)),
         output_dtype(output_dtype),
         compute_kernel_config(compute_kernel_config),
         num_links(num_links),
@@ -91,6 +97,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         fused_ternary_scalar(fused_ternary_scalar),
         chunks(chunks),
         dim(dim),
+        chunk_sizes(std::move(chunk_sizes)),
         fsdp_cluster_axis(fsdp_cluster_axis),
         fsdp_ring_size(fsdp_ring_size),
         fsdp_semaphore(std::move(fsdp_semaphore)),
@@ -111,6 +118,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "config",
         "chunks",
         "dim",
+        "chunk_sizes",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
@@ -129,12 +137,22 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->config,
             this->chunks,
             this->dim,
+            this->chunk_sizes,
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
             this->fuse_swiglu);
     }
 };
+
+// Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.
+inline std::vector<uint32_t> resolve_chunk_sizes(const AllGatherMinimalMatmulAsyncParams& params, uint32_t N) {
+    if (!params.chunk_sizes.empty()) {
+        return params.chunk_sizes;
+    }
+    const auto chunks = static_cast<uint32_t>(params.chunks);
+    return std::vector<uint32_t>(chunks, N / chunks);
+}
 
 struct AllGatherMinimalMatmulAsyncInputs {
     Tensor input_tensor;

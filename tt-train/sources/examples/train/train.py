@@ -64,6 +64,7 @@ from model_builders import (
 )
 from callbacks import (
     AverageLossCallback,
+    EpochCallback,
     MemoryTrackerCallback,
     MoECallback,
     ThroughputCallback,
@@ -86,6 +87,10 @@ MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # ── Training config ───────────────────────────────────────────────────────────
 
+# Defaults for the warmup_linear schedule; overridable via training_config.
+_WARMUP_LINEAR_WARMUP_FRACTION = 0.1
+_WARMUP_LINEAR_MIN_LR_FRACTION = 0.01
+
 
 class TrainingConfig(BaseTrainingConfig):
     """Base training config + NanoGPT-specific defaults + legacy field-name aliases."""
@@ -98,6 +103,15 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
+        # warmup_linear knobs: warmup_steps (absolute) overrides warmup_ratio (fraction of the
+        # schedule). Unset is None rather than 0 so an explicit 0 means "no warmup".
+        self.warmup_ratio = float(tc.get("warmup_ratio", _WARMUP_LINEAR_WARMUP_FRACTION))
+        warmup_steps = tc.get("warmup_steps")
+        self.warmup_steps = None if warmup_steps is None else int(warmup_steps)
+        self.min_lr_ratio = float(tc.get("min_lr_ratio", _WARMUP_LINEAR_MIN_LR_FRACTION))
+        # Steps the LR curve is shaped over; 0 = the run length. Set larger than max_steps to run
+        # only a prefix of a longer curve (e.g. max_steps=500, lr_schedule_steps=1000 = first half).
+        self.lr_schedule_steps = int(tc.get("lr_schedule_steps", 0))
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
@@ -105,9 +119,24 @@ class TrainingConfig(BaseTrainingConfig):
         self.seed = int(tc.get("seed", 5489))
         self.max_steps = int(tc.get("max_steps", 5000))
 
-        # Legacy field names kept alive for callers that still read them.
-        self.num_epochs = self.epochs
+        # 0 = no epoch cap; max_steps controls the run. (A real epoch is one pass over the
+        # corpus's tokens; the epoch bound scales by that, not by overlapping window count.)
+        self.num_epochs = self.epochs = int(tc.get("num_epochs", 0))
+        # Legacy field name kept alive for callers that still read it.
         self.model_save_interval = self.save_every
+
+
+def resolve_effective_max_steps(training_cfg: TrainingConfig, steps_per_epoch: float) -> int:
+    """Run length: whichever of the `max_steps`/`num_epochs` caps comes first (0 disables a cap)."""
+    caps = []
+    if training_cfg.max_steps > 0:
+        caps.append(training_cfg.max_steps)
+    if training_cfg.num_epochs > 0:
+        # Round up, or the last fractional step of the requested epochs is dropped.
+        caps.append(max(1, math.ceil(training_cfg.num_epochs * steps_per_epoch)))
+    if not caps:
+        raise ValueError("No stop condition: set max_steps > 0 or num_epochs > 0 in training_config.")
+    return min(caps)
 
 
 # ── Mesh / device ─────────────────────────────────────────────────────────────
@@ -179,23 +208,32 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
 
 # ── LR schedule ───────────────────────────────────────────────────────────────
 
-_WARMUP_LINEAR_WARMUP_FRACTION = 0.1
-_WARMUP_LINEAR_MIN_LR_FRACTION = 0.01
+
+def resolve_warmup_steps(training_cfg: TrainingConfig, total_steps: int) -> int:
+    """Absolute warmup length: explicit `warmup_steps` wins (0 = none), else `warmup_ratio`."""
+    warmup = (
+        round(total_steps * training_cfg.warmup_ratio)
+        if training_cfg.warmup_steps is None
+        else training_cfg.warmup_steps
+    )
+    return max(0, min(warmup, total_steps))
 
 
-def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: int) -> Callable[[int], float]:
-    """Return a `step -> lr` callable. `warmup_linear` runs warmup → linear decay; anything else is constant LR."""
+def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps: int) -> Callable[[int], float]:
+    """Return a `step -> lr` callable. `warmup_linear` runs warmup → linear decay; anything else is constant LR.
+
+    `total_steps` is the horizon the curve is shaped over — the run may stop before reaching it.
+    """
     base_lr = optimizer.get_lr()
 
     if training_cfg.scheduler_type == "warmup_linear":
-        warmup_steps = int(max_steps * _WARMUP_LINEAR_WARMUP_FRACTION)
         sched = SpeedrunScheduler(
             SpeedrunSchedulerConfig(
                 max_lr=base_lr,
-                min_lr=base_lr * _WARMUP_LINEAR_MIN_LR_FRACTION,
-                warmup_steps=warmup_steps,
+                min_lr=base_lr * training_cfg.min_lr_ratio,
+                warmup_steps=resolve_warmup_steps(training_cfg, total_steps),
                 hold_steps=0,
-                total_steps=max_steps,
+                total_steps=total_steps,
             )
         )
         return sched.lr_at
@@ -487,6 +525,17 @@ def run_training(
 
     peak_tflops = get_device_peak_tflops_bf16() * mesh.num_devices() if flops_per_token > 0 else 0.0
 
+    grad_accum = max(1, training_cfg.gradient_accumulation_steps)
+    # batch_size is already global: the dataloader draws that many samples and the collate mapper
+    # shards them across the data-parallel axes, so scaling by dp_size here would double-count.
+    global_batch = training_cfg.batch_size * grad_accum
+
+    corpus_tokens = len(dataset.tokens)
+    tokens_per_step = global_batch * seq_len
+    steps_per_epoch = corpus_tokens / tokens_per_step
+
+    effective_max_steps = resolve_effective_max_steps(training_cfg, steps_per_epoch)
+
     callbacks: list[TrainerCallback] = []
 
     if model_cfg.model_type == "deepseek":
@@ -494,6 +543,8 @@ def run_training(
 
     # Metrics.
     callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, log_interval=1))
+    if steps_per_epoch > 0:
+        callbacks.append(EpochCallback(steps_per_epoch))
     avg_loss_cb = AverageLossCallback()
     callbacks.append(avg_loss_cb)
 
@@ -506,14 +557,10 @@ def run_training(
 
     saver, loader = build_checkpoint_io(tokenizer, model_cfg)
 
-    # Match old train_nanogpt.py: training stops at min(max_steps, num_epochs × batches_per_epoch / grad_accum).
-    batches_per_epoch = len(dataloader)
-    grad_accum = max(1, training_cfg.gradient_accumulation_steps)
-    epoch_bound = (training_cfg.num_epochs * batches_per_epoch) // grad_accum
-    effective_max_steps = min(training_cfg.max_steps, epoch_bound) if epoch_bound > 0 else training_cfg.max_steps
-
-    # Schedule over the steps actually run, so warmup + decay complete by the end of training.
-    schedule = build_lr_schedule(training_cfg, optimizer, effective_max_steps)
+    # Shape the LR curve over lr_schedule_steps (default: the run length). A larger horizon runs only
+    # a prefix of a longer curve; warmup + decay otherwise complete exactly at the end of training.
+    schedule_horizon = training_cfg.lr_schedule_steps or effective_max_steps
+    schedule = build_lr_schedule(training_cfg, optimizer, schedule_horizon)
 
     sft_cfg = SFTConfig(
         max_steps=effective_max_steps,
@@ -558,8 +605,14 @@ def run_training(
         vocab_str = f"{model_cfg.vocab_size}"
 
     if training_cfg.scheduler_type == "warmup_linear":
-        warmup = int(effective_max_steps * _WARMUP_LINEAR_WARMUP_FRACTION)
-        schedule_str = f"warmup_linear ; {warmup:,} warmup ; {effective_max_steps - warmup:,} decay"
+        warmup_steps = resolve_warmup_steps(training_cfg, schedule_horizon)
+        schedule_str = f"warmup_linear ; {warmup_steps:,} warmup ; {schedule_horizon - warmup_steps:,} decay"
+        if schedule_horizon > effective_max_steps:
+            # Run ends before the curve completes: only a prefix of a longer schedule.
+            schedule_str += f" ; horizon {schedule_horizon:,} (run stops early at {effective_max_steps:,})"
+        elif schedule_horizon < effective_max_steps:
+            # Curve reaches min_lr at the horizon; the run then continues flat at min_lr.
+            schedule_str += f" ; then {effective_max_steps - schedule_horizon:,} at min_lr"
     else:
         schedule_str = "constant"
 
@@ -587,15 +640,16 @@ def run_training(
     steps_str = f"{effective_max_steps:,}"
     if effective_max_steps < training_cfg.max_steps:
         steps_str += f" (epoch-capped from {training_cfg.max_steps:,})"
-    passes = effective_max_steps * grad_accum / batches_per_epoch if batches_per_epoch else 0.0
+    tokens_to_process = effective_max_steps * tokens_per_step
+    epochs = effective_max_steps / steps_per_epoch if steps_per_epoch else 0.0
+    epoch_cap = f"{training_cfg.num_epochs} cap" if training_cfg.num_epochs > 0 else "no cap"
     training_fields: list[tuple[str, str]] = [
         ("steps", steps_str),
-        ("epochs", f"{passes:.3g} ({training_cfg.num_epochs} configured)"),
+        ("tokens", f"{tokens_to_process:,}"),
+        ("epochs", f"{epochs:.3g} ({epoch_cap})"),
         ("seed", str(training_cfg.seed)),
     ]
 
-    dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
-    global_batch = training_cfg.batch_size * grad_accum * dp_size
     batch_str = (
         f"size {training_cfg.batch_size} ; accum {training_cfg.gradient_accumulation_steps} "
         f"; global {global_batch:,} ; dropout {model_cfg.dropout_prob}"
@@ -627,7 +681,8 @@ def run_training(
             "data",
             [
                 ("path", shorten_home(data_path)),
-                ("samples", f"{len(dataset):,}"),
+                ("tokens", f"{corpus_tokens:,}"),
+                ("windows", f"{len(dataset):,}"),
                 ("vocab", vocab_str),
             ],
         ),
@@ -774,7 +829,7 @@ def main() -> None:
     if args.max_steps is not None:
         training_cfg.max_steps = args.max_steps
     if args.epochs is not None:
-        training_cfg.num_epochs = args.epochs
+        training_cfg.num_epochs = training_cfg.epochs = args.epochs
     if args.max_grad_norm is not None:
         training_cfg.use_clip_grad_norm = True
         training_cfg.clip_grad_norm_max_norm = args.max_grad_norm
@@ -800,6 +855,33 @@ def main() -> None:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     mesh = build_mesh(device_cfg)
+
+    # Optional MoE-only expert-parallel axis (DeepSeek). device_cfg.moe_axis is an index
+    # into mesh_shape; rename that mesh axis to "moe_ep" (unless it already carries a
+    # parallelism name) and record it on the DeepSeek spec so SparseMoEEP partitions experts
+    # across it. When enable_tp is true, MoE uses the "tp" axis and this is ignored.
+    moe_ax = device_cfg.moe_axis
+    resolved_moe_axis: str | None = None
+    if moe_ax != -1:
+        shape = tuple(int(s) for s in device_cfg.mesh_shape)
+        if not (0 <= moe_ax < len(shape)):
+            raise ValueError(f"device_config.moe_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}")
+        names = list(mesh.axis_names)
+        logical = names[moe_ax]
+        if logical.startswith("_"):
+            names[moe_ax] = "moe_ep"
+            mesh = ttml.Mesh(mesh.shape, tuple(names))
+            resolved_moe_axis = "moe_ep"
+        else:
+            resolved_moe_axis = logical
+
+    # Record the resolved MoE axis on the DeepSeek spec so sparse_ep partitions experts
+    # across it. No-op for non-DeepSeek models.
+    if model_cfg.model_type == "deepseek":
+        model_cfg.spec.moe_axis_name = resolved_moe_axis
+
+    if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
+        print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
     ttml.manual_seed(training_cfg.seed)

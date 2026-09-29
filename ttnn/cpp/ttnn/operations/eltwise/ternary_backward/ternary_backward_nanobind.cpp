@@ -106,21 +106,29 @@ void py_module(nb::module_& mod) {
         R"doc(
         Performs backward operations for where of :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.
 
+        The three input tensors are the arguments of a forward `ttnn.where` call, with :attr:`input_tensor_a` as its predicate,
+        and :attr:`grad_tensor` is the gradient with respect to the output of that call, so its elements line up one to one
+        with that output. The forward `ttnn.where` copies each output element from :attr:`input_tensor_b` where the predicate
+        is 1 and from :attr:`input_tensor_c` where the predicate is 0, so each element of :attr:`grad_tensor` belongs to
+        whichever tensor supplied the element in that position. This function returns (up to) two gradients derived from
+        :attr:`grad_tensor` split by the predicate: `where(predicate, grad_tensor, 0)` and `where(predicate, 0, grad_tensor)`.
+        The values of :attr:`input_tensor_b` and :attr:`input_tensor_c` do not affect the result.
+
 
         Args:
-            grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor): the input tensor.
-            input_tensor_c (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the gradient with respect to the output of the forward `ttnn.where` call.
+            input_tensor_a (ttnn.Tensor): the predicate tensor of the forward `ttnn.where` call, containing only 0's or 1's.
+            input_tensor_b (ttnn.Tensor): the true_value tensor of the forward `ttnn.where` call.
+            input_tensor_c (ttnn.Tensor): the false_value tensor of the forward `ttnn.where` call.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            are_required_outputs (List[bool], optional): list of required outputs. Defaults to `[True, True]`.
-            input_a_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            input_b_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            are_required_outputs (List[bool], optional): which output gradients to compute. A `False` entry skips that gradient, and the returned list holds `None` in its place. Defaults to `[True, True]`.
+            input_a_grad (ttnn.Tensor, optional): preallocated tensor to hold the first of the two results (corresponding to :attr:`input_tensor_b`). Defaults to `None`.
+            input_b_grad (ttnn.Tensor, optional): preallocated tensor to hold the second of the two results (corresponding to :attr:`input_tensor_c`). Defaults to `None`.
 
         Returns:
-            List of ttnn.Tensor: the output tensor.
+            List of ttnn.Tensor: the gradients with respect to :attr:`input_tensor_b` and :attr:`input_tensor_c`, or `None` if the corresponding entry in :attr:`are_required_outputs` is `False`.
 
 
         Note:

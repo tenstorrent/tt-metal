@@ -81,6 +81,10 @@ variable "UV_IMAGE" {
   default = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
 }
 
+variable "TT_LLM_ENGINE_IMAGE" {
+  default = "ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74"
+}
+
 # =============================================================================
 # Tool targets (from Dockerfile.tools)
 #
@@ -118,6 +122,13 @@ target "clangbuildanalyzer" {
   dockerfile = "dockerfile/Dockerfile.tools"
   target     = "clangbuildanalyzer"
   tags       = ["tool-clangbuildanalyzer:local"]
+}
+
+target "iwyu" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "iwyu"
+  tags       = ["tool-iwyu:local"]
 }
 
 target "gdb" {
@@ -195,7 +206,7 @@ target "dockerfile-frontend" {
 }
 
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "iwyu", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
 }
 
 # =============================================================================
@@ -259,6 +270,7 @@ target "_main-common" {
     mold-layer               = "target:mold"
     doxygen-layer            = "target:doxygen"
     clangbuildanalyzer-layer = "target:clangbuildanalyzer"
+    iwyu-layer               = "target:iwyu"
     gdb-layer                = "target:gdb"
     cmake-layer              = "target:cmake"
     yq-layer                 = "target:yq"
@@ -324,6 +336,9 @@ target "release-models" {
   inherits = ["_main-common"]
   target   = "release-models"
   tags     = ["tt-metalium-release-models:local"]
+  args = {
+    TT_LLM_ENGINE_IMAGE = TT_LLM_ENGINE_IMAGE
+  }
 }
 
 group "main" {

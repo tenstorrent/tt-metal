@@ -45,6 +45,8 @@ def is_unsupported_case(
     def tensor_size_bytes(shape):
         padded = list(shape)
         if layout == ttnn.TILE_LAYOUT:
+            # TensorLayout promotes a tiled rank-<2 shape to rank 2 before padding it
+            padded = [1] * (2 - len(padded)) + padded
             padded[-2] = math.ceil(padded[-2] / tile[0]) * tile[0]
             padded[-1] = math.ceil(padded[-1] / tile[1]) * tile[1]
         return math.prod(padded) * elem_size
@@ -133,11 +135,15 @@ def run_all_gather_impl(
     mesh_shape = tuple(mesh_device.shape)
     replicate = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
 
+    # mem_config_ag=None makes the CCL internally derive output config = input config.
+    # Do that here for validation and persistent buffer creation.
+    mem_config_ag_resolved = mem_config_ag if mem_config_ag is not None else mem_config_input
+
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
         ag_output_shape,
         dim,
-        mem_config_ag,
+        mem_config_ag_resolved,
         replicate,
         ag_input_dtype,
         layout,
@@ -188,7 +194,7 @@ def run_all_gather_impl(
                     device=mesh_device,
                     layout=layout,
                     dtype=ag_input_dtype,
-                    memory_config=mem_config_ag,
+                    memory_config=mem_config_ag_resolved,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
             ]
@@ -199,7 +205,7 @@ def run_all_gather_impl(
                     device=mesh_device,
                     layout=layout,
                     dtype=ag_input_dtype,
-                    memory_config=mem_config_ag,
+                    memory_config=mem_config_ag_resolved,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 )
                 for _ in range(num_iters)
@@ -322,6 +328,11 @@ def run_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     if not skip_check:
+        # Check output_topology
+        actual = [repr(p) for p in tt_all_gather_out_tensor_list[0].tensor_topology().placements()]
+        expected = ["PlacementReplicate()"] * len(actual)
+        assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
+
         for i in range(num_iters):
             tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
@@ -391,10 +402,15 @@ def run_all_gather_impl(
         ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf
         ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, padded
         ([256], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, rank 1
+        # rank 1 row-major, no persistent buffer: padded rank stays 1, and the output is allocated from the spec
+        ([256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, False, 1, False),  # check, rank 1
         # composite (RM last-dim unaligned pages)
         ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True),  # perf, composite
         # composite (tile padding on gather dim)
         ([1, 1, 48, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, composite
+        ([1600], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True),  # check, composite, rank 1
+        # per-device 16 elements is a whole bfloat8_b block, so the concat re-quantizes exactly
+        ([128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, False, 1, True),  # check, composite, rank 1
     ],
     ids=[
         "dit_shape-perf",
@@ -409,8 +425,11 @@ def run_all_gather_impl(
         "gather_dim_negative_2-perf",
         "gather_dim_negative_1_padded_dim_2-check",
         "rank1_persistent_buffer-check",
+        "rank1_row_major-check",
         "composite_ag_test_one-perf",
         "composite_ag_test_two-check",
+        "composite_rank1-check",
+        "composite_rank1_bfloat8_b-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -1003,13 +1022,39 @@ def _l1_width_sharded(shard_height, shard_width, num_cores):
     )
 
 
-# Width-sharded RM DRAM config; coarse DRAM page alignment lets a narrow shard have a padded page.
+# Width-sharded RM DRAM config
 def _dram_width_sharded(shard_height, shard_width, num_cores):
     grid = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(8, 8), row_wise=True)
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# ND-sharded L1 memory config. Shards are cut based on ceil(tensor_dim / shard_dim) per dim.
+# Unlike legacy 2D sharding a core may hold several shards, and the last shard along a dim may be partially filled.
+def _l1_nd_sharded(
+    shard_shape,
+    num_cores=8,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    grid = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(8, 8), row_wise=True)
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid, orientation, strategy))
+
+
+# ND-sharded DRAM config.
+def _dram_nd_sharded(
+    shard_shape,
+    num_banks=8,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    # For DRAM buffers the bank id is the core's x-coord alone, so the grid must be a single ROW of cores.
+    grid = ttnn.num_cores_to_corerangeset(num_banks, ttnn.CoreCoord(8, 1), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.BufferType.DRAM, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid, orientation, strategy)
     )
 
 
@@ -1028,6 +1073,8 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         #
         # matched (m=1,s=1,k=1): RM last-dim, equal in/out shard widths.
         ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 64, 8)),
+        # matched at rank 1 (m=1,s=1,k=1): a sub-rank-2 padded shape is promoted to [1, N] for the shard grid.
+        ([256], 0, _l1_width_sharded(1, 32, 1), _l1_width_sharded(1, 32, 8)),
         # concat full (m=8,s=1,k=1): sharded -> interleaved; one chunk/device packed per output row.
         ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), ttnn.L1_MEMORY_CONFIG),
         # concat partial (m=2,s=1,k=1): 2 device contributions per output page (multiple pages/row).
@@ -1056,9 +1103,13 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         # matched, padded, sharded -> interleaved, non-last-dim (m=1,s=1,k=1): a full-row DRAM shard
         # (content 136*2=272B, padded to the 32B DRAM page) gathered on the height dim into interleaved output.
         ([1, 1, 256, 136], 2, _dram_width_sharded(32, 136, 1), ttnn.DRAM_MEMORY_CONFIG),
+        # matched, output page slot smaller than the input's aligned page (m=1,s=1,k=1): 272B content
+        # pads to 288B in DRAM (32B align) but stays 272B in L1 (16B align).
+        ([1, 1, 256, 136], 2, _dram_nd_sharded([1, 1, 32, 136], 1), _l1_nd_sharded([1, 1, 32, 136])),
     ],
     ids=[
         "matched",
+        "matched_rank1",
         "concat_full_to_interleaved",
         "concat_partial",
         "split",
@@ -1071,6 +1122,7 @@ def _dram_width_sharded(shard_height, shard_width, num_cores):
         "non_last_dim_interleaved",
         "split_padded_output",
         "matched_sharded_to_interleaved_padded",
+        "matched_out_page_smaller_than_in_aligned",
     ],
 )
 @pytest.mark.parametrize(
@@ -1100,6 +1152,186 @@ def test_all_gather_page_indexing(
         num_iters=1,
         use_persistent_buffers=False,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
+    [
+        # ND sharding: the shard shape is a full ND shape instead of being flattened to 2D.
+        # The m/s/k iterator modes are covered by test_all_gather_page_indexing. What's exercised here
+        # is page_id -> address for ND page grids, plus the host's output-spec/route plumbing.
+        #
+        # --- basic: matched mode (in page == out page), tile + row-major, gather dim varied ---
+        ([1, 1, 128, 512], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), _l1_nd_sharded([1, 1, 64, 64])),
+        ([1, 1, 512, 128], 2, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), _l1_nd_sharded([1, 1, 64, 64])),
+        ([2, 8, 64, 128], 1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 32, 64]), _l1_nd_sharded([1, 1, 32, 64])),
+        ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 64])),
+        ([2, 8, 32, 128], 1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 128]), _l1_nd_sharded([1, 1, 8, 128])),
+        # --- partial shards: tensor extent % shard extent != 0, so the last shard along a dim is
+        #     only part-filled. Those slots are never addressed, so the page grid is unchanged.
+        ([3, 8, 64, 64], 1, ttnn.TILE_LAYOUT, _l1_nd_sharded([2, 1, 32, 64]), _l1_nd_sharded([2, 1, 32, 64])),
+        ([1, 1, 96, 768], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), _l1_nd_sharded([1, 1, 64, 64])),
+        ([1, 24, 64, 64], 1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 2, 32, 64]), _l1_nd_sharded([1, 2, 32, 64])),
+        # --- shard rank < tensor rank (squeezed down to the shard's rank) ---
+        ([2, 8, 64, 128], 1, ttnn.TILE_LAYOUT, _l1_nd_sharded([32, 64]), _l1_nd_sharded([32, 64])),
+        # --- rank-1 tensors. Row-major keeps a padded rank of 1, so the shard shape must be rank 1 too.
+        #     Tiled is padded to rank 2, so it takes a legacy 2D spec (an ND one trips the mesh mapper's
+        #     own rank check, upstream of this op). ---
+        ([256], 0, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([32]), _l1_nd_sharded([32])),
+        ([256], 0, ttnn.TILE_LAYOUT, _l1_width_sharded(32, 32, 1), ttnn.L1_MEMORY_CONFIG),
+        # --- shard -> core mapping: round-robin wrap (several shards per core), CONTIGUOUS_1D
+        #     (adjacent shards packed onto one core), non-rectangular grid, COL_MAJOR core order ---
+        (
+            [1, 1, 128, 512],
+            -1,
+            ttnn.TILE_LAYOUT,
+            _l1_nd_sharded([1, 1, 32, 32], num_cores=4),
+            _l1_nd_sharded([1, 1, 32, 32], num_cores=4),
+        ),
+        (
+            [1, 1, 128, 512],
+            -1,
+            ttnn.TILE_LAYOUT,
+            _l1_nd_sharded([1, 1, 32, 32], strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D),
+            _l1_nd_sharded([1, 1, 32, 32], strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D),
+        ),
+        (
+            [1, 1, 128, 512],
+            -1,
+            ttnn.TILE_LAYOUT,
+            _l1_nd_sharded([1, 1, 64, 64], num_cores=12),
+            _l1_nd_sharded([1, 1, 64, 64], num_cores=12),
+        ),
+        (
+            [1, 1, 128, 512],
+            -1,
+            ttnn.TILE_LAYOUT,
+            _l1_nd_sharded([1, 1, 64, 64], orientation=ttnn.ShardOrientation.COL_MAJOR),
+            _l1_nd_sharded([1, 1, 64, 64], orientation=ttnn.ShardOrientation.COL_MAJOR),
+        ),
+        # --- DRAM banks (bank id == core x, see _dram_nd_sharded) ---
+        ([2, 8, 64, 128], 1, ttnn.TILE_LAYOUT, _dram_nd_sharded([1, 1, 32, 64]), _dram_nd_sharded([1, 1, 32, 64])),
+        ([2, 8, 32, 128], 1, ttnn.ROW_MAJOR_LAYOUT, _dram_nd_sharded([1, 1, 8, 128]), _dram_nd_sharded([1, 1, 8, 128])),
+        # --- mixed: ND on one side only ---
+        ([1, 1, 128, 512], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), _l1_width_sharded(128, 64, 8)),
+        ([1, 1, 128, 512], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 128, 512], -1, ttnn.TILE_LAYOUT, _l1_width_sharded(128, 32, 2), _l1_nd_sharded([1, 1, 64, 64])),
+        # in:out shard widths with no integer ratio (96 vs 64 elements). Native for tile, where the
+        # page is one tile either way, so shard width doesn't enter page indexing.
+        ([1, 1, 128, 768], -1, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 96]), _l1_width_sharded(128, 64, 12)),
+        # --- concat (m=2) and split (s=2) driven by unequal ND shard widths ---
+        ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 128])),
+        ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 32])),
+        # --- mem_config_ag=None: the plain ttnn.all_gather(x, dim) call, where the output config is
+        #     derived from the input's. The input's ND spec has a legacy 2D equivalent, whose grid
+        #     rules must not be re-applied to the num_devices-times-larger output.
+        ([8, 2, 64, 64], 0, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 32, 64], num_cores=9), None),
+        ([1, 1, 64, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), None),
+        # --- composite AG, since non-integral in:out page ratio (192B vs 256B)
+        ([1, 1, 32, 768], -1, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG, _l1_nd_sharded([1, 1, 32, 128])),
+        # --- composite AG, since padding on the gather dim
+        ([1, 1, 32, 384], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 64])),
+        ([1, 1, 32, 256], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 32, 32]), _l1_nd_sharded([1, 1, 32, 96])),
+    ],
+    ids=[
+        "tile_last_dim",
+        "tile_height_dim",
+        "tile_middle_dim",
+        "rm_last_dim",
+        "rm_middle_dim",
+        "partial_shard_outer_dim",
+        "partial_shard_hw",
+        "partial_shard_gather_dim",
+        "shard_rank_lt_tensor_rank",
+        "rank1_rm",
+        "rank1_tile_sharded_to_interleaved",
+        "many_shards_per_core",
+        "contiguous_1d",
+        "non_rectangular_grid",
+        "col_major_cores",
+        "tile_dram",
+        "rm_dram",
+        "nd_to_legacy_sharded",
+        "nd_to_interleaved",
+        "legacy_sharded_to_nd",
+        "tile_unequal_shard_widths",
+        "nd_concat",
+        "nd_split",
+        "default_out_config_tile",
+        "default_out_config_rm",
+        "composite_nonintegral_page_ratio",
+        "composite_pad_on_gather_dim_input",
+        "pad_on_gather_dim_output",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_1d"]
+)
+def test_all_gather_nd_sharded(
+    mesh_device,
+    layout,
+    ag_input_dtype,
+    ag_output_shape,
+    dim,
+    mem_config_input,
+    mem_config_ag,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=1,
+        use_persistent_buffers=False,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "mapper_dim, gather_dim, expect_replicated",
+    [
+        # The mapper keeps the dim as the caller spelled it while the gather dim is normalized, so the two
+        # have to be compared as axes: -1 and 3 are the same axis of a rank-4 tensor.
+        (-1, -1, True),
+        # Different axes, so the Shard placement must survive.
+        (-2, 3, False),
+        # No Shard placement anywhere to begin with; gathering must not introduce a spurious one.
+        (None, -1, True),
+    ],
+    ids=["same_axis", "different_axis", "already_replicated"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_replicated):
+    # Gathering the sharded axis replicates it, and the output topology has to say so.
+    devices = mesh_device.get_num_devices()
+    mesh_mapper = (
+        ttnn.ReplicateTensorToMesh(mesh_device)
+        if mapper_dim is None
+        else ttnn.ShardTensorToMesh(mesh_device, dim=mapper_dim)
+    )
+
+    tt_input = ttnn.from_torch(
+        torch.rand([1, 1, 32 * devices, 32 * devices], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+        device=mesh_device,
+    )
+    tt_output = ttnn.all_gather(tt_input, dim=gather_dim)
+
+    actual = [repr(p) for p in tt_output.tensor_topology().placements()]
+    expected = ["PlacementReplicate()"] if expect_replicated else [f"PlacementShard({mapper_dim})"]
+    assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -1164,6 +1396,108 @@ def test_all_gather_2x4(
         use_persistent_buffers=False,
         cluster_axis=1,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "cluster_axis, gather_dim, other_dim",
+    [
+        # Different tensor dims sharded on each mesh axis; gathering one must not disturb the other's Shard.
+        (0, 2, 3),
+        (1, 3, 2),
+    ],
+    ids=["cluster_axis_0", "cluster_axis_1"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_1d"]
+)
+def test_all_gather_output_topology_2x4(mesh_device, cluster_axis, gather_dim, other_dim):
+    mesh_shape = tuple(mesh_device.shape)
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = gather_dim
+    shard_dims[1 - cluster_axis] = other_dim
+
+    tt_input = ttnn.from_torch(
+        torch.rand([1, 1, 32 * mesh_shape[0], 32 * mesh_shape[1]], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(shard_dims), mesh_shape=mesh_shape),
+        device=mesh_device,
+    )
+
+    tt_output = ttnn.all_gather(tt_input, dim=gather_dim, cluster_axis=cluster_axis)
+
+    actual = [repr(p) for p in tt_output.tensor_topology().placements()]
+    expected = [None, None]
+    expected[cluster_axis] = "PlacementReplicate()"
+    expected[1 - cluster_axis] = f"PlacementShard({other_dim})"
+    assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, dim, output_dtype, output_layout, output_shape, msg_pattern",
+    [
+        ([256], -2, ttnn.bfloat16, ttnn.TILE_LAYOUT, [2048], "Invalid gather dim"),
+        (
+            [1, 1, 32, 32],
+            -1,
+            ttnn.bfloat8_b,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 32, 256],
+            "Output tensor dtype .* should be same as input tensor dtype",
+        ),
+        (
+            [1, 1, 32, 32],
+            -1,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 32, 256],
+            "Output tensor layout .* should be same as input tensor layout",
+        ),
+        (
+            [1, 1, 32, 32],
+            -1,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            [1, 1, 32, 128],
+            "Output tensor shape must be",
+        ),
+    ],
+    ids=[
+        "invalid_dim",
+        "persistent_output_wrong_dtype",
+        "persistent_output_wrong_layout",
+        "persistent_output_wrong_shape",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_all_gather_negative_tests(
+    mesh_device, input_shape, dim, output_dtype, output_layout, output_shape, msg_pattern, expect_error
+):
+    tt_input = ttnn.from_torch(
+        torch.rand(input_shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    persistent_output_buffer = ttnn.from_torch(
+        torch.zeros(output_shape),
+        layout=output_layout,
+        dtype=output_dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+    with expect_error(RuntimeError, msg_pattern):
+        ttnn.all_gather(tt_input, dim=dim, output_tensor=persistent_output_buffer)
 
 
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, memory_config, layout, device):

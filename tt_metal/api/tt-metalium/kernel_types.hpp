@@ -109,6 +109,12 @@ struct ComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    // Opt-in: compile this kernel's TRISC2 (pack) binary with the RISC-V Vector (Zve32f)
+    // extension enabled. Blackhole only (program compile fails on other archs). The unpack and
+    // math TRISC compiles are unchanged, and the vector unit is reachable only through explicit
+    // intrinsics (auto-vectorization stays disabled); guard kernel-side vector code with
+    // the compiler-provided __riscv_vector macro or the pack-thread defines.
+    bool enable_trisc2_rvv = false;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation

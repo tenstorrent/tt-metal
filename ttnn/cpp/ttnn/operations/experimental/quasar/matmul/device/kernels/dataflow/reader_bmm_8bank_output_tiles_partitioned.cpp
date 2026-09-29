@@ -27,9 +27,7 @@ void kernel_main() {
     constexpr uint32_t in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
     constexpr uint32_t in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
 
-    // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
-    // DPRINT("batch={}\n", batch);
-
+    //     //
     constexpr uint32_t cb_id_in0 = dfb::in0;
     constexpr uint32_t cb_id_in1 = dfb::in1;
 
@@ -81,8 +79,7 @@ void kernel_main() {
                 noc.async_read_barrier();
                 cb_in1.push_back(onetile);
             }
-            // DPRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
-
+            //
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt
         }  // Kt loop

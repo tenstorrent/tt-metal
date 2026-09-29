@@ -46,21 +46,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "demo"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
         env:
@@ -143,8 +135,6 @@ jobs:
 
             # Source T3K test scripts if needed (for run_t3000_* functions)
             if [[ "$CMD" == *"run_t3000"* ]]; then
-              source tests/scripts/t3000/run_t3000_demo_tests.sh
-              source tests/scripts/t3000/run_t3000_perf_tests.sh
               source tests/scripts/t3000/run_t3000_integration_tests.sh
             fi
 
@@ -201,7 +191,10 @@ jobs:
   ai-run-summary:
     name: "AI Run Summary"
     needs: [load-test-matrix, demo-sp-release-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

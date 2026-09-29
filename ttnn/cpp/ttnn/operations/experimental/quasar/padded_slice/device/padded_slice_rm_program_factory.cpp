@@ -112,6 +112,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
     const uint32_t num_sticks_per_core = output_shard_spec.shape[0];
+    // [#48552] Real (unpadded) output stick count = product of the actual output dims except channels. The
+    // shard height (num_sticks_per_core) is tile-rounded and can exceed this, so without clamping the last
+    // core reads past the real output and its src_stick_id walks beyond the source buffer. WH/BH's async_read
+    // tolerates the OOB page-id (reads garbage into the padded tail); Quasar range-checks it and asserts.
+    // Clamp per-core below so the reader only touches real sticks (the TILE factory clamps the same way).
+    uint32_t total_output_sticks = 1;
+    for (uint32_t d = 0; d + 1 < actual_output_shape.rank(); ++d) {
+        total_output_sticks *= actual_output_shape[d];
+    }
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
 
     uint32_t core_index = 0;
@@ -141,6 +150,13 @@ get_padded_slice_runtime_args_rm_sharded_output(
         int this_input_row_size_bytes =
             std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
+        // [#48552] Clamp to the real output sticks so the reader doesn't over-read past the source on the
+        // tile-rounded padded shard tail (see total_output_sticks note above).
+        if (num_sticks_written >= total_output_sticks) {
+            this_core_num_sticks = 0;
+        } else if (num_sticks_written + this_core_num_sticks > total_output_sticks) {
+            this_core_num_sticks = total_output_sticks - num_sticks_written;
+        }
         if (this_input_row_size_bytes == 0) {
             this_core_num_sticks = 0;
         }
@@ -284,8 +300,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "num_read_per_barrier"}};
     // Per-dim geometry tail (num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim).
     reader.advanced_options.num_runtime_varargs = 3 * num_dims;
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // Writer: drain/commit the OUTPUT DFB (non-pad). Reuses the ported i2s sharded writer.
     KernelSpec writer{
@@ -295,8 +310,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "writer_unary_sharded.cpp"};
     writer.dfb_bindings = {ConsumerOf(PS_OUT_DFB, "out")};
     writer.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     spec.kernels = {reader, writer};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {PS_READER, PS_WRITER}, .target_nodes = total_cores}};

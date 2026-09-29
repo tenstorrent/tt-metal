@@ -8,7 +8,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-logger/tt-logger.hpp>  // [DIAG avgpool x1.15] remove after
 #include <bit>
 #include <cmath>
 #include <filesystem>
@@ -68,28 +67,13 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    IDevice* device = &a.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
 
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    // [DIAG avgpool x1.15 -- remove after] What does the multi_core_H factory actually see/emit? If this
-    // does NOT print during the failing run, a cached program is being reused (stale scaler baked in).
-    // If it prints use_post_mul=0 / scaler=1/49, attributes lost the split. If use_post_mul=1 &
-    // scaler=1.0 but output is still x1.15, the H compute kernel isn't applying REDUCE_POST_MUL.
-    log_debug(
-        tt::LogOp,
-        "QSR_REDUCE_H_FACTORY math_op={} scaler={} post_mul_scaler={} use_post_mul={} scaler_bits=0x{:08x} "
-        "post_mul_bits=0x{:08x}",
-        static_cast<int>(operation_attributes.math_op),
-        operation_attributes.scaler,
-        operation_attributes.post_mul_scaler,
-        use_post_mul,
-        scaler_bits,
-        post_mul_scaler_bits);
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
@@ -163,8 +147,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .compile_time_args =
             {{"Ht", Ht}, {"Wt", Wt}, {"HtWt", HtWt}, {"scaler_bits", scaler_bits}, {"use_welford", 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -174,8 +157,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     auto make_compute = [&](const KernelSpecName& id, uint32_t compute_Wt) {
@@ -190,13 +172,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                  DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"Ht", Ht}, {"Wt", compute_Wt}, {"NC", 1u}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-            .hw_config = ttnn::to_compute_hardware_config(
-                device->arch(),
-                ttnn::ComputeKernelConfig{
-                    .math_fidelity = math_fidelity,
-                    .math_approx_mode = false,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en}),
+            .hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+                .math_fidelity = math_fidelity,
+                .math_approx_mode = false,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en}),
         };
     };
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
@@ -12,14 +12,9 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
-#include "erisc_datamover_builder.hpp"
-#include <set>
 #include <map>
 #include <vector>
 #include <unordered_map>
-#include <queue>
-#include <functional>
-#include <unordered_set>
 #include <optional>
 #include <filesystem>
 #include <string>
@@ -51,6 +46,17 @@ inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh
 // Returns true if requested_type requires more connections than available_type provides
 // mesh_shape: [rows, cols], used to compare realized per-axis torus connectivity.
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
+
+// True when the fabric config (not the descriptor's declared dim_types) is the origin of a torus on
+// this axis. On a genuine torus axis the wrap cables physically consume every port of that axis;
+// smaller extents leave those ports open, but they still belong to the torus by convention: deadlock
+// avoidance is derived per direction from the fabric config, so an inter-mesh link placed on such a
+// port can face a peer that labels the axis differently and hang (issue #54650). Edge ports of a
+// config-driven torus axis are therefore reserved (excluded from inter-mesh use); an axis the
+// descriptor itself declares as RING keeps its boundary ports.
+inline bool is_config_driven_torus_axis(FabricType requested_type, FabricType declared_type, uint32_t axis) {
+    return has_flag(requested_type, torus_flag_for_axis(axis)) && !has_flag(declared_type, torus_flag_for_axis(axis));
+}
 
 // Compute maximum 1D hops across all meshes in topology
 // Returns max(rows-1, cols-1) across all meshes, representing longest linear path
@@ -88,7 +94,7 @@ void serialize_mesh_coordinates_to_file(
 // Serialize ASIC ID to Fabric node ID mappings to a YAML file
 // Categorizes mappings by mesh and host, showing which ASICs map to which Fabric nodes
 void serialize_asic_to_fabric_node_mapping_to_file(
-    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path, bool mock_enabled);
 
 /**
  * @brief Find and load a Physical Grouping Descriptor with the standard search order.

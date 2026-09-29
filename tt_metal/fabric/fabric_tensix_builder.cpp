@@ -74,7 +74,13 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
             active_fabric_eth_channels.insert({direction, active_eth_chans});
         }
 
+        size_t total_active_channels = 0;
+        for (const auto& [direction, eth_chans] : active_fabric_eth_channels) {
+            total_active_channels += eth_chans.size();
+        }
+
         std::vector<chan_id_t> non_dispatch_active_channels;
+        non_dispatch_active_channels.reserve(total_active_channels);
         std::set<routing_plane_id_t> non_dispatch_routing_planes;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
             dispatch_link_idx_ = tt_metal::RelayMux::get_dispatch_link_index(

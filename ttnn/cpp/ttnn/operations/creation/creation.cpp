@@ -130,6 +130,13 @@ template Tensor full_impl<uint32_t>(
     MeshDevice* device,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor);
+template Tensor full_impl<int8_t>(
+    const ttnn::Shape& shape,
+    int8_t value,
+    const Layout layout,
+    MeshDevice* device,
+    const MemoryConfig& output_mem_config,
+    std::optional<Tensor> optional_output_tensor);
 template Tensor full_impl<int32_t>(
     const ttnn::Shape& shape,
     int32_t value,
@@ -188,6 +195,7 @@ Tensor full_impl(
         case DataType::UINT8: return concrete_full.template operator()<uint8_t>(fill_value);
         case DataType::UINT16: return concrete_full.template operator()<uint16_t>(fill_value);
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
+        case DataType::INT8: return concrete_full.template operator()<int8_t>(fill_value);
         case DataType::INT32: return concrete_full.template operator()<int32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
@@ -506,6 +514,20 @@ template Tensor from_buffer<uint8_t>(
     const std::optional<MemoryConfig>& memory_config);
 template Tensor from_buffer<uint8_t>(
     const std::vector<uint8_t>& buffer,
+    const Shape& shape,
+    const DataType dtype,
+    MeshDevice* device,
+    const std::optional<Layout>& layout,
+    const std::optional<MemoryConfig>& memory_config);
+template Tensor from_buffer<int8_t>(
+    std::vector<int8_t>&& buffer,
+    const Shape& shape,
+    const DataType dtype,
+    MeshDevice* device,
+    const std::optional<Layout>& layout,
+    const std::optional<MemoryConfig>& memory_config);
+template Tensor from_buffer<int8_t>(
+    const std::vector<int8_t>& buffer,
     const Shape& shape,
     const DataType dtype,
     MeshDevice* device,

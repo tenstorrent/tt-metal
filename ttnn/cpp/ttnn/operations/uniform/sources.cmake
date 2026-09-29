@@ -7,6 +7,7 @@ set(TTNN_OP_UNIFORM_SRCS
     device/uniform_device_operation.cpp
     device/uniform_program_factory.cpp
     uniform.cpp
+    uniform_range.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from

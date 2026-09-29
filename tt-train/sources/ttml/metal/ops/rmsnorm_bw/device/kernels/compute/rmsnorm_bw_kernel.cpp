@@ -52,18 +52,18 @@ inline void compute_gained_dL_dout(uint32_t col, uint32_t working_register, uint
 
     // NOTE(maciek): We need to manually zero the working register, as mul_tiles_bcast_rows accumulates into
     // the dst register.
-    copy_tile_init(cb_zero_idx);
+    copy_init(cb_zero_idx);
     copy_tile(cb_zero_idx, /* tile_idx */ 0, working_register);
 
     // Compute scaled_gain = gamma * 1/rms_a
     // NOTE: cb_recip_rms_a_bcasted is ready to be used, so we do not need to wait for it, but we need to broadcast
     // gamma.
-    mul_bcast_rows_init_short(cb_recip_rms_a_bcasted_idx, cb_gamma_idx);
+    mul_bcast_rows_init(cb_recip_rms_a_bcasted_idx, cb_gamma_idx);
     mul_tiles_bcast_rows(
         cb_recip_rms_a_bcasted_idx, cb_gamma_idx, /* tile_idx */ 0, /* tile_idx */ col, working_register);
 
     // Compute gained_dL_dout = scaled_gain * dL_out
-    copy_tile_init(cb_dL_out_idx);
+    copy_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, col, tile_register);
     mul_binary_tile_init();
     mul_binary_tile(working_register, tile_register, working_register);
@@ -80,12 +80,12 @@ inline void compute_dL_da(
 
     // NOTE(maciek): We need to manually zero the rhs register, as mul_tiles_bcast_cols accumulates into
     // the dst register.
-    copy_tile_init(cb_zero_idx);
+    copy_init(cb_zero_idx);
     copy_tile(cb_zero_idx, /* tile_idx */ 0, rhs_register);
 
     // Compute scaled_outer = scale * a (broadcasted multiplication)
     reconfig_data_format(cb_input_idx, cb_scale_idx);
-    mul_bcast_cols_init_short(cb_input_idx, cb_scale_idx);
+    mul_bcast_cols_init(cb_input_idx, cb_scale_idx);
     mul_tiles_bcast_cols(
         cb_input_idx,
         cb_scale_idx,
@@ -97,12 +97,12 @@ inline void compute_dL_da(
     // Compute rhs = scaled_outer / (c * rms_a^2)
     // Uses pre-computed reciprocal of rms_a and scaler (1/c) for efficiency
     reconfig_data_format(cb_recip_rms_a_bcasted_idx, cb_recip_rms_a_bcasted_idx);
-    copy_tile_init(cb_recip_rms_a_bcasted_idx);
+    copy_init(cb_recip_rms_a_bcasted_idx);
     copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
     mul_binary_tile(rhs_register, tile_register, rhs_register);
     mul_binary_tile(rhs_register, tile_register, rhs_register);
-    copy_tile_init(cb_scaler_idx);
+    copy_init(cb_scaler_idx);
     copy_tile(cb_scaler_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
     mul_binary_tile(rhs_register, tile_register, rhs_register);
@@ -121,7 +121,7 @@ inline void compute_dL_dgamma_components(
 
     // Compute normalized_a = a / rms_a (using pre-computed reciprocal)
     reconfig_data_format(cb_input_idx, cb_recip_rms_a_bcasted_idx);
-    mul_tiles_init(cb_input_idx, cb_recip_rms_a_bcasted_idx);
+    mul_init(cb_input_idx, cb_recip_rms_a_bcasted_idx);
     mul_tiles(
         cb_input_idx,
         cb_recip_rms_a_bcasted_idx,
@@ -130,7 +130,7 @@ inline void compute_dL_dgamma_components(
         dL_dg_components_register);
 
     // Compute dL_dgamma_components = normalized_a * dL_dout
-    copy_tile_init(cb_dL_out_idx);
+    copy_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, /* tile_idx */ input_tile_idx, tile_register);
     mul_binary_tile_init();
     mul_binary_tile(dL_dg_components_register, tile_register, dL_dg_components_register);
@@ -146,7 +146,9 @@ inline void compute_recip_rms_a_bcasted() {
     // Computes reciprocal of RMS activation (1/rms_a) and broadcasts it across columns.
     const uint32_t reg_rms_a = 0;
     tile_regs_acquire();
-    unary_bcast_init<BroadcastType::COL>(cb_rms_a_idx, cb_recip_rms_a_bcasted_idx);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_rms_a_idx, cb_recip_rms_a_bcasted_idx);
+    unary_bcast_init<BroadcastType::COL>(cb_rms_a_idx);
     unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ 0, /* reg tile idx */ reg_rms_a);
     recip_tile_init();
     recip_tile(reg_rms_a);
@@ -177,7 +179,7 @@ inline void compute_scale(const uint32_t row) {
         compute_gained_dL_dout(col, working_register, tile_register);
 
         // Compute and accumulate scale components: a * gained_dL_dout
-        copy_tile_init(cb_input_idx);
+        copy_init(cb_input_idx);
         copy_tile(cb_input_idx, col, tile_register);
         mul_binary_tile_init();
         mul_binary_tile(working_register, tile_register, working_register);
@@ -188,7 +190,7 @@ inline void compute_scale(const uint32_t row) {
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                 const uint32_t mask_register = working_register + 1U;
 
-                copy_tile_init(cb_mask_w_idx);
+                copy_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                 mask_tile_init();
@@ -250,7 +252,7 @@ inline void compute_scale(const uint32_t row) {
             compute_gained_dL_dout(block_idx, working_register, tile_register);
 
             // Compute and accumulate scale components: a * gained_dL_dout
-            copy_tile_init(cb_input_idx);
+            copy_init(cb_input_idx);
             copy_tile(cb_input_idx, block_idx, tile_register);
             mul_binary_tile_init();
             mul_binary_tile(working_register, tile_register, working_register);
@@ -262,7 +264,7 @@ inline void compute_scale(const uint32_t row) {
                     const uint32_t mask_register =
                         working_register + 1U;  // mask register should be next to data register
 
-                    copy_tile_init(cb_mask_w_idx);
+                    copy_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     mask_tile_init();
@@ -318,8 +320,8 @@ void kernel_main() {
     cb_wait_front(cb_mat_mul_reduce, onetile);
     cb_wait_front(cb_zero_idx, onetile);
 
-    init_sfpu(cb_input_idx, cb_dL_da_idx);
-    binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+    compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+    copy_init(cb_input_idx);
     reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);

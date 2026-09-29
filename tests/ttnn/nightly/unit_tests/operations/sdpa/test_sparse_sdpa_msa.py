@@ -573,6 +573,23 @@ def test_msa_native_determinism(device, q_dtype, kv_dtype):
     assert mismatch == 0.0, "sparse_sdpa_msa output is not deterministic across repeated runs"
 
 
+# Causal chunk_start_idx is hash-excluded (only causal on/off is hashed), so it must be re-applied on cache
+# hits. cs=BLK_KV shifts every query one block forward, changing which selected blocks are masked; each
+# dispatch must match its own reference (a frozen offset fails the second) while reusing one cached program.
+@run_for_blackhole()
+def test_msa_native_causal_chunk_start_no_recompile(device):
+    d, H, n_kv, S, nblk = _D, 64, 4, 320, 16
+    T = nblk * BLK_KV
+    device.clear_program_cache()
+    q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=nblk, d=d, causal=True, seed=31)
+    for cs in (0, BLK_KV):
+        gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5, causal=True, chunk_start_idx=cs)
+        out = run_op_msa_native(q, k, v, indices, device, chunk_start_idx=cs)
+        assert pcc(out, gold) > 0.99, f"chunk_start_idx={cs} pcc={pcc(out, gold)}"
+    n = device.num_program_cache_entries()
+    assert n == 1, f"changing chunk_start_idx recompiled: {n} entries (expected 1)"
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D})],

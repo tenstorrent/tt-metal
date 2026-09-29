@@ -46,11 +46,36 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
         "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.layout() == Layout::TILE) {
+        // ReshapeTileProgramFactory sizes its CBs and tile counts from the architectural 32x32
+        // constants, and the tile is absent from compute_program_hash, so a non-standard tile would
+        // both compile a mis-sized program and alias onto a cached 32x32 one.
+        const auto tile = input_tensor_a.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+            "reshape_on_device does not currently support tiles other than 32x32, got {}x{}",
+            tile.get_height(),
+            tile.get_width());
         TT_FATAL(
             input_tensor_a.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
             input_tensor_a.physical_volume(),
             TILE_HW);
+        // The tile reshape kernel reads/writes exactly one tile-padded volume: the reader maps every output tile
+        // back into the input by row-major position, so input and output must have the same tile-padded volume.
+        // Reshapes that change the tile padding (e.g. (1,1,1,1024) <-> (1,1,32,32)) break this contract: the writer
+        // and reader disagree on the tile count (deadlock) and the reader indexes input pages that do not exist
+        // (out-of-bounds NoC reads). Reject them here with a clear error instead of hanging; use ttnn::reshape for
+        // such shapes. Use the tile-aligned output padded shape (padded_output_shape is the unpadded logical shape
+        // when the caller does not pass an explicit padded shape, so it cannot be compared directly).
+        const uint64_t output_physical_volume =
+            compute_output_specs(operation_attributes, tensor_args).padded_shape().volume();
+        TT_FATAL(
+            input_tensor_a.physical_volume() == output_physical_volume,
+            "Tile reshape requires the input and output to have the same tile-padded physical volume, but got input "
+            "{} and output {}. Reshapes that change the tile padding are not supported on the tile path; use "
+            "ttnn::reshape instead.",
+            input_tensor_a.physical_volume(),
+            output_physical_volume);
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
         TT_FATAL(

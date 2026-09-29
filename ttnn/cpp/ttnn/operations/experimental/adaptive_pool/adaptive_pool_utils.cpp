@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <tt_stl/assert.hpp>
 
@@ -27,6 +28,13 @@ bool are_middle_kernels_uniform(const std::vector<uint32_t>& kernels) {
     return true;
 }
 
+// PyTorch adaptive pooling window for one output index.
+std::pair<uint32_t, uint32_t> pytorch_adaptive_window(uint32_t idx, uint32_t input_size, uint32_t output_size) {
+    uint32_t start = (idx * input_size) / output_size;
+    uint32_t end = ((idx + 1) * input_size + output_size - 1) / output_size;
+    return {start, end};
+}
+
 // Helper function designed to generate the kernel sizes for each output elements the same way it is
 // calculated in pytorch implementation
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_patterns(
@@ -35,40 +43,53 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_
 
     // Height kernel pattern
     for (uint32_t out_h = 0; out_h < output_h; out_h++) {
-        uint32_t start_h = (out_h * input_h) / output_h;
-        uint32_t end_h = ((out_h + 1) * input_h + output_h - 1) / output_h;
+        auto [start_h, end_h] = pytorch_adaptive_window(out_h, input_h, output_h);
         h_kernels.push_back(end_h - start_h);
     }
 
     // Width kernel pattern
     for (uint32_t out_w = 0; out_w < output_w; out_w++) {
-        uint32_t start_w = (out_w * input_w) / output_w;
-        uint32_t end_w = ((out_w + 1) * input_w + output_w - 1) / output_w;
+        auto [start_w, end_w] = pytorch_adaptive_window(out_w, input_w, output_w);
         w_kernels.push_back(end_w - start_w);
     }
 
     return {h_kernels, w_kernels};
 }
 
-// Helper function designed to generate the stride values for each output elements the same way it is
-// calculated in pytorch implementation
-std::vector<uint32_t> calculate_actual_stride_patterns(
-    uint32_t /*input_size*/,
+// A uniform pool2d window, including border padding, covers the same input range as PyTorch.
+bool pool2d_windows_match_adaptive(
+    uint32_t input_size,
     uint32_t output_size,
-    uint32_t /*kernel_size*/,
+    uint32_t kernel_size,
     uint32_t stride,
-    uint32_t /*pad_before*/,
-    uint32_t /*pad_after*/) {
-    std::vector<uint32_t> actual_strides;
-
-    // Calculate the actual start positions in the padded input for each output
-    for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {
-        uint32_t prev_start = (out_idx - 1) * stride;
-        uint32_t curr_start = out_idx * stride;
-        actual_strides.push_back(curr_start - prev_start);
+    uint32_t pad_before,
+    uint32_t pad_after) {
+    if (stride == 0) {
+        return false;
     }
 
-    return actual_strides;
+    uint32_t padded_size = input_size + pad_before + pad_after;
+    if (kernel_size > padded_size) {
+        return false;
+    }
+    uint32_t produced_size = ((padded_size - kernel_size) / stride) + 1;
+    if (produced_size != output_size) {
+        return false;
+    }
+
+    for (uint32_t out_idx = 0; out_idx < output_size; out_idx++) {
+        auto [start, end] = pytorch_adaptive_window(out_idx, input_size, output_size);
+
+        // Corresponding pool2d window mapped back onto the unpadded input
+        int32_t pool_start = static_cast<int32_t>(out_idx * stride) - static_cast<int32_t>(pad_before);
+        int32_t pool_end = pool_start + static_cast<int32_t>(kernel_size);
+        uint32_t covered_start = static_cast<uint32_t>(std::max(pool_start, 0));
+        uint32_t covered_end = static_cast<uint32_t>(std::min(std::max(pool_end, 0), static_cast<int32_t>(input_size)));
+        if (covered_start != start || covered_end != end) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Adaptive pool params carry the information which is needed by pool2d but not given as arguments of the adaptive pool
@@ -148,17 +169,6 @@ AdaptivePoolingParams calculate_adaptive_pool_params(
         params.padding = {pad_top, pad_bottom, pad_left, pad_right};
     }
 
-    uint32_t padded_h = input_h + params.padding[0] + params.padding[1];
-    uint32_t padded_w = input_w + params.padding[2] + params.padding[3];
-    uint32_t final_out_h = ((padded_h - params.kernel_size[0]) / params.stride[0]) + 1;
-    uint32_t final_out_w = ((padded_w - params.kernel_size[1]) / params.stride[1]) + 1;
-
-    if (final_out_h != output_h || final_out_w != output_w) {
-        params.kernel_size = {base_kernel_h, base_kernel_w};
-        params.stride = {base_stride_h, base_stride_w};
-        params.padding = {0, 0, 0, 0};
-    }
-
     return params;
 }
 
@@ -180,27 +190,14 @@ bool are_borders_correctable_with_padding(const std::vector<uint32_t>& kernels) 
 bool validate_pooling_params_uniformity(
     const AdaptivePoolingParams& params, uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
     // Check height dimension
-    auto h_actual_strides = calculate_actual_stride_patterns(
+    bool h_uniform = pool2d_windows_match_adaptive(
         input_h, output_h, params.kernel_size[0], params.stride[0], params.padding[0], params.padding[1]);
 
     // Check width dimension
-    auto w_actual_strides = calculate_actual_stride_patterns(
+    bool w_uniform = pool2d_windows_match_adaptive(
         input_w, output_w, params.kernel_size[1], params.stride[1], params.padding[2], params.padding[3]);
 
-    // All strides should be exactly the same (since we're using fixed stride)
-    for (uint32_t stride : h_actual_strides) {
-        if (stride != params.stride[0]) {
-            return false;
-        }
-    }
-
-    for (uint32_t stride : w_actual_strides) {
-        if (stride != params.stride[1]) {
-            return false;
-        }
-    }
-
-    return true;
+    return h_uniform && w_uniform;
 }
 
 // Validation function to check if adaptive pooling approach is feasible

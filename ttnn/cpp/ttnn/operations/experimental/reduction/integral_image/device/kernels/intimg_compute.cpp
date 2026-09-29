@@ -71,14 +71,14 @@ FORCE_INLINE void cumsum_cube_axis_2(
 
     bool enable_reload = false;
 
-    binary_op_init_common(cb_input, cb_acc, cb_cumsum_stage_0);
+    compute_kernel_hw_startup(cb_input, cb_acc, cb_cumsum_stage_0);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
         const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
         input_cb.wait_front(ONE_TILE);
 
-        add_tiles_init(cb_input, cb_op);
+        add_init(cb_input, cb_op);
         add_tiles(cb_input, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         input_cb.pop_front(ONE_TILE);
@@ -99,7 +99,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
         tile_regs_acquire();
 
         acc_cb.wait_front(ONE_TILE);
-        copy_tile_init(cb_acc);
+        copy_init(cb_acc);
         copy_tile(cb_acc, FIRST_TILE, WORKING_REG);
 
         tile_regs_commit();
@@ -127,7 +127,7 @@ FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_c
         ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, ONE_TILE};
         WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, ONE_TILE};
         tile_regs_acquire();
-        copy_tile_init(cb_cumsum_stage_wip);
+        copy_init(cb_cumsum_stage_wip);
         copy_tile(cb_cumsum_stage_wip, FIRST_TILE, WORKING_REG);
 
         cumsum_tile_init();
@@ -156,7 +156,7 @@ FORCE_INLINE void propagate_tile_into_cube(
         WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
         tile_regs_acquire();
 
-        add_tiles_init(cb_axis_2_buffer, cb_cumsum_stage_a);
+        add_init(cb_axis_2_buffer, cb_cumsum_stage_a);
         add_tiles(cb_axis_2_buffer, cb_cumsum_stage_a, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         tile_regs_commit();
@@ -189,7 +189,9 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read);
 
         constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
 
