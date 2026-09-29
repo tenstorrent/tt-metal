@@ -47,7 +47,8 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id,
     const std::vector<tt::tt_metal::IDevice*>& physical_devices,
-    std::chrono::microseconds active_spin = {});
+    std::chrono::microseconds active_spin = {},
+    const char* name = "pool");
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.

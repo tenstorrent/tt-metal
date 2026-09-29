@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/threading/thread_pool.hpp"
+#include "impl/threading/dispatch_stats.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -350,6 +351,23 @@ public:
         }
     }
 
+    // TT_METAL_DISPATCH_STATS measurement (#57586), written only by the worker thread.
+    struct WorkerStats {
+        dispatch_stats::Log2Hist pickup_after_park_ns, pickup_awake_ns, idle_gap_ns, task_ns;
+        uint64_t parks = 0;
+    };
+    void stats_on_start(uint64_t submit_ns) {
+        const uint64_t now = dispatch_stats::now_ns();
+        const uint64_t latency = now > submit_ns ? now - submit_ns : 0;
+        (stats_parked_ ? stats_.pickup_after_park_ns : stats_.pickup_awake_ns).add(latency);
+        if (stats_last_done_ns_ != 0 && submit_ns > stats_last_done_ns_) {
+            stats_.idle_gap_ns.add(submit_ns - stats_last_done_ns_);
+        }
+        stats_parked_ = false;
+    }
+    void stats_task(uint64_t ns) { stats_.task_ns.add(ns); }
+    const WorkerStats& stats() const { return stats_; }
+
     // The physical core the worker is pinned to, if sysfs says.
     const std::optional<std::pair<int, int>>& core() const { return core_; }
 
@@ -360,6 +378,9 @@ private:
     void run();
 
     void note_work_done() {
+        if (dispatch_stats::enabled()) {
+            stats_last_done_ns_ = dispatch_stats::now_ns();
+        }
         if (active_spin_.count() > 0) {
             last_work_ = std::chrono::steady_clock::now();
         }
@@ -386,6 +407,8 @@ private:
         parked_.store(1, std::memory_order_seq_cst);
         if (!has_work() && !shutdown_.load(std::memory_order_seq_cst)) {
             futex_wait(parked_, 1);
+            stats_parked_ = true;
+            stats_.parks++;
         }
         parked_.store(0, std::memory_order_relaxed);
         // Work that comes back soon after the worker parked finds its core in a deep idle state, and the slow wake
@@ -410,6 +433,9 @@ private:
     std::chrono::steady_clock::time_point last_work_;
     std::exception_ptr stored_exception_;
     std::optional<std::pair<int, int>> core_;
+    WorkerStats stats_;
+    uint64_t stats_last_done_ns_ = 0;
+    bool stats_parked_ = false;
 };
 
 // State of one parallel_for call, shared by the caller and the participating workers. Workers can still hold
@@ -444,6 +470,8 @@ public:
 
     const std::vector<NumaAwareExecutor*>& participants() const { return participants_; }
 
+    uint64_t submit_ns = 0;  // TT_METAL_DISPATCH_STATS
+
     // Takes one reference for the caller and one for the first participant, which the caller offers the job to.
     // Each participant offers it to the ones it wakes, taking a reference for each.
     void start() { refs_.store(2, std::memory_order_relaxed); }
@@ -458,8 +486,15 @@ public:
             for_each_child(position, [this](size_t child) { wake_subtree(child); });
             int64_t ran = 0;
             for (size_t call = 0; call < executor_of_call_.size(); call++) {
-                if (executor_of_call_[call] == executor && run(call)) {
+                if (executor_of_call_[call] != executor) {
+                    continue;
+                }
+                const uint64_t t0 = dispatch_stats::enabled() ? dispatch_stats::now_ns() : 0;
+                if (run(call)) {
                     ran++;
+                    if (dispatch_stats::enabled()) {
+                        executor->stats_task(dispatch_stats::now_ns() - t0);
+                    }
                 }
             }
             completed(ran);
@@ -586,6 +621,9 @@ inline void NumaAwareExecutor::run() {
         }
         if (job_.load(std::memory_order_relaxed) != nullptr) {
             if (auto* job = job_.exchange(nullptr, std::memory_order_acquire)) {
+                if (dispatch_stats::enabled()) {
+                    stats_on_start(job->submit_ns);
+                }
                 job->run_participant(this);
                 note_work_done();
             }
@@ -616,8 +654,9 @@ public:
     DeviceBoundThreadPool(
         ContextId context_id,
         const std::vector<tt::tt_metal::IDevice*>& physical_devices,
-        std::chrono::microseconds active_spin = {}) :
-        num_workers_(physical_devices.size()) {
+        std::chrono::microseconds active_spin = {},
+        const char* name = "pool") :
+        name_(name), num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(
@@ -648,6 +687,34 @@ public:
         for (auto& worker : workers_) {
             worker->stop();
         }
+        if (dispatch_stats::enabled()) {
+            dispatch_stats::emit(stats_json(true));
+        }
+    }
+
+    // Worker histograms are read without synchronization for snapshots, so those are approximate.
+    std::string stats_json(bool final) const {
+        NumaAwareExecutor::WorkerStats all;
+        for (const auto& worker : workers_) {
+            const auto& w = worker->stats();
+            all.pickup_after_park_ns.merge(w.pickup_after_park_ns);
+            all.pickup_awake_ns.merge(w.pickup_awake_ns);
+            all.idle_gap_ns.merge(w.idle_gap_ns);
+            all.task_ns.merge(w.task_ns);
+            all.parks += w.parks;
+        }
+        return "{\"kind\":\"pool\",\"final\":" + std::string(final ? "true" : "false") +
+               ",\"instance\":" + std::to_string(stats_instance_) + ",\"name\":\"" + name_ +
+               "\",\"workers\":" + std::to_string(num_workers_) + ",\"fan_outs\":" + std::to_string(stats_.fan_outs) +
+               ",\"enqueues\":" + std::to_string(stats_.enqueues) + ",\"worker_parks\":" + std::to_string(all.parks) +
+               ",\"calls_per_fan_out\":" + stats_.calls_per_fan_out.json() +
+               ",\"calls_by_caller\":" + stats_.calls_by_caller.json() + ",\"fan_out_ns\":" + stats_.fan_out_ns.json() +
+               ",\"join_ns\":" + stats_.join_ns.json() + ",\"caller_task_ns\":" + stats_.caller_task_ns.json() +
+               ",\"fan_out_gap_ns\":" + stats_.fan_out_gap_ns.json() + ",\"wait_ns\":" + stats_.wait_ns.json() +
+               ",\"tasks_per_wait\":" + stats_.tasks_per_wait.json() + ",\"worker_task_ns\":" + all.task_ns.json() +
+               ",\"pickup_after_park_ns\":" + all.pickup_after_park_ns.json() +
+               ",\"pickup_awake_ns\":" + all.pickup_awake_ns.json() +
+               ",\"worker_idle_gap_ns\":" + all.idle_gap_ns.json() + "}";
     }
 
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
@@ -658,6 +725,17 @@ public:
         uint32_t thread_id =
             device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
         completion_.add();
+        if (dispatch_stats::enabled()) {
+            stats_.enqueues++;
+            stats_.tasks_since_wait++;
+            auto* worker = workers_[thread_id].get();
+            f = [f = std::move(f), submit = dispatch_stats::now_ns(), worker]() {
+                worker->stats_on_start(submit);
+                const uint64_t t0 = dispatch_stats::now_ns();
+                f();
+                worker->stats_task(dispatch_stats::now_ns() - t0);
+            };
+        }
         workers_[thread_id]->enqueue(std::move(f));
     }
 
@@ -670,7 +748,9 @@ public:
             fn(0);
             return;
         }
+        const uint64_t stats_start_ns = dispatch_stats::enabled() ? dispatch_stats::now_ns() : 0;
         auto* job = new ParallelJob(fn, device_ids.size());
+        job->submit_ns = stats_start_ns;
         // A worker pinned to the caller's physical core would take CPU time from the caller, so the caller runs its
         // calls instead. An unpinned caller can land on a pool core, for example when woken by a pinned thread.
         const auto* caller_core = core_of_calling_thread();
@@ -693,19 +773,49 @@ public:
         // has claimed, so the job finishes even if some workers are never woken.
         int64_t ran = 0;
         for (size_t call = device_ids.size(); call-- > 0;) {
+            const uint64_t t0 = stats_start_ns != 0 ? dispatch_stats::now_ns() : 0;
             if (job->run(call)) {
                 ran++;
+                if (stats_start_ns != 0) {
+                    stats_.caller_task_ns.add(dispatch_stats::now_ns() - t0);
+                }
             }
         }
         job->completed(ran);
-        if (auto exception = job->finish()) {
+        const uint64_t stats_join_ns = stats_start_ns != 0 ? dispatch_stats::now_ns() : 0;
+        auto exception = job->finish();
+        if (stats_start_ns != 0) {
+            const uint64_t end = dispatch_stats::now_ns();
+            stats_.fan_outs++;
+            stats_.calls_per_fan_out.add(device_ids.size());
+            stats_.calls_by_caller.add(static_cast<uint64_t>(ran));
+            stats_.fan_out_ns.add(end - stats_start_ns);
+            stats_.join_ns.add(end - stats_join_ns);
+            if (stats_.last_fan_out_end_ns != 0) {
+                stats_.fan_out_gap_ns.add(stats_start_ns - stats_.last_fan_out_end_ns);
+            }
+            stats_.last_fan_out_end_ns = end;
+            if (dispatch_stats::snapshot_due(stats_.last_snapshot_ns)) {
+                dispatch_stats::emit(stats_json(false));
+            }
+        }
+        if (exception) {
             std::rethrow_exception(exception);
         }
     }
 
     void wait() override {
         thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
+        const uint64_t stats_wait_start_ns = dispatch_stats::enabled() ? dispatch_stats::now_ns() : 0;
         completion_.wait();
+        if (stats_wait_start_ns != 0) {
+            stats_.wait_ns.add(dispatch_stats::now_ns() - stats_wait_start_ns);
+            stats_.tasks_per_wait.add(stats_.tasks_since_wait);
+            stats_.tasks_since_wait = 0;
+            if (dispatch_stats::snapshot_due(stats_.last_snapshot_ns)) {
+                dispatch_stats::emit(stats_json(false));
+            }
+        }
         // Rethrow the first exception in the calling thread.
         std::exception_ptr exception;
         for (auto& worker : workers_) {
@@ -743,6 +853,16 @@ private:
         }
         return cores;
     }
+
+    // TT_METAL_DISPATCH_STATS measurement (#57586), written only by the pool's caller.
+    struct CallerStats {
+        dispatch_stats::Log2Hist fan_out_ns, join_ns, caller_task_ns, fan_out_gap_ns, wait_ns;
+        dispatch_stats::CountHist calls_per_fan_out, calls_by_caller, tasks_per_wait;
+        uint64_t fan_outs = 0, enqueues = 0, tasks_since_wait = 0, last_fan_out_end_ns = 0, last_snapshot_ns = 0;
+    };
+    const uint64_t stats_instance_ = dispatch_stats::next_instance_id();
+    std::string name_ = "pool";
+    CallerStats stats_;
 
     // Declared before the executors so that it outlives them.
     Completion completion_;
@@ -784,8 +904,9 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id,
     const std::vector<tt::tt_metal::IDevice*>& physical_devices,
-    std::chrono::microseconds active_spin) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, active_spin);
+    std::chrono::microseconds active_spin,
+    const char* name) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, active_spin, name);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {

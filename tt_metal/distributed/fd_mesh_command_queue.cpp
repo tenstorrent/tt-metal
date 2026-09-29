@@ -5,6 +5,7 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_stl/fmt.hpp>
 #include "fd_mesh_command_queue.hpp"
+#include "impl/threading/dispatch_stats.hpp"
 
 #include <chrono>
 
@@ -189,6 +190,45 @@ struct MeshCoreDataReadDescriptor {
     MeshCoordinate device_coord;
 };
 
+struct FDMeshCommandQueue::DispatchStats {
+    using Log2Hist = dispatch_stats::Log2Hist;
+    using CountHist = dispatch_stats::CountHist;
+    uint64_t first_ns = 0;
+    uint64_t last_end_ns = 0;
+    uint64_t enqueues = 0;
+    uint64_t first_enqueues = 0;
+    uint64_t trace_captures = 0;
+    uint64_t index = 0;
+    std::unordered_map<uint64_t, uint64_t> last_index_of_workload;
+    Log2Hist call_ns, first_call_ns, pre_ns, lock_wait_ns, body_ns, write_ns, write_ns_per_device, bytes_per_device,
+        gap_ns, repeat_distance, trace_call_ns, trace_replay_ns, trace_replay_gap_ns;
+    CountHist devices, programs;
+    uint64_t trace_replays = 0;
+    uint64_t last_trace_end_ns = 0;
+    uint64_t last_snapshot_ns = 0;
+    const uint64_t instance = dispatch_stats::next_instance_id();
+
+    std::string json(uint32_t queue_id, bool final) const {
+        const uint64_t wall = last_end_ns > first_ns ? last_end_ns - first_ns : 0;
+        return "{\"kind\":\"emw\",\"final\":" + std::string(final ? "true" : "false") +
+               ",\"instance\":" + std::to_string(instance) + ",\"queue\":" + std::to_string(queue_id) +
+               ",\"wall_ns\":" + std::to_string(wall) + ",\"enqueues\":" + std::to_string(enqueues) +
+               ",\"first_enqueues\":" + std::to_string(first_enqueues) +
+               ",\"trace_captures\":" + std::to_string(trace_captures) +
+               ",\"trace_replays\":" + std::to_string(trace_replays) +
+               ",\"distinct_workloads\":" + std::to_string(last_index_of_workload.size()) +
+               ",\"call_ns\":" + call_ns.json() + ",\"first_call_ns\":" + first_call_ns.json() +
+               ",\"pre_ns\":" + pre_ns.json() + ",\"lock_wait_ns\":" + lock_wait_ns.json() +
+               ",\"body_ns\":" + body_ns.json() + ",\"write_ns\":" + write_ns.json() +
+               ",\"write_ns_per_device\":" + write_ns_per_device.json() +
+               ",\"bytes_per_device\":" + bytes_per_device.json() + ",\"gap_ns\":" + gap_ns.json() +
+               ",\"repeat_distance\":" + repeat_distance.json() + ",\"trace_call_ns\":" + trace_call_ns.json() +
+               ",\"trace_replay_ns\":" + trace_replay_ns.json() +
+               ",\"trace_replay_gap_ns\":" + trace_replay_gap_ns.json() + ",\"devices\":" + devices.json() +
+               ",\"programs\":" + programs.json() + "}";
+    }
+};
+
 FDMeshCommandQueue::FDMeshCommandQueue(
     MeshDevice* mesh_device,
     uint32_t id,
@@ -238,6 +278,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
+    if (dispatch_stats_) {
+        dispatch_stats::emit(dispatch_stats_->json(id_, true));
+    }
     // Mock/emulated devices don't have actual completion queues, skip validation
     auto target_type = this->get_target_device_type();
     bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
@@ -411,9 +454,21 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
+    const uint64_t stats_entry_ns = dispatch_stats::enabled() ? dispatch_stats::now_ns() : 0;
     auto lock = lock_api_function_();
+    const uint64_t stats_locked_ns = dispatch_stats::enabled() ? dispatch_stats::now_ns() : 0;
     // Called directly rather than through EnqueueMeshWorkload, the time starts here.
     auto enqueue_start = std::exchange(mesh_workload.impl().enqueue_start_, {});
+    uint64_t stats_start_ns = stats_entry_ns;
+    if (dispatch_stats::enabled()) {
+        if (!dispatch_stats_) {
+            dispatch_stats_ = std::make_unique<DispatchStats>();
+        }
+        if (enqueue_start != std::chrono::steady_clock::time_point{}) {
+            stats_start_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(enqueue_start.time_since_epoch()).count();
+        }
+    }
     if (fan_out_program_writes_ && enqueue_start == std::chrono::steady_clock::time_point{}) {
         enqueue_start = std::chrono::steady_clock::now();
     }
@@ -473,6 +528,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
         trace_node.sub_device_id = sub_device_id;
+        if (dispatch_stats_) {
+            dispatch_stats_->trace_captures++;
+            dispatch_stats_->trace_call_ns.add(dispatch_stats::now_ns() - stats_start_ns);
+        }
         return;
     }
 
@@ -613,6 +672,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     const bool choose_fan_out = fan_out_program_writes_ && device_program_writes_.size() > 1;
     const bool fan_out = choose_fan_out && fan_out_choice_.fans_out();
+    const uint64_t stats_write_start_ns = dispatch_stats_ ? dispatch_stats::now_ns() : 0;
     if (fan_out) {
         dispatch_thread_pool_->parallel_for(device_program_write_ids_, [this, &dispatch_metadata](size_t i) {
             const auto& write = device_program_writes_[i];
@@ -633,6 +693,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 dispatch_metadata.stall_before_program);
         }
     }
+
+    const uint64_t stats_write_end_ns = dispatch_stats_ ? dispatch_stats::now_ns() : 0;
 
     // Remember when this CrossNode launch will complete so a later re-enqueue of the
     // same program can wait only for that launch.
@@ -672,6 +734,49 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
+    }
+    if (dispatch_stats_) {
+        auto& st = *dispatch_stats_;
+        const uint64_t end_ns = dispatch_stats::now_ns();
+        const bool first = program_binary_status != ProgramBinaryStatus::Committed;
+        if (st.first_ns == 0) {
+            st.first_ns = stats_start_ns;
+        }
+        if (st.last_end_ns != 0 && stats_start_ns > st.last_end_ns) {
+            st.gap_ns.add(stats_start_ns - st.last_end_ns);
+        }
+        st.last_end_ns = end_ns;
+        const uint64_t id = mesh_workload.impl().get_id();
+        auto [it, inserted] = st.last_index_of_workload.try_emplace(id, st.index);
+        if (!inserted) {
+            st.repeat_distance.add(st.index - it->second);
+            it->second = st.index;
+        }
+        st.index++;
+        if (first) {
+            st.first_enqueues++;
+            st.first_call_ns.add(end_ns - stats_start_ns);
+        } else {
+            st.enqueues++;
+            st.call_ns.add(end_ns - stats_start_ns);
+            st.pre_ns.add(stats_entry_ns - stats_start_ns);
+            st.lock_wait_ns.add(stats_locked_ns - stats_entry_ns);
+            st.body_ns.add(end_ns - stats_locked_ns);
+            const uint64_t write = stats_write_end_ns - stats_write_start_ns;
+            st.write_ns.add(write);
+            const size_t n = device_program_writes_.size();
+            st.devices.add(n);
+            st.programs.add(mesh_workload.get_programs().size());
+            if (n > 0) {
+                st.write_ns_per_device.add(write / n);
+                for (const auto& w : device_program_writes_) {
+                    st.bytes_per_device.add(w.one_shot_size);
+                }
+            }
+        }
+        if (dispatch_stats::snapshot_due(st.last_snapshot_ns)) {
+            dispatch_stats::emit(st.json(id_, false));
+        }
     }
 }
 
@@ -1509,6 +1614,7 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
 }
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
+    const uint64_t stats_trace_start_ns = dispatch_stats::enabled() ? dispatch_stats::now_ns() : 0;
     auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
@@ -1548,6 +1654,22 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
 
     if (blocking) {
         this->finish_nolock();
+    }
+    if (dispatch_stats::enabled()) {
+        if (!dispatch_stats_) {
+            dispatch_stats_ = std::make_unique<DispatchStats>();
+        }
+        auto& st = *dispatch_stats_;
+        const uint64_t end_ns = dispatch_stats::now_ns();
+        st.trace_replays++;
+        st.trace_replay_ns.add(end_ns - stats_trace_start_ns);
+        if (st.last_trace_end_ns != 0) {
+            st.trace_replay_gap_ns.add(stats_trace_start_ns - st.last_trace_end_ns);
+        }
+        st.last_trace_end_ns = end_ns;
+        if (dispatch_stats::snapshot_due(st.last_snapshot_ns)) {
+            dispatch_stats::emit(st.json(id_, false));
+        }
     }
 }
 

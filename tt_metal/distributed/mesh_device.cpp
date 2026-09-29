@@ -96,12 +96,15 @@ int generate_unique_mesh_id() {
 
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id, const std::vector<IDevice*>& physical_devices, std::chrono::microseconds active_spin = {}) {
+    ContextId context_id,
+    const std::vector<IDevice*>& physical_devices,
+    std::chrono::microseconds active_spin = {},
+    const char* name = "pool") {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices, active_spin);
+    return create_device_bound_thread_pool(context_id, physical_devices, active_spin, name);
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -371,8 +374,10 @@ MeshDeviceImpl::MeshDeviceImpl(
     dispatch_thread_pool_(create_default_thread_pool(
         context_id_,
         extract_locals(scoped_devices_->root_devices()),
-        std::chrono::microseconds(MetalContext::instance(context_id_).rtoptions().get_dispatch_pool_active_spin_us()))),
-    reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
+        std::chrono::microseconds(MetalContext::instance(context_id_).rtoptions().get_dispatch_pool_active_spin_us()),
+        "dispatch")),
+    reader_thread_pool_(create_default_thread_pool(
+        context_id_, extract_locals(scoped_devices_->root_devices()), std::chrono::microseconds{}, "reader")),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =

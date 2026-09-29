@@ -242,6 +242,9 @@ private:
         bool fans_out() const { return phase == Phase::Steady ? fan_out : phase == Phase::ProbeFanOut; }
     };
     FanOutChoice fan_out_choice_;
+    // TT_METAL_DISPATCH_STATS measurement (#57586); null unless enabled.
+    struct DispatchStats;
+    std::unique_ptr<DispatchStats> dispatch_stats_;
     void update_fan_out_choice(
         uint64_t workload_id, bool first_enqueue, std::chrono::steady_clock::time_point enqueue_start, bool fanned_out);
 
