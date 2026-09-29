@@ -17,6 +17,8 @@ void kernel_main() {
     auto batch_end = get_arg(args::batch_end);
     auto seq_t_start = get_arg(args::seq_t_start);
     auto seq_t_end = get_arg(args::seq_t_end);
+    auto head_start = get_arg(args::head_start);
+    auto head_end = get_arg(args::head_end);
 
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto Wt = get_arg(args::Wt);
@@ -51,7 +53,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
-        for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
+        for (uint32_t head_num = head_start; head_num < head_end; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
                 uint32_t output_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 const bool write_rotary_output = seq_tile < rotary_Ht;
