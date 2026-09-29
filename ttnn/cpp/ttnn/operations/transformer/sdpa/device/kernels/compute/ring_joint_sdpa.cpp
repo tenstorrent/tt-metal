@@ -224,7 +224,7 @@ void kernel_main() {
     static_assert(!(ksplit_enabled && seg_accum_enabled));
     static_assert(
         !(ksplit_enabled || seg_accum_enabled) ||
-        (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+        (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
     // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
@@ -409,7 +409,7 @@ void kernel_main() {
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
         if constexpr (ksplit_enabled) {
-            if (ksplit_active) {
+            if (ksplit_active && !has_sliding_window) {
                 const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
                     kv_pad_rotation_enabled,
                     chunked_enabled,
@@ -628,7 +628,17 @@ void kernel_main() {
                 /*q_base_tiles=*/0,
                 rotated_slots,
                 ksplit_k_range.begin,
-                ksplit_k_range.end);
+                ksplit_k_range.end,
+                ksplit_active ? ksplit_idx : 0,
+                ksplit_active ? ksplit_count : 1);
+            if constexpr (has_sliding_window && ksplit_enabled) {
+                // Sliding bands split the unit's work plan, which can be shorter than the band count near the
+                // sequence start: an empty band stages no state.
+                if (ksplit_active) {
+                    seen_active_iter = acc_state.last_call_k_chunks > 0;
+                    ksplit_max_valid = acc_state.sliding_plan_k_chunks;
+                }
+            }
             if constexpr (seg_accum_enabled) {
                 // Fold this iteration's state (acc_state.prev) into the long-term state held in the restore CBs.
                 if (seg_active && acc_state.last_call_k_chunks > 0) {
@@ -774,7 +784,10 @@ void kernel_main() {
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                    if (ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count).empty()) {
+                    const auto sender_range = has_sliding_window
+                                                  ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
+                                                  : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count);
+                    if (sender_range.empty()) {
                         for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
                             CircularBuffer(cb).wait_front(Sq_chunk_t);
                             sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
