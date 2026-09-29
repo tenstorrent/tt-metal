@@ -106,6 +106,15 @@ inline std::uint16_t datum_at(std::uint32_t r, std::uint32_t c, std::uint32_t pa
     return static_cast<std::uint16_t>(0x4000u | ((r * pad_w + c) & 0x1FFFu));
 }
 
+// Reads datum `index` back out of the packed uint32 words L1 hands us, even datum in the low
+// half -- the same convention make_tilized_input() packs with, which is why this is a shift
+// and not a uint16_t* view of the words. That view would alias uint32 storage through a
+// non-character type, which the standard does not allow and an optimizer may act on, and it
+// would quietly make the golden comparison depend on host endianness.
+inline std::uint16_t datum_from_words(const std::vector<std::uint32_t>& words, std::size_t index) {
+    return static_cast<std::uint16_t>(words[index / 2] >> (16 * (index % 2)));
+}
+
 // Tilized stimulus for a ct_dim-wide tile-row, in the layout the unpacker expects: per tile,
 // four 16x16 faces in order top-left, top-right, bottom-left, bottom-right, each row-major,
 // two datums per uint32 with the even datum in the low half. Matches gold_standard_tilize;
@@ -336,15 +345,13 @@ bool run_narrow_row(
             read_bytes);
         return false;
     }
-    const auto* out_datums = reinterpret_cast<const std::uint16_t*>(out_words.data());
-
     std::uint32_t bad = 0;
     std::uint32_t first_bad_r = 0, first_bad_c = 0;
     std::uint16_t first_bad_got = 0, first_bad_want = 0;
     for (std::uint32_t r = 0; r < OUT_ROWS; r++) {
         for (std::uint32_t c = 0; c < matrix_w; c++) {
             const std::uint16_t want = datum_at(r, c, pad_w);
-            const std::uint16_t got = out_datums[r * matrix_w + c];
+            const std::uint16_t got = datum_from_words(out_words, static_cast<std::size_t>(r) * matrix_w + c);
             if (got != want) {
                 if (bad == 0) {
                     first_bad_r = r;
