@@ -72,6 +72,29 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+// scalar OP tensor. The tensor still occupies operand slot a on the device; the compute
+// kernel reads the scalar as the mathematical left operand, so this runs the same LLK as
+// the tensor-scalar form and keeps its dtype coverage.
+//
+// One macro serves all four ops because the declarations are identical,
+// fast_and_approximate_mode included; the ops differ only in how the impl defaults it, each
+// matching its own tensor-first overload: add and subtract resolve unset to the FPU kernel,
+// divide passes it through, and multiply passes it through except on block float, which runs
+// on the FPU only and so forces the mode regardless of the argument.
+#define TTNN_BINARY_OP_SCALAR_TENSOR(NAME, OP_TYPE)                                       \
+    Tensor NAME(                                                                          \
+        operations::unary::ScalarVariant lhs,                                             \
+        const Tensor& rhs,                                                                \
+        const std::optional<const DataType>& output_dtype = std::nullopt,                 \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
+        const std::optional<Tensor>& output = std::nullopt,                               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,              \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
 // Inplace binary op exposing fast_and_approximate_mode (Tensor-Tensor and Tensor-scalar,
 // calls invoke_binary_ng with output=lhs)
 #define TTNN_BINARY_OP_INPLACE_FAST_APPROX(NAME, OP_TYPE)                                 \
@@ -220,7 +243,8 @@ Tensor invoke_binary_ng(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& fast_and_approximate_mode = false,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    bool scalar_is_lhs = false);
 
 // Resolves the user-facing fast_and_approximate_mode flag for ADD/SUB/RSUB. These ops keep the
 // faster FPU kernel as their default, so an unset flag means `true`; passing `false` routes
@@ -242,9 +266,11 @@ Tensor invoke_binary_ng_isclose(
 
 TTNN_BINARY_OP_TENSOR_TENSOR_FAST_APPROX(add, ADD)
 TTNN_BINARY_OP_TENSOR_SCALAR_FAST_APPROX(add, ADD)
+TTNN_BINARY_OP_SCALAR_TENSOR(add, ADD)
 TTNN_BINARY_OP_INPLACE_FAST_APPROX(add_, ADD)
 TTNN_BINARY_OP_TENSOR_TENSOR_FAST_APPROX(subtract, SUB)
 TTNN_BINARY_OP_TENSOR_SCALAR_FAST_APPROX(subtract, SUB)
+TTNN_BINARY_OP_SCALAR_TENSOR(subtract, SUB)
 TTNN_BINARY_OP_INPLACE_FAST_APPROX(subtract_, SUB)
 TTNN_BINARY_OP_TENSOR_TENSOR(eq, EQ)
 Tensor eq(
@@ -396,6 +422,7 @@ Tensor divide(
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+TTNN_BINARY_OP_SCALAR_TENSOR(divide, DIV)
 Tensor divide_(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -440,6 +467,7 @@ Tensor multiply(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode);
 Tensor multiply(const Tensor& lhs, operations::unary::ScalarVariant rhs, bool fast_and_approximate_mode);
+TTNN_BINARY_OP_SCALAR_TENSOR(multiply, MUL)
 Tensor multiply_(
     const Tensor& lhs,
     const Tensor& rhs,

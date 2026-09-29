@@ -1,13 +1,8 @@
-# Files a Jira record when the Package and release workflow fails.
+# Files Jira records when the Package and release workflow fails.
 #
-# Watches the "Package and release" workflow; on a failed run it collects the
-# failed jobs and opens (or de-duplicates onto) a Jira issue via
-# create_jira_issue.py.
-#
-# TODO (specifics to be provided):
-#   - JIRA_ISSUE_TYPE        : issue type (default below: Bug)
-#   - WATCH_JOBS             : comma-separated job-name substrings that count as
-#                             "the tests and pipelines" (empty = any failed job)
+# Watches the "Package and release" workflow; on a failed run on a release ref
+# it opens one RELEASE ticket per failed job (or comments on the job's open
+# ticket), via release_failure_tickets.py. A green run on the ref closes them.
 #
 # Credentials (repo/org Actions secrets, scoped to this RELEASE-project automation
 # so other Jira projects can carry their own):
@@ -27,19 +22,24 @@ on:
         description: "Package and release workflow run id to file a Jira issue for (manual testing)"
         required: true
         type: string
+      dry-run:
+        description: "Print the Jira payload in the log instead of filing"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   actions: read
 
 env:
-  # Empty = file for any failed job. Narrow to the specific tests/pipelines later.
-  WATCH_JOBS: ""
   JIRA_ISSUE_TYPE: "Bug"
 
 jobs:
   file-jira:
-    # Only when the watched run failed (or a manual test dispatch).
+    # Failed run, or a manual dispatch for testing. The release-ref check lives
+    # in the script, which resolves the branch from the run itself so both
+    # paths are covered.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
@@ -47,68 +47,71 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
 
-      - name: Collect failed jobs from the package-and-release run
-        id: collect
+      # One ticket per failed job. The script resolves the branch from the run
+      # itself (so workflow_run and workflow_dispatch are gated alike -- only
+      # main, stable and the version tags reach the board), drops failures that
+      # carry no test result, and attaches each job's owner and the root cause
+      # from the run's AI Summary artifact.
+      - name: File one Jira issue per failed job
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          # Failed job names (optionally filtered to the watched set). Capture
-          # first: a gh failure inside <(...) would leave `failed` empty and be
-          # read as "nothing to file".
-          if ! names=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
-            --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out") | .name'); then
-            echo "::error::could not list jobs for run $RUN_ID"
-            exit 1
-          fi
-          mapfile -t failed < <(printf '%s' "$names")
-          if [ -n "${WATCH_JOBS}" ]; then
-            filtered=()
-            IFS=',' read -ra pats <<< "$WATCH_JOBS"
-            for j in "${failed[@]}"; do
-              for p in "${pats[@]}"; do [[ "$j" == *"$(echo "$p" | xargs)"* ]] && filtered+=("$j") && break; done
-            done
-            failed=("${filtered[@]}")
-          fi
-          if [ "${#failed[@]}" -eq 0 ]; then
-            echo "No watched jobs failed; nothing to file."
-            echo "file=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "file=true" >> "$GITHUB_OUTPUT"
-          {
-            echo "summary=Package and release failed on ${HEAD_BRANCH:-unknown} (${#failed[@]} job(s))"
-            echo "description<<EOF"
-            echo "The Package and release workflow failed."
-            echo "Branch: ${HEAD_BRANCH:-unknown}"
-            echo "Commit: ${HEAD_SHA:-unknown}"
-            echo "Run: ${RUN_URL:-manual dispatch}"
-            echo "Failed jobs:"
-            for j in "${failed[@]}"; do echo "- $j"; done
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: File Jira issue
-        if: ${{ steps.collect.outputs.file == 'true' }}
-        env:
           JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
           JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: ${{ env.JIRA_ISSUE_TYPE }}
-          JIRA_SUMMARY: ${{ steps.collect.outputs.summary }}
-          JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
-          JIRA_LABELS: "ci-failure,package-and-release"
-          # While one issue is open for this pipeline, later failures comment on it.
-          JIRA_DEDUP_LABEL: "package-release-failure"
+          # Everything lands on one owner for triage, who reassigns. Override
+          # with the repo variable rather than editing this file.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
+          # False for workflow_run events: the expression only reads true on a
+          # manual dispatch that asked for it.
+          JIRA_DRY_RUN: ${{ inputs.dry-run && '1' || '' }}
         run: |
+          set -euo pipefail
+          # job_owners reads the pipeline_reorg YAML.
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          python3 .github/actions/scripts/release_failure_tickets.py
+
+  # The mirror of file-jira: a green run on a release ref means the failure is
+  # gone, so the open ticket(s) for that ref are closed with a comment linking
+  # the green run.
+  close-jira:
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Close open Jira issues for this release ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ACTION: "close"
+        run: |
+          set -euo pipefail
+          # Same release-ref gate as the collect step above: only release refs
+          # ever filed a ticket, so only they have anything to close.
+          BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
+          case "$BRANCH" in
+            main|stable|v[0-9]*) ;;
+            *)
+              echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to close."
+              exit 0 ;;
+          esac
           if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
-            echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
+            echo "::notice::JIRA_RELEASE_* secrets not configured; skipping."
             exit 0
           fi
-          python3 .github/actions/scripts/create_jira_issue.py
+          export JIRA_DEDUP_LABEL="package-release-ref:$BRANCH"
+          export JIRA_COMMENT="Package and release is green again on $BRANCH: run [$RUN_ID]($RUN_URL) passed. Closing."
+          python3 .github/actions/scripts/jira_client.py

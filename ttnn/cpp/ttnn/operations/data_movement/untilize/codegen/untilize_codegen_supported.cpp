@@ -11,10 +11,14 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "untilize_codegen_cb_plan.hpp"
+#include "untilize_codegen_device_operation.hpp"
+
 namespace ttnn::operations::data_movement::untilize_codegen {
 
-uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device) {
-    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+uint32_t usable_l1_bytes(const tt::tt_metal::distributed::MeshDevice& device) {
+    return device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
 // Correctness scope of the codegen path: TILE input, interleaved (non-sharded) input AND
@@ -57,16 +61,18 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     constexpr uint64_t kWideChunkThreshold = 800'000;
 
     // Mirrors build_column_parallel + plan_cb_depths: that builder's CB plan is sized by the
-    // busiest core's tile count, not by Wt, and plan_cb_depths() TT_FATALs once even the
-    // single-buffer plan (cb_in + cb_out, one slot per tile each) exceeds the L1 budget. Reject
-    // here so "auto" falls back to native instead of aborting inside program creation.
+    // busiest core's tile count, not by Wt. A case whose single-buffer plan (cb_in + cb_out, one
+    // slot per tile each) cannot fit even an empty core's L1 is out of scope for every codegen
+    // builder no matter what else is resident, so reject it here and let "auto" pick native.
+    // This is a static bound only -- whether the plan fits the L1 that is actually free right now
+    // is codegen_cb_plan_fits_live_l1's business (routing) and the program factory's (CB tier).
     auto column_parallel_plan_fits = [&](uint32_t wt) {
         auto* device = input.device();
         auto grid = device->compute_with_storage_grid_size();
         auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
         uint32_t max_tiles_per_core =
             std::max(std::get<4>(split), std::get<3>(split).empty() ? 0u : std::get<5>(split));
-        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(device);
+        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(*device);
     };
 
     const auto& logical = input.logical_shape();
@@ -86,10 +92,11 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         return 2ull * wt_ceil * kTileSize <= kWideChunkThreshold;
     }
 
-    // Tile-aligned path: a multi-tile-row input wide enough that a single tile-row would overflow
-    // the chunking threshold (~800KB for two double-buffered CBs at 2048B/tile) needs a
-    // slice -> untilize -> concat cascade this implementation does not have, so it is out of scope
-    // here. Computed from the PADDED shape (Wt/Ht are physical, tile-grid
+    // Tile-aligned path: mirrors ops/untilize/untilize.py's wide-tensor guard for
+    // build_untilize_tile -- a multi-tile-row input wide enough that a single tile-row would
+    // overflow the slice+concat chunking threshold (~800KB for two double-buffered CBs at
+    // 2048B/tile) is routed to a slice -> untilize -> concat cascade over unrelated builder
+    // entries, out of scope here. Computed from the PADDED shape (Wt/Ht are physical, tile-grid
     // quantities), matching how the program factory itself derives Wt/total_tile_rows.
     const auto& padded_shape = input.padded_shape();
     uint32_t rank = padded_shape.rank();
@@ -112,6 +119,36 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     }
 
     return true;
+}
+
+bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using tt::tt_metal::Layout;
+    namespace plan = ttnn::prim::untilize_codegen_detail;
+
+    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+        return true;
+    }
+
+    const ttnn::prim::UntilizeCodegenOperationAttributes attrs{.output_mem_config = output_mem_config};
+    const ttnn::prim::UntilizeCodegenTensorArgs tensor_args{.input = input};
+
+    // The codegen op allocates its output (create_output_tensors) before it samples live L1 for
+    // the hash and the program; routing runs before that allocation, so reserve the output's
+    // per-core L1 footprint here to see the budget those two will (issue #21358 for the native op).
+    const auto out_spec = ttnn::prim::UntilizeCodegenDeviceOperation::compute_output_specs(attrs, tensor_args);
+    // require_constructible: the spec was just built from these same (shape, dtype, layout, mem_config) by
+    // compute_output_specs, so a construction failure here is a bug, not a case to wave through with a 0 B
+    // reservation that would make this gate more permissive than the program factory it predicts.
+    const uint32_t pending_l1_output_bytes = get_pending_l1_output_reservation(
+        input,
+        out_spec.padded_shape(),
+        output_mem_config,
+        out_spec.data_type(),
+        Layout::ROW_MAJOR,
+        /*require_constructible=*/true);
+
+    return plan::choose_codegen_cb_plan(attrs, tensor_args, pending_l1_output_bytes).tier !=
+           plan::CodegenCbPlan::Native;
 }
 
 bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids) {

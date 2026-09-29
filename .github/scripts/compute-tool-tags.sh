@@ -22,6 +22,7 @@ CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | he
 MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 CLANGBUILDANALYZER_VERSION=$(grep -E "^ARG CLANGBUILDANALYZER_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+IWYU_VERSION=$(grep -E "^ARG IWYU_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
@@ -39,8 +40,12 @@ for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd curl oras; 
     declare "$hash_var=$(cat "dockerfile/scripts/install-${tool}.sh" | sha1sum | cut -d' ' -f1 | head -c 12)"
 done
 
-# Handle special cases (sfpi and openmpi) separately
+# Handle special cases (sfpi, openmpi and iwyu) separately
 SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
+# iwyu is bound to a Clang major version that the builder stage needs as an ARG,
+# so it lives in Dockerfile.tools as well as the script. Both feed the hash, or
+# bumping the Clang major alone would silently reuse the old image.
+IWYU_HASH=$({ cat dockerfile/scripts/install-iwyu.sh; grep -E "^ARG IWYU_LLVM_MAJOR=" dockerfile/Dockerfile.tools; } | sha1sum | cut -d' ' -f1 | head -c 12)
 OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh .github/scripts/install-slurm.sh | sha1sum | cut -d' ' -f1 | head -c 12)
 # syft-scanner and dockerfile-frontend have no install script of their own
 # (single-stage passthroughs of an upstream image - see Dockerfile.tools) -
@@ -55,6 +60,7 @@ jq -n \
   --arg mold "${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" \
   --arg doxygen "${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" \
   --arg clangbuildanalyzer "${BASE}/clangbuildanalyzer:${CLANGBUILDANALYZER_VERSION}-${CLANGBUILDANALYZER_HASH}" \
+  --arg iwyu "${BASE}/iwyu:${IWYU_VERSION}-${IWYU_HASH}" \
   --arg gdb "${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" \
   --arg cmake "${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" \
   --arg yq "${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" \
@@ -70,6 +76,7 @@ jq -n \
     "mold-tag": $mold,
     "doxygen-tag": $doxygen,
     "clangbuildanalyzer-tag": $clangbuildanalyzer,
+    "iwyu-tag": $iwyu,
     "gdb-tag": $gdb,
     "cmake-tag": $cmake,
     "yq-tag": $yq,

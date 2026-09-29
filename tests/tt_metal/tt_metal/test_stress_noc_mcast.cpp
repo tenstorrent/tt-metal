@@ -146,5 +146,5 @@ TEST_F(UnitMeshFixture, DISABLED_StressNocMcast) {
     }
     log_info(LogTest, "Running for {} seconds", time_secs);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 }

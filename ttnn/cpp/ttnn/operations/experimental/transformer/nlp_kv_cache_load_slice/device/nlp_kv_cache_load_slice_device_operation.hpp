@@ -6,9 +6,10 @@
 
 #include <optional>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "nlp_kv_cache_load_slice_device_operation_types.hpp"
-#include "nlp_kv_cache_load_slice_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -18,7 +19,13 @@ struct NlpKVCacheLoadSliceDeviceOperation {
     using tensor_args_t = NlpKvCacheLoadSliceInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<NlpKVCacheLoadSliceProgramFactory>;
+
+    // The slice window (output_tensor_start/end) is an attribute and therefore part of the program
+    // hash, so every per-core start tile id is structural. The only per-dispatch state is the input
+    // address (a reader runtime-arg binding) and the output shard buffer backing CB c_0 (a CB
+    // binding); those bindings are the whole cache-hit refresh.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

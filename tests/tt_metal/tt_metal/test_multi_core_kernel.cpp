@@ -113,7 +113,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelSameRuntimeArgs) {
     set_rt_args(program, reader_kernel_id, all_cores, unary_reader_args);
     set_rt_args(program, writer_kernel_id, all_cores, unary_writer_args);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
@@ -168,7 +168,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelUniqueRuntimeArgs) {
         set_rt_args(program, writer_kernel_id, core_range, rt_args.at(core_range_idx++));
     }
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec_1;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer_1, result_vec_1);

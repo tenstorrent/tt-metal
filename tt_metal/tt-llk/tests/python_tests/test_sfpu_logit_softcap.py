@@ -3,31 +3,36 @@
 """
 logit-softcap SFPU test. Covers llk_sfpu/ckernel_sfpu_logit_softcap.h.
 
-cap reaches the kernel as an fp32 bit pattern. The second parameter is not read.
-This runs on Pack.
+cap reaches the kernel as an fp32 bit pattern. Both variants run on Pack; the
+accurate overload's second parameter is not read.
 
-_sfpu_tanh_fp32_accurate_ reads vConstFloatPrgm0 and vConstFloatPrgm1, but the
-kernel doesn't mention that and gives no init. They are programmed by tanh_init,
-and the branch that must run for that is is_fp32_dest_acc_en = true. The false
-branch loads coefficients belonging to a different tanh implementation.
+The driver uses tanh_init<false, true>() for the accurate variant and
+tanh_init<false, false>() for the polynomial variant, independently of destination
+precision. Switching variants or overwriting their shared vConstFloatPrgm0/1/2
+constants requires reinitialization.
 
 tanh saturates to +-1 by |x| around 5, so the test covers the linear region, the
 knee, and deep saturation.
 """
 
 import struct
+from dataclasses import dataclass
 
 import torch
-from conftest import skip_for_wormhole
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import SFPU_UNARY_SCALAR, TILE_COUNT
+from helpers.test_variant_parameters import (
+    SFPU_UNARY_SCALAR,
+    TILE_COUNT,
+    TemplateParameter,
+)
 from helpers.utils import passed_test
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
@@ -162,3 +167,62 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
             f"saturated lanes (|x| >= {SATURATED_ABS}) must clamp to sgn(x) * cap "
             f"= +-{cap}, got range [{got.min().item()}, {got.max().item()}]"
         )
+
+
+@dataclass
+class LOGIT_SOFTCAP_POLYNOMIAL(TemplateParameter):
+    def convert_to_cpp(self):
+        return "#define LOGIT_SOFTCAP_POLYNOMIAL true"
+
+
+@skip_for_wormhole
+@skip_for_quasar
+@parametrize(cap=CAPS, input_range=INPUT_RANGES)
+def test_sfpu_logit_softcap_polynomial_rounding(cap, input_range):
+    """Check the polynomial against tanh, and its explicit BF16 RNE against FP32.
+
+    Reading both outputs as FP32 prevents the packer from hiding a missing SFPU
+    rounding step. Inputs are identical BF16 in both runs. Three tiles also
+    exercise PACK-side SFPU re-entry across destination sections.
+    """
+    low, high = input_range
+    src = torch.linspace(low, high, 3 * 1024).to(torch.bfloat16)
+
+    def variant(dest_acc):
+        return TestConfig(
+            "sources/sfpu_logit_softcap_test.cpp",
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+            templates=[
+                SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap)),
+                LOGIT_SOFTCAP_POLYNOMIAL(),
+            ],
+            runtimes=[TILE_COUNT(3)],
+            variant_stimuli=StimuliConfig(
+                src,
+                DataFormat.Float16_b,
+                torch.zeros(1024, dtype=torch.bfloat16),
+                DataFormat.Float16_b,
+                DataFormat.Float32,
+                tile_count_A=3,
+                tile_count_B=1,
+                tile_count_res=3,
+            ),
+            dest_acc=dest_acc,
+        )
+
+    fp32_config, bf16_config = variant(DestAccumulation.Yes), variant(
+        DestAccumulation.No
+    )
+    # compile-producer skips on run(), so prepare both first.
+    fp32_config.prepare()
+    bf16_config.prepare()
+    fp32 = torch.as_tensor(fp32_config.run().result).float()
+    bf16 = torch.as_tensor(bf16_config.run().result).float()
+
+    # The polynomial has <= 0.0024 absolute error on this domain. Use an
+    # elementwise bound: PCC alone cannot validate saturation or a zero tile.
+    golden = cap * torch.tanh(src.float())
+    torch.testing.assert_close(fp32, golden, rtol=0, atol=0.0025 * cap)
+    assert torch.equal(
+        bf16, fp32.to(torch.bfloat16).float()
+    ), "Polynomial softcap must round to BF16 before storing DEST"

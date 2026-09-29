@@ -59,8 +59,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPARE_PY="$SCRIPT_DIR/perf_regression_compare.py"
 LLK_PRIMARY="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# The canonical compare module, shared with the PR gate, so the skill and the
+# gate can never disagree about what counts as a regression.
+COMPARE_PY="$LLK_PRIMARY/perf/regression_compare.py"
 REPO_ROOT="$(git -C "$LLK_PRIMARY" rev-parse --show-toplevel)"
 # tt-llk relative to the repo root -- the same path inside every worktree.
 LLK_RELPATH="${LLK_PRIMARY#"$REPO_ROOT"/}"
@@ -117,7 +119,7 @@ CURRENT_REF="HEAD"
 ITERATIONS=3
 # Measured on a 5-run baseline of unchanged code, not guessed. See
 # docs/perf_evaluation/results/blackhole-nonsol/README.md and the constants in
-# perf_regression_compare.py.
+# perf/regression_compare.py.
 THRESHOLD=0.02
 MIN_CYCLES=30
 SPEED_OF_LIGHT=0
@@ -410,9 +412,15 @@ measure_iteration() {
             ${PYTEST_VARIANT_ARGS+"${PYTEST_VARIANT_ARGS[@]}"} "./$TEST.py"
     )
 
-    local csv="$perf_data/$TEST/$TEST.csv"
+    # Where a sweep lands depends on the commit being measured, and a compare
+    # normally straddles the change: newer trees write perf_data/runs/<tag>/ and
+    # point perf_data/latest at it, older ones write perf_data/<test>/ directly.
+    local csv="$perf_data/latest/$TEST/$TEST.csv"
     if [ ! -f "$csv" ]; then
-        csv="$(find "$llk" -path "*/perf_data/$TEST/$TEST.csv" | head -1)"
+        csv="$perf_data/$TEST/$TEST.csv"
+    fi
+    if [ ! -f "$csv" ]; then
+        csv="$(find "$llk" -path "*/perf_data/*$TEST/$TEST.csv" | head -1)"
     fi
     if [ -z "$csv" ] || [ ! -f "$csv" ]; then
         die "no perf CSV from ${sha:0:12} (${side}). Was every case deselected -- does

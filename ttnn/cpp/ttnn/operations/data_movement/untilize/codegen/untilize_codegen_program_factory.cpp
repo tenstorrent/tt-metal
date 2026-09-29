@@ -5,6 +5,8 @@
 #include "untilize_codegen_program_factory.hpp"
 
 #include <algorithm>
+#include <optional>
+#include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -13,7 +15,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "untilize_codegen_cb_plan.hpp"
 #include "untilize_codegen_device_operation.hpp"
 #include "untilize_codegen_supported.hpp"
 
@@ -29,85 +34,20 @@ constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/until
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
 constexpr uint32_t kSeqIdentity = 0;  // mirrors common/templates/sequencers.h SEQ_IDENTITY
-using ttnn::operations::data_movement::untilize_codegen::usable_l1_bytes;
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
-// 32-bit datums need 32-bit DEST accumulation in pack_untilize. Always false for the current
-// supported_by_codegen scope (bf16/bf8_b only); kept general so widening that scope does not
-// need this rule rediscovered.
+// Mirrors spec.py's _needs_dst_accum: 32-bit datums need 32-bit DEST accumulation in
+// pack_untilize. Always false for this port's supported_by_codegen scope (bf16/bf8_b only);
+// kept general to stay a faithful transliteration of the source builder.
 bool needs_dst_accum(DataType dtype) {
     return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
 }
 
-// Mirrors compute_untilize.cpp's compute_num_blocks_per_column: the largest bct <= max_bct
-// that evenly divides wt. The host must replicate this to size CB depths in the same units
-// the kernel will actually consume per pack_untilize_block call.
-uint32_t compute_block_ct_dim(uint32_t wt, bool fp32) {
-    uint32_t max_bct = fp32 ? 4 : 8;
-    for (uint32_t bct = max_bct; bct >= 1; --bct) {
-        if (wt % bct == 0) {
-            return bct;
-        }
-    }
-    return 1;
-}
-
-struct CbPlan {
-    uint32_t cb_in_depth;
-    uint32_t cb_out_depth;
-    uint32_t read_batch;
-};
-
-// Mirrors codegen_common.factory.cb_policy.plan_cb_depths exactly: 3-tier asymmetric CB
-// depth selection (double-buffer both -> double-buffer input only -> single-buffer both),
-// budgeted against the device's actual usable-L1 (queried, not a hardcoded constant -- see
-// usable_l1_bytes()). There is deliberately no 4th "chunked" tier: this raises when even the
-// single-buffer plan overflows, because supported_by_codegen's wide-chunk-threshold check is
-// expected to have already routed such shapes to native. Fail loudly rather than inventing a
-// fallback depth that would mask a hole in that gate.
-CbPlan plan_cb_depths(const IDevice* device, uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
-    uint64_t p = pages_per_unit;
-    uint64_t ts = page_size;
-    uint64_t double_both = (2 * p + 2 * p) * ts;
-    uint64_t double_in = (2 * p + p) * ts;
-    uint64_t single_both = (p + p) * ts;
-    uint64_t usable_l1 = usable_l1_bytes(device);
-    if (double_both <= usable_l1) {
-        return CbPlan{static_cast<uint32_t>(2 * p), static_cast<uint32_t>(2 * p), pages_per_unit};
-    }
-    if (double_in <= usable_l1) {
-        return CbPlan{static_cast<uint32_t>(2 * p), pages_per_unit, pages_per_unit};
-    }
-    if (single_both <= usable_l1) {
-        return CbPlan{pages_per_unit, pages_per_unit, block_units};
-    }
-    TT_THROW(
-        "untilize codegen: single-buffer CB plan exceeds L1 and cannot be reduced without chunking "
-        "(pages_per_unit={}, page_size={}, minimum_bytes={}, budget={}); supported_by_codegen() should "
-        "have routed this shape to native",
-        pages_per_unit,
-        page_size,
-        single_both,
-        usable_l1);
-    return CbPlan{};
-}
-
-// Largest divisor of wt (>=2) such that every tile-row x column-block unit still gets its own
-// core; returns 1 ("don't use the 2D path") otherwise.
-uint32_t choose_2d_ncol(uint32_t total_tile_rows, uint32_t wt, uint32_t valid_cores) {
-    if (total_tile_rows >= valid_cores || wt < 2) {
-        return 1;
-    }
-    uint32_t max_ncol = std::min(valid_cores / total_tile_rows, wt);
-    uint32_t best = 1;
-    for (uint32_t d = 2; d <= max_ncol; ++d) {
-        if (wt % d == 0) {
-            best = d;
-        }
-    }
-    return best;
-}
+using untilize_codegen_detail::CbPlan;
+using untilize_codegen_detail::choose_2d_ncol;
+using untilize_codegen_detail::compute_block_ct_dim;
+using untilize_codegen_detail::plan_cb_depths;
 
 // DRAM-interleaved tile CBs must step at the device's real DRAM page pitch, not the raw tile
 // byte size (a no-op for bf16/bf8_b tile sizes, both already multiples of every supported
@@ -142,8 +82,8 @@ KernelDescriptor make_reader(const CoreRangeSet& cores, Buffer* in_buf, uint32_t
         {"seq_id", kSeqIdentity},
         {"cb_id", kCbIn},
         {"batch", read_batch},
-        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch")
-        // unconditionally (0 = use the accessor's page size). Absent -> JIT compile fails.
+        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch");
+        // builder_utils injects it (0 = use the accessor's page size). Absent -> JIT compile fails.
         {"src_page_pitch", 0},
     };
     reader.config = ReaderConfigDescriptor{};
@@ -162,7 +102,7 @@ KernelDescriptor make_compute(
 }
 
 struct CommonArgs {
-    IDevice* device;
+    MeshDevice* device;
     Buffer* in_buf;
     Buffer* out_buf;
     tt::DataFormat in_fmt;
@@ -173,18 +113,24 @@ struct CommonArgs {
     uint32_t out_elem_size;
     bool fp32;
     uint32_t max_bct;
+    // Live L1 headroom, sampled once in create_descriptor -- see kUsableL1Note.
+    uint64_t usable_l1;
 };
 
 // Per-tile-row split (build_untilize_tile's default path / _build_untilize_tile_cliff).
 // Splits total_tile_rows across up to the device's core grid; an uneven split produces a
 // second ("cliff") compute-kernel core group with its own per-core tile-row count.
-ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t total_tile_rows) {
+std::optional<ProgramDescriptor> build_main_split(const CommonArgs& a, uint32_t wt, uint32_t total_tile_rows) {
     auto grid = a.device->compute_with_storage_grid_size();
     auto [_num_cores, core_range, cg1, cg2, tpc1, tpc2] =
         tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
-    CbPlan plan = plan_cb_depths(a.device, wt, a.tile_size_for_planning, block_ct_dim);
+    auto maybe_plan = plan_cb_depths(a.usable_l1, wt, a.tile_size_for_planning, block_ct_dim);
+    if (!maybe_plan.has_value()) {
+        return std::nullopt;
+    }
+    const CbPlan& plan = *maybe_plan;
 
     // Row stride used both as the writer's TensorAccessor page pitch and the CB byte stride
     // between physical tile-rows: the FULL padded row (Wt tiles wide), never the logical
@@ -224,8 +170,9 @@ ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t to
     emit_group(cg1, tpc1);
     emit_group(cg2, tpc2);
 
-    // Kernel order is [reader, writer, compute...] on both the single-compute and cliff cases --
-    // the legacy order the rest of the untilize stack expects, not [reader, compute, writer].
+    // Kernel order [reader, writer, compute...] mirrors spec.py's build_untilize_tile: the
+    // single-compute case reorders assemble()'s [reader, compute, writer] back to legacy order,
+    // and the cliff case builds its kernel list in legacy order directly.
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
     if (cg2.empty()) {
@@ -239,14 +186,18 @@ ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t to
 
 // Column-parallel split (_build_untilize_column_parallel): single tile-row, Wt>1 -- splits
 // tile-COLUMNS across cores instead of tile-rows.
-ProgramDescriptor build_column_parallel(const CommonArgs& a, uint32_t wt) {
+std::optional<ProgramDescriptor> build_column_parallel(const CommonArgs& a, uint32_t wt) {
     auto grid = a.device->compute_with_storage_grid_size();
     auto [_num_cores, core_range, cg1, cg2, tpc1, tpc2] =
         tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
 
     uint32_t max_tpc = std::max(tpc1, cg2.empty() ? 0u : tpc2);
     uint32_t block_ct_dim = compute_block_ct_dim(max_tpc, a.fp32);
-    CbPlan plan = plan_cb_depths(a.device, max_tpc, a.tile_size_for_planning, block_ct_dim);
+    auto maybe_plan = plan_cb_depths(a.usable_l1, max_tpc, a.tile_size_for_planning, block_ct_dim);
+    if (!maybe_plan.has_value()) {
+        return std::nullopt;
+    }
+    const CbPlan& plan = *maybe_plan;
 
     uint32_t full_stick_size = wt * TILE_WIDTH * a.out_elem_size;
 
@@ -302,7 +253,8 @@ ProgramDescriptor build_column_parallel(const CommonArgs& a, uint32_t wt) {
 // 2D (tile-row x column-block) split (_build_untilize_2d_column): raises core utilization
 // when total_tile_rows alone would leave cores idle. Every one of total_tile_rows*ncol cores
 // owns exactly one (tile-row, column-block) unit of tpc = Wt/ncol tiles.
-ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t total_tile_rows, uint32_t ncol) {
+std::optional<ProgramDescriptor> build_2d_column(
+    const CommonArgs& a, uint32_t wt, uint32_t total_tile_rows, uint32_t ncol) {
     uint32_t tpc = wt / ncol;
     uint32_t num_units = total_tile_rows * ncol;
 
@@ -311,7 +263,11 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
         tt::tt_metal::split_work_to_cores(grid, num_units, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(tpc, a.fp32);
-    CbPlan plan = plan_cb_depths(a.device, tpc, a.tile_size_for_planning, block_ct_dim);
+    auto maybe_plan = plan_cb_depths(a.usable_l1, tpc, a.tile_size_for_planning, block_ct_dim);
+    if (!maybe_plan.has_value()) {
+        return std::nullopt;
+    }
+    const CbPlan& plan = *maybe_plan;
 
     uint32_t full_stick_size = wt * TILE_WIDTH * a.out_elem_size;
     uint32_t col_chunk_bytes = tpc * TILE_WIDTH * a.out_elem_size;
@@ -350,9 +306,10 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
     return desc;
 }
 
-// Counts sticks in [start, start+count) whose position within a `batch_h`-sized physical batch
-// falls below `valid_per_batch`. The with-unpadding writer's running out_page_offset needs this to
-// skip padding rows and land on a compact stick numbering.
+// Mirrors spec.py's _count_valid_sticks: counts sticks in [start, start+count) whose position
+// within a `batch_h`-sized physical batch falls below `valid_per_batch`. The with-unpadding
+// writer's running out_page_offset needs this to skip padding rows and land on the same compact
+// stick numbering the reference (build_untilize_with_unpadding) produces.
 uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, uint32_t valid_per_batch) {
     if (valid_per_batch == 0 || batch_h == 0) {
         return count;
@@ -374,7 +331,7 @@ uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, ui
 // writer additionally skips physical pad sticks and writes only the unpadded row width, producing
 // the compact output UntilizeCodegenDeviceOperation::compute_output_specs's non-aligned branch
 // declares. Cliff-capable (two compute kernels), same as build_main_split.
-ProgramDescriptor build_with_unpadding(
+std::optional<ProgramDescriptor> build_with_unpadding(
     const CommonArgs& a,
     uint32_t wt,
     uint32_t total_tile_rows,
@@ -386,7 +343,11 @@ ProgramDescriptor build_with_unpadding(
         tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
-    CbPlan plan = plan_cb_depths(a.device, wt, a.tile_size_for_planning, block_ct_dim);
+    auto maybe_plan = plan_cb_depths(a.usable_l1, wt, a.tile_size_for_planning, block_ct_dim);
+    if (!maybe_plan.has_value()) {
+        return std::nullopt;
+    }
+    const CbPlan& plan = *maybe_plan;
 
     uint32_t unpadded_row_bytes = w_unpadded * a.out_elem_size;
     uint32_t padded_row_bytes = wt * TILE_WIDTH * a.out_elem_size;
@@ -410,8 +371,8 @@ ProgramDescriptor build_with_unpadding(
     writer.compile_time_args.push_back(wt);
     writer.config = WriterConfigDescriptor{};
 
-    // out_page_offset is a running accumulator carried across cores in ascending order, so the
-    // groups below must be emitted in that order.
+    // out_page_offset is a running accumulator carried across cores in ascending order (mirrors
+    // spec.py's stateful `_state["off"]` closure, invoked once per core by emit_per_core_rt).
     uint32_t assigned = 0;
     uint32_t out_page_offset = 0;
     auto emit_group = [&](const CoreRangeSet& group, uint32_t wpc) {
@@ -443,6 +404,18 @@ ProgramDescriptor build_with_unpadding(
     return desc;
 }
 
+// No codegen CB plan fits the L1 that is free right now. ttnn::untilize runs the same chooser
+// (codegen_cb_plan_fits_live_l1) before dispatching and routes such a case to the native prim as a
+// whole, so this factory never builds anything but a codegen program; reaching here means L1
+// occupancy moved between routing and program build, or the codegen prim was forced
+// (untilize_force_codegen, which by design never falls back to native).
+[[noreturn]] void throw_no_codegen_cb_plan(uint64_t usable_l1) {
+    TT_THROW(
+        "untilize codegen: no codegen CB plan fits the {} B of L1 free on this device right now; ttnn::untilize "
+        "routes such a case to the native untilize prim before dispatch",
+        usable_l1);
+}
+
 }  // namespace
 
 ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
@@ -466,6 +439,24 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     a.out_elem_size = output.element_size();
     a.in_buf = input.buffer();
     a.out_buf = output.buffer();
+    // kUsableL1Note: live-L1 is sampled here on a cache MISS so every builder plans against one
+    // snapshot (get_max_l1_space: lowest_occupied_compute_l1_address ?: l1_size_per_core, minus
+    // allocator base). The SAME chooser (choose_codegen_cb_plan) also runs on every dispatch from
+    // compute_program_hash, so a later occupancy change that crosses a CB tier is a new cache key
+    // rather than a hit with a frozen plan. Both of those run after the output tensor has been
+    // allocated; ttnn::untilize ran the chooser once more before that, with the output's pending
+    // L1 footprint reserved, and only dispatched here because some codegen tier fit.
+    //
+    // get_max_l1_space is therefore on the untilize-codegen hot path (hash), not miss-only: it
+    // takes the allocator mutex and walks the L1 free list per sub-device. create_descriptor
+    // itself still runs only on a miss; cache hits patch addresses via apply_resolved_bindings
+    // (except ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK, OFF by default).
+    a.usable_l1 = ttnn::operations::data_movement::get_max_l1_space(input);
+
+    auto chosen = untilize_codegen_detail::choose_codegen_cb_plan(operation_attributes, tensor_args);
+    if (chosen.tier == untilize_codegen_detail::CodegenCbPlan::Native) {
+        throw_no_codegen_cb_plan(a.usable_l1);
+    }
 
     // Wt/Ht/NC are derived from the PADDED (physical, tile-aligned) shape, which the reader/
     // compute stages need regardless of dispatch branch below (even the with-unpadding path
@@ -482,7 +473,14 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     uint32_t ht = h / TILE_HEIGHT;
     uint32_t total_tile_rows = nc * ht;
 
-    (void)operation_attributes;
+    // Each branch below picks the codegen builder this shape belongs to. A builder declines
+    // (nullopt) when its CB plan does not fit the L1 that is free right now; choose_codegen_cb_plan
+    // above mirrors each builder's plan against the same snapshot, so a decline here is the same
+    // hard error as the Native tier above. Under the opt-in ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    // build this function is re-invoked on cache hits and diffed against the cached descriptor; if
+    // L1 occupancy has changed enough since the miss to flip a tier, that check can report a
+    // spurious mismatch. That build is a debug aid (OFF by default) and never runs in production
+    // dispatch.
 
     // Non-tile-aligned logical shapes (bf16 only -- see supported_by_codegen) route through the
     // with-unpadding builder instead of build_untilize_tile's variants. h == ht * TILE_HEIGHT
@@ -491,11 +489,17 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     const auto& logical_shape = input.logical_shape();
     bool tile_aligned = logical_shape[-2] % TILE_HEIGHT == 0 && logical_shape[-1] % TILE_WIDTH == 0;
     if (!tile_aligned) {
-        return build_with_unpadding(a, wt, total_tile_rows, logical_shape[-2], logical_shape[-1], h);
+        if (auto desc = build_with_unpadding(a, wt, total_tile_rows, logical_shape[-2], logical_shape[-1], h)) {
+            return std::move(*desc);
+        }
+        throw_no_codegen_cb_plan(a.usable_l1);
     }
 
     if (total_tile_rows == 1 && wt > 1) {
-        return build_column_parallel(a, wt);
+        if (auto desc = build_column_parallel(a, wt)) {
+            return std::move(*desc);
+        }
+        throw_no_codegen_cb_plan(a.usable_l1);
     }
 
     auto grid = a.device->compute_with_storage_grid_size();
@@ -503,10 +507,16 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     if (wt > 1) {
         uint32_t ncol = choose_2d_ncol(total_tile_rows, wt, valid_cores);
         if (ncol >= 2) {
-            return build_2d_column(a, wt, total_tile_rows, ncol);
+            if (auto desc = build_2d_column(a, wt, total_tile_rows, ncol)) {
+                return std::move(*desc);
+            }
+            throw_no_codegen_cb_plan(a.usable_l1);
         }
     }
-    return build_main_split(a, wt, total_tile_rows);
+    if (auto desc = build_main_split(a, wt, total_tile_rows)) {
+        return std::move(*desc);
+    }
+    throw_no_codegen_cb_plan(a.usable_l1);
 }
 
 }  // namespace ttnn::prim

@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr auto dfb_x_m_max = dfb::x_minus_max;
     DataflowBuffer dfb_x_m_max_obj(dfb_x_m_max);
     constexpr auto dfb_tmp = dfb::tmp;
-    DataflowBuffer dfb_tmp_obj(dfb_tmp);
+    const DataflowBuffer dfb_tmp_obj(dfb_tmp);
 
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
@@ -39,8 +39,8 @@ void kernel_main() {
 
     // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
     // force-unrolling the per-Ht loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
-    std::uint32_t N = get_arg(args::N);
-    std::uint32_t Ht = get_arg(args::Ht);
+    const std::uint32_t N = get_arg(args::N);
+    const std::uint32_t Ht = get_arg(args::Ht);
 
     dfb_mask_obj.wait_front(onetile);
     dfb_max_scaler_obj.wait_front(onetile);
@@ -49,7 +49,7 @@ void kernel_main() {
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Ht == 1) {
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_tmp, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
@@ -63,7 +63,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
-            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+            mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_tmp, dfb_max_scaler, dfb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -71,8 +71,8 @@ void kernel_main() {
         }
 
         // compute x - max(x)
-        dfb_x_m_max_obj.reserve_back(Ht);
-        dfb_in0_obj.wait_front(Ht);
+        dfb_x_m_max_obj.reserve_back(static_cast<uint16_t>(Ht));
+        dfb_in0_obj.wait_front(static_cast<uint16_t>(Ht));
         dfb_max_obj.wait_front(1);
 
         for (std::uint32_t h = 0; h < Ht; ++h) {
@@ -86,12 +86,12 @@ void kernel_main() {
             tile_regs_release();
         }
         dfb_max_obj.pop_front(1);
-        dfb_in0_obj.pop_front(Ht);
-        dfb_x_m_max_obj.push_back(Ht);
+        dfb_in0_obj.pop_front(static_cast<uint16_t>(Ht));
+        dfb_x_m_max_obj.push_back(static_cast<uint16_t>(Ht));
 
         // compute exp(x - max(x))
-        dfb_exps_obj.reserve_back(Ht);
-        dfb_x_m_max_obj.wait_front(Ht);
+        dfb_exps_obj.reserve_back(static_cast<uint16_t>(Ht));
+        dfb_x_m_max_obj.wait_front(static_cast<uint16_t>(Ht));
         for (std::uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
             copy_tile_init_with_dt(dfb_x_m_max_obj);
@@ -118,7 +118,7 @@ void kernel_main() {
             pack_tile_with_dt(dst0, dfb_exps_obj);
             tile_regs_release();
         }
-        dfb_exps_obj.push_back(Ht);
+        dfb_exps_obj.push_back(static_cast<uint16_t>(Ht));
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -155,11 +155,11 @@ void kernel_main() {
 #endif
 
         // compute final result
-        dfb_out0_obj.reserve_back(Ht);
-        dfb_x_m_max_obj.wait_front(Ht);
+        dfb_out0_obj.reserve_back(static_cast<uint16_t>(Ht));
+        dfb_x_m_max_obj.wait_front(static_cast<uint16_t>(Ht));
         dfb_recipsumexps_obj.wait_front(1);
 #ifndef LOG
-        dfb_exps_obj.wait_front(Ht);
+        dfb_exps_obj.wait_front(static_cast<uint16_t>(Ht));
 #endif
 
         for (std::uint32_t h = 0; h < Ht; h += onetile) {
@@ -187,10 +187,10 @@ void kernel_main() {
         }
 
         dfb_recipsumexps_obj.pop_front(1);
-        dfb_x_m_max_obj.pop_front(Ht);
-        dfb_out0_obj.push_back(Ht);
+        dfb_x_m_max_obj.pop_front(static_cast<uint16_t>(Ht));
+        dfb_out0_obj.push_back(static_cast<uint16_t>(Ht));
 #ifndef LOG
-        dfb_exps_obj.pop_front(Ht);
+        dfb_exps_obj.pop_front(static_cast<uint16_t>(Ht));
 #endif
     }
 }

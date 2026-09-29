@@ -14,9 +14,14 @@ architecture (GQA + block-sparse MSA) with a REGULAR TP-head-sharded triple KV c
 not the DeepSeek merged/replicated kvpe cache. Single-rank AND pipeline-parallel (multi-galaxy D2D)
 prefill are wired: the runtime slices the model by rank (first_layer_idx / is_first_rank / is_last_rank),
 and the D2D activation ships emb-replicated across TP (pipeline_activation_emb_tp_sharded=False) to match
-M3's SP residual layout. KV-chunk-table migration IS wired for the single-rank case: the multi-tensor
-cache is described by a multi-config table (one config per (tensor, head-shard); see
-``tt/runners/kv_chunk_table.py``); pipelined migration is not yet wired (same limit as DeepSeek).
+M3's SP residual layout. KV-chunk-table migration is wired for BOTH: the multi-tensor cache is described
+by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/kv_chunk_table.py``), and
+with a pipeline the gathered stage layouts merge every stage's layers into one table at global layer
+indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``).
+
+Limitation: the block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3
+does not support multi-turn continuation from a prefix that is not chunk-aligned (the producer's
+``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode resumes at a 32-token boundary); ``prefill_chunk`` asserts on it.
 
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
@@ -24,7 +29,7 @@ for the H2D producer (which reads only path/trace attributes).
 
 Env the operator sets (mirrors the rest of the M3 ecosystem):
   HF_MODEL / PREFILL_HF_MODEL   real MiniMax-M3 checkpoint dir (VL-wrapped config + bf16 safetensors)
-  TT_CACHE_PATH                 tilized weight-cache root (defaults to the checkpoint dir)
+  TT_CACHE_PATH                 tilized weight-cache root (default: /mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill if present, else the checkpoint dir)
   PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
 """
 
@@ -39,15 +44,10 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
 
-# The common runner reads PREFILL_NUM_LAYERS with a hardcoded default of 61 (DeepSeek's layer count).
-# M3 has 60 decoder layers. This adapter module is imported (via get_adapter) BEFORE the runner reads
-# PREFILL_NUM_LAYERS, so a setdefault here gives M3 the right default without touching the common runner.
-# An explicit PREFILL_NUM_LAYERS still wins (e.g. a partial-model bring-up run).
-os.environ.setdefault("PREFILL_NUM_LAYERS", "60")
-
 
 class MiniMaxM3Config:
-    """Static model-dimension constants the common runner reads. The runner uses only
+    """Static model-dimension constants the common runner reads: ``NUM_LAYERS`` (its layer-count
+    default, overridable with PREFILL_NUM_LAYERS for a partial-model bring-up) and
     ``FABRIC_PAYLOAD_SIZE`` (the fabric router's max packet payload, mirrored from the embedding dim as
     in the DeepSeek config); the rest document M3's dimensions for readers."""
 
@@ -63,7 +63,8 @@ class MiniMaxM3Config:
 
 def _model_path() -> str:
     """Resolve the MiniMax-M3 checkpoint dir: PREFILL_HF_MODEL > HF_MODEL > hf_model_default. This is the
-    dir AutoConfig / the weight loader read, and (absent TT_CACHE_PATH) the tilized-cache root."""
+    dir AutoConfig / the weight loader read, and (absent TT_CACHE_PATH) the legacy tilized-cache root; see model_config.default_weight_cache_root.
+    """
     return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL") or MiniMaxM3PrefillAdapter.hf_model_default
 
 
@@ -75,12 +76,15 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     model_config = MiniMaxM3Config
     # AutoConfig can load M3 only from the full VL checkpoint (it carries the remote config code); the
     # repo config-only dir does not register model_type=minimax_m3. Operators set HF_MODEL/PREFILL_HF_MODEL.
-    hf_model_default = "/mnt/models/MiniMaxAI/MiniMax-M3-ref/"
-    ttnn_cache_default = ""  # M3 caches under the checkpoint dir (or TT_CACHE_PATH); no separate root
+    hf_model_default = "/mnt/weka/model-weights/llm/minimax/MiniMax-M3/"
+    ttnn_cache_default = ""  # unused: see model_config.default_weight_cache_root (TT_CACHE_PATH > weka root > ckpt)
     default_gate_mode = "DEVICE_FP32"  # unused by M3 (kept for runner contract parity)
-    prefill_trace_default = "/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240"
+    prefill_trace_default = "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
 
-    l1_small_size = 0
+    # high_bw_all_gather (MSA cache read) parks its semaphores in L1_SMALL; 0 makes it fall back to general
+    # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
+    # importing the adapter stays cheap).
+    l1_small_size = 1152
 
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
@@ -108,10 +112,11 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
         """The tilized ``.tensorbin`` cache dir, mirroring ``ModelArgs.weight_cache_path(bfloat8_b)`` (the
-        layout the cache-populate run wrote): ``{TT_CACHE_PATH or checkpoint_dir}/tensor_cache_bfp8_{MeshShape}``.
+        layout the cache-populate run wrote): ``{default_weight_cache_root()}/tensor_cache_bfp8_{MeshShape}``.
         The model reads its per-tensor caches from here (on a hit the bf16 source is never touched)."""
-        cache_dir = os.environ.get("TT_CACHE_PATH")
-        cache_dir = Path(cache_dir) if cache_dir else Path(_model_path())
+        from models.demos.minimax_m3.tt.model_config import default_weight_cache_root
+
+        cache_dir = default_weight_cache_root(_model_path())
         sp, tp = mesh_shape
         path = cache_dir / f"tensor_cache_bfp8_{ttnn.MeshShape(sp, tp)}"
         path.mkdir(parents=True, exist_ok=True)

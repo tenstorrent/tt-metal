@@ -251,7 +251,7 @@ void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
 
 // Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
 experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
-    using experimental::DataMovementGen1Config;
+    using experimental::DataMovementHardwareConfig;
     using experimental::KernelSpec;
     using experimental::KernelSpecName;
     using experimental::NodeCoord;
@@ -264,9 +264,12 @@ experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 1,
         .hw_config =
-            DataMovementGen1Config{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::NOC_0,
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::NOC_0,
+                    },
             },
     };
 
@@ -522,6 +525,11 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
     auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+
+    EXPECT_EQ(
+        MetalContext::instance(context_id).get_dispatch_core_config().get_dispatch_core_axis(), DispatchCoreAxis::COL);
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
     experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
     distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);

@@ -43,7 +43,7 @@ def test_bw_div_binary(input_shapes, rounding_mode, device):
     other_tensor = ttnn.from_torch(other_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_data, in_data, other_data, rounding_mode)
+    golden_tensor = golden_function(grad_data, in_data, other_data, rounding_mode=rounding_mode)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor, rounding_mode=rounding_mode)
 
@@ -100,7 +100,7 @@ def test_bw_unary_div_0(input_shapes, scalar, rounding_mode, device):
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar, rounding_mode=rounding_mode)
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode)
+    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode=rounding_mode)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -129,7 +129,7 @@ def test_bw_unary_div(input_shapes, scalar, rounding_mode, device):
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar, rounding_mode=rounding_mode)
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode)
+    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode=rounding_mode)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -235,7 +235,7 @@ def test_bw_div_scalar_opt_output(input_shapes, scalar, rounding_mode, device):
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     tt_output_tensor_on_device = [input_grad]
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode)
+    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode=rounding_mode)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert status
@@ -293,7 +293,7 @@ def test_bw_div_opt(input_shapes, rounding_mode, are_required_outputs, device):
     tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_data, in_data, other_data, rounding_mode)
+    golden_tensor = golden_function(grad_data, in_data, other_data, rounding_mode=rounding_mode)
 
     status = True
     for i in range(len(are_required_outputs)):
@@ -328,7 +328,7 @@ def test_bw_binary_div_inf_cases(input_shapes, rounding_mode, device):
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor, rounding_mode=rounding_mode)
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
-    golden_tensor = golden_function(grad_data, in_data, other_data, rounding_mode)
+    golden_tensor = golden_function(grad_data, in_data, other_data, rounding_mode=rounding_mode)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
