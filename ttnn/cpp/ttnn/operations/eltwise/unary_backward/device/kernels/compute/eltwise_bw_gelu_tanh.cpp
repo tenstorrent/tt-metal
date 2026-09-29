@@ -12,6 +12,15 @@
 
 namespace ckl = compute_kernel_lib;
 
+// The unpacker only has to switch format between the two operand buffers when they carry
+// different formats, which the program factory signals with MIXED_OPERAND_DATA_FORMATS; for
+// the same-dtype case the configuration compute_kernel_hw_startup() installs covers both.
+#ifdef MIXED_OPERAND_DATA_FORMATS
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 // GELU'(x) = 0.5*(1+tanh(z)) + 0.5*beta*x*(1+3*kappa*x^2)*(1-tanh(z)^2),
 // where z = beta*(x+kappa*x^3); output = grad_out*GELU'(x).
 void kernel_main() {
@@ -31,17 +40,16 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(
-                dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D0>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D1>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D2>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D5>{},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},

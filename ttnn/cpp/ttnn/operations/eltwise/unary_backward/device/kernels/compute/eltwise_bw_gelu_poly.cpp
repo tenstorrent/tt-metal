@@ -10,6 +10,15 @@
 
 namespace ckl = compute_kernel_lib;
 
+// The unpacker only has to switch format between the two operand buffers when they carry
+// different formats, which the program factory signals with MIXED_OPERAND_DATA_FORMATS; for
+// the same-dtype case the configuration compute_kernel_hw_startup() installs covers both.
+#ifdef MIXED_OPERAND_DATA_FORMATS
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 // GELU backward using the exact (non-tanh) piecewise derivative: Sollya-fitted core and corrected negative tail.
 // Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
 void kernel_main() {
@@ -34,7 +43,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                operand_reconfig),
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
@@ -42,7 +51,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                operand_reconfig),
             ckl::Dst::D1>{},
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = GELU'(input)
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * GELU'(input)

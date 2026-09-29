@@ -29,6 +29,10 @@ struct UnaryBackwardKernelSpec {
     // float32 where the composite had to round each one back to the operand dtype in L1. Costs
     // half the DEST slots (8 -> 4 for bfloat16), so it is per-op rather than blanket.
     bool force_fp32_dest_acc = false;
+    // Kernel to use instead of compute_kernel_path when DEST accumulates in float32, which halves
+    // the DEST slots (8 -> 4 in SyncHalf). A gradient whose chain needs more than four live tiles
+    // supplies a variant that fits; empty means compute_kernel_path fits either way.
+    std::string_view compute_kernel_path_fp32_dest = {};
 };
 
 const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type);

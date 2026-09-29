@@ -16,6 +16,15 @@
 
 namespace ckl = compute_kernel_lib;
 
+// The unpacker only has to switch format between the two operand buffers when they carry
+// different formats, which the program factory signals with MIXED_OPERAND_DATA_FORMATS; for
+// the same-dtype case the configuration compute_kernel_hw_startup() installs covers both.
+#ifdef MIXED_OPERAND_DATA_FORMATS
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -33,10 +42,10 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D1>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D2>{},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
@@ -71,12 +80,11 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // tile[0] is free now (tanh/sech² no longer needed): load grad_out.
         ckl::CopyTile<
-            ckl::input(
-                dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D0>{},
         // tile[2] = x * pdf term. Re-read x from the CB
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D3>{},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // result: tile[1] = cdf_term + x * pdf_term
