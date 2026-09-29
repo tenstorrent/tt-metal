@@ -22,3 +22,23 @@ Overseer log: time, task, trigger, classification, action, resulting commit.
 - 00:24 R.1 FAIL: shape_mismatches 45 = `layers.*.hc_attn_fn` expected `"*"` in the spec (not a wildcard for shapes;
   real shape [24, 16384]). Classified: spec error (intake). Paused, killed the fix agent before it edited anything.
   Owner approved the one-line spec fix ("yes"); intake re-approved; resume.
+- 01:40 R.2 PASS (998ab90bb7a) after 1 reference attempt. Reviewed: glm_ref.py is a standalone implementation (no
+  HF import; sparse indexer gathers selected pools; fp32 KDA state); HF parity L0-4 and logits PCC 1-1e-13, top1 1.0;
+  whole-model (45-layer) HF sanity: smoke "Paris", text_top1_acc 0.964 (~10 min, streams FP8 experts). Accepted.
+- 01:10-01:32 owner asked to investigate KDA fixes on main (mvasilijevicTT): missing ea27dd5f1ba (padded-chunk
+  actual_end) + 411fb7c4fd8 (bind only if given). Owner approved: build + test in worktree
+  /localdev/dnijemcevic/tt-metal-kda first; cherry-pick into the branch at the plan-approval wait.
+  Baseline KDA op tests on the current build: 244 passed, 22 skipped, 1 perf-timing fail (summarize_chunk_recurrence
+  production perf 319.9 us > 314.7 us limit).
+- 01:44-02:12 cherry-picks in the worktree: 14 new KDA op-test failures (prepare_chunk_recurrence without actual_start:
+  q bound twice, rejected by #55670). Built clean origin/main 98134127a7b in /localdev/dnijemcevic/tt-metal-main:
+  the same 14 fail with the same TT_FATAL (checked: main's own build, submodules and python modules). CI never ran them
+  after #57070 merged (nightly L2 stopped earlier every night; PR CI ran before #55670 was in its base); no issue filed.
+  Server side: main's prefill engine changes nothing K.1 or GLM's adapter must follow (read-only comparison;
+  scratchpad prefill_engine_main_vs_ours.md). Owner: port the fix by cherry-pick, not rebase; not patch the op.
+- 02:59 cherry-picked #57070 + #58049 onto the branch (158a510b062, 926ca262f00), rebuilt in place (0 errors).
+  KDA op tests: 236 passed, 24 skipped, 15 failed = the 14 known main failures + the summarize production-perf
+  timing check (also fails on the old build). Framework selftests 212 passed; ttnn.bringup fork tests 23 passed;
+  test_box on 2x2 passed. findings.yaml: kda-actual-end-padding for the implement agents.
+- Plan reviewed with the owner (KDA TP2 x SP2 on 2x2 accepted as the experiment; DSA replicated + query split;
+  indexer composed, not deferred; MiMo expert layout at 72/288 unverified). Owner approved the plan ("ok go ahead").
