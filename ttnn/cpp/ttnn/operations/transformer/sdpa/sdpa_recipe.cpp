@@ -119,7 +119,11 @@ ProgramDescriptor recipe_compute_program(
         .math_fidelity = policy.pv_fidelity,
         .fp32_dest_acc_en = fp32,
         .dst_full_sync_en = false,
-        .math_approx_mode = true};
+        .math_approx_mode = true,
+        // B-E record their exp and compensation programs in the SFPU replay buffer once and replay them
+        // per tile from other functions; the SFPI compiler's replay optimization would overwrite them
+        // (tenstorrent/tt-metal#58433). FAST is the legacy kernel and keeps its build.
+        .disable_sfpu_replay_optimization = policy.selection.recipe != Recipe::A};
     if (fp32) {
         compute_config.unpack_to_dest_mode.resize(64, UnpackToDestMode::Default);
         for (uint32_t cb : {5, 7, 8, 9, 12, 13, 14}) {
