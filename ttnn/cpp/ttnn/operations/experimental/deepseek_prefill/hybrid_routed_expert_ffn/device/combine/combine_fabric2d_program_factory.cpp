@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_fabric2d_program_factory.hpp"
-#include "combine_fabric2d_placement.hpp"
-#include "combine_fabric2d_assignments.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_assignments.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_reader_ct_args.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_reader_rt_args.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_untilizer_rt_args.hpp"
@@ -37,6 +38,10 @@
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine {
+
+// Placement, assignments and the geometry helpers are combine_fabric2d's; this op walks the same ring.
+using namespace ::ttnn::operations::experimental::deepseek_prefill::
+    combine_fabric2d;  // NOLINT(google-build-using-namespace)
 
 namespace {
 
@@ -571,8 +576,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
         tt::tt_metal::KernelDescriptor kernel;
         kernel.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/kernels/combine/"
-            "dataflow/collector_combine_fabric2d.cpp";
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
+            "collector_combine_fabric2d.cpp";
         kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         kernel.core_ranges = CoreRangeSet(CoreRange(collector.logical));
         kernel.compile_time_args = {
