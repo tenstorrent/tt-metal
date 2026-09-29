@@ -1399,3 +1399,48 @@ Results:
 - Reference passes (exact). Stub fails (AssertionError).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_12_experts.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.shared_expert test (attempt 1)
+
+Reviewed the rendered shared_expert test for dsa_moe layer 3 and rewrote it in the style of the experts test. The
+gated metric is unchanged: pcc_shared_expert_L03 (PCC >= 0.99, chunk 1).
+- Sensitivity: CPU host scripts /tmp/glm_se/s{1,2,3}.py (not kept). The numbers are in the test docstring.
+- The clamps engage on this golden, unlike layer 0: 49 gate > 10 and 276 |up| > 10 entries on chunk 1. So the golden
+  checks already catch missing or one-sided clamps, and a limit of 9.9 or 10.1 (per-token ratio). The probe is 4 * x
+  (exact in bf16) against the CPU reference of the same input. It catches limit 9.9 / 10.1 by coefficient too.
+- Floor: the CPU reference on the bf16 golden input scores rel 0.0017. The planned device path (bf16 weights, fp32
+  intermediates, bf16 out) scores 0.0024 / [0.9996, 1.0015] / 0.0033 / coef 1.00045. The +0.045% comes from bf16
+  rounding of the fp8 block-scaled weights (proposed as a known issue).
+- Checks on chunk 1 and chunk 0:
+  - rel L2 <= 0.008 and per-token ratio [0.993, 1.007].
+  - worst row <= 0.015.
+  - coefficient [0.997, 1.003].
+  - every 128-row block's coefficient [0.996, 1.004].
+- Probe checks: rel <= 0.008, ratio [0.993, 1.007], worst row <= 0.016, coefficient [0.997, 1.003].
+- These limits pass bfp8 weights (0.0061, probe worst row 0.0121).
+- They fail bfp8 x and h (rel 0.0095), HiFi2-like 7-bit weight truncation (coef 0.994) and x1.005 (coef 1.0055).
+- Implement: keep activations bf16 or fp32, and reuse `tt/mlp.py:TtDenseMLP` with the shared weights (TP=4, 512 per
+  chip, fp32 all_reduce), as components.yaml plans.
+Results:
+- Reference passes: 0.999999 / 0.0017 / [0.9994, 1.0010] / 0.0022 / 0.99999; chunk 0 the same; probe exact.
+- Stub fails (PCC 0).
+- The gate (device) fails with `NotImplementedError: no device module for shared_expert yet`, as expected before the
+  implement step.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_shared_expert.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.shared_expert implement (attempt 1)
+
+- No new module. `tt/mlp.py:TtDenseMLP` is reused through `build_mlp(..., name="mlp.shared_experts")`. It has the
+  shared-expert weights (fp8 -> bf16 via the reference loader) and runs TP=4 with 512 intermediate columns per chip,
+  fp32 intermediates, an fp32 all_reduce with cluster_axis=None, and a bf16 output. Every matmul is HiFi4.
+- Registered in `hooks.py`: a `shared_expert` branch in `_device_step` (through `_norm_host_fn`), and `shared_expert`
+  added to `DEVICE_STEPS["dsa_moe"]`. The module docstring now covers both widths.
+- Gate: PCC 0.999997, rel 0.00244, ratio [0.9991, 1.0008], worst row 0.0033, coefficient 0.99984, blocks
+  [0.99979, 0.99991]. Chunk 0: 0.999997 / 0.00245. Clamp probe: rel 0.00214, coefficient 0.99978. About 15 s.
+- The device coefficient is 0.99984. The test docstring predicted 1.00045 from a host simulation of the planned path.
+  The gap is consistent with the known "fp32 activations into an FPU op shrink the result slightly" issue, and it is
+  well inside the limits.
+- In the run log, the first `FAIL pcc=0` line comes from the precompile collect pass (placeholder outputs), not from
+  the real pass.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_shared_expert.py`
