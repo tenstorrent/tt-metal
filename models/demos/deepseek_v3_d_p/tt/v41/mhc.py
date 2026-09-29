@@ -13,6 +13,8 @@ Streams are ``[1, 1, S/sp, hc_mult * hidden/tp]`` fp32 (per chip: its hidden sli
 ``pre_mix`` is ``[1, 1, S/sp, hc_mult]`` fp32.
 """
 
+import struct
+
 import torch
 
 import ttnn
@@ -48,7 +50,21 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
 
 
 class _V41Site(TtMHCWrap):
-    """``TtMHCWrap`` with its collapse and hc_post as one fused op each (bit-identical, one pass over the streams)."""
+    """``TtMHCWrap`` with its split projection, collapse and hc_post as one fused op each (one pass over the streams).
+
+    collapse and hc_post are bit-identical to the composite path; the projection accumulates the same fp32 matmul
+    and an fp32 sum of squares, and TP-sums both in one all-reduce."""
+
+    def __init__(self, device, cfg, fn, base, scale, **kwargs):
+        # fn_T gets zero columns up to the tile width: the fused projection puts mean(x^2) + eps in column mix_hc
+        self.mix_hc = fn.shape[0]
+        assert self.mix_hc < 32, self.mix_hc
+        fn = torch.cat([fn.float(), torch.zeros(32 - self.mix_hc, fn.shape[1])])
+        super().__init__(device, cfg, fn, base, scale, **kwargs)
+
+    def project(self, x):
+        tp_sum = self._tp_sum if self.tp_factor > 1 else None
+        return fused_rms_project(x, self.fn_T, self.mix_hc, self.norm_eps, self.tp_factor, tp_sum)
 
     def collapse(self, x, pre):
         return fused_collapse(x, pre, self.n)
@@ -210,3 +226,134 @@ def fused_hc_post(h, residual, post, comb, n: int) -> ttnn.Tensor:
     """``new_j = post_j * h + sum_i comb[i, j] * residual_i`` -> [1, 1, T, n*C] fp32 (``TtMHCWrap.hc_post``)."""
     table = [[(0, j)] + [(1, i * n + j) for i in range(n)] for j in range(n)]
     return _stream_mix(residual, n, [post, comb], table, outputs=n, x=h)
+
+
+_PROJ_BK = 8  # stream/weight tiles per read barrier (the largest divisor of the width in tiles up to this)
+_PROJ_X_BLOCKS = 6  # x blocks buffered per core (measured: x reads, not compute, bound the op)
+_CB_X, _CB_XSQ, _CB_W, _CB_CONST, _CB_MIX, _CB_HI, _CB_LO = 0, 1, 2, 3, 4, 5, 6
+
+
+def _f32_bits(v: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", v))[0]
+
+
+def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Tensor:
+    """One pass over the streams: [1, 1, T, K] fp32 ``x``, [1, 1, K, 32] fp32 ``fn_T`` (zero from ``mix_col`` on)
+    -> [1, 1, T, 32] fp32 with ``x @ fn_T`` in columns < ``mix_col`` and ``sum(x^2) / width + eps_part`` in
+    column ``mix_col``: this chip's partial mixes and share of ``mean(x^2) + eps``, summed across TP by the caller."""
+    for t in (x, fn_T):
+        assert t.dtype == ttnn.float32 and t.layout == ttnn.TILE_LAYOUT, (t.dtype, t.layout)
+        assert not t.memory_config().is_sharded(), "the mHC projection takes interleaved tensors"
+    tokens, k = x.shape[-2], x.shape[-1]
+    assert tokens % 32 == 0 and k % 32 == 0, (tokens, k)
+    assert tuple(fn_T.padded_shape)[-2:] == (k, 32) and mix_col < 32, (tuple(fn_T.padded_shape), k, mix_col)
+    kt, rows = k // 32, tokens // 32
+    bk = max(b for b in range(1, _PROJ_BK + 1) if kt % b == 0)
+
+    device = x.device()
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, tokens, 32]), ttnn.float32, ttnn.TILE_LAYOUT, device, x.memory_config()
+    )
+    grid = device.compute_with_storage_grid_size()
+    num_cores = min(grid.x * grid.y, rows)
+    base, extra = divmod(rows, num_cores)
+    last = ttnn.CoreCoord((num_cores - 1) % grid.x, (num_cores - 1) // grid.x)
+    ranges = []
+    if last.y > 0:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, last.y - 1)))
+    ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, last.y), last))
+    cores = ttnn.CoreRangeSet(ranges)
+
+    reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    start = 0
+    for i in range(num_cores):
+        cx, cy = i % grid.x, i // grid.x
+        count = base + (i < extra)
+        reader_args[cx][cy] = [x.buffer_address(), start, count]
+        writer_args[cx][cy] = [fn_T.buffer_address(), out.buffer_address(), start, count]
+        compute_args[cx][cy] = [count]
+        start += count
+
+    def cb(index: int, tiles: int) -> ttnn.CBDescriptor:
+        page = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.float32, page_size=_FP32_TILE_BYTES)
+        return ttnn.CBDescriptor(total_size=tiles * _FP32_TILE_BYTES, core_ranges=cores, format_descriptors=[page])
+
+    accessor = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+    )
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    # exact fp32 copies into DST: the squares' inputs and the mixes reload
+    modes[_CB_XSQ] = modes[_CB_MIX] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    compute_config.unpack_to_dest_mode = modes
+    # eps_part lands on all 32 entries of the row's partial sums of squares, which the E matmul sums
+    compute_ct = [
+        _CB_X,
+        _CB_XSQ,
+        _CB_W,
+        _CB_CONST,
+        _CB_MIX,
+        _CB_HI,
+        _CB_LO,
+        _CB_OUT,
+        kt,
+        bk,
+        _f32_bits(1.0 / width),
+        _f32_bits(eps_part / 32),
+    ]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/mhc_proj_reader.cpp",
+            core_ranges=cores,
+            compile_time_args=[_CB_X, _CB_XSQ, _CB_CONST, kt, bk, mix_col] + accessor(x),
+            runtime_args=reader_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/mhc_proj_writer.cpp",
+            core_ranges=cores,
+            compile_time_args=[_CB_W, _CB_OUT, kt, bk] + accessor(fn_T) + accessor(out),
+            runtime_args=writer_args,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/mhc_proj_compute.cpp",
+            core_ranges=cores,
+            compile_time_args=compute_ct,
+            runtime_args=compute_args,
+            config=compute_config,
+        ),
+    ]
+    x_page = lambda index: ttnn.CBFormatDescriptor(
+        buffer_index=index, data_format=ttnn.float32, page_size=_FP32_TILE_BYTES
+    )
+    cbs = [
+        # cb_x and cb_xsq: one buffer, two views (the matmul operand and the fp32 unpack-to-DST input)
+        ttnn.CBDescriptor(
+            total_size=_PROJ_X_BLOCKS * bk * _FP32_TILE_BYTES,
+            core_ranges=cores,
+            format_descriptors=[x_page(_CB_X), x_page(_CB_XSQ)],
+        ),
+        cb(_CB_W, 2 * bk),
+        cb(_CB_CONST, 1),
+        cb(_CB_MIX, 1),
+        cb(_CB_HI, 1),
+        cb(_CB_LO, 1),
+        cb(_CB_OUT, 2),
+    ]
+    return ttnn.generic_op([x, fn_T, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+
+
+def fused_rms_project(x, fn_T, mix_col: int, norm_eps: float, tp_factor: int = 1, tp_sum=None) -> ttnn.Tensor:
+    """``tt_mhc._project`` in one pass over the streams and one TP reduction: [1, 1, T, K] -> [1, 1, T, 32] with
+    ``RMSNorm(x) @ fn`` in columns < ``mix_col`` (``tp_sum`` sums the partial mixes and mean of squares together,
+    replicated on every TP chip). Columns >= ``mix_col`` are scratch the Sinkhorn op does not read."""
+    # every core reads all of the (small) weight: from L1, not 80x from DRAM
+    w = ttnn.to_memory_config(fn_T, ttnn.L1_MEMORY_CONFIG)
+    r = fused_project(x, w, mix_col, x.shape[-1] * tp_factor, norm_eps / tp_factor)
+    ttnn.deallocate(w)
+    if tp_sum is not None:
+        r = tp_sum(r)
+    rs = ttnn.rsqrt(r)  # column mix_col: rsqrt(mean(x^2) + eps); the other columns are scratch
+    # every column times column mix_col of rs, per token: no column slice (untilize + slice + tilize)
+    return _stream_mix(r, 1, [rs], [[(0, mix_col)]], outputs=1)
