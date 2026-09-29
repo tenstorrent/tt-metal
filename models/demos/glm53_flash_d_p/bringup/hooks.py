@@ -43,7 +43,7 @@ DEVICE_STEPS = {
         "ffn_norm",
         "mlp",
     },
-    "dsa_moe": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "indexer"},
+    "dsa_moe": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "indexer", "attention"},
     "kda_moe": set(),
 }
 
@@ -205,6 +205,41 @@ class _IndexerHostFn:
         return self.module.state_torch()
 
 
+class _MlaHostFn:
+    """fn(ctx, attn_norm [S, H], q_resid [S, 1536], topk int32 [S, 2051]) -> host [S, H] bf16 around TtMLA (harness
+    boundary: bf16 upload, topk compacted to the sparse_sdpa row format and split by chip, chip-0 read-back). A
+    component ctx that carries ``state_prefix`` loads its latent rows first and gets ``state_out`` back."""
+
+    def __init__(self, mesh, module):
+        self.mesh, self.module = mesh, module
+
+    def __call__(self, ctx, x, q_resid, topk):
+        import ttnn
+        from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+        from models.demos.glm53_flash_d_p.tt.mla_attention import idx_to_device
+
+        prefix = ctx.extra.get("state_prefix")
+        if prefix is not None and ctx.start > 0:
+            self.module.load_state(prefix, ctx.extra.get("prefix_len", ctx.start))
+        s = x.shape[-2]
+        xd = replicate(self.mesh, x.reshape(1, 1, s, x.shape[-1]).to(torch.bfloat16))
+        qd = replicate(self.mesh, q_resid.reshape(1, 1, s, q_resid.shape[-1]).to(torch.bfloat16))
+        idx = idx_to_device(self.mesh, topk.reshape(s, -1))
+        yd = self.module(xd, qd, idx, ctx.start)
+        y = replicated_to_host(yd).reshape(s, -1)
+        for t in (xd, qd, idx, yd):
+            ttnn.deallocate(t)
+        if prefix is not None:
+            ctx.extra["state_out"] = self.module.state_torch()
+        return y
+
+    def load_state(self, tensors, length=None):
+        self.module.load_state(tensors, length)
+
+    def state_torch(self):
+        return self.module.state_torch()
+
+
 def _max_seq(spec):
     seqs = [r["seq"] for r in spec.get("ladder", [])] + [spec.get("target", {}).get("seq", 0)]
     return max(seqs)
@@ -244,6 +279,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
 
         module = build_indexer(mesh, loader, cfg, layer, _max_seq(spec), _chunks(spec))
         return _IndexerHostFn(mesh, module, cfg.index_topk + cfg.index_kpool - 1)
+    if step == "attention":
+        from models.demos.glm53_flash_d_p.tt.mla_attention import build_mla
+
+        return _MlaHostFn(mesh, build_mla(mesh, loader, cfg, layer, _max_seq(spec)))
     if step == "mlp" and not cfg.is_moe(layer):
         from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
 
@@ -264,16 +303,19 @@ class _RefState:
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
-        if layer in self.dev:
-            self.dev[layer].load_state(tensors, length)
+        for d in self.dev.get(layer, ()):
+            d.load_state(tensors, length)
 
     def to_torch(self, layer, length):
-        """The CPU state with the device-held tensors (a KDA layer's whole state, a DSA layer's pooled keys) on top."""
+        """The CPU state with the device-held tensors (a KDA layer's whole state, a DSA layer's pooled keys and
+        latent cache) on top."""
         out = self.ref.state_tensors(self.s, layer, length)
-        if layer in self.dev:
-            out.update(self.dev[layer].state_torch())
-            if "index_key" in out:
-                out["index_key"] = out["index_key"][: length // self.ref.cfg.index_kpool]
+        for d in self.dev.get(layer, ()):
+            out.update(d.state_torch())
+        if "index_key" in out:
+            out["index_key"] = out["index_key"][: length // self.ref.cfg.index_kpool]
+        if "kv_latent" in out:
+            out["kv_latent"] = out["kv_latent"][:length]
         return out
 
 
@@ -296,8 +338,8 @@ class HybridDeviceModel:
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        dev = {i: o[s] for i, o in self.overrides.items() for s in o if hasattr(o[s], "state_torch")}
-        return _RefState(self.ref, max_seq, dev)
+        dev = {i: [f for f in o.values() if hasattr(f, "state_torch")] for i, o in self.overrides.items()}
+        return _RefState(self.ref, max_seq, {i: fs for i, fs in dev.items() if fs})
 
     def embed(self, tokens):
         import torch.nn.functional as F
