@@ -1294,3 +1294,134 @@ def test_topk_large_indices_column_split_matches_single_core(device, k, n):
         ttnn.to_torch(single, dtype=torch.uint32).to(torch.int64),
     )
     _assert_topk_matches_torch(torch_input, split, k)
+
+
+# ---------------------------------------------------------------------------
+# Column body: with k <= 64 every column of a K 1024 chunk keeps its own top 64 across the chunks, so the
+# winners of a row can crowd into one column. 160 rows keep every row on its own core on any Blackhole grid.
+# ---------------------------------------------------------------------------
+
+
+def _make_column_winners_input(num_rows: int, n: int, k: int, stride: int, first: int) -> torch.Tensor:
+    """k distinct winners per row at first + row + j * stride, zeros elsewhere."""
+    values = torch.zeros((num_rows, n), dtype=torch.bfloat16)
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    winner_values = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    for row in range(num_rows):
+        positions = (first + row + torch.arange(k, dtype=torch.int64) * stride) % n
+        values[row, positions] = winner_values
+    return values
+
+
+@pytest.mark.parametrize("k", [16, 48, 64])
+@pytest.mark.parametrize(
+    "num_chunks,tail_trim,stride",
+    [
+        (4, 0, None),  # spread over the row
+        (4, 0, 16),  # all winners in one column of one chunk
+        (33, 5, 1024),  # one column of every chunk, over two segments with a partial last chunk
+        (40, 7, None),
+        (65, 0, None),  # three segments
+    ],
+)
+def test_topk_large_indices_column_body_decodes_global_indices(device, k, num_chunks, tail_trim, stride):
+    num_rows = 160
+    n = num_chunks * 1024 - tail_trim
+    torch_input = _make_column_winners_input(num_rows, n, k, stride or n // k, first=3)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+@pytest.mark.parametrize("k", [16, 32, 64])
+@pytest.mark.parametrize("n", [4096, 16384 + 17])
+def test_topk_large_indices_column_body_random_values(device, k, n):
+    torch.manual_seed(4)
+    torch_input = torch.randn(160, n, dtype=torch.bfloat16)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_values_match_torch(torch_input, tt_indices, k)
+
+
+@pytest.mark.parametrize("k", [16, 64])
+def test_topk_large_indices_column_body_negative_infinity(device, k):
+    sentinel = 0xFFFFFFFF
+    num_rows, n, finite_count = 160, 4096 + 3, 10
+    torch_input = torch.full((num_rows, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, 1000 : 1000 + finite_count] = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+    torch_input[:4] = -float("inf")
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    expected_row = torch.cat(
+        [
+            torch.arange(1000 + finite_count - 1, 999, -1, dtype=torch.int64),
+            torch.full((k - finite_count,), sentinel, dtype=torch.int64),
+        ]
+    )
+    expected = expected_row.unsqueeze(0).repeat(num_rows, 1)
+    expected[:4] = sentinel
+    _assert_indices(tt_indices, expected, [num_rows, k])
+
+
+@pytest.mark.parametrize("valid_length", [1000, 3000, 5 * 1024 + 1, 33 * 1024 + 9])
+def test_topk_large_indices_column_body_valid_length(device, valid_length):
+    k = 32
+    num_rows, n = 160, 40 * 1024
+    torch_input = _make_column_winners_input(num_rows, n, k, (valid_length - num_rows - 1) // k, first=1)
+    torch_input[:, valid_length:] = 300.0
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+    _assert_topk_matches_torch(torch_input[:, :valid_length], tt_indices, k)
+
+
+def test_topk_large_indices_column_body_metadata_empty_segments(device):
+    # 8 rows of 131072 take the column body with a column split, and the segments past the on-device length
+    # fold in as -inf survivors through the tree merge.
+    k, valid_length = 32, 40000
+    torch.manual_seed(5)
+    torch_input = torch.randn(8, 131072, dtype=torch.bfloat16)
+    torch_input[:, valid_length:] = 300.0
+    tt_indices = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, valid_length),
+    )
+
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+    assert int(indices.max()) < valid_length
+    _assert_topk_values_match_torch(torch_input[:, :valid_length], tt_indices, k)
+
+
+def test_topk_large_indices_program_cache_separates_column_body(device):
+    k = 32
+    many_rows = _make_column_winners_input(160, 8192, k, 8192 // k, first=0)
+    few_rows = _make_column_winners_input(2, 8192, k, 8192 // k, first=0)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        column = ttnn.experimental.topk_large_indices(_to_device(many_rows, device), k=k)
+        entries_after_column = device.num_program_cache_entries()
+        full = ttnn.experimental.topk_large_indices(_to_device(few_rows, device), k=k)
+
+        assert device.num_program_cache_entries() == entries_after_column + 1
+        _assert_topk_matches_torch(many_rows, column, k)
+        _assert_topk_matches_torch(few_rows, full, k)
+    finally:
+        device.clear_program_cache()
+
+
+def test_topk_large_indices_column_body_matches_full_body_on_one_core(device):
+    # One core runs the column body for k 64; k 80 over the same row runs the full K 512 body.
+    torch_input = _make_column_winners_input(1, 16384, 80, 16384 // 80, first=11)
+    tt_input = _to_device(torch_input, device)
+    one_core = _rect_core_grid(0, 0, 0)
+
+    column = ttnn.experimental.topk_large_indices(tt_input, k=64, sub_core_grids=one_core)
+    full = ttnn.experimental.topk_large_indices(tt_input, k=80, sub_core_grids=one_core)
+
+    assert_equal(
+        ttnn.to_torch(column, dtype=torch.uint32).to(torch.int64),
+        ttnn.to_torch(full, dtype=torch.uint32).to(torch.int64)[:, :64],
+    )
+    _assert_topk_matches_torch(torch_input, column, 64)

@@ -105,8 +105,9 @@ FORCE_INLINE void sort_classic_chunk(CircularBuffer& input, uint32_t dst, uint32
 }
 
 // FullInit is compile-time and this helper is force-inlined so the hot loop has
-// neither a mode branch nor a repeated full TopK configuration sequence.
-template <uint32_t K, bool FullInit>
+// neither a mode branch nor a repeated full TopK configuration sequence. Columns sorts
+// each 64 row column of the chunk on its own instead of the whole chunk.
+template <uint32_t K, bool FullInit, bool Columns = false>
 FORCE_INLINE void sort_fused_chunk(
     CircularBuffer& input, uint32_t dst, uint32_t active_elements, bool ascending, uint32_t local_chunk_id) {
     copy_chunk<K>(input, dst, active_elements);
@@ -118,7 +119,11 @@ FORCE_INLINE void sort_fused_chunk(
     } else {
         MATH((ckernel::sfpu::_topk_large_indices_reinit_fused_after_stamp_()));
     }
-    topk_xl_local_sort<K>(dst, ascending);
+    if constexpr (Columns) {
+        topk_xl_local_sort_generic<K, true>(dst, ascending);
+    } else {
+        topk_xl_local_sort<K>(dst, ascending);
+    }
 }
 
 // Every body reduces the row chunks [first_chunk, first_chunk + num_chunks) into an unfused
@@ -153,7 +158,9 @@ FORCE_INLINE void reduce_fused_row(
     topk_xl_separate_indices_row_major_global<K>(survivor_slot);
 }
 
-template <uint32_t K>
+// Columns (k <= 64): every column of the survivor keeps the top 64 of its column across the segment's chunks,
+// which holds the segment's top 64, and one full sort ranks them once the segment is done.
+template <uint32_t K, bool Columns>
 FORCE_INLINE void reduce_segmented_row(
     CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements, bool final_ascending) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
@@ -180,12 +187,23 @@ FORCE_INLINE void reduce_segmented_row(
 
         const uint32_t first_elements = segment_first + 1 == end_chunk_total ? tail_elements : K;
         if (segment == 0) {
-            sort_fused_chunk<K, true>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
+            sort_fused_chunk<K, true, Columns>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
         } else {
-            sort_fused_chunk<K, false>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
+            sort_fused_chunk<K, false, Columns>(
+                input, base, first_elements, false, segment_first & fused_chunk_id_mask);
         }
 
-        if (segment_first == last_chunk) {
+        if constexpr (Columns) {
+            for (uint32_t chunk = segment_first + 1; chunk <= last_chunk; ++chunk) {
+                const uint32_t active_elements = chunk + 1 == end_chunk_total ? tail_elements : K;
+                sort_fused_chunk<K, false, true>(input, chunk_slot, active_elements, true, chunk & fused_chunk_id_mask);
+                topk_xl_merge<K, true>(base);
+                if (chunk != last_chunk) {
+                    topk_xl_rebuild_columns<K>(base, false);
+                }
+            }
+            topk_xl_local_sort<K>(base, mirror_final_survivor);
+        } else if (segment_first == last_chunk) {
             topk_xl_rebuild<K, true>(base, mirror_final_survivor);
         } else {
             for (uint32_t chunk = segment_first + 1; chunk <= last_chunk; ++chunk) {
@@ -275,8 +293,11 @@ void kernel_main() {
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     static_assert(
-        body_mode == ComputeBodyMode::FusedEndToEnd || body_mode == ComputeBodyMode::FusedSegmented,
+        body_mode == ComputeBodyMode::FusedEndToEnd || body_mode == ComputeBodyMode::FusedSegmented ||
+            body_mode == ComputeBodyMode::ColumnSegmented,
         "invalid TopK compute body mode");
+    constexpr bool columns = body_mode == ComputeBodyMode::ColumnSegmented;
+    static_assert(!columns || K == 1024, "the column body runs on K 1024 chunks");
 
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t survivor_tiles = 2 * tiles_per_sequence;
@@ -312,10 +333,10 @@ void kernel_main() {
     for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
 
-        if constexpr (body_mode == ComputeBodyMode::FusedSegmented) {
-            reduce_segmented_row<K>(input, seg_first_chunk, num_chunks, tail_elements, body_final_ascending);
-        } else {
+        if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
             reduce_fused_row<K>(input, seg_first_chunk, num_chunks, tail_elements, body_final_ascending);
+        } else {
+            reduce_segmented_row<K, columns>(input, seg_first_chunk, num_chunks, tail_elements, body_final_ascending);
         }
 
         for (uint32_t round = 0; round < num_recv_rounds; ++round) {

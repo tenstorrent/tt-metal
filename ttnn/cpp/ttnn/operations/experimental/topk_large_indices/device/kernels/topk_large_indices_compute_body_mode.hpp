@@ -12,6 +12,8 @@ namespace ttnn::operations::experimental::topk_large_indices::program {
 enum class ComputeBodyMode : uint32_t {
     FusedEndToEnd = 1,
     FusedSegmented = 2,
+    // K 1024 chunks folded per column, each of the 16 columns keeping its own top 64: k <= 64 only.
+    ColumnSegmented = 3,
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program
