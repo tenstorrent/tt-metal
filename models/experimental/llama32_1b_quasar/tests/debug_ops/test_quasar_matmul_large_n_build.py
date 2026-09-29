@@ -16,9 +16,11 @@ config. The e2e's mcast_in0 path is "correct by coincidence" without those pack_
 cb_intermed0), so the fix is retained for asserts-on / non-aliasing configs and this large-N build limit is
 tracked here.
 
-This test reconstructs that exact program config + matching shapes so the kernel builds in isolation. It is
-xfail (strict=False) until the kernel fits at large-N; it will XPASS once fixed. Inputs built via
-quasar.tilize (from_torch(TILE) faults on Quasar wide-short tensors).
+FIXED: the pack-destination retarget (pack_reconfig_data_format + pack_init) is now emitted once via a
+noinline qsr_pack_retarget() helper instead of inlined at each switch site, so trisc0 fits at per_core_N=84
+(measured text+data ~8.2KB was ~40B over the ~8KB trisc L1 budget). This test reconstructs that exact
+program config + matching shapes and PCC-checks the result, guarding against a regression of that overflow.
+Inputs built via quasar.tilize (from_torch(TILE) faults on Quasar wide-short tensors).
 
 Run (Quasar sim, 2-node emulator, SLOW dispatch):
     TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 TT_METAL_SIMULATOR=~/sim/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 \
@@ -68,16 +70,12 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-@pytest.mark.xfail(
-    reason="trisc0 build overflow: bmm_large_block_zm_fused_bias_activation_metal2 does not fit at "
-    "per_core_N=84 with the #58488 pack_init additions (post-link .xip.elf step fails). XPASSes once the "
-    "kernel is trimmed to fit large-N.",
-    strict=False,
-)
 @pytest.mark.timeout(3600)
 def test_matmul_large_n_build(mesh_device):
-    """Build the exact large-N 1D-mcast matmul in isolation. Fails at program creation (kernel build) until
-    the metal2 matmul kernel fits at this config; then checks PCC."""
+    """Build the exact large-N 1D-mcast matmul in isolation and check PCC. Guards against a regression of the
+    trisc0 code-size overflow: bmm_large_block_zm_fused_bias_activation_metal2's pack-destination retarget
+    (pack_reconfig_data_format + pack_init) is emitted once via the noinline qsr_pack_retarget helper instead
+    of inlined at each switch site, which is what makes trisc0 fit at per_core_N=84."""
     torch.manual_seed(0)
     a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
     b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
