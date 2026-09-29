@@ -2095,7 +2095,7 @@
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -2112,7 +2112,7 @@
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
