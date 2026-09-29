@@ -74,6 +74,7 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
 
     auto input_tensor_shape = tensor_args.input.logical_shape();
     auto input_tensor_rank = tensor_args.input.logical_shape().rank();
+    TT_FATAL(operation_attributes.kernel_size.size() == 2, "Fold: kernel_size takes 2 elements");
     uint32_t kernel_size_product = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1];
     TT_FATAL(kernel_size_product > 0, "Fold: kernel_size must be greater than 0");
     auto output_shape = [&] {
