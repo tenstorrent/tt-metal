@@ -39,5 +39,11 @@ ttnn::Tensor minimal_matmul(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool fuse_swiglu = false);
+    bool fuse_swiglu = false,
+    const std::optional<ttnn::Tensor>& valid_rows_tensor = std::nullopt,
+    uint32_t valid_rows_addend = 0,
+    const std::optional<ttnn::Tensor>& slot_tensor = std::nullopt,
+    uint32_t kv_num_layers = 1,
+    uint32_t kv_layer_idx = 0,
+    std::optional<uint32_t> out_head_dim = std::nullopt);
 }

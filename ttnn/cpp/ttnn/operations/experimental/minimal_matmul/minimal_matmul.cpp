@@ -20,7 +20,13 @@ ttnn::Tensor minimal_matmul(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::optional<ttnn::Tensor>& valid_rows_tensor,
+    uint32_t valid_rows_addend,
+    const std::optional<ttnn::Tensor>& slot_tensor,
+    uint32_t kv_num_layers,
+    uint32_t kv_layer_idx,
+    std::optional<uint32_t> out_head_dim) {
     // Unpack: single Tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
     ttnn::Tensor main_input;
     std::optional<ttnn::Tensor> second_input;
@@ -51,7 +57,13 @@ ttnn::Tensor minimal_matmul(
         /*fused_ternary_input_a=*/std::nullopt,
         /*fused_ternary_input_b=*/std::nullopt,
         fuse_swiglu,
-        second_input);
+        second_input,
+        valid_rows_tensor,
+        valid_rows_addend,
+        slot_tensor,
+        kv_num_layers,
+        kv_layer_idx,
+        out_head_dim);
 
     // Extract and return the single output
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());

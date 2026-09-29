@@ -428,10 +428,21 @@ void kernel_main() {
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
 
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
+#ifdef DYNAMIC_M
+    uint32_t M_tiles_rt = 0;
+    UNPACK(M_tiles_rt = mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    MATH(M_tiles_rt = mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    PACK(M_tiles_rt = mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    constexpr uint32_t M_start_tile = 0;
+    const uint32_t M_end_tile = M_tiles_rt;
+    const uint32_t M_blocks = (M_tiles_rt + M_block_tiles - 1) / M_block_tiles;
+#else
+    const auto M_start_tile = get_arg(args::M_start_tile);
+    const auto M_end_tile = get_arg(args::M_end_tile);
+    constexpr uint32_t M_blocks = M_blocks_per_core;
+#endif
 
 #ifdef FUSE_TERNARY
     const auto fused_ternary_scalar_uint = get_arg(args::fused_ternary_scalar);
@@ -475,7 +486,7 @@ void kernel_main() {
     uint32_t current_subblock_h = subblock_h;
     uint32_t current_subblock_w = subblock_w;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         current_M_block_tiles = m_tile_end - m_tile;

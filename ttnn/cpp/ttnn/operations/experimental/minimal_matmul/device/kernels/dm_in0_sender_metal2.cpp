@@ -22,6 +22,10 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "matmul_dataflow_common_metal2.hpp"
+#ifdef DYNAMIC_M_MAILBOX
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#endif
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
@@ -58,8 +62,8 @@ void kernel_main() {
     const auto in0_dest_noc_y = get_arg(args::in0_dest_noc_y);
     const auto in0_sender_noc_x = get_arg(args::in0_sender_noc_x);
     const auto in0_sender_noc_y = get_arg(args::in0_sender_noc_y);
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
+    uint32_t M_start_tile = get_arg(args::M_start_tile);
+    uint32_t M_end_tile = get_arg(args::M_end_tile);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
     const auto defer_write_k_block = get_arg(args::defer_write_k_block);
@@ -84,13 +88,20 @@ void kernel_main() {
     const auto ternary_b_reader = TensorAccessor(tensor::ternary_b);
 #endif  // FUSE_TERNARY
 
+    uint32_t M_blocks = M_blocks_per_core;
+#ifdef DYNAMIC_M
+    uint32_t M_valid_tiles = M_tiles;
+    uint32_t in0_row_base = 0;
+#else
+    constexpr uint32_t in0_row_base = 0;
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
+#endif
 #ifdef MM_WINDOW_BLOCKS
     // The output tensor holds only the window, so its height is the host-computed
     // grid.y * MM_WINDOW_BLOCKS * M_block_tiles rather than the full M. Both the row bound and the
     // row stride come from it. Width is untouched — windowing is purely along M.
     const TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
-#else
+#elif !defined(DYNAMIC_M)
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 #endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
@@ -190,6 +201,43 @@ void kernel_main() {
     }
 #endif
 
+#ifdef DYNAMIC_M
+    {
+        constexpr auto M_parallel_cores = get_arg(args::M_parallel_cores);
+        constexpr auto valid_rows_addend = get_arg(args::valid_rows_addend);
+        const uint32_t scratch_addr = dfb_in0.get_write_ptr();
+        const uint32_t valid_rows = std::min(
+            read_scalar_u32(TensorAccessor(tensor::valid_rows), scratch_addr) + valid_rows_addend, M_tiles * 32);
+        M_valid_tiles = (valid_rows + 31) / 32;
+#ifdef DYNAMIC_M_SLOT
+        constexpr auto kv_num_layers = get_arg(args::kv_num_layers);
+        constexpr auto kv_layer_idx = get_arg(args::kv_layer_idx);
+        constexpr auto in0_batch_extent = get_arg(args::in0_batch_extent);
+        const uint32_t batch =
+            read_scalar_u32(TensorAccessor(tensor::slot), scratch_addr) * kv_num_layers + kv_layer_idx;
+        ASSERT(batch < in0_batch_extent);
+        in0_row_base = (batch < in0_batch_extent ? batch : 0) * M_tiles;
+#else
+        in0_row_base = get_arg(args::kv_layer_idx) * M_tiles;
+#endif
+        const uint32_t M_tiles_rt = (M_valid_tiles + M_parallel_cores - 1) / M_parallel_cores;
+        const uint32_t M_core_idx = get_arg(args::M_core_idx);
+        M_start_tile = M_tiles_rt * M_core_idx;
+        M_end_tile = M_start_tile + M_tiles_rt;
+        M_blocks = (M_tiles_rt + M_block_tiles - 1) / M_block_tiles;
+#ifdef DYNAMIC_M_MAILBOX
+        ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, M_tiles_rt);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, M_tiles_rt);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, M_tiles_rt);
+#endif
+    }
+#endif
+
+#ifdef DYNAMIC_M
+    const TensorShape2D out_shape(std::max<uint32_t>(M_valid_tiles, 1), N_tiles, padded_M_tiles, padded_N_tiles);
+    const uint32_t in0_rows_end = in0_row_base + std::max<uint32_t>(M_valid_tiles, 1);
+    const TensorShape2D in0_shape(in0_rows_end, K_tiles, in0_rows_end, padded_K_tiles);
+#endif
     in0_valid_semaphore.set(VALID);
 
     /**
@@ -206,7 +254,7 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         // Rows this block writes to. Only the OUTPUT is windowed — this kernel also reads the
@@ -248,7 +296,7 @@ void kernel_main() {
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
-            bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+            bool is_last_block = (m_block_iter == M_blocks - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
@@ -350,8 +398,8 @@ void kernel_main() {
                         /*main_Wt=*/K_tiles,
 #endif
 #endif
-                        m_tile,
-                        m_tile_end,
+                        in0_row_base + m_tile,
+                        in0_row_base + m_tile_end,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
                 } else {

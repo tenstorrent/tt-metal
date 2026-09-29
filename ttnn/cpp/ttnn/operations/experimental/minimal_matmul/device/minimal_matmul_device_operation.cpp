@@ -249,6 +249,53 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             ternary_b_logical[-1]);
     }
 
+    const bool dynamic_m = tensor_args.valid_rows_tensor.has_value();
+    TT_FATAL(
+        dynamic_m || (!tensor_args.slot_tensor.has_value() && !operation_attributes.out_head_dim.has_value()),
+        "minimal_matmul slot_tensor / out_head_dim require valid_rows_tensor");
+    if (dynamic_m) {
+        auto validate_scalar = [&](const Tensor& t, const char* name) {
+            TT_FATAL(
+                t.storage_type() == StorageType::DEVICE && t.device() == act_tensor.device(),
+                "minimal_matmul {} must be on the activation's device",
+                name);
+            TT_FATAL(t.dtype() == DataType::UINT32, "minimal_matmul {} must be UINT32, got {}", name, t.dtype());
+            TT_FATAL(t.layout() == Layout::ROW_MAJOR, "minimal_matmul {} must be ROW_MAJOR", name);
+            TT_FATAL(
+                t.memory_config().is_dram() && !t.memory_config().is_sharded(),
+                "minimal_matmul {} must be DRAM interleaved",
+                name);
+        };
+        validate_scalar(tensor_args.valid_rows_tensor.value(), "valid_rows_tensor");
+        if (tensor_args.slot_tensor.has_value()) {
+            validate_scalar(tensor_args.slot_tensor.value(), "slot_tensor");
+        }
+        TT_FATAL(
+            chunks == 1 && !operation_attributes.fuse_swiglu && !has_fused_ternary &&
+                !tensor_args.optional_input_tensor.has_value(),
+            "minimal_matmul valid_rows_tensor does not support chunks, fuse_swiglu, fused ternary or fused concat");
+        uint32_t batch_extent = act_tensor.physical_volume() / (act_tensor.padded_shape()[-2] * a_padded[-1]);
+        TT_FATAL(
+            operation_attributes.kv_num_layers > 0 &&
+                operation_attributes.kv_layer_idx < operation_attributes.kv_num_layers,
+            "minimal_matmul kv_layer_idx={} must be < kv_num_layers={}",
+            operation_attributes.kv_layer_idx,
+            operation_attributes.kv_num_layers);
+        TT_FATAL(
+            operation_attributes.kv_layer_idx < batch_extent,
+            "minimal_matmul kv_layer_idx={} is outside the in0 batch extent {}",
+            operation_attributes.kv_layer_idx,
+            batch_extent);
+        if (operation_attributes.out_head_dim.has_value()) {
+            const uint32_t head_dim = operation_attributes.out_head_dim.value();
+            TT_FATAL(
+                head_dim > 0 && head_dim % TILE_WIDTH == 0 && N % head_dim == 0,
+                "minimal_matmul out_head_dim={} must be a tile multiple dividing N={}",
+                head_dim,
+                N);
+        }
+    }
+
     // Config constraints
     if (config.has_value()) {
         const auto& cfg = config.value();
@@ -301,6 +348,15 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
+    if (tensor_args.valid_rows_tensor.has_value()) {
+        const uint32_t M_cap = in0_input_tensor_shape[-2];
+        const uint32_t head_dim = operation_attributes.out_head_dim.value_or(N);
+        output_specs.push_back(tt::tt_metal::TensorSpec(
+            ttnn::Shape({1, N / head_dim, M_cap, head_dim}),
+            TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        return output_specs;
+    }
+
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
@@ -346,7 +402,13 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
     bool fuse_swiglu,
-    const std::optional<Tensor>& optional_input_tensor) {
+    const std::optional<Tensor>& optional_input_tensor,
+    const std::optional<Tensor>& valid_rows_tensor,
+    uint32_t valid_rows_addend,
+    const std::optional<Tensor>& slot_tensor,
+    uint32_t kv_num_layers,
+    uint32_t kv_layer_idx,
+    std::optional<uint32_t> out_head_dim) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -368,14 +430,20 @@ std::vector<Tensor> minimal_matmul(
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim,
-            .fuse_swiglu = fuse_swiglu},
+            .fuse_swiglu = fuse_swiglu,
+            .valid_rows_addend = valid_rows_addend,
+            .kv_num_layers = kv_num_layers,
+            .kv_layer_idx = kv_layer_idx,
+            .out_head_dim = out_head_dim},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .bias_tensor = bias_tensor,
             .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
-            .fused_ternary_input_b = fused_ternary_input_b});
+            .fused_ternary_input_b = fused_ternary_input_b,
+            .valid_rows_tensor = valid_rows_tensor,
+            .slot_tensor = slot_tensor});
 }
 
 }  // namespace ttnn::prim

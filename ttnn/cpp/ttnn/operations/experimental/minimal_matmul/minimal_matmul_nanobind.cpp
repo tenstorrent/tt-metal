@@ -23,7 +23,7 @@ void bind_minimal_matmul(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul", "ttnn.experimental.">(
         mod,
         R"doc(
-        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False)
+        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False, valid_rows_tensor=None, valid_rows_addend=0, slot_tensor=None, kv_num_layers=1, kv_layer_idx=0, out_head_dim=None)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with optional fused activation.
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
@@ -76,6 +76,27 @@ void bind_minimal_matmul(nb::module_& mod) {
             can be used to produce this layout). The op computes silu(gate) * up and the output width is therefore N/2.
             The bias (if provided) must use the same column layout. N must be divisible by 2*32 (two
             tile-aligned halves). Mutually exclusive with fused_activation.
+
+        valid_rows_tensor : Optional[ttnn.Tensor], default: None
+            1-element UINT32 ROW_MAJOR DRAM tensor read on device (trace-safe). Treats input_tensor as a
+            preallocated [batch..., M_cap, K] buffer and computes only its first
+            min(valid_rows_tensor[0] + valid_rows_addend, M_cap) rows (rounded up to a tile) of one batch,
+            re-split across the grid at runtime. The output is [1, N / out_head_dim, M_cap, out_head_dim]
+            (out_head_dim defaults to N); rows past the valid count are left unwritten.
+            Not supported with chunks, fuse_swiglu, fused ternary or fused concat.
+
+        valid_rows_addend : int, default: 0
+            Added to valid_rows_tensor[0], e.g. the chunk length when the tensor holds the prefix length.
+
+        slot_tensor : Optional[ttnn.Tensor], default: None
+            1-element UINT32 ROW_MAJOR DRAM tensor; the in0 batch is slot_tensor[0] * kv_num_layers + kv_layer_idx.
+            Without it the batch is kv_layer_idx.
+
+        kv_num_layers, kv_layer_idx : int, default: 1, 0
+            Batch fold for slot_tensor.
+
+        out_head_dim : Optional[int], default: None
+            Tile-multiple head width; writes the output head-major as [1, N / out_head_dim, M_cap, out_head_dim].
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
@@ -159,7 +180,13 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("valid_rows_tensor") = nb::none(),
+        nb::arg("valid_rows_addend") = 0,
+        nb::arg("slot_tensor") = nb::none(),
+        nb::arg("kv_num_layers") = 1,
+        nb::arg("kv_layer_idx") = 0,
+        nb::arg("out_head_dim") = nb::none());
 
     auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
                                         mod,

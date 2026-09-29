@@ -1081,3 +1081,153 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+def _uint32_scalar(device, value):
+    return ttnn.from_torch(
+        torch.tensor([[[[value]]]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _valid_rows_reference(torch_cache, torch_weight, batch, n_rows, head_dim):
+    out = torch_cache[batch, 0, :n_rows].float() @ torch_weight.float()
+    return out.reshape(n_rows, -1, head_dim).permute(1, 0, 2)
+
+
+def _run_valid_rows(
+    device, tt_cache, tt_weight, valid_rows, addend, slot, num_layers, layer_idx, head_dim, config, compute_config
+):
+    return ttnn.experimental.minimal_matmul(
+        tt_cache,
+        tt_weight,
+        config=config,
+        compute_kernel_config=compute_config,
+        valid_rows_tensor=valid_rows,
+        valid_rows_addend=addend,
+        slot_tensor=slot,
+        kv_num_layers=num_layers,
+        kv_layer_idx=layer_idx,
+        out_head_dim=head_dim,
+    )
+
+
+def _valid_rows_setup(device, batch_extent, M_cap, K, N):
+    torch.manual_seed(0)
+    torch_cache = torch.randn(batch_extent, 1, M_cap, K, dtype=torch.bfloat16)
+    torch_weight = torch.randn(K, N, dtype=torch.bfloat16)
+    tt_cache = ttnn.from_torch(torch_cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=9,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return torch_cache, torch_weight, tt_cache, tt_weight, config, compute_config
+
+
+@pytest.mark.parametrize(
+    "M_cap, N, head_dim",
+    [(4096, 2048, 128), (4096, 2048, None), (1024, 8192, 128)],
+    ids=["wide_M_heads", "wide_M_flat", "wide_N_heads"],
+)
+@pytest.mark.parametrize(
+    "valid_value, addend",
+    [(0, 1024), (1024, 1024), (2016, 0), (32, 0), (0, 32), (1 << 20, 0)],
+    ids=["first_chunk", "second_chunk", "non_block_aligned", "one_tile", "addend_only", "clamped"],
+)
+@pytest.mark.parametrize(
+    "batch_extent, num_layers, layer_idx, slot",
+    [(1, 1, 0, None), (6, 3, 1, 1), (4, 4, 2, None)],
+    ids=["single", "slot", "layer_only"],
+)
+def test_linear_valid_rows(device, M_cap, N, head_dim, valid_value, addend, batch_extent, num_layers, layer_idx, slot):
+    K = 576
+    torch_cache, torch_weight, tt_cache, tt_weight, config, compute_config = _valid_rows_setup(
+        device, batch_extent, M_cap, K, N
+    )
+    n_rows = min(valid_value + addend, M_cap)
+    n_rows = (n_rows + 31) // 32 * 32
+    batch = (slot or 0) * num_layers + layer_idx
+    hd = head_dim or N
+
+    tt_out = _run_valid_rows(
+        device,
+        tt_cache,
+        tt_weight,
+        _uint32_scalar(device, valid_value),
+        addend,
+        _uint32_scalar(device, slot) if slot is not None else None,
+        num_layers,
+        layer_idx,
+        head_dim,
+        config,
+        compute_config,
+    )
+    assert list(tt_out.shape) == [1, N // hd, M_cap, hd]
+    out = ttnn.to_torch(tt_out)[:, :, :n_rows].float()
+    ref = _valid_rows_reference(torch_cache, torch_weight, batch, n_rows, hd).unsqueeze(0)
+    check = assert_quality(ref, out)
+    assert check["pcc"] > 0.999
+    assert check["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_linear_valid_rows_trace(device):
+    M_cap, K, N, head_dim, chunk = 4096, 576, 2048, 128, 1024
+    num_layers, layer_idx, batch_extent = 2, 1, 4
+    torch_cache, torch_weight, tt_cache, tt_weight, config, compute_config = _valid_rows_setup(
+        device, batch_extent, M_cap, K, N
+    )
+    tt_valid = _uint32_scalar(device, 0)
+    tt_slot = _uint32_scalar(device, 0)
+
+    def run():
+        return _run_valid_rows(
+            device,
+            tt_cache,
+            tt_weight,
+            tt_valid,
+            chunk,
+            tt_slot,
+            num_layers,
+            layer_idx,
+            head_dim,
+            config,
+            compute_config,
+        )
+
+    run()
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    tt_out = run()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    for prefix, slot in [(0, 0), (1024, 1), (3072, 0), (2048, 1)]:
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[[[prefix]]]], dtype=torch.int32), dtype=ttnn.uint32), tt_valid
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[[[slot]]]], dtype=torch.int32), dtype=ttnn.uint32), tt_slot
+        )
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        n_rows = min(prefix + chunk, M_cap)
+        out = ttnn.to_torch(tt_out)[:, :, :n_rows].float()
+        ref = _valid_rows_reference(
+            torch_cache, torch_weight, slot * num_layers + layer_idx, n_rows, head_dim
+        ).unsqueeze(0)
+        check = assert_quality(ref, out)
+        assert check["pcc"] > 0.999, f"prefix={prefix} slot={slot}"
+    ttnn.release_trace(device, trace_id)
