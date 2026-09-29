@@ -456,8 +456,38 @@ def _is_partial_shard(spec):
     return _rows_of(spec["shape"]) < _shard_row_capacity(mem)
 
 
+# Per-element host byte sizes, for the RAM budget below.
+_DTYPE_BYTES = {
+    "BFLOAT16": 2,
+    "BFLOAT8_B": 1,
+    "BFLOAT4_B": 1,
+    "FLOAT32": 4,
+    "UINT32": 4,
+    "INT32": 4,
+    "UINT16": 2,
+    "UINT8": 1,
+}
+
+# A single captured input larger than this cannot be materialized on the 2-compute-node emulator: the full
+# host torch tensor plus its copy in the simulator's host-modeled DRAM exhausts RAM and the OS OOM-killer
+# takes the worker (a hard SIGKILL with no traceback, not a clean device OOM). The real llama vocab table
+# [1,1,128256,2048] bf16 is ~525 MB and hits exactly this; the model runs embedding on host anyway, so the
+# full-table device embedding these cases capture is never actually executed in the e2e.
+_HOST_TENSOR_RAM_BUDGET = 256_000_000  # ~256 MB
+
+
+def _host_tensor_bytes(spec):
+    return math.prod(spec["shape"]) * _DTYPE_BYTES.get(spec["dtype"], 4)
+
+
 def build_tensor(spec, mesh_device, case, op_name, key):
     """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
+    nbytes = _host_tensor_bytes(spec)
+    if nbytes > _HOST_TENSOR_RAM_BUDGET:
+        pytest.skip(
+            f"input {key} {spec['shape']} {spec['dtype']} ~{nbytes / 1e6:.0f} MB exceeds the emulator host RAM "
+            f"budget (~{_HOST_TENSOR_RAM_BUDGET / 1e6:.0f} MB) — materializing it would OOM-kill the worker"
+        )
     data = _torch_data(spec, case, op_name, key)
     if (op_name, key) in HOST_INPUT:
         return ttnn.from_torch(data, dtype=DTYPE[spec["dtype"]], layout=LAYOUT[spec["layout"]]), data
