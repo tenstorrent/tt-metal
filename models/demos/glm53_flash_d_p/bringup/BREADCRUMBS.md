@@ -304,3 +304,24 @@ finite output and state. Warm times 0.08 s / 0.13 s including host readback.
 Left for later: output per-token ratio stays low ([0.990, 0.998], scale 0.9954), probably `intra` (scale 0.9957) from the
 same kernel subtraction; a fork of prepare_chunk_recurrence would fix k_dec_t and intra at the source.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attention.py`
+
+## S.kda_dense.04 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc + attn_collapse + attn_norm + attention on device, layer 0). Rewrote it from
+swap 03's test. Kept the gated pcc_swap_out, every swap-03 check and the `_f32` cast. Added the attention checks at the
+component test's limits (rel L2 <= 0.02, per-token ratio [0.98, 1.02], every 128-row block <= 0.03, worst row <= 0.1),
+run twice: vs the golden attn_out, and vs the CPU KDA of the device attn_norm, on a fresh reference ctx with the same
+golden prefix state. Added the post-chunk KDA state vs the golden snapshot at start + chunk (recurrent 0.03 / worst head
+0.05, conv 0.02). On the device it reads `dctx.extra["state_out"]` (set by `_KdaHostFn` because device_ctx carries
+`state_prefix`) and fails if that is missing. In reference mode it reads the CPU state.
+Sensitivity (CPU host script, not kept; only the attention perturbed): block out rel follows the attention's rel
+(x0.99 0.0096, x1.02 0.0185, zeroed prefix state 0.045, zeroed attention 1.60). So the block-out limits stay rel <= 0.01
+and ratio [0.97, 1.03].
+Results: reference passes (out 0.999999, rel 0.0017; the recurrent state matches the golden exactly because the fp32
+chain from `in` repeats the golden run; conv 0.0017, which is bf16 rounding). Stub fails (PCC 0, every check). Device
+passes: out PCC 0.999984, rel 0.0062, ratio [0.9827, 1.0078]; attention vs golden 0.0073 / [0.9895, 0.9978] / block
+0.0074 / row 0.014, vs CPU same input 0.0068; state recurrent 0.0135 / head 0.024, conv 0.0020.
+Next step: the device attention's low scale (0.9954) accounts for most of the block-out rel (0.0062 of 0.01) and sets
+the per-token minimum (0.983 of 0.97).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_04_attention.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
