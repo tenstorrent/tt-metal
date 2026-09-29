@@ -850,6 +850,12 @@ def cmd_optimize(args) -> int:
                 rd = find_run_dir(run_root, slug=_dash_slug)
                 if rd is None:
                     return {"run": {"id": None, "live": False}, "model": {"slug": _dash_slug}}
+                _rb = getattr(args, "batch", None)
+                if rd is not None and _rb:
+                    try:
+                        (rd / ".requested_batch").write_text(str(int(_rb)))  # persist so any served view shows batch
+                    except Exception:
+                        pass
                 return collect_state(rd, state_dir_candidates(run_root, _dash_slug), _dash_slug, requested_batch=getattr(args, "batch", None))
 
             def _dash_decision(action):
