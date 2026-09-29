@@ -1442,107 +1442,133 @@
 
 # ===== GPT-OSS-120B ==================================================================================
 
-# GPT-OSS-120B full-model real-weights chunked prefill + per-layer KV PCC (standalone harness,
-# not pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above). Auto-SKIPs (rc 0)
-# off-galaxy or when PREFILL_TRACE_DIR is unset. Requires staged mounts:
+# GPT-OSS-120B prefill suite: three former jobs folded into one so the ~8 min per-job fixed cost
+# (multihost setup, container init, checkout, post steps) is paid once instead of three times.
+# The sections run serially on one allocation; each is time-bounded and runs regardless of the
+# others, and the job fails if any section fails.
+#
+# [1/3] chunked prefill KV accuracy longbook 5k@2.5k and [2/3] 5k@1k: full-model real-weights
+# chunked prefill + per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py,
+# standalone harness, not pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above).
+# [2/3] is the same harness/goldens at the small variable-chunk size (PREFILL_CHUNK_SIZE=1024 ->
+# 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when PREFILL_TRACE_DIR is unset.
+# GPT_OSS_KV_PCC_MIN=0.85 is a floor under the measured ~0.92 min KV PCC (ring chunked and
+# 1k-chunk configs, EXPERT_DTYPE=bf8), keeping headroom for bf8/golden noise.
+# [3/3] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
+# runtime built for {1k, 8k} prefills the same 1024 real tokens as a native 1k chunk vs padded
+# into an 8k chunk and reports both timings. No PCC/golden -- it catches the multi-chunk-size
+# runtime build or small-chunk ring path breaking. Auto-SKIPs off-galaxy; no PREFILL_TRACE_DIR.
+#
+# Requires staged mounts:
 #   HF_MODEL          -> /mnt/models/blaze/openai/gpt-oss-120b (config only here: with
 #                        GPT_OSS_WEIGHTS_FROM_CACHE=1 weights come from the tilized cache)
 #   TT_CACHE_PATH     -> /mnt/models/blaze/openai/gpt-oss-120b
 #                        must hold "tensor_cache_bfp8_MeshShape([4, 8])"; without it the run
 #                        cold-tilizes from safetensors and will blow the timeout
 #   PREFILL_TRACE_DIR -> /mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+#                        (KV accuracy sections only)
 # fabric_profile torus_xy: every chunk drives the SP ring cache-read (FABRIC_1D_RING), which
 # needs the certified TorusXY wraparound links the impl workflow provides.
-- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k"
+#
+# Per-section bounds (timeout -k 2m, a timeout counts as FAIL and the next section still runs):
+#   [1/3] 35 min: ~12 min measured warm (cache load + JIT + prefill + PCC readback); headroom for
+#         cold kernel JIT and the ~180 GB tilized-cache read over NFS. Cold cache BUILD exceeds it.
+#   [2/3] 35 min: same profile as [1/3] (5 ring chunks instead of 2; compile/IO dominate).
+#   [3/3] 30 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
+# The former test_type tokens are kept as test_tags so existing test-type selections still pick
+# this job.
+- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k, 5k@1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
-    export GPT_OSS_WEIGHTS_FROM_CACHE=1
-    export EXPERT_DTYPE=bf8
-    export PREFILL_CHUNKED=1
-    export PREFILL_CHUNK_SIZE=2560
-    export PREFILL_TPS_ITERS=1
-    # Floor under the measured ~0.92 min KV PCC (ring chunked and 1k-chunk configs,
-    # EXPERT_DTYPE=bf8): fail below 0.85, keeping headroom for bf8/golden noise.
-    export GPT_OSS_KV_PCC_MIN=0.85
-    mpirun --pernode --tag-output bash -lc '
-      python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
-    '
-  test_type: gpt_oss_prefill_kv_pcc
-  test_group: module
-  skus:
-    bh_sc1:
-      # ~12 min measured warm (cache load + JIT + prefill + PCC readback); headroom for cold
-      # kernel JIT and the ~180 GB tilized-cache read over NFS. Cold cache BUILD will exceed this.
-      timeout: 35
-  owner_id: U08HM8SL5U4 # Maciek Dragula
-  team: models
-  budget_type: demo
-  sp_config: sc1
+    # errexit off for the whole suite: each section must run whatever the previous one did.
+    set +e
+    suite_rc=0
+    suite_summary=()
 
-# Same harness/goldens at the variable-chunk small size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks
-# over the 5k golden): regression for the small variable-chunk size. Same staged mounts as the
-# 5k@2.5k stage above.
-- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k"
-  fabric_profile: torus_xy
-  cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
-    export GPT_OSS_WEIGHTS_FROM_CACHE=1
-    export EXPERT_DTYPE=bf8
-    export PREFILL_CHUNKED=1
-    export PREFILL_CHUNK_SIZE=1024
-    export PREFILL_TPS_ITERS=1
-    export GPT_OSS_KV_PCC_MIN=0.85
-    mpirun --pernode --tag-output bash -lc '
-      python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
-    '
-  test_type: gpt_oss_prefill_kv_pcc_1k
-  test_group: module
-  skus:
-    bh_sc1:
-      # Same profile as the 5k@2.5k stage (5 ring chunks instead of 2; compile/IO dominate).
-      timeout: 35
-  owner_id: U08HM8SL5U4 # Maciek Dragula
-  team: models
-  budget_type: demo
-  sp_config: sc1
+    # Section bodies run in a subshell "( ... )" so one section's exports cannot leak into the next.
+    gpt_oss_kv_pcc_2p5k() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+      export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+      export GPT_OSS_WEIGHTS_FROM_CACHE=1
+      export EXPERT_DTYPE=bf8
+      export PREFILL_CHUNKED=1
+      export PREFILL_CHUNK_SIZE=2560
+      export PREFILL_TPS_ITERS=1
+      export GPT_OSS_KV_PCC_MIN=0.85
+      timeout -k 2m 35m mpirun --pernode --tag-output bash -lc '
+        python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
+      '
+    )
 
-# Variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py):
-# one runtime built for {1k, 8k} prefills the same 1024 real tokens as a native 1k chunk vs
-# padded into an 8k chunk and reports both timings. No PCC/golden --- it exists to catch the
-# multi-chunk-size runtime build or small-chunk ring path breaking. Auto-SKIPs off-galaxy.
-# No PREFILL_TRACE_DIR needed; weights via the same staged tilized cache.
-- name: "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k"
-  fabric_profile: torus_xy
-  cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-    export GPT_OSS_WEIGHTS_FROM_CACHE=1
-    export EXPERT_DTYPE=bf8
-    export VARCHUNK_SMALL=1024
-    export VARCHUNK_LARGE=8192
-    mpirun --pernode --tag-output bash -lc '
-      python3 models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py
-    '
-  test_type: gpt_oss_varchunk_smoke
+    gpt_oss_kv_pcc_1k() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+      export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+      export GPT_OSS_WEIGHTS_FROM_CACHE=1
+      export EXPERT_DTYPE=bf8
+      export PREFILL_CHUNKED=1
+      export PREFILL_CHUNK_SIZE=1024
+      export PREFILL_TPS_ITERS=1
+      export GPT_OSS_KV_PCC_MIN=0.85
+      timeout -k 2m 35m mpirun --pernode --tag-output bash -lc '
+        python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
+      '
+    )
+
+    gpt_oss_varchunk_smoke() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+      export GPT_OSS_WEIGHTS_FROM_CACHE=1
+      export EXPERT_DTYPE=bf8
+      export VARCHUNK_SMALL=1024
+      export VARCHUNK_LARGE=8192
+      timeout -k 2m 30m mpirun --pernode --tag-output bash -lc '
+        python3 models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py
+      '
+    )
+
+    # run_section <n/total> <title> <function>: banner, run, one-line result; never aborts.
+    run_section() {
+      local tag="$1" title="$2" fn="$3" t0=$SECONDS rc verdict note=""
+      echo "::group::[$tag] $title"
+      "$fn"
+      rc=$?
+      echo "::endgroup::"
+      if [ "$rc" -eq 0 ]; then verdict=PASS; else verdict=FAIL; suite_rc=1; fi
+      if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then note=", timed out"; fi
+      local d=$((SECONDS - t0))
+      echo "[$tag] $verdict (exit $rc, $((d / 60)) min $((d % 60)) s$note)"
+      suite_summary+=("[$tag] $verdict  $title")
+    }
+
+    run_section 1/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k" gpt_oss_kv_pcc_2p5k
+    run_section 2/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k" gpt_oss_kv_pcc_1k
+    run_section 3/3 "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k" gpt_oss_varchunk_smoke
+
+    echo "===== GPT-OSS-120B prefill suite summary ====="
+    printf '%s\n' "${suite_summary[@]}"
+    if [ "$suite_rc" -eq 0 ]; then echo "suite: PASS"; else echo "suite: FAIL"; fi
+    exit "$suite_rc"
+  test_type: gpt_oss_prefill_suite
+  # Former per-job test_type tokens, so `-f test-type=<old token>` still selects this job.
+  test_tags: [gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
   test_group: module
   skus:
     bh_sc1:
-      # One runtime build + 6 short prefills; no golden readback. Cache read + JIT dominate.
-      timeout: 30
+      # Sum of the per-section bounds (35 + 35 + 30) plus 10 min margin (up to 2 min timeout -k
+      # grace per section, plus the summary), so a section timeout still leaves the later
+      # sections their full budget.
+      timeout: 110
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
   budget_type: demo
