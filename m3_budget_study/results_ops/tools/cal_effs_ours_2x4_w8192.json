@@ -1,0 +1,43 @@
+{
+ "about": [
+  "CAL.effs['2x4'] measured on our zone profiles (P0-A): one (2,4) stage, SP=2 TP=4 EP=8, layers 0-6 contiguous (real routing), 1D fabric, bf4 experts, M3_MOE_W_NDSHARD=1 M3_MOE_HYBRID_THRESHOLD=128, v1 dispatch/combine, bf8 index_k cache.",
+  "Condition: W=8192 single request at h=139264 (the 141312 request aligned down to whole chunks); prose and code runs pooled. moe = mean of sparse layers 3-6, dense = layer 1.",
+  "Formula = sim_core zoneEff: eff = roof / (zone ms - latency floor), clamped to [0.003, 1]. zone ms = MEAN over the 8 chips (Pavlo's statistic, not the worst chip). Floor 0.04 ms for CCL ops, 0.01 ms otherwise; norm_ag = both all-gathers (roof x2, floor x2), as zoneEff's mean-of-two.",
+  "Roofline = sim_core roofTok/roofSeg via tools/roofline_ops.js --segments W:139264 --idx bf8 (our index_k cache is bf8; Pavlo's profiles were bf16), imbalance 1.2 in the experts FLOPs, Tr = W.",
+  "sparse, indexer, ring_c are multiplied by waveFactor(W)/waveFactor(5120) = 0.9896, so that layerMs at T=W reproduces the measured zone (the sim applies that ratio at run time).",
+  "misc = layer zone mean - every mapped op (includes routing_setup, the untracked MoE all-gather and its SP arrival wait). kv_a2a = dispatch. ring_scan 0.015 is Pavlo's placeholder (the pipeline fit replaces it); for 2x4 pipelines the dense ring uses CAL.pipe.ringC, not dense.ring_c.",
+  "With opEff = 0 the sim uses min(eff, target): values above target (qkv and experts, at both W) have no effect. Keep CAL.pipe.moeMult (fitted against the same kind of 1D zone profile)."
+ ],
+ "2x4": {
+  "moe": {
+   "norm_ag": 0.401244,
+   "qkv": 0.873083,
+   "idx_branch": 0.036036,
+   "o_proj": 0.588367,
+   "attn_rs": 0.42964,
+   "shared": 0.434831,
+   "router": 0.06247,
+   "dispatch": 0.160515,
+   "experts": 0.744549,
+   "combine": 0.393419,
+   "moe_reduce": 0.173799,
+   "ag_kv": 0.337085,
+   "ag_idx": 0.539014,
+   "indexer": 0.036983,
+   "sparse": 0.035575,
+   "misc": 0.114429,
+   "kv_a2a": 0.160515
+  },
+  "dense": {
+   "norm_ag": 0.395389,
+   "qkv": 0.873408,
+   "o_proj": 0.596912,
+   "attn_rs": 0.263323,
+   "dense_mlp": 0.616933,
+   "misc": 0.135568,
+   "ring_c": 0.350011,
+   "ring_scan": 0.015,
+   "kv_a2a": 0.160515
+  }
+ }
+}
