@@ -439,3 +439,26 @@ device gate already passes through `TtHcCollapse` (hooks `_COLLAPSE_STEPS`): PCC
 [0.9978, 1.0022], L1 0.0036 / 0.0067 / [0.9977, 1.0024].
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_ffn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_dense.07 test (attempt 1)
+
+Reviewed the rendered swap test (attn_hc through ffn_hc plus ffn_collapse on device, layer 0). Rewrote it from swap 06's
+test, keeping every swap-06 check and the gated pcc_swap_out. swap 06's tail check (metric `rel_l2_swap_out_vs_cpu_tail`)
+now uses the CPU ffn_hc plus the CPU ffn_collapse, with the same limits. Added:
+- ffn_collapse vs the CPU collapse of the device (h_mid, ffn_hc), and the same module on layer 1's golden, at the
+  component test's limits (rel <= 0.008, ratio [0.99, 1.01], worst row <= 0.03).
+- ffn_collapse vs golden ffn_in, looser because it carries the upstream error: rel <= 0.02, ratio [0.97, 1.03],
+  worst row <= 0.05. The device scores 0.0118, so 0.015 would have left too little margin.
+- ffn_collapse's share of block out: block out vs the CPU tail from the CPU collapse of the same device inputs.
+  Limits: rel <= 0.003, ratio [0.995, 1.005].
+Sensitivity (CPU host script /tmp/s07_sens.py on the layer-0 golden, not kept), tail rel / ratio: x1.01 0.0012 /
+[0.9967, 1.0118]; one row's pre reversed 0.0001 / [0.9952, 1.0080], which passes the collapse checks and is caught only
+here; last row zeroed 0.0075. Noise: bf16 output 0.0015 / [0.9989, 1.0015]; all-bf16 0.0019 / [0.9983, 1.0017].
+ffn_norm does not remove the collapse's scale errors (small-RMS rows, eps).
+Results: device passes (out PCC 0.999981, rel 0.0071, ratio [0.9797, 1.0088]; collapse vs CPU 0.0017, L1 0.0036, vs
+golden 0.0118; cpu tail 0.0025 / [0.9873, 1.0130]; collapse-share tail 0.0015 / [0.9989, 1.0009]). Reference passes
+(out rel 0.0017). Stub fails (PCC 0, every check).
+Watch: the block-out ratio minimum vs golden is unchanged from swap 06 (0.9797, limit 0.97). ffn_norm, mlp and
+ffn_residual are still to come.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_07_ffn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
