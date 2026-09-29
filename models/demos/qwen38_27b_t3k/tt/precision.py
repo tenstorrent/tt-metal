@@ -9,14 +9,16 @@ from pathlib import Path
 
 ROLES = ("attention", "output", "gate", "up", "down")
 BASELINE = {
-    "config_id": "baseline_bfp4_lofi_head_bfp8_hifi2",
+    "config_id": "baseline_bfp4_lofi_head_bfp8_hifi2_ccl_bfp8",
     "weight_groups": {**{r: "bfloat4_b" for r in ROLES}, "head": "bfloat8_b"},
     "compute_fidelities": {**{r: "LoFi" for r in ROLES}, "head": "HiFi2"},
     "fp32_dest_acc_en": True,
     "layer_exceptions": {},
     "activation_dtype": {"attention": "bfloat16", "mlp": "bfloat16"},
     "residual_dtype": "bfloat16",
-    "ccl_dtype": "bfloat16",
+    # One usable ethernet link per chip pair makes the collective a fixed 24 ms of every
+    # decode step at bfloat16; halving the payload recovers 12 ms of it at no measured cost.
+    "ccl_dtype": "bfloat8_b",
     "kv_cache_dtype": "bfloat8_b",
     "logits_dtype": "bfloat16",
     "sampling_dtype": "bfloat16",

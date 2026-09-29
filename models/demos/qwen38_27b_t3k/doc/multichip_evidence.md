@@ -156,13 +156,13 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
 ## Batch-1 performance
 
 Warmed, prompt 128 and generate 128, the shape the serving profile uses, at the shipping
-`ccl_dtype` of bfloat16:
+`ccl_dtype`, now bfloat8_b:
 
-| metric | value |
-| --- | ---: |
-| TTFT | 247.0 ms |
-| decode, token out | 72.321 ms, 13.83 t/s/u |
-| decode, no readback | 71.522 ms, 13.98 t/s/u |
+| metric | bfloat8_b (shipping) | bfloat16 (previous) |
+| --- | ---: | ---: |
+| TTFT | 260.2 ms | 247.0 ms |
+| decode, token out | 60.216 ms, 16.61 t/s/u | 72.321 ms, 13.83 t/s/u |
+| decode, no readback | 59.558 ms, 16.79 t/s/u | 71.522 ms, 13.98 t/s/u |
 
 Both decode boundaries are reported because they answer different questions: the no-readback
 figure is the logits-side comparison, and token out adds the final norm, LM head, sampling and
@@ -223,9 +223,22 @@ tokens, mean top-1000 logit PCC moves 0.8963 to 0.8989, two of seven steps negat
 positive, with identical top-10 overlap at every step and 7/7 greedy agreement. Free-running
 greedy output is byte-identical across all four arms above.
 
-The value is not reachable from the platform overlay as the merge stands. `_TP_POLICY` is
-applied before the caller policy, and `decoder_policy` always supplies `ccl_dtype` from the
-precision policy, so a platform entry for it is overwritten. Moving this to bfloat8_b therefore
-means either a T3K precision artifact selected at deployment, or giving the platform overlay
-ownership of the keys precision also sets. Both reach QB2's shipping path, where this is
-unmeasured, so the choice is deliberately left open rather than taken here.
+This is now the default for this tree, set in `config/precision.json` and in the `BASELINE`
+fallback so that selecting `baseline` does not quietly give back the saving. The precision
+policy is the only level that can own it, because `decoder_policy` supplies `ccl_dtype` after
+the platform overlay is merged.
+
+Prefill pays for it. Re-measured with the new default, TTFT moves from 247.03 ms to 260.22 ms,
+5.3% worse, with both sample tails settled and tight. Prefill collectives carry the whole
+sequence rather than the tile-padded 32-row decode workspace, so the typecast in `_linear`
+costs more there than the halved payload saves. Break-even is 1.1 generated tokens, and only a
+single-token request is worse:
+
+| workload | bfloat16 | bfloat8_b | |
+| --- | ---: | ---: | ---: |
+| 128 in, 1 out | 319 ms | 320 ms | +0.3% |
+| 128 in, 8 out | 826 ms | 742 ms | -10.1% |
+| 128 in, 128 out | 9504 ms | 7968 ms | -16.2% |
+| 128 in, 1024 out | 74.3 s | 61.9 s | -16.7% |
+
+Splitting the dtype by phase would recover the prefill loss and has not been measured.
