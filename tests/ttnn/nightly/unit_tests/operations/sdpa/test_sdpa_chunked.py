@@ -594,8 +594,14 @@ def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device,
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize(
     "q_chunk_size,k_chunk_size,sliding_window,use_sink",
-    [(256, 512, None, True), (128, 128, 128, True), (128, 128, 128, False), (128, 128, None, True)],
-    ids=["full_q256k512_sink", "sliding128_sink", "sliding128_no_sink", "full_q128k128_sink"],
+    [
+        (256, 512, None, True),
+        (128, 128, 128, True),
+        (128, 128, 128, False),
+        (128, 128, None, True),
+        (128, 128, 100, True),
+    ],
+    ids=["full_q256k512_sink", "sliding128_sink", "sliding128_no_sink", "full_q128k128_sink", "sliding100_sink"],
 )
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 @pytest.mark.parametrize("flexible", [False, True], ids=["scalar_start", "tensor_start"])
