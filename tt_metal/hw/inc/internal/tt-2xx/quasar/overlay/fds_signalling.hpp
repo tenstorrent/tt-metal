@@ -18,10 +18,10 @@ namespace overlay::fds_signalling {
 // count in one does not match the same cycle count in the other.
 
 // Number of NoC cycles that a go/done must be stable through the deglitcher before capture.
-inline constexpr uint32_t filter_length_cycles = 21;
+inline constexpr uint32_t filter_length_cycles = 19;
 
 // Number of DM cycles that auto dispatch holds each queued go/done on the wire before sending the next.
-inline constexpr uint32_t auto_dispatch_pacing_cycle_count = 47;
+inline constexpr uint32_t auto_dispatch_pacing_cycle_count = 43;
 
 // Group 0 is the idle value on the wire, so payload groups start at 1.
 inline constexpr uint32_t idle_group_id = 0;
