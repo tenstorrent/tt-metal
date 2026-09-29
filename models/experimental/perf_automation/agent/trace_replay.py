@@ -664,6 +664,17 @@ def measure_adapter(adapter, device) -> float:
         except Exception:  # noqa: BLE001
             _dims = (1, 1)
     _dp, _tp = int(_dims[0]), int(_dims[1])
+    # THE PIPELINE'S OWN SPLIT, when it states one, over the mesh's axis order. rows x cols says how
+    # many chips, not which axis is tensor-parallel: Qwen-Image-Edit opens 8x4 and runs TP=8 over axis
+    # 0, which this printed as TP=4 (stage_marks.pipeline_tp; stage_seams.TP_ATTR).
+    try:
+        from .stage_marks import pipeline_tp as _pipeline_tp
+
+        _own_tp = _pipeline_tp(getattr(adapter, "_pipe", None) or adapter)
+        if _own_tp and (_dp * _tp) % _own_tp == 0:
+            _dp, _tp = (_dp * _tp) // _own_tp, _own_tp
+    except Exception:  # noqa: BLE001 -- an unstated split keeps the mesh's
+        pass
     print("DP=%d TP=%d shard_active=%s" % (_dp, _tp, bool(_dp * _tp > 1)), flush=True)
 
     stages = list(getattr(adapter, "stages", None) or [])
@@ -708,6 +719,22 @@ def measure_adapter(adapter, device) -> float:
         _n = int(getattr(st, "items", 0) or 0)
         if _n > 0:
             print("TRACE_STAGE_ITEMS[%s]=%d" % (st.name, _n), flush=True)
+        # AND HOW MANY DATA-PARALLEL GROUPS SHARE THEM (stage_seams.SPLIT), so the ceiling prices what
+        # one chip does. Printed only for a stage that is split: 1 is the reader's fallback.
+        _sp = int(getattr(st, "split", 0) or 0)
+        if _sp > 1:
+            print("TRACE_STAGE_SPLIT[%s]=%d" % (st.name, _sp), flush=True)
+
+    # WHICH MODULES EACH STAGE RUNS, read from the pipeline's own code (stage_marks.stage_module_paths)
+    # so perf_mcp can price each stage's compute from the weights it actually multiplies instead of
+    # charging every stage the whole model. Silent when the stages cannot be matched.
+    try:
+        from .stage_marks import stage_module_paths as _stage_module_paths
+
+        for _sn, _sp in _stage_module_paths(getattr(adapter, "_pipe", None) or adapter).items():
+            print("TRACE_STAGE_MODULES[%s]=%s" % (_sn, ",".join(_sp)), flush=True)
+    except Exception:  # noqa: BLE001
+        pass
 
     pipeline_ms = sum(ms for _, ms, _ in results)
     # THE UNIT IS A STRUCTURAL FACT, so read the STRUCTURE, not a name. This matched

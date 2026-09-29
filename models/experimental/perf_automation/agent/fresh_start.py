@@ -47,6 +47,7 @@ _STATE_GLOBS = (
     "perf_mcp_stage_ms_*.json",
     "perf_mcp_gate_verdicts_*.json",
     "perf_mcp_fullpipe_consumed_*.json",
+    "perf_mcp_pcc_consumed_*.json",
     "perf_mcp_knob_cache.json",
     "perf_integrity_resolve_cache.json",
     "perf_mcp_fullpipe_gate.log",

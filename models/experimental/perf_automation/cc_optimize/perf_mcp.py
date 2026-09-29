@@ -2445,6 +2445,12 @@ def measure_candidate() -> dict:
     faster = delta > _win_threshold(base_dev)
     pt_ms = prof.get("per_token_ms")
     base_pt = baseline.get("per_token_ms")
+    # THE MEASUREMENT git_commit FOLLOWS. The skill's loop is measure_candidate -> git_commit ->
+    # record_kernel_attempt, so the stamp record_kernel_attempt makes lands one call too late:
+    # _record_committed_win found no measured_ms on the target and wrote no commit row, and with none
+    # anywhere the report ticked every faster try -- Qwen-Image-Edit showed 5 wins for 2 commits, two
+    # of them reverted for PCC. Stamped here as well, the order the agent calls them in stops mattering.
+    _stamp_target_measurement(dev)
     return {
         "verdict": "valid",
         "device_ms": dev,
@@ -2479,16 +2485,24 @@ def check_pcc() -> dict:
         if _is_measurement_failure(_msg):
             out = _measurement_failed_result(_msg)
             out["status"] = "measurement_failed"
-            record_gate_verdict("pcc", "measurement_failed")
+            record_gate_verdict("pcc", "measurement_failed", measurement_id=_measurement_id())
             return out
         _note_device_crash("check_pcc", _msg)
-        record_gate_verdict("pcc", "crash")
+        record_gate_verdict("pcc", "crash", measurement_id=_measurement_id())
         return {"status": "crash", "error": _msg}
     if res.get("status") == "crash":
         _note_device_crash("check_pcc", str(res.get("error") or ""))
     else:
         _note_device_ok()
-    record_gate_verdict("pcc", res.get("status"), pcc=res.get("pcc"))
+    # The id makes this reading ownable by exactly one attempt (_attempt_pcc_verdict), the same rule
+    # the end-to-end verdict follows; the threshold travels with it so the report can say what it missed.
+    record_gate_verdict(
+        "pcc",
+        res.get("status"),
+        pcc=res.get("pcc"),
+        threshold=res.get("threshold"),
+        measurement_id=_measurement_id(),
+    )
     return res
 
 
@@ -5585,10 +5599,29 @@ def _baseline_at_record():
         return None
 
 
-def _consumed_verdict_path():
+def _consumed_verdict_path(gate: str = "fullpipe"):
     return state_dir() / (
-        "perf_mcp_fullpipe_consumed_%s_%s.json" % (_model_key(), os.environ.get("PERF_MCP_TASK", "main"))
+        "perf_mcp_%s_consumed_%s_%s.json" % (gate, _model_key(), os.environ.get("PERF_MCP_TASK", "main"))
     )
+
+
+def _claim_verdict(gate: str, ident) -> bool:
+    """Mark the measurement `ident` as owned by the attempt being recorded; False when an earlier
+    attempt already owns it (or it carries no identity). ONE MEASUREMENT, ONE ATTEMPT -- the rule the
+    end-to-end verdict has always had, shared so the PCC reading follows it too."""
+    if ident is None:
+        return False
+    path = _consumed_verdict_path(gate)
+    try:
+        if json.loads(path.read_text()) == ident:
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        path.write_text(json.dumps(ident))
+    except OSError:
+        pass
+    return True
 
 
 def _measurement_id() -> str:
@@ -5655,26 +5688,31 @@ def _attempt_fullpipe_verdict() -> dict:
     if not ms > 0:
         return out
 
-    ident = _verdict_identity(fp)
-    if ident is None:
-        # No measurement id -> this verdict cannot be traced to a trace replay. Not ownable.
+    # No measurement id -> this verdict cannot be traced to a trace replay, so it is not ownable; an
+    # id an earlier attempt already claimed belongs to that attempt.
+    if not _claim_verdict("fullpipe", _verdict_identity(fp)):
         return out
-    path = _consumed_verdict_path()
-    try:
-        already = json.loads(path.read_text())
-    except Exception:  # noqa: BLE001
-        already = None
-    if already == ident:
-        return out  # this measurement already belongs to an earlier attempt
 
     ref = _fullpipe_reference_ms(fp)
     out.update(own=True, ms=round(ms, 4), ref=None if ref is None else round(ref, 4))
     if ref is not None:
         out["win"], out["delta"], out["metric"] = _win_from_verdict(fp, ms, ref)
-    try:
-        path.write_text(json.dumps(ident))
-    except OSError:
-        pass
+    return out
+
+
+def _attempt_pcc_verdict() -> dict:
+    """{pcc, pcc_status, pcc_threshold} of the PCC reading this attempt owns, or {} when it owns none.
+
+    Owned exactly like the end-to-end verdict: the check_pcc run's own id, claimed once, so a later
+    attempt that ran no check of its own never borrows the previous one's accuracy."""
+    v = gate_verdicts().get("pcc") or {}
+    mid = v.get("measurement_id")
+    if not mid or not _claim_verdict("pcc", [str(v.get("sha") or ""), str(mid)]):
+        return {}
+    out = {"pcc_status": str(v.get("status") or "")}
+    for k, key in (("pcc", "pcc"), ("threshold", "pcc_threshold")):
+        if isinstance(v.get(k), (int, float)):
+            out[key] = float(v[k])
     return out
 
 
@@ -6000,6 +6038,9 @@ def record_kernel_attempt(
         "op_signature": op_signature,
         "kernel_kind": kernel_kind,
         "measured_ms": _ms,
+        # THE ACCURACY THIS CANDIDATE HAD, beside the time it had -- so a faster change that was
+        # reverted for PCC reads as that in the report, not as a bare negative delta.
+        **_attempt_pcc_verdict(),
         # ONE COMPARISON, MADE ONCE, FOR THIS ATTEMPT -- see _attempt_fullpipe_verdict. This attempt's
         # OWN end-to-end minus the running best; the SIGN IS THE VERDICT. The banked flag, the delta
         # the report prints and the win mark all read this one result, so they cannot disagree about

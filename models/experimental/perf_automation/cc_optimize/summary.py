@@ -1015,25 +1015,55 @@ def _win_set(attempts, baseline_ms=None) -> set:
     if not any(isinstance(a, dict) and a.get("commit_record") for a in rows):
         return wins  # this ledger predates commit rows entirely; unfiltered is the honest answer
     _m = _perf_mcp()
-    _match = getattr(_m, "_op_match", None) if _m else None
-    if not callable(_match):
+    if not callable(getattr(_m, "_op_match", None) if _m else None):
         return wins  # cannot verify banking here; do not silently blank the report
-    banked = set()
-    for i in wins:
-        a = rows[i] if 0 <= i < len(rows) else None
-        if not isinstance(a, dict):
+    return {i for i in wins if 0 <= i < len(rows) and _banking_commit(rows[i], rows) is not None}
+
+
+def _banking_commit(a, rows):
+    """The commit row that banked attempt `a`, or None. ONE matching rule for "was it banked" and
+    "by which commit": the end-to-end reading both rows share (_banks_the_same_state), else op +
+    rung via perf_mcp's own _op_match."""
+    if not isinstance(a, dict) or a.get("commit_record"):
+        return None
+    _m = _perf_mcp()
+    _match = getattr(_m, "_op_match", None) if _m else None
+    rung = str(a.get("kernel_kind") or "").strip().lower()
+    sig = a.get("op_signature")
+    for b in rows or []:
+        if not isinstance(b, dict) or not b.get("commit_record"):
             continue
-        rung = str(a.get("kernel_kind") or "").strip().lower()
-        sig = a.get("op_signature")
-        for b in rows:
-            if not isinstance(b, dict) or not b.get("commit_record"):
-                continue
-            if _banks_the_same_state(a, b) or (
-                str(b.get("kernel_kind") or "").strip().lower() == rung and _match(sig, b)
-            ):
-                banked.add(i)
-                break
-    return banked
+        if _banks_the_same_state(a, b) or (
+            callable(_match) and str(b.get("kernel_kind") or "").strip().lower() == rung and _match(sig, b)
+        ):
+            return b
+    return None
+
+
+def _attempt_result(a, won: bool, rows) -> str:
+    """The per-attempt result cell: what happened to this try, from what its own row recorded.
+
+    ✓ only for a banked win, with the commit that banked it; a candidate the PCC gate failed says so
+    with the number it had, since "faster" is not a result when the change was reverted for it."""
+    # FIRST: a candidate whose own PCC reading failed cannot have been banked (gates_allow_banking
+    # refuses it), so no fallback may tick it -- whatever its delta says.
+    _led = _ledger()
+    if _led is not None and _led.pcc_failed(a):
+        _st = str(a.get("pcc_status") or "")
+        _p, _t = a.get("pcc"), a.get("pcc_threshold")
+        if isinstance(_p, (int, float)) and isinstance(_t, (int, float)):
+            return "✗ PCC %.3f < %.2f" % (_p, _t)
+        return "✗ PCC %s" % _st
+    if won:
+        _c = _banking_commit(a, rows)
+        _sha = str((_c or {}).get("commit") or "")[:11]
+        return "✓ win (%s)" % _sha if _sha else "✓ win"
+    if a.get("wedged"):
+        return "· wedged"
+    _d = a.get("fullpipe_delta_ms")
+    if isinstance(_d, (int, float)) and _d < 0 and any(isinstance(b, dict) and b.get("commit_record") for b in rows):
+        return "· not kept"  # faster on the replay, but no commit banked it
+    return "· no gain"
 
 
 # THE MATH-FIDELITY RUNGS, ONE LIST. _fidelity_breakdown held it as a local so the ladder always
@@ -3720,15 +3750,18 @@ def render_summary(
         # Copy, the data movers, half of a typical run -- cannot be placed at all. Read from the
         # capture's marks; blank when the capture marked no stages, which is exactly how the column
         # renders for a model that emits none.
-        _ar = " %-44s\u2502 %-9s\u2502 %-18s\u2502 %-20s\u2502 %-22s\u2502 %s"
-        ah = _ar % ("op", "stack", "lever", "eager device_ms", "1CQ \u0394 vs current", "result")
+        # PCC: the accuracy this candidate had (its own check_pcc reading), "—" when it recorded none.
+        _ar = " %-44s\u2502 %-9s\u2502 %-18s\u2502 %-20s\u2502 %-22s\u2502 %-8s\u2502 %s"
+        ah = _ar % ("op", "stack", "lever", "eager device_ms", "1CQ \u0394 vs current", "PCC", "result")
         lines.append(ah)
         # THE RULE IS DERIVED FROM THE HEADER, not counted by hand. Hand-counted it drifted the
         # moment a field width changed -- crosses at 33/48/64/82 under dividers at 33/49/66/85.
         lines.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in ah.ljust(140)))
         _unmeasured = 0
         for _i, a in enumerate(attempts):
-            if not isinstance(a, dict):
+            # A COMMIT ROW IS THE PROOF A WIN WAS BANKED, NOT AN ATTEMPT: it is read into the win's own
+            # result cell (its sha) and would otherwise print as a second, "no gain" copy of that try.
+            if not isinstance(a, dict) or a.get("commit_record"):
                 continue
             sig = _op_label(a.get("op_signature", "?"))
             lever = _disp_level(a.get("kernel_kind") or "?")
@@ -3766,9 +3799,13 @@ def render_summary(
             if gain_s == "n/m":
                 _unmeasured += 1
                 continue
-            res = "✓ win" if _i in _wins else ("· wedged" if a.get("wedged") else "· no gain")
+            res = _attempt_result(a, _i in _wins, attempts)
+            _pcc = a.get("pcc")
+            pcc_s = f"{_pcc:.4f}" if isinstance(_pcc, (int, float)) else "\u2014"
             lines.append(
-                (_ar % (sig, _stage_label(a.get("op_signature"), baseline_profile), lever, ms_s, gain_s, res)).rstrip()
+                (
+                    _ar % (sig, _stage_label(a.get("op_signature"), baseline_profile), lever, ms_s, gain_s, pcc_s, res)
+                ).rstrip()
             )
         if _unmeasured:
             lines.append("")

@@ -100,6 +100,6 @@ def test_a_stage_that_cannot_be_measured_does_not_cost_the_others():
     i = src.index("for st in stages:")
     body = src[i : src.index("pipeline_ms = ", i)]
     assert "try:" in body, "measuring a stage is unguarded: one fault loses them all"
-    assert "_measure_stage(device, st)" in body
+    assert "_measure_stage(device, st, _stage_budget)" in body
     assert "continue" in body, "a stage that cannot be measured must not abort the others"
     assert "could not be measured" in body, "the drop is silent"
