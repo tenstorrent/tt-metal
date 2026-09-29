@@ -428,6 +428,7 @@ described in the next paragraph.
 | `MINIMAX_H3_MM_FIDELITY`, `MINIMAX_H3_MM_FP32_ACC=0` | fidelity / fp32 accumulation of the five block matmuls (bandwidth-bound at this shape: no gain) |
 | `MINIMAX_H3_SDPA_CHUNKS=q,k`, `MINIMAX_H3_AGMM_BLOCKS=K,N:Mb,Kb,Nb[,sh,sw];...`, `MINIMAX_H3_MMRS_BLOCKING=gx,gy,Mb,Kb,Nb,sh,sw[,workers[,window]]` | sweep overrides for the ring SDPA chunking and the linears' blockings |
 | `MINIMAX_H3_SDPA_KV_DTYPE=bfloat8_b`, `MINIMAX_H3_SDPA_DST_FULL_SYNC=1`, `MINIMAX_H3_SEQ_ALIGN_TILES=2` | measured and rejected (slower, or the wider padding breaks the ring mask's single partial tail chunk); kept for experiments |
+| `MINIMAX_H3_SDPA_V_DTYPE=bfloat8_b` | typecast only V (K stays bf16 for the logits): V is the operand the LoFi PV matmul streams, so this halves its unpack bytes and its share of the ring traffic; one typecast per block until fused; gate with the 2-step comparison |
 | `trace_denoise=True, bucket_denoise=False` (create_pipeline) | trace the step at the exact 256-aligned length instead of the bucket ladder (no gain on the 4x8: the step is device-bound) |
 
 Cross-step reuse (`step_reuse.py`) is a different kind of knob: it changes the output. It is off unless set, eager path

@@ -176,14 +176,20 @@ class MiniMaxH3Attention(Module):
 
         # Ring SDPA reuses the joint-attention entry point with empty joint inputs, as WanAttention does.
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), device=mesh_device)
-        # Opt-in K/V dtype for the ring SDPA (e.g. bfloat8_b halves the K/V ring traffic); the joint dummies follow.
-        self.sdpa_kv_dtype = None
-        self.dummy_joint_kv = self.dummy_joint_input
-        if self.use_ring and os.environ.get("MINIMAX_H3_SDPA_KV_DTYPE"):
-            self.sdpa_kv_dtype = getattr(ttnn, os.environ["MINIMAX_H3_SDPA_KV_DTYPE"])
-            self.dummy_joint_kv = typed_tensor(
-                torch.zeros((1, self.n_local_heads, 0, head_dim)), self.sdpa_kv_dtype, mesh_device
-            )
+        # Opt-in K/V dtypes for the ring SDPA: MINIMAX_H3_SDPA_KV_DTYPE sets both, MINIMAX_H3_SDPA_V_DTYPE only V (the
+        # streamed PV operand; K stays bf16 for the logits). The joint dummies follow each stream's dtype.
+        self.sdpa_k_dtype = self.sdpa_v_dtype = None
+        self.dummy_joint_k = self.dummy_joint_v = self.dummy_joint_input
+        if self.use_ring:
+            kv = os.environ.get("MINIMAX_H3_SDPA_KV_DTYPE")
+            v_only = os.environ.get("MINIMAX_H3_SDPA_V_DTYPE")
+            if kv:
+                self.sdpa_k_dtype = self.sdpa_v_dtype = getattr(ttnn, kv)
+            if v_only:
+                self.sdpa_v_dtype = getattr(ttnn, v_only)
+            for name, dtype in (("dummy_joint_k", self.sdpa_k_dtype), ("dummy_joint_v", self.sdpa_v_dtype)):
+                if dtype is not None:
+                    setattr(self, name, typed_tensor(torch.zeros((1, self.n_local_heads, 0, head_dim)), dtype, mesh_device))
 
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid
@@ -566,9 +572,10 @@ class MiniMaxH3Attention(Module):
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
-        if self.sdpa_kv_dtype is not None:
-            k_BHNE = ttnn.typecast(k_BHNE, self.sdpa_kv_dtype)
-            v_BHNE = ttnn.typecast(v_BHNE, self.sdpa_kv_dtype)
+        if self.sdpa_k_dtype is not None:
+            k_BHNE = ttnn.typecast(k_BHNE, self.sdpa_k_dtype)
+        if self.sdpa_v_dtype is not None:
+            v_BHNE = ttnn.typecast(v_BHNE, self.sdpa_v_dtype)
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
@@ -607,8 +614,8 @@ class MiniMaxH3Attention(Module):
                 k_BHNE,
                 v_BHNE,
                 self.dummy_joint_input,
-                self.dummy_joint_kv,
-                self.dummy_joint_kv,
+                self.dummy_joint_k,
+                self.dummy_joint_v,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype
                 ),
