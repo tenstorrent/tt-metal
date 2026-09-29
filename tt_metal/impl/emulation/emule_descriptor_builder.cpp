@@ -11,6 +11,7 @@
 
 #include <optional>
 #include <set>
+#include <sstream>
 #include <tuple>
 #include <type_traits>
 
@@ -24,6 +25,7 @@
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
+#include "jit_build/genfiles.hpp"            // emit_llk_metadata
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
 #include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
@@ -42,6 +44,13 @@ namespace tt_emule {
 using namespace tt::tt_metal;
 
 namespace {
+
+// The binding token's LLKMetadata initializer, rendered by genfiles so both JIT paths bake identical tokens.
+std::string llk_literal(const LLKMetadata& llk) {
+    std::ostringstream os;
+    emit_llk_metadata(os, llk);
+    return os.str();
+}
 
 // Per-kernel thread count and the processor ids each thread runs as:
 // - QuasarDataMovementKernel: one thread per DM processor (0..7).
@@ -258,8 +267,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           uint16_t id,
                                                           bool is_relay,
                                                           uint8_t pipe,
-                                                          const std::optional<LLKMetadata>&) {
-                kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
+                                                          const std::optional<LLKMetadata>& llk) {
+                kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe, llk ? llk_literal(*llk) : ""});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
@@ -272,7 +281,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     uint32_t cta_off,
                     uint32_t addr_crta_off,
                     uint32_t num_rt,
-                    const LLKMetadata&) {
+                    const LLKMetadata& llk) {
                     // Emule doesn't yet model per-binding runtime CRTA words; the downstream
                     // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
                     // dynamic-shape case here (the sole binding reader) rather than in a consumer.
@@ -285,13 +294,16 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                         "before enabling this path.",
                         name,
                         num_rt);
-                    kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
+                    kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, llk_literal(llk)});
                 });
-            k.process_scratchpad_binding_handles(
-                [&kd](
-                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
-                    kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
-                });
+            k.process_scratchpad_binding_handles([&kd](
+                                                     const std::string& name,
+                                                     uint32_t size_bytes,
+                                                     uint32_t addr_crta_word,
+                                                     const std::optional<LLKMetadata>& llk) {
+                kd.bindings.scratch.push_back(
+                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? llk_literal(*llk) : ""});
+            });
             k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
                 kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
             });
