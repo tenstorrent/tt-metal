@@ -123,7 +123,7 @@ def run_mla_inference(
     if has_indexer:
         rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
         # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
-        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+        # num_full_indexer_layers (GLM-5.3 cross-layer reuse), so the cache must carry that many slots for
         # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
         index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
@@ -170,7 +170,7 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
+    # GLM-5.3 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
     # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,

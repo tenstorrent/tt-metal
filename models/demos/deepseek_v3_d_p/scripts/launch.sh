@@ -25,7 +25,7 @@ SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-/data/$USER/tt-metal}"
 
 if [ -z "${MODEL:-}" ]; then
-  echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_2" >&2
+  echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3" >&2
   echo "  e.g.  MODEL=KIMI_K2_7 $0 20" >&2
   exit 1
 fi
