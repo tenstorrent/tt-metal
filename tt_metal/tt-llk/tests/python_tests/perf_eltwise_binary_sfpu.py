@@ -81,6 +81,28 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations,
     input_dimensions,
 ):
+    _run_perf_eltwise_binary_sfpu(
+        perf_report,
+        formats,
+        mathop,
+        approx_mode,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    )
+
+
+def _run_perf_eltwise_binary_sfpu(
+    perf_report,
+    formats,
+    mathop,
+    approx_mode,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -129,32 +151,18 @@ def test_perf_eltwise_binary_sfpu_float(
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
-    approx_mode=[ApproximationMode.No],
-    mathop=[MathOperation.SfpuLogsigmoid],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[16],
-    iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
 )
-def test_perf_eltwise_binary_sfpu_logsigmoid(
-    perf_report,
-    formats,
-    mathop,
-    approx_mode,
-    dest_acc,
-    loop_factor,
-    iterations,
-    input_dimensions,
-):
-    test_perf_eltwise_binary_sfpu_float(
+def test_perf_eltwise_binary_sfpu_logsigmoid(perf_report, formats, dest_acc):
+    _run_perf_eltwise_binary_sfpu(
         perf_report,
         formats,
-        mathop,
-        approx_mode,
+        MathOperation.SfpuLogsigmoid,
+        ApproximationMode.No,
         dest_acc,
-        loop_factor,
-        iterations,
-        input_dimensions,
+        loop_factor=16,
+        iterations=32,
+        input_dimensions=[128, 64],  # tile_cnt: 8
     )
 
 

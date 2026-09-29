@@ -601,7 +601,8 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::silu)
     {
         // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
-        // vConstFloatPrgm0 that calculate_silu depends on.
+        // vConstFloatPrgm0 that calculate_silu depends on (and, on Blackhole,
+        // vConstFloatPrgm1 = 1/ln2 for its exp).
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -634,8 +635,9 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative)
     {
-        // Mirrors production tanh_derivative_tile_init: tanh_derivative_sech2_init programs the tail exp's
-        // Cody-Waite constants into vConstFloatPrgm0/1/2, which calculate_tanh_derivative_sech2 reads.
+        // Mirrors production tanh_derivative_tile_init. On Blackhole, tanh_derivative_sech2_init programs the
+        // tail exp's Cody-Waite constants into vConstFloatPrgm0/1/2, which calculate_tanh_derivative_sech2
+        // reads; on Wormhole it only resets the counters.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_sech2_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
@@ -2245,7 +2247,8 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init.
+        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init
+        // (Prgm0) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else

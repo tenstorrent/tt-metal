@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_expm1_cw.h"  // CW_* Cody-Waite constants, expm1_cw_init_prgm_consts
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "cmath_common.h"
 
@@ -110,12 +111,8 @@ inline void tanh_derivative_init() {
 // Performance: ~16 ops (vs ~28 for _sfpu_exp_f32_accurate_)
 // Accuracy: < 1 ULP for the exp, combined with asymptotic formula gives Max ULP = 1
 // =============================================================================
-// Cody-Waite constants of the tail exp; tanh_derivative_sech2_init parks them in vConstFloatPrgm0/1/2.
-constexpr float SECH2_TAIL_INV_LN2 = 1.4426950408889634f;
-constexpr float SECH2_TAIL_LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
-constexpr float SECH2_TAIL_LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
-
-// The three Cody-Waite constants come from the caller: vConstFloatPrgmN programmed by the init, or an
+// The three Cody-Waite constants (CW_INV_LN2, CW_NEG_LN2_HI, CW_NEG_LN2_LO from ckernel_sfpu_expm1_cw.h;
+// tanh_derivative_sech2_init parks them in vConstFloatPrgm0/1/2) come from the caller: vConstFloatPrgmN, or an
 // sfpi::vFloat / float literal. (sfpi 7.83.0 never lifts a literal out of a loop by itself, so as literals
 // they cost an SFPLOADI pair each per row.)
 template <typename K, typename HI, typename LO>
@@ -266,9 +263,7 @@ inline void tanh_derivative_sech2_init() {
     // No reciprocal, no LUT: the three programmable registers hold the tail exp's Cody-Waite constants,
     // which calculate_tanh_derivative_sech2 reads on every row (Prgm0 would be the reciprocal's 2.0f in a
     // kernel that had one).
-    sfpi::vConstFloatPrgm0 = SECH2_TAIL_INV_LN2;
-    sfpi::vConstFloatPrgm1 = SECH2_TAIL_LN2_HI;
-    sfpi::vConstFloatPrgm2 = SECH2_TAIL_LN2_LO;
+    expm1_cw_init_prgm_consts();
 }
 
 }  // namespace sfpu
