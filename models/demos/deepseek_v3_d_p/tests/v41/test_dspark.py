@@ -12,9 +12,10 @@ linear ops 0.999), and the final rings (D2, 0.998), bit-identically on repeat. R
 must stay zero. Cases: prompts shorter than the window, longer than it, and a chunked prompt whose last
 ``window`` positions span two chunks.
 
-Weights are synthetic only: the real DSpark (``mtp.*``) shards are not downloaded. "small" is the oracle's
-small schedule (one DSpark layer, taps of layers 4 and 5, window 16); "real" is V4.1 layers 20, 36-39 with the
-three DSpark layers at real dims (window 128).
+"small" is the oracle's small schedule (one DSpark layer, taps of layers 4 and 5, window 16); "real" is V4.1
+layers 20, 36-39 with the three DSpark layers at real dims (window 128). Weights: synthetic, or ("real_ckpt") the
+checkpoint's DSpark units ``mtp.0-2`` on the synthetic backbone of "real" (the backbone shards are not downloaded;
+the backbone only produces the taps, which are teacher-forced from the oracle either way).
 """
 
 import pytest
@@ -33,17 +34,34 @@ MAIN_X_PCC = 0.999
 TAP_PCC = 0.999
 RING_PCC = 0.998
 
+REAL_LAYERS = (20, 36, 37, 38, 39)
+DSPARK_UNITS = tuple(f"mtp.{k}" for k in range(DeepSeekV41FlashConfig.NUM_DSPARK_LAYERS))
+REAL_PROMPTS = [(100, [100]), (300, [300]), (300, [256, 44])]  # window 128: < window, > window, last 128 span two
+
 # (spec, prompt length, chunk lengths); every chunk but the last is a multiple of 2*32*sp (sp = 2)
 CASES = {
     "small": (
         lambda: o.small_spec(seq_len=256),
         [(13, [13]), (100, [100]), (135, [128, 7])],  # window 16: < window, > window, last 16 span two chunks
     ),
-    "real": (
-        lambda: o.real_spec((20, 36, 37, 38, 39), 512, dspark=True),
-        [(100, [100]), (300, [300]), (300, [256, 44])],  # window 128: < window, > window, last 128 span two
+    "real": (lambda: o.real_spec(REAL_LAYERS, 512, dspark=True), REAL_PROMPTS),
+    "real_ckpt": (
+        lambda: o.real_spec(REAL_LAYERS, 512, dspark=True, checkpoint=o.HF_SNAPSHOT, checkpoint_units=DSPARK_UNITS),
+        REAL_PROMPTS,
     ),
 }
+
+
+def dspark_shards_present() -> bool:
+    """Whether the checkpoint shards of the DSpark units are downloaded."""
+    import json
+
+    index = o.HF_SNAPSHOT / "model.safetensors.index.json"
+    if not index.is_file():
+        return False
+    weight_map = json.loads(index.read_text())["weight_map"]
+    files = {f for name, f in weight_map.items() if name.split(".")[0] == "mtp"}
+    return bool(files) and all((o.HF_SNAPSHOT / f).is_file() for f in files)
 
 
 def _config(args: v41.ModelArgs):
@@ -90,7 +108,7 @@ def _pcc(a, b) -> float:
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize("dims", ["small", "real"])
+@pytest.mark.parametrize("dims", ["small", "real", "real_ckpt"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -105,14 +123,16 @@ def _pcc(a, b) -> float:
 )
 def test_v41_dspark_seeding(mesh_device, device_params, dims):
     make_spec, prompts = CASES[dims]
+    if dims == "real_ckpt" and not dspark_shards_present():
+        pytest.skip(f"DSpark checkpoint shards not in {o.HF_SNAPSHOT}")
     spec = make_spec()
     args = spec.args
     cfg = _config(args)
-    if dims == "real":
+    if dims != "small":
         for name in ("EMB_SIZE", "HEAD_DIM", "QK_ROPE_HEAD_DIM", "SLIDING_WINDOW", "RMS_NORM_EPS", "ROPE_THETA"):
             assert getattr(cfg, name) == getattr(DeepSeekV41FlashConfig, name), name
     tap_ids = [spec.layer_ids[p] for p in args.dspark_target_layer_ids]
-    if dims == "real":
+    if dims != "small":
         assert tap_ids == list(DeepSeekV41FlashConfig.DSPARK_TARGET_LAYER_IDS)
     model = o.build_reference(spec)
     shape, (sp, tp) = tuple(mesh_device.shape), tuple(mesh_device.shape)
@@ -170,7 +190,7 @@ def test_v41_dspark_seeding(mesh_device, device_params, dims):
                     ref = ref_main_x[start + a : start + a + end]
                     results[f"{tag}_c{start}_main_x"] = _pcc(ref, main_xs[-1])
                     exact[f"{tag}_c{start}_main_x_replicated"] = all_devices_equal(main_x)
-                dspark.seed(taps, start, length, rings)
+                dspark.seed(taps, start, length, rings, dspark.seed_rope(start, length))
                 start += length
             return [first_device(r) for r in rings], main_xs, rings
 

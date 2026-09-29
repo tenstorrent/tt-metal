@@ -13,6 +13,8 @@ Typical use::
 
     spec = real_spec((2, 3), seq_len=2048)                   # V4.1 layers 2 -> 3, real dims, synthetic
     spec = real_spec((0, 2, 3), 2048, checkpoint=HF_SNAPSHOT)  # the same with checkpoint weights
+    spec = real_spec((20, 36, 37, 38, 39), 512, dspark=True, checkpoint=HF_SNAPSHOT,
+                     checkpoint_units=("mtp.0", "mtp.1", "mtp.2"))   # real DSpark, synthetic backbone
     spec = small_spec(seq_len=41)                           # small dims, all six block types + DSpark
     model = build_reference(spec)                           # e.g. for device weights
     result = oracle(spec, random_tokens(spec), model)       # cached captures and state
@@ -24,7 +26,9 @@ synthetic weights therefore do not depend on which other layers the schedule hol
 are read from the HF shards as stored (FP8/FP4 + E8M0 scales) and converted like upstream ``convert.py``
 (``wo_a`` dequantized to bf16, FP4 experts viewed as ``float4_e2m1fn_x2``). Synthetic Engram tables are
 row-sparse: row ``r`` of layer ``l`` is drawn from its own seed, and only the rows a prompt hashes to are
-materialized (a real table has 384M rows); lookups still run through the reference module.
+materialized (a real table has 384M rows); lookups still run through the reference module. A spec with
+``checkpoint_units`` mixes the two: the named units come from the checkpoint, every other unit is synthetic
+(bit-identical to the fully synthetic spec's), e.g. real DSpark layers on a backbone whose shards are absent.
 
 Result layout (all tensors batch-squeezed, keyed by V4.1 layer id; the small schedule's ids are its
 positions)::
@@ -46,7 +50,8 @@ positions)::
                 main_hidden [S,n_taps*D] and dspark_window{k} [window,head_dim] (DSpark schedules)
 
 Disk cache (``CACHE_DIR``, env ``TT_V41_ORACLE_CACHE``). Results are keyed by the model args, layer ids,
-seed, weights source (``synthetic`` or the checkpoint revision), tokenizer source, a sha256 of the prompt
+seed, weights source (``synthetic``, the checkpoint revision, or the revision + checkpoint units + ``synthetic``
+for a mixed spec), tokenizer source, a sha256 of the prompt
 tokens, a digest of the vendored reference sources (model/kernel_cpu/engram/testing .py), the torch
 version and ``PACKAGE_VERSION``; synthetic weights per unit by unit name, parameter signature, seed and
 the same digest. Invalidation: editing a vendored reference file or changing torch invalidates
@@ -110,13 +115,30 @@ _TOKEN_KEYS = (
 class OracleSpec:
     """What determines a reference model: its args, the checkpoint layer id of each backbone position,
     the full model those layers come from (Engram hashing depends on it), the seed of synthetic weights,
-    and the checkpoint snapshot (None = synthetic weights)."""
+    the checkpoint snapshot (None = synthetic weights) and the units read from it (empty = all units; else only
+    these, the others synthetic)."""
 
     args: v41.ModelArgs
     layer_ids: tuple[int, ...]
     model_args: v41.ModelArgs
     seed: int = 0
     checkpoint: Path | None = None
+    checkpoint_units: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if self.checkpoint_units and self.checkpoint is None:
+            raise ValueError(f"checkpoint_units {self.checkpoint_units} need a checkpoint")
+
+    def unit_checkpoint(self, name: str) -> Path | None:
+        """The checkpoint unit ``name`` is read from, None if it is synthetic."""
+        if self.checkpoint is None or (self.checkpoint_units and name not in self.checkpoint_units):
+            return None
+        return self.checkpoint
+
+    @property
+    def has_synthetic(self) -> bool:
+        """Whether any unit has synthetic weights (then results depend on the synthetic init)."""
+        return self.checkpoint is None or bool(self.checkpoint_units)
 
 
 def released_args(seq_len: int) -> v41.ModelArgs:
@@ -135,12 +157,14 @@ def real_spec(
     candidate_topk_blocks: int | None = None,
     seed: int = 0,
     checkpoint: Path | None = None,
+    checkpoint_units: tuple[str, ...] = (),
 ) -> OracleSpec:
     """A reference made of V4.1 layers ``layers`` (execution order) at real dims.
 
     Every layer keeps its V4.1 role: compress ratio (0 = sliding window only, base RoPE), KV / index /
     candidate source, Engram (layers 1, 14). A layer that reads shared state needs the layers producing
     it in ``layers``; ``dspark`` adds the 3 DSpark layers and needs their tap layers 37-39.
+    ``checkpoint_units``: read only these units from ``checkpoint`` (see ``OracleSpec``).
     ``candidate_topk_blocks`` overrides 2048 (at short prompts every block is a candidate otherwise).
     """
     cfg = DeepSeekV41FlashConfig
@@ -179,7 +203,9 @@ def real_spec(
         dspark_block_size=full.dspark_block_size if dspark else 0,
         dspark_target_layer_ids=positions(full.dspark_target_layer_ids) if dspark else (),
     )
-    return OracleSpec(args, layers, full, seed, None if checkpoint is None else Path(checkpoint))
+    return OracleSpec(
+        args, layers, full, seed, None if checkpoint is None else Path(checkpoint), tuple(checkpoint_units)
+    )
 
 
 def small_spec(seq_len: int, *, seed: int = 0, **overrides) -> OracleSpec:
@@ -244,6 +270,8 @@ def _tokenizer(spec: OracleSpec):
 def _source_ids(spec: OracleSpec) -> dict:
     """The weights and tokenizer identities that enter every cache key."""
     weights = "synthetic" if spec.checkpoint is None else f"hf:{spec.checkpoint.name}"
+    if spec.checkpoint_units:  # only mixed specs extend the key: synthetic / checkpoint keys stay as they were
+        weights += f"[{','.join(sorted(spec.checkpoint_units))}]+synthetic"
     tokenizer = f"hf:{(spec.checkpoint or HF_SNAPSHOT).name}" if _uses_real_tokenizer(spec) else "stub"
     return {"weights": weights, "tokenizer": tokenizer}
 
@@ -417,12 +445,15 @@ def build_reference(spec: OracleSpec) -> v41.Transformer:
     for layer in model.layers:
         if layer.engram is not None:
             _make_engram_row_sparse(layer.engram)
-    for name, module in _units(model, spec):
+    units = _units(model, spec)
+    if unknown := sorted(set(spec.checkpoint_units) - {name for name, _ in units}):
+        raise ValueError(f"checkpoint_units {unknown} are not units of this model")
+    for name, module in units:
         with _Detached(module) as unit:
-            if spec.checkpoint is None:
+            if (checkpoint := spec.unit_checkpoint(name)) is None:
                 _synthetic_unit(name, unit, spec.seed)
             else:
-                _checkpoint_unit(name, unit, spec.checkpoint)
+                _checkpoint_unit(name, unit, checkpoint)
     return model.eval()
 
 
@@ -489,7 +520,7 @@ def _run(model: v41.Transformer, spec: OracleSpec, tokens: torch.Tensor) -> dict
     """Single-shot prefill of ``tokens`` [1, S] with block / shared-state / final-state captures."""
     seq = tokens.size(1)
     _reset_state(model)
-    if spec.checkpoint is None:
+    if spec.has_synthetic:  # checkpoint Engram layers are rejected by _checkpoint_unit
         load_engram_rows(model, spec, tokens)
     blocks: dict = {lid: {} for lid in spec.layer_ids}
     shared: dict = {}
@@ -587,7 +618,7 @@ def cache_path(spec: OracleSpec, tokens: torch.Tensor) -> Path:
         _source_ids(spec),
         hashlib.sha256(tokens.to(torch.int64).contiguous().numpy().tobytes()).hexdigest(),
         list(tokens.shape),
-        _reference_digest(synthetic=spec.checkpoint is None),
+        _reference_digest(synthetic=spec.has_synthetic),
         torch.__version__,
         PACKAGE_VERSION,
     )
@@ -681,7 +712,7 @@ def _noisy_run(spec: OracleSpec, tokens: torch.Tensor, count: int, model, noise)
     model = _model(model, spec)
     clean = oracle(spec, tokens, model) if noise is not None else None  # before the noisy run resets the state
     _reset_state(model)
-    if spec.checkpoint is None:
+    if spec.has_synthetic:  # checkpoint Engram layers are rejected by _checkpoint_unit
         load_engram_rows(model, spec, tokens)
     captured, blocks = {}, {}
 
@@ -1072,6 +1103,8 @@ def vl_parameters(spec: OracleSpec) -> dict[str, torch.Tensor]:
     and ``image_start`` / ``image_end`` / ``image_newline`` (bf16 ``[dim]``); synthetic (seeded per name) or stored."""
     names = [f"layers.{lid}.ffn.gate.bias_vl" for lid in spec.layer_ids]
     names += ["image_start", "image_end", "image_newline"]
+    if spec.checkpoint_units:
+        raise NotImplementedError("VL parameters of a mixed synthetic / checkpoint spec are not defined")
     if spec.checkpoint is None:
         out = {}
         for name in names:

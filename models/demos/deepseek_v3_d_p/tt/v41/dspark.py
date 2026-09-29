@@ -139,14 +139,14 @@ class TtV41DSpark(LightweightModule):
             for _ in self.layers
         ]
 
-    def seed(self, taps: list, start: int, length: int, rings: list, rope: tuple | None = None) -> None:
+    def seed(self, taps: list, start: int, length: int, rings: list, rope: tuple) -> None:
         """Write the DSpark window KV of the chunk's last ``min(length, window)`` real positions (absolute
         ``start + p``) into ``rings`` slot ``(start + p) % window``, in place. Call once per chunk, in order.
-        ``rope``: this chunk's ``seed_rope(start, length)``, uploaded ahead (uploaded here when None)."""
+        ``rope``: this chunk's ``seed_rope(start, length)``, uploaded ahead."""
         assert len(rings) == len(self.layers)
         main_x, a = self.project(taps, length)
         lo, _, b = self._seed_rows(length)
-        cos, sin = rope if rope is not None else self.seed_rope(start, length)
+        cos, sin = rope
         assert cos.shape[2] == b - a, f"RoPE table of {cos.shape[2]} rows for seed rows [{a}, {b})"
         x = fp8_qdq(main_x)
         for layer, ring in zip(self.layers, rings):
