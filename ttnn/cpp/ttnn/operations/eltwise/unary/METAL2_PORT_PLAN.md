@@ -122,13 +122,13 @@ No semaphore-ID RTAs or page-size 3rd-argument sites exist.
 
 ## Hardware configuration (planned)
 
-- reader: `create_reader_datamovement_config(arch)`, the reader default triple.
-- writer: `create_writer_datamovement_config(arch)`, the writer default triple.
-- compute: Style B, a `ComputeGen1Config` built directly because legacy set a `ComputeConfigDescriptor` literally.
+- reader: `create_reader_datamovement_config()`, the reader default triple.
+- writer: `create_writer_datamovement_config()`, the writer default triple.
+- compute: Style B, a `ComputeHardwareConfig` built directly because legacy set a `ComputeConfigDescriptor` literally.
   - `fpu_math_fidelity = HiFi4`
   - `sfpu_precision_mode = Precise` (`math_approx_mode = false`)
   - `enable_32_bit_dest = fp32_dest_acc_en`
-  - `bfp_pack_precision_mode = bfp8_pack_precise ? Precise : Approximate`
+  - `config_1xx->bfp_pack_precision_mode = bfp8_pack_precise ? Precise : Approximate`, set off Quasar only (Quasar replaces BFP with MXFP)
   - `double_buffer_dest = true` (legacy `dst_full_sync_en` default `false`)
   - `unpack_modes`, for each DFB compute consumes (`in`, and `tmp0` when present):
     - `preserve_fp32_precision` → `UnpackToDest` (legacy `UnpackToDestFp32`).

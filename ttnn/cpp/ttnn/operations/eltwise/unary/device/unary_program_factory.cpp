@@ -562,7 +562,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .accessor_name = "src",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dm_runtime_arg_names},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // --- Writer Kernel ---
@@ -585,7 +585,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .accessor_name = "dst",
         }},
         .runtime_arg_schema = {.runtime_arg_names = dm_runtime_arg_names},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // --- Compute Kernel ---
@@ -631,7 +631,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
     // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets
     // legacy's silent UnpackToSrc instead of a TT_FATAL.
-    ComputeUnpackModes unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const DFBSpecName& dfb, DataFormat df) {
         if (operation_attributes.preserve_fp32_precision && operation_attributes.fp32_dest_acc_en) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
@@ -647,6 +647,22 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     // Field values carried over from the legacy ComputeConfigDescriptor: math_fidelity = HiFi4,
     // fp32_dest_acc_en, bfp8_pack_precise, math_approx_mode = false. dst_full_sync_en was left at its
     // legacy default (false), i.e. double_buffer_dest = true, which is also the Metal 2.0 default.
+    //
+    // bfp_pack_precision_mode is 1xx-only -- Quasar replaces BFP with MXFP -- so it lives in
+    // config_1xx and is omitted there, as copy/typecast does.
+    ComputeHardwareConfig compute_hw_config{
+        .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
+        .enable_32_bit_dest = operation_attributes.fp32_dest_acc_en,
+        .unpack_modes = std::move(unpack_modes),
+    };
+    if (arch != tt::ARCH::QUASAR) {
+        compute_hw_config.config_1xx = ComputeHardwareConfig::Compute1XXConfig{
+            .bfp_pack_precision_mode =
+                operation_attributes.bfp8_pack_precise ? Precision::Precise : Precision::Approximate,
+        };
+    }
+
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = compute_path,
@@ -658,14 +674,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args = std::move(compute_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "packed_scalar1", "packed_scalar2"}},
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{
-            .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
-            .bfp_pack_precision_mode =
-                operation_attributes.bfp8_pack_precise ? Precision::Precise : Precision::Approximate,
-            .enable_32_bit_dest = operation_attributes.fp32_dest_acc_en,
-            .unpack_modes = std::move(unpack_modes),
-        }},
+        .hw_config = std::move(compute_hw_config),
     };
 
     ProgramSpec spec{
