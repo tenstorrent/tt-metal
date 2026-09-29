@@ -170,7 +170,7 @@ def _linear(node, name, tokens, k, n, wdtype, layout, *, k_sharded_tp, n_sharded
     )
 
 
-def block_ops(layer: int, w: Workload, layout: Layout = LOUDBOX_2X4, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
+def block_ops(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
     """Operation costs of one backbone block for one chunk on one chip."""
     btype = C.block_type(layer)
     ratio = C.compress_ratio(layer)
@@ -527,9 +527,7 @@ class BlockEstimate:
     ops: list
 
 
-def compose_block(
-    layer: int, w: Workload, layout: Layout = LOUDBOX_2X4, hw: Hardware = BLACKHOLE_P150B
-) -> BlockEstimate:
+def compose_block(layer: int, w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> BlockEstimate:
     ops = block_ops(layer, w, layout, hw)
     compute = sum(o.compute_ns for o in ops)
     dram = sum(o.dram_ns for o in ops)
@@ -617,7 +615,7 @@ def kv_cache_bytes(tokens: int, w: Workload, layers: list[int] | None = None) ->
     return total
 
 
-def final_ops(w: Workload, layout: Layout = LOUDBOX_2X4, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
+def final_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
     """F1 final collapse and F2 norm over the chunk; F3 fp32 LM head over the last token only."""
     s, ht, hc = w.chunk / layout.sp, C.EMB_SIZE / layout.tp, C.HC_MULT
     ops = [
@@ -645,7 +643,7 @@ def final_ops(w: Workload, layout: Layout = LOUDBOX_2X4, hw: Hardware = BLACKHOL
     return [_finish(op, layout, hw) for op in ops]
 
 
-def dspark_prefill_ops(w: Workload, layout: Layout = LOUDBOX_2X4, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
+def dspark_prefill_ops(w: Workload, layout: Layout, hw: Hardware = BLACKHOLE_P150B) -> list[OpCost]:
     """N6 taps (3 layers, whole chunk) and D1/D2 over the last ``min(128, chunk)`` rows: main_proj FP8
     15360 -> 5120 + main_norm once, then per DSpark layer wkv 5120 -> 512, kv_norm, RoPE, FP8 QDQ."""
     s, h, d, hc = w.chunk / layout.sp, C.EMB_SIZE, C.HEAD_DIM, C.HC_MULT
@@ -689,7 +687,7 @@ def dspark_prefill_ops(w: Workload, layout: Layout = LOUDBOX_2X4, hw: Hardware =
 
 
 def vision_ops(
-    image_tokens: int, layout: Layout = LOUDBOX_2X4, hw: Hardware = BLACKHOLE_P150B, weight_dtype: str = "bf16"
+    image_tokens: int, layout: Layout, hw: Hardware = BLACKHOLE_P150B, weight_dtype: str = "bf16"
 ) -> list[OpCost]:
     """V1-V3 for one image of ``image_tokens`` aligner outputs (= patches / 9), work split over all chips.
 

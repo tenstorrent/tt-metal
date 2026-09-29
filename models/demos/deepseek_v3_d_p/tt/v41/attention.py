@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillSta
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
+from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -245,7 +246,7 @@ class TtV41Attention(LightweightModule):
                 out_dim=2,
                 num_links=self.ccl.num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cluster_axis=1,
+                cluster_axis=TP_AXIS,
             )
         attn = ttnn.transformer.sparse_sdpa(
             ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
@@ -265,7 +266,7 @@ class TtV41Attention(LightweightModule):
                 out_dim=1,
                 num_links=self.ccl.num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cluster_axis=1,
+                cluster_axis=TP_AXIS,
             )
         state.update_window_carry(self.layer, length)
         attn = self._rope(attn, cos, sin, inverse=True)

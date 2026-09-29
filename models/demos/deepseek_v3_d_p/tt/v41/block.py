@@ -15,6 +15,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TtV41Attention
+from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.tt.v41.mhc import TtV41HyperConnections
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 
@@ -35,14 +36,14 @@ class TtV41Block(LightweightModule):
         """``weights``: ``attn`` (TtV41Attention weights), ``attn_norm``, ``ffn_norm``, ``hc_attn`` / ``hc_ffn``
         (fn, base, scale), and the MoE state-dict entries ``gate_weights``, ``routed_expert_weights``,
         ``shared_expert_weights``."""
-        tp_axis, sp_axis = 1, 0
+        V41MeshLayout.of(mesh_device).check_model(config)
         self.layer = layer
         norm = lambda w: TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=config.EMB_SIZE,
             torch_weight=w,
             epsilon=config.RMS_NORM_EPS,
-            cluster_axis=tp_axis,
+            cluster_axis=TP_AXIS,
             num_links=num_links,
             topology=topology,
         )

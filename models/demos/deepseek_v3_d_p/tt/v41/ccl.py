@@ -7,8 +7,7 @@
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-
-TP_AXIS = 1
+from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 
 
 class V41Collectives:

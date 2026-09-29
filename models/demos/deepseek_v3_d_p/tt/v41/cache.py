@@ -36,6 +36,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheFormat,
     MlaKvCacheGeometry,
@@ -103,7 +104,9 @@ class V41PrefillState:
         assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
         self.mesh_device = mesh_device
         self.config = config
-        self.geometry = V41CacheGeometry(config, max_seq_len, chunk, mesh_device.shape[0])
+        layout = V41MeshLayout.of(mesh_device)
+        self.geometry = V41CacheGeometry(config, max_seq_len, chunk, layout.sp)
+        layout.check_chunk(chunk)
         self.layers = list(layers)
         self.start = 0
         self.compressed_kv_format = kv_format
@@ -137,7 +140,7 @@ class V41PrefillState:
         self.selection = {}
         # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
         self.dspark_rings = None
-        self._ccl = get_tt_ccl(mesh_device) if mesh_device.shape[0] > 1 else None
+        self._ccl = get_tt_ccl(mesh_device) if layout.sp > 1 else None
         self._num_links = 2 if is_blackhole() else 1
 
     def kv_format(self, ratio: int) -> MlaKvCacheFormat:
@@ -183,12 +186,12 @@ class V41PrefillState:
         return ttnn.experimental.all_gather_async(
             t,
             dim=2,
-            multi_device_global_semaphore=self._ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=0),
-            barrier_semaphore=self._ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=0),
+            multi_device_global_semaphore=self._ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=SP_AXIS),
+            barrier_semaphore=self._ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=SP_AXIS),
             num_links=self._num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            cluster_axis=0,
+            cluster_axis=SP_AXIS,
         )
 
     @staticmethod
