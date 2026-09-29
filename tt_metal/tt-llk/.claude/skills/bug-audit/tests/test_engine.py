@@ -212,6 +212,14 @@ def test_ledger_site_check(tmp_path):
     assert ok(
         str(external)
     ), "a document outside the tree is an external reference; it needs no line"
+    dep = tmp_path / "cache" / "tt-logger" / "init.hpp"
+    write(str(dep), "\n" * 80)
+    assert ok(
+        f"{dep}:64-71 (tt-logger cache, outside the tree)"
+    ), "a fetched dependency cited by its absolute path is a real place"
+    assert not ok(
+        "cache/tt-logger/init.hpp:64-71"
+    ), "the same file cited relative to nothing in the tree stays unlocatable"
 
 
 # ---- siblings.py: leads from mined deep reads -------------------------------------------------------------------

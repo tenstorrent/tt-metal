@@ -230,7 +230,7 @@ print(f"wave {wave_no}: " + ", ".join(f"{k} {v}" for k, v in stats.items()))
 if stats.get("ledger_entries"):
     print(
         f"contract-trace ledger: {stats['ledger_entries']} boundaries traced, {stats.get('ledger_skipped', 0)} skipped, "
-        f"{stats.get('ledger_bad', 0)} cite an other side that cannot be located in the tree (fabricated, or an ambiguous short path); "
+        f"{stats.get('ledger_bad', 0)} cite an other side that cannot be located (fabricated, an ambiguous short path, or an out-of-tree file not given as an absolute path); "
         f"trace audit overturned {stats.get('trace_overturned', 0)} of {stats.get('trace_rechecked', 0)} re-checked verdicts"
     )
 print(

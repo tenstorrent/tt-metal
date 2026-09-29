@@ -194,7 +194,8 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
 ### Contracts that make the result trustworthy
 - **The contract trace is recorded and audited.** Each hunter returns a ledger of every boundary it traced (its
   site, the other side's `file:line`, the verdict, and what it compared), plus the boundaries it skipped and why.
-  `persist_wave.py` checks that every "other side" is a real `file:line`. Before screening, an independent trace
+  `persist_wave.py` checks that every "other side" is a real `file:line` (repo-relative in the tree, absolute for a
+  file outside it, such as a fetched dependency). Before screening, an independent trace
   auditor re-traces a sample of each ledger: the first, middle and last "consistent" entries, plus every mismatch
   that has no finding. Whatever it finds joins the candidates. The persist summary reports how many verdicts the
   audit overturned. A high rate means the hunters are skimming.

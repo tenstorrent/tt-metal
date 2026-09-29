@@ -55,7 +55,7 @@ const FIND_SCHEMA = {
         properties: {
           site: { type: 'string', description: 'repo-relative path:line in YOUR batch where the boundary is crossed' },
           kind: { type: 'string', enum: ['call-callee', 'host-kernel', 'producer-consumer', 'validate-impl', 'decl-callers', 'symbol-resolution', 'sibling'] },
-          other_side: { type: 'string', description: 'REPO-RELATIVE path:line (or path:a-b) of the other side you actually opened and read' },
+          other_side: { type: 'string', description: 'path:line (or path:a-b) of the other side you actually opened and read: repo-relative for a file in the tree, ABSOLUTE for one outside it (a fetched dependency, a doc)' },
           verdict: { type: 'string', enum: ['consistent', 'mismatch', 'unclear'] },
           note: { type: 'string', description: 'what you compared (types, counts, order, units, conditions), one line' },
         },
