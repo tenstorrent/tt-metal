@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -22,14 +23,10 @@
 // precedence because it sets the program config before this is reached.
 //
 // The selector is a pure function of a Problem (shapes, formats, compute settings) and a HardwareDesc
-// (grid, L1), so it can be exercised for any architecture without a device. It uses structural heuristics
-// only, no measured constants:
-//  - B not batched: the batch is fused into M and 2D mcast is used, unless a 1D layout keeps at least
-//    ONE_D_CORE_ADVANTAGE times as many cores busy (small M or small N), in which case that 1D layout is used,
-//    or 1D in0-mcast keeps as many cores busy with less input per core (per_core_M + per_core_N);
-//  - batched B: Reuse, unless the multicast layout looping over the batch (chosen as above) keeps
-//    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores)
-//    or Reuse would read ONE_D_CORE_ADVANTAGE times as much input (splitting batch matrices re-reads B);
+// (grid, L1, nominal rates), so it can be exercised for any architecture without a device:
+//  - family (2D, 1D in0/in1-mcast, Reuse): each is blocked by the rules below, and the one with the smallest
+//    per-core roofline estimate is used: the largest of compute (matrix engine rate at the math fidelity), what
+//    the busiest core receives over the NoC, and the chip's DRAM traffic, from nominal hardware rates;
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
 //    (MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES, MAX_SELF_READ_TILES_PER_K_STEP). Precision is left to the compute
 //    kernel config: the blocking doesn't change with the output format or packer L1 accumulation. 1D
@@ -44,11 +41,6 @@
 // A width- or block-sharded A's K blocks are whole shard columns when they fit, multicast in place.
 // Problems it does not handle yet return nullopt, and the caller falls back to the legacy selection.
 namespace ttnn::operations::matmul::auto_config {
-
-// Switching away from the default layout needs at least this many times as many cores busy: 1D over 2D (1D
-// multicasts a whole operand to every core), and for batched B a batch-looping multicast layout over Reuse.
-// On the Wormhole sweep anything from 1.25 to 2 performs about the same.
-constexpr double ONE_D_CORE_ADVANTAGE = 1.5;
 
 // K block depth, for every family: in0_block_w is at most this. Deeper K blocks stop paying for themselves,
 // and in 2D the block-size heuristic would otherwise trade output-block size (the only source of data reuse)
@@ -79,6 +71,12 @@ struct HardwareDesc {
     bool pinned_origin = false;    // the configs must name the grid's cores (a sub-device's) explicitly
     uint32_t l1_cb_budget = 0;     // per-core bytes available for circular buffers
     uint32_t dram_alignment = 32;  // bytes; tiles read from DRAM are padded to this
+    // Nominal rates for the roofline estimate, per core clock cycle (tech_reports/GEMM_FLOPS and
+    // tech_reports/FlashAttention): matrix engine FLOPs at LoFi (8x16 x 16x16 per cycle), divided by the math
+    // fidelity; one NoC link into a core; the chip's DRAM bandwidth.
+    uint32_t matmul_flops_per_cycle = 4096;
+    uint32_t noc_bytes_per_cycle = 32;
+    double dram_bytes_per_cycle = 288.0;  // 288 GB/s at 1 GHz
 
     static HardwareDesc for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget);
 };
@@ -154,6 +152,19 @@ struct Candidate {
 // Per-core L1 bytes the factory for `family` needs with this blocking (32x32 tiles): its circular buffers,
 // less those backed by a sharded tensor, plus a sharded output's shard, which is not allocated yet.
 uint32_t circular_buffer_bytes(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
+
+// Per-core roofline terms (cycles) of a blocked candidate, from the rates in HardwareDesc. They depend on the
+// output blocks but not on in0_block_w.
+struct RooflineTerms {
+    double compute = 0;  // the busiest core's tile products
+    double noc = 0;      // input bytes the busiest core receives
+    double dram = 0;     // input bytes read from DRAM, chip-wide
+    double cycles() const { return std::max({compute, noc, dram}); }
+};
+RooflineTerms roofline(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
+
+// The roofline estimate: the largest term. The family choice takes the smallest.
+double estimated_cycles(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
 
 // The blocked candidate of each family that can run the problem and fits L1, in family order.
 std::vector<Candidate> candidates(const Problem& problem, const HardwareDesc& hw);

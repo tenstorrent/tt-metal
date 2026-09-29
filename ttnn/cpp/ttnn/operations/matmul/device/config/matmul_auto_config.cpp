@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -179,6 +180,10 @@ HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_c
     hw.grid = grid;
     hw.l1_cb_budget = l1_cb_budget;
     hw.dram_alignment = arch == tt::ARCH::BLACKHOLE ? 64 : 32;
+    if (arch == tt::ARCH::BLACKHOLE) {
+        hw.noc_bytes_per_cycle = 64;
+        hw.dram_bytes_per_cycle = 512.0 / 1.35;  // 512 GB/s at 1.35 GHz
+    }
     return hw;
 }
 
@@ -476,19 +481,64 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
     return std::nullopt;
 }
 
-// Input tiles per K tile each core reads: its rows of A plus its columns of B
-uint32_t per_core_input_tiles(const Blocking& b) { return b.per_core_M + b.per_core_N; }
-
-// Input tiles read from memory in total. The mcast layouts read A once per output column block and B once
-// per output row block (each shared by multicast); Reuse reads A once and B once per M slice of a batch.
-uint64_t total_input_tiles(const Problem& p, Family family, const Blocking& b) {
-    const uint64_t a_tiles = static_cast<uint64_t>(p.batch_a) * p.Mt * p.Kt;
-    const uint64_t b_tiles = static_cast<uint64_t>(p.batch_b) * p.Kt * p.Nt;
-    if (family == Family::Reuse) {
-        return a_tiles + b_tiles * div_up(p.Mt, b.per_core_M);
+uint32_t fidelity_multiplier(MathFidelity fidelity) {
+    switch (fidelity) {
+        case MathFidelity::LoFi: return 1;
+        case MathFidelity::HiFi2: return 2;
+        case MathFidelity::HiFi3: return 3;
+        default: return 4;
     }
-    return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
 }
+
+}  // namespace
+
+// Per-core roofline estimate, in cycles, of a blocked candidate: the largest of
+//  - compute: the busiest core's tile products at the matrix engine's rate for the math fidelity (A tiles
+//    shorter than 8 rows still take a full 8-row pass of the engine);
+//  - NoC: the input bytes the busiest core receives (its rows of A and columns of B, once per output block
+//    that uses them);
+//  - DRAM: the input bytes read from DRAM in total (the mcast layouts read A once per output column block and
+//    B once per output row block; Reuse reads A once and B once per M slice of a batch), over the chip's
+//    bandwidth.
+RooflineTerms roofline(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+    const double a_bytes = in0_tile_bytes(p);
+    const double b_bytes = in1_tile_bytes(p);
+    const double engine_share = std::min(p.in0_tile_h, 8u) / 8.0;
+    const double cycles_per_product = 2.0 * p.in0_tile_h * TILE_DIM * p.in1_tile_w *
+                                      fidelity_multiplier(p.math_fidelity) / (hw.matmul_flops_per_cycle * engine_share);
+    const double Kt = p.Kt;
+    double products = 0;  // per core
+    double received = 0;  // bytes per core
+    double a_total = 0;   // tiles read from memory
+    double b_total = 0;
+    if (family == Family::Reuse) {
+        const double cores = hw.grid.x * hw.grid.y;
+        const double blocks = std::ceil(std::ceil(double(p.batch_a) * p.Mt / b.per_core_M) / cores);
+        const double batches_per_block = std::max(1.0, double(b.per_core_M) / p.Mt);
+        products = blocks * b.per_core_M * p.Nt * Kt;
+        received = blocks * (b.per_core_M * Kt * a_bytes + batches_per_block * Kt * p.Nt * b_bytes);
+        a_total = double(p.batch_a) * p.Mt * Kt;
+        b_total = double(p.batch_b) * Kt * p.Nt * div_up(p.Mt, b.per_core_M);
+    } else {
+        // Unfused, the layout loops over the batch; in0 reuse (a broadcast A) keeps A resident across it
+        const double loops = b.fuse_batch ? 1.0 : std::max(p.batch_a, p.batch_b);
+        const double a_passes = double(b.per_core_N) / b.out_block_w;
+        const double b_passes = double(b.per_core_M) / b.out_block_h;
+        products = double(b.per_core_M) * b.per_core_N * Kt * loops;
+        received = b.per_core_M * Kt * a_passes * (broadcasts_a(p) ? 1.0 : loops) * a_bytes +
+                   b.per_core_N * Kt * b_passes * loops * b_bytes;
+        a_total = double(p.batch_a) * p.Mt * Kt * a_passes;
+        b_total = (p.batch_b > 1 ? double(p.batch_b) : loops) * Kt * p.Nt * b_passes;
+    }
+    const double dram_bytes = (p.a.in_l1 ? 0.0 : a_total * a_bytes) + (p.b.in_l1 ? 0.0 : b_total * b_bytes);
+    return {products * cycles_per_product, received / hw.noc_bytes_per_cycle, dram_bytes / hw.dram_bytes_per_cycle};
+}
+
+double estimated_cycles(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
+    return roofline(p, hw, family, b).cycles();
+}
+
+namespace {
 
 uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, const Blocking& b) {
     if (family == Family::Reuse) {
@@ -745,58 +795,24 @@ std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
     return result;
 }
 
-namespace {
-
-// Among the multicast layouts: 2D unless a 1D layout keeps clearly more cores busy (in0-mcast first when both
-// do), or 1D in0-mcast keeps as many cores busy with less input per core.
-const Candidate* choose_mcast(const Candidate* two_d, const Candidate* in0, const Candidate* in1) {
-    if (!two_d) {
-        return in0 ? in0 : in1;
-    }
-    const double threshold = ONE_D_CORE_ADVANTAGE * two_d->cores;
-    if (in0 && in0->cores >= threshold && (!in1 || in0->cores >= in1->cores)) {
-        return in0;
-    }
-    if (in1 && in1->cores >= threshold) {
-        return in1;
-    }
-    if (in0 && in0->cores >= two_d->cores &&
-        per_core_input_tiles(in0->blocking) < per_core_input_tiles(two_d->blocking)) {
-        return in0;  // a taller, squarer per-core block reads less input
-    }
-    return two_d;
-}
-
-}  // namespace
-
 std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw) {
     const auto all = candidates(p, hw);
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
         // The layout already fixed the family
         return all.empty() ? std::nullopt : std::optional<Candidate>(all.front());
     }
-    auto find = [&](Family family) -> const Candidate* {
-        for (const auto& c : all) {
-            if (c.family == family) {
-                return &c;
-            }
+    // The candidate with the smallest roofline estimate; ties keep the earlier family
+    const Candidate* best = nullptr;
+    double best_cycles = 0;
+    for (const auto& c : all) {
+        const double cycles = estimated_cycles(p, hw, c.family, c.blocking);
+        if (!best || cycles < best_cycles) {
+            best = &c;
+            best_cycles = cycles;
         }
-        return nullptr;
-    };
-    const Candidate* mcast = choose_mcast(find(Family::Mcast2D), find(Family::Mcast1DIn0), find(Family::Mcast1DIn1));
-    // Batched B: Reuse, whose cores work on their blocks independently, unless the multicast layout (which
-    // loops over the batch across the whole grid) keeps clearly more cores busy, or Reuse would read clearly
-    // more input (it re-reads a batch's B for every M slice it splits the batch matrix into).
-    if (const auto* reuse = find(Family::Reuse)) {
-        if (mcast && (mcast->cores >= ONE_D_CORE_ADVANTAGE * reuse->cores ||
-                      total_input_tiles(p, Family::Reuse, reuse->blocking) >=
-                          ONE_D_CORE_ADVANTAGE * total_input_tiles(p, mcast->family, mcast->blocking))) {
-            return *mcast;
-        }
-        return *reuse;
     }
-    if (mcast) {
-        return *mcast;
+    if (best) {
+        return *best;
     }
     return std::nullopt;
 }
