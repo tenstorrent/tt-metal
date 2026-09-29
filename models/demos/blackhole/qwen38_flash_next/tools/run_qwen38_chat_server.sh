@@ -35,7 +35,7 @@
 #   --python PATH           the interpreter that imports ttnn (default: <checkout>/python_env/bin/python)
 #   --validate-only         run the checks and the CPU preparation, do not open the mesh
 #   --prefill-mode M        chunked (default) | teacher_forced (every prompt token through the decode step)
-#   --agreement-reference F --agreement-parts "P Q" --agreement-full-logits DIR
+#   --agreement-reference F --agreement-parts "P Q" --agreement-items "ID ID" --agreement-full-logits DIR
 #                           teacher-force the reference corpus Q38-REF-v1 through the chain before READY and write
 #                           the agreement records, the device column and its score against F (needs the sampled
 #                           server; see tools/qwen38_reference_corpus.py)
@@ -60,7 +60,7 @@ profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp
 prefill_slab=
 acceptance= acceptance_prompts= require_json_96= acceptance_only= prepare_only= bf4_stage_limit= bf4_corpus= bf4_corpus_verification=
 serve_seconds= python= validate_only= prefill_mode=chunked sampling=1 stall_seconds=300
-agreement_reference= agreement_parts= agreement_full_logits=
+agreement_reference= agreement_parts= agreement_items= agreement_full_logits=
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --profile) profile=${2-}; shift 2 ;;
@@ -90,6 +90,7 @@ while [[ $# -gt 0 ]]; do
         --validate-only) validate_only=1; shift ;;
         --agreement-reference) agreement_reference=${2-}; shift 2 ;;
         --agreement-parts) agreement_parts=${2-}; shift 2 ;;
+        --agreement-items) agreement_items=${2-}; shift 2 ;;
         --agreement-full-logits) agreement_full_logits=${2-}; shift 2 ;;
         -h|--help) usage ;;
         *) die "unknown argument $1 (see --help)" ;;
@@ -196,9 +197,10 @@ if [[ -n "$agreement_reference" ]]; then
     [[ -f "$agreement_reference" ]] || die "--agreement-reference $agreement_reference is not a file"
     args+=(--agreement-reference "$agreement_reference")
     if [[ -n "$agreement_parts" ]]; then read -r -a agreement_part_list <<<"$agreement_parts"; args+=(--agreement-parts "${agreement_part_list[@]}"); fi
+    if [[ -n "$agreement_items" ]]; then read -r -a agreement_item_list <<<"$agreement_items"; args+=(--agreement-items "${agreement_item_list[@]}"); fi
     [[ -z "$agreement_full_logits" ]] || args+=(--agreement-full-logits "$agreement_full_logits")
 else
-    [[ -z "$agreement_parts$agreement_full_logits" ]] || die "--agreement-parts and --agreement-full-logits need --agreement-reference"
+    [[ -z "$agreement_parts$agreement_items$agreement_full_logits" ]] || die "--agreement-parts, --agreement-items and --agreement-full-logits need --agreement-reference"
 fi
 
 printf 'run_qwen38_chat_server: checkout %s (%s) head %s%s\n' "$REPO_ROOT" "$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)" "$head" "$([[ "$dirty" == 0 ]] || printf ' (%s modified files)' "$dirty")" >&2
