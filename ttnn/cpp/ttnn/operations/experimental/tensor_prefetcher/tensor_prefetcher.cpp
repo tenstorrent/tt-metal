@@ -4,7 +4,7 @@
 
 #include "tensor_prefetcher.hpp"
 
-#include "ttnn/global_circular_buffer.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
@@ -78,11 +78,7 @@ void queue_tensor_prefetcher_request(
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
     if (has_pipes) {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device,
-            ttnn::global_circular_buffer::prefetcher_pipe_refs(prefetcher_pipes),
-            device_subset,
-            inputs,
-            trace_cq);
+            *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
     } else {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
             *mesh_device, *global_cb, device_subset, inputs, trace_cq);

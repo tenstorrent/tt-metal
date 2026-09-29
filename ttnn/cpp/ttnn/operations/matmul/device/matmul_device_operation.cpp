@@ -13,6 +13,7 @@
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"
 #include "ttnn/global_circular_buffer.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
@@ -459,17 +460,22 @@ void validate_matmul_untilize_out(
         config_name);
 }
 
-// PrefetcherPipe delivery: only the Mcast1D factory reads in1 from the pipes. Any other config's
-// factory would read the weight from DRAM and never drain the pipes, so a paired prefetch would fill
-// rings nobody empties. Runs for every config so it rejects the pipes on every other config; the
-// Mcast1D validator checks the rest (mcast_in0, no gather_in0).
+// PrefetcherPipe delivery: only the Mcast1D factory's mcast_in0 path (no gather_in0) reads in1 from
+// the pipes. Any other factory would read the weight from DRAM and never drain the pipes, so a paired
+// prefetch would fill rings nobody empties. The pipes replace global_cb as the in1 source, so the two
+// are exclusive.
 void validate_matmul_prefetcher_pipes_program_config(
     const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     if (attributes.prefetcher_pipes.empty()) {
         return;
     }
     TT_FATAL(
-        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
+        !attributes.global_cb.has_value(),
+        "global_cb and prefetcher_pipes are alternative in1 transports; supply at most one, not both");
+    const auto* mcast_1d_config =
+        std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(&chosen_program_config);
+    TT_FATAL(
+        mcast_1d_config != nullptr && mcast_1d_config->mcast_in0 && !mcast_1d_config->gather_in0,
         "{}: prefetcher_pipes delivery is supported only for MatmulMultiCoreReuseMultiCast1DProgramConfig with "
         "mcast_in0=true and gather_in0=false; pass that program config explicitly",
         ttsl::get_active_type_name_in_variant(chosen_program_config));
@@ -1124,6 +1130,34 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
+// A DRAM-sender mcast_in0 transport delivers one in1 K-block (in0_block_w * per_core_N tiles) at a
+// time into a window the reader streams through with one block of lookahead: it publishes the current
+// block to compute while the previous one drains, so the window has to hold two.
+constexpr uint32_t kMcastIn0MinResidentBlocks = 2;
+
+uint32_t mcast_in0_in1_block_size_bytes(
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    return program_config.in0_block_w * program_config.per_core_N *
+           in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+}
+
+void validate_mcast_in0_one_output_block_per_worker(
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    std::string_view transport) {
+    TT_FATAL(
+        program_config.out_block_h == program_config.per_core_M &&
+            program_config.out_block_w == program_config.per_core_N,
+        "mcast_in0 {} requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
+        "and out_block_w ({}) must equal per_core_N ({})",
+        transport,
+        program_config.out_block_h,
+        program_config.per_core_M,
+        program_config.out_block_w,
+        program_config.per_core_N);
+}
+
 void validate_dram_sender_global_cb_mcast_in0_geometry(
     const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
     const Tensor& input_tensor_b,
@@ -1132,15 +1166,7 @@ void validate_dram_sender_global_cb_mcast_in0_geometry(
     TT_FATAL(
         tt::tt_metal::experimental::sender_core_type(gcb) == tt::tt_metal::experimental::SenderCoreType::Dram,
         "mcast_in0 global_cb requires programmable DRAM senders");
-    TT_FATAL(
-        program_config.out_block_h == program_config.per_core_M &&
-            program_config.out_block_w == program_config.per_core_N,
-        "mcast_in0 global_cb requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
-        "and out_block_w ({}) must equal per_core_N ({})",
-        program_config.out_block_h,
-        program_config.per_core_M,
-        program_config.out_block_w,
-        program_config.per_core_N);
+    validate_mcast_in0_one_output_block_per_worker(program_config, "global_cb");
 
     // The weight ↔ matmul cross-checks (per-receiver shard geometry, K % in0_block_w == 0, per_core_N ==
     // per-receiver N, stream_in1 == false) are owned by the shared prefetcher helper, which dispatches on
@@ -1149,57 +1175,43 @@ void validate_dram_sender_global_cb_mcast_in0_geometry(
     // place.
     ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
 
-    // GCB-window guard specific to this op: the mcast reader streams K-blocks through a remote-CB
-    // window, so the GCB has to hold at least a double buffer of them. The window itself is floored to
-    // whole pages when the CB is created, so a size that is not an exact multiple is fine — the leftover
-    // bytes are simply unused.
-    const uint32_t in1_block_size_bytes =
-        program_config.in0_block_w * program_config.per_core_N *
-        in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    // The GCB is the reader's streaming window. It is floored to whole pages when the CB is created, so
+    // a size that is not an exact multiple is fine — the leftover bytes are simply unused.
+    const uint32_t in1_block_size_bytes = mcast_in0_in1_block_size_bytes(input_tensor_b, in1_tile, program_config);
     const uint32_t resident_blocks = gcb.size() / in1_block_size_bytes;
     TT_FATAL(
-        resident_blocks >= 2,
+        resident_blocks >= kMcastIn0MinResidentBlocks,
         "mcast_in0 global_cb requires a two-page streaming window: size {} holds {} whole in1 K-block pages of {} B, "
-        "need at least 2",
+        "need at least {}",
         gcb.size(),
         resident_blocks,
-        in1_block_size_bytes);
+        in1_block_size_bytes,
+        kMcastIn0MinResidentBlocks);
 }
 
 void validate_prefetcher_pipes_mcast_in0_geometry(
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const Tensor& input_tensor_b,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
-    uint32_t ring_size = 0;
-    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
-        const auto& pipe = prefetcher_pipes[p];
-        TT_FATAL(pipe != nullptr, "mcast_in0 prefetcher_pipes holds a null pipe at index {}", p);
+    const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+    const uint32_t ring_size = pipes.front().get().ring_size();
+    for (size_t p = 0; p < pipes.size(); ++p) {
+        const tt::tt_metal::experimental::PrefetcherPipe& pipe = pipes[p];
         TT_FATAL(
-            pipe->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram,
+            pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram,
             "mcast_in0 prefetcher_pipes requires programmable DRAM senders, but pipe {} (sender {}) has a worker "
             "sender. Build them with create_prefetcher_pipes_for_tensor_prefetcher.",
             p,
-            pipe->sender_core().str());
-        if (p == 0) {
-            ring_size = pipe->ring_size();
-        }
+            pipe.sender_core().str());
         TT_FATAL(
-            pipe->ring_size() == ring_size,
+            pipe.ring_size() == ring_size,
             "mcast_in0 prefetcher_pipes requires one ring size across every pipe: pipe {} has {} B, pipe 0 has {} B",
             p,
-            pipe->ring_size(),
+            pipe.ring_size(),
             ring_size);
     }
-    TT_FATAL(
-        program_config.out_block_h == program_config.per_core_M &&
-            program_config.out_block_w == program_config.per_core_N,
-        "mcast_in0 prefetcher_pipes requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
-        "and out_block_w ({}) must equal per_core_N ({})",
-        program_config.out_block_h,
-        program_config.per_core_M,
-        program_config.out_block_w,
-        program_config.per_core_N);
+    validate_mcast_in0_one_output_block_per_worker(program_config, "prefetcher_pipes");
 
     // Shared weight <-> matmul cross-checks (per-receiver shard geometry, K % in0_block_w == 0,
     // per_core_N == per-receiver N, stream_in1 == false), plus the receiver-contiguous-only rule
@@ -1211,27 +1223,22 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
     // ring has to be a whole number of its blocks: the DRAM sender addresses the ring in whole
     // entries and would otherwise land on a different grid than the receivers after the first wrap.
     // The pipes' creation entry_size does not have to match -- the sender snaps onto this one.
-    const uint32_t in1_block_size_bytes =
-        program_config.in0_block_w * program_config.per_core_N *
-        in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    const uint32_t in1_block_size_bytes = mcast_in0_in1_block_size_bytes(input_tensor_b, in1_tile, program_config);
     TT_FATAL(
         ring_size % in1_block_size_bytes == 0,
         "mcast_in0 prefetcher_pipes ring size {} B must be a whole number of this matmul's in1 K-blocks of {} B "
-        "(in0_block_w {} * per_core_N {} * {} B per tile), but {} B are left over",
+        "(in0_block_w {} * per_core_N {} tiles), but {} B are left over",
         ring_size,
         in1_block_size_bytes,
         program_config.in0_block_w,
         program_config.per_core_N,
-        in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype())),
         ring_size % in1_block_size_bytes);
-
-    // The reader streams K-blocks through a two-block window: publish the current block, then wait
-    // for compute to drain the previous one before returning its credit.
     TT_FATAL(
-        ring_size >= 2 * in1_block_size_bytes,
-        "mcast_in0 prefetcher_pipes ring size {} B must hold at least two in1 K-blocks of {} B for the reader's "
+        ring_size >= kMcastIn0MinResidentBlocks * in1_block_size_bytes,
+        "mcast_in0 prefetcher_pipes ring size {} B must hold at least {} in1 K-blocks of {} B for the reader's "
         "one-block lookahead",
         ring_size,
+        kMcastIn0MinResidentBlocks,
         in1_block_size_bytes);
 }
 
@@ -1927,39 +1934,29 @@ void validate_matmul_mcast1d_config(
         "{}: stream_in1 is the gather_in0 ring-rotation mode and requires gather_in0=true",
         config_name);
 
-    if (attributes.global_cb.has_value() && !program_config.gather_in0) {
+    // DRAM-sender weight delivery into mcast_in0, through a global_cb or through PrefetcherPipes (which
+    // the universal checks have already confined to mcast_in0 without gather_in0).
+    const bool dram_sender_in1 = attributes.global_cb.has_value() || !attributes.prefetcher_pipes.empty();
+    if (dram_sender_in1 && !program_config.gather_in0) {
+        const std::string_view transport = attributes.global_cb.has_value() ? "global_cb" : "prefetcher_pipes";
         TT_FATAL(
             program_config.mcast_in0,
-            "{}: global_cb without gather_in0 is supported only for mcast_in0=true",
-            config_name);
-        validate_dram_sender_global_cb_mcast_in0_geometry(
-            attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+            "{}: {} without gather_in0 is supported only for mcast_in0=true",
+            config_name,
+            transport);
+        if (attributes.global_cb.has_value()) {
+            validate_dram_sender_global_cb_mcast_in0_geometry(
+                attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        } else {
+            validate_prefetcher_pipes_mcast_in0_geometry(
+                attributes.prefetcher_pipes, input_tensor_b, in1_tile, program_config);
+        }
         TT_FATAL(
             program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
-            "{}: mcast_in0 global_cb requires one effective activation batch, but fuse_batch={} and "
+            "{}: mcast_in0 {} requires one effective activation batch, but fuse_batch={} and "
             "activation batch size={}",
             config_name,
-            program_config.fuse_batch,
-            get_batch_size(a_shape_padded));
-    }
-
-    TT_FATAL(
-        !(attributes.global_cb.has_value() && !attributes.prefetcher_pipes.empty()),
-        "{}: global_cb and prefetcher_pipes are alternative in1 transports; supply at most one, not both",
-        config_name);
-
-    if (!attributes.prefetcher_pipes.empty()) {
-        TT_FATAL(
-            program_config.mcast_in0 && !program_config.gather_in0,
-            "{}: prefetcher_pipes delivery is supported only for mcast_in0=true with gather_in0=false",
-            config_name);
-        validate_prefetcher_pipes_mcast_in0_geometry(
-            attributes.prefetcher_pipes, input_tensor_b, in1_tile, program_config);
-        TT_FATAL(
-            program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
-            "{}: mcast_in0 prefetcher_pipes requires one effective activation batch, but fuse_batch={} and "
-            "activation batch size={}",
-            config_name,
+            transport,
             program_config.fuse_batch,
             get_batch_size(a_shape_padded));
     }

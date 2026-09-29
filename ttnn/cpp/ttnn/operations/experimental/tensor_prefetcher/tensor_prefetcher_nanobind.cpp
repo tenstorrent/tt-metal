@@ -336,7 +336,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             static_cast<uint32_t (*)(
                 const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig&,
                 const ttnn::Tensor&,
-                const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>&)>(
+                const ttnn::PrefetcherPipeList&)>(
                 &ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d),
             nb::arg("program_config"),
             nb::arg("weight"),

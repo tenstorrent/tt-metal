@@ -20,7 +20,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
-#include "ttnn/global_circular_buffer.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -3188,7 +3188,7 @@ void override_program_parameters(
 // pairing banks with the workers in any other order still covers exactly the workers, and returns the
 // output blocks permuted.
 static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const MeshTensor& in1_tensor,
     const std::vector<CoreCoord>& workers) {
     using tt::tt_metal::ShardDistributionStrategy;
@@ -3202,11 +3202,11 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
         strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
         "matmul mcast_in0 over prefetcher_pipes needs a ROUND_ROBIN_1D or CONTIGUOUS_1D weight, but its shard "
         "distribution strategy is {}",
-        static_cast<int>(strategy));
+        strategy);
 
     std::map<std::pair<uint32_t, uint32_t>, CoreCoord> receiver_of_shard;
-    for (const auto& delivery : tt::tt_metal::experimental::GetTensorPrefetcherReceiverShards(
-             ttnn::global_circular_buffer::prefetcher_pipe_refs(prefetcher_pipes))) {
+    for (const auto& delivery :
+         tt::tt_metal::experimental::GetTensorPrefetcherReceiverShards(ttnn::prefetcher_pipe_refs(prefetcher_pipes))) {
         receiver_of_shard.emplace(std::pair{delivery.bank, delivery.bank_local_shard}, delivery.receiver);
     }
 
@@ -3228,7 +3228,7 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
             workers[i].str(),
             bank_local_shard,
             bank,
-            contiguous ? "CONTIGUOUS_1D" : "ROUND_ROBIN_1D",
+            strategy,
             it == receiver_of_shard.end() ? std::string("no receiver") : it->second.str());
     }
 }
@@ -3277,7 +3277,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes = {}) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {}) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -3582,9 +3582,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // Defines
     // ------------------------------------------------------------------
     std::map<std::string, std::string> mm_kernel_defines;
-    if (use_prefetcher_pipes) {
-        mm_kernel_defines["ENABLE_PREFETCHER_PIPE"] = "1";
-    }
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (use_prefetcher_pipes) {
@@ -3762,11 +3759,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     Group<PrefetcherPipeParamName> prefetcher_pipe_names;
     const uint32_t in1_pipe_entry_size = in1_block_tiles * in1_single_tile_size;
     if (use_prefetcher_pipes) {
-        const CoreRangeSet pipe_receivers = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
-            ttnn::global_circular_buffer::prefetcher_pipe_refs(prefetcher_pipes));
+        const CoreRangeSet pipe_receivers =
+            tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes));
         TT_FATAL(
             pipe_receivers.num_cores() == all_cores_with_work.num_cores() &&
-                pipe_receivers.intersection(all_cores_with_work).num_cores() == all_cores_with_work.num_cores(),
+                pipe_receivers.contains(all_cores_with_work),
             "matmul mcast_in0 over prefetcher_pipes needs the pipes' receivers to be exactly the {} workers that "
             "compute an output block ({}), but they are {}. Receiver i in row-major order computes output columns "
             "[i * per_core_N, (i + 1) * per_core_N).",
@@ -6260,9 +6257,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             sub_device_start_core,
             operation_attributes.prefetcher_pipes);
     }
-    TT_FATAL(
-        operation_attributes.prefetcher_pipes.empty(),
-        "matmul over prefetcher_pipes is supported only for mcast_in0=true, not the mcast_in1 variant");
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_artifacts(
         a,
         device,

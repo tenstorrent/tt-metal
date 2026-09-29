@@ -4,18 +4,14 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-
-namespace tt::tt_metal::experimental {
-class PrefetcherPipe;
-}  // namespace tt::tt_metal::experimental
 
 namespace ttnn::global_circular_buffer {
 
@@ -120,11 +116,6 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes);
-
-// The tt-metal PrefetcherPipe calls borrow the pipes they read, so this is how a ttnn caller lends
-// its shared pipes to one. TT_FATALs on a null pipe.
-std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipe_refs(
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes);
+    const ttnn::PrefetcherPipeList& prefetcher_pipes);
 
 }  // namespace ttnn::global_circular_buffer

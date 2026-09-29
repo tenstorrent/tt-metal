@@ -245,10 +245,10 @@ void kernel_main() {
     // in1 is a relay laid over this worker's PrefetcherPipe ring, so the prefetcher's K-blocks arrive
     // already in place: this kernel only turns a delivered entry (one K-block) into in1 credit for
     // compute (its tiles, one relay page each) and, once compute is done with it, that entry's credit
-    // back into an ack to the sender. One accessor names
-    // every pipe; the one present on this worker is the one bound here. bind_relay() aligns in1 to the
-    // pipe's durable cursor (firmware resets it at launch) and makes pop_front wait for compute. The
-    // pipe lives to the end of kernel_main; its destructor stores the cursor back.
+    // back into an ack to the sender. One accessor names every pipe; the one present on this worker is
+    // the one bound here. bind_relay() aligns in1 to the pipe's durable cursor (firmware resets it at
+    // launch) and makes pop_front wait for compute. The pipe lives to the end of kernel_main; its
+    // destructor stores the cursor back.
     experimental::PrefetcherPipe pipe(pipe::in1);
     auto in1_relay = pipe.bind_relay();
 #elif defined(IN1_SHARDED)
@@ -579,19 +579,18 @@ void kernel_main() {
                         }
 #endif
                     }
-#ifdef ENABLE_PREFETCHER_PIPE
+#if defined(ENABLE_PREFETCHER_PIPE)
                     if (num_blocks_inner_dim > 0) {
                         pipe.pop_front(1, noc);
                     }
-#endif
-#ifdef ENABLE_GLOBAL_CB
+#elif defined(ENABLE_GLOBAL_CB)
                     if (num_blocks_inner_dim > 0) {
                         while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
                             invalidate_l1_cache();
                         }
                         experimental::remote_cb_pop_front(remote_cb_id, 1);
                     }
-#endif
+#endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {

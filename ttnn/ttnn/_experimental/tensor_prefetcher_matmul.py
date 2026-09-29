@@ -80,12 +80,10 @@ def prefetch_and_linear(
     target_kwargs = {"global_cb": global_cb} if global_cb is not None else {"prefetcher_pipes": prefetcher_pipes}
 
     device = input_tensor_a.device()
-    if prefetcher_pipes is not None:
+    if prefetcher_pipes is not None or program_config.mcast_in0 or program_config.stream_in1:
         block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
-            program_config, weight, prefetcher_pipes=prefetcher_pipes
+            program_config, weight, **target_kwargs
         )
-    elif program_config.mcast_in0 or program_config.stream_in1:
-        block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, weight, global_cb)
     else:
         # Gather consumes one K-block per ring position.
         block_count = global_cb.receiver_cores().num_cores()

@@ -130,22 +130,23 @@ FORCE_INLINE uint32_t prefetcher_pipe_relay_pages_per_entry(uint32_t relay_dfb_i
     return pipe_entry_size / page_size;
 }
 
-// Point a relay's local CB at a PrefetcherPipe's ring window: the pipe's usable limit and its
-// cursor, all in LocalCBInterface units, with the relay paged at relay_pages_per_entry pages per
-// pipe entry. The window is whole pages, because the pipe's usable ring is whole pipe entries.
+// Point a relay's local CB at a PrefetcherPipe's ring window [fifo_start_addr, fifo_limit_addr) with
+// its cursor at fifo_ptr, paged at relay_page_size. All arguments are bytes. relay_page_size divides
+// the pipe entry and the window is whole pipe entries, so the window is whole relay pages.
 FORCE_INLINE void set_local_relay_cb_to_pipe_window(
     LocalCBInterface& local,
-    uint32_t fifo_limit_units,
-    uint32_t fifo_start_units,
-    uint32_t fifo_ptr_units,
-    uint32_t pipe_entry_units,
-    uint32_t relay_pages_per_entry) {
-    const uint32_t fifo_size_units = fifo_limit_units - fifo_start_units;
-    ASSERT(relay_pages_per_entry != 0);
-    ASSERT(pipe_entry_units % relay_pages_per_entry == 0);
-    const uint32_t page_size_units = pipe_entry_units / relay_pages_per_entry;
+    uint32_t fifo_start_addr,
+    uint32_t fifo_limit_addr,
+    uint32_t fifo_ptr,
+    uint32_t pipe_entry_size,
+    uint32_t relay_page_size) {
+    const uint32_t fifo_limit_units = fifo_limit_addr >> cb_addr_shift;
+    const uint32_t fifo_size_units = fifo_limit_units - (fifo_start_addr >> cb_addr_shift);
+    const uint32_t fifo_ptr_units = fifo_ptr >> cb_addr_shift;
+    const uint32_t page_size_units = relay_page_size >> cb_addr_shift;
     ASSERT(page_size_units != 0);
-    ASSERT(fifo_size_units % pipe_entry_units == 0);
+    ASSERT(pipe_entry_size % relay_page_size == 0);
+    ASSERT(fifo_size_units % (pipe_entry_size >> cb_addr_shift) == 0);
     local.fifo_limit = fifo_limit_units;
     local.fifo_size = fifo_size_units;
     local.fifo_page_size = page_size_units;
@@ -253,16 +254,16 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     local.tc_idx = 0;
 #endif
 #else
-    // Launch-time snap: the relay's local CB still carries its configured page, which fixes the ratio.
-    const uint32_t relay_pages_per_entry = prefetcher_pipe_relay_pages_per_entry(relay_dfb_id, entry_size);
+    // Launch-time snap: only the window and cursor move. The relay keeps the page firmware set from its
+    // config, one pipe entry or a whole fraction of one.
     LocalCBInterface& local = get_local_cb_interface(relay_dfb_id);
     set_local_relay_cb_to_pipe_window(
         local,
-        fifo_limit_page_aligned >> cb_addr_shift,
-        fifo_start_addr >> cb_addr_shift,
-        next_fifo_rd_ptr >> cb_addr_shift,
-        entry_size >> cb_addr_shift,
-        relay_pages_per_entry);
+        fifo_start_addr,
+        fifo_limit_page_aligned,
+        next_fifo_rd_ptr,
+        entry_size,
+        local.fifo_page_size << cb_addr_shift);
 #endif
 }
 
@@ -343,14 +344,15 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     }
     local.tc_idx = 0;
 #else
-    LocalCBInterface& local = get_local_cb_interface(relay_dfb_id);
+    ASSERT(relay_pages_per_entry != 0);
+    ASSERT(iface.fifo_page_size % relay_pages_per_entry == 0);
     set_local_relay_cb_to_pipe_window(
-        local,
-        iface.fifo_limit_page_aligned >> cb_addr_shift,
-        iface.fifo_start_addr >> cb_addr_shift,
-        iface.fifo_rd_ptr >> cb_addr_shift,
-        iface.fifo_page_size >> cb_addr_shift,
-        relay_pages_per_entry);
+        get_local_cb_interface(relay_dfb_id),
+        iface.fifo_start_addr,
+        iface.fifo_limit_page_aligned,
+        iface.fifo_rd_ptr,
+        iface.fifo_page_size,
+        iface.fifo_page_size / relay_pages_per_entry);
 #endif
 }
 

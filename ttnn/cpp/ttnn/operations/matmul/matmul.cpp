@@ -83,16 +83,6 @@ Tensor handle_zero_volume_matmul(
     return output_tensor;
 }
 
-// The in1 weight transport is exclusive: `global_cb` streams K-blocks through a DRAM-sender
-// GlobalCircularBuffer, `prefetcher_pipes` through DRAM-sender PrefetcherPipes. Supplying both
-// would leave the reader with two sources for the same operand.
-void validate_in1_transport(
-    const std::optional<const GlobalCircularBuffer>& global_cb, const PrefetcherPipeList& prefetcher_pipes) {
-    TT_FATAL(
-        !(global_cb.has_value() && !prefetcher_pipes.empty()),
-        "global_cb and prefetcher_pipes are alternative in1 transports; supply at most one, not both");
-}
-
 }  // namespace detail
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
@@ -388,7 +378,6 @@ Tensor matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const PrefetcherPipeList& prefetcher_pipes) {
-    detail::validate_in1_transport(global_cb, prefetcher_pipes);
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -441,7 +430,6 @@ Tensor linear(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const PrefetcherPipeList& prefetcher_pipes) {
-    detail::validate_in1_transport(global_cb, prefetcher_pipes);
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
