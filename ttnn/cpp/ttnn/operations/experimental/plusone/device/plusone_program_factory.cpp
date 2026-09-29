@@ -26,7 +26,6 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     const PlusoneParams& operation_attributes, const Tensor& input, Tensor& /*tensor_return_value*/) {
     const MeshTensor& input_mesh_tensor = input.mesh_tensor();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
@@ -52,46 +51,38 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
-    const DFBSpecName IN0{"in0"};
+    const ScratchpadSpecName IN0{"in0"};
     const KernelSpecName READER{"reader"};
 
     // The input tensor is a Program-scope resource when the kernel touches it:
     //  - DRAM (interleaved): via TensorAccessor (accessor path, gated by SRC0_IS_DRAM).
-    //  - sharded (L1): as the DFB's borrowed backing memory.
+    //  - sharded (L1): as the LocalTensorAccessor's backing region (gated by IN0_IS_LOCAL).
     // For an L1-interleaved input (neither DRAM nor sharded — the pre-existing
-    // "unhandled" anomaly) the kernel operates on uninitialized L1 scratch and never
+    // "unhandled" anomaly) the kernel operates on uninitialized scratch and never
     // references the input, so no TensorParameter is declared. Behavior is preserved.
     const bool needs_tensor_param = src_is_dram || input.is_sharded();
 
-    // ---- Dataflow buffer (legacy c_0) ----
-    // When the input is sharded, borrow the DFB from the input buffer so the framework
-    // re-applies the globally-allocated address on a program-cache hit. Otherwise the
-    // DFB is plain L1 scratch. The reader uses it purely as an address source (raw
-    // get_write_ptr, no FIFO ops), so it is a single-toucher sync-free CB → self-loop.
-    DataflowBufferSpec in0_dfb{
+    // ---- Scratchpad (replaces the former DFB in0) ----
+    // The reader never drives the DFB's FIFO machinery: it takes the region's base address
+    // once and indexes it (raw-address use, no LLK), so the DFB was a misdescription. The
+    // region is a private scratchpad on the paths where the input is not sharded; on the
+    // sharded path the same footprint is the input's node-local L1 region, reached through
+    // the tensor binding instead (the kernel's IN0_IS_LOCAL branch).
+    ScratchpadSpec in0_scratch{
         .unique_id = IN0,
-        .entry_size = aligned_input_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_cb_data_format,
+        .size_per_node = aligned_input_page_size,
     };
-    if (input.is_sharded()) {
-        in0_dfb.borrowed_from = INPUT;
-    }
 
     // ---- Reader kernel ----
-    // Self-loop: the sole toucher binds the DFB as both PRODUCER and CONSUMER (one
-    // accessor name). Legacy CTA slots 0 (cb index) and 1 (src_is_dram) are gone: the
-    // CB index becomes the DFB binding, and src_is_dram becomes the SRC0_IS_DRAM define
-    // (it gates the conditional TensorAccessor binding). The Buffer* RTA and the
-    // TensorAccessorArgs plumbing are replaced by the tensor binding.
+    // The kernel's view of the working region is placement-dependent:
+    //  - sharded (IN0_IS_LOCAL): LocalTensorAccessor over the input tensor — the region is
+    //    the input shard's node-local L1, so the framework re-applies the tensor's address
+    //    on a program-cache hit.
+    //  - otherwise: the private scratchpad above. The DRAM path (SRC0_IS_DRAM) additionally
+    //    binds the tensor for the TensorAccessor that drives the NoC transfers.
     KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp",
-        .dfb_bindings =
-            {
-                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-            },
         .compile_time_args =
             {
                 {"stick_size", aligned_input_page_size},
@@ -101,25 +92,35 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
             },
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
-    if (src_is_dram) {
-        // Accessor path (DRAM): bind the input tensor and enable the NoC transfers.
+    if (input.is_sharded()) {
+        reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
+        reader.compiler_options.defines = {{"IN0_IS_LOCAL", "1"}};
+    } else if (src_is_dram) {
+        reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = IN0, .accessor_name = "in0"}};
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
         reader.compiler_options.defines = {{"SRC0_IS_DRAM", "1"}};
+    } else {
+        // L1-interleaved: no tensor binding (the anomaly noted above).
+        reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = IN0, .accessor_name = "in0"}};
     }
 
     // ---- Assemble the spec ----
     ProgramSpec spec;
     spec.name = "plusone";
     spec.kernels = {std::move(reader)};
-    spec.dataflow_buffers = {std::move(in0_dfb)};
+    // The scratchpad is bound only on the non-sharded paths; an unbound ScratchpadSpec is a
+    // program-creation error, so the registration carries the same guard as the binding.
+    if (!input.is_sharded()) {
+        spec.scratchpads = {std::move(in0_scratch)};
+    }
     if (needs_tensor_param) {
         spec.tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()}};
     }
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER}, .target_nodes = all_cores}};
 
     // ---- Run args ----
-    // The reader has no runtime args (the Buffer* address is now carried by the tensor
-    // binding); provide an empty per-kernel entry to satisfy the "a KernelRunArgs for
+    // The reader has no runtime args (the region's address is carried by the scratchpad or
+    // tensor binding); provide an empty per-kernel entry to satisfy the "a KernelRunArgs for
     // every kernel" contract.
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = READER}};
