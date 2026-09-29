@@ -1484,6 +1484,13 @@ tasks:
     kind: mlp
     layer: 3
     stateful: false
+  frozen:
+    at: '2026-09-29T12:08:34'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_shared_expert.py: ed80a80883b7fd7c46411f82381ce88c21d19164599f9b390a502c78047fe8ed
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: S.dsa_moe.13
   title: 'dsa_moe block with steps 1-13 on device (last: shared_expert)'
   step: implement
