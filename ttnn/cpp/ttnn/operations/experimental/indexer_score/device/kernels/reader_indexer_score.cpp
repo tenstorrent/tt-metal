@@ -153,6 +153,9 @@ struct McastDir {
  *  then relay the valid flag into their recv semaphore. Mirrors chain_link. */
 template <uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem>
 inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+    return;  // Perf experiment: no mcast (receivers skip their side too).
+#endif
     Semaphore<> s(send_sem);
     s.wait(d.ndst);  // all receivers reserved their slot and signaled ready
     s.set(0);
@@ -173,6 +176,9 @@ inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes
 /** Receiver: slot already reserved at `addr`; set recv=INVALID, signal sender ready, wait VALID. */
 template <uint32_t send_sem, uint32_t recv_sem>
 inline void mcast_recv(Noc noc, const McastDir& d) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+    return;
+#endif
     Semaphore<> r(recv_sem);
     r.set(0);
     Semaphore<>(send_sem).up(noc, d.sx, d.sy, 1);
@@ -220,7 +226,9 @@ inline uint32_t read_q_row_into(Noc noc, const QAcc& q_acc, uint32_t ptr, uint32
     for (uint32_t head = first_head; head < first_head + heads_per_group; ++head) {
         const uint32_t base = head * q_len_tiles * head_dim_tiles + q_row_abs * head_dim_tiles;
         for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+#ifndef INDEXER_SCORE_COMPUTE_ONLY
             noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), q_tile_bytes, {.page_id = base + dim_tile}, {});
+#endif
             ptr += q_tile_bytes;
         }
     }
@@ -344,6 +352,9 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         mcast_recv<q_send_sem, q_recv_sem>(noc, q_dir);
     } else {
         for (uint32_t tile = 0; tile < input_tiles; ++tile) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+            break;
+#endif
             noc.async_read(
                 w_acc,
                 CoreLocalMem<uint32_t>(addr + tile * bf16_tile_bytes),
@@ -367,7 +378,9 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
 template <typename Acc>
 inline void read_ktile_dims(Noc noc, const Acc& acc, uint32_t& ptr, uint32_t base) {
     for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+#ifndef INDEXER_SCORE_COMPUTE_ONLY
         noc.async_read(acc, CoreLocalMem<uint32_t>(ptr), k_tile_bytes, {.page_id = base + dim_tile}, {});
+#endif
         ptr += k_tile_bytes;
     }
 }
@@ -500,6 +513,9 @@ struct FusedRingGate {
     }
 
     void gate_shard(uint32_t physical_tile_start, uint32_t k_tiles_in_unit, uint32_t midpoint_tiles) const {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+        return;  // Perf experiment: the fused all-gather is stubbed out.
+#endif
         const uint32_t shard = physical_tile_start / tiles_per_shard;
         if (shard != ring_index) {
             if constexpr (partial_readiness_enabled) {
@@ -565,6 +581,9 @@ inline void read_k_chunk_streaming(
                     bc_shard_stride_gap,
                     bc_slab_stride_gap>(k_tile_start + c);
                 for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+                    break;
+#endif
                     noc.async_read(
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),

@@ -48,6 +48,9 @@ inline void write_strip(
         const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;  // strip row stride (full KC)
         const uint32_t write_bytes = valid_w * frag_bytes;         // only in-bounds columns
         for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+            break;  // Perf experiment: logits stay in L1.
+#endif
             noc.async_write(
                 CoreLocalMem<uint32_t>(src),
                 out_acc,
@@ -110,6 +113,9 @@ inline void write_shard_major_strip(
         const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;
         for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
             for (uint32_t fragment = 0; fragment < num_fragments; ++fragment) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+                break;
+#endif
                 noc.async_write(
                     CoreLocalMem<uint32_t>(src + fragment_col[fragment] * frag_bytes),
                     out_acc,
@@ -186,6 +192,9 @@ inline void write_pooled_strip(
     const uint32_t row_bytes = valid_blocks * sizeof(uint16_t);
     const uint32_t col_off_bytes = col_off_blocks * sizeof(uint16_t);
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+#ifdef INDEXER_SCORE_COMPUTE_ONLY
+        break;
+#endif
         noc.async_write(
             CoreLocalMem<uint32_t>(scratch_addr + rr * row_bytes),
             out_acc,
