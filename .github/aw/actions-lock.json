@@ -5,17 +5,5 @@
       "version": "v0.89.21",
       "sha": "924af5fdc64061cfbf66fb584c8b07e2ac230c60"
     }
-  },
-  "workflow_versions": {
-    "_comment": "gh-aw compiler version each agentic workflow is compiled with. Not managed by gh-aw itself — update manually when deliberately bumping one workflow. A workflow missing here falls back to the setup entry's version above. See copilot-setup-steps.yml for why these are split: the three copilot-loop workflows moved to v0.89.21 for the enforced required-labels fix on resolve-pull-request-review-thread; the other six are still on v0.86.2.",
-    "ci-failure-triage": "v0.86.2",
-    "issue-monster": "v0.89.21",
-    "mattpocock-skills-reviewer": "v0.86.2",
-    "pr-sous-chef": "v0.89.21",
-    "repo-assist": "v0.86.2",
-    "silencer": "v0.86.2",
-    "squad-plan": "v0.89.21",
-    "tenstorrent-skills-reviewer": "v0.86.2",
-    "test-command": "v0.86.2"
   }
 }

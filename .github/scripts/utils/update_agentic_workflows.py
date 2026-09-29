@@ -9,10 +9,15 @@ for every unique workflow touched.
 
 Agentic workflows can each be pinned to their own gh-aw compiler version — one
 workflow doesn't have to track another's. The single source of truth for which
-version a given workflow uses is .github/aw/actions-lock.json's `workflow_versions`
-map (one entry per workflow name, maintained by hand — gh-aw itself doesn't write to
-it). A workflow not yet listed there (e.g. a brand new one, before someone deliberately
-pins it) falls back to the `entries` block's github/gh-aw-actions/setup version.
+version a given workflow uses is .github/aw/workflow-versions.json (one entry per
+workflow name, maintained by hand). That map deliberately lives in its own file
+rather than inside actions-lock.json: gh-aw's own `compile` rewrites
+actions-lock.json's `entries` block — and drops any key it doesn't recognize — as a
+side effect whenever the compiling version differs from what's currently recorded
+there, which would silently destroy a version map stored inside it. A workflow not
+yet listed in workflow-versions.json (e.g. a brand new one, before someone
+deliberately pins it) falls back to actions-lock.json's `entries` block's
+github/gh-aw-actions/setup version.
 
 The gh-aw CLI itself is never installed globally: for each workflow, this script
 downloads that workflow's pinned release binary for the current OS/arch into a
@@ -39,11 +44,12 @@ import tempfile
 
 WORKFLOWS_DIR = os.path.join(".github", "workflows")
 ACTIONS_LOCK_PATH = os.path.join(".github", "aw", "actions-lock.json")
+WORKFLOW_VERSIONS_PATH = os.path.join(".github", "aw", "workflow-versions.json")
 GH_AW_REPO = "github/gh-aw"
 
 
 def default_pinned_version():
-    """Fallback version, used only when a workflow has no entry in workflow_versions yet."""
+    """Fallback version, used only when a workflow has no entry in workflow-versions.json."""
     with open(ACTIONS_LOCK_PATH) as f:
         entries = json.load(f)["entries"]
     for entry in entries.values():
@@ -54,12 +60,11 @@ def default_pinned_version():
 
 
 def resolve_pinned_version(name):
-    """The single source of truth for a workflow's gh-aw version: the workflow_versions
-    map in .github/aw/actions-lock.json, keyed by workflow name."""
-    with open(ACTIONS_LOCK_PATH) as f:
+    """The single source of truth for a workflow's gh-aw version: workflow-versions.json,
+    keyed by workflow name."""
+    with open(WORKFLOW_VERSIONS_PATH) as f:
         data = json.load(f)
-    version = data.get("workflow_versions", {}).get(name)
-    return version or default_pinned_version()
+    return data.get(name) or default_pinned_version()
 
 
 def platform_asset_name():
@@ -127,6 +132,23 @@ def is_tracked(path):
     return result.returncode == 0
 
 
+@contextlib.contextmanager
+def preserved_actions_lock():
+    """gh-aw's own `compile` rewrites actions-lock.json's `entries` block to match
+    whichever version actually ran, as a side effect of every compile — so touching two
+    workflows pinned to different versions in one invocation would otherwise leave that
+    shared file bouncing to reflect whichever ran last, an incidental diff unrelated to
+    either workflow's own change. Snapshot it before compiling and restore it after,
+    so each workflow's compile only ever touches its own lock file."""
+    with open(ACTIONS_LOCK_PATH, "rb") as f:
+        before = f.read()
+    try:
+        yield
+    finally:
+        with open(ACTIONS_LOCK_PATH, "wb") as f:
+            f.write(before)
+
+
 def compile_workflow(name):
     md_path = os.path.join(WORKFLOWS_DIR, f"{name}.md")
     if not os.path.isfile(md_path):
@@ -137,7 +159,7 @@ def compile_workflow(name):
     lock_existed_before = os.path.isfile(lock_path)
 
     version = resolve_pinned_version(name)
-    with gh_aw_binary(version) as binary_path:
+    with preserved_actions_lock(), gh_aw_binary(version) as binary_path:
         result = subprocess.run([binary_path, "compile", name])
 
     if result.returncode != 0:
