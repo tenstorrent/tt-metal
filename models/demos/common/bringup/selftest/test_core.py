@@ -276,3 +276,20 @@ def test_cpu_threads_are_physical_cores():
     from models.demos.common.bringup.core.metrics import cpu_threads
 
     assert cpu_threads() == (psutil.cpu_count(logical=False) or os.cpu_count())
+
+
+def test_state_keeps_only_gated_metrics_when_a_test_records_many(sandbox):
+    """F50: a swap test records hundreds of informational metrics; state.json keeps the gated ones, results all."""
+    many = {f"info_{i:03d}": 1.0 for i in range(70)}
+    led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995, **many), metrics={"pcc_*": ">= 0.99"}))
+    res = run_gate(sandbox.spec, led, "A.1")
+    assert res.verdict == "PASS", res.summary()
+    assert led.state()["A.1"]["metrics"] == {"pcc_out": 0.995}
+    full = json.loads((led.results_dir / "A.1.json").read_text())["metrics"]
+    assert len(full) == 71 and full["info_069"]["value"] == 1.0
+
+
+def test_state_keeps_every_metric_of_a_small_test(sandbox):
+    led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995, info=2.0), metrics={"pcc_*": ">= 0.99"}))
+    run_gate(sandbox.spec, led, "A.1")
+    assert led.state()["A.1"]["metrics"] == {"pcc_out": 0.995, "info": 2.0}
