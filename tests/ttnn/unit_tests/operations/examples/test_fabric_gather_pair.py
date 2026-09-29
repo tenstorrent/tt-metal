@@ -23,11 +23,15 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from ttnn.operations.examples.fabric_gather_pair import NOC0, NOC1, VARIANTS, fabric_gather_pair
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 SHAPE = tuple(int(x) for x in os.environ.get("FGP_SHAPE", "8192,4096").split(","))  # per-chip shard (H, W), bf16
 TRIALS = int(os.environ.get("FGP_TRIALS", "3"))
+# "device" = device profiler kernel duration (slowest chip); "rt" = realtime profiler program duration (longest chip
+# record per program). For "rt" run with TT_METAL_DEVICE_PROFILER=0.
+PROFILER = os.environ.get("FGP_PROFILER", "device")
 PAYLOAD = int(os.environ.get("FGP_PAYLOAD", "14336"))
 RUN_VARIANTS = tuple(os.environ.get("FGP_VARIANTS", ",".join(VARIANTS)).split(","))
 # Diagnostic ablations, "|"-separated sets of "+"-joined names (dram_read, local_copy, fabric); "" = full op.
@@ -77,6 +81,15 @@ def _slowest_chip_ns(mesh_device):
     return max(chip_ns)
 
 
+def _rt_program_ns(mesh_device, run):
+    _, records = profile_realtime_program(mesh_device, run, collect_all=True, record_timeout_seconds=5.0)
+    programs = {}
+    for record in records:
+        programs[record["runtime_id"]] = max(programs.get(record["runtime_id"], 0.0), record["duration_ns"])
+    assert programs, "realtime profiler returned no program"
+    return sum(programs.values())
+
+
 def _router(payload):
     cfg = ttnn.FabricRouterConfig()
     cfg.max_packet_payload_size_bytes = payload
@@ -117,7 +130,7 @@ def test_fabric_gather_pair(mesh_device):
     lines = [
         f"\n=== fabric_gather_pair  box={socket.gethostname()}  arch={mesh_device.arch()}  "
         f"fabric={ttnn.get_fabric_config()}  payload={ttnn.get_tt_fabric_max_payload_size_bytes()}B  "
-        f"shard={H}x{W} bf16 ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median) ===",
+        f"shard={H}x{W} bf16 ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median)  profiler={PROFILER} ===",
         f"    {'placement':<16} {'NoC coords':<15} {'variant':<26} {'kernel ns':>11} {'GB/s per link-dir':>18} "
         f"{'GB/s per chip':>14}",
     ]
@@ -150,9 +163,12 @@ def test_fabric_gather_pair(mesh_device):
                     ), f"{name}/{variant}: chip ({r},{c}) output != [row-0 shard ; row-1 shard]"
             samples = []
             for _ in range(TRIALS):
-                ttnn.ReadDeviceProfiler(mesh_device)
-                run()
-                samples.append(_slowest_chip_ns(mesh_device))
+                if PROFILER == "rt":
+                    samples.append(_rt_program_ns(mesh_device, run))
+                else:
+                    ttnn.ReadDeviceProfiler(mesh_device)
+                    run()
+                    samples.append(_slowest_chip_ns(mesh_device))
             ns = statistics.median(samples)
             lines.append(
                 f"    {name:<16} {noc_xy:<15} {variant + ('+local_noc0' if local == 'noc0' else '') + ('+copy:' + copy_name if copy_name != 'none' else '') + ('-' + '-'.join(ablate) if ablate else ''):<26} {ns:>11.0f} {shard_bytes / len(cores) / ns:>18.2f} "

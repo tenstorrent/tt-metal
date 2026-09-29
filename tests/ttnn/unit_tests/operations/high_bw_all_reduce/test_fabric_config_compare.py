@@ -118,3 +118,25 @@ def test_all_reduce_payload_sweep(mesh_device):
         f"payload={ttnn.get_tt_fabric_max_payload_size_bytes()} mesh={tuple(mesh_device.shape)}"
     )
     ar_bw.test_bw(mesh_device, (1, 1, 8192, 4096), 0, ttnn.Topology.Linear, 2)
+
+
+@pytest.mark.parametrize(
+    "device_params", [pytest.param(ag._device_params(ttnn.FabricConfig.FABRIC_1D), id="fabric_1d")], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+@pytest.mark.parametrize("rows_per_device", [65536, 131072], ids=lambda r: f"rows{r}")
+def test_all_gather_pair_g2(mesh_device, rows_per_device):
+    """G = 2 (2x2 mesh, cluster_axis=0 pairs), for comparison with the fabric_gather_pair example."""
+    case_name, dtype, width, layout, expected_page_size = next(c for c in ag._TEST_CASES if c[0] == "bf16_tiles")
+    mb = rows_per_device * width * 2 / 2**20
+    print(f"FABRIC_G2_COMPARE op=high_bw_all_gather rows={rows_per_device} per_device={mb:.1f}MiB")
+    ag._run_high_bw_all_gather_perf(
+        mesh_device,
+        dtype,
+        width,
+        layout,
+        expected_page_size,
+        min_bandwidth_gbps=0.0,
+        cluster_axis=0,
+        rows_per_device=rows_per_device,
+    )
