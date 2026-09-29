@@ -55,6 +55,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
     DataflowBuffer C_partials(dfb::C_partials);
 
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
+    // The packer bakes the output ring's L1 base into its descriptor at init (compute_kernel_hw_startup
+    // programmed C_partials), so every switch between C_partials and C_slice re-inits the pack; a format
+    // reconfig alone would leave the data in the other ring.
+    uint32_t pack_target_programmed = uint32_t(dfb::C_partials);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
@@ -69,6 +73,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
+                if (pack_target_id != pack_target_programmed) {
+                    pack_init(pack_target_id);
+                    pack_target_programmed = pack_target_id;
+                }
                 // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
                 // onto them, and the finished sum is packed without accumulation.
                 if constexpr (partials_format_differs) {

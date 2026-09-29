@@ -24,10 +24,10 @@ Run on the Quasar simulator (one config per process; a sim-side hang ignores pyt
         TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \\
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py -k <case>
 
-    craq-sim (libttsim.so of 2026-08-26) hangs on every case with more than one K block (partials through
-    cb_intermed0), for this factory and for the legacy Metal 2.0 reuse factory alike, so on the simulator
-    pick single-K-block cases (Kt <= 8 with K_chunk_tiles auto, or K_chunk_tiles = Kt). K-spill is verified on
-    silicon; the emulator is the place to confirm it on Quasar.
+    A craq-sim built from the quasar branch of 2026-09-24 or later runs every case here, including K spill
+    (partials through C_partials); the libttsim.so of 2026-08-26 hangs on every K-spill case, for this
+    factory and for the legacy Metal 2.0 reuse factory alike. The emulator is the place to confirm timing
+    on Quasar.
 """
 
 import os
