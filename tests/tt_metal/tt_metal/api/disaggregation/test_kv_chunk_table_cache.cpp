@@ -28,8 +28,6 @@ std::string read_file(const fs::path& path) {
     return contents.str();
 }
 
-// Gives each test a fresh cache and output directory. Runs on Blackhole only (ARCH_NAME, set by the
-// build/test scripts).
 class KvChunkTableCache : public ::testing::Test {
 protected:
     void SetUp() override {

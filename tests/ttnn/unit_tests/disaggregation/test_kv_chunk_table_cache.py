@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.experimental.disaggregation.get_or_build_kv_chunk_table on real KvChunkAddressTables."""
-
 import os
 
 import pytest

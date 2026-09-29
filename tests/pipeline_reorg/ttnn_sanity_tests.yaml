@@ -302,8 +302,6 @@
   owner_id: U0BCCPS862F # Milan Alimpic
 
 - name: "kv chunk table cache"
-  # No group suite globs tests/ttnn/unit_tests/disaggregation, so this Blackhole P150b row is the
-  # only thing that runs it.
   cmd: pytest --timeout 120 tests/ttnn/unit_tests/disaggregation -xv
   skus:
     bh_p150b_civ2:
