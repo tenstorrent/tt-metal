@@ -2978,3 +2978,33 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
+
+## S.moe_shared.11 test (attempt 1)
+
+What
+- Replaced the rendered swap test test_swap_moe_shared_11_router.py (moe_shared layer 2, steps 1-11, last router).
+  It is now test_swap_moe_shared_10_ffn_norm.py with "router" added to SWAPPED and every swap-10 check kept at its
+  limits. The router block is taken from test_swap_moe_full_11_router.py: 8 nonzeros per row, non-negative, row sum /
+  2.827 within 0.004; vs golden overlap >= 0.98 and matched-row rel L2 <= 0.01; vs the CPU router on the same device
+  ffn_norm overlap >= 0.996, matched rel <= 0.004, worst row overlap >= 0.75.
+- CPU mutation study on the layer-2 golden: /tmp/hy4_ssh11/study.py (outside the repo). The table is in the docstring.
+
+Decisions
+- Kept swap 10's golden-overlap floor at 0.98, not layer 1's 0.99. Layer 2 routing is closer to ties, and with the
+  device ffn_norm the CPU router scores only 0.99335. The vs-CPU checks catch the precision bugs instead: every bf16
+  stage scores <= 0.98907 against 0.996.
+- Every mutation in the table fails at least one check. bf16 output and bf16 bias pass, and both are harmless.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999995; router vs golden 0.99725 / rel 0.00173, vs CPU 1.0).
+- BRINGUP_IMPL=stub: FAIL (every check).
+- Gate (device): PASS. pcc_swap_out 0.999977; router vs golden 0.99335 (1939 matched, rel 0.00206); vs CPU 0.99963,
+  worst row 0.875, rel 0.000059; row sums 1.00000; tail 0.0025; out rel 0.00674.
+
+Gotchas
+- The first `FAIL pcc_swap_out: pcc=0.000000` in the log comes from the precompile collect pass. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
