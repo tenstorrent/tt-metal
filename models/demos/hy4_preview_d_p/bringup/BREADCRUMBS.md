@@ -2472,3 +2472,34 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
+
+## C.moe_shared.q_a test (attempt 1)
+
+What was done
+- Replaced the rendered one-line test with test_c_moe_full_q_a.py's checks at LAYER = 2, same limits: gated
+  pcc_q_a_L02 (0.99), no CPU bridge, element count, finite output, rel L2 <= 0.008, row norm ratio in [0.994, 1.006],
+  worst row rel L2 <= 0.015 vs the golden; second run on golden input x 0.01 (bf16) vs the CPU step (rel <= 0.01,
+  worst row <= 0.02, the eps check). Layer-2 mutation tables are in the test docstring (CPU study script
+  /tmp/hy4_qa_l2/study.py, outside the repo, 10 s).
+
+Decisions
+- Kept the layer-0/1 limits: layer-2 golden statistics match (pre-norm row rms 0.309-0.489, mean square >= 9.6e4 x
+  eps; bf16 estimate rel 0.0030, ratio [0.9989, 1.0009], worst row 0.0039). Every mutation in the table fails at least
+  one check. The shared layer has its own q_a (only the indexer is shared), so no shared_topk setup is needed here.
+
+Gotchas
+- Layer-2 norm w is smaller (mean 0.103, [0.021, 0.21]), so a dropped norm weight (PCC 0.952) and 1 + w (0.961) fail
+  PCC again, unlike layer 1. Norm per K partial, RMS over half the columns, eps and a zeroed tile row still pass PCC;
+  rel L2 / row ratio / x 0.01 catch them.
+- As before, the first "FAIL pcc_q_a_L02: pcc=0.000000" line is the precompile collect pass.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999998, rel 0.00183, ratio [0.99952, 1.00051], worst row 0.0022; scaled 0.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, existing TtQa serves layer 2): PASS. pcc 0.999998, rel 0.00201, ratio [0.99842, 1.00086], worst row
+  0.00326; scaled x 0.01 rel 0.00176, worst row 0.00224.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
