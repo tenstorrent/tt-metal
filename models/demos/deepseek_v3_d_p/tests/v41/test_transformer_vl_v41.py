@@ -18,7 +18,6 @@ Cases: small dims, two images (sharing roles; Engram layers 0 1 2 3), one chunk 
 of the image). Precompute the CPU oracles first: ``scripts/precompute_vl_oracles.py`` in the bead's artifacts.
 """
 
-from dataclasses import asdict
 
 import pytest
 import torch
@@ -36,10 +35,10 @@ from models.demos.deepseek_v3_d_p.tests.v41.test_transformer_v41 import (
     PRODUCTION_CANDIDATE_BLOCKS,
     SCHEDULES,
     SCORED,
-    WEIGHT_CACHE,
     _check,
     _stage,
 )
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -139,7 +138,6 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
         return weights | {"gate_bias_vl": reference.layers[pos].ffn.gate.bias_vl.detach()}
 
     # the text weights are the text spec's: its device MoE tensors are reused
-    identity = orc._digest(asdict(base.args), base.seed, "synthetic", orc._reference_digest(synthetic=True))
     with _stage(f"vl {schedule} {case} build"):
         model = TtV41Transformer(
             mesh_device,
@@ -154,7 +152,7 @@ def test_v41_transformer_vl_small(mesh_device, device_params, case, schedule):
             engram=engram,
             engram_hash=engram_hash,
             image_embeds={k: getattr(reference, k).detach() for k in DELIMITERS},
-            weight_cache_path=WEIGHT_CACHE / f"small-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
+            weight_cache_path=weight_cache_dir(base, mesh_device.shape),
         )
     merged = _MergedPrompt(model, prompt)
     with _stage(f"vl {schedule} {case} merge exactness"):
@@ -179,9 +177,6 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
     with _stage(f"vl production {weights} prompt (vision oracle cached)"):
         tokens, prompt, _ = vl_prompts.production_prompt(ckpt.root if ckpt else None)
     spec = orc.vl_spec(base, prompt)
-    identity = orc._digest(
-        asdict(base.args), base.seed, str(base.checkpoint), orc._reference_digest(synthetic=ckpt is None)
-    )
     if ckpt is None:
         reference = orc.build_vl_reference(spec, prompt)
 
@@ -214,7 +209,7 @@ def test_v41_transformer_vl_production(mesh_device, device_params, weights):
             max_seq_len=seq,
             chunk=seq,
             image_embeds=image_embeds,
-            weight_cache_path=WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
+            weight_cache_path=weight_cache_dir(base, mesh_device.shape),
         )
     merged = _MergedPrompt(model, prompt)
     with _stage(f"vl production {weights} merge exactness"):

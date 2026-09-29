@@ -18,7 +18,6 @@ records a completed build.
 
 import json
 import time
-from dataclasses import asdict
 
 import pytest
 import torch
@@ -29,9 +28,10 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41 import expert_dtype_reference as R
-from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import WEIGHT_CACHE, _pack, _pcc, _unpack
+from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _pack, _pcc, _unpack
 from models.demos.deepseek_v3_d_p.tests.v41.test_moe_v41 import BARS as MOE_BARS
 from models.demos.deepseek_v3_d_p.tests.v41.test_moe_v41 import _metrics, _run
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
@@ -60,17 +60,16 @@ def _dram_bytes_per_chip(mesh_device) -> int:
     return view.total_bytes_allocated_per_bank * view.num_banks
 
 
-def _weights(ckpt, layer: int, dtype: str, spec=None):
-    """``test_block_v41``'s cache root for the layer's schedule (or ``spec``), the layer's weights (routed experts
-    only when their ``dtype`` cache is incomplete) and the marker to touch after a completed build."""
+def _weights(ckpt, layer: int, dtype: str, mesh_shape, spec=None):
+    """The device-weight cache root (tests/v41/weight_cache.py key) for the layer's schedule (or ``spec``) at the
+    ``dtype`` routed experts on ``mesh_shape``, the layer's weights (routed experts only when that cache is
+    incomplete) and the marker to touch after a completed build."""
     spec = spec or R.block_spec(layer)
-    identity = orc._digest(asdict(spec.args), spec.seed, str(spec.checkpoint), orc._reference_digest(synthetic=False))
-    root = WEIGHT_CACHE / f"real-{identity}"
+    root = weight_cache_dir(spec, mesh_shape, EXPERT_DTYPES[dtype])
     root.mkdir(parents=True, exist_ok=True)
     init_checker(root)
-    marker = root / f"layer_{layer}.{dtype}.complete"
-    # test_block_v41's marker records a completed build at TtV41Block's default dtype (bfp8)
-    cached = marker.exists() or (dtype == "bfp8" and (root / f"layer_{layer}.complete").exists())
+    marker = root / f"layer_{layer}.complete"
+    cached = marker.exists()
     start = time.perf_counter()
     w = load_layer_dense(ckpt, layer) if cached else load_layer(ckpt, layer)
     logger.info(f"layer {layer} weights loaded (routed experts: {not cached}) {time.perf_counter() - start:.1f}s")
@@ -96,7 +95,7 @@ def test_v41_moe_expert_dtype(mesh_device, device_params, layer, expert_dtype):
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     ref = R.moe_parts(layer)
-    root, w, marker = _weights(ckpt, layer, expert_dtype)
+    root, w, marker = _weights(ckpt, layer, expert_dtype, mesh_device.shape)
     base = _dram_bytes_per_chip(mesh_device)
     start = time.perf_counter()
     moe = TtV41Moe(
@@ -160,7 +159,7 @@ def test_v41_block_expert_dtype(mesh_device, device_params, layer, expert_dtype)
     logger.info(f"block oracle loaded {time.perf_counter() - start:.1f}s")
     seq, cfg, shape = R.ORACLE_SEQ, BLOCK_CONFIG, tuple(mesh_device.shape)
     tp, n = shape[1], cfg.HC_MULT
-    root, w, marker = _weights(ckpt, layer, expert_dtype)
+    root, w, marker = _weights(ckpt, layer, expert_dtype, mesh_device.shape)
     base = _dram_bytes_per_chip(mesh_device)
     start = time.perf_counter()
     block = TtV41Block(

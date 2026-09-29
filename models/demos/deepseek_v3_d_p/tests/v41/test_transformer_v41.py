@@ -19,11 +19,8 @@ Cases: small dims (one chunk, two chunks, a padded last chunk), then production 
 and real weights.
 """
 
-import os
 import time
 from contextlib import contextmanager
-from dataclasses import asdict
-from pathlib import Path
 
 import pytest
 import torch
@@ -36,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
 from models.demos.deepseek_v3_d_p.tests.v41.test_block_v41 import _unpack
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, weight_cache_dir  # noqa: F401 (re-export)
 from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash, V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.tt.v41.weights import (
@@ -64,7 +62,6 @@ MARGIN = {"top1": 0.02, "top5": 0.02, "pcc": 0.002}  # token metrics: reported a
 DRIFT_MARGIN = 0.003
 PRODUCTION_SEQ = 2048
 PRODUCTION_CANDIDATE_BLOCKS = 96  # of 128 visible blocks at S=2048 (2048 would make every block a candidate)
-WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
 MESH = [
     pytest.param(
         (2, 4),
@@ -108,8 +105,7 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
             "main_norm": reference.mtp[0].main_norm.weight.detach(),
             "layers": [{"wkv": fp8(b.attn.wkv), "kv_norm": b.attn.kv_norm.weight.detach()} for b in reference.mtp],
         }
-    # device MoE tensors converted once per weight identity (the model build dominated small-dims runs)
-    identity = orc._digest(asdict(spec.args), spec.seed, "synthetic", orc._reference_digest(synthetic=True))
+    # device MoE tensors converted once per weight identity (tests/v41/weight_cache.py)
     with _stage(f"{schedule} {case} build"):
         model = TtV41Transformer(
             mesh_device,
@@ -124,7 +120,7 @@ def test_v41_transformer_small(mesh_device, device_params, case, schedule):
             dspark_weights=dspark,
             engram=engram,
             engram_hash=engram_hash,
-            weight_cache_path=WEIGHT_CACHE / f"small-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
+            weight_cache_path=weight_cache_dir(spec, mesh_device.shape),
         )
     state = _check(model, spec, tokens, reference, f"{schedule} {case}")
     if dspark is not None:
@@ -222,10 +218,6 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
     cfg = type("V41TestConfig", (C,), {"CANDIDATE_TOPK_BLOCKS": PRODUCTION_CANDIDATE_BLOCKS})
     tokens = orc.text_tokens(PRODUCTION_SEQ)
     reference = orc.build_reference(spec) if ckpt is None else None
-    # device MoE tensors converted once, keyed by weight identity (dims + layer set, seed, checkpoint, init)
-    identity = orc._digest(
-        asdict(spec.args), spec.seed, str(spec.checkpoint), orc._reference_digest(synthetic=ckpt is None)
-    )
     if ckpt is None:
         layer_weights = lambda layer, include_moe: device_weights(reference, layers.index(layer), include_moe)
         embed, norm, head = (
@@ -248,6 +240,6 @@ def test_v41_transformer_production(mesh_device, device_params, weights, chunks)
             head,
             max_seq_len=PRODUCTION_SEQ,
             chunk=PRODUCTION_SEQ // chunks,
-            weight_cache_path=WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}",
+            weight_cache_path=weight_cache_dir(spec, mesh_device.shape),
         )
     _check(model, spec, tokens, reference, f"production {weights} chunks={chunks}")

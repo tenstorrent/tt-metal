@@ -35,8 +35,5 @@ from models.demos.deepseek_v3_d_p.tests.v41 import test_block_v41 as blocks
     ],
     indirect=True,
 )
-def test_v41_blocks_on_device_state_4x2(
-    mesh_device, device_params, weights, chunks, schedule, prompt, kv_format, monkeypatch
-):
-    monkeypatch.setattr(blocks, "WEIGHT_CACHE", blocks.WEIGHT_CACHE / "mesh-4x2")
+def test_v41_blocks_on_device_state_4x2(mesh_device, device_params, weights, chunks, schedule, prompt, kv_format):
     blocks.test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks, schedule, prompt, kv_format)

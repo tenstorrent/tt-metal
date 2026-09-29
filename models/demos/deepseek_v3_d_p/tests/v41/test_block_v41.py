@@ -19,7 +19,6 @@ format encodes); the PCC against the FP4-QDQ rows is reported (``compressed_kv_v
 """
 
 import os
-from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -34,6 +33,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import device_weights
 from models.demos.deepseek_v3_d_p.tests.v41.small_config import SmallV41Config, small_spec
+from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, weight_cache_dir  # noqa: F401 (re-export)
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
 from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
@@ -51,7 +51,6 @@ BLOCK_PCC = {"small": 0.99, "synthetic": 0.99, "real": 0.98}
 SYNTHETIC_INDEX_SOURCE_PCC = 0.98
 SMALL_SEQ = 512
 CACHE_PCC = 0.998
-WEIGHT_CACHE = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights"))
 
 
 def _pack(x, tp):
@@ -135,14 +134,9 @@ def test_v41_blocks_on_device_state(mesh_device, device_params, weights, chunks,
     shape, (sp, tp), n = tuple(mesh_device.shape), tuple(mesh_device.shape), cfg.HC_MULT
     down = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, shape, dims=(2, 3)))
 
-    # MoE device tensors are cached on disk: the first build converts 1152 expert matrices per layer on the
-    # host (minutes); later builds load them. A marker records a completed layer.
-    # keyed by weight identity (dims, seed, checkpoint revision / synthetic init) and mesh shape (device tensors are
-    # per-chip shards), not by the oracle result
-    identity = orc._digest(
-        asdict(spec.args), spec.seed, str(spec.checkpoint), orc._reference_digest(synthetic=ckpt is None)
-    )
-    cache_root = WEIGHT_CACHE / f"{weights}-{identity}-mesh{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    # MoE device tensors are cached on disk (tests/v41/weight_cache.py key): the first build converts 1152 expert
+    # matrices per layer on the host (minutes); later builds load them. A marker records a completed layer.
+    cache_root = weight_cache_dir(spec, mesh_device.shape)
     cache_root.mkdir(parents=True, exist_ok=True)
     init_checker(cache_root)
     blocks = {}

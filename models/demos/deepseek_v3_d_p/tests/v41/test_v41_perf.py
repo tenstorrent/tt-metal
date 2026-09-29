@@ -152,7 +152,7 @@ def test_v41_block_perf(mesh_device, device_params, schedule, expert_dtype, monk
     blocks = {}
     for layer in layers:
         start = time.perf_counter()
-        root, w, marker = _weights(ckpt, layer, expert_dtype, spec)
+        root, w, marker = _weights(ckpt, layer, expert_dtype, mesh_device.shape, spec)
         blocks[layer] = TtV41Block(
             mesh_device,
             C,
