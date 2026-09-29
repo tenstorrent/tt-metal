@@ -1553,8 +1553,8 @@
 
 # Disaggregated-prefill model accuracy on one BH Galaxy. Timeouts include checkpoint I/O, CPU references,
 # device JIT and readbacks; these are scheduling budgets, not performance claims.
-# The former components and book top-5 jobs run as sections of this one job, sharing its setup. Every
-# section and every pytest runs even if an earlier one failed; the job fails if any of them failed.
+# Components and book top-5 run as sections of one job. Every section and every pytest runs even if
+# an earlier one failed; the job fails if any of them failed.
 # Full 2K accuracy remains a required local check; restore its CI job before
 # project completion (see the model README).
 - name: "(Llama-3.1-8B) prefill components, decoder + book top-5 accuracy 2k, 4k"
@@ -1604,12 +1604,12 @@
     printf '%s' "$summary"
     exit "$fail"
   test_type: llama31_prefill_suite
-  # Old test_type tokens of the folded jobs, so `-f test-type=<old token>` still selects this job.
+  # Per-section tokens: `-f test-type=<token>` selects this job.
   test_tags: [llama31, transformer, llama31_prefill_components, llama31_prefill_book_top5]
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the former jobs' step timeouts (25 + 15). No extra margin: the models/demo/bh_sc1
+      # Sum of the section timeouts (25 + 15). No margin: the models/demo/bh_sc1
       # budget in .github/time_budget.yaml is fully allocated.
       timeout: 40
       tier: 2
