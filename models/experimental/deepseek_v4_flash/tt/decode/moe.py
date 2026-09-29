@@ -853,6 +853,16 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         """
         return self._core_grid
 
+    @property
+    def gate_up_weights(self) -> list[ttnn.Tensor]:
+        """The per-expert ND-sharded gate_up weights (read in place by the prefill routed-expert op)."""
+        return self._gate_up_fused
+
+    @property
+    def down_weights(self) -> list[ttnn.Tensor]:
+        """The per-expert ND-sharded down weights (read in place by the prefill routed-expert op)."""
+        return self._down_fused
+
     def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
         """Run ``fused_experts`` for one token row; returns ``[1,1,1,D]``.
 
