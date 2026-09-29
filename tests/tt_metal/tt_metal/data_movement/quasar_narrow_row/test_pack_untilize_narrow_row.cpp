@@ -231,7 +231,7 @@ bool run_narrow_row(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(SRC_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -240,7 +240,7 @@ bool run_narrow_row(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(SRC_DFB, "src"), experimental::ProducerOf(PAD_DFB, "pad")},
         .compile_time_args = {{"ct_dim", ct_dim}, {"out_rows", OUT_ROWS}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::KernelSpec compact_spec{
@@ -259,7 +259,7 @@ bool run_narrow_row(
                      "dest_coords",
                      "num_channels"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::ProgramSpec spec{
