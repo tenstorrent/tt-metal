@@ -192,24 +192,82 @@ void kernel_main() {
 #endif
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         constexpr auto attn_wait = causal_mask ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::None;
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(Wt).block_size(ndst),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Add,
-                ckl::input(
-                    dfb_scale_mask,
-                    ckl::WaitPolicy::PerBlockSize,
-                    ckl::PopPolicy::PerBlockSize,
-                    ckl::InputTileMapping::Block),
-                ckl::input(
-                    dfb_fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
-            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
-            // reuse the exps buffer again, this time in a circular manner
-            ckl::PackTile<ckl::output(
-                dfb_x,
-                ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>{});
+#ifdef MASK_PADDED_DATA
+        if (Wt > 1) {
+            // Split: apply user attention mask to Wt-1 tiles, then apply padded -inf
+            // mask to the final tile. This mirrors the non-FUSED_SCALE_MASK path and fixes
+            // #58495: tile-padding columns participate in the softmax denominator when W
+            // is not a multiple of 32.
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(Wt - 1).block_size(ndst),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_scale_mask,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                // reuse the exps buffer again, this time in a circular manner
+                ckl::PackTile<ckl::output(
+                    dfb_x,
+                    ckl::ReservePolicy::PerBlockSize,
+                    ckl::PushPolicy::PerBlockSize,
+                    ckl::DataFormatReconfig::Disabled)>{});
+            // last tile: add user mask AND padded -inf mask
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_scale_mask,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_fused_attn,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::None,
+                        ckl::InputTileMapping::Block)>{},
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(dfb_x),
+                    ckl::input(
+                        dfb_mask_padded,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::None)>{},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(
+                    dfb_x,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
+        } else
+#endif  // MASK_PADDED_DATA
+        {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(Wt).block_size(ndst),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_scale_mask,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                // reuse the exps buffer again, this time in a circular manner
+                ckl::PackTile<ckl::output(
+                    dfb_x,
+                    ckl::ReservePolicy::PerBlockSize,
+                    ckl::PushPolicy::PerBlockSize,
+                    ckl::DataFormatReconfig::Disabled)>{});
+        }
 
 // add numeric_stable
 // fuse exp with sub tiles
