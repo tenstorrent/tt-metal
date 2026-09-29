@@ -1609,3 +1609,31 @@ Results:
 Next step: implement only needs to add attn_hc to `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_attn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.01 test (attempt 1)
+Reviewed the rendered swap test (kda_moe layer 4, attn_hc on device). The rendered file was the bare `run_swap_test`.
+I rewrote it from the dsa_moe swap 01 test, since the MoE is in the block and routing flips break per-row checks.
+It keeps the gated pcc_swap_out. It takes the attn_hc part checks from the layer-4 component test: post max abs 6e-3,
+worst column 0.05.
+- Limits re-measured on layer 4 (CPU host script /tmp/kmoe01/sens.py, not kept; the numbers are in the test
+  docstring). The fp32 reference flips 24 tokens vs the golden (layer 3: 36), with same-routing ratio
+  [0.9992, 1.0009].
+- Tightened from layer 3:
+  - golden same-routing ratio: [0.975, 1.025] -> [0.985, 1.015];
+  - CPU-block same-routing rel: 0.005 -> 0.004 (comb x1.005 scores 0.0050 and now fails);
+  - CPU-block ratio: [0.98, 1.02] -> [0.985, 1.015].
+  Added: flipped rows vs the CPU block bounded [0.9, 1.1] (known issue: a share check on same-routing rows cannot see a
+  dropped row). Every comparison is now `not x <= lim`, so NaN fails.
+- Caught at block level: comb transposed, comb x1.005 / x1.01 / x1.02, post x1.02 / x1.05 (flips 115 / 304 > 64),
+  pre x1.02 (69 flips), 10 iterations, hc_eps 1e-5 / 0, last row zeroed.
+- Not caught at block level: pre x1.01, post x1.01 / x1.005, rms eps 1e-6 / 1.2e-5. The attn_hc part checks catch
+  x1.02 on each part and 19 iterations.
+Results:
+- Device passes: PCC 0.999995, rel 0.0034. Vs golden: 41 flips, same-routing [0.9925, 1.0033], flipped rows
+  [0.9719, 1.0182]. Vs the CPU block: 35 flips, rel 0.00118, [0.9930, 1.0033]. attn_hc parts 0.0047 / 0.0040 / 0.0031,
+  worst column 0.0245.
+- Reference passes (rel 0.0026, vs CPU 0). Stub fails (PCC 0 and every check). About 30 s for the real pass.
+Watch: the CPU flip count (35 of 64) and the CPU ratio low side (0.9930 of 0.985) are the tightest margins. Later
+kda_moe swaps add device steps in front of the router (known issue: a fixed router-flip limit fills up).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_01_attn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
