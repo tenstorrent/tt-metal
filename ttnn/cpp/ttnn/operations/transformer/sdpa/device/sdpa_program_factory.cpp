@@ -723,10 +723,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t max_global_q_chunks_per_core =
         global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
 
-    // Blackhole serves DRAM slowest on the low rows, so a causal remainder that is the minority of the grid goes to
-    // the last cores; a majority stays where it is, concentrating it on the bottom rows measured slower.
+    // Blackhole serves DRAM slowest on the low rows of the full grid, so with block float Q a causal remainder that is
+    // the minority goes to the last cores (measured to pay there; with bf16 Q or on a sub-grid it costs, main's order).
     const bool remainder_on_last_cores =
-        is_causal && device->arch() == tt::ARCH::BLACKHOLE && 2 * global_q_cores_doing_extra <= num_cores;
+        is_causal && device->arch() == tt::ARCH::BLACKHOLE && 2 * global_q_cores_doing_extra <= num_cores &&
+        (input_tensor_q.dtype() == DataType::BFLOAT8_B || input_tensor_q.dtype() == DataType::BFLOAT4_B) &&
+        num_cores == device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
     const uint32_t global_q_first_extra_core = remainder_on_last_cores ? (num_cores - global_q_cores_doing_extra) : 0u;
     auto global_q_range_for_core = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
         const uint32_t extras_before =
