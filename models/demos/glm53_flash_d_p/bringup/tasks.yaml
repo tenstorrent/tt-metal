@@ -1714,6 +1714,13 @@ tasks:
     swapped:
     - attn_hc
     layer: 4
+  frozen:
+    at: '2026-09-29T13:26:49'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_01_attn_hc.py: a2f0cda1ea0a909708c7070ac930c6bfe450c68d82a42101469d173c267e54e7
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_moe.attn_collapse
   title: kda_moe attn_collapse (op) on device, layer 4
   step: implement
