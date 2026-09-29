@@ -27,6 +27,9 @@ struct SparseSDPAParams {
     // The remap configuration is compile-time; T is part of the program hash for this path.
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // Fork option: Float32 output / row-sum running-state CBs and exact softmax exp (compile-time; hashed).
+    // Default = the source program.
+    bool high_precision = false;
     bool has_scaled_kv() const { return kv_format == transformer::bringup::SparseKVFormat::SCALED_FP8; }
 };
 
