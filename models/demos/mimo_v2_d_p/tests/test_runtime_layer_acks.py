@@ -11,7 +11,6 @@ import time
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.mimo_v2_d_p.tests.mesh import MESH_PARAMS
@@ -60,7 +59,7 @@ def test_runtime_layer_acks(mesh_device, device_params, chunk):
         assert acks == [(i, rep) for i in range(LAYERS)], acks
     deferred, synced = times["deferred"], times["synced"]
     med = lambda v: sorted(v)[len(v) // 2]
-    logger.info(
-        f"{chunk // mesh_device.shape[0]} tok/chip, {LAYERS} layers: deferred acks {med(deferred):.2f} ms / chunk, "
+    print(  # print: visible under LOGURU_LEVEL=ERROR (the host-overhead measurement setting)
+        f"ACKS {chunk // mesh_device.shape[0]} tok/chip, {LAYERS} layers: deferred acks {med(deferred):.2f} ms / chunk, "
         f"synchronize per layer {med(synced):.2f} ms / chunk ({deferred} vs {synced})"
     )
