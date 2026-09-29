@@ -1458,3 +1458,38 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
+
+## C.moe_full.attention test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test with test_c_dense_full_attention.py's four checks at LAYER = 1: gated
+  pcc_attention_L01 (PCC, 0.99) on golden s4096 chunk 1, plus asserted checks on (1) golden chunk 1, (2) golden
+  chunk 0 (start 0, -1 pads), (3) a probe topk (64 random causal positions per row, unsorted, seed 0) vs the CPU
+  step, and (4) attn_norm x 1e-3 vs the CPU step (kv_a_layernorm eps).
+- Re-ran the layer-0 CPU mutation study on the layer-1 golden (/tmp/hy4_c_attn1/mut.py c1 / c0 / probe / syn / pess,
+  outside the repo). Tables are in the test docstring.
+
+Decisions
+- Limits loosened from layer 0's (0.01 / [0.99, 1.01] / 0.02) to rel 0.015, ratio [0.985, 1.015], worst row 0.04.
+  The layer-1 device module scores 0.0066 / [0.9927, 1.0066] / 0.0165; the bf16 CPU estimate is 0.0045 / 0.013.
+  Every mutation still fails at least one check. The closest calls are RoPE + 1 (golden rel 0.0103, caught by worst
+  row 0.31), x 1.02 (caught by the ratio, 1.02) and dense causal attention (rel 0.0216).
+
+Gotchas
+- Layer 1 is noisier on the device than layer 0 (worst row 0.0165 vs 0.0052), but separates the bugs better (RoPE
+  from 0 fails PCC here).
+- device_component already builds TtHy4Attention for any layer, so the gate runs on the device even though
+  DEVICE_STEPS["moe_full"] does not list attention yet.
+- The first "FAIL pcc_attention_L01: pcc=0.000000" line and UP_FRONT_COLLECT_RESULT status=failed come from the
+  precompile collect pass. Ignore them.
+
+Results
+- BRINGUP_IMPL=reference: PASS (golden rel 0.00173, worst row 0.0027; chunk 0 0.00171; probe / scaled exact).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): PASS. pcc_attention_L01 0.999978. golden 0.00663 / [0.99418, 1.00622] / 0.0155; chunk0 0.00672 /
+  [0.99270, 1.00661] / 0.0158; probe 0.00670 / 0.0165; scaled 0.00385 / 0.0061.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
