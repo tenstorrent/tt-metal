@@ -207,6 +207,10 @@ jobs:
             tests/pipeline_reorg
       - name: Install dependencies
         run: pip3 install PyYAML
+      # A cmd block that records a failed test command and runs the next one starts that
+      # command on devices nothing has reset (#57706). Runs from this job's own checkout.
+      - name: Lint pipeline cmd blocks
+        run: python3 .github/scripts/utils/lint_pipeline_cmds.py
       - name: Verify test timeouts against team time budgets
         uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
         with:

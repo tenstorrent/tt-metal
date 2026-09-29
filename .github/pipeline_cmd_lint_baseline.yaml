@@ -1,0 +1,26 @@
+# Baseline for .github/scripts/utils/lint_pipeline_cmds.py.
+#
+# These test entries predate the lint. Their cmd blocks record a failed test command
+# and start the next one on devices that were not reset (tt-metal#57706). New entries
+# and the models tier yamls must not be added here: use `|| exit $?` instead.
+#
+# The lint reports an entry listed here that no longer has a finding, so remove the
+# entry from this file when you fix it. This list can only shrink.
+#
+# Format: <yaml basename>: [<entry name>, ...]
+agentic_research_model_tests.yaml:
+  - Llama 3.1-8B QB2 decoder and IFEval serving
+  - Gemma4 31B QB2 decoder, GPQA subset and serving
+blackhole_e2e_tests.yaml:
+  - Disaggregated prefill accuracy tests
+  - Disaggregated prefill sparse MLA accuracy tests
+  - Disaggregated prefill perf tests
+  - Disaggregated prefill accuracy & weight cache tests
+  - Disaggregated prefill D2D socket sync op tests
+blaze_models_prefill_tests.yaml:
+  - Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism
+  - high_bw_all_gather CCL perf + accuracy
+ops_unit_tests.yaml:
+  - Disaggregated prefill op unit tests (LB)
+  - Disaggregated prefill op unit tests (P150)
+  - Disaggregated prefill op unit tests (QB2)
