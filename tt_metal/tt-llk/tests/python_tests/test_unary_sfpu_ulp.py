@@ -290,6 +290,14 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             ulp_sweep.record_unmeasurable(mathop.name, key, reason)
             return
         if not gated:
+            # Skipped, but on the record: the row names how many lanes went non-finite,
+            # and the headroom report fails a run where that count appears or grows.
+            # Without this a re-emitted overflow was a permanent, silent skip.
+            _record_ulp_measurement(
+                distance,
+                mask=mask,
+                nonfinite=int(overflowed.sum()),
+            )
             pytest.skip(f"{cell}: not measurable -- {unmeasurable}")
         raise AssertionError(f"{cell}: {unmeasurable}")
 

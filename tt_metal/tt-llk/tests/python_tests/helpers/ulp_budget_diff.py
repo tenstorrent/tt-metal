@@ -45,9 +45,16 @@ _MAX_ROWS = 40
 _SLACK_FRACTION = 0.5
 
 #: The worst lane a row's comment says the last sweep measured. Written by the emitter
-#: on every row it produces ("max 393 ULP, budget 433 > ceiling 25") and by hand on most
-#: others; a row without one has no baseline and is not judged.
+#: on every row it produces ("max 393 ULP, budget 433 > ceiling 25"); a row without one
+#: has no baseline and is not judged.
 _RECORDED_MAX = re.compile(r"\bmax (\d+) ULP")
+
+#: The lanes a "not measurable" row says disagreed with the golden about being finite.
+#: Both spellings: rows emitted before the check also judged a finite answer to an
+#: infinite golden read "non-finite against a finite golden".
+_RECORDED_NONFINITE = re.compile(
+    r"not measurable: (\d+) lane\(s\) (?:non-finite|disagreeing with the golden)"
+)
 
 
 def _cell_name(op: str, key: Tuple[Tuple[str, str], ...]) -> str:
@@ -402,8 +409,35 @@ def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
     return worst
 
 
+def _nonfinite_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
+    """Per cell, the most lanes any measurement saw go non-finite against a finite
+    golden (0 for rows written before the sweep recorded it)."""
+    worst: Dict[Cell, int] = {}
+    for row in rows:
+        key = tuple((k, str(row[k])) for k in KEY_FIELDS if row.get(k) is not None)
+        cell: Cell = (row["op"], key)
+        worst[cell] = max(worst.get(cell, 0), int(row.get("nonfinite", 0)))
+    return worst
+
+
+def recorded_nonfinite(row: Row) -> int:
+    """How many non-finite lanes the row already accounts for: the count on a "not
+    measurable" row, 0 on any other."""
+    found = _RECORDED_NONFINITE.search(row.provenance)
+    return int(found.group(1)) if found else 0
+
+
 def recorded_max(row: Row) -> Optional[int]:
-    """The measurement a row records, or ``None`` if its comment names none."""
+    """The measurement a row records, or ``None`` if there is none to judge against.
+
+    Only a row that pins both ``in`` and ``out`` is a baseline: the emitter writes every
+    row that way, and its figure is the whole-format worst lane the nightly re-measures.
+    A hand-written broader row lists a sampled driver's figure, or one per format
+    ("max 868220929 ULP Float32 / 13249 Float16_b / ..."), and judging a cell against
+    either would report a regression the kernel never had."""
+    pinned = dict(row.key)
+    if "in" not in pinned or "out" not in pinned:
+        return None
     found = _RECORDED_MAX.search(row.provenance)
     return int(found.group(1)) if found else None
 
@@ -413,7 +447,9 @@ def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
 
 
 def render_headroom(
-    table: Dict[Cell, Row], measured: Dict[Cell, int]
+    table: Dict[Cell, Row],
+    measured: Dict[Cell, int],
+    nonfinite: Optional[Dict[Cell, int]] = None,
 ) -> Tuple[str, int]:
     """The report, and the regression count the workflow fails on.
 
@@ -421,11 +457,20 @@ def render_headroom(
     meet, so the value here is which cells have no headroom left or carry slack. A
     tolerance cell has no budget and the sweep passes it whatever it measures, so it is
     judged against the measurement its own row records, and only this report sees it.
+    The same holds for a cell the sweep could not measure: an overflow is recorded as a
+    lane count, and more such lanes than its row accounts for is a regression too.
     """
     over: List[str] = []
     regressed: List[str] = []
     tight: List[str] = []
     slack: List[str] = []
+    for cell, count in sorted((nonfinite or {}).items()):
+        row = _resolve(table, *cell)
+        if row is None or count <= recorded_nonfinite(row):
+            continue
+        regressed.append(
+            _headroom_line(cell, count, recorded_nonfinite(row), "non-finite lanes")
+        )
     for cell, worst in sorted(measured.items()):
         row = _resolve(table, *cell)
         if row is None:
@@ -510,7 +555,9 @@ def _headroom(args) -> Tuple[str, int]:
         for line in args.measured.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    report, regressions = render_headroom(table, _measured_cells(rows))
+    report, regressions = render_headroom(
+        table, _measured_cells(rows), _nonfinite_cells(rows)
+    )
     return report, 1 if regressions else 0
 
 
