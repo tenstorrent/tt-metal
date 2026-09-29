@@ -100,7 +100,7 @@ __attribute__((always_inline)) inline void sync_threads()
     llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
-// Only Quasar still uses these, but BARRIER_END anchors BUFFERS_START, so reclaiming them moves every buffer.
+// The barrier words are unused since the semaphore rendezvous, but BARRIER_END anchors BUFFERS_START; keep them.
 
 __attribute__((always_inline)) inline void reset()
 {
@@ -112,7 +112,6 @@ __attribute__((always_inline)) inline void reset()
 
     *epoch_ptr = 0;
 
-    // The Quasar rendezvous uses a relative generation, which needs a uniform start.
     (*barrier_ptr)[TRISC_ID] = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));

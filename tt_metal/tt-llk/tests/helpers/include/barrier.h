@@ -49,15 +49,80 @@ constexpr bool is_action_thread()
 #endif
 }
 
-#if !defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR)
+
+// Semaphores 8 to 11 sit in bank 1, which t6_sem() cannot address, so no LLK op can reach them even by accident.
+// The spare semaphores are free, so each peer waits on its own release level and the peers stay independent.
+constexpr std::uint8_t ARRIVE_SEM       = 8;
+constexpr std::uint8_t RELEASE_SEM_BASE = 9; // unpack 9, math 10, sfpu 11
+
+constexpr std::uint8_t release_sem_of(std::uint32_t peer)
+{
+    return static_cast<std::uint8_t>(RELEASE_SEM_BASE + peer);
+}
+
+constexpr std::uint8_t my_release_sem()
+{
+#if defined(LLK_TRISC_UNPACK)
+    return release_sem_of(0);
+#elif defined(LLK_TRISC_MATH)
+    return release_sem_of(1);
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+    return release_sem_of(2);
+#else
+    return release_sem_of(0); // the action thread never waits on one
+#endif
+}
+
+#else
 
 // The only two indices no LLK op uses. Reserved below for the rest of the translation unit, because
 // the arrival drain would eat the token of any driver that also posted one.
 constexpr std::uint8_t ARRIVE_SEM  = ckernel::semaphore::PACK_DONE;
 constexpr std::uint8_t RELEASE_SEM = ckernel::semaphore::UNPACK_OPERAND_SYNC;
+
+// No third free semaphore, so the two peers share one release level. Sharing is safe because nobody consumes
+// it: the action thread flips it once per rendezvous and each peer waits for it to differ from what it saw.
+constexpr std::uint8_t release_sem_of(std::uint32_t)
+{
+    return RELEASE_SEM;
+}
+
+constexpr std::uint8_t my_release_sem()
+{
+    return RELEASE_SEM;
+}
+
 #pragma GCC poison PACK_DONE UNPACK_OPERAND_SYNC
 
-// A consumed token, not a level to observe, so a peer that samples late still finds its release.
+#endif
+
+namespace detail
+{
+// A PC buffer load must land before the next one is issued: two outstanding loads hang the TRISC on Blackhole,
+// and semaphore_post reads the semaphore for its assert right after this one.
+__attribute__((always_inline)) inline std::uint32_t settled(std::uint32_t value)
+{
+    asm volatile("mv %0, %0" : "+r"(value));
+    return value;
+}
+
+// Only the action thread writes release semaphores, so its read-then-write flip cannot race a peer.
+__attribute__((always_inline)) inline void flip(std::uint8_t sem)
+{
+    if (settled(ckernel::semaphore_read(sem)) == 0)
+    {
+        ckernel::semaphore_post(sem);
+    }
+    else
+    {
+        ckernel::semaphore_get(sem);
+    }
+}
+} // namespace detail
+
+// The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
+// shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
 template <typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {
@@ -75,67 +140,26 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 
         action();
 
+#if defined(ARCH_QUASAR)
         for (std::uint32_t i = 0; i < NUM_THREADS - 1; ++i)
         {
-            ckernel::semaphore_post(RELEASE_SEM);
+            detail::flip(release_sem_of(i));
         }
+#else
+        detail::flip(RELEASE_SEM);
+#endif
     }
     else
     {
+        const std::uint32_t seen = detail::settled(ckernel::semaphore_read(my_release_sem()));
         ckernel::semaphore_post(ARRIVE_SEM);
-        while (ckernel::semaphore_read(RELEASE_SEM) == 0)
+        while (ckernel::semaphore_read(my_release_sem()) == seen)
         {
-        }
-        ckernel::semaphore_get(RELEASE_SEM);
-    }
-
-    ckernel::fence_compiler();
-}
-
-#else // ARCH_QUASAR
-
-// Quasar has no free semaphore, so it gets an L1 rendezvous; trisc.cpp supplies the address.
-extern volatile std::uint32_t* barrier_slots;
-
-// Generations only increase, so a late thread still sees the round it missed; hence < and not ==.
-template <typename Action>
-__attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
-{
-    ckernel::fence_compiler();
-
-    volatile std::uint32_t* slots = barrier_slots;
-
-    const std::uint32_t arrive_gen = slots[THREAD_ID] + 1;
-    slots[THREAD_ID]               = arrive_gen;
-    ckernel::invalidate_data_cache();
-    for (std::uint32_t i = 0; i < NUM_THREADS; ++i)
-    {
-        while (i != THREAD_ID && slots[i] < arrive_gen)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
-
-    if (is_action_thread)
-    {
-        action();
-    }
-
-    const std::uint32_t release_gen = arrive_gen + 1;
-    slots[THREAD_ID]                = release_gen;
-    ckernel::invalidate_data_cache();
-    for (std::uint32_t i = 0; i < NUM_THREADS; ++i)
-    {
-        while (i != THREAD_ID && slots[i] < release_gen)
-        {
-            ckernel::invalidate_data_cache();
         }
     }
 
     ckernel::fence_compiler();
 }
-
-#endif // !ARCH_QUASAR
 
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread)
 {
