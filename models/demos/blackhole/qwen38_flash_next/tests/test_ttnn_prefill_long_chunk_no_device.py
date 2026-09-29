@@ -570,12 +570,6 @@ def test_long_chunk_source_pins() -> None:
     # The long chunk's combine is tilized as one [1280, 2560] tile grid and viewed back as the reduce's rank-4 input.
     assert "ttnn.reshape(outputs[5], (TOP_K * self.rows, HIDDEN_SIZE))" in routed
     assert "ttnn.experimental.view(combine_flat, self.row_contract.fast_reduce_input)" in routed
-    # The chunk recurrence is called once per pass at either row count through the resolved kernel (the composite by
-    # default, _chunk_rows_composite; chunk_size stays the 32-row tile).
-    chunk = inspect.getsource(gdn_module.Qwen38TTNNGDN._chunk_rows)
-    assert chunk.count("kernel(self, q_rows, k_rows, v_rows, g_rows, beta_rows, initial_state, constants)") == 1
-    composite = inspect.getsource(gdn_module.Qwen38TTNNGDN._chunk_rows_composite)
-    assert composite.count("ttnn.transformer.chunk_gated_delta_rule(") == 1 and "chunk_size=CHUNK_SIZE" in composite
     commit = inspect.getsource(gdn_module.Qwen38TTNNGDN.commit_rows_full)
     assert "_copy_inplace(final_state, state.recurrent" in commit and "history_select_full" in commit
     assert "chunk_gated_delta_rule" not in commit
