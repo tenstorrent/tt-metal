@@ -16,7 +16,7 @@
 // Quasar test infra also compiles TTI macros somewhere else without
 // enabling tensix.  And it fails if we don't use .ttinsn, for unknown
 // reasons.  See #58144
-#if 1
+#if 0
 // works
 #define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".ttinsn %0 # qsr" ::"n"(unsigned(ENCODING))); })
 #else
