@@ -285,6 +285,34 @@ def _distributed_prefix(
     return local_entry_state, final_state
 
 
+def select_final_state(
+    rank_finals: ttnn.Tensor,
+    prefix_final_state: ttnn.Tensor,
+    *,
+    selections: ChronologicalSelections,
+    actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
+    local_rows: int,
+    sequence_parallel_axis: int,
+    fused: bool = True,
+) -> ttnn.Tensor:
+    """State after the last valid token: the owning rank's final for a separated tail, else the prefix carry.
+
+    ``fused`` selects on device in one copy; the concat-and-select path is its bit-exact reference.
+    """
+    if not fused:
+        return selections.select_final_state(rank_finals, prefix_final_state)
+    return ttnn.experimental.kda.select_final_carry(
+        rank_finals,
+        prefix_final_state,
+        actual_start=actual_start,
+        actual_end=actual_end,
+        local_rows=local_rows,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        sequence_parallel_axis=sequence_parallel_axis,
+    )
+
+
 def _last_group_state(
     grouped_final_states: ttnn.Tensor,
     geometry: _RecurrenceGeometry,
@@ -494,7 +522,15 @@ def _scan_sp_grouped_chunks(
         cluster_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
-    final_state = selections.select_final_state(gathered, prefix_final_state)
+    final_state = select_final_state(
+        gathered,
+        prefix_final_state,
+        selections=selections,
+        actual_start=actual_start,
+        actual_end=actual_end,
+        local_rows=geometry.local_rows,
+        sequence_parallel_axis=sequence_parallel_axis,
+    )
     return RecurrenceResult(
         output, ttnn.reshape(final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
     )
