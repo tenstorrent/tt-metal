@@ -17,9 +17,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.host_fallback import HostCompressedAttention, attention_index_rows
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 
@@ -57,8 +56,8 @@ class TtV41Attention(LightweightModule):
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
         assert seq_len % (32 * self.sp) == 0, f"chunk {seq_len} must split into whole tiles over sp={self.sp}"
-        self.tt_ccl = get_tt_ccl(mesh_device) if (self.sp > 1 or self.tp > 1) else None
-        self.num_links = 2 if is_blackhole() else 1
+        self.ccl = V41Collectives(mesh_device, topology)
+        self.num_links = self.ccl.num_links
 
         tp_mapper = lambda dim: ttnn.ShardTensor2dMesh(mesh_device, tuple(mesh_device.shape), dims=(None, dim))
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -123,33 +122,6 @@ class TtV41Attention(LightweightModule):
             for t in (cos, sin)
         )
 
-    # --- collectives -------------------------------------------------------------------------------
-    def _tp_all_reduce(self, t):
-        """Row-parallel partial sums -> the full result replicated across TP (reduce-scatter + gather)."""
-        if self.tp == 1:
-            return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
-            t,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.topology,
-            cluster_axis=self.tp_axis,
-        )
-        return ttnn.experimental.all_gather_async(
-            t,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.topology,
-            cluster_axis=self.tp_axis,
-        )
-
     def _rope(self, t, inverse=False):
         """Rotate the trailing rope_head_dim channels of ``t`` [B, H, S, head_dim]."""
         b, h, s, d = t.shape
@@ -182,7 +154,7 @@ class TtV41Attention(LightweightModule):
         heads_local = self.heads // self.tp
 
         qr = ttnn.rms_norm(
-            self._tp_all_reduce(ttnn.linear(x, self.wq_a, compute_kernel_config=self.compute_kernel_config)),
+            self.ccl.tp_all_reduce(ttnn.linear(x, self.wq_a, compute_kernel_config=self.compute_kernel_config)),
             weight=self.q_norm,
             epsilon=self.eps,
         )
@@ -193,7 +165,7 @@ class TtV41Attention(LightweightModule):
         q = self._rope(q)
 
         kv = ttnn.rms_norm(
-            self._tp_all_reduce(ttnn.linear(x, self.wkv, compute_kernel_config=self.compute_kernel_config)),
+            self.ccl.tp_all_reduce(ttnn.linear(x, self.wkv, compute_kernel_config=self.compute_kernel_config)),
             weight=self.kv_norm,
             epsilon=self.eps,
         )
@@ -274,16 +246,4 @@ class TtV41Attention(LightweightModule):
             [ttnn.slice(grouped, [0, g, 0, 0], [1, g + 1, seq_local, rank]) for g in range(groups_local)], dim=-1
         )
         out = ttnn.linear(grouped, self.wo_b, compute_kernel_config=self.compute_kernel_config)
-        if self.tp == 1:
-            return out
-        return ttnn.experimental.reduce_scatter_minimal_async(
-            out,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.topology,
-            cluster_axis=self.tp_axis,
-        )
+        return self.ccl.tp_reduce_scatter(out)
