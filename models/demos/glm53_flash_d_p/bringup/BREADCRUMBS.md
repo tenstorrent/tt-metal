@@ -1021,3 +1021,29 @@ Results: device passes (PCC 0.999995, c0 0.999994; attention vs CPU same input 0
 CPU 0.00204; attention share 30 / 0.00069; ~90 s). Reference passes (same-input and share checks exact). Stub fails.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_06_attention.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.attn_residual test (attempt 1)
+
+Reviewed the rendered component test for `h_mid = post * attn_out + comb^T @ in` at layer 3 (the same weightless
+module as kda_dense). I rewrote it from the kda_dense attn_residual test. I dropped the second-layer run: at layer 3
+the streams already differ, so comb bugs show here (comb not transposed rel 0.023, identity comb 0.041).
+New at layer 3: post <= 0.024, so the post term is 4.3% of the output (row norms: in 1.10, attn_out 16.5, post term
+0.037, out 1.07). post x1.05 passes PCC and rel L2. The golden was computed from the fp32 attn_hc, so the fp32
+reference on the golden's bf16 inputs already sits at rel 0.0024 / [0.9956, 1.0035].
+Checks:
+- vs golden: the gated PCC; rel <= 0.006; ratio [0.99, 1.01]; worst row <= 0.015; per-stream <= 0.008.
+- vs the fp32 CPU step on the same golden inputs (new here): rel <= 0.0035, ratio [0.997, 1.003], worst row <= 0.008.
+- Each term on its own: comb coefficient [0.998, 1.002] and rel <= 0.0035; post coefficient [0.99, 1.01] and rel
+  <= 0.08 (bf16 output rounding alone gives 0.034).
+- Every limit is written `not x <= lim`, so NaN fails.
+Sensitivity (CPU host script /tmp/dsares/sens.py, not kept; numbers are in the test docstring). Caught: post x1.02
+(ratio 1.017, coefficient 1.02), comb x1.005 (comb coefficient 1.005), comb x1.002 (CPU ratio 1.0039), a truncating
+bf16 output (comb coefficient 0.9970), plus every coarser bug. PCC alone catches only post from the pre slot and
+stream-major rows.
+Results: device passes already, because `_device_step` builds tt/residual.py for any layer. It scores PCC 0.999996;
+vs golden 0.00282 / [0.9956, 1.0035] / worst row 0.0078; vs CPU 0.00146 / [0.9983, 1.0004] / 0.0021; post coefficient
+1.00000 / rel 0.034; comb coefficient 0.99994 / rel 0.0015. These match a CPU model of bf16 output rounding exactly.
+Reference passes (vs CPU 0). Stub fails (PCC 0).
+Next step: implement only needs to add attn_residual to `DEVICE_STEPS["dsa_moe"]`.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_residual.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
