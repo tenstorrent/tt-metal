@@ -1,0 +1,16 @@
+findings:
+- id: R2-hf-rope-interleaved
+  task: R.2
+  kind: REFERENCE
+  title: transformers 5.17's hy_v4 port uses rotate-half RoPE; Hy4 is served with interleaved RoPE (MLA and indexer)
+  detail: >-
+    With the vendored 5.17 modeling code as released, the full-model HF sanity passed the smoke ("Paris") but scored top-1
+    next-token accuracy 0.237 on the first 2048 prompt tokens (floor 0.4). The CPU reference matched that oracle at PCC 1.0 on
+    all 6 layers, since both followed the same code. SGLang's Hy4 support (srt/configs/hy_v4.py) sets rope_interleave = True
+    and indexer_rope_interleave = True; DeepseekV2AttentionMLA and the DSA indexer turn these into is_neox_style=False (GPT-J
+    pairs). With interleaved RoPE in both places (vendored oracle: apply_rotary_pos_emb_interleaved, marked "bring-up fix";
+    reference: hy4_ref.apply_rope), accuracy is 0.965 and parity is unchanged (PCC 1.0). For the device: the checkpoint's
+    rope dims are already in interleaved (Meta) order for MLA q/k_pe and for the indexer's last 64 dims, so no host
+    permutation is needed for rotary_embedding_llama-style kernels. hy4_preview_findings.md still says to "permute the rope
+    columns on the host (rotate_half to interleaved)"; that no longer applies. The q_a / kv_a RMSNorm eps is 1e-6 in HF and
+    1e-5 in SGLang; the reference follows HF, a negligible difference.
