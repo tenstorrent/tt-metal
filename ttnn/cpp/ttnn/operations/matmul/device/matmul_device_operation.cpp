@@ -459,6 +459,22 @@ void validate_matmul_untilize_out(
         config_name);
 }
 
+// PrefetcherPipe delivery: only the Mcast1D factory reads in1 from the pipes. Any other config's
+// factory would read the weight from DRAM and never drain the pipes, so a paired prefetch would fill
+// rings nobody empties. Runs for every config so it rejects the pipes on every other config; the
+// Mcast1D validator checks the rest (mcast_in0, no gather_in0).
+void validate_matmul_prefetcher_pipes_program_config(
+    const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    if (attributes.prefetcher_pipes.empty()) {
+        return;
+    }
+    TT_FATAL(
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
+        "{}: prefetcher_pipes delivery is supported only for MatmulMultiCoreReuseMultiCast1DProgramConfig with "
+        "mcast_in0=true and gather_in0=false; pass that program config explicitly",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
+}
+
 // ===========================================================================
 // VALIDATIONS FOR MULTIPLE PROGRAM CONFIGS: each function here runs for several (but not
 // all) program configs that need the same checks, branching internally per config.
@@ -2382,6 +2398,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     // ---- universal checks, part 2: need the chosen program config ----
+    // First, so pipes on a config that never reads them fail on that rather than on its own checks.
+    validate_matmul_prefetcher_pipes_program_config(attributes, chosen_program_config);
     // Config-based shared validators (each self-filters by config via std::visit).
     validate_matmul_tiny_tile_constraints(input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);

@@ -1734,6 +1734,30 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_bank_pairing_of_other_distrib
         )
 
 
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device, expect_error):
+    """Only the 1D mcast factory reads in1 from the pipes; any other config would leave them undrained."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
+    _space, pipes = _make_mcast_in0_pipes(device, setup, setup["entry_size"], 2)
+    program_config_2d = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(setup["ring_cols"], setup["recv_per_bank"]),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    with expect_error(RuntimeError, "prefetcher_pipes delivery is supported only for"):
+        ttnn.linear(
+            setup["tt_act"],
+            setup["tt_weight"],
+            program_config=program_config_2d,
+            memory_config=setup["output_mem_config"],
+            prefetcher_pipes=pipes,
+        )
+
+
 def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device):
     """Two matmuls with different in1 K-block sizes, back to back on one pipe set.
 
