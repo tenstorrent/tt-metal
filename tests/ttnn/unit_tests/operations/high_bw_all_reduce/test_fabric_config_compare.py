@@ -140,3 +140,28 @@ def test_all_gather_pair_g2(mesh_device, rows_per_device):
         cluster_axis=0,
         rows_per_device=rows_per_device,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(ag._device_params(ttnn.FabricConfig.FABRIC_1D), id="fabric_1d_line"),
+        pytest.param(ag._device_params(ttnn.FabricConfig.FABRIC_1D_RING), id="fabric_1d_ring"),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
+def test_all_gather_4x1_line_ring(mesh_device):
+    """G = 4 line (FABRIC_1D) / ring (FABRIC_1D_RING), 72 MiB per chip, for comparison with fabric_all_gather."""
+    case_name, dtype, width, layout, expected_page_size = next(c for c in ag._TEST_CASES if c[0] == "bf16_tiles")
+    print(f"FABRIC_G4_COMPARE op=high_bw_all_gather fabric={ttnn.get_fabric_config()}")
+    ag._run_high_bw_all_gather_perf(
+        mesh_device,
+        dtype,
+        width,
+        layout,
+        expected_page_size,
+        min_bandwidth_gbps=0.0,
+        cluster_axis=0,
+        rows_per_device=65536,
+    )

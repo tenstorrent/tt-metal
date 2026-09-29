@@ -318,6 +318,21 @@ neither exposes `ITERATIONS` or a parity stride, so `r_iter2`/`c_skip` need the 
 **Measured result:** delivering the same operands to the same 64 cores is **1.91× faster** with the two 1-D mcasts (Blackhole, 11×10 grid, 8×8 split, `M=8t N=32t K=4t`; **8512 ns → 4450 ns**). DRAM tile-reads drop `1280 → 160` (**8×**). As in `shared_input_reuse`, the device-time win is *much smaller than the read-count reduction* — each line's sender reads its slice serially and the bytes still cross the NoC.
 **Gist:** broadcast an operand along the axis it does **not** vary with. On a 2-D split that means **two** `Mcast1D` families on the same grid at disjoint `base_sem_id`s (0 and 2) — `PerRow` for the operand that is constant along a row, `PerColumn` for the one constant down a column — with each core a sender on one, both, or neither (four CT-specialized reader kernels, so every core hosts exactly one). **The naming inverts and this is the trap:** a 2-D work split needs **1-D** mcasts, while a 1-D work split (cut `M` only, every core needing all of `B`) is what needs a **2-D** mcast to a whole rectangle. "More sharded" means a *shorter, narrower* path per operand, not a bigger broadcast. Ordering is deadlock-free because every core completes its A phase before any core can block in its B phase.
 
+## ⭐⭐⭐ T3 — [`fabric_all_gather`](fabric_all_gather/README.md)
+**Concepts:** store-and-forward relay gated by arrival counters (and how often a packet carries the increment), and
+placing each link's port core below its Ethernet core — in a complete line / ring all-gather over fabric (any mesh axis
+or a whole-mesh snake, 1–4 links, any fabric config), DRAM to DRAM.
+**Situation:** you need a multi-chip collective whose data passes through intermediate chips, and it must run near
+the links' rate on whatever fabric config the workload uses.
+**Measured result** (Blackhole 4× p150a, 16 MiB bf16 per chip, 2 links, effective receive per chip): 4-chip ring
+**125 GB/s**, 4-chip line **88 GB/s** (same as a 2-chip pair, i.e. the relay is free in steady state) on FABRIC_1D;
+104–118 (ring) on the 2D configs; bit-exact on all 112 fabric × topology × links combinations. 4 links: ring **143**.
+A fused increment on **every** packet halves the rate (the receiving router waits for each write before the
+increment); one increment per 8 chunks restores it.
+**Gist:** one port core per (direction, link) that sends its own shard, then relays a prefix of what its upstream sends,
+waiting for `chunk / K + 1` arrivals, with every K-th packet a fused write + increment; one copy core per link for
+the local shard; find each connection's Ethernet core (probe it on device) and put the port core directly below it.
+
 ## ⭐⭐⭐ T3 — [`shared_input_reuse`](shared_input_reuse/README.md)
 **Concept:** redundant-DRAM-read elimination — stream a shared input once and NoC-multicast it (the `mcast_pipe` helper) vs. every core re-reading it from DRAM.
 **Situation:** a grid of cores all need the **same** multi-MB input — a large shared matrix `[R, C]` (~2.4 MB) streamed in fixed-size chunks (larger than L1). Written the obvious way, every core streams the whole input from DRAM — `N×` the unique bytes.
