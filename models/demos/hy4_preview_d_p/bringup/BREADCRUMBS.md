@@ -2232,3 +2232,41 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
+
+## S.moe_full.15 test (attempt 1)
+
+What
+- Replaced the rendered 36-line swap-15 test (moe_full layer 1, steps 1-15 on device, last: ffn_residual) with swap
+  14's reviewed test plus ffn_residual checks. Every swap-14 check is kept at its limits; `ffn_residual` added to
+  SWAPPED.
+- New checks on block out (helper `post_check`):
+  - vs the CPU ffn_residual on the block's own device h_mid / ffn_hc / mlp_out: rel <= 5e-4, worst (row, stream)
+    <= 1e-3 (the h_mid limits from swap 07), plus the rounding-aware float64 addend checks per stream.
+  - the module again with each row's post gates rotated by (row mod 4), vs the CPU step: same limits, plus stream
+    norm ratio [0.995, 1.005] (`rot_` metrics).
+  - vs golden: per-token per-stream norm ratio [0.98, 1.02] on rows routed as in the golden, [0.95, 1.05] on flipped
+    rows.
+- CPU mutation study: /tmp/hy4_sm15/study.py, log study.log (outside the repo). It uses the swap-12 device tensors in
+  /tmp/hy4_sm12/seen.pt. The table is in the test docstring.
+
+Decisions
+- These bugs pass the 0.98 gate and every swap-14 check: 1.002 / 1.005 / 0.995 x mlp_out, 0.999 x h_mid, the
+  addend dropped on stream 2, and a module that ignores the gates it is given (it only fails with rotated gates).
+  The new checks catch every one of them.
+- vs-CPU at 5e-4 would fail a bf16 hc_post (bf16 output 0.0017). The same TtHcPost already has to meet this limit at
+  h_mid (swap 07), so this is not a new precision demand.
+
+Results
+- BRINGUP_IMPL=reference: PASS (all new checks 0; out stream ratio matched [0.99936, 1.00051], 22 flipped rows).
+- BRINGUP_IMPL=stub: FAIL (AssertionError).
+- Gate (device): PASS. pcc_swap_out 0.999973. out vs CPU ffn_residual rel 0 / row 0, addend coefs 1.0, rotated rel 0.
+  Out stream ratio vs golden: 1936 matched rows [0.99037, 1.00875], 112 flipped rows [0.99069, 1.01949]. Tail 0.0064,
+  out rel 0.00753.
+
+Gotchas
+- Out rel vs golden is 0.00753 (limit 0.01). This is now the whole block on the device.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
