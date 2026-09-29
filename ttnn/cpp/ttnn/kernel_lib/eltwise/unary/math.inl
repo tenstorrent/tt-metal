@@ -26,11 +26,16 @@ struct Exp : UnaryOp<Exp<approx, Slot>, Slot> {
 };
 
 // ---- Log ----
+// log_tile / log_tile_init are WH/BH-only (not declared in Quasar's compute_kernel_api.h), and the
+// non-dependent name lookup in this template body fails to compile on Quasar even when Log is never
+// instantiated (e.g. layernorm only pulls in the header). Guard it out until the LLK is ported.
+#ifndef ARCH_QUASAR
 template <Approx fast, Dst Slot>
 struct Log : UnaryOp<Log<fast, Slot>, Slot> {
     static ALWI void init() { log_tile_init<fast == Approx::Fast>(); }
     static ALWI void exec_impl(uint32_t slot_offset) { log_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
+#endif
 
 // ---- Sqrt ----
 template <Approx fast, Dst Slot>
@@ -71,6 +76,9 @@ struct Log1p : UnaryOp<Log1p<fast, Slot>, Slot> {
 };
 
 // ---- Power — runtime exponent. ----
+// power_tile / power_tile_init are WH/BH-only (not declared in Quasar's compute_kernel_api.h); guard out
+// until the LLK is ported (the template body otherwise fails non-dependent name lookup on Quasar).
+#ifndef ARCH_QUASAR
 template <Dst Slot>
 struct Power : UnaryOp<Power<Slot>, Slot> {
     uint32_t exponent;
@@ -79,6 +87,7 @@ struct Power : UnaryOp<Power<Slot>, Slot> {
     static ALWI void init() { power_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { power_tile(to_u32(Slot) + slot_offset, exponent); }
 };
+#endif
 
 // ---- Rpow — base^x, runtime base. ----
 template <Dst Slot>
@@ -107,6 +116,9 @@ struct Cumsum : UnaryOp<Cumsum<Slot>, Slot> {
 // ---- PowerIterative — positive-integer exponent via iterative multiply. ----
 // Distinct LLK from Power: power_iterative_tile uses an iterative loop; faster for
 // small integer exponents. Only supports positive integer scalars.
+// power_iterative_tile / power_iterative_tile_init are WH/BH-only (not declared in Quasar's
+// compute_kernel_api.h); guard out until the LLK is ported.
+#ifndef ARCH_QUASAR
 template <Dst Slot>
 struct PowerIterative : UnaryOp<PowerIterative<Slot>, Slot> {
     uint32_t exponent;
@@ -117,5 +129,6 @@ struct PowerIterative : UnaryOp<PowerIterative<Slot>, Slot> {
         power_iterative_tile(to_u32(Slot) + slot_offset, exponent);
     }
 };
+#endif
 
 }  // namespace compute_kernel_lib
