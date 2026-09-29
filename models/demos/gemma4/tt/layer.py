@@ -266,12 +266,12 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, keep_sharded=is_decode)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            hidden_states = ttnn.add(residual, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             residual.deallocate(True)
             attn_output.deallocate(True)
 
@@ -283,7 +283,7 @@ class Gemma4DecoderLayer:
 
         if self.enable_moe_block:
             # post_feedforward_layernorm_1 on MLP output
-            mlp_normed = self.post_feedforward_layernorm_1.forward(mlp_output)
+            mlp_normed = self.post_feedforward_layernorm_1.forward(mlp_output, keep_sharded=is_decode)
             mlp_output.deallocate(True)
 
             # Router input = pre-MLP residual, expert input = normed residual
@@ -296,7 +296,7 @@ class Gemma4DecoderLayer:
             expert_input.deallocate(True)
 
             # post_feedforward_layernorm_2 on expert output
-            expert_normed = self.post_feedforward_layernorm_2.forward(expert_output)
+            expert_normed = self.post_feedforward_layernorm_2.forward(expert_output, keep_sharded=is_decode)
             expert_output.deallocate(True)
 
             # Combine: mlp_normed + expert_normed
@@ -307,8 +307,8 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, keep_sharded=is_decode)
+        combined = ttnn.add(residual, hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         residual.deallocate(True)
         hidden_states.deallocate(True)
 

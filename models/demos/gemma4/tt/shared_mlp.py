@@ -171,7 +171,38 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
+            _gu_decode_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(6, 1),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                out_block_h=1,
+                out_block_w=6,
+                per_core_M=1,
+                per_core_N=6,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            _gu_decode_ck = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            _gu_n_tiles = (gu_n + 31) // 32
+
+            def _gate_up(x):
+                if x.shape[-2] <= 32 and _gu_n_tiles == 34 and x.shape[-1] == 2816:
+                    return ttnn.linear(
+                        x,
+                        gate_up_proj,
+                        program_config=_gu_decode_pc,
+                        compute_kernel_config=_gu_decode_ck,
+                    )
+                return ttnn.linear(x, gate_up_proj)
+
+            self.gate_up_proj = _gate_up
 
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
@@ -189,7 +220,7 @@ class SharedMLP:
             down_proj = ttnn.as_tensor(
                 down_proj_weight,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=row_mapper,
                 cache_file_name=get_cache_file_name(
@@ -198,7 +229,37 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.down_proj = lambda x: ttnn.linear(x, down_proj)
+            _down_decode_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 6),
+                in0_block_w=17,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                out_block_h=1,
+                out_block_w=2,
+                per_core_M=1,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            _down_n_tiles = (self.hidden_size + 31) // 32
+
+            def _down(x):
+                if x.shape[-2] <= 32 and x.shape[-1] == 544 and _down_n_tiles == 88:
+                    return ttnn.linear(
+                        x,
+                        down_proj,
+                        program_config=_down_decode_pc,
+                        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                            math_fidelity=ttnn.MathFidelity.HiFi2,
+                            math_approx_mode=False,
+                            fp32_dest_acc_en=True,
+                            packer_l1_acc=True,
+                        ),
+                    )
+                return ttnn.linear(x, down_proj)
+
+            self.down_proj = _down
 
     def __call__(self, hidden_states):
         """
@@ -218,8 +279,12 @@ class SharedMLP:
 
         # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config): the Tanh variant
         # dropped the E4B full-model PCC from 0.9846 to 0.9578 (gate 0.96) on bh_quietbox_2.
-        gate = ttnn.gelu(gate, variant=gelu_variant())
-        hidden = ttnn.mul(gate, up)
+        # The fused GELU below with param 0.0 is the accurate (non-approximate) variant.
+        hidden = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)],
+        )
         gate.deallocate(True)
         up.deallocate(True)
 

@@ -88,6 +88,36 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
             fused_activation=None,
             mcast_in0=True,
         )
+        if memory_config is None:
+            # Decode M=32: write QKV straight to L1 so split_qkv_heads_decode skips its DRAM->L1 copy.
+            memory_config = ttnn.L1_MEMORY_CONFIG
+    elif hidden_states.padded_shape[-2] == 32 and hidden_states.shape[-1] == 2816 and weights.wqkv.shape[-1] == 3072:
+        # Decode-only (M=32) sweep candidate: 1D mcast_in0, 8x6 grid, K block 4; fp32 accumulation
+        # so the fewer, larger K blocks do not change the rounding the default config had.
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 6),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=1,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        return ttnn.linear(
+            hidden_states,
+            weights.wqkv,
+            memory_config=memory_config,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
     return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config, program_config=program_config)
 
 
@@ -621,7 +651,33 @@ def apply_output_projection(tensor, weights: AttentionWeights):
     if isinstance(weights.o_proj, DramShardedLinear):
         out = weights.o_proj(tensor)
     else:
-        out = ttnn.linear(tensor, weights.o_proj)
+        m_rows = 1
+        for i in range(len(tensor.shape) - 1):
+            m_rows *= int(tensor.shape[i])
+        k_tiles = int(tensor.shape[-1]) // 32
+        n_tiles = (int(weights.o_proj.shape[-1]) + 31) // 32
+        if m_rows <= 32 and k_tiles % 4 == 0:
+            # Decode: swept 1D config (8x6 grid, in0_block_w=4, per_core_N=2) beats the default.
+            pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 6),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=1,
+                per_core_N=max(2, (n_tiles + 47) // 48),
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            ckc = ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            out = ttnn.linear(tensor, weights.o_proj, program_config=pc, compute_kernel_config=ckc)
+        else:
+            out = ttnn.linear(tensor, weights.o_proj)
     tensor.deallocate(True)
     return out
 

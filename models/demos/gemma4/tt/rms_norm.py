@@ -79,10 +79,16 @@ class RMSNorm(nn.Module):
         if best is None or best[0] == 1:
             return None
         num_cores, gx, gy = best
+        if tiles == 88 and grid.x >= 11:
+            # Swept on this board: 11x1 grid, block_w 8, subblock_w 2 is 4% faster
+            # than the 88-core grid at [1,1,32,2816].
+            num_cores, gx, gy = 11, 11, 1
         block_w = tiles // num_cores
         subblock_w = 4
         while subblock_w > 1 and block_w % subblock_w != 0:
             subblock_w -= 1
+        if tiles == 88 and num_cores == 11:
+            subblock_w = 2
         input_memcfg = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, dim // num_cores),
             core_grid=ttnn.CoreGrid(x=gx, y=gy),
@@ -99,21 +105,38 @@ class RMSNorm(nn.Module):
         )
         return (input_memcfg, program_config)
 
-    def _forward_sharded(self, x):
-        """Width-sharded decode RMSNorm: I2S -> sharded rms_norm -> S2I."""
-        x_sh = ttnn.to_memory_config(x, self._sharded_cfg[0])
+    def _forward_sharded(self, x, keep_sharded=False):
+        """Width-sharded decode RMSNorm: I2S -> sharded rms_norm -> S2I.
+        An input already in the sharded layout skips the I2S; keep_sharded
+        returns the sharded output (consumer is an elementwise op)."""
+        if x.is_sharded():
+            x_sh = x
+        else:
+            x_sh = ttnn.to_memory_config(x, self._sharded_cfg[0])
         out = ttnn.rms_norm(
             x_sh,
             weight=self.tt_weight,
             epsilon=self.eps,
             program_config=self._sharded_cfg[1],
         )
-        x_sh.deallocate(True)
+        if x_sh is not x:
+            x_sh.deallocate(True)
+        if keep_sharded:
+            return out
         out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x):
+    def forward(self, x, keep_sharded=False):
+        # Already width-sharded in this norm's own layout (from a sibling norm
+        # kept sharded): run the sharded norm directly.
+        if not self.is_distributed and x.is_sharded() and self.with_scale and self.tt_weight is not None:
+            dim = x.shape[-1]
+            if self._sharded_cfg is None or self._sharded_dim != dim:
+                self._sharded_dim = dim
+                self._sharded_cfg = self._build_sharded_cfg(dim)
+            if self._sharded_cfg and x.memory_config() == self._sharded_cfg[0]:
+                return self._forward_sharded(x, keep_sharded=keep_sharded)
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -171,7 +194,7 @@ class RMSNorm(nn.Module):
                     self._sharded_dim = dim
                     self._sharded_cfg = self._build_sharded_cfg(dim)
                 if self._sharded_cfg:
-                    return self._forward_sharded(x)
+                    return self._forward_sharded(x, keep_sharded=keep_sharded)
 
             is_prefill = len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE
             compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
