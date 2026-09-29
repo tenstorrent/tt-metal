@@ -75,13 +75,25 @@ it self-calibrates if the precision policy changes. Its `FLOOR_MARGIN` of 0.01 i
 slack, not a derived bound: `full_attention` measures 0.978978 against a 0.980890 floor, so it
 passes on that margin rather than on merit.
 
-The floor itself does not model the head. The shipping `config/precision.json` is
-`head_bfp4_lofi`, putting the LM head at `bfloat4_b` and LoFi, while the floor control
-quantized the head to `bfloat8_b` and the only recorded head comparison holds precision
-constant between two TT programs. So head-precision error is unbounded by the evidence here,
-and the 0.822 top-1000 logit PCC cannot yet be attributed between the projections and the head.
-A control against `QWEN_PRECISION_CONFIG=baseline`, which differs only in the head group, is
-the missing measurement.
+The head is not where the logit error lives. The shipping `config/precision.json` is
+`head_bfp4_lofi`, putting the LM head at `bfloat4_b` and LoFi. Running the same prompt and the
+same teacher-forced token sequence against the same fp32 reference under a policy that differs
+only in the head group, `bfloat8_b` and HiFi2, moves mean top-1000 PCC from 0.8963 to 0.9024:
+
+| step | bfp4/LoFi head | bfp8/HiFi2 head | delta |
+| --- | ---: | ---: | ---: |
+| prefill | 0.8461 | 0.8544 | +0.0083 |
+| decode1 | 0.8220 | 0.8263 | +0.0043 |
+| decode2 | 0.8846 | 0.8894 | +0.0047 |
+| decode3 | 0.9078 | 0.9121 | +0.0042 |
+| decode4 | 0.9639 | 0.9691 | +0.0052 |
+| decode5 | 0.8974 | 0.9054 | +0.0080 |
+| decode6 | 0.9519 | 0.9602 | +0.0083 |
+
+Top-10 overlap against the reference is identical at every step under both policies, and greedy
+agreement is 7/7 under both. So the head accounts for roughly 0.6 of the ten-point gap from
+1.0; the remainder is the `bfloat4_b` projections compounding over 64 layers. That also earns
+the shipping head choice: the cheaper head costs 0.006 PCC and changes no ranking.
 
 ## Behaviour
 
