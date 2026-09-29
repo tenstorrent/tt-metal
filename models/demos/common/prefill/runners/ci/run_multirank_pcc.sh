@@ -252,7 +252,7 @@ if [ "${PP_RANKS}" -ne 0 ]; then
   # Each producer reads its own stage's nine layers; merging the four maps would read the whole
   # galaxy four times.
   RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
-  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map_r'\${OMPI_COMM_WORLD_RANK}'.json';"
+  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
 else
   TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
   RUNNER_PLACEMENT=""
