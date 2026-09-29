@@ -53,6 +53,7 @@
 #include "dispatch/dispatch_mem_map.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
+#include "program/program_impl.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
@@ -122,6 +123,15 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& hal = metal.hal();
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
+
+    // The two profilers have separate data paths (this one reads dispatch_s timestamps through a reserved tensix),
+    // but running them together produced ~1800 "zone with end < start" real-time records per ResNet run; until that
+    // is understood the real-time profiler stands down in streaming mode.
+    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+        log_info(
+            tt::LogMetal, "Real-time profiler disabled on device {}: TT_METAL_STREAMING_PROFILER is set.", device_id);
+        return {};
+    }
 
     // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
@@ -480,7 +490,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     ring_.emplace(std::min(kMaxRingCapacity, max_consumer_batch_records * kRingHeadroomBatches));
 
     for (const auto& dev_state : devices_) {
-        tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
+        tt::NotifyProgramRealtimeProfilerActivated(context_id_, dev_state.chip_id);
     }
 
     run_init_sync();
@@ -515,12 +525,12 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
     // RT_PROFILER_SOCKET_CONFIG_SIZE has headroom over today's SocketSenderSize, but assert
     // it here so a future growth of the sender config triggers a deterministic startup failure.
     TT_FATAL(
-        RT_PROFILER_SOCKET_CONFIG_SIZE >= D2HSocket::required_config_buffer_size(),
+        RT_PROFILER_SOCKET_CONFIG_SIZE >= D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)),
         "RT_PROFILER_SOCKET_CONFIG_SIZE ({} B) is smaller than D2HSocket's required config "
         "buffer size ({} B). Bump RT_PROFILER_SOCKET_CONFIG_SIZE in "
         "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp and rebuild.",
         RT_PROFILER_SOCKET_CONFIG_SIZE,
-        D2HSocket::required_config_buffer_size());
+        D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)));
     uint32_t config_buffer_addr_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::config_buffer_addr);
     uint32_t sync_request_offset = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
@@ -739,7 +749,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
-            tt::tt_metal::detail::CompileProgram(device, realtime_profiler_program, /*force_slow_dispatch=*/true);
+            realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
                 device, realtime_profiler_program, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::LaunchProgram(
@@ -1163,7 +1173,9 @@ void RealtimeProfilerManager::on_callback_unregistered(tt::ProgramRealtimeProfil
 RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
 
 void RealtimeProfilerManager::shutdown() {
+    // Upper bound on the wait for the push kernel to finish draining; see the poll below.
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
+    constexpr auto kShutdownKernelExitPollBackoff = std::chrono::microseconds(50);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
 
     // Re-write ring_buffer->terminate as a safety net, then let the push kernel deliver the last PCIe page.
@@ -1188,8 +1200,60 @@ void RealtimeProfilerManager::shutdown() {
             }
         }
     }
-    if (!devices_.empty()) {
-        std::this_thread::sleep_for(kShutdownKernelExitGrace);
+    // Wait for the push kernel to hand over its last PCIe page and exit. It drains the ring and returns once
+    // it observes terminate with an empty ring, and it bumps read_index only after that page's write barrier
+    // has retired, so read_index == write_index means every entry has landed in the host ring. Poll for that
+    // equality rather than waiting out kShutdownKernelExitGrace: draining takes microseconds, and shutdown()
+    // runs on every close_device, where suites with a function-scoped `device` fixture pay it per test.
+    const auto deadline = std::chrono::steady_clock::now() + kShutdownKernelExitGrace;
+    for (auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        const uint32_t indices_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, write_index);
+        static_assert(
+            offsetof(RtProfilerRingBuffer, read_index) ==
+                offsetof(RtProfilerRingBuffer, write_index) + sizeof(uint32_t),
+            "write_index and read_index must be adjacent to be read in one shot");
+        bool drained = false;
+        while (true) {
+            std::vector<uint32_t> indices(2, 0);
+            try {
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    dev_state.device,
+                    dev_state.realtime_profiler_core,
+                    indices_addr,
+                    2 * sizeof(uint32_t),
+                    indices,
+                    CoreType::WORKER);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to read ring indices while draining device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+                break;
+            }
+            if (indices[0] == indices[1]) {
+                drained = true;
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} push kernel did not drain within {} ms "
+                    "(write_index={}, read_index={}); trailing records may be lost",
+                    dev_state.chip_id,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(kShutdownKernelExitGrace).count(),
+                    indices[0],
+                    indices[1]);
+                break;
+            }
+            std::this_thread::sleep_for(kShutdownKernelExitPollBackoff);
+        }
+        if (drained) {
+            log_debug(tt::LogMetal, "[Real-time profiler] Device {} push kernel drained", dev_state.chip_id);
+        }
     }
 
     if (receiver_thread_.joinable()) {
@@ -1242,7 +1306,7 @@ void RealtimeProfilerManager::shutdown() {
     // Clear activation state before destroying per-device records so concurrent
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
-        tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
+        tt::NotifyProgramRealtimeProfilerDeactivated(context_id_, dev_state.chip_id);
     }
     devices_.clear();
 }

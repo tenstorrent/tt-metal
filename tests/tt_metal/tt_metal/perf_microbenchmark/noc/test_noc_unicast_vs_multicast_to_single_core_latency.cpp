@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <map>
 #include <string>
 #include <variant>
@@ -25,21 +27,20 @@ using namespace tt;
 
 void measure_latency(const std::string& kernel_name) {
     const int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto mesh_device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
     tt::tt_metal::CoreCoord producer_logical_core =
-        tt_metal::MetalContext::instance().get_dispatch_core_manager().prefetcher_core(device->id(), channel, 0);
+        tt_metal::MetalContext::instance().get_dispatch_core_manager().prefetcher_core(device_id, channel, 0);
     tt::tt_metal::CoreCoord consumer_logical_core =
-        tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device->id(), channel, 0);
+        tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device_id, channel, 0);
 
     TT_FATAL(
         producer_logical_core != consumer_logical_core,
         "Producer and consumer core are {}. They should not be the same!",
         producer_logical_core.str());
 
-    auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
+    auto first_worker_physical_core = mesh_device->worker_core_from_logical_core({0, 0});
 
     std::map<std::string, std::string> defines = {
         {"WORKER_NOC_X", std::to_string(first_worker_physical_core.x)},
@@ -58,9 +59,7 @@ void measure_latency(const std::string& kernel_name) {
 
     tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    tt::tt_metal::detail::CompileProgram(device, program);
-    tt_metal::detail::LaunchProgram(device, program);
-    tt_metal::CloseDevice(device);
+    tt_metal::LaunchProgram(*mesh_device, std::move(program));
 }
 
 int main() {

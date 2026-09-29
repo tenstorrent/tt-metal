@@ -109,8 +109,8 @@ Dest-full tall/wide is the unary throughput case. Skip dest index and SFPU
 
 **Matmul.** Use dest-full tall and wide output grids (`mt,nt` =
 `(1, max_tiles)` and `(max_tiles, 1)`) × `kt={1, 4}` so both `ct>=rt` and
-`ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX
-inputs are LoFi-only; Float16 / Float16_b still sweep LoFi–HiFi4.
+`ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX,
+Float16_b, and Int8 inputs are LoFi-only; Float16 still sweeps LoFi–HiFi4.
 
 **Check coverage** with
 `compare_test_and_perf.py --dir quasar --arch quasar`. Composite
@@ -157,7 +157,7 @@ may bypass math entirely.
 ## Repair PerfRunType paths
 
 1. Read the C++ kernel, correctness harness, perf harness, and latest
-   `perf_data/<test>/<test>.post.csv`.
+   `perf_data/latest/<test>/<test>.post.csv`.
 2. Map every producer/consumer handshake:
    - SrcA and SrcB dvalid between unpack and math
    - destination dvalid between unpack/math and pack

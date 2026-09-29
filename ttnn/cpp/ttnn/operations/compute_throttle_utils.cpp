@@ -71,15 +71,15 @@ void throttle_mm_perf(
     mm_kernel_defines["MM_THROTTLE"] = std::to_string(uint_throttle_level);
 
     if (uint_throttle_level == 5) {
-        log_info(tt::LogOp, "Throttle matmul perf to max 33%");
+        log_debug(tt::LogOp, "Throttle matmul perf to max 33%");
     } else if (uint_throttle_level == 4) {
-        log_info(tt::LogOp, "Throttle matmul perf to max 40%");
+        log_debug(tt::LogOp, "Throttle matmul perf to max 40%");
     } else if (uint_throttle_level == 3) {
-        log_info(tt::LogOp, "Throttle matmul perf to max 50%");
+        log_debug(tt::LogOp, "Throttle matmul perf to max 50%");
     } else if (uint_throttle_level == 2) {
-        log_info(tt::LogOp, "Throttle matmul perf to max 67%");
+        log_debug(tt::LogOp, "Throttle matmul perf to max 67%");
     } else if (uint_throttle_level == 1) {
-        log_info(tt::LogOp, "Throttle matmul perf to max 73%");
+        log_debug(tt::LogOp, "Throttle matmul perf to max 73%");
     } else {
         mm_kernel_defines["MM_THROTTLE"] = std::to_string(0);
         log_error(

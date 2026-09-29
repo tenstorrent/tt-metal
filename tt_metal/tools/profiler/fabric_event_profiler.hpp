@@ -9,7 +9,7 @@
 
 #include "tools/profiler/noc_event_profiler.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;

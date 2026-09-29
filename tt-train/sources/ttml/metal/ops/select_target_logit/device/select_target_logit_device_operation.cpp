@@ -5,6 +5,7 @@
 #include "select_target_logit_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <limits>
 
 #include "select_target_logit_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -49,6 +50,29 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
         tensor_args.logit.logical_shape().rank() == 4U,
         "SelectTargetLogit: logit must be rank 4, got rank {}",
         tensor_args.logit.logical_shape().rank());
+
+    // The reader walks one row-major target page per batch-channel slice of the logit
+    // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
+    // inner dim, while the program cache is keyed on the logit shape alone. Pinning both the
+    // target's page width and its page count to the logit keeps every page index the reader
+    // can form inside the target allocation, and keeps a cached program valid for the target
+    // tensor it runs with.
+    const auto& target_shape = tensor_args.target.logical_shape();
+    TT_FATAL(
+        target_shape[-1] == tensor_args.logit.logical_shape()[-2],
+        "SelectTargetLogit: target inner dim ({}) must equal logit sequence dim ({})",
+        target_shape[-1],
+        tensor_args.logit.logical_shape()[-2]);
+    const auto& logit_padded_shape = tensor_args.logit.padded_shape();
+    const uint64_t logit_nc_pages =
+        logit_padded_shape.volume() / (static_cast<uint64_t>(logit_padded_shape[-2]) * logit_padded_shape[-1]);
+    const uint64_t target_pages = target_shape.volume() / target_shape[-1];
+    TT_FATAL(
+        target_pages == logit_nc_pages,
+        "SelectTargetLogit: target must supply one page per logit batch-channel slice, got {} page(s) for {} "
+        "slice(s)",
+        target_pages,
+        logit_nc_pages);
 
     TT_FATAL(args.local_V > 0U, "SelectTargetLogit: local_V must be > 0");
 
@@ -107,11 +131,17 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
 }
 
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v / local_V / cluster_axis only affect runtime args (they're patched by
-    // override_runtime_arguments per coord); they don't change the compiled kernel binary.
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // first_v / local_V only affect runtime args (they're patched by override_runtime_arguments
+    // per coord). cluster_axis, however, determines the mesh-workload structure (one program per
+    // TP slab when set vs one per coordinate when unset) and the program-to-coordinate mapping,
+    // so it must be part of the hash. value_or keeps nullopt distinct from axis 0 (an optional
+    // hashes its payload directly, so nullopt and 0 would otherwise collide); the sentinel can
+    // never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SelectTargetLogitDeviceOperation>(
-        tensor_args.logit.dtype(), tensor_args.logit.logical_shape());
+        args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
+        tensor_args.logit.dtype(),
+        tensor_args.logit.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::select_target_logit::device

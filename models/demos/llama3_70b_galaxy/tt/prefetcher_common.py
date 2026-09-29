@@ -13,6 +13,18 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 global_tt_tensor_address = None
 
 
+def _mesh_is_blackhole(mesh_device):
+    """Best-effort Blackhole detection from the mesh device arch."""
+    try:
+        arch = mesh_device.arch()
+        return "blackhole" in str(arch).lower()
+    except Exception:
+        try:
+            return "blackhole" in ttnn.get_arch_name().lower()
+        except Exception:
+            return False
+
+
 class TtLlamaPrefetcherSetup(LightweightModule):
     def __init__(
         self,
@@ -37,8 +49,16 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.n_layers = n_layers
 
         ###### Set up GlobalCB ######
-        num_reader_cores = 12
-        num_global_cb_receivers = 2
+        # Blackhole galaxy has 8 DRAM banks and a 12x10 tensix grid (vs Wormhole's 12 banks / 7x10),
+        # so the prefetcher ring is 8 readers x 3 receivers (=24, same RING_SIZE) instead of 12 x 2.
+        is_blackhole = _mesh_is_blackhole(mesh_device)
+        self.is_blackhole = is_blackhole
+        if is_blackhole:
+            num_reader_cores = 8
+            num_global_cb_receivers = 3
+        else:
+            num_reader_cores = 12
+            num_global_cb_receivers = 2
 
         (
             self.active_sender_cores,
@@ -49,7 +69,9 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             self.worker_cores_range_set,
             self.mm_optimised_ring_cores,
             self.hop_grid,
-        ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test=False)
+        ) = get_core_ranges(
+            num_reader_cores, num_global_cb_receivers, is_functional_test=False, is_blackhole=is_blackhole
+        )
 
         ##### Set up the input tensors #####
         self.dram_core_range_set = ttnn.CoreRangeSet(
@@ -59,7 +81,8 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.active_sender_cores]
         )
 
-        self.all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+        _grid_max = ttnn.CoreCoord(11, 9) if is_blackhole else ttnn.CoreCoord(6, 9)
+        self.all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), _grid_max)])
 
         ##### Setup up sub devices #####
 
@@ -78,7 +101,17 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # This ensures that back to back matmuls (for eg. in MLP) can run
             # without stalling on the weight prefetch
             # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now
-            self.global_cb_size = 728 * 1088
+            # Blackhole: the global CB is top-anchored in L1 (its top sits just below the receiver-core
+            # semaphore buffers and it grows downward). At 728 tiles its base lands at ~389 KB on the
+            # prefetcher receiver cores, which leaves only ~389 KB of contiguous low L1 for the ring
+            # matmul's static CBs (`bmm_..._gathered`, which need ~444 KB) -> during full-model trace
+            # capture (global CB + every matmul program resident at once) the matmul CBs overlap the
+            # global CB by ~55 KB ("static circular buffers clash with L1 buffers on [1-0 - 6-9]").
+            # Trimming to 656 tiles raises the global CB base to ~457 KB, clearing the matmul CB region
+            # with margin across all receiver cores. Still >2x the largest single weight block, so the
+            # weight double-buffering the prefetcher relies on is preserved. WH (2 receivers, different
+            # L1 layout) keeps the original 728.
+            self.global_cb_size = (656 if self.is_blackhole else 728) * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
             # self.global_circular_buffer = ttnn.create_global_circular_buffer(
             #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size

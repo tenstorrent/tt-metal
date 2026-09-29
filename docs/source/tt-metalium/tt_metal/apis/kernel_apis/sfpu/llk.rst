@@ -136,20 +136,31 @@ depends on the target architecture. On Wormhole, Blackhole & Quasar this is
 a vector of 32 32-bit values. Users should be aware that vector length
 may change with future architectures.
 
+Floating point operations are not IEEE conformant, due to hardware
+restrictions. The following does not claim to be a complete list of
+differences.
+
+  * ``-0.0`` and ``+0.0`` are different.
+  * Comparisions involving NaNs do not behave as IEEE specifies.
+  * Conversions of NaNs to non-floating point type produce an
+    unspecified value.
+  * Other operations on NaNs produce a NaN result of unspecified sign.
+  * Some rounding is towards nearest, with ties rounding to the larger
+    magnitude result.
+
+Comparison behavior is described in more detail below.
+
 User Visible Constants
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:
+Constant registers are implemented as objects which can be referenced
+wherever a vector can be used. The following variables are defined:
 
   * ``vConstTileId``, counts by two through the vector elements: [0, 2, 4..62]
   * ``vConstFloatPrgm0``, ``vConstIntPrgm0``
   * ``vConstFloatPrgm1``, ``vConstIntPrgm1``
   * ``vConstFloatPrgm2``, ``vConstIntPrgm2``
-
-Note: previously the vector constants ``1.0f``, ``0.0f``, ``-1.0f``
-and ``0.8373f`` were also available as named constants. Just use the
-floating literals (possibly converted to ``vFloat``), the compiler
-knows what to do.
+  * ``vConstFloatPrgm3``, ``vConstIntPrgm3`` Quasar only
 
 User Visible Objects
 ^^^^^^^^^^^^^^^^^^^^
@@ -222,6 +233,53 @@ Will result in both ``a < b`` and ``a >= b`` being printed, but only the element
 
 ``v_and`` can be used inside any predicated conditional block (i.e., a ``v_block`` or a ``v_if``).
 
+Register Pressure
+^^^^^^^^^^^^^^^^^
+
+Register pressure refers to the number of live variables, which should
+be held in registers, at any point in the program.  The more live
+values, the higher the pressure. The SFPU only has 8 LRegs available
+to hold variables. Usually when more values are live the compiler will
+emit spill and fill code to store values on the program stack.  But
+this is not possible on the SFPU, as there is no simple path between the
+lregs and memory for the lregs. If this situation happens, the
+compiler will emit an error message of the form:
+
+.. code-block::
+
+   error: there are too few lregs to hold live values
+   note: try 'sfpi::lreg_pressure', or reduce the number of live variables
+   note: instruction is '1504: [sp:SI]=L0:XTT32SI       REG_DEAD L0:XTT32SI'
+
+The preceeding ``inlined from ...`` lines provide information about
+the context of the instruction (usually the instruction is embedded in
+the sfpi library, so somewhere further back in the include chain is
+the cause).
+
+As the note indicates, sfpi provides a type that can be used to tell
+the compiler register pressure is high, and therefore avoid
+optimizations that can increase it. It is not however a guaranteed
+solution.  To use this, place:
+
+.. code-block:: c++
+
+   sfpi::lreg_pressure _;
+
+in the scope you determine to have high register pressure. (The ``_``
+indicates an aribtrary name of no importance.) The pressure will be
+noted between the defined variable and the end of the scope.  If,
+within a high pressure area you determine the pressure drops, you may
+embed:
+
+.. code-block:: c++
+
+    sfpi::lreg_pressure _(false);
+
+which will reduce the pressure from that point until the end of its
+scope. ``lreg_pressure`` objects nest the pressure correctly, so one
+may be embedded within another's scope (most likely via function
+inlining).
+
 Data Type Details
 -----------------
 
@@ -245,8 +303,8 @@ If no ``mode`` override is provided, the data representation in
 tha Architecture. You may override that default with the ``mode``
 function, which optionally specifies a data representation, and an
 optional addr_mode operand. This may be specified on both loads and
-stores.  The following data representations and defaults are
-available:
+stores.  The following data representations and defaults, if
+applicable, are available:
 
   * FSrcB - (vFloat) dynamic float representation
   * F32 - 32-bit float
@@ -255,8 +313,10 @@ available:
   * I32 - (vInt, except Wormhole), 32-bit 2's complement integer
   * U32 - (vUInt), 32-bit unsigned integer
   * U16 - (vUInt16), 16-bit unsigned integer
+  * U8 - 8-bit unsigned integer, (Quasar only)
   * SM32 - (vSMag), 32-bit sign-magnitude integer
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
+  * SM8 - 8-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
   * LO16 - low 16 bits
   * HI16 - high 16 bits
@@ -265,9 +325,11 @@ On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
 ``vSMag`` to or from ``I32`` a conversion operation is inserted -- on
 Wormhole this is part of the load or store, on other architectures it
-is a separate operation. It is unspecified how 2's complement's most
-negative value converts to sign-magnitude.  Not all data
-representations are permitted for all types.
+is a separate operation. On all ISAs, loading or storing SM16 or SM8
+to or from vInt or related types will insert conversion operations.
+It is unspecified how 2's complement's most negative value converts to
+sign-magnitude.  Not all data representations are permitted for all
+types.
 
 The ``LO16`` layout transfers 16 bits to and from the low part of a
 ``vUInt`` or related type. The ``HI16`` layout reads 16 bits into the
@@ -391,19 +453,40 @@ The modifying variants, ``OP=``, are available.
 
 Conditional operators are provided -- ``==``, ``!=``, ``<``, ``>=``,
 ``>`` & ``<=``. These produce a ``vBool`` result, which may be used
-directly or indirectly in a ``v_if`` conditional. Both operands must
+directly in a ``v_if`` conditional. Both operands must
 be related vector types, or the second operand may be an appropriate
 scalar operator, or, for integral comparisons, may be a ``vMag`` type.
 
 ``vBool``s may be combined with ``&&``, ``||`` and ``!``
 operations. Note that these are not short-circuiting.
 
-Note: There is currently a compiler defect regarding signed and
-unsigned integer comparisons, where ordering comparisons are only
-correct when the two operands are within 2^31 of eachother. Also,
-floating point comparisons use the multiply-add unit, which means
-comparisons are not strictly conforming -- specifically infinities and
-signed zeroes behave differently.
+You may create predicate functions that return a ``vBool``, but they
+must be invoked inside a ``v_if`` (or ``v_elseif``) condition.  Do not
+store the return value and then interrogate it later.
+
+Float comparisons have the following properties:
+
+  * Equality compares compare bit-patterns, thus ``-0.0f`` and
+    ``+0.0f`` compare non-equal, as do all NaNs with different
+    representations.
+  * On Wormhole, ordering compares use a floating point subtract and
+    examine the resultant sign bit. Thus, due to rounding, ``-0.0``
+    compares less than or equal to ``+0.0`` and also greater than or
+    equal to ``+0.0`` even though it also compares as not equal. NaNs
+    might compare greater than or less than other values.
+  * On Blackhole and Quasar, a sign-magnitude comparison is used,
+    which provides a complete ordering of floating point values. That
+    ordering is ``+NaN > +Inf > +normal > +subnormal > +0.0 > -0.0
+    > -subnormal > -normal > -Inf > -NaN``.
+  * The IEEE feature that any comparison involving a NaN is false is
+    not supported.
+
+These features are determined by the hardware.
+
+Note: With the exception of signed integral compares on Quasar, there
+is currently a compiler defect regarding signed and unsigned integer
+comparisons, where ordering comparisons are only correct when the two
+operands are within 2^31 of each other.
 
 Scalar Values
 ^^^^^^^^^^^^^
@@ -493,21 +576,6 @@ Returns the absolute value of ''v''.
 
 Returns the count of leading (left-most) zeros of ''v''. ``LZMode``
 may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
-
-.. code-block:: c++
-
-   impl_::FloatInt round (vFloat v);
-
-Round v to nearest integer, ties round to nearest even. This returns a
-tuple that may be implicitly converted to either ``vFloat`` or
-``vInt``, if you want exactly one result object.  Or it may be used in
-a structured binding, if you want both:
-
-.. code-block:: c++
-
-   auto [f1, i1] = round (v);
-   vFloat f2 = round (v);
-   vInt i2 = round (v);
 
 .. code-block:: c++
 
@@ -628,28 +696,84 @@ Blackhole.
 
 .. code-block:: c++
 
-    vFloat lut(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
-    vFloat lut_sign(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
+    // Wormhole, Blackhole
+    vFloat lut(vFloat v, vLut8si si0, vLut8si si1, vLut8si si2,
+               LutSign  = LutSign::Retain);
+    vFloat lut(vFloat v, vLut16si si0, vLut16si si1, vLut16si si2,
+               LutSign  = LutSign::Retain);
+    vFloat lut(vFloat v, vLut32si si0, vLut32si si1, vLut132si si2,
+               LutSign  = LutSign::Retain);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    vFloat lut (vFloat v, vLut16ss s01, vLut16ii i01,
+                vLut16ss s23, vLut16ii i23,
+                vLut16ss s45, vLut16ii i45,
+                LutSign signedness = LutSign::Retain);
 
-``l0``, ``l1``, ``l2`` each contain 2 8-bit floating point values ``A`` and ``B`` with ``A`` in bits 15:8 and ``B`` in bits 7:0. The 8-bit format is:
+    // Quasar
+    LutCookie<LutMode::Fp8x3> lut_init (sLut8si si0, sLut8si si1, sLut8si si2);
+    LutCookie<LutMode::Fp16x3> lut_init (sLut16si si0, sLut16si si1, sLut16si si2);
+    LutCookie<LutMode::Fp32x3> lut_init (sLut32si si0, sLut32si si1, sLut32si si2);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    LutCookie<Mode> lut_init (sLut16ss s01, sLut16ii i01,
+                              sLut16ss s23, sLut16ii i23,
+                              sLut16ss s45, sLut16ii i45);
+    template <LutMode Mode = LutMode::Fp16x6_HWM3>
+    LutCookie<Mode> lut_init (sLut16si si0, sLut16si si1,
+                              sLut16si si2, sLut16si si3,
+                              sLut16si si4, sLut16si si5);
+    template <LutMode Mode>
+    vFloat lut (vFloat v, LutSign = LutSign::Retain);
+    template <LutMode Mode>
+    vFloat lut (vFloat v, LutCookie<Mode>, LutSign = LutSign::Retain);
 
-  * 0xFF represents the value 0, otherwise
-  * bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa
+Compute a multiply-add driven by a 3 or 6-entry lookup table.  Each table entry
+consists of a slope (``s``) and an intercept (``i``). The absolute value of the
+incoming `v` determines which lookup table entry to use.
 
-Floating point representations of ``A`` and ``B`` (19-bit on GS and 32-bit on WH) are constructed by:
+The three-entry tables use the first entry for values <1.0, otherwise
+the second entry for <2.0 and the third entry otherwise. The six entry
+tables use <0.5, <1.0, <1.5, <2.0 as cutoffs for the first 4 entries
+and then either <3.0 or <4.0 for the 5th entry, otherwise the 6th
+entry is used. ``LutMode::Fp16x6_HWM3`` uses 3.0 and
+``LutMode::Fp16x6_HWM4`` uses 4.0.
 
-  * Using the sign bit
-  * Generating an 8-bit exponent as (127 – exponent_extender)
-  * Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s
+The table entries themselves are created from pairs floating point or
+integer values representing either the slope and intercept, a pair of
+slopes or a pair of intercepts. Both scalar (``s``) and vector (``v``)
+variants are available. Floating point values are converted after
+rounding to nearest representable value, with ties rounding away from
+zero. Integer values are reinterpretted directly as the encoded
+coefficients. (This arrangement is determined by the underlying
+instruction, ``sfplut`` or ``sfplut32fp``.)
 
-``A`` and ``B`` are selected from one of ``l0``, ``l1`` or ``l2`` based on the value in ``v`` as follows:
+The optional ``LutSign`` operand determines whether the result sign is
+copied from the source value (``LutSign::Retain``), or is that
+determined by the computation (``LutSign::Update``).
 
-  * ``l0`` when ``v`` < 0
-  * ``l1`` when ``v`` == 0
-  * ``l2`` when ``v`` > 0
+The Quasar API uses an initialization and evaluation scheme, which
+matches how the hardware holds the constant table. It makes more use
+of the ``LutMode`` enumeration, whose values are:
 
-.. XXXX is this backwards?
-.. Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
+  * ``Fp8x3``       // 3 entry 8-bit constants
+  * ``Fp16x3``      // 3 entry 16-bit constants
+  * ``Fp32x3``      // 3 entry 32-bit constants
+  * ``Fp16x6_HWM3`` // 6 entry 16-bit constants cutoff 3.0
+  * ``Fp16x6_HWM4`` // 6 entry 16-bit constants cutoff 4.0
+
+The Quasar 16-bit 6-entry initialization may be done in two forms,
+either passing ``ss`` and ``ii`` pairs as with the Blackhole and
+Wormhole scheme, or passing a sequence of ``si`` values, which more
+closely matches the table format and the 3-entry routines.  The
+intialization routines return an empty-class cookie, whose only use is
+to convey type information implicitly to the ``lut`` evaluation
+routine.  It may be ignored, with the loss of consistency checking, if
+one uses the cookieless evaluator.
+
+Note that the 8- and 16-bit formats use a bespoke representation, and
+the 8 bit format in particular has a range of (-2.0, +2.0).
+
+On Quasar, use of these routines conflicts with use of the ``vConst``
+constants.
 
 .. code-block:: c++
 
@@ -702,15 +826,28 @@ For example:
     l_reg[LRegs::LReg1] = x;         // this is necessary at the end of the function
                                      // to preserve the value in LReg1 (if desired)
 
-You may mark an lreg as used in code that the compiler cannot examine
-with the ``used`` function:
+Mark an LReg as occupied in a region the compiler cannot examine with
+``used()``.  Call it before a raw ``TTI_*`` / ``TT_*`` sequence so the
+compiler will not keep an SFPI value live in that LReg, and again after
+so it will not assume the LReg still holds an SFPI value:
 
 .. code-block:: c++
 
-    l_reg[LRegs::LReg0].used();
-    // your code here
+    vFloat x = dst_reg[0];
+    dst_reg[0] = x + 1.0f;
 
-The compiler will not keep a value live in  lreg0 across your code.
+    l_reg[LRegs::LReg0].used();   // LReg0 is not live going in
+    TTI_SFPLOAD(...);             // raw instruction writes LReg0
+    TT_SFPSTORE(...);
+    l_reg[LRegs::LReg0].used();   // LReg0 contents are unknown going out
+
+    vFloat y = dst_reg[1];
+    dst_reg[1] = y;
+
+Without ``used()``, mixing SFPI with those macros is undefined (see
+Mixing SFPI with ``TTI`` / ``TT`` below).  Prefer expressing the
+sequence in SFPI; if that is not possible, write the whole region in
+``TTI``/``TT``, or mark every occupied LReg as shown above.
 
 Miscellaneous
 =============
@@ -797,7 +934,7 @@ vector to memory will result in an error similar to the following:
 .. code-block:: c++
 
     tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
-      792 |     v = (initialized) ? __builtin_rvtt_sfpassign_lv(v, in) : in;
+      792 |     v = __builtin_rvtt_sfpassign_lv (v, in);
           |       ^
     /tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
 
@@ -808,6 +945,33 @@ Function Calls
 There is no ABI and none of the vector types can be passed on the stack.
 Therefore, all function calls must be inlined.  To ensure this use
 ``sfpi_inline``, which is defined to ``__attribute__((always_inline))`` on GCC.
+
+Return Inside ``v_if``
+----------------------
+
+Do not ``return`` inside a ``v_if``.  ``return`` is a C++ statement lowered to
+scalar, non-predicated control flow: it exits the whole function for every
+vector lane and skips the matching ``v_endif`` (unbalanced CC stack).  There
+is no per-lane early out.  Handle special cases with predicated assignment
+instead (``v_if (cond) { result = x; } v_endif;``) and let later stores
+overwrite.  A scalar ``if`` outside a vector-predicated block can still
+``return``.
+
+Mixing SFPI with ``TTI`` / ``TT``
+---------------------------------
+
+Do not mix SFPI vector code (``vFloat``, ``v_if``, ``dst_reg``) with raw
+``TTI_*`` / ``TT_*`` instruction macros in the same live region.  The
+compiler allocates LRegs and manages the CC stack; those macros write
+numbered LRegs and CC that the compiler cannot see.  The result is
+undefined: live SFPI values can be overwritten, the CC stack can become
+unbalanced, and the optimizer can reorder the instruction stream.
+
+When a sequence cannot be expressed in SFPI, implement that region
+entirely with ``TTI``/``TT``.  If SFPI and a raw sequence must appear in
+the same function, mark each occupied LReg with ``l_reg[n].used()`` so
+the compiler will not keep a value live across the raw sequence (see
+Assigning LRegs above).
 
 Register Spilling
 -----------------
@@ -832,6 +996,8 @@ Limitations
 -----------
 
   * Forgetting a ``v_endif`` results in mismatched {} error which can be confusing (however, catches the case where a ``v_endif`` is missing!)
+  * ``return`` inside a ``v_if`` is not a per-lane early out; it exits the whole function and skips ``v_endif``
+  * Mixing SFPI with raw ``TTI_*`` / ``TT_*`` macros in the same live region is undefined (compiler-allocated LRegs and CC vs numbered registers the compiler cannot see)
   * In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code
   * Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort
   * The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.

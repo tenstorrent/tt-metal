@@ -39,6 +39,10 @@ PERF_WARMUP_ITERS = 10
 PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 1.0
+PRODUCTION_WIDTH_PREFILL_MAX_SEQ_LEN = 128
+PRODUCTION_WIDTH_PREFILL_SKIP_REASON = (
+    f"Production-width prefill fixture is limited to seq_len <= {PRODUCTION_WIDTH_PREFILL_MAX_SEQ_LEN}"
+)
 DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 75.485, "op_to_op": None},
     ("prefill", 128): {"kernel": 971.716, "op_to_op": None},
@@ -65,9 +69,9 @@ def ds_reduce_scatter_post_ff2_reference(
     1. Sums all partial products element-wise (each is [..., dim])
     2. Scatters the result: each device gets [..., dim / mesh_width]
 
-    For the reference, we need to match the first device's output:
+    For the reference, match the first row/column device's output:
     - Sum: x[..., :dim] + x[..., dim:2*dim] + ... = summed_result [..., dim]
-    - First device gets: summed_result[..., :dim/mesh_width]
+    - First column gets: summed_result[..., :dim/mesh_width]
 
     Args:
         x: Input tensor of shape [num_layers, seq_len, batch, dim * mesh_width] for decode
@@ -77,27 +81,93 @@ def ds_reduce_scatter_post_ff2_reference(
         mode: "decode" or "prefill" (unused but kept for API consistency).
 
     Returns:
-        Output tensor representing what the first device has after reduce_scatter.
-        Shape is [num_layers, seq_len, batch, dim / mesh_width] for decode
-        or [num_layers, batch, seq_len, dim / mesh_width] for prefill.
+        Output tensor for the row-0, column-0 device after reduce-scatter.
+        Shape is [1, seq_len, batch, dim / mesh_width] for decode
+        or [1, batch, seq_len, dim / mesh_width] for prefill.
     """
-    # Get the dimensions
-    last_dim = x.shape[-1]
-    per_device_input_dim = last_dim // mesh_width  # dim - what each device has as input
-    per_device_output_dim = per_device_input_dim // mesh_width  # dim / mesh_width - output per device
+    return _build_reduce_scatter_post_ff2_reference_shards(x, mesh_width)[0]
 
-    # Reshape to separate device contributions: [..., mesh_width, per_device_input_dim]
-    shape_prefix = x.shape[:-1]
-    x_reshaped = x.reshape(*shape_prefix, mesh_width, per_device_input_dim)
 
-    # Sum across devices (dim=-2) to get the reduced result: [..., per_device_input_dim]
-    x_reduced = x_reshaped.sum(dim=-2)
+def _build_reduce_scatter_post_ff2_reference_shards(torch_input: torch.Tensor, mesh_width: int) -> list[torch.Tensor]:
+    """Return expected reduce-scatter output for every row-major mesh shard."""
+    last_dim = torch_input.shape[-1]
+    per_device_input_dim = last_dim // mesh_width
+    per_device_output_dim = per_device_input_dim // mesh_width
 
-    # Scatter: each device gets 1/mesh_width of the reduced result
-    # First device gets the first chunk: [..., per_device_output_dim]
-    x_scattered = x_reduced[..., :per_device_output_dim]
+    assert last_dim % mesh_width == 0, f"Input width {last_dim} must divide evenly across {mesh_width} columns"
+    assert (
+        per_device_input_dim % mesh_width == 0
+    ), f"Reduced width {per_device_input_dim} must scatter evenly across {mesh_width} columns"
 
-    return x_scattered
+    # Production FF2 emits one full hidden-size partial product on each mesh column.
+    # Reduce-scatter sums those column partials per row, then scatters the reduced
+    # hidden dimension across the same columns.
+    shape_prefix = torch_input.shape[:-1]
+    reduced = torch_input.reshape(*shape_prefix, mesh_width, per_device_input_dim).sum(dim=-2)
+
+    ref_shards = []
+    for row_idx in range(torch_input.shape[0]):
+        row_reduced = reduced[row_idx : row_idx + 1]
+        for col_idx in range(mesh_width):
+            col_start = col_idx * per_device_output_dim
+            col_end = col_start + per_device_output_dim
+            ref_shards.append(row_reduced[..., col_start:col_end])
+
+    return ref_shards
+
+
+def _pair_output_shards_with_references(
+    output_tensors: list,
+    mesh_coords: list,
+    ref_outputs: list[torch.Tensor],
+    mesh_width: int,
+    is_local=None,
+) -> list[tuple[object, object, torch.Tensor]]:
+    """Pair rank-local output tensors with references using their global mesh coordinates."""
+    local_coords = mesh_coords if is_local is None else [coord for coord in mesh_coords if is_local(coord)]
+    assert len(output_tensors) == len(local_coords), (
+        f"Expected {len(local_coords)} local output shards from {len(mesh_coords)} mesh coordinates, "
+        f"got {len(output_tensors)}"
+    )
+
+    output_shards = []
+    for coord, output_tensor in zip(local_coords, output_tensors):
+        row_idx, col_idx = tuple(coord)
+        ref_idx = row_idx * mesh_width + col_idx
+        assert ref_idx < len(ref_outputs), (
+            f"Reference shard index {ref_idx} for mesh coordinate ({row_idx}, {col_idx}) "
+            f"exceeds {len(ref_outputs)} available shards"
+        )
+        output_shards.append((coord, output_tensor, ref_outputs[ref_idx]))
+
+    return output_shards
+
+
+def test_pair_output_shards_with_references_uses_global_coordinates_for_rank_local_outputs():
+    mesh_width = 4
+    mesh_coords = [ttnn.MeshCoordinate(row, col) for row in range(4) for col in range(mesh_width)]
+    ref_outputs = [torch.tensor(row * mesh_width + col) for row in range(4) for col in range(mesh_width)]
+    local_coords = {(2, 1), (2, 2), (3, 1), (3, 2)}
+    output_tensors = []
+    for coord in mesh_coords:
+        row, col = tuple(coord)
+        if (row, col) in local_coords:
+            output_tensors.append(f"output-{row}-{col}")
+
+    output_shards = _pair_output_shards_with_references(
+        output_tensors,
+        mesh_coords,
+        ref_outputs,
+        mesh_width,
+        is_local=lambda coord: tuple(coord) in local_coords,
+    )
+
+    assert [(tuple(coord), output, reference.item()) for coord, output, reference in output_shards] == [
+        ((2, 1), "output-2-1", 9),
+        ((2, 2), "output-2-2", 10),
+        ((3, 1), "output-3-1", 13),
+        ((3, 2), "output-3-2", 14),
+    ]
 
 
 def ds_reduce_scatter_post_ff2_ttnn(
@@ -169,7 +239,7 @@ def _run_ds_reduce_scatter_post_ff2_test(
     mesh_device: ttnn.MeshDevice,
     run_config: dict,
     tt_input: ttnn.Tensor,
-    ref_output: torch.Tensor,
+    ref_outputs: list[torch.Tensor],
     expected_pcc: float,
     expected_atol: float,
     expected_rtol: float,
@@ -187,13 +257,30 @@ def _run_ds_reduce_scatter_post_ff2_test(
 
     tt_output = ds_reduce_scatter_post_ff2_ttnn(tt_input, run_config, ccl, mode)
 
-    # Get output from the first device only for comparison with reference
-    # (similar to how all_gather test does it)
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
-
-    pcc_value, max_abs_error = compare_with_reference(
-        tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol, strict_assert=False
+    pcc_value = 1.0
+    max_abs_error = 0.0
+    output_tensors = ttnn.get_device_tensors(tt_output)
+    mesh_coords = list(tt_output.tensor_topology().mesh_coords())
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    output_shards = _pair_output_shards_with_references(
+        output_tensors,
+        mesh_coords,
+        ref_outputs,
+        mesh_device.shape[1],
+        is_local=view.is_local if view is not None else None,
     )
+    for mesh_coord, output_tensor, ref_output in output_shards:
+        row_idx, col_idx = tuple(mesh_coord)
+        tt_output_torch = ttnn.to_torch(output_tensor)
+
+        try:
+            shard_pcc, shard_max_abs_error = compare_with_reference(
+                tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol, strict_assert=False
+            )
+        except AssertionError as e:
+            raise AssertionError(f"Reduce-scatter output shard mismatch at mesh row {row_idx}, column {col_idx}") from e
+        pcc_value = min(pcc_value, shard_pcc)
+        max_abs_error = max(max_abs_error, shard_max_abs_error)
 
     if os.getenv(DEVICE_PERF_ENV_VAR) is None:
         perf_profiler = BenchmarkProfiler()
@@ -349,17 +436,18 @@ def _build_reduce_scatter_inputs(
     mesh_width = mesh_device.shape[1]
     dim = hf_config.hidden_size
 
-    # Create input tensor with shape [num_layers, ..., dim]
-    # This will be sharded: each device gets [1, ..., dim/mesh_width] after sharding on dims=(0, -1)
+    # Create input tensor with shape [num_layers, ..., dim * mesh_width].
+    # This matches the post-FF2 production path: every column device owns a
+    # full-width partial product of size `dim`, and reduce-scatter sums those
+    # partial products before scattering the reduced result across columns.
+    input_width = dim * mesh_width
     if mode == "decode":
-        torch_input = torch.randn(num_layers, seq_len, batch_size, dim, dtype=torch.bfloat16)
+        torch_input = torch.randn(num_layers, seq_len, batch_size, input_width, dtype=torch.bfloat16)
     else:
-        torch_input = torch.randn(num_layers, batch_size, seq_len, dim, dtype=torch.bfloat16)
+        torch_input = torch.randn(num_layers, batch_size, seq_len, input_width, dtype=torch.bfloat16)
 
-    # Shard across mesh devices with dims=(0, -1)
-    # Each device (row=r, col=c) gets portion:
-    # - Layer: layers[r]
-    # - Dim: dim[c * dim/mesh_width : (c+1) * dim/mesh_width]
+    # Shard across mesh devices with dims=(0, -1). Each device row gets one
+    # layer, and each device column gets one full hidden-size FF2 partial.
     if mode == "decode":
         # The input to reduce_scatter is the w2 output, which is L1 WIDTH_SHARDED with width=dim.
         # output_num_cores is derived the same way as in MLP.decode_model_config.
@@ -382,21 +470,9 @@ def _build_reduce_scatter_inputs(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    per_device_dim = dim // mesh_width
-    per_device_output_dim = per_device_dim // mesh_width
+    ref_outputs = _build_reduce_scatter_post_ff2_reference_shards(torch_input, mesh_width)
 
-    # Get first layer and reshape to separate device contributions
-    first_layer = torch_input[:1]  # [1, seq, batch, dim]
-    shape_prefix = first_layer.shape[:-1]  # [1, seq, batch]
-    first_layer_reshaped = first_layer.reshape(*shape_prefix, mesh_width, per_device_dim)
-
-    # Sum across devices (simulate reduce)
-    reduced = first_layer_reshaped.sum(dim=-2)  # [1, seq, batch, per_device_dim]
-
-    # Scatter: first device gets first chunk
-    ref_output = reduced[..., :per_device_output_dim]  # [1, seq, batch, per_device_output_dim]
-
-    return run_config, tt_input, ref_output, batch_size
+    return run_config, tt_input, ref_outputs, batch_size
 
 
 @pytest.mark.ci_fused_op
@@ -414,7 +490,7 @@ def _build_reduce_scatter_inputs(
             0.2,
             0.2,
             0.0,
-            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
         ),
         pytest.param(
             "prefill",
@@ -423,7 +499,7 @@ def _build_reduce_scatter_inputs(
             0.2,
             0.2,
             0.0,
-            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
         ),
         pytest.param(
             "prefill",
@@ -432,7 +508,7 @@ def _build_reduce_scatter_inputs(
             0.2,
             0.2,
             0.0,
-            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
         ),
         pytest.param(
             "prefill",
@@ -441,7 +517,7 @@ def _build_reduce_scatter_inputs(
             0.2,
             0.2,
             0.0,
-            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
         ),
     ],
 )
@@ -487,7 +563,7 @@ def test_ds_reduce_scatter_post_ff2(
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
 
-    run_config, tt_input, ref_output, batch_size = _build_reduce_scatter_inputs(
+    run_config, tt_input, ref_outputs, batch_size = _build_reduce_scatter_inputs(
         mesh_device,
         hf_config,
         cache_path,
@@ -501,7 +577,7 @@ def test_ds_reduce_scatter_post_ff2(
         mesh_device,
         run_config,
         tt_input,
-        ref_output,
+        ref_outputs,
         expected_pcc,
         expected_atol,
         expected_rtol,
@@ -521,10 +597,26 @@ def test_ds_reduce_scatter_post_ff2(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
-        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
-        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
-        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param(
+            "prefill",
+            1024,
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
+        ),
+        pytest.param(
+            "prefill",
+            8192,
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            marks=pytest.mark.skip(reason=PRODUCTION_WIDTH_PREFILL_SKIP_REASON),
+        ),
     ],
 )
 def test_ds_reduce_scatter_post_ff2_device_perf(mode, seq_len):

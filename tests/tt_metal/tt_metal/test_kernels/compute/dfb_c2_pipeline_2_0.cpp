@@ -36,7 +36,8 @@ void kernel_main() {
     // tile pack_tile(0, dfb_self.get_id()) reconfigures the destination —
     // the init still needs to point at the kernel's outermost output.
     // Matches production pattern (eltwise_sfpu.cpp / eltwise_binary.cpp).
-    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
+    copy_init(dfb_in.get_id());
     relu_tile_init();
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

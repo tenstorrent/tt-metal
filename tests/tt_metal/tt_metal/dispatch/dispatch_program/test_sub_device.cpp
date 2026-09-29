@@ -46,6 +46,7 @@
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -58,10 +59,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     SubDevice sub_device_1(std::array{sharded_cores_1});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+    DeviceAddr l1_max_size = mesh_device->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
-    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 2);
+    // Program-local CBs are DRAM-aligned from persistent high-water. Leave three
+    // local-L1 slots so a 1x CB fits and a 4x CB overlaps the top-down global buffer.
+    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 3);
     ShardSpecBuffer global_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
 
@@ -85,7 +88,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
 
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
-    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
+    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
@@ -104,6 +107,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(sub_device_manager_1);
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {
@@ -165,17 +170,18 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     std::vector<uint32_t> output_1;
     distributed::ReadShard(device->mesh_command_queue(), output_1, buffer_1, zero_coord, true);
     EXPECT_EQ(input_1, output_1);
+    const auto device_id = device->get_device_ids()[0];
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            device->get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
+            device_id, physical_core, buffer_1->address(), page_size_1);
         EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
         input_1_it += page_size_1 / sizeof(uint32_t);
     }
     auto sem_addr = global_semaphore.address();
     auto physical_syncer_core = device->worker_core_from_logical_core(syncer_core);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        device->get_devices()[0]->id(), physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
+        device_id, physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
 
     // Full synchronization
     device->reset_sub_device_stall_group();
@@ -461,8 +467,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 
             distributed::Synchronize(*mesh_device, std::nullopt);
             std::vector<uint32_t> kernel_result;
-            tt_metal::detail::ReadFromDeviceL1(
-                mesh_device->get_devices()[0], core, l1_unreserved_base, sizeof(int), kernel_result);
+            slow_dispatch::ReadFromL1(*mesh_device, core, l1_unreserved_base, sizeof(int), kernel_result);
             EXPECT_EQ(kernel_result[0], unique_runtime_args[0] + common_runtime_args[0]);
         }
     }
