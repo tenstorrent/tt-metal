@@ -543,6 +543,17 @@ All verified by reading the code; none implemented.
    the sprint-6 bf16 default (9.787 / 10.835 s): -15.7 % denoise. The demo CLI on the same tip
    (81 f, seed 42, the perf-test prompt): warm traced 10.85 s bf16, **9.32 s** preset.
 
+   *Visual verdict (operator, 2026-09-29): bf16 stays the default; the preset stays opt-in.*
+   Side-by-side `/home/ttuser/wan5b_s6_ab_bf16_left_bf8lofi_right.mp4` (bf16 left). What the
+   numbers say about the two clips: they are **different samples, not a degraded copy** --
+   PSNR 17.9 dB / SSIM 0.78 between them (a trajectory divergence over 80 forwards), while
+   per-clip sharpness is identical (Laplacian variance 310.6 vs 309.4, high-frequency energy
+   share 41.12 vs 41.11 %). The operator saw a slight quality loss on this sample (glove logo,
+   face detail), which is consistent with "different sample" rather than systematic softening.
+   Judge the preset like a seed change with 2.4x the per-step error (relative RMSE 4.1 % vs
+   1.7 % against fp32). `all_weights_bf8` (bf8 weights, HiFi2 everywhere, PCC 99.9885 %, ~-3 %)
+   is the untried middle rung if a default change is wanted later.
+
    `all_bf8_lofi` is the sprint-4 result: -15.5% end to end at 720p against the sprint-3 tip, a
    0.024 pp PCC cost and a CLIP mean *above* bf16 (which says nothing about quality, section 8).
    The 121 f previews `/home/ttuser/wan5b_t2v_720p_bf8lofi_{first,mid,last}.png` and the mp4
