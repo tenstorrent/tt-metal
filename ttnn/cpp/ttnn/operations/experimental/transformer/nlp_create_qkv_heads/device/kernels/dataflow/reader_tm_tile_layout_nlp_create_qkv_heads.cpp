@@ -49,6 +49,31 @@ void kernel_main() {
     const uint32_t tile_bytes_qv = get_tile_size(cb_id_qv);
     const uint32_t tile_bytes_k = get_tile_size(cb_id_k);
 
+#ifdef QKV_HSPLIT
+    // head_split (factory define QKV_HSPLIT): one work unit = (global tile row R, head hh of the Q|K|V heads); reads
+    // the head_tiles tiles of that head at row R (batched transfers), the writer routes them to q / k / v.
+    {
+        constexpr uint32_t row_tiles = q_num_tiles + 2 * kv_num_tiles;
+        constexpr uint32_t hall = row_tiles / head_tiles;
+        constexpr uint32_t transfer_tiles = head_tiles % 4 == 0 ? 4 : (head_tiles % 2 == 0 ? 2 : 1);
+        for (uint32_t u = in0_tensor_tile_id; u < in0_tensor_tile_id + num_blocks; ++u) {
+            const uint32_t R = u / hall;
+            const uint32_t hh = u - R * hall;
+            uint32_t source = R * row_tiles + hh * head_tiles;
+            for (uint32_t tile = 0; tile < head_tiles; tile += transfer_tiles) {
+                cb_qv.reserve_back(transfer_tiles);
+                uint32_t destination = cb_qv.get_write_ptr();
+                for (uint32_t j = 0; j < transfer_tiles; ++j) {
+                    noc.async_read(s0, CoreLocalMem<uint32_t>(destination), tile_bytes_qv, {.page_id = source++}, {});
+                    destination += tile_bytes_qv;
+                }
+                noc.async_read_barrier();
+                cb_qv.push_back(transfer_tiles);
+            }
+        }
+        return;
+    }
+#endif
     if constexpr (head_parallel) {
         constexpr uint32_t heads = q_num_tiles / head_tiles;
         constexpr uint32_t transfer_tiles = head_tiles % 4 == 0 ? 4 : (head_tiles % 2 == 0 ? 2 : 1);

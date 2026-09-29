@@ -32,6 +32,11 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
         divisible by ``2 * ttnn.TILE_SIZE`` (typically ``TILE_SIZE`` is 32, so supported values are
         ``32`` or multiples of ``64``).
 
+        Partial rotary (prefill mode, interleaved input and output): ``cos_cache`` / ``sin_cache`` may be
+        narrower than ``input_tensor`` (rotary_dim < head_dim, a multiple of ``2 * ttnn.TILE_SIZE``). The first
+        rotary_dim channels are then rotated (rotate_half within them) and the remaining channels are passed
+        through unchanged, i.e. ``concat([rope(x[..., :rotary_dim]), x[..., rotary_dim:]], -1)``.
+
         Args:
             input_tensor (ttnn.Tensor): Input tensor to apply rotation to (on device)
             cos_cache (ttnn.Tensor): Precomputed cosine values (on device)

@@ -59,6 +59,39 @@ void kernel_main() {
     uint32_t v_out_tensor_current_tile_id;  // need this to update v_out_tensor_tile_id
     uint32_t out_tensor_current_tile_id_along_c;
 
+#ifdef QKV_HSPLIT
+    // head_split (factory define QKV_HSPLIT): unit u = (global tile row R, head hh of Q|K|V); see the reader.
+    {
+        constexpr uint32_t hall = q_out_c + 2 * kv_out_c;
+        constexpr uint32_t transfer_tiles = q_out_w_tiles % 4 == 0 ? 4 : (q_out_w_tiles % 2 == 0 ? 2 : 1);
+        auto write_unit = [&](const auto& acc, uint32_t dst) {
+            for (uint32_t tile = 0; tile < q_out_w_tiles; tile += transfer_tiles) {
+                cb_qv.wait_front(transfer_tiles);
+                uint32_t source = cb_qv.get_read_ptr();
+                for (uint32_t j = 0; j < transfer_tiles; ++j) {
+                    noc.async_write(CoreLocalMem<uint32_t>(source), acc, tile_bytes_qv, {}, {.page_id = dst++});
+                    source += tile_bytes_qv;
+                }
+                noc.async_write_barrier();
+                cb_qv.pop_front(transfer_tiles);
+            }
+        };
+        for (uint32_t u = q_out_tensor_tile_id; u < q_out_tensor_tile_id + num_blocks; ++u) {
+            const uint32_t R = u / hall;
+            const uint32_t hh = u - R * hall;
+            const uint32_t b = R / q_out_h_tiles;
+            const uint32_t rr = R - b * q_out_h_tiles;
+            if (hh < q_out_c) {
+                write_unit(sq, b * q_out_c * q_out_HtWt + hh * q_out_HtWt + rr * q_out_w_tiles);
+            } else if (hh < q_out_c + kv_out_c) {
+                write_unit(sk, b * kv_out_c * q_out_HtWt + (hh - q_out_c) * q_out_HtWt + rr * q_out_w_tiles);
+            } else {
+                write_unit(sv, b * kv_out_c * q_out_HtWt + (hh - q_out_c - kv_out_c) * q_out_HtWt + rr * q_out_w_tiles);
+            }
+        }
+        return;
+    }
+#endif
     if constexpr (head_parallel) {
         constexpr uint32_t transfer_tiles = q_out_w_tiles % 4 == 0 ? 4 : (q_out_w_tiles % 2 == 0 ? 2 : 1);
         for (uint32_t tile = 0; tile < num_blocks * q_out_w_tiles; tile += transfer_tiles) {

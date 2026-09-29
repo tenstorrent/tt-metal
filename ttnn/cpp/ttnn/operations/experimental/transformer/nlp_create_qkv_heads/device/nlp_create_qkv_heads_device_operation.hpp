@@ -26,6 +26,9 @@ struct NlpCreateHeadsDeviceOperation {
         bool transpose_k_heads;
         bool kv_tied;
         MemoryConfig output_mem_config;
+        // Interleaved, single fused Q|K|V input, no K transpose / kv_tied, fewer tile rows than cores: one work unit
+        // per (tile row, head) over all Q + 2 KV heads instead of per tile row. Same output. Default off.
+        bool head_split = false;
     };
 
     struct tensor_args_t {
@@ -98,5 +101,6 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     bool transpose_k_heads,
     bool kv_tied = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt,
+    bool head_split = false);
 }  // namespace ttnn::prim

@@ -50,7 +50,20 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin shapes must match");
-    TT_FATAL(cos.padded_shape()[0] == 1 && cos.padded_shape()[-1] == X, "Cos dims must match input dims");
+    // Partial rotary: in prefill mode with interleaved input and output, cos/sin may be narrower than the input (a
+    // multiple of 64 wide): the first cos-width channels are rotated and the rest are passed through unchanged
+    // (partial-rotary kernels). Otherwise cos/sin must be as wide as the input.
+    const uint32_t rotary_width = cos.padded_shape()[-1];
+    const bool partial_ok = !args.is_decode_mode && !input_tensor.is_sharded() &&
+                            !args.output_mem_config.is_sharded() && rotary_width < X &&
+                            rotary_width % (TILE_WIDTH * 2) == 0;
+    TT_FATAL(
+        cos.padded_shape()[0] == 1 && (rotary_width == X || partial_ok),
+        "Cos dims must match input dims (or, in prefill mode with interleaved input and output, be narrower than the "
+        "input and a multiple of {}). Input width: {}, cos width: {}.",
+        TILE_WIDTH * 2,
+        X,
+        rotary_width);
 
     if (args.is_decode_mode) {
         // Decode mode: input [1, batch, num_heads, head_dim], cos/sin [1, batch, 1, head_dim]

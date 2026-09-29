@@ -19,11 +19,15 @@ void bind_nlp_concat_heads(nb::module_& mod) {
         mod,
         R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
+            ``head_split=True`` (interleaved input and output, num_heads > 1, fewer tile rows than cores) splits the
+            work per (tile row, head) instead of per tile row so short sequences use the whole grid; the output is the
+            same, otherwise it is ignored. Defaults to False.
         )doc",
         &ttnn::experimental::nlp_concat_heads,
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("head_split") = false);
 }
 
 }  // namespace ttnn::operations::experimental::nlp_concat_heads::detail

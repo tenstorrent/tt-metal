@@ -306,7 +306,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     bool transpose_k_heads,
     bool kv_tied,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors,
+    bool head_split) {
     using OperationType = ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -315,7 +316,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
         .head_dim = head_dim,
         .transpose_k_heads = transpose_k_heads,
         .kv_tied = kv_tied,
-        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())};
+        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config()),
+        .head_split = head_split};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_q = input_tensor_q,
         .input_tensor_kv = input_tensor_kv,

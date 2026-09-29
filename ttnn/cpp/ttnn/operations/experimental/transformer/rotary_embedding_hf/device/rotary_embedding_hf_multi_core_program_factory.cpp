@@ -4,6 +4,7 @@
 
 #include "rotary_embedding_hf_multi_core_program_factory.hpp"
 #include <bit>
+#include <string>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -349,6 +350,13 @@ ProgramDescriptor create_multi_tile_descriptor(
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    // Partial rotary (validated in the device op: prefill, interleaved): cos/sin narrower than the input -> rotate the
+    // first cos-width tiles of every row, pass the rest through (partial-rotary kernels). Wt is then the rotary width.
+    const uint32_t Wt_in = Wt;
+    const bool partial = cos.padded_shape()[-1] / TILE_WIDTH < Wt_in;
+    if (partial) {
+        Wt = cos.padded_shape()[-1] / TILE_WIDTH;
+    }
     uint32_t half_Wt = Wt / 2;
     uint32_t HtWt = Ht * Wt;
 
@@ -499,6 +507,19 @@ ProgramDescriptor create_multi_tile_descriptor(
         .buffer = out_sharded ? output.buffer() : nullptr,
     });
 
+    constexpr uint8_t pass_cb_index = tt::CBIndex::c_5;
+    if (partial) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * (Wt_in - Wt) * input_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = pass_cb_index,
+                .data_format = input_cb_data_format,
+                .page_size = input_single_tile_size,
+            }}},
+        });
+    }
+
     const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     auto* src_buffer = input.buffer();
@@ -526,14 +547,25 @@ ProgramDescriptor create_multi_tile_descriptor(
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines writer_kernel_defines;
+    KernelDescriptor::Defines reader_kernel_defines;
     if (out_sharded) {
         writer_kernel_defines.emplace_back("OUT_SHARDED", "1");
+    }
+    if (partial) {
+        for (auto* d : {&reader_kernel_defines, &writer_kernel_defines}) {
+            d->emplace_back("ROT_WT_IN", std::to_string(Wt_in));
+            d->emplace_back("ROT_WT", std::to_string(Wt));
+            d->emplace_back("PASS_CB", std::to_string(static_cast<uint32_t>(pass_cb_index)));
+        }
     }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
-        "reader_rotary_embedding_hf_interleaved.cpp";
+        partial ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+                  "reader_rotary_embedding_hf_partial_interleaved.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+                  "reader_rotary_embedding_hf_interleaved.cpp";
+    reader_desc.defines = std::move(reader_kernel_defines);
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -541,8 +573,10 @@ ProgramDescriptor create_multi_tile_descriptor(
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
-        "writer_rotary_embedding_hf_interleaved.cpp";
+        partial ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+                  "writer_rotary_embedding_hf_partial_interleaved.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+                  "writer_rotary_embedding_hf_interleaved.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
@@ -600,7 +634,22 @@ ProgramDescriptor create_multi_tile_descriptor(
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
+    for (uint32_t i = 0, rows_written = 0; partial && i < num_cores; ++i) {
+        const CoreCoord& core = cores.at(i);
+        uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
+        reader_desc.emplace_runtime_args(
+            core,
+            {src_buffer,
+             cos_buffer,
+             sin_buffer,
+             num_rows_per_core,
+             rows_written * Wt_in,
+             rows_written % Ht,
+             (rows_written % Ht) * Wt});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core, rows_written * Wt_in});
+        rows_written += num_rows_per_core;
+    }
+    for (uint32_t i = 0, num_tiles_written = 0; !partial && i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;

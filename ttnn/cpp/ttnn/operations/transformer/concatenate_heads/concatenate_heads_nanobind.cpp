@@ -24,6 +24,7 @@ void bind_concatenate_heads(nb::module_& mod) {
 
             Keyword Args:
                 memory_config: Memory Config of the output tensor, if `None` then it gets set to input_tensor.memory_config(). Defaults to `None`.
+                head_split (bool): interleaved input and output with fewer tile rows than cores: split the work per (tile row, head) instead of per tile row, so short sequences use the whole grid. Same output; ignored otherwise. Defaults to `False`.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -36,7 +37,8 @@ void bind_concatenate_heads(nb::module_& mod) {
         &ttnn::transformer::concatenate_heads,
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("head_split") = false);
 }
 
 }  // namespace ttnn::operations::transformer

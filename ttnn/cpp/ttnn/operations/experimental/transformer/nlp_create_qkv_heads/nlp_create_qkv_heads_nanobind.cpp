@@ -21,7 +21,7 @@ void bind_nlp_create_qkv_heads(nb::module_& mod) {
     ttnn::bind_function<"nlp_create_qkv_heads", "ttnn.experimental.">(
         mod,
         R"doc(
-            Shuffles [B, 1, S, 3 * head_dim * num_heads] fused qkv matrix into 3 Q, K, and V heads with shapes [B, num_heads, S, head_dim], [B, num_kv_heads, head_dim, S], and [B, num_kv_heads, S, head_dim]. If optional ``input_kv`` tensor is provided, K and V will be created from ``input_kv`` and ``input`` should have shape [B, 1, S, head_dim * num_heads] instead. ``num_kv_heads`` defaults to ``num_heads`` if not provided. An additional transpose along the last two dims is performed by default for K heads, but this can be skipped with ``transpose_k_heads=false``. With ``kv_tied=true`` the input carries one K/V section instead of two and V is read from the same columns as K. In fused mode this width must be unambiguous for tied layout and not simultaneously match the untied section count.
+            Shuffles [B, 1, S, 3 * head_dim * num_heads] fused qkv matrix into 3 Q, K, and V heads with shapes [B, num_heads, S, head_dim], [B, num_kv_heads, head_dim, S], and [B, num_kv_heads, S, head_dim]. If optional ``input_kv`` tensor is provided, K and V will be created from ``input_kv`` and ``input`` should have shape [B, 1, S, head_dim * num_heads] instead. ``num_kv_heads`` defaults to ``num_heads`` if not provided. An additional transpose along the last two dims is performed by default for K heads, but this can be skipped with ``transpose_k_heads=false``. With ``kv_tied=true`` the input carries one K/V section instead of two and V is read from the same columns as K. In fused mode this width must be unambiguous for tied layout and not simultaneously match the untied section count. ``head_split=true`` (interleaved, fused Q|K|V input only, no ``input_kv``, ``transpose_k_heads=false``, ``kv_tied=false``, fewer tile rows than cores) splits the work per (tile row, head) instead of per tile row so short sequences use the whole grid; the output is the same, otherwise it is ignored.
         )doc",
         &ttnn::experimental::nlp_create_qkv_heads,
         nb::arg("input").noconvert(),
@@ -32,7 +32,8 @@ void bind_nlp_create_qkv_heads(nb::module_& mod) {
         nb::arg("transpose_k_heads").noconvert() = true,
         nb::arg("kv_tied").noconvert() = false,
         nb::arg("memory_config").noconvert() = nb::none(),
-        nb::arg("output_tensors").noconvert() = nb::none());
+        nb::arg("output_tensors").noconvert() = nb::none(),
+        nb::arg("head_split").noconvert() = false);
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

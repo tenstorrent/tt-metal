@@ -104,11 +104,12 @@ NLPConcatHeadsDeviceOperation::tensor_return_value_t NLPConcatHeadsDeviceOperati
 
 namespace ttnn::prim {
 
-Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config, bool head_split) {
     using OperationType = ttnn::experimental::prim::NLPConcatHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+        .head_split = head_split,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);

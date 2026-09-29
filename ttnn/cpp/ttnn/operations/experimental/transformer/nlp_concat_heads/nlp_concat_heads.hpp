@@ -13,6 +13,8 @@
 namespace ttnn::experimental {
 
 ttnn::Tensor nlp_concat_heads(
-    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    bool head_split = false);
 
 }  // namespace ttnn::experimental

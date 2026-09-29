@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_program_artifacts(
-    const NlpConcatHeadsParams& /*operation_attributes*/, const Tensor& input, Tensor& output) {
+    const NlpConcatHeadsParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
     const auto& ashape = a.padded_shape();
 
@@ -55,6 +55,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet(), core_group_2 = CoreRangeSet();
     bool row_major = false;
+    bool hsplit = false;
     if (in_sharded) {
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
@@ -63,6 +64,12 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
         row_major = a.shard_spec().value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     } else {
+        // operation_attributes.head_split: interleaved in/out with fewer tile rows than cores -> the work unit is a
+        // (tile row, head) pair (reader_tm_tile_layout_nlp_concat_heads_hsplit.cpp); num_blocks then counts units.
+        hsplit = operation_attributes.head_split && !out_sharded && in0_c > 1 && num_blocks < num_cores_x * num_cores_y;
+        if (hsplit) {
+            num_blocks *= in0_c;
+        }
         std::tie(
             num_cores,
             all_cores,
@@ -148,6 +155,48 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             .compile_time_args = std::move(compile_time_args),
             .runtime_arg_schema =
                 {.runtime_arg_names = {"nheads", "start_read_offset_bytes", "start_write_offset_bytes"}},
+            .hw_config = create_writer_datamovement_config(arch),
+        };
+    } else if (hsplit) {
+        reader_spec = KernelSpec{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                "reader_tm_tile_layout_nlp_concat_heads_hsplit.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN0_DFB,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = INPUT,
+                .accessor_name = "src",
+            }},
+            .compile_time_args =
+                {
+                    {"in0_h_tiles", in0_h_tiles},
+                    {"in0_w_tiles", in0_w_tiles},
+                    {"in0_c", in0_c},
+                    {"in0_HtWt", in0_HtWt},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"num_units", "unit_start"}},
+            .hw_config = create_reader_datamovement_config(arch),
+        };
+        writer_spec = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                "writer_unary_interleaved_start_id_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN0_DFB,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = OUTPUT,
+                .accessor_name = "dst",
+            }},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
             .hw_config = create_writer_datamovement_config(arch),
         };
     } else {
@@ -249,6 +298,26 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                 });
         }
 
+    } else if (hsplit) {
+        for (uint32_t i = 0, units_written = 0; i < cores.size(); ++i) {
+            const CoreCoord& core = cores[i];
+            uint32_t units_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {
+                    {"num_units", units_per_core},
+                    {"unit_start", units_written},
+                });
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {
+                    {"num_pages", units_per_core * in0_w_tiles},
+                    {"start_id", units_written * in0_w_tiles},
+                });
+            units_written += units_per_core;
+        }
     } else {
         for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
             const CoreCoord& core = cores[i];

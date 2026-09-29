@@ -49,12 +49,17 @@ struct InterleavedWorkSplit {
     // reader, writer.  The compute kernels exist only when transpose_k_heads, and the second one only
     // when core_group_2 is non-empty.
     bool head_parallel = false;
+    // operation_attributes.head_split: single fused Q|K|V input, no transpose / kv_tied, fewer tile rows than cores ->
+    // one work unit per (tile row, head) over all Q+2KV heads (QKV_HSPLIT kernels).
+    bool qkv_hsplit = false;
     uint32_t reader_kernel_idx = 0;
     uint32_t writer_kernel_idx = 1;
 };
 
 InterleavedWorkSplit build_interleaved_work_split(
-    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor,
+    bool has_kv_input) {
     const auto& input_shape = input_tensor.padded_shape();
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
@@ -62,12 +67,19 @@ InterleavedWorkSplit build_interleaved_work_split(
     // Split heads only when the Q-only sequence split would leave cores idle.
     const bool head_parallel = operation_attributes.num_kv_heads == 0 && operation_attributes.num_q_heads > 1 &&
                                !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y;
-    const uint32_t num_blocks = sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
+    const bool qkv_hsplit = !head_parallel && operation_attributes.head_split &&
+                            operation_attributes.num_kv_heads > 0 && !operation_attributes.transpose_k_heads &&
+                            !operation_attributes.kv_tied && !has_kv_input && sequence_blocks < grid.x * grid.y;
+    const uint32_t num_blocks =
+        sequence_blocks *
+        (head_parallel ? operation_attributes.num_q_heads
+                       : (qkv_hsplit ? operation_attributes.num_q_heads + 2 * operation_attributes.num_kv_heads : 1));
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_blocks);
 
     InterleavedWorkSplit split;
     split.head_parallel = head_parallel;
+    split.qkv_hsplit = qkv_hsplit;
     split.all_cores = std::move(all_cores);
     split.core_group_1 = std::move(core_group_1);
     split.core_group_2 = std::move(core_group_2);
@@ -136,7 +148,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    const auto split =
+        build_interleaved_work_split(operation_attributes, input_tensor, tensor_args.input_tensor_kv.has_value());
     const auto& all_cores = split.all_cores;
     const auto& core_group_1 = split.core_group_1;
     const auto& core_group_2 = split.core_group_2;
@@ -223,6 +236,10 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     }
     if (operation_attributes.kv_tied) {
         reader_defines.emplace_back("KV_TIED", "1");
+    }
+    if (split.qkv_hsplit) {
+        reader_defines.emplace_back("QKV_HSPLIT", "1");
+        writer_defines.emplace_back("QKV_HSPLIT", "1");
     }
 
     KernelDescriptor reader_desc;
@@ -322,7 +339,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
             reader_rt.push_back(uint32_t{0});
         }
         reader_rt.push_back(num_blocks_per_core);
-        reader_rt.push_back(split.head_parallel ? num_blocks_written : num_blocks_written * in0_w_tiles);
+        reader_rt.push_back(
+            (split.head_parallel || split.qkv_hsplit) ? num_blocks_written : num_blocks_written * in0_w_tiles);
         reader_rt.push_back(num_blocks_written * in1_w_tiles);
         reader_desc.emplace_runtime_args(core, reader_rt);
 
@@ -334,7 +352,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
                 v_buffer,             // v_tensor_addr
                 num_blocks_per_core,  // num_blocks
                 q_out_h_dim,          // q_out_h_dim
-                split.head_parallel ? num_blocks_written * q_out_w_tiles : q_out_tensor_tile_id,
+                split.head_parallel ? num_blocks_written * q_out_w_tiles
+                                    : (split.qkv_hsplit ? num_blocks_written : q_out_tensor_tile_id),
                 k_out_tensor_tile_id,  // k_out_tensor_tile_id
                 v_out_tensor_tile_id,  // v_out_tensor_tile_id
             });
@@ -655,7 +674,8 @@ void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     auto& output = tensor_return_value;
     const Tensor& input_tensor = tensor_args.input_tensor_q;
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    const auto split =
+        build_interleaved_work_split(operation_attributes, input_tensor, tensor_args.input_tensor_kv.has_value());
 
     const uint32_t in0_addr = input_tensor.buffer()->address();
     const bool read_from_input_tensor_kv = tensor_args.input_tensor_kv.has_value();
