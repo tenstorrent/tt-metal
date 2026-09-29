@@ -142,14 +142,18 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
+    const std::size_t cache_entries_before_preparation = this->device_->num_program_cache_entries();
     auto preparation = ttnn::experimental::prepare_generic_op(
         std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     EXPECT_GT(preparation.max_program_config_size_bytes, 0);
     EXPECT_GT(preparation.max_kernel_binary_size_bytes, 0);
+    // A successful miss inserts the prepared workload; repeating the preparation is a cache hit.
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_preparation + 1);
     EXPECT_EQ(
         ttnn::experimental::prepare_generic_op(
             std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
         preparation);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_preparation + 1);
 
     const std::size_t cacheEntriesBeforeCapture = this->device_->num_program_cache_entries();
     ProgramDescriptor uncachedProgramDescriptor = program_descriptor;
@@ -175,7 +179,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         std::exception);
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_failure);
 
+    // The launch reuses the workload that preparation inserted instead of compiling a new one.
+    const std::size_t cache_entries_before_launch = this->device_->num_program_cache_entries();
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_launch);
     Tensor output_tensor = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
     ASSERT_TRUE(allclose);
