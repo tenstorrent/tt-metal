@@ -173,7 +173,9 @@ def _patch_model_args(
     # Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1 (legacy
     # full-ISL single chunk for A/B / correctness — avoid on long ISL).
     _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
-    if _chunk_override <= 0 and os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes"):
+    from models.demos.gemma4.tt.common import gemma4_cp_prefill_engaged
+
+    if _chunk_override <= 0 and gemma4_cp_prefill_engaged(mesh_device):
         # CP prefill pairs with a large generator chunk: each lane's quarter
         # then fills the SDPA grid (measured 254K ladder 2026-09-29: 2048 base
         # 190.5 s; 16K x CP 115.3; 24K x CP 99.2; 32K x CP 134.3 — U-shaped,
@@ -873,6 +875,12 @@ class ChunkedPrefillPageTableGuardMixin:
             # after lm_head. A captured chunk has get_last_token=-1 and cannot
             # perform the host-side boundary merge safely after the trace.
             and not self._uses_bounded_sliding_kv(model_id)
+            # Lane-sharded KV routes each chunk's page table to the OWNER
+            # column via host-side stacking on global_user_id; the traced
+            # replay's persistent chunk-table refresh has no such per-lane
+            # restage, so chunked prompts stay on the eager path under lanes
+            # (which forwards global_user_id through **kwargs end to end).
+            and not bool(getattr(getattr(self.model[model_id], "mesh_config", None), "lane_sharded", False))
         )
         if not use_traced_chunks:
             # Eager path stays in gemma4 (do not patch models/tt_transformers):

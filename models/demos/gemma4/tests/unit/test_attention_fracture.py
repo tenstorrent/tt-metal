@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gemma4 attention under 2D weight fracture (galaxy one-instance) vs HF.
+"""Gemma4 attention under the galaxy one-instance fracture gate vs HF.
 
-(8,4) mesh, one weight copy: wqkv shards head-groups over axis 0 and K over
-axis 1 (partials completed by an axis-1 all-reduce inside
-apply_qkv_projection); o_proj shards head-groups x H-quarters (completed by
-apply_allreduce's reduce+gather). Per-chip compute is the plain TP=8 layout.
+(8,4) mesh, one weight copy for the MLP; attention itself is NOT 2D-fractured:
+wqkv and o_proj shard head-groups over the tp axis (axis 0) and are REPLICATED
+across the lane axis (axis 1) — see attention/weights.py fracture mappers.
+There is no axis-1 reduction anywhere in attention: o_proj partials complete
+via the ordinary tp-axis-only all-reduce (apply_allreduce), which is exactly
+what lets lane columns later carry different users. This test validates that
+per-column plain-TP=8 attention under the fracture gate still matches HF.
 
     pytest models/demos/gemma4/tests/unit/test_attention_fracture.py -k 8x4
 """

@@ -167,7 +167,9 @@ def _patch_model_args(
     # the configured max_context. Override with GEMMA4_GEN_PREFILL_CHUNK, or
     # force full-ISL single-chunk via GEMMA4_VLLM_SINGLE_CHUNK=1.
     chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
-    if chunk_override <= 0 and os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes"):
+    from models.demos.gemma4.tt.common import gemma4_cp_prefill_engaged
+
+    if chunk_override <= 0 and gemma4_cp_prefill_engaged(mesh_device):
         # CP prefill pairs with a large generator chunk (measured 254K ladder:
         # optimum 24576; CP alone and big-chunks alone are both <=0). Same
         # default as the standalone generator path.
@@ -884,6 +886,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return spec_per_layer
 
     @classmethod
+    def _tt_folds_dp_into_lanes(cls):
+        """Plugin marker: run ``--data_parallel_size N`` as N in-process lanes.
+
+        True only under the galaxy one-instance lanes gate; the DP=4 rail keeps
+        standard multi-process DP (one submesh per rank).
+        """
+        return os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
@@ -906,7 +917,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             )
 
         model_path = hf_config._name_or_path
-        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        lanes_fold = os.environ.get("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+        if lanes_fold and tt_data_parallel > 1:
+            # One-instance lane fold: ONE model on the FULL mesh; the plugin's
+            # lane coordinator schedules tt_data_parallel lanes that map onto
+            # mesh columns (owner-lane KV), not submeshes. Global slots are
+            # rows: lane = slot // lane_slots (block convention).
+            submesh_devices = [mesh_device]
+        else:
+            submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         # Bounded sliding: mirror demo (auto policy + env). Hybrid-groups mode
         # still defaults ON when env unset — see ``_resolve_vllm_bounded_sliding``.
@@ -955,15 +974,31 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     model_path,
                     prefill_trace_enabled,
                 )
+            if lanes_fold and tt_data_parallel > 1:
+                # Generator-visible batch is the GLOBAL slot space; the model
+                # and KV stay sized per column (create above used the per-lane
+                # split). lane_slots lets prefill derive a slot's owner lane.
+                _lanes = getattr(getattr(model_i, "mesh_config", None), "lanes", None)
+                assert (
+                    _lanes == tt_data_parallel
+                ), f"lane fold expects mesh lanes == tt_data_parallel: {_lanes} != {tt_data_parallel}"
+                model_i.lane_slots = max_batch_size // tt_data_parallel
             _patch_model_args(
                 model_args_i,
                 submesh,
-                max_batch_size=max_batch_size // tt_data_parallel,
+                max_batch_size=(
+                    max_batch_size if (lanes_fold and tt_data_parallel > 1) else max_batch_size // tt_data_parallel
+                ),
                 max_seq_len=max_seq_len,
                 model_path=model_path,
                 prefill_trace_enabled=prefill_trace_enabled,
                 bounded_sliding=bounded_sliding_kv_cache,
             )
+            if lanes_fold and tt_data_parallel > 1:
+                # The batched-prefill flatten path is not lane-aware (it would
+                # hand _lane_stack the slot LIST); prefills stay per-user, and
+                # same-tile bursts get lane-parallel routing separately.
+                model_args_i.disable_batched_prefill = True
             # The shared TT vLLM cache allocator reads ``model.args.optimizations``;
             # mirror the text-transformer wrappers by exposing model_args here.
             model_i.args = model_args_i

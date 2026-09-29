@@ -47,6 +47,26 @@ def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
+def gemma4_cp_prefill_engaged(mesh_device):
+    """True only when create_tt_model will actually set mesh_config.cp_prefill.
+
+    Mirrors the fracture gate: CP env AND fracture env AND a true 2D mesh, and
+    not lanes (which forces cp_prefill off). The prefill-chunk default sites
+    use this so a stray GEMMA4_CP_PREFILL=1 on a non-fracture run cannot select
+    the large chunk that regresses without CP (24576 alone measured -1.8%).
+    """
+    env = os.environ.get
+    cp = env("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes")
+    fr = env("GEMMA4_GALAXY_FRACTURE", "0").lower() in ("1", "true", "yes")
+    lanes = env("GEMMA4_GALAXY_LANES", "0").lower() in ("1", "true", "yes")
+    shape = getattr(mesh_device, "shape", None)
+    try:
+        is2d = shape is not None and shape[0] > 1 and shape[1] > 1
+    except (TypeError, IndexError):
+        is2d = False
+    return cp and fr and is2d and not lanes
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size=1,
@@ -107,6 +127,14 @@ def create_tt_model(
             )
             mesh_config.lane_sharded = _lanes
             mesh_config.cp_prefill = os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes")
+            if mesh_config.lane_sharded and mesh_config.cp_prefill:
+                # Incompatible: lane prefill hands the real page table only to
+                # the owner column, while CP partitions Q across EVERY column —
+                # the non-owner quarters would attend a scratch-block prefix.
+                # CP-under-lanes needs a cross-lane KV gather to the owner
+                # first; until then lanes win and CP is dropped.
+                logger.warning("GEMMA4_CP_PREFILL ignored: incompatible with GEMMA4_GALAXY_LANES (owner-lane KV)")
+                mesh_config.cp_prefill = False
         elif is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
