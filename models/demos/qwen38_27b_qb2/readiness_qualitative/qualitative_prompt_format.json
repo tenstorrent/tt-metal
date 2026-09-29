@@ -1,0 +1,18 @@
+{
+  "hf_model": "/home/cleonidou/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "hf_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering_method": "tokenizer.apply_chat_template(add_generation_prompt=True)",
+  "generation_params": {
+    "greedy": true,
+    "max_new_tokens": 256,
+    "temperature": 0
+  },
+  "prompt_source": "/home/cleonidou/.claude/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.16/runtime/readiness_check/vllm_prompts.txt",
+  "num_prompts": 6,
+  "tt_mesh": "T3K (1, 8) TP=8",
+  "tt_fabric": "FABRIC_1D_RING",
+  "hf_control_dtype": "bfloat16 (checkpoint native)"
+}
