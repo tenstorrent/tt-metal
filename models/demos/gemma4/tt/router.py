@@ -105,7 +105,32 @@ class Gemma4Router:
         scaled = ttnn.mul(scaled, self.scalar_root_size)
 
         # 3. Linear projection → [1, 1, seq_len, num_experts] — on device
-        expert_scores = ttnn.linear(scaled, self.proj_weight)
+        if scaled.shape[-2] <= 32 and scaled.shape[-1] == 2816 and self.proj_weight.shape[-1] == 128:
+            expert_scores = ttnn.linear(
+                scaled,
+                self.proj_weight,
+                program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(4, 1),
+                    in0_block_w=44,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=1,
+                    per_core_M=1,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                ),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=True,
+                ),
+            )
+        else:
+            expert_scores = ttnn.linear(scaled, self.proj_weight)
         scaled.deallocate(True)
 
         # 4. Softmax over all experts — on device
