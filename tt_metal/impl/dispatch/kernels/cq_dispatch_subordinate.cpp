@@ -255,6 +255,9 @@ static bool rt_profiler_ack_degraded = false;
 FORCE_INLINE
 bool wait_realtime_profiler_ack(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
     const uint32_t last_signalled = msg->realtime_profiler_state;
+    // The ack is written over the NoC. On Blackhole the RISC's L1 cache must be invalidated before every read of it,
+    // otherwise a stale line is polled until the timeout.
+    invalidate_l1_cache();
     if (msg->realtime_profiler_ack == last_signalled) {
         rt_profiler_ack_degraded = false;
         return true;
@@ -263,6 +266,7 @@ bool wait_realtime_profiler_ack(volatile tt_l1_ptr realtime_profiler_msg_t* msg)
         return false;
     }
     for (uint32_t i = 0; i < rt_profiler_ack_spin_limit; i++) {
+        invalidate_l1_cache();
         if (msg->realtime_profiler_ack == last_signalled) {
             return true;
         }
