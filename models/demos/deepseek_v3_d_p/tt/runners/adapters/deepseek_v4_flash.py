@@ -88,11 +88,31 @@ class DeepSeekV4FlashAdapter(PrefillModelAdapter):
 
         model_dir = os.environ.get("PREFILL_HF_MODEL", self.hf_model_default)
         weight_map = hf_names.read_weight_map(model_dir)
+        cache_dir = Path(params.weight_cache_path) if params.weight_cache_path is not None else None
+        experts_per_chip = int(hf_config.n_routed_experts) // int(mesh_device.get_num_devices())
+        force_dequant = os.environ.get("PREFILL_FORCE_EXPERT_DEQUANT", "0") == "1"
+
+        def experts_cached(layer_idx: int) -> bool:
+            """Every routed-expert .tensorbin of this layer exists (TtRoutedExpert's names: ``layer_{i}.routed_expert
+            .local_{e}_{gate|up|down}*``). Then TtMoe loads them from the cache when given no torch weights -- and the
+            host dequant of 256 FP4 experts per layer (~12.8 GB bf16, most of the ~27-min warm load) is skipped."""
+            if cache_dir is None or force_dequant:
+                return False
+            for e in range(experts_per_chip):
+                for proj in ("gate", "up", "down"):
+                    if not any(cache_dir.glob(f"layer_{layer_idx}.routed_expert.local_{e}_{proj}*.tensorbin")):
+                        return False
+            return True
 
         def layer_weights(layer_idx: int) -> dict:
             w = hf_names.layer_torch_dict(model_dir, layer_idx, weight_map=weight_map)
             w.pop("__kind__", None)
-            w["__experts__"] = [e for _, e in hf_names.iter_layer_experts(model_dir, layer_idx, weight_map=weight_map)]
+            if experts_cached(layer_idx):
+                w["__experts__"] = None  # TtMoe: "pass None when the .tensorbin cache is complete" (build_v4_moe)
+            else:
+                w["__experts__"] = [
+                    e for _, e in hf_names.iter_layer_experts(model_dir, layer_idx, weight_map=weight_map)
+                ]
             return w
 
         top = hf_names.top_level_torch_dict(model_dir, weight_map=weight_map)
