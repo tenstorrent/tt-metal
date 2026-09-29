@@ -1229,52 +1229,36 @@
 
 # ===== Mistral-Small-4-119B ============================================================================
 
-# All Mistral-Small-4-119B legs run as ONE job, one section per former entry, so the ~8 min fixed
-# cost of a multihost job (setup, container init, checkout, post steps) is paid once, not seven times.
-# How the cmd is wired:
-# * Every section runs regardless of earlier failures; a section's result is recorded, and the job
-#   exits non-zero if ANY section failed. Each section is a `( ... ) || rc=$?`: being on the left of
-#   `||` keeps the outer `bash -eo pipefail` (run-with-log) from aborting, and the subshell keeps a
-#   section's exports out of the others.
-# * No entry-level fabric_profile. Sections [2/7], [6/7], [7/7] export the two variables the impl's
-#   "Configure TorusXY fabric profile" step writes to GITHUB_ENV for `fabric_profile: torus_xy`;
-#   the other sections run without them, exactly as their own jobs did.
-# * Each section is bounded by `timeout -k 2m <its former job timeout>m`; a timeout is a FAIL and the
-#   next section still runs. The sections share one galaxy allocation, so a hang can leave the device
-#   wedged for later sections -- they still run and report, bounded the same way.
-# * `-k` terms, env and pytest args are unchanged from the former per-leg entries.
+# Mistral-Small-4-119B suite: one section per test, run serially on one allocation.
+# * Every section runs regardless of earlier failures; the job exits non-zero if ANY section failed.
+#   Each section is `( ... ) || rc=$?`: the `||` keeps the outer `bash -eo pipefail` (run-with-log)
+#   from aborting, and the subshell keeps a section's exports out of the others.
+# * No entry-level fabric_profile: sections [2/7], [6/7], [7/7] export the TorusXY variables the
+#   impl's "Configure TorusXY fabric profile" step would set; the others run without them.
+# * Each section is bounded by `timeout -k 2m <N>m`; a timeout is a FAIL and the next section still
+#   runs. A hang can leave the device wedged for later sections; they still run and report.
 #
-# Per-section notes (timeouts were sized from CI runs; the same work runs ~2.4x slower on a galaxy
-# box than on CI, so local numbers oversize CI timeouts badly):
-# [1/7] MLA + llama4 query scale, 20 min: 4.9 min on CI run 33558247799 for the first three pytests;
-#       20 is ~4.0x after #56135 doubled every blaze prefill timeout for #56046 (weight build degrades
-#       with depth). Also carries the llama4 query-temperature tests: Mistral's query scale is the
-#       reason this model needs bespoke MLA handling, and those tests were otherwise gated by nothing.
-#       The tests/torch/ reference file and test_llama4_scale_cache.py are host-only (the latter stubs
-#       the mesh device and asserts the shared query-scale dict reaches every layer; 2.6 s) and have no
-#       other CI home, so they ride along. The four pytests used to be chained under `set -e`, which
-#       was load-bearing: without it only the LAST pytest's status reaches the runner. Now each runs
-#       regardless and any failure sets the section's exit status (`|| rc=1`, `exit $rc`).
-# [2/7] MLA chunked, 44 min: 13.0 min on run 33425317777 for all 13 scenarios (verified by
-#       --collect-only); ~3.4x. A warm weight cache is what took it from 20.9 min to under 15.
-# [3/7] Prefill block, 40 min: PROVISIONAL -- re-size from a CI run. The earlier 6 was measured on a
-#       run where every row skipped (the non_balanced CI skip had no Mistral exemption). The `-k` pins
-#       the two PCC rows, random and pretrained, at iter1; the full matrix is 24 runnable rows.
-# [4/7] MoE, 20 min: 4.5 min on run 33425317777, covering both the 5k and 25k rows; ~4.4x.
-# [5/7] Prefill transformer, 28 min: 9.1 min on CI run 33558247799; ~3.0x. Full-model PCC gated per
-#       stage on npcc.
-# [6/7] Chunked padded no trace, 52 min: 17.1 min on CI run 33558247799 at L36/full55k (18 chunks x 35
-#       layers, each a host readback); ~3.0x. 56,320-token host-generated golden (torch/HF reference,
-#       not a vLLM recording), so it localises per layer but is not independent of the reference. Its
-#       decoder gate is the only assertion in [6/7] or [7/7] covering layers past GATED_LAYER_DEPTH
-#       (10) -- shorten it before deleting it. Decoder outputs gate on nPCC
-#       (adapter.gate_hidden_states_on_npcc). PREFILL_TRACE_DIR deliberately unexported: the adapter's
-#       default points at the staged golden.
-# [7/7] Chunked padded trace, 20 min: 4.9 min on run 33425317777 (KV assert only); ~4x. Trace twin of
-#       [6/7]: SAME splits, SAME golden, SAME KV bar -- the padded forward is captured once and
-#       replayed per chunk. Kept a separate section, not a second -k term, so a trace-only regression
-#       is attributed on its own line. Asserts KV only, gated to layers 0..10 (the per-layer decoder
-#       readback cannot live inside a capture), and is the only Mistral section exercising
+# Per-section notes:
+# [1/7] MLA + llama4 query scale, 20 min. Carries the llama4 query-temperature tests: Mistral's query
+#       scale is why this model needs bespoke MLA handling. The tests/torch/ reference and
+#       test_llama4_scale_cache.py are host-only (the latter stubs the mesh device and asserts the
+#       shared query-scale dict reaches every layer). Each pytest runs regardless; any failure fails
+#       the section.
+# [2/7] MLA chunked, 44 min: 13 scenarios; relies on the staged weight cache.
+# [3/7] Prefill block, 40 min: PROVISIONAL, size from CI. The `-k` pins the two PCC rows, random and
+#       pretrained, at iter1; the full matrix is 24 runnable rows.
+# [4/7] MoE, 20 min: 5k and 25k rows.
+# [5/7] Prefill transformer, 28 min: full-model PCC gated per stage on npcc.
+# [6/7] Chunked padded no trace, 52 min: L36/full55k (18 chunks x 35 layers, each a host readback).
+#       56,320-token host-generated golden (torch/HF reference, not a vLLM recording), so it localises
+#       per layer but is not independent of the reference. Its decoder gate is the only assertion in
+#       [6/7] or [7/7] covering layers past GATED_LAYER_DEPTH (10) -- shorten it before deleting it.
+#       Decoder outputs gate on nPCC (adapter.gate_hidden_states_on_npcc). PREFILL_TRACE_DIR is
+#       deliberately unexported: the adapter's default points at the staged golden.
+# [7/7] Chunked padded trace, 20 min: trace twin of [6/7] -- same splits, golden and KV bar; the
+#       padded forward is captured once and replayed per chunk. A separate section so a trace-only
+#       regression is attributed on its own line. Asserts KV only, gated to layers 0..10 (the
+#       per-layer decoder readback cannot live inside a capture), and is the only section exercising
 #       ChunkMetadata.llama4_scale.
 - name: "(Mistral-Small-4-119B) MLA, MLA chunked, block, MoE, transformer + chunked padded accuracy"
   cmd: |
@@ -1407,19 +1391,15 @@
     printf '%s' "$summary"
     exit "$fail"
   test_type: mistral4_prefill_suite
-  # The former per-leg test_types stay selectable as tags, so `-f test-type=mistral4_moe` etc.
-  # still run this job.
+  # Per-section tokens: `-f test-type=<token>` selects this job.
   test_tags: [mistral4, mla, block, moe, transformer,
               mistral4_mla, mistral4_mla_chunked, mistral4_prefill_block, mistral4_moe,
               mistral4_prefill_transformer, mistral4_chunked_padded]
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the seven former per-leg timeouts (20+44+40+20+28+52+20 = 224), each also enforced
-      # per section above. No extra margin: models/demo/bh_sc1 in .github/time_budget.yaml has zero
-      # headroom (1750/1750), so anything above 224 fails verify-time-budgets. Only a run where every
-      # section hits its own timeout can reach this; since each `timeout -k 2m` may overrun by up to
-      # 2 min, that worst case can cut the last section short and lose the summary.
+      # Sum of the section timeouts (20+44+40+20+28+52+20 = 224). No margin: models/demo/bh_sc1 in
+      # .github/time_budget.yaml is full (1750/1750), so anything above 224 fails verify-time-budgets.
       timeout: 224
       tier: 2
       release_ready: false
