@@ -700,3 +700,28 @@ Watch: the worst-row margin is about 1.9x (0.0042 of 0.008). The next step, impl
 to `DEVICE_STEPS["dsa_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_attn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.02 test (attempt 1)
+
+Reviewed the rendered swap test (dsa_moe layer 3, attn_hc + attn_collapse on device). I rewrote it from swap dsa_moe
+01, which keeps every swap 01 check: block out vs golden split by routing; block out vs the all-CPU block of the golden
+`in` (now both device steps' share); the attn_hc part checks. Added:
+- attn_collapse vs golden attn_in: rel 0.01, ratio [0.985, 1.015], worst row 0.02. The component test's worst-row
+  limit (0.008) does not fit here, because the input is the device attn_hc (0.3% attn_hc noise gives 0.0084).
+- attn_collapse vs the fp32 CPU collapse of its own inputs (golden `in`, device attn_hc): rel 0.0045, ratio
+  [0.996, 1.004], worst row 0.0065. This is the sharp check: x1.005 and pre column 0 x1.01 fail, and bf16 accumulation
+  (0.0031 / [0.9970, 1.0026]) passes.
+- The collapse share of block out: a third CPU block run with attn_hc fixed to the device output and the CPU
+  collapse. Limits: flips <= 24, same-routing rel 0.0015, ratio [0.995, 1.005].
+- Limits are written `not x <= lim`, so NaN fails (under the stub, the same-input rel is 0/0).
+Sensitivity (CPU host script /tmp/dsas02/sens.py, not kept; numbers in the test docstring). attn_norm removes a
+collapse scale error, so block out cannot see x1.01 (share rel 0.0001). The gate (PCC) catches only pre reversed and
+stream-major rows. Share catches: pre col 0 x1.01 (40 flips, 0.9939), one row's pre reversed (ratio 1.0059), zeroed
+rows and columns.
+Results: device passes (PCC 0.999994; collapse same-input 0.0017 / [0.9998, 1.0001] / 0.0017, which is just the bf16
+output rounding; vs golden 0.0039 / worst row 0.0070; share 4 flips / 0.0002 / [0.9995, 1.0004]; vs CPU 27 flips /
+0.0020). Reference passes (every same-input check 0). Stub fails (PCC 0 and every check).
+Note: `DEVICE_STEPS["dsa_moe"]` in hooks.py is still empty. The swap tests call `device_component` directly, so the
+next implement step only needs to register attn_hc / attn_collapse there.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_02_attn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
