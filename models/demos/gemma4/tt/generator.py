@@ -173,6 +173,13 @@ def _patch_model_args(
     # Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1 (legacy
     # full-ISL single chunk for A/B / correctness — avoid on long ISL).
     _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
+    if _chunk_override <= 0 and os.environ.get("GEMMA4_CP_PREFILL", "0").lower() in ("1", "true", "yes"):
+        # CP prefill pairs with a large generator chunk: each lane's quarter
+        # then fills the SDPA grid (measured 254K ladder 2026-09-29: 2048 base
+        # 190.5 s; 16K x CP 115.3; 24K x CP 99.2; 32K x CP 134.3 — U-shaped,
+        # optimum 24576 = 6144 rows/column = 48 q-blocks). Explicit
+        # GEMMA4_GEN_PREFILL_CHUNK still wins.
+        _chunk_override = 24576
     _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
     _needs_chunk_for_dram = (not _force_single) and should_auto_enable_chunked_bounded(
         max_seq_len,
