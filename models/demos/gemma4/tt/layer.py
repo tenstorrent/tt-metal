@@ -271,7 +271,12 @@ class Gemma4DecoderLayer:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            add_memcfg = ttnn.DRAM_MEMORY_CONFIG
+            if is_decode and attn_output.is_sharded():
+                # Land the residual sum in the norm's own width-sharded layout so
+                # the pre-FFN norms skip their DRAM->L1 interleaved_to_sharded.
+                add_memcfg = attn_output.memory_config()
+            hidden_states = ttnn.add(residual, attn_output, memory_config=add_memcfg)
             residual.deallocate(True)
             attn_output.deallocate(True)
 
