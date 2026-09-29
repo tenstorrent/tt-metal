@@ -23,6 +23,9 @@ get_l1_alignment = ttnn._ttnn.device.get_l1_alignment
 get_optimal_dram_bank_to_logical_worker_assignment = (
     ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment
 )
+get_optimal_dram_bank_to_logical_worker_assignment_at_mesh_coordinate = (
+    ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment_at_mesh_coordinate
+)
 enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
 disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
 is_asynchronous_slow_dispatch_enabled = ttnn._ttnn.device.is_asynchronous_slow_dispatch_enabled

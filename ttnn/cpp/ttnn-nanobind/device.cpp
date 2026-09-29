@@ -726,6 +726,35 @@ void device_module(nb::module_& m_device) {
         )doc");
 
     m_device.def(
+        "get_optimal_dram_bank_to_logical_worker_assignment_at_mesh_coordinate",
+        [](MeshDevice* device, tt::tt_metal::NOC noc, const MeshCoordinate& coord) {
+            const auto assignment = device->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
+            std::vector<CoreCoord> bank_ordered(assignment.size());
+            std::vector<bool> seen(assignment.size(), false);
+            for (const auto& [bank_id, worker] : assignment) {
+                TT_FATAL(bank_id < bank_ordered.size(), "invalid DRAM bank id {}", bank_id);
+                TT_FATAL(!seen[bank_id], "duplicate DRAM bank id {}", bank_id);
+                bank_ordered[bank_id] = worker;
+                seen[bank_id] = true;
+            }
+            for (bool value : seen) {
+                TT_FATAL(value, "DRAM worker assignment is missing a bank id");
+            }
+            return bank_ordered;
+        },
+        nb::arg("device"),
+        nb::arg("noc"),
+        nb::arg("coord"),
+        R"doc(
+            Return the bank-id-ordered DRAM worker assignment for one mesh coordinate.
+
+            For a local coordinate, the assignment comes from that device and can be used
+            to validate device-specific weight layouts on differently harvested chips.
+            Remote coordinates follow MeshDevice's native fallback to a local device;
+            callers requiring the exact physical assignment must query local coordinates.
+        )doc");
+
+    m_device.def(
         "enable_asynchronous_slow_dispatch",
         [](tt::tt_metal::distributed::MeshDevice* device) {
             tt::tt_metal::experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(device);
