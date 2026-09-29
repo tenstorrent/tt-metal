@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.attention_csa import INDEX_SENTINEL, DeepSeekV4Indexer
+from models.experimental.deepseek_v4_flash.tt.decode.attention_csa import INDEX_SENTINEL, DeepSeekV4Indexer
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score is Blackhole-only")
 

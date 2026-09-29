@@ -15,12 +15,12 @@ from .attention import (
     DeepSeekV4Attention,
     _StaticLayerCache,
 )
-from .common import DeepSeekV4Module, _HIFI4, _profile, _region
+from ..common import DeepSeekV4Module, _HIFI4, _profile, _region
 from .hyperconnection import DeepSeekV4HyperConnection
-from .layers import DeepSeekV4RMSNorm
+from ..layers import DeepSeekV4RMSNorm
 from .moe import DeepSeekV4SparseMoeBlock
 from .paged_cache import PagedLayerView
-from .weight_cache import WeightCache, _as_cache
+from ..weight_cache import WeightCache, _as_cache
 
 
 def _strip_prefix(weights: dict, prefix: str) -> dict:

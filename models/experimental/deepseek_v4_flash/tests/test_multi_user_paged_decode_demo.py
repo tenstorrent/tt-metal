@@ -77,7 +77,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
-from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 # Construction, encoding and RoPE tables come from the single-user decode demo so the

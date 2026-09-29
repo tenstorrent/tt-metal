@@ -28,7 +28,7 @@ from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights imp
     _weight_cache,
 )
 from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
-from models.experimental.deepseek_v4_flash.tt.attention import (
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     DeepSeekV4Attention,
     int32_pos_tensor,
     make_rope_table,
