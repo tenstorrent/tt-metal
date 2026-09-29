@@ -2760,3 +2760,38 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
+
+## C.moe_shared.ffn_hc test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test for ffn_hc at layer 2 (iHC gates [S, 8] from h_mid, hc_mlp_layer of layer 2,
+  s4096 chunk 1, bf16 golden) with the layer-1 test (test_c_moe_full_ffn_hc.py) re-tuned for layer 2. Same checks:
+  gated PCC 0.99, CPU-bridge assert, element count, finite, rel L2 <= 0.01, per-column rel L2 <= 0.01 (0.02 on
+  column 1), post worst row <= 0.015, ffn_x via the CPU ffn_hc_pre (<= 0.005 / row 0.02), out via the CPU
+  ffn_residual with golden mlp_out (per stream <= 0.003 / row 0.02).
+- CPU mutation study: /tmp/hy4_ffnhc2/{keys,mut}.py (the layer-1 scripts with layer 2, outside the repo). Table in
+  the test docstring.
+
+Decisions
+- SMALL_COLS = (1,) only: at layer 2 pre gate 1 sits at hc_eps (mean 1.4e-6); columns 0 and 6 (layer 1's small
+  ones) are 1.1e-3 / 3.5e-4 here, so they get the 0.01 limit (device 0.0030 / 0.0050).
+- Out per-stream limit 0.003 (layer 1: 0.005). Post x 1.01 scores 0.0044; the device scores 0.00099. At 0.005 that
+  bug failed only the per-column check, by 0.0002.
+- Every study mutation fails at least one check, except bf16 rounding and swapping the two gate scales (equal at
+  layer 2, 0.0398, a no-op).
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00026, col rel <= 0.0019, post row 0.0040, out stream <= 0.00073).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device, the existing TtHcGates via `_HC_STEPS["ffn_hc"]`): PASS. PCC 1.000000, rel 0.00029, col rel [0.0030,
+  0.0064, 0.0, 0.0018, 0.0042, 0.0041, 0.0050, 0.0023], post row 0.0081, ffn_x 0.00070 / 0.0052, out stream
+  <= 0.00099 / row 0.0033.
+
+Gotchas
+- Tightest margins: post columns 4-6 (~0.0045 vs 0.01) and the post worst row (0.0081 vs 0.015), all from the device
+  sigmoid on ~5e-4 gates. Column 1 (hc_eps) is at 0.0064 vs 0.02.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
