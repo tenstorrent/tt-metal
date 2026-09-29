@@ -108,31 +108,34 @@ void append_fabric_vc2_connection_rt_args(
         auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, CoreType::WORKER);
         TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
         worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_teardown_semaphore_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_teardown_semaphore_id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
         auto buffer_index_sem_id_opt =
             worker_program_or_desc.find_available_semaphore_id(worker_core, CoreType::WORKER);
         TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
         worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_buffer_index_semaphore_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
         auto flow_control_sem_id_opt =
             worker_program_or_desc.find_available_semaphore_id(worker_core, CoreType::WORKER);
         TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
         worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_flow_control_semaphore_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_flow_control_semaphore_id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
     } else {
         worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
         worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
