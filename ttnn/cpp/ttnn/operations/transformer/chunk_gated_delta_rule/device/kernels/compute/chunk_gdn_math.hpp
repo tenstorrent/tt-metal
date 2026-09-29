@@ -1386,11 +1386,173 @@ inline void prep_chunk_generic(const GdnPrepCbs& cb, uint32_t scale_bits, uint32
 // (R10B: this line is load-bearing -- it nudges scan_step's zone pragmas off a 16-bit
 // device-profiler hash collision that the prep sub-zones' line shift landed them on above.)
 
+// ---- Ct == 1 scan step (P4_FLARCV) ------------------------------------------------------------------
+// Same products and per-output accumulation order as scan_step_generic<1, ...>, so bit-identical:
+//  * every block is a matmul_block row (ct_dim = Vt, rt_dim = 1): the in0 tile unpacks once per inner
+//    index and serves the row's Vt output tiles (kdS, v_new, o, S_new: ~94 instead of ~144 tile unpacks);
+//  * S_new is computed before o: o is off the S chain, so its matmuls hide the S_new pack -> next-step
+//    kdS unpack round trip.
+// o = q_decay @ S + intra @ v_new -> cb_out (drained by the writer) for the chunk whose q_decay / intra /
+// v_new are at the front of their CBs and whose state is S; pops all four.
+template <uint32_t Kt, uint32_t Vt>
+inline void scan_o_c1(const GdnScanCbs& cb, uint32_t S) {
+    constexpr uint32_t ck = Kt;
+    constexpr uint32_t cv = Vt;
+    constexpr uint32_t kv = Kt * Vt;
+    GDN_ZONE("st_o");
+    WAIT(cb.qdecay, ck);
+    WAIT(cb.intra, 1);
+    WAIT(cb.vnew, cv);
+    WAIT(S, kv);
+    cb_reserve_back(cb.out, cv);
+    matmul_block_init(cb.qdecay, S, 0, cv, 1, 1);
+    tile_regs_acquire();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        matmul_block(cb.qdecay, S, ki, ki * cv, 0, 0, cv, 1, 1);
+    }
+    matmul_block(cb.intra, cb.vnew, 0, 0, 0, 0, cv, 1, 1);
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < cv; j++) {
+        pack_tile(j, cb.out, j);
+    }
+    tile_regs_release();
+    cb_push_back(cb.out, cv);
+    POP(cb.qdecay, ck);
+    POP(cb.intra, 1);
+    POP(cb.vnew, cv);
+    POP(S, kv);
+}
+
+// kPipeO (fused receivers, GDN_SCAN_PIPE_O): o of the PREVIOUS chunk (prev_S; has_prev) runs right after this
+// chunk's kdS, filling the kdS pack -> diff unpack round trip; this chunk's o, v_new and S stay in their CBs
+// for the next step (or the caller's epilogue). Otherwise o runs at the end of the step, after S_new.
+template <uint32_t Kt, uint32_t Vt, bool kPipeO = false>
+inline void scan_step_c1(
+    const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst, uint32_t prev_S = 0, bool has_prev = false) {
+    constexpr uint32_t ck = Kt;
+    constexpr uint32_t cv = Vt;
+    constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t kc = Kt;
+    // Every block has ct_dim = cv, rt_dim = 1 (the MOP depends only on the shape; all operands fp32 32x32).
+    auto mm_row_init = [&](uint32_t in0, uint32_t in1) { matmul_block_init(in0, in1, 0, cv, 1, 1); };
+
+    // kdS = kd @ S -> scr1. S arrives one K tile-row at a time (the previous step pushes S_new per row),
+    // so the k-th inner product waits only for row k. kdS is pushed per tile for the per-tile diff.
+    {
+        GDN_ZONE("st_kdS");
+        WAIT(cb.kd, ck);
+        cb_reserve_back(cb.scr1, cv);
+        mm_row_init(cb.kd, cur_S);
+        tile_regs_acquire();
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            WAIT(cur_S, (ki + 1) * cv);
+            matmul_block(cb.kd, cur_S, ki, ki * cv, 0, 0, cv, 1, 1);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < cv; j++) {
+            pack_tile(j, cb.scr1, 0);
+            cb_push_back(cb.scr1, 1);
+        }
+        tile_regs_release();
+        POP(cb.kd, ck);
+    }
+    if constexpr (kPipeO) {
+        if (has_prev) {
+            scan_o_c1<Kt, Vt>(cb, prev_S);
+        }
+    }
+    // diff = v_beta - kdS -> ointer, and v_new = T_inv @ diff -> vnew: one DST acquire each (the math thread
+    // never waits on the other DST half while the packer drains the previous block), but the unpacker waits
+    // and the packer pushes per tile: tile j of each only needs tile j of its input.
+    {
+        GDN_ZONE("st_diff");
+        WAIT(cb.vbeta, cv);
+        cb_reserve_back(cb.ointer, cv);
+        sub_init(cb.vbeta, cb.scr1);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < cv; j++) {
+            WAIT(cb.scr1, j + 1);
+            sub_tiles(cb.vbeta, cb.scr1, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < cv; j++) {
+            pack_tile(j, cb.ointer, 0);
+            cb_push_back(cb.ointer, 1);
+        }
+        tile_regs_release();
+        POP(cb.vbeta, cv);
+        POP(cb.scr1, cv);
+    }
+    {
+        GDN_ZONE("st_vnew");
+        WAIT(cb.Tinv, 1);
+        cb_reserve_back(cb.vnew, cv);
+        matmul_init(cb.Tinv, cb.ointer, 0);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < cv; j++) {
+            WAIT(cb.ointer, j + 1);
+            matmul_tiles(cb.Tinv, cb.ointer, 0, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < cv; j++) {
+            pack_tile(j, cb.vnew, 0);
+            cb_push_back(cb.vnew, 1);
+        }
+        tile_regs_release();
+        POP(cb.Tinv, 1);
+        POP(cb.ointer, cv);
+    }
+    // S_new = (dl*I) @ S + k_dec_t @ v_new -> dst, one DST row block (cv tiles) per K tile-row, each row
+    // pushed as soon as it is packed. Row 0's decay product is issued before the wait for v_new.
+    {
+        GDN_ZONE("st_snew");
+        WAIT(cb.kdec_t, kc);
+        WAIT(cb.dl, 1);
+        cb_reserve_back(dst, kv);
+        mm_row_init(cb.dl, cur_S);
+        for (uint32_t mi = 0; mi < Kt; mi++) {
+            tile_regs_acquire();
+            matmul_block(cb.dl, cur_S, 0, mi * cv, 0, 0, cv, 1, 1);
+            WAIT(cb.vnew, cv);
+            matmul_block(cb.kdec_t, cb.vnew, mi, 0, 0, 0, cv, 1, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < cv; j++) {
+                pack_tile(j, dst, j);
+            }
+            tile_regs_release();
+            cb_push_back(dst, cv);
+        }
+        POP(cb.kdec_t, kc);
+        POP(cb.dl, 1);
+    }
+    if constexpr (!kPipeO) {
+        scan_o_c1<Kt, Vt>(cb, cur_S);
+    }
+}
+
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+inline void scan_step_generic(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst);
+
 // PHASE B (scan): one chunk of the sequential recurrence. cur_S = the state input CB for this
 // chunk (reader-fed cb_S at chunk 0, then the compute-only ping-pong), dst = where the updated
 // state goes (the other ping-pong CB, or the final-state CB on the last chunk).
+// Ct == 1 with Vt <= 4 (one fp32 DST half per output row) runs scan_step_c1.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
+    if constexpr (Ct == 1 && Vt <= 4) {
+        scan_step_c1<Kt, Vt>(cb, cur_S, dst);
+    } else {
+        scan_step_generic<Ct, Kt, Vt>(cb, cur_S, dst);
+    }
+}
+
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+inline void scan_step_generic(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;

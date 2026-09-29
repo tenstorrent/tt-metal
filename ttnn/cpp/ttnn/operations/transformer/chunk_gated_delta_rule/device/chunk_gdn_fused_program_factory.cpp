@@ -421,6 +421,13 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     scan_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     scan_compute.core_ranges = rcv_set;
     scan_compute.compile_time_args = ct_scan;
+    // P4_FLARCV: with a hand-off depth >= 2, fused receivers compute chunk c-1's o inside chunk c's step
+    // (chunk_gdn_scan.cpp): holding chunk c-1's q_decay/intra one step longer still leaves the receiver
+    // reader room to reserve chunk c+1 once c-1 is popped. At depth 1 (and on the phased scan, whose CBs
+    // are single-buffered) the reader's reserve for chunk c would wait on that pop forever: no pipelining.
+    if (kHandoffNbuf >= 2) {
+        scan_compute.defines = {{"GDN_SCAN_PIPE_O", "1"}};
+    }
     const tt::tt_metal::ComputeConfigDescriptor scan_compute_cfg =
         gdn_compute_config(attrs.compute_kernel_config, "QWEN36_FLA_SCAN_FID");
     scan_compute.config = scan_compute_cfg;

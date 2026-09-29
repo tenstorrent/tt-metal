@@ -1108,9 +1108,53 @@ def gated_deltanet_forward_ttnn(
     # Beta and g. F10B item B: the small (num_v_heads-wide) beta/g/a elementwise chain below uses
     # mc_small (independent L1 policy), not mc -- the qkv/gab/ab/a/b PROJECTION matmuls just above
     # and below are untouched (still `mc`, i.e. DRAM at T=2048).
+    #
+    # P5_GATING (QWEN36_GDN_GATE_FUSE=1, default off): cut this chain's op count with existing
+    # ttnn fused-activation / output-dtype kwargs, same math:
+    #   - beta: BinaryNg ttnn.multiply(b_raw, scale, input_tensor_a_activations=[SIGMOID], dtype=...)
+    #     runs sigmoid(b_raw) then the *2.0 (allow_neg_eigval) or *1.0 scale in ONE device op
+    #     (folds in the old `if allow_neg_eigval: beta = multiply(beta, 2.0)` step unconditionally,
+    #     so it always costs one multiply, not a no-op skip -- verified bit-exact below either way),
+    #     with the output dtype set straight to FLOAT32 when the fused-chunk path needs it.
+    #   - sp: BinaryNg ttnn.add(a, dt_bias, activations=[softplus_param]) runs the add and the
+    #     softplus in ONE op via the SAME UnaryOpType.SOFTPLUS -> softplus_tile() LLK path that
+    #     ttnn.softplus itself uses (see unary_op_utils.cpp add_activation_defines /
+    #     string_to_unary_with_param): this keeps the x < -5 accuracy fix, it is not a different
+    #     implementation.
+    #   - g: the existing ttnn.multiply(A_neg, sp) just gets dtype=FLOAT32 added when needed.
+    # Where fp32 output isn't needed (QWEN36_GDN_GB_LAYOUT=0, or off the fused-chunk path), dtype
+    # is left None (default bf16), matching today's dtype exactly.
+    # The old code's typecast block below (~1190) already guards on `beta.dtype != ttnn.float32`
+    # / `g.dtype != ttnn.float32`, so when this path already produced FLOAT32 those typecasts are
+    # skipped automatically -- no separate edit needed there.
+    _gf_enabled = os.environ.get("QWEN36_GDN_GATE_FUSE", "0") != "0"
+    _gf_need_fp32 = (
+        _gf_enabled
+        and _use_chunk_fn
+        and mode == "chunk"
+        and T > 1
+        and os.environ.get("QWEN36_GDN_GB_LAYOUT", "0") != "0"
+    )
+    _gf_dtype = ttnn.float32 if _gf_need_fp32 else None
+    _gf_beta_out_mc = mc if _gf_need_fp32 else mc_small
+    _gf_beta_scale = 2.0 if allow_neg_eigval else 1.0
+    _gf_softplus_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)  # matches ttnn.softplus defaults
+
+    def _gf_beta_from_b_raw(braw):
+        return ttnn.multiply(
+            braw,
+            _gf_beta_scale,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
+            dtype=_gf_dtype,
+            memory_config=_gf_beta_out_mc,
+        )
+
     if _mega_extracted:
         a = a_raw
-        beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
+        if _gf_enabled:
+            beta = _gf_beta_from_b_raw(b_raw)
+        else:
+            beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
     elif ab_proj_weight is not None:
         ab = ttnn.linear(
             hidden_states,
@@ -1125,18 +1169,22 @@ def gated_deltanet_forward_ttnn(
         b_raw = ab[:, :, num_v:]
         b_raw = ttnn.to_layout(b_raw, ttnn.TILE_LAYOUT)
         ttnn.deallocate(ab)
-        beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
+        if _gf_enabled:
+            beta = _gf_beta_from_b_raw(b_raw)
+        else:
+            beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
     else:
-        beta = ttnn.sigmoid(
-            ttnn.linear(
-                hidden_states,
-                b_proj_weight,
-                memory_config=mc,
-                compute_kernel_config=ckc,
-                program_config=_pc(hidden_states, b_proj_weight),
-            ),
-            memory_config=mc_small,
+        b_raw = ttnn.linear(
+            hidden_states,
+            b_proj_weight,
+            memory_config=mc,
+            compute_kernel_config=ckc,
+            program_config=_pc(hidden_states, b_proj_weight),
         )
+        if _gf_enabled:
+            beta = _gf_beta_from_b_raw(b_raw)
+        else:
+            beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
         a = ttnn.linear(
             hidden_states,
             a_proj_weight,
@@ -1144,16 +1192,20 @@ def gated_deltanet_forward_ttnn(
             compute_kernel_config=ckc,
             program_config=_pc(hidden_states, a_proj_weight),
         )
-    if allow_neg_eigval:
+    if allow_neg_eigval and not _gf_enabled:
         beta = ttnn.multiply(beta, 2.0, memory_config=mc_small)
-    a_biased = ttnn.add(a, dt_bias, memory_config=mc_small)
-    sp = ttnn.softplus(a_biased, memory_config=mc_small)
+    if _gf_enabled:
+        sp = ttnn.add(a, dt_bias, activations=[_gf_softplus_param], memory_config=mc_small)
+    else:
+        a_biased = ttnn.add(a, dt_bias, memory_config=mc_small)
+        sp = ttnn.softplus(a_biased, memory_config=mc_small)
+    _gf_g_out_mc = mc if _gf_need_fp32 else mc_small
     if A_neg_precomputed is not None:
-        g = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc_small)
+        g = ttnn.multiply(A_neg_precomputed, sp, dtype=_gf_dtype, memory_config=_gf_g_out_mc)
     else:
         A = ttnn.exp(A_log, memory_config=mc_small)
         A_neg = ttnn.neg(A, memory_config=mc_small)
-        g = ttnn.multiply(A_neg, sp, memory_config=mc_small)
+        g = ttnn.multiply(A_neg, sp, dtype=_gf_dtype, memory_config=_gf_g_out_mc)
 
     # Gated delta rule: chunk prefill (fp32 seq kernel) vs decode (optimized T=1) vs recurrent fallback
     if mode == "chunk" and T > 1:

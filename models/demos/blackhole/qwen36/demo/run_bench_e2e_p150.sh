@@ -148,6 +148,18 @@
 #   sfpu (runner default since MG3 2026-09-26) = pinned ttnn.ChunkGdnWyInverse.SFPU (numerics change vs horner);
 #   horner (runner default C1 2026-09-26 .. MG3) = ttnn.ChunkGdnWyInverse.HORNER, the pre-#57445 numerics;
 #   auto (code default when unset) = wy_inverse not passed (op default AUTO = SFPU on Blackhole at chunk 32). A/B e.g. QWEN36_GDN_PCFG=nv2np4 QWEN36_GDN_WYINV=sfpu bash run_bench_e2e_p150.sh.
+# QWEN36_GDN_GATE_FUSE also survives the reset (P7_INT1D / P5_GATING, models/experimental/gated_attention_gated_deltanet:
+#   fuses the GDN beta sigmoid+scale and the a+dt_bias+softplus into single BinaryNg ops, same math, bit-exact;
+#   distinct from the pre-existing QWEN36_GDN_GATE_FUSED, which fuses the output-gate multiply): 1 (runner default
+#   since P7_INT1D) = fused chain; 0 (code default) = separate ops.
+# QWEN36_ROPE_L1 also survives the reset (P7_INT1D / P7_ROPE, tt/model.py: the persistent per-chunk RoPE cos/sin
+#   buffers go in L1 interleaved instead of DRAM interleaved; bit-exact): 1 (runner default since P7_INT1D) = L1;
+#   0 (code default) = DRAM.
+# QWEN36_FLA_SCAN_FID also survives the reset (R10B hook, chunk_gdn_fused_program_factory.cpp: math-fidelity
+#   override for the fused FLA scan/receiver compute kernel only): HiFi3 (runner default since P7_INT1D item B2;
+#   +/-2% vs f64, inside the coherence gate, -1.7 ms/4k vs HiFi4) | HiFi4 | HiFi2 | LoFi; unset (code default) =
+#   HiFi4 exactly (today's fixed behaviour). QWEN36_FLA_PREP_FID is the same hook for the prep/producer kernel;
+#   the runner leaves it unset (no pin) -- the P4_FLARCV producer path is already bit-exact at HiFi4.
 # Non-QWEN overrides (not touched by the reset): BENCH_GDN_FLAT_GB (default 1) -> QWEN_GDN_FLAT_GB;
 #   BENCH_TRACE_GUARD (default 1) -> QWEN36_TRACE_GUARD + TT_METAL_TRACE_ALLOC_TRACKING=1.
 #
@@ -179,7 +191,8 @@ echo "== branch: $(git rev-parse --abbrev-ref HEAD) commit: $(git rev-parse HEAD
 # ---------------------------------------------------------------------------------------------
 # 1. Unset EVERY QWEN* var already in the shell, so nothing is inherited from a previous session.
 # (QWEN36_ONDEV_ARGMAX, the QWEN36_I1_* / QWEN36_I2_* / QWEN36_M1_* / QWEN36_M2_* / QWEN36_M3_* / QWEN36_C2_* / QWEN36_R3_* / QWEN36_M4_* / QWEN36_M5_* / QWEN36_I3_* / QWEN36_F_* / QWEN36_N_* / QWEN36_R5_* / QWEN36_MM_* / QWEN36_SGRN_* item flags, QWEN36_GDN_DECODE_FUSED,
-#  QWEN36_GDN_CONV_REPACK, QWEN36_GDN_CONV_KDA_TILED, QWEN36_GDN_PCFG, QWEN36_GDN_WYINV, the QWEN36_I4_*
+#  QWEN36_GDN_CONV_REPACK, QWEN36_GDN_CONV_KDA_TILED, QWEN36_GDN_PCFG, QWEN36_GDN_WYINV, QWEN36_GDN_GATE_FUSE,
+#  QWEN36_ROPE_L1, QWEN36_FLA_SCAN_FID, the QWEN36_I4_*
 #  flags, QWEN36_LAYER_RESID_L1 and QWEN36_LAYER_L1_MAX_T are read first and re-exported in section 3.)
 # ---------------------------------------------------------------------------------------------
 ONDEV_ARGMAX="${QWEN36_ONDEV_ARGMAX:-1}"
@@ -390,6 +403,21 @@ case "$GDN_WYINV" in
   auto|horner|sfpu) ;;
   *) echo "ERROR: QWEN36_GDN_WYINV must be auto, horner or sfpu (got '$GDN_WYINV')" >&2; exit 1 ;;
 esac
+GDN_GATE_FUSE="${QWEN36_GDN_GATE_FUSE:-1}"  # runner default 1 since P7_INT1D (P5_GATING; code default: 0)
+case "$GDN_GATE_FUSE" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_GDN_GATE_FUSE must be 0 or 1 (got '$GDN_GATE_FUSE')" >&2; exit 1 ;;
+esac
+ROPE_L1="${QWEN36_ROPE_L1:-1}"  # runner default 1 since P7_INT1D (P7_ROPE; code default: 0)
+case "$ROPE_L1" in
+  0|1) ;;
+  *) echo "ERROR: QWEN36_ROPE_L1 must be 0 or 1 (got '$ROPE_L1')" >&2; exit 1 ;;
+esac
+FLA_SCAN_FID="${QWEN36_FLA_SCAN_FID:-HiFi3}"  # runner default HiFi3 since P7_INT1D item B2 (code default: unset -> HiFi4)
+case "$FLA_SCAN_FID" in
+  HiFi4|HiFi3|HiFi2|LoFi) ;;
+  *) echo "ERROR: QWEN36_FLA_SCAN_FID must be HiFi4, HiFi3, HiFi2 or LoFi (got '$FLA_SCAN_FID')" >&2; exit 1 ;;
+esac
 I4_SDPA_Q64="${QWEN36_I4_SDPA_Q64:-1}"  # = ttnn_gated_attention.I4_SDPA_Q64_DEFAULT
 case "$I4_SDPA_Q64" in
   0|1) ;;
@@ -475,6 +503,7 @@ export QWEN36_GDN_CONV_TILED_SPLIT=0
 export QWEN36_GDN_DECODE_FUSED="$GDN_DECODE_FUSED"
 export QWEN36_GDN_FUSED_PREFILL=1
 export QWEN36_GDN_GATE_CLIP=0
+export QWEN36_GDN_GATE_FUSE="$GDN_GATE_FUSE"
 export QWEN36_GDN_GATE_FUSED=1
 export QWEN36_GDN_GB_LAYOUT=0
 export QWEN36_GDN_L1_MAX_T=0
@@ -560,6 +589,7 @@ for item in $I3_ITEMS; do
   export "QWEN36_I3_$item=${I3_VALS[$item]}"
   I3_SUMMARY="$I3_SUMMARY QWEN36_I3_$item=${I3_VALS[$item]}"
 done
+export QWEN36_FLA_SCAN_FID="$FLA_SCAN_FID"
 export QWEN36_I4_SDPA_EXP_COMPAT="$I4_SDPA_EXP_COMPAT"
 export QWEN36_I4_SDPA_Q64="$I4_SDPA_Q64"
 export QWEN36_LAYER_L1_MAX_T="$LAYER_L1_MAX_T"
@@ -581,6 +611,7 @@ export QWEN36_PREFILL_PROGCFG_OVERRIDES=1
 export QWEN36_PREFIX_WRITE_ITERS=100
 export QWEN36_PREFIX_WRITE_WIDTH=1
 export QWEN36_ROPE_DEVICE_TABLE=1
+export QWEN36_ROPE_L1="$ROPE_L1"
 export QWEN36_ROPE_LEGACY=0
 
 export QWEN9B_MLP_DOWN_AUTO=0
@@ -707,7 +738,7 @@ else
   OUT="$RESULTS_DIR/isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--isl "$ISL")
 fi
-echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
+echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY$SGRN_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_GDN_GATE_FUSE=$QWEN36_GDN_GATE_FUSE QWEN36_ROPE_L1=$QWEN36_ROPE_L1 QWEN36_FLA_SCAN_FID=$QWEN36_FLA_SCAN_FID QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
 
 RUN_LOG="${OUT%.json}.log"
 set +e

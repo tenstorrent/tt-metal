@@ -393,6 +393,26 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "with the pre-P6_INT1C op); 1-3=fused kernel (bit-exact with each other); 4=fused kernel with an "
         "exp_21f sigmoid (within 1 bf16 ulp of 0 for >99.9% of values; not bit-exact); unset=op default (4)",
     ),
+    # P7_INT1D item flags (merged into r3 2026-09-28).
+    "QWEN36_GDN_GATE_FUSE": (
+        "0",
+        "P7_INT1D (P5_GATING): fuse the GDN beta sigmoid+scale and the a+dt_bias+softplus into single BinaryNg "
+        "ops (same math, bit-exact; distinct from the pre-existing QWEN36_GDN_GATE_FUSED, which fuses the "
+        "output-gate multiply). run_bench_e2e_p150.sh pins it (runner default 1); 0=separate ops",
+    ),
+    "QWEN36_ROPE_L1": (
+        "0",
+        "P7_INT1D (P7_ROPE): place the persistent per-chunk RoPE cos/sin buffers in L1 interleaved instead of "
+        "DRAM interleaved (bit-exact). run_bench_e2e_p150.sh pins it (runner default 1); 0=DRAM",
+    ),
+    "QWEN36_FLA_SCAN_FID": (
+        "<unset>",
+        "R10B experiment hook (chunk_gdn_fused_program_factory.cpp): math-fidelity override for the fused FLA "
+        "scan/receiver compute kernel only; HiFi4|HiFi3|HiFi2|LoFi, unset=HiFi4 (today's fixed behaviour). "
+        "run_bench_e2e_p150.sh pins it (runner default HiFi3 since P7_INT1D item B2: +/-2% vs f64, -1.7 ms/4k "
+        "vs HiFi4). QWEN36_FLA_PREP_FID is the same hook for the prep/producer kernel; the runner leaves it "
+        "unset (no pin)",
+    ),
     # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
     "QWEN36_I4_SDPA_EXP_COMPAT": (
         "1",

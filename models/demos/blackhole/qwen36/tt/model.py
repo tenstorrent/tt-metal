@@ -1954,17 +1954,27 @@ class Qwen36Model:
             page_table[:, :blocks_per_chunk].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         # TP handoff: add ReplicateTensorToMesh for cos/sin (parity with tt/rope.py).
+        # P7_ROPE (QWEN36_ROPE_L1, default "0"): the persistent per-chunk cos/sin buffers are tiny
+        # ([1, chunk_size, rope_head_dim] bf16, e.g. 2048x64 = 256 KiB) and every FA layer's RoPE call
+        # for the chunk reads the SAME values, so placing them in L1 (interleaved) instead of the
+        # default DRAM interleaved turns every one of those reads into an L1 read. Allocated here
+        # (before trace capture) and only ever refreshed in place (ttnn.copy /
+        # copy_host_to_device_tensor into the same buffer), so the L1 placement holds for both
+        # chunks across every trace replay. "1" opts in; default "0" is byte-identical to before.
+        _rope_l1_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("QWEN36_ROPE_L1", "0") == "1" else None
         self._chunk_cos_buf = ttnn.from_torch(
             self.rope.cos_cpu[:chunk_size].unsqueeze(0).contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=_rope_l1_mc,
         )
         self._chunk_sin_buf = ttnn.from_torch(
             self.rope.sin_cpu[:chunk_size].unsqueeze(0).contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=_rope_l1_mc,
         )
 
         # Bind GDN to persistent external state; enable in-place carry across replays.
