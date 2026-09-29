@@ -3076,3 +3076,33 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
+
+## C.moe_shared.shared_expert test (attempt 1)
+
+What
+- Replaced the rendered 20-line test with the reviewed test_c_moe_full_shared_expert.py, set for layer 2 (LAYER = 2).
+  All checks and limits are the same: gated pcc_shared_expert_L02 >= 0.99; vs golden rel <= 0.008, row ratio in
+  [0.99, 1.01], worst row <= 0.015; not a CPU bridge; a second run on scaled input vs the CPU step (rel <= 0.006,
+  ratio [0.99, 1.01], row <= 0.012).
+- Re-ran the layer-1 CPU mutation study on the layer-2 golden and weights (/tmp/hy4_se2/study{,2}.py, outside the
+  repo). The tables are in the test docstring.
+
+Decisions
+- SYN_SCALE 3, not 2. The layer-2 input is narrower (gate [-2.91, 5.30], up [-5.65, 5.72]; layer 1: up to 8.07 /
+  9.67). At x 2 the clamp at 10 scores only rel 0.0069 / worst row 0.088, just past the limits. At x 3 it scores
+  0.0685 / 0.40, against bf16 noise of 0.0034 / 0.0057. That matches layer 1's x 2 (gate [-8.7, 15.9]).
+- The golden limits hold at layer 2: bf16 gate/up/h scores 0.0036 / [0.9957, 1.0031] / 0.0062. x 1.01 is caught
+  (ratio max 1.0106, rel 0.0102). bfp8 weights score 0.0080, right at the limit. The plan says bf16 weights.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999998, rel 0.00196, ratio [0.99956, 1.00061], row 0.00248; scaled 0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): already PASS. hooks.device_component returns the layer-1 TtDenseMLP shared-expert module for any
+  layer: pcc 0.999998, rel 0.00209, ratio [0.99892, 0.99997], row 0.00263; x3 rel 0.00074, row 0.00098.
+  The implement step still has to add shared_expert to DEVICE_STEPS["moe_shared"] (and whatever else it needs).
+- The first "FAIL pcc_shared_expert_L02: pcc=0.000000" line is the precompile collect pass. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
