@@ -35,6 +35,10 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Fused SwiGLU epilogue (opt-in). in1 holds tile-pair interleaved [gate | up] columns (weight tile 2p = gate
+    // tile p, tile 2p+1 = up tile p, as from prepare_for_fused_swiglu). The output is silu(gate) * up, so its
+    // width is half the weight width. Last member so the struct stays a positional aggregate.
+    bool fuse_swiglu = false;
 };
 
 // 1D mcast matmul program config.
@@ -98,6 +102,15 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
+
+// True when the config is the 2D multicast config with the fused SwiGLU epilogue enabled.
+inline bool is_fuse_swiglu(const std::optional<MatmulProgramConfig>& config) {
+    if (!config.has_value()) {
+        return false;
+    }
+    const auto* mcast2d = std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&config.value());
+    return mcast2d != nullptr && mcast2d->fuse_swiglu;
+}
 
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
 // If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is

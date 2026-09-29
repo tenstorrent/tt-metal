@@ -119,6 +119,18 @@
 #   gamma (RMSNorm weight) lives in L1 interleaved instead of DRAM (placement only, bit-exact; standalone
 #   P2_NORM measurement: -1.3 us/call of 92 calls). Runner default 1 since 2026-09-28 (differs from the
 #   code default 0); A/B e.g. QWEN36_N_GAMMA_L1=0 bash run_bench_e2e_p150.sh.
+# The R5 item flag QWEN36_R5_GLU also survives the reset (tt/tp_common.py R5_FLAG_DEFAULTS; unset = code default 0
+#   = the current path; values 0|1; single device, T == 2048 prefill chunks with bfloat8_b gate/up): 1 = the fused-SwiGLU
+#   gate/up matmul runs as the 2D-mcast ttnn.matmul with the fused SwiGLU epilogue (needs the C++ fuse_swiglu config
+#   field) instead of minimal_matmul(fuse_swiglu=True); numerics change. Runner default 1 since 2026-09-28 (differs
+#   from the code default 0; gated: PCC 0.99905-0.99937 top-1 equal, needle 48/50, G0 coherence OK); A/B e.g.
+#   QWEN36_R5_GLU=0 bash run_bench_e2e_p150.sh.
+# The MM item flag QWEN36_MM_BW16 also survives the reset (tt/tp_common.py MM_FLAG_DEFAULTS; unset = code default 0
+#   = the current path; values 0|1; single device, T == 2048 prefill chunks): 1 = in0_block_w 16 instead of 8 for
+#   MLP down (M1 S2), GDN z|a|0|b|0 in-proj (M1 S4), the o-proj family (FA/GDN o_proj) and the FA q|k|v fused proj
+#   (P3_MMSWEEP shapes); excludes GDN q|k|v in-proj (M1 S3, bw16 overflows a kernel-config limit there). Numerics
+#   change (PCC ~0.99995, not bit-exact). Runner default 1 since 2026-09-28 (differs from the code default 0);
+#   A/B e.g. QWEN36_MM_BW16=0 bash run_bench_e2e_p150.sh.
 # QWEN36_GDN_PCFG also survives the reset (PR #57440 port: program_config of the fused FLA prefill op,
 #   parsed in tt/gdn/gated_deltanet.py; it replaces the removed QWEN_GDN_NP/_NV/_PLACEMENT C++ knobs):
 #   nv1np5 (runner default, C1 2026-09-26; kept by MG3) = NV=1 NP=5 row-local (with QWEN36_GDN_WYINV=horner:
@@ -299,6 +311,30 @@ for item in $N_ITEMS; do
     *) echo "ERROR: $var must be 0 or 1 (got '$val')" >&2; exit 1 ;;
   esac
   N_VALS[$item]="$val"
+done
+R5_ITEMS="GLU"
+declare -A R5_DEFAULTS=([GLU]=1)  # runner default 1 since 2026-09-28 (tp_common.R5_FLAG_DEFAULTS code default 0)
+declare -A R5_VALS
+for item in $R5_ITEMS; do
+  var="QWEN36_R5_$item"
+  val="${!var:-${R5_DEFAULTS[$item]}}"
+  case "$val" in
+    0|1) ;;
+    *) echo "ERROR: $var must be 0 or 1 (got '$val')" >&2; exit 1 ;;
+  esac
+  R5_VALS[$item]="$val"
+done
+MM_ITEMS="BW16"
+declare -A MM_DEFAULTS=([BW16]=1)  # runner default 1 since 2026-09-28 (tp_common.MM_FLAG_DEFAULTS code default 0)
+declare -A MM_VALS
+for item in $MM_ITEMS; do
+  var="QWEN36_MM_$item"
+  val="${!var:-${MM_DEFAULTS[$item]}}"
+  case "$val" in
+    0|1) ;;
+    *) echo "ERROR: $var must be 0 or 1 (got '$val')" >&2; exit 1 ;;
+  esac
+  MM_VALS[$item]="$val"
 done
 LAYER_RESID_L1="${QWEN36_LAYER_RESID_L1:-1}"  # C3 runner default 1 (code default 0: tt/layer.py, tt/model.py)
 case "$LAYER_RESID_L1" in
@@ -485,6 +521,16 @@ for item in $N_ITEMS; do
   export "QWEN36_N_$item=${N_VALS[$item]}"
   N_SUMMARY="$N_SUMMARY QWEN36_N_$item=${N_VALS[$item]}"
 done
+R5_SUMMARY=""
+for item in $R5_ITEMS; do
+  export "QWEN36_R5_$item=${R5_VALS[$item]}"
+  R5_SUMMARY="$R5_SUMMARY QWEN36_R5_$item=${R5_VALS[$item]}"
+done
+MM_SUMMARY=""
+for item in $MM_ITEMS; do
+  export "QWEN36_MM_$item=${MM_VALS[$item]}"
+  MM_SUMMARY="$MM_SUMMARY QWEN36_MM_$item=${MM_VALS[$item]}"
+done
 I3_SUMMARY=""
 for item in $I3_ITEMS; do
   export "QWEN36_I3_$item=${I3_VALS[$item]}"
@@ -637,7 +683,7 @@ else
   OUT="$RESULTS_DIR/isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--isl "$ISL")
 fi
-echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
+echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 QWEN36_ONDEV_ARGMAX=$QWEN36_ONDEV_ARGMAX$I1_SUMMARY$I2_SUMMARY$M1_SUMMARY$M2_SUMMARY$M3_SUMMARY$C2_SUMMARY$R3_SUMMARY$M4_SUMMARY$M5_SUMMARY$I3_SUMMARY$F_SUMMARY$N_SUMMARY$R5_SUMMARY$MM_SUMMARY QWEN36_LAYER_RESID_L1=$QWEN36_LAYER_RESID_L1 QWEN36_LAYER_L1_MAX_T=$QWEN36_LAYER_L1_MAX_T QWEN36_GDN_DECODE_FUSED=$QWEN36_GDN_DECODE_FUSED QWEN36_GDN_CONV_REPACK=$QWEN36_GDN_CONV_REPACK QWEN36_GDN_CONV_KDA_TILED=$QWEN36_GDN_CONV_KDA_TILED QWEN36_GDN_PCFG=$QWEN36_GDN_PCFG QWEN36_GDN_WYINV=$QWEN36_GDN_WYINV QWEN36_I4_SDPA_Q64=$QWEN36_I4_SDPA_Q64 QWEN36_I4_SDPA_EXP_COMPAT=$QWEN36_I4_SDPA_EXP_COMPAT -> $OUT =="
 
 RUN_LOG="${OUT%.json}.log"
 set +e

@@ -372,6 +372,19 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "F: single device, MLP gate/up weights (decode w1/w3 + prefill packed w_gate_up) bfloat8_b (numerics change, "
         "new weight-cache files); 0=bfloat4_b",
     ),
+    # R5 item flags (tt/tp_common.py R5_FLAG_DEFAULTS; read via tp_common.r5_value); 0 = current path.
+    "QWEN36_R5_GLU": (
+        "0",
+        "R5: single device, T == 2048 prefill chunks with bfloat8_b gate/up: fused-SwiGLU gate/up as the 2D-mcast "
+        "ttnn.matmul fuse_swiglu epilogue (needs the C++ config field; numerics change); 0=minimal_matmul fuse_swiglu",
+    ),
+    # MM item flags (tt/tp_common.py MM_FLAG_DEFAULTS; read via tp_common.mm_value); 0 = current path.
+    "QWEN36_MM_BW16": (
+        "0",
+        "MM: single device, T == 2048 prefill chunks: in0_block_w 16 (instead of 8) for MLP down (M1 S2), GDN "
+        "z|a|0|b|0 in-proj (M1 S4), the o-proj family (FA/GDN o_proj) and the FA q|k|v fused proj (numerics change, "
+        "PCC ~0.99995); excludes GDN q|k|v in-proj (M1 S3); 0=in0_block_w 8 for all of them",
+    ),
     # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
     "QWEN36_I4_SDPA_EXP_COMPAT": (
         "1",
@@ -975,6 +988,12 @@ def main():
     # F item flags, effective raw values (QWEN36_F_<item>, default in tp_common.F_FLAG_DEFAULTS).
     f_flags = {item: _tp_common.f_value(item) for item in _tp_common.F_FLAG_DEFAULTS}
     print(f"  f_flags (effective): {f_flags}")
+    # R5 item flags, effective raw values (QWEN36_R5_<item>, default in tp_common.R5_FLAG_DEFAULTS).
+    r5_flags = {item: _tp_common.r5_value(item) for item in _tp_common.R5_FLAG_DEFAULTS}
+    print(f"  r5_flags (effective): {r5_flags}")
+    # MM item flags, effective raw values (QWEN36_MM_<item>, default in tp_common.MM_FLAG_DEFAULTS).
+    mm_flags = {item: _tp_common.mm_value(item) for item in _tp_common.MM_FLAG_DEFAULTS}
+    print(f"  mm_flags (effective): {mm_flags}")
 
     # --demo-prompt ignores --isl for prompt content (it's always the demo's 2642-token traced_4k
     # prompt) but still needs a KV-cache budget big enough to hold it -- size against
@@ -1245,6 +1264,8 @@ def main():
                 "i4_flags": i4_flags,
                 "i3_flags": i3_flags,
                 "f_flags": f_flags,
+                "r5_flags": r5_flags,
+                "mm_flags": mm_flags,
                 "trace_guard": trace_guard,
                 "gdn_decode_fused": gdn_decode_fused,
                 "gdn_decode_fused_layers": gdn_fused_layers,

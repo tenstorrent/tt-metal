@@ -25,6 +25,9 @@
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
+#ifdef FUSE_GLU
+#include "bmm_fused_glu.hpp"
+#endif
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
@@ -235,6 +238,10 @@ void kernel_main() {
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = static_cast<bool>(get_compile_time_arg_val(18));
     DataflowBuffer bias_dfb(bias_dfb_id);
+#elif defined FUSE_GLU
+    // Fused SwiGLU: the last K block packs into the partials CB (as with bias); the GLU pass below reads it.
+    constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
+    DataflowBuffer out_dfb(out_dfb_id);
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
 #endif
@@ -261,6 +268,9 @@ void kernel_main() {
     constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
 
     ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+#endif
+#if defined FUSE_GLU and defined GLU_SFPU_ON_PACK
+    glu_init_pack();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -409,7 +419,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
+#if defined FUSE_BIAS or defined FUSE_GLU
                                 if (block == 0) {  // no accumulation for first iteration
                                     pack_reconfig_l1_acc(0);
                                 } else {
@@ -453,7 +463,7 @@ void kernel_main() {
                     }
 
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
+#if defined FUSE_BIAS or defined FUSE_GLU
                     if (block < num_blocks_inner_dim - 1) {
                         // Wait/pop in subblock-sized steps so the step size
                         // matches the bias section's wait_front(out_subblock_num_tiles),
@@ -577,6 +587,46 @@ void kernel_main() {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
+#ifdef FUSE_GLU
+                // Fused SwiGLU pass. The partials CB holds the finished [gate | up] block: in each subblock row,
+                // tile 2q is gate and tile 2q+1 is up (tile-pair interleaved weight; out_subblock_w is even).
+                // Per subblock: copy the partials to DEST, DST[2j] = silu(DST[2j]) * DST[2j+1], and pack the
+                // even tiles only, which gives the (h, q) row-major order of the half-width output subblock.
+                pack_reconfig_data_format(out_dfb_id);
+#ifdef PACKER_L1_ACC
+                pack_reconfig_l1_acc(0);
+#endif
+                reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
+                copy_init(mm_partials_dfb_id);
+#ifndef GLU_SFPU_ON_PACK
+                glu_init_math();
+#endif
+                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        // Same step size as the K loop pops (CB rule: equal wait_front steps on a CB).
+                        mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                        tile_regs_acquire();
+                        copy_block(mm_partials_dfb_id, 0, 0, out_subblock_num_tiles);
+#ifndef GLU_SFPU_ON_PACK
+                        glu_pairs_math<out_subblock_num_tiles>();
+#endif
+                        tile_regs_commit();
+                        mm_partials_dfb.pop_front(out_subblock_num_tiles);
+
+                        out_dfb.reserve_back(out_subblock_num_tiles / 2);
+#ifdef GLU_SFPU_ON_PACK
+                        glu_pairs_from_pack<out_subblock_num_tiles>();
+#else
+                        tile_regs_wait();
+#endif
+                        for (uint32_t j = 0; j < out_subblock_num_tiles / 2; j++) {
+                            pack_tile(2 * j, out_dfb_id);
+                        }
+                        tile_regs_release();
+                        out_dfb.push_back(out_subblock_num_tiles / 2);
+                    }
+                }
+#endif  // FUSE_GLU
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
                     pack_relu_config(ReluConfig::none());

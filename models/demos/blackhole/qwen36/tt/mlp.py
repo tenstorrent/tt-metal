@@ -409,14 +409,28 @@ class Qwen36MLP:
                     cfg = tpc.i2_swiglu_minimal_config(T, self._mm_grid) or tpc.prefill_minimal_matmul_config(
                         T, x.shape[-1], w.w_gate_up.shape[-1], self._mm_grid
                     )
-                hidden = ttnn.experimental.minimal_matmul(
-                    x,
-                    w.w_gate_up,
-                    fuse_swiglu=True,
-                    config=cfg,
-                    compute_kernel_config=self.compute_kernel_config,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
-                )
+                # R5 GLU (QWEN36_R5_GLU=1, tp_common; T == 2048 chunks, bf8 weight): the 2D-mcast matmul with the
+                # fused SwiGLU epilogue on the same pair-interleaved weight and output placement. None -> the
+                # minimal_matmul call below, unchanged (every other shape, and the flag off).
+                r5_pc = tpc.r5_glu_progcfg(x, w.w_gate_up, self._mm_grid, self.compute_kernel_config)
+                if r5_pc is not None:
+                    hidden = ttnn.matmul(
+                        x,
+                        w.w_gate_up,
+                        program_config=r5_pc,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                        dtype=ttnn.bfloat16,
+                    )
+                else:
+                    hidden = ttnn.experimental.minimal_matmul(
+                        x,
+                        w.w_gate_up,
+                        fuse_swiglu=True,
+                        config=cfg,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    )
             else:
                 w1_out = self._prefill_matmul(x, w.w1, T, "QWEN9B_MLP_UP_AUTO", activation="silu")
                 w3_out = self._prefill_matmul(x, w.w3, T, "QWEN9B_MLP_UP_AUTO")
