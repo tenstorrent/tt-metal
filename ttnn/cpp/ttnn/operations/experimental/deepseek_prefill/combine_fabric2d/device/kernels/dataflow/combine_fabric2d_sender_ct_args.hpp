@@ -96,9 +96,19 @@ struct SenderCtArgs {
         fwd_sem_addr(get_compile_time_arg_val(14)),
         final_sem_addr(get_compile_time_arg_val(15)) {}
 
-    // The ring counters live at hand-placed L1 addresses here, so this kernel owns their lifetime and
-    // must hand the next launch a zeroed pair. Safe only at the very end: the reader's last act was
-    // publishing the CMD_END slot the sender has just drained, so nothing still reads or bumps them.
+    // What a ring-counter slot names depends on where the counters live. Overlapped, they are program
+    // semaphores the framework re-initialises every launch; alone, they are hand-placed L1 this kernel
+    // owns, so it must hand the next launch a zeroed pair. Zeroing is safe only at the very end: the
+    // reader's last act was publishing the CMD_END slot the sender has just drained.
+#ifdef CMBF2D_OVERLAPPED
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_slot));
+    }
+    void reset_ring_counters() const {}
+#else
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
     }
@@ -109,6 +119,7 @@ struct SenderCtArgs {
         noc_semaphore_set(filled_ptr(), 0);
         noc_semaphore_set(freed_ptr(), 0);
     }
+#endif
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
