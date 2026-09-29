@@ -1,0 +1,153 @@
+{
+ "metrics": {
+  "comb_col_sum_err_swap_attn_hc": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0025892257690429688
+  },
+  "max_abs_swap_attn_hc_comb": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.00341796875
+  },
+  "max_abs_swap_attn_hc_post": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0048828125
+  },
+  "max_abs_swap_attn_hc_pre": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0024403929710388184
+  },
+  "max_row_rel_l2_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.001831491244956851
+  },
+  "max_row_rel_l2_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.0032877230551093817
+  },
+  "norm_ratio_max_swap_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:48:01",
+   "value": 1.0036077499389648
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:01",
+   "value": 1.0005639791488647
+  },
+  "norm_ratio_max_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T03:48:00",
+   "value": 1.0001907348632812
+  },
+  "norm_ratio_max_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:01",
+   "value": 1.0005968809127808
+  },
+  "norm_ratio_max_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T03:48:01",
+   "value": 1.000510334968567
+  },
+  "norm_ratio_min_swap_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.9959993362426758
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.9991434216499329
+  },
+  "norm_ratio_min_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9979953765869141
+  },
+  "norm_ratio_min_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.9992856979370117
+  },
+  "norm_ratio_min_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.9991397261619568
+  },
+  "pcc_swap_attn_hc": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999986168826368
+  },
+  "pcc_swap_attn_in": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999988646765312
+  },
+  "pcc_swap_attn_norm": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999960055235335
+  },
+  "pcc_swap_attn_out": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.999997196126098
+  },
+  "pcc_swap_ffn_hc": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999973181340369
+  },
+  "pcc_swap_ffn_in": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.999994636726979
+  },
+  "pcc_swap_ffn_norm": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999967367468074
+  },
+  "pcc_swap_h_mid": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999963333979875
+  },
+  "pcc_swap_mlp_out": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999932907424838
+  },
+  "pcc_swap_out": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9999971407366881
+  },
+  "rel_l2_swap_attn_collapse_L01_distinct_streams": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.002982753561809659
+  },
+  "rel_l2_swap_attn_collapse_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.001657875720411539
+  },
+  "rel_l2_swap_attn_collapse_vs_golden": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0015689185820519924
+  },
+  "rel_l2_swap_attn_hc_comb": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0015802496345713735
+  },
+  "rel_l2_swap_attn_hc_post": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.00134118867572397
+  },
+  "rel_l2_swap_attn_hc_pre": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0013967951526865363
+  },
+  "rel_l2_swap_attn_norm_vs_cpu_same_input": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.0016701857093721628
+  },
+  "rel_l2_swap_attn_norm_vs_golden": {
+   "t": "2026-09-29T03:48:01",
+   "value": 0.002827497199177742
+  },
+  "rel_l2_swap_out": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.0025939715560525656
+  },
+  "row_norm_ratio_max_swap_out": {
+   "t": "2026-09-29T03:48:00",
+   "value": 1.0047237873077393
+  },
+  "row_norm_ratio_min_swap_out": {
+   "t": "2026-09-29T03:48:00",
+   "value": 0.9953752756118774
+  }
+ },
+ "task": "S.kda_dense.03"
+}
