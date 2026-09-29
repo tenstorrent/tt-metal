@@ -235,3 +235,72 @@ Results: reference passes (out 0.999999, norm rel 0.0017). Stub fails (PCC 0, ev
 vs CPU same input 0.0017.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_03_attn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.kda_dense.attention test (attempt 1)
+
+Reviewed the rendered component test for the KDA attention (layer 0, s4096 chunk 1: start 2048, [2048, 4096] bf16,
+prefix state from the golden snapshot at 2048). Kept the gated PCC (metric `pcc_attention_L00`). A CPU mutation run on
+this golden (`/tmp` scripts, not kept) showed that PCC and whole-chunk rel L2 miss the state bugs that matter for a
+TP=2 / SP=2 ttKDA:
+- zeroed recurrent prefix PCC 0.99935 / rel 0.036; zeroed conv tail 0.99992 / 0.012; transposed recurrent state 0.9982;
+  second SP half started from the prefix state 0.99987 / 0.016, or from zero 0.99941; conv halo at the SP split
+  zeroed 0.99994 / 0.011; o_norm dropped 0.99942 (ratio 0.003); x1.02 PCC 1.0 / rel 0.020.
+- These errors sit in the first rows of the chunk or of an SP segment: the worst 128-row block rel L2 is 0.043..0.15 and
+  the worst row 0.38..0.95. Headroom: fp32 reference 0.0020 / 0.0024; bf16 everywhere 0.0047 / 0.0063; +1% element
+  noise 0.011 / 0.015; +3% noise 0.030 / 0.039.
+- Caught by PCC already: q scale, gate bound, dt_bias, A_log exp, beta, gate activation, o_norm weight, conv silu, TP
+  head halves swapped.
+Added asserted checks (informational metrics): finite, rel L2 <= 0.02, per-token norm ratio [0.98, 1.02], every
+128-row block rel L2 <= 0.03 (prints all 16 blocks), worst per-token rel L2 <= 0.1. Post-chunk state vs the golden
+snapshot at start + chunk: recurrent rel <= 0.03 and worst head <= 0.05, conv rel <= 0.02. Always checked in reference
+mode. In device mode it is checked only when the module sets `dctx.extra["state_out"] = {"kda_recurrent": [64, 128,
+128], "kda_conv": [3, 24576]}` (reference layout, torch, read back at the harness boundary); otherwise the test prints
+a note and the ladder's state metrics check the state.
+Results: reference passes (PCC 0.999998, rel 0.0020, blocks 0.0020, worst row 0.0024; state rec 0.0008 / head 0.0020,
+conv 0.0019). Stub fails (PCC 0). Device mode fails with NotImplementedError until the implement step adds the module.
+Implement notes: o_norm eps must be exactly 1e-5. The core output RMS is far below sqrt(eps), so the gated RMSNorm acts
+as a scale of about 316 and does not normalize core-output error away. A device error above about 1.5% of the output
+fails rel 0.02. Exposing `state_out` is recommended: the SP carry is where a 2x2 ttKDA is most likely to break.
+Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attention.py`
+(`BRINGUP_IMPL=stub` for the stub; no prefix for the device gate).
+
+## C.kda_dense.attention implement (attempt 1)
+
+What was done:
+- `tt/kda_attention.py:TtKdaAttention` (+ `build_kda_attention(mesh, loader, cfg, layer, max_seq)`), built from DeepSeek's
+  ttKDA. x [1, 1, S, 4096] replicated -> `ttnn.mesh_partition(dim -2, cluster_axis 0)` -> [1, S/2, 4096] -> ttKDA
+  (SP 2 on axis 0, TP 2 on axis 1, heads 32c..32c+31 on column c) -> [1, S/2, 2048] -> `all_gather` dim -1 on axis 1,
+  then dim -2 on axis 0 -> [1, 1, S, 4096] replicated bf16.
+- Every matmul-like program runs at HiFi4: recurrence affine prefix and scan, and output projection (ttKDA defaults
+  are HiFi2). The gated-RMS output is fp32. The grouped-scan group count comes from the device grid: the largest g
+  dividing the local chunk count with 32 * g <= grid cores, which gives g = 2 for local T = 1024 / 2560 / 4096.
+  One ttKDA per chunk length, sharing the KDAWeights.
+- actual_start: a replicated uint32 ROW_MAJOR [max_seq / 64 + 1, 1] table of 64-aligned starts, built at load.
+  Each chunk takes a `ttnn.slice` of it (a [1, 1] device scalar).
+- State: `self.state` and `self.zero_state` are allocated once; a chunk at start 0 reads `zero_state`. The new carries
+  are `ttnn.copy`'d into `self.state` (kimi_k3/kda_state.py pattern). `load_state` / `state_torch` convert at the
+  harness boundary: recurrent [64, 128, 128] is sharded on dim 1 over axis 1. The reference conv tail [3, q|k|v] is
+  reordered to the per-TP-rank [q_c|k_c|v_c].
+- hooks: `_KdaHostFn`. If ctx.extra has `state_prefix` it is loaded and `state_out` is set; otherwise the module's
+  carried state continues. `attention` is added to `DEVICE_STEPS["kda_dense"]`. In the hybrid model `_RefState`
+  routes load_prefix / to_torch of those layers to the device module.
+Checked: SP order. chronology.hpp `derive` gives first_rank = (start / (S/2)) % 2 = 0 and no split for every start that
+is a multiple of S, so row 0 takes the first half and row 1 the second: the contiguous halves the plan feeds. The SP
+fallback was not needed (every block rel L2 is 0.0070-0.0072, no bump at row 1024).
+Precision findings (known_issues Proposed):
+- First run: output fine (PCC 0.99998, rel 0.0072), state worst head 0.0528 > 0.05, biased low (head 12 scale 0.95),
+  on the fast-decay channels.
+- The device q/k/v/g/beta match the CPU (rel 0.004 / 0.0018 / 0.0004). Of the prepared terms only k_dec_t is off
+  (4.4% on head 12). Cause: the TF32 FPU subtraction `G - G_last/2` in prepare_chunk_recurrence.
+- Fix: `_PreciseDecayRecurrence` recomputes k_dec_t (suffix-sum matmul on bf16 g, fp32 exp, fp32 l2-normalized k).
+  `GLM_KDA_DECAY=kernel` keeps the kernel's own term. Also the gate in fp32 (`_GlmKDA._compute_gates`); on its own it
+  changed nothing (worst head 0.0538).
+- Probed exact on device (fp32): transpose, permute, subtract, multiply, typecast->bf16 (RNE). An fp32 matmul operand
+  rounds to TF32 (max rel 9.7e-4, unbiased); a bf16 operand is exact.
+Result (gate): pcc_attention_L00 0.999985, rel L2 0.0071, row ratio [0.9902, 0.9982], worst block 0.0072, worst row
+0.0136; state recurrent rel 0.0134 / worst head 0.0238, conv 0.0017.
+Also ran, as a scratch test now deleted: S = 5120 and 8192 at start 0 and start S (random x). They build and give
+finite output and state. Warm times 0.08 s / 0.13 s including host readback.
+Left for later: output per-token ratio stays low ([0.990, 0.998], scale 0.9954), probably `intra` (scale 0.9957) from the
+same kernel subtraction; a fork of prepare_chunk_recurrence would fix k_dec_t and intra at the source.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_dense_attention.py`

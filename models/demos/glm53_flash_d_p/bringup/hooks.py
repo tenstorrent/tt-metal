@@ -32,7 +32,7 @@ def hf_model(spec, num_layers):
 # Device steps of the hybrid model, per block type: each passed its component gate on the device. Every other step
 # runs on the CPU reference.
 DEVICE_STEPS = {
-    "kda_dense": {"attn_hc", "attn_collapse", "attn_norm"},
+    "kda_dense": {"attn_hc", "attn_collapse", "attn_norm", "attention"},
     "dsa_moe": set(),
     "kda_moe": set(),
 }
@@ -104,7 +104,48 @@ def _norm_host_fn(mesh, module):
     return fn
 
 
+class _KdaHostFn:
+    """fn(ctx, x_host [S, H]) -> host [S, H] bf16 around TtKdaAttention (harness boundary: bf16 upload, chip-0
+    read-back). A component ctx that carries ``state_prefix`` loads it first and gets ``state_out`` back; otherwise
+    the module's own carried state continues from the previous chunk."""
+
+    def __init__(self, mesh, module):
+        self.mesh, self.module = mesh, module
+
+    def __call__(self, ctx, x):
+        import ttnn
+        from models.demos.glm53_flash_d_p.tt.common import replicate, replicated_to_host
+
+        prefix = ctx.extra.get("state_prefix")
+        if prefix is not None and ctx.start > 0:
+            self.module.load_state(prefix)
+        s = x.shape[-2]
+        xd = replicate(self.mesh, x.reshape(1, 1, s, x.shape[-1]).to(torch.bfloat16))
+        yd = self.module(xd, ctx.start)
+        y = replicated_to_host(yd).reshape(s, -1)
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        if prefix is not None:
+            ctx.extra["state_out"] = self.module.state_torch()
+        return y
+
+    def load_state(self, tensors):
+        self.module.load_state(tensors)
+
+    def state_torch(self):
+        return self.module.state_torch()
+
+
+def _max_seq(spec):
+    seqs = [r["seq"] for r in spec.get("ladder", [])] + [spec.get("target", {}).get("seq", 0)]
+    return max(seqs)
+
+
 def _device_step(mesh, spec, layer, step, loader, cfg):
+    if step == "attention" and cfg.is_kda(layer):
+        from models.demos.glm53_flash_d_p.tt.kda_attention import build_kda_attention
+
+        return _KdaHostFn(mesh, build_kda_attention(mesh, loader, cfg, layer, _max_seq(spec)))
     if step in _HC_STEPS:
         from models.demos.glm53_flash_d_p.tt.mhc import build_hc
 
@@ -126,15 +167,19 @@ def device_component(mesh, spec, layer, step):
 
 
 class _RefState:
-    """CPU reference state (no device-resident state yet)."""
+    """CPU reference state; a layer whose stateful step runs on the device keeps its state there (``dev``)."""
 
-    def __init__(self, ref, max_seq):
-        self.ref, self.s = ref, ref.new_state(max_seq)
+    def __init__(self, ref, max_seq, dev=None):
+        self.ref, self.s, self.dev = ref, ref.new_state(max_seq), dev or {}
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
+        if layer in self.dev:
+            self.dev[layer].load_state(tensors)
 
     def to_torch(self, layer, length):
+        if layer in self.dev:
+            return self.dev[layer].state_torch()
         return self.ref.state_tensors(self.s, layer, length)
 
 
@@ -157,7 +202,8 @@ class HybridDeviceModel:
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        return _RefState(self.ref, max_seq)
+        dev = {i: o[s] for i, o in self.overrides.items() for s in o if hasattr(o[s], "state_torch")}
+        return _RefState(self.ref, max_seq, dev)
 
     def embed(self, tokens):
         import torch.nn.functional as F
