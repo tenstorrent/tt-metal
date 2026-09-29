@@ -1530,3 +1530,39 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
+
+## C.moe_full.attn_residual test (attempt 1)
+
+What was done
+- Replaced the rendered 22-line test with layer 0's attn_residual test at layer 1, with these changes. Gated PCC
+  (0.99) kept. Not a CPU bridge, size and finite kept. rel L2 <= 0.01 kept. Per-token per-stream norm ratio tightened
+  to [0.99, 1.01]. The addend checks (delta_j = out_j - in_j vs t_j = post_j * attn_out) are now rounding-aware:
+  |coef_j - 1| <= 0.01 + 2 r_j / ||t_j||, ||delta_j - t_j|| <= 0.01 ||t_j|| + 2 r_j, per token <= 0.05 ||t|| + 2 r +
+  1e-6. Here r is the bf16 rounding error of the exact fp32 result on the golden inputs.
+- CPU mutation study on the layer-1 golden (/tmp/hy4_c_res1/study.py and bound.py, outside the repo). The table is in
+  the test docstring.
+
+Decisions
+- Rounding-aware limits: at layer 1 the post gates of streams 0 / 1 are ~3e-4, so their addend (norm 0.29 / 0.47) is
+  below the stream's bf16 resolution (norm ~70). Fixed limits would fail any bf16-output module; with this bound a
+  bf16 output uses about 0.49 of the allowance.
+- Addend statistics are computed in float64. With fp32 sums over 12.6M elements, the exact reference scored
+  coefficient 1.02-1.03.
+- The limits are tighter than layer 0's (coefficient 0.01, rel 0.01 + budget, norm ratio 0.99-1.01). 1.02 x attn_out
+  now fails the addend (excess 1.34), rel L2 (0.0111) and the ratio. 1.01 x passes (blind spot, at bf16 tolerance).
+
+Gotchas
+- Layer-1 streams differ (norms 70 / 65 / 71 / 115), so input- or output-stream swaps are now visible (PCC 0.989,
+  rel 0.149).
+- The first "FAIL pcc_attn_residual_L01: pcc=0.000000" line comes from the precompile collect pass. Ignore it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00243, ratio [0.9980, 1.0022], addend exact).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device, TtHcPost via device_component): PASS. pcc_attn_residual_L01 0.999997. rel 0.00243, ratio [0.9980,
+  1.0022], addend coefficient 1.0 and excess 0 on every stream (bit-identical to the fp32 CPU step).
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
