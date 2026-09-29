@@ -145,6 +145,29 @@
   "started": "2026-09-29T01:40:28",
   "status": "PASS"
  },
+ "R.4": {
+  "attempts": 0,
+  "duration_s": 17.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T01:45:42"
+   }
+  ],
+  "last_run": "2026-09-29T01:45:42",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/R.4.log",
+  "metrics": {
+   "trim_done": 1,
+   "trim_dropped_tensors": 72497,
+   "trim_freed_gb": 309.53,
+   "trim_kept_tensors": 3611,
+   "trim_verify_errors": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T01:45:25",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/glm53_prefill",
   "created": "2026-09-29T00:16:27",
