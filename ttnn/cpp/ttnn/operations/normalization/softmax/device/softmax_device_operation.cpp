@@ -255,12 +255,16 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
                             auto num_cores_r = program_config.compute_with_storage_grid_size.y;
                             // check dims
-                            TT_FATAL(program_config.block_h > 0, "block_h must be greater than 0.");
+                            const auto shard_volume = program_config.block_w * program_config.block_h *
+                                                      tensors_args.input_tensor.tensor_spec().tile().get_tile_hw();
                             TT_FATAL(
-                                M * K /
-                                        ((program_config.block_w * program_config.block_h) *
-                                         tensors_args.input_tensor.tensor_spec().tile().get_tile_hw()) ==
-                                    num_cores_r * num_cores_c,
+                                shard_volume > 0,
+                                "block_h must be greater than 0 and block_w * block_h * tile_hw must not overflow; got "
+                                "block_w = {}, block_h = {}",
+                                program_config.block_w,
+                                program_config.block_h);
+                            TT_FATAL(
+                                M * K / shard_volume == num_cores_r * num_cores_c,
                                 "number of shards must equal to number of cores. M = {}, K = {}, block_w = {}, block_h "
                                 "= {}, num_cores = {}",
                                 M,
