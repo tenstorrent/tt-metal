@@ -74,6 +74,7 @@ DEVICE_STEPS = {
         "ffn_hc",
         "ffn_hc_pre",
         "ffn_norm",
+        "mlp",
     },
     "moe_full": set(),
     "moe_shared": set(),
@@ -96,6 +97,8 @@ _QA_STEPS = {"q_a"}
 _INDEXER_STEPS = {"indexer"}
 # Gated sparse MLA (tt/attention.py:TtHy4Attention), stateful: owns the layer's device MLA latent cache.
 _ATTENTION_STEPS = {"attention"}
+# Dense SwiGLU MLP (tt/mlp.py:TtDenseMLP), layer 0: TP=2 over axis 1, fp32 intermediates, reduce_scatter over axis 1.
+_MLP_STEPS = {"mlp"}
 
 
 def _loader(spec):
@@ -419,6 +422,39 @@ class _AttentionHostFn:
         return out
 
 
+def _mlp_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtDenseMLP: gate / up column-parallel and down row-parallel over mesh columns (9216 of 18432 per chip), bf16 as
+    stored; HiFi4 + fp32 dest, fp32 gate / up / h (``HY4_MLP_MID=bf16`` for comparison); unclamped."""
+    import os
+
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.mlp import TtDenseMLP
+
+    loader = loader or _loader(spec)
+    p = f"model.layers.{layer}.mlp."
+    w = lambda n: loader.get(p + n + ".weight")  # noqa: E731
+    mid = ttnn.bfloat16 if os.environ.get("HY4_MLP_MID") == "bf16" else ttnn.float32
+    return TtDenseMLP(mesh, w("gate_proj"), w("up_proj"), w("down_proj"), tp_axis=1, mid=mid)
+
+
+def _row_in_col_out_host_fn(mesh, module, dtype=None):
+    """fn(ctx, x_host [S, H]) -> host [S, W] fp32 for a module taking the row-split input replicated over axis 1
+    ([1, 1, S/2, H] per chip, the TtGatheredRmsNorm layout) and returning the column split [1, 1, S/2, W/2] (harness
+    boundary)."""
+    import ttnn
+    from models.demos.hy4_preview_d_p.tt.layout import col_split_to_host, row_split_to_device
+
+    def fn(ctx, x):
+        xd = row_split_to_device(mesh, x, dtype=dtype or ttnn.bfloat16)
+        yd = module(xd)
+        y = col_split_to_host(mesh, yd).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(yd)
+        return y
+
+    return fn
+
+
 def _col_split_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> host [S, H] fp32 for a module on column-split [1, 1, S/2, H/2] tensors (harness
     boundary)."""
@@ -449,6 +485,8 @@ def _device_step_fn(mesh, spec, layer, step, loader, cfg):
         return _IndexerHostFn(mesh, _indexer_module(mesh, spec, layer, loader, cfg))
     if step in _ATTENTION_STEPS:
         return _AttentionHostFn(mesh, _attention_module(mesh, spec, layer, loader, cfg))
+    if step in _MLP_STEPS:
+        return _row_in_col_out_host_fn(mesh, _mlp_module(mesh, spec, layer, loader, cfg))
     if step in _HC_PRE_STEPS:
         from models.demos.hy4_preview_d_p.tt.ihc import TtHcPre
 
@@ -472,6 +510,7 @@ def device_component(mesh, spec, layer, step):
             _QA_STEPS,
             _INDEXER_STEPS,
             _ATTENTION_STEPS,
+            _MLP_STEPS,
         )
     ):
         loader = _loader(spec)
