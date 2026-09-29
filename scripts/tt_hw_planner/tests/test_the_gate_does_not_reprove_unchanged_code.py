@@ -87,7 +87,7 @@ def test_no_run_identity_means_no_caching(repo, monkeypatch):
     demo, _ = repo
     monkeypatch.setenv(_RUN_ENV, "")
     assert _key(demo) is None
-    assert E._cached_correctness_pass(demo, None) is False
+    assert not E._cached_correctness_pass(demo, None)
 
 
 def test_the_key_is_content_not_mtime(repo):
@@ -108,12 +108,12 @@ def test_the_key_is_content_not_mtime(repo):
 def test_a_pass_is_reused_and_a_failure_is_not(repo):
     demo, _ = repo
     k = _key(demo)
-    assert E._cached_correctness_pass(demo, k) is False  # nothing recorded yet
-    E._record_correctness_pass(demo, k)
-    assert E._cached_correctness_pass(demo, k) is True
+    assert E._cached_correctness_pass(demo, k) is None  # nothing recorded yet
+    E._record_correctness_pass(demo, k, ["PCC=0.995"])
+    assert E._cached_correctness_pass(demo, k) == ["PCC=0.995"]
     # a later edit invalidates it
     (demo / "tt" / "pipeline.py").write_text("X = 9\n")
-    assert E._cached_correctness_pass(demo, _key(demo)) is False
+    assert E._cached_correctness_pass(demo, _key(demo)) is None
 
 
 def test_only_a_pass_is_ever_recorded():
@@ -127,20 +127,20 @@ def test_only_a_pass_is_ever_recorded():
 def test_the_cache_can_be_switched_off(repo, monkeypatch):
     demo, _ = repo
     k = _key(demo)
-    E._record_correctness_pass(demo, k)
+    E._record_correctness_pass(demo, k, [])
     monkeypatch.setenv(E._GATE_CACHE_OFF_ENV, "1")
-    assert E._cached_correctness_pass(demo, k) is False
+    assert E._cached_correctness_pass(demo, k) is None
 
 
 def test_a_corrupt_cache_file_is_ignored_not_raised(repo):
     demo, _ = repo
     (demo / E._GATE_CACHE_FILE).write_text("{not json")
-    assert E._cached_correctness_pass(demo, _key(demo)) is False
+    assert E._cached_correctness_pass(demo, _key(demo)) is None
 
 
 def test_an_unwritable_demo_dir_does_not_raise(repo):
     demo, _ = repo
-    E._record_correctness_pass(demo / "nonexistent-subdir", _key(demo))  # must not raise
+    E._record_correctness_pass(demo / "nonexistent-subdir", _key(demo), [])  # must not raise
 
 
 # --- the gate still gates -----------------------------------------------------------------------
@@ -173,7 +173,7 @@ def test_it_names_no_model_or_stage():
     import inspect
     import textwrap
 
-    for fn in (E._import_closure, E._correctness_key, E._repo_root_of):
+    for fn in (E._import_closure, E._correctness_key, E._repo_root_of, E._source_fingerprint):
         tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
         node = tree.body[0]
         if ast.get_docstring(node) is not None:
@@ -181,3 +181,71 @@ def test_it_names_no_model_or_stage():
         lowered = ast.unparse(node).lower()
         for name in ("qwen", "denoise", "prefill", "encoder", "vae", "tt_dit", "demos/"):
             assert name not in lowered, f"{name!r} in {fn.__name__} would assume where code lives"
+
+
+# --- the two ways it managed to never fire ------------------------------------------------------
+
+
+def test_a_failing_trace_gate_does_not_throw_away_a_clean_correctness_pass():
+    """BUG 1: the record sat at the END, under a `reasons` list that also carries trace and stack.
+
+    On the bring-up this was written for, the trace gate was the ONLY thing failing -- so a clean
+    3.5 h correctness pass was discarded every round because a ten-minute gate after it failed, and
+    the cache never recorded once in a 25-hour run."""
+    import inspect
+
+    src = inspect.getsource(E._run_deterministic_gates)
+    record_at = src.index("_record_correctness_pass(demo_dir, _key")
+    assert "trace_gate import" not in src[:record_at], "the record must happen BEFORE the trace gate runs"
+    assert "_block_stack_gate" not in src[:record_at], "the record must happen BEFORE the stack gate runs"
+    assert src.count("_record_correctness_pass(demo_dir, _key") == 1, "one record, at the end of correctness"
+
+
+def test_a_cache_hit_does_not_waive_the_trace_and_stack_gates():
+    """BUG 2: the hit returned (True, []) from the top, ahead of the very gate that was failing."""
+    import inspect
+
+    src = inspect.getsource(E._run_deterministic_gates)
+    hit_at = src.index("_cached_correctness_pass(demo_dir, _key)")
+    after = src[hit_at:]
+    assert "return True, []" not in after, "a hit must not return past the remaining gates"
+    assert "_block_stack_gate" in after and "trace_gate import" in after
+
+
+def test_a_hit_replays_the_evidence_the_later_checks_read():
+    """A check with no input must never read as a pass: the batch report and PCC come back too."""
+    from models.experimental.perf_automation.agent.perf_adapter import batch_report_line
+
+    out = "\n".join(["noise", batch_report_line(32), "some_stage PCC = 0.9987", "another line", "1 passed"])
+    kept = E._gate_pass_evidence(out)
+    assert batch_report_line(32) in kept
+    assert any("PCC" in k for k in kept)
+    assert "noise" not in kept and "another line" not in kept
+    replayed = "\n".join(kept + ["1 passed"])
+    assert E._batch_gate_reason(32, replayed) is None  # the batch check still sees what it drove
+    assert E._batch_gate_reason(4, replayed) is not None  # and still catches the wrong batch
+
+
+def test_a_replayed_pass_cannot_hide_a_failing_pcc():
+    """The stored lines are the run's own, so the PCC check reaches the same verdict it did live."""
+    import re
+
+    kept = E._gate_pass_evidence("stage PCC = 0.9600\n1 passed")
+    replayed = "\n".join(kept)
+    vals = [float(v) for v in re.findall(r"PCC[^=\n]*=\s*(-?\d+(?:\.\d+)?)", replayed)]
+    assert vals == [0.96] and min(vals) < 0.99
+
+
+def test_the_evidence_survives_a_round_trip(repo):
+    demo, _ = repo
+    k = _key(demo)
+    E._record_correctness_pass(demo, k, ["PERF_BATCH=32", "PCC = 0.999"])
+    assert E._cached_correctness_pass(demo, k) == ["PERF_BATCH=32", "PCC = 0.999"]
+
+
+def test_an_old_record_without_evidence_is_not_trusted(repo):
+    """A file written by the previous shape has no evidence to replay, so it must not count."""
+    demo, _ = repo
+    k = _key(demo)
+    (demo / E._GATE_CACHE_FILE).write_text(json.dumps({"key": k, "version": E._GATE_KEY_VERSION}))
+    assert E._cached_correctness_pass(demo, k) is None

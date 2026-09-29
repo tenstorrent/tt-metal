@@ -1419,6 +1419,23 @@ def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
 #     about this code on THIS board, and device_recovery._run_stamp() already exists to say which
 #     run a piece of state belongs to -- see its docstring on state outliving the run that earned it.
 # Set $E2E_GATE_NO_CACHE=1 to re-run regardless.
+#
+# TWO CORRECTIONS, BOTH FROM WATCHING IT NEVER FIRE ON THE RUN IT WAS BUILT FOR.
+#
+# (1) IT RECORDED NOTHING. The record sat under `if not reasons` at the very END of this function,
+#     by which point `reasons` also carries the TRACE and STACK gates. Those run after correctness
+#     and, on the bring-up this was written for, were the only thing failing -- so a clean 3.5 h
+#     correctness pass was thrown away every round because a ten-minute gate after it had failed.
+#     The record now happens where correctness ENDS, on the correctness verdict alone.
+# (2) A HIT SKIPPED THE TRACE GATE TOO. The hit returned `(True, [])` from the top of the function,
+#     ahead of the trace and stack gates -- so the one time it did fire it would have waived exactly
+#     the gate that was failing. The hit now skips only the expensive thing, the tests/e2e RUN, and
+#     everything after it still runs.
+#
+# Skipping the run means the checks that read its OUTPUT (the batch report, the xfail/skip scan, the
+# measured PCC) would have nothing to read, and a check with no input must never read as a pass. So
+# the record keeps the lines that carry those facts and a hit replays them: the same verdict from the
+# same evidence, without the device work that produced it.
 _GATE_CACHE_FILE = ".e2e_correctness_pass.json"
 _GATE_CACHE_OFF_ENV = "E2E_GATE_NO_CACHE"
 _GATE_KEY_VERSION = 1
@@ -1518,22 +1535,46 @@ def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
     return h.hexdigest()[:16]
 
 
-def _cached_correctness_pass(demo_dir: Path, key: Optional[str]) -> bool:
+def _gate_pass_evidence(test_output: str) -> list:
+    """The lines of a PASSING gate run that the checks after it read: the batch report, and PCC.
+
+    Kept as the run's own lines rather than as parsed values, so the checks downstream stay the
+    single authority on what those lines mean and a cached verdict is reached the same way a live
+    one is."""
+    from models.experimental.perf_automation.agent.perf_adapter import parse_batch_report
+
+    keep = []
+    for line in (test_output or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(r"PCC[^=\n]*=\s*-?\d+(?:\.\d+)?", line) or parse_batch_report(line) is not None:
+            keep.append(line)
+    return keep
+
+
+def _cached_correctness_pass(demo_dir: Path, key: Optional[str]) -> Optional[list]:
+    """The evidence of a pass already earned for this exact code, or None. Falsy when absent."""
     if not key or os.environ.get(_GATE_CACHE_OFF_ENV) == "1":
-        return False
+        return None
     try:
         doc = json.loads((demo_dir / _GATE_CACHE_FILE).read_text())
     except Exception:  # noqa: BLE001
-        return False
-    return isinstance(doc, dict) and doc.get("key") == key
+        return None
+    if not isinstance(doc, dict) or doc.get("key") != key:
+        return None
+    ev = doc.get("evidence")
+    return list(ev) if isinstance(ev, list) else None
 
 
-def _record_correctness_pass(demo_dir: Path, key: Optional[str]) -> None:
+def _record_correctness_pass(demo_dir: Path, key: Optional[str], evidence: Optional[list] = None) -> None:
     """Remember a PASS only. A failure is what the loop is working on and must be re-run."""
     if not key or os.environ.get(_GATE_CACHE_OFF_ENV) == "1":
         return
     try:
-        (demo_dir / _GATE_CACHE_FILE).write_text(json.dumps({"key": key, "version": _GATE_KEY_VERSION}))
+        (demo_dir / _GATE_CACHE_FILE).write_text(
+            json.dumps({"key": key, "version": _GATE_KEY_VERSION, "evidence": list(evidence or [])})
+        )
     except OSError:
         pass
 
@@ -1553,9 +1594,9 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     # it costs the whole round (see _correctness_key). Only a PASS is reused, and only within the run
     # that earned it.
     _key = _correctness_key(demo_dir, pcc, batch)
-    if _cached_correctness_pass(demo_dir, _key):
+    _cached_pass = _cached_correctness_pass(demo_dir, _key)
+    if _cached_pass is not None:
         print("  [gate] correctness unchanged since it passed this run -- reusing that verdict", flush=True)
-        return True, []
 
     demo_subdir = demo_dir / "demo"
     demo_entrypoints = sorted(demo_subdir.glob("demo_*.py")) if demo_subdir.is_dir() else []
@@ -1704,6 +1745,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     _gate_argv += [*_pr.PYTEST_NO_TIMEOUT, "-rA", "-s"]
 
     def _e2e_once():
+        # The run that already passed, on code that has not changed since, is still a pass; what the
+        # checks below it read is replayed from the record rather than re-earned on the device.
+        if _cached_pass is not None:
+            return _StepResult(True, "\n".join(_cached_pass + ["1 passed"]), detail=0)
         _gate_log.unlink(missing_ok=True)  # each attempt is judged on its own output
         try:
             rc = _pr._execute(
@@ -1848,6 +1893,11 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
         print("[emit-e2e] WARNING: G6 trace gate DISABLED via E2E_I_KNOW_TRACE_IS_BROKEN=1")
         print("[emit-e2e]          emitted pipeline may not run trace in optimize.")
 
+    # ---- CORRECTNESS ENDS HERE. Everything below is the trace/stack gates, which are cheap and
+    # must be re-run every round; the expensive verdict above is the one worth keeping.
+    if not reasons:
+        _record_correctness_pass(demo_dir, _key, _gate_pass_evidence(pytest_out))
+
     if not _rt_off and not _anno and not reasons:
         probe_py = Path(__file__).resolve().parent.parent / "_trace_capture_probe.py"
         if probe_py.is_file():
@@ -1980,8 +2030,6 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     if _stack_reason:
         reasons.append(_stack_reason)
 
-    if not reasons:
-        _record_correctness_pass(demo_dir, _key)
     return (len(reasons) == 0), reasons
 
 
