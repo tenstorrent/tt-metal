@@ -4,9 +4,9 @@
 """fabric_all_gather — a line / ring all-gather over fabric, DRAM to DRAM, as one ttnn.generic_op.
 
 Groups: `cluster_axis` 0 (each mesh column), 1 (each mesh row) or None (one snake over the whole mesh). Every hop
-must be one physical link. Each chip's shard is TILE, interleaved in DRAM; the output concatenates the group's shards
-in row-major chip order along dim 0 (or along dim -2 when every leading dim is 1), whatever order the data travels
-in (a snake ring over the whole mesh still writes chip (r, c) at slot r * cols + c).
+must be one physical link. Each chip's shard is TILE or ROW_MAJOR (any dtype), interleaved in DRAM; the output
+concatenates the group's shards in row-major chip order along dim 0 (or along dim -2 when every leading dim is 1),
+whatever order the data travels in (a snake ring over the whole mesh still writes chip (r, c) at slot r * cols + c).
 
 Per chip, per direction (toward the next / previous chip in the group) and per link there is one *port* core:
   reader (RISCV_1, NoC0): reads its chip's own shard from the input, then the shards it relays, from the output,
@@ -762,8 +762,8 @@ def create_mesh_program_descriptor(
     page_bytes = int(input_tensor.buffer_aligned_page_size())
     num_banks = _num_banks(mesh_device)
     shape = list(input_tensor.padded_shape)
-    shard_pages = (shape[-1] // 32) * (shape[-2] // 32) * math.prod(shape[:-2])
-    assert input_tensor.layout == ttnn.TILE_LAYOUT
+    # a page is a 32 x 32 tile (TILE) or one row (ROW_MAJOR); the kernels only move whole pages, so any dtype works
+    shard_pages = _shard_pages(input_tensor)
     run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
     chunk_bytes = run_pages * page_bytes
     group = max(1, min(8, cb_bytes // (2 * chunk_bytes)))
@@ -877,6 +877,21 @@ def create_mesh_program_descriptor(
 _SEM_CACHE = {}
 
 
+def _shard_pages(t):
+    shape = list(t.padded_shape)
+    if t.layout == ttnn.TILE_LAYOUT:
+        return (shape[-1] // 32) * (shape[-2] // 32) * math.prod(shape[:-2])
+    return math.prod(shape[:-1])  # ROW_MAJOR: one page per row
+
+
+def _check_dram_interleaved(t, what):
+    mc = t.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise ValueError(f"fabric_all_gather: {what} must be DRAM interleaved")
+    if t.layout == ttnn.TILE_LAYOUT and list(t.shape)[-2:] != list(t.padded_shape)[-2:]:
+        raise ValueError(f"fabric_all_gather: a TILE {what} must be tile-aligned (got {list(t.shape)})")
+
+
 def output_shape(input_tensor, G, dim):
     shape = list(input_tensor.shape)
     assert dim in (0, len(shape) - 2), "gather along dim 0, or dim -2 with every leading dim 1"
@@ -909,12 +924,13 @@ def fabric_all_gather(
     ready_semaphore=None,
     data_valid_semaphore=None,
 ):
-    """All-gather `input_tensor` (TILE, DRAM interleaved, one shard per chip) over each group; returns the output.
+    """All-gather `input_tensor` (TILE or ROW_MAJOR, any dtype, DRAM interleaved, one shard per chip) over each group;
+    returns the output.
 
     scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
     topology=Ring). The output is always in row-major chip order (as high_bw_all_gather's), for snakes too.
 
-    output: a preallocated output (the gathered shape, TILE, DRAM interleaved), written in place and returned; it
+    output: a preallocated output (the gathered shape, same dtype and layout, DRAM interleaved), written in place; it
         can be reused call after call. Calls are fenced: no chip writes into a neighbour's output before the
         neighbour has started the same call, i.e. finished everything queued before it (including whatever read the
         previous result).
@@ -941,19 +957,16 @@ def fabric_all_gather(
         sub_core_grid=sub_core_grid,
     )
     G = next(iter(chips.values()))["G"]
+    _check_dram_interleaved(input_tensor, "input")
     want = output_shape(input_tensor, G, dim)
+    layout = input_tensor.layout
     if output is None:
         output = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(want), input_tensor.dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape(want), input_tensor.dtype, layout, mesh_device, ttnn.DRAM_MEMORY_CONFIG
         )
-    elif (
-        list(output.shape) != want
-        or output.dtype != input_tensor.dtype
-        or output.layout != ttnn.TILE_LAYOUT
-        or output.memory_config().buffer_type != ttnn.BufferType.DRAM
-        or output.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-    ):
-        raise ValueError(f"fabric_all_gather: output must be {want} {input_tensor.dtype} TILE DRAM interleaved")
+    elif list(output.shape) != want or output.dtype != input_tensor.dtype or output.layout != layout:
+        raise ValueError(f"fabric_all_gather: output must be {want} {input_tensor.dtype} {layout}")
+    _check_dram_interleaved(output, "output")
     if ready_semaphore is not None:
         sems = (data_valid_semaphore, ready_semaphore)
     else:

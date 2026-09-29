@@ -39,8 +39,10 @@ _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 SHAPE = tuple(int(x) for x in os.environ.get("FAG_SHAPE", "2048,4096").split(","))  # per-chip shard (H, W), bf16
 TRIALS = int(os.environ.get("FAG_TRIALS", "3"))
 PAYLOAD = int(os.environ.get("FAG_PAYLOAD", "14336"))
-_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "fp32": ttnn.float32}
+_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "fp32": ttnn.float32, "fp8": ttnn.fp8_e4m3}
 DTYPE_NAME = os.environ.get("FAG_DTYPE", "bf16")
+_LAYOUTS = {"tile": ttnn.TILE_LAYOUT, "rm": ttnn.ROW_MAJOR_LAYOUT}
+LAYOUT_NAME = os.environ.get("FAG_LAYOUT", "tile")  # rm = ROW_MAJOR (a page is one row)
 DIM = int(os.environ.get("FAG_DIM", "0"))  # 0, or 2 (= dim -2 of the [1, 1, H, W] shard)
 LINKS = tuple(int(x) for x in os.environ.get("FAG_LINKS", "1,2").split(","))
 # schedule variants: "b" = balanced ring (far shard split between directions), "d" = desynchronized bank walks
@@ -111,6 +113,14 @@ def _slowest_chip_ns(mesh_device):
     return max(chip_ns)
 
 
+def _to_host(t):
+    """A device tensor's values on the host, exactly. fp8_e4m3 goes through float32 on device first (some torch
+    builds reject fp8 over DLPack; every fp8 value is exact in float32)."""
+    if t.dtype == ttnn.fp8_e4m3:
+        t = ttnn.typecast(t, ttnn.float32)
+    return ttnn.to_torch(t)
+
+
 def _rt_slowest_chip_ns(mesh_device, run):
     _, records = profile_realtime_program(mesh_device, run, collect_all=True, record_timeout_seconds=5.0)
     assert records, "realtime profiler returned no program"
@@ -147,15 +157,18 @@ def test_fabric_all_gather(mesh_device):
     host = torch.randn((rows, cols, H, W), dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
     inp = ttnn.from_torch(
         host,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16 if dtype == ttnn.fp8_e4m3 else dtype,  # fp8: made on device from bf16
+        layout=_LAYOUTS[LAYOUT_NAME],
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
     )
-    if dtype == ttnn.bfloat8_b:  # lossy: compare against what the device holds
-        host = torch.stack([ttnn.to_torch(t) for t in ttnn.get_device_tensors(inp)]).reshape(rows, cols, H, W)
-    shard_bytes = (H // 32) * (W // 32) * int(inp.buffer_aligned_page_size())
+    if dtype == ttnn.fp8_e4m3:
+        inp = ttnn.typecast(inp, ttnn.fp8_e4m3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if dtype in (ttnn.bfloat8_b, ttnn.fp8_e4m3):  # lossy: compare against what the device holds
+        host = torch.stack([_to_host(t) for t in ttnn.get_device_tensors(inp)]).reshape(rows, cols, H, W)
+    pages = (H // 32) * (W // 32) if LAYOUT_NAME == "tile" else H
+    shard_bytes = pages * int(inp.buffer_aligned_page_size())
     fabric = str(ttnn.get_fabric_config()).split(".")[-1]
     for topo_name in TOPOS:
         shape, cluster_axis, topo = _TOPOS[topo_name][:3]
@@ -185,7 +198,7 @@ def test_fabric_all_gather(mesh_device):
             for grp in groups:  # one chip's output on the host at a time (a Galaxy's outputs are tens of GB)
                 expected = torch.cat([host[r, c].reshape(1, 1, H, W) for r, c in grp], dim=DIM)
                 for r, c in grp:
-                    got = ttnn.to_torch(dev[r * cols + c])
+                    got = _to_host(dev[r * cols + c])
                     assert torch.equal(
                         got.reshape(expected.shape).to(expected.dtype), expected
                     ), f"{fabric}/{topo_name}/links={num_links}: chip ({r},{c}) output != gathered shards"
@@ -230,7 +243,7 @@ def test_fabric_all_gather(mesh_device):
     _REPORT.insert(
         0,
         f"\n=== fabric_all_gather  box={socket.gethostname()}  arch={mesh_device.arch()}  payload={PAYLOAD}B  "
-        f"shard={H}x{W} {DTYPE_NAME} dim={DIM} ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median) ===",
+        f"shard={H}x{W} {DTYPE_NAME} {LAYOUT_NAME} dim={DIM} ({shard_bytes / 2**20:.0f} MiB/chip)  trials={TRIALS} (median) ===",
     ) if not _REPORT or not _REPORT[0].startswith("\n===") else None
 
 

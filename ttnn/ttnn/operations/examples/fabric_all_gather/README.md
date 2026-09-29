@@ -61,7 +61,7 @@ python -m ttnn.operations.examples.fabric_all_gather [options]
 | `--trials` | int | `3` | measured launches per case (median) |
 
 Test environment variables (`test_fabric_all_gather.py`): `FAG_FABRICS`, `FAG_TOPOS`, `FAG_LINKS`, `FAG_VARIANTS`
-(`base`, `b` balanced, `d` desync, `bd`), `FAG_SHAPE`, `FAG_DTYPE`, `FAG_DIM`, `FAG_PAYLOAD`, `FAG_TRIALS`,
+(`base`, `b` balanced, `d` desync, `bd`), `FAG_SHAPE`, `FAG_DTYPE` (`bf16`, `bfp8`, `fp32`, `fp8`), `FAG_LAYOUT` (`tile`, `rm`), `FAG_DIM`, `FAG_PAYLOAD`, `FAG_TRIALS`,
 `FAG_PROFILER` (`device` or `rt`), `FAG_STRICT` (1 = an unroutable topology fails), `FAG_REUSE_CALLS`.
 
 A topology the fabric cannot route (no direct link for a hop, or fewer links than requested) is reported as
@@ -96,6 +96,13 @@ All 112 combinations (7 fabric configs × 8 topologies × 1 and 2 links) are bit
   a 4-chip line 48 → 88 → 103 → 104.
 - **Placement is automatic and matters.** Every port core sits directly below its connection's Ethernet core, so the
   per-link streams share no NoC links.
+
+### Row-major and fp8
+The kernels move whole pages and never look inside them, so any dtype and either layout works: a TILE page is a
+32 × 32 tile, a ROW_MAJOR page is one row (1152 B for bf16 × 576, 704 B for fp8_e4m3 × 656 — a chunk is then 12 or
+20 rows of one bank). A ROW_MAJOR shard needs no alignment (6875 rows per chip is fine); a TILE shard must be
+tile-aligned. Bit-exact on the QuietBox (2 links, balanced, 8192 rows per chip): bf16 ROW_MAJOR ring 151 GB/s on
+FABRIC_1D and 143–144 on 2D-torus-XY; fp8 ROW_MAJOR 144–147 / 138–140 — within a few % of TILE.
 
 ### Balancing a ring: split the far shard between the two directions
 On an even ring of G chips each chip receives G/2 shards over one direction and G/2 − 1 over the other, so one
