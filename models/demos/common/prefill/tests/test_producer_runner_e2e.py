@@ -184,6 +184,10 @@ SCENARIOS = {
             "TT_GLM53_MTP_TTNN_CACHE": GLM53_MTP_TTNN_CACHE,
             "PREFILL_HF_MODEL": GLM53_HF_MODEL,
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
+            # The MTP levels chain off the trunk output, so they inherit its error and add ~0.03/level on
+            # GLM-5.3 (test_mtp.py L4: KVPE 0.874 vs GLM-5.2 0.903): 7 levels land near 0.83 while the
+            # trunk still scores 0.855. Gate them separately so the trunk keeps its own 0.85 floor.
+            "PREFILL_MTP_PCC": "0.80",
         },
         "ready_timeout_s": 3600,
         "producer_timeout_s": 7200,
