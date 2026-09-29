@@ -8,6 +8,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import (
     assert_allclose,
+    assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
@@ -185,18 +186,27 @@ def test_bw_gelu_opt_output(variant, approximate, device):
     )
 
 
-@pytest.mark.parametrize(
-    "grad_dtype,input_dtype",
-    (
-        (ttnn.bfloat16, ttnn.bfloat16),
-        (ttnn.float32, ttnn.bfloat16),
-        (ttnn.bfloat16, ttnn.float32),
-    ),
-)
 @pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
-def test_bw_gelu_mixed_grad_and_input_dtypes(grad_dtype, input_dtype, variant, approximate, device):
-    """grad_output and input need not share a dtype: the kernels switch the unpacker's format
-    between the two operand buffers when they differ. The result takes the input's dtype."""
+@pytest.mark.parametrize(
+    "grad_dtype,input_dtype,ulp_threshold",
+    (
+        # float32 output: the mixed program and its widened twin are the same float32 computation.
+        (ttnn.bfloat16, ttnn.float32, 0),
+        # bfloat16 output: the device packs float32 DEST to bfloat16 while the twin's float32
+        # result is rounded on the host, so allow the one ULP that final rounding can differ by.
+        (ttnn.float32, ttnn.bfloat16, 1),
+    ),
+    ids=("bf16_grad-fp32_input", "fp32_grad-bf16_input"),
+)
+def test_bw_gelu_mixed_grad_and_input_dtypes(variant, approximate, grad_dtype, input_dtype, ulp_threshold, device):
+    """grad_output and input need not share a dtype: each kernel switches the unpacker's format
+    between the two operand buffers when they differ, including eltwise_bw_gelu_tanh_fp32.cpp,
+    which reads grad_output partway through its chain after several input reads.
+
+    Widening bfloat16 to float32 is exact, so a mixed-dtype call must reproduce the same-dtype
+    float32 call on the widened operands -- the operand formats are the only difference between
+    the two programs. That isolates the format switching from the kernels' own accuracy, which
+    test_gelu_bw_exhaustive_allclose bounds against PyTorch for the same-dtype paths."""
     shape = torch.Size([1, 1, 32, 32])
     input_data = torch.linspace(-5.0, 5.0, shape.numel(), dtype=torch.float32).reshape(shape)
     grad_data = torch.linspace(-2.0, 2.0, shape.numel(), dtype=torch.float32).reshape(shape)
@@ -206,12 +216,19 @@ def test_bw_gelu_mixed_grad_and_input_dtypes(grad_dtype, input_dtype, variant, a
     output = ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0]
     assert output.dtype == input_dtype
 
-    rtol, atol = _bf16_tolerance(approximate)
-    assert_allclose(
-        _gelu_bw_reference(input_data, grad_data, approximate),
-        ttnn.to_torch(output),
-        rtol=rtol,
-        atol=atol,
+    widened_input = ttnn.from_torch(
+        ttnn.to_torch(input_tensor).float(), ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    widened_grad = ttnn.from_torch(
+        ttnn.to_torch(grad_tensor).float(), ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    expected = ttnn.to_torch(ttnn.gelu_bw(widened_grad, widened_input, variant=variant)[0]).float()
+
+    output_torch_dtype = torch.bfloat16 if input_dtype == ttnn.bfloat16 else torch.float32
+    assert_with_ulp(
+        expected_result=expected.to(output_torch_dtype),
+        actual_result=ttnn.to_torch(output).to(output_torch_dtype),
+        ulp_threshold=ulp_threshold,
     )
 
 
