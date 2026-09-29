@@ -1777,6 +1777,7 @@ class Gemma4Model:
         batch_size=1,
         user_id=0,
         batched_prefill=False,
+        lane_parallel=False,
         **kwargs,
     ):
         """Build prefill device inputs and cache the host-side state needed
@@ -1801,9 +1802,31 @@ class Gemma4Model:
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
+        tok_mapper = mesh_mapper
 
         tokens_torch = tokens.to(torch.long)
-        if batch_size > 1:
+        if lane_parallel:
+            # Lane-parallel prefill (slice 4): row i of ``tokens`` is lane i's
+            # user; sharding rows over the lane axis lets each column embed and
+            # prefill its OWN user with batch_size=1 semantics. Attention is
+            # already per-column (own KV, tp-axis-only o_proj reduce) and the
+            # lane MLP gather/scatter sums fractured K-chunks across lanes for
+            # whatever rows the columns carry, so the rest of the forward
+            # needs no mode flag.
+            assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
+            assert batch_size == 1, "lane_parallel runs single-user semantics per column"
+            assert not trace_enabled, "lane_parallel prefill is eager-only"
+            assert chunk_page_table is None, "lane_parallel prefill is single-chunk"
+            if self.hidden_size_per_layer_input:
+                raise NotImplementedError("lane_parallel prefill does not support PLI models")
+            lanes = self.mesh_config.lanes
+            assert (
+                tokens_torch.dim() == 2 and tokens_torch.shape[0] == lanes
+            ), f"lane_parallel tokens must be [lanes={lanes}, seq], got {tuple(tokens_torch.shape)}"
+            per_user_seq_len = tokens_torch.shape[-1]
+            tokens_for_embed = tokens_torch
+            tok_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
+        elif batch_size > 1:
             assert tokens_torch.dim() == 2, "batched prefill tokens must be [batch, seq_len]"
             per_user_seq_len = tokens_torch.shape[-1]
             tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
@@ -1818,7 +1841,7 @@ class Gemma4Model:
             device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=tok_mapper,
         )
 
         # Lane-sharded prefill (galaxy one-instance slice 3b): every column
@@ -1836,11 +1859,20 @@ class Gemma4Model:
             owner = 0 if gid is None else int(gid) % lanes  # slot -> lane by modulo
             stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
             stacked[owner] = table
-            return stacked
+            # Flatten to [lanes*rows, blocks]: dim-0 sharding then hands each
+            # column a 2-D [rows, blocks] table. A 3-D per-column view makes
+            # paged_fill read shape[1]=1 as "one block per seq", which only
+            # holds for prompts within a single effective block.
+            return stacked.reshape(-1, stacked.shape[-1])
 
         pt_mapper = mesh_mapper
         if lane_sharded and page_table is not None:
-            page_table = _lane_stack(page_table)
+            if lane_parallel:
+                # Pre-stacked [lanes, rows, blocks]: flatten for the same
+                # 2-D-per-column reason as _lane_stack.
+                page_table = page_table.reshape(-1, page_table.shape[-1])
+            else:
+                page_table = _lane_stack(page_table)
             pt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
 
         tt_page_table = None
