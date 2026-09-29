@@ -33,6 +33,12 @@ bool is_sub_tile(const ttnn::Shape& shape) {
     return shape[-2] % tt::constants::TILE_HEIGHT != 0 || shape[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
+// ttnn does not support a bfloat16 ROW_MAJOR tensor whose last dim is a single element, and native
+// refuses it, so a row-major leg over one is out of scope.
+bool row_major_stick_ok(DataType dtype, const ttnn::Shape& shape) {
+    return dtype != DataType::BFLOAT16 || shape[-1] >= 2;
+}
+
 MemoryConfig interleaved_in(BufferType buffer_type) {
     return MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
 }
@@ -246,7 +252,7 @@ bool supported_by_codegen(
         return true;
     }
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        if (input.dtype() == DataType::BFLOAT8_B) {
+        if (input.dtype() == DataType::BFLOAT8_B || !row_major_stick_ok(input.dtype(), shape)) {
             return false;
         }
         if (input.storage_type() != ttnn::StorageType::DEVICE) {
@@ -310,7 +316,9 @@ bool supported_by_codegen(
     if (input.layout() != ttnn::TILE_LAYOUT && input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
         return false;
     }
-    if (input.dtype() == DataType::BFLOAT8_B) {
+    // Every leg below reads the input's stick width first, so the one-stick rule applies to the round
+    // trip's row-major legs as well.
+    if (input.dtype() == DataType::BFLOAT8_B || !row_major_stick_ok(input.dtype(), shape)) {
         return false;
     }
     if (input.storage_type() != ttnn::StorageType::DEVICE) {
@@ -364,7 +372,7 @@ bool is_demoted(
     if (repeated != 1) {
         return false;
     }
-    const auto it = std::find_if(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r != 1; });
+    const auto* const it = std::find_if(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r != 1; });
     const auto dim = static_cast<int32_t>(std::distance(repeat_dims.cbegin(), it));
     return repeat::is_native_repeat_sharding(
         input.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, dim, *it);
