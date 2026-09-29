@@ -68,24 +68,20 @@ class MLP:
             # Create fused MoE config if the arch supports the fused kernels.
             # On Blackhole (8 DRAM banks vs Wormhole's 12) moe_gpt's K-split table does
             # not cover the full hidden dim, so fused_config stays None and
-            # ThroughputExperts.forward_decode falls back to the dense flow
+            # ThroughputExperts.forward_decode would otherwise fall back to the dense flow
             # (all_to_all_dispatch -> matmul -> all_to_all_combine), which is
-            # numerically equivalent. See fused_moe_kernels_supported_on_arch().
-            # Blackhole takes moe_compute, the arch-agnostic successor to moe_gpt: it sizes its
-            # matmul ring from the live DRAM-bank count instead of assuming Wormhole's 12, and
-            # folds the combine and the routing-score multiply into the kernel.
-            # OPT-IN ONLY. moe_compute is ~1.7x faster end to end (34.0 vs 19.6 tok/s/user at
-            # batch 128 on a Blackhole Galaxy) and its per-layer PCC is good -- experts 0.983,
-            # MLP 0.977, decoder 0.990 against the dense flow's 0.984/0.978/0.992. The cross-row
-            # divergence/repetition symptom this note used to describe was SDPA decode's own
-            # core-grid mismatch (get_decode_sdpa_config sizing off the wide per-device grid
-            # instead of the tight one-core-per-user grid), not a moe_compute bug -- fixed, so
-            # both flows now produce 128/128 coherent, row-identical outputs at batch 128. Default
-            # stays dense (moe_compute's full end-to-end validation is newer); set
-            # GPT_OSS_MOE_COMPUTE=1 to exercise the faster path.
+            # numerically equivalent but slower. See fused_moe_kernels_supported_on_arch().
+            # Blackhole instead defaults to moe_compute, the arch-agnostic successor to moe_gpt:
+            # it sizes its matmul ring from the live DRAM-bank count instead of assuming
+            # Wormhole's 12, and folds the combine and the routing-score multiply into the
+            # kernel. ~1.7x faster end to end than the dense flow (34.7 vs 19.6 tok/s/user at
+            # batch 128 on a Blackhole Galaxy), 128/128 coherent, row-identical outputs
+            # verified at batch 128, and per-layer PCC is good -- experts 0.983, MLP 0.977,
+            # decoder 0.990 against the dense flow's 0.984/0.978/0.992. Set
+            # GPT_OSS_MOE_COMPUTE=0 to fall back to the dense flow (e.g. for debugging).
             moe_compute_config = None
             if (
-                os.getenv("GPT_OSS_MOE_COMPUTE") == "1"
+                os.getenv("GPT_OSS_MOE_COMPUTE", "1") != "0"
                 and not fused_moe_kernels_supported_on_arch()
                 and mesh_device.shape[0] > 1
             ):
