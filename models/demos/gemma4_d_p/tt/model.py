@@ -399,7 +399,8 @@ class Gemma4Model:
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
-        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        # Tile layout out of the lookup: the caller wants tiles, and this skips a separate tilize per chunk.
+        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         embeds = ttnn.mul(embeds, self.embed_scale)
 
         # All-gather sharded hidden dim back to full hidden
@@ -408,7 +409,7 @@ class Gemma4Model:
             from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
 
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
-        return ccl_partition_rows(ttnn.to_layout(embeds, ttnn.TILE_LAYOUT), self.mesh_config)
+        return ccl_partition_rows(embeds, self.mesh_config)
 
     def transform_and_embed_prefill_inputs_device(self, tokens):
         """Embed CP-sharded tokens into tiled hidden states, keeping this TP device's 1/TP of the rows."""
