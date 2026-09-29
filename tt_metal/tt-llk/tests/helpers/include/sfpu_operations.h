@@ -767,10 +767,24 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
     // _unary_comp_int_scalar); the two sides must move together.
     constexpr int UNARY_COMP_INT_SCALAR = 5;
-    // Clamp/Hardtanh fp32-encoded bounds. Shared with the golden
-    // (sfpu_dispatch_constants.py: CLAMP_MIN / CLAMP_MAX); the two sides must move together.
-    constexpr std::uint32_t CLAMP_MIN_FP32 = 0xBF800000u; // -1.0f
-    constexpr std::uint32_t CLAMP_MAX_FP32 = 0x3F800000u; //  1.0f
+    // Clamp/Hardtanh bounds, as the raw 32-bit patterns the kernels take: fp32 bits for the float
+    // kernels, two's-complement for calculate_clamp_int32. Overridable together via the
+    // SFPU_CLAMP_BOUNDS template parameter (SFPU_CLAMP_MIN_BITS / SFPU_CLAMP_MAX_BITS), on the same
+    // #ifdef arrangement as SHIFT_AMOUNT, so the special-input and int32 sweeps can drive bounds of
+    // either sign, min > max, and zero-valued bounds; a test that does not set them keeps the fixed
+    // defaults. Defaults are shared with the golden (sfpu_dispatch_constants.py: CLAMP_MIN /
+    // CLAMP_MAX and CLAMP_INT32_MIN / CLAMP_INT32_MAX); the two sides must move together.
+#ifdef SFPU_CLAMP_MIN_BITS
+    constexpr std::uint32_t CLAMP_MIN_FP32  = SFPU_CLAMP_MIN_BITS;
+    constexpr std::uint32_t CLAMP_MAX_FP32  = SFPU_CLAMP_MAX_BITS;
+    constexpr std::uint32_t CLAMP_MIN_INT32 = SFPU_CLAMP_MIN_BITS;
+    constexpr std::uint32_t CLAMP_MAX_INT32 = SFPU_CLAMP_MAX_BITS;
+#else
+    constexpr std::uint32_t CLAMP_MIN_FP32  = 0xBF800000u; // -1.0f
+    constexpr std::uint32_t CLAMP_MAX_FP32  = 0x3F800000u; //  1.0f
+    constexpr std::uint32_t CLAMP_MIN_INT32 = 0xFFFFFE0Cu; // -500
+    constexpr std::uint32_t CLAMP_MAX_INT32 = 0x000003E8u; //  1000
+#endif
 
     if constexpr (OPERATION == SfpuType::abs)
     {
@@ -1257,7 +1271,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::clamp)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, CLAMP_MIN_FP32, CLAMP_MAX_FP32);
+        // Production dispatches on the input dtype (clamp_tile vs clamp_tile_int32, see
+        // unary_op_utils.cpp CLAMP_TSS); mirror it on the runtime math format so the Int32 kernel,
+        // with its sign-dependent SFPNOT arms, is exercised by the same MathOperation.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp_int32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, CLAMP_MIN_INT32, CLAMP_MAX_INT32);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, CLAMP_MIN_FP32, CLAMP_MAX_FP32);
+        }
     }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {

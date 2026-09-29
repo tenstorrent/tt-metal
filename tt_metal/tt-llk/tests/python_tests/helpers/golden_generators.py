@@ -33,6 +33,8 @@ from helpers.pack import (
     pack_mxint8,
 )
 from helpers.sfpu_dispatch_constants import (
+    CLAMP_INT32_MAX,
+    CLAMP_INT32_MIN,
     CLAMP_MAX,
     CLAMP_MIN,
     HARDSHRINK_LAMBDA,
@@ -2410,6 +2412,11 @@ class UnarySFPUGolden:
             MathOperation.UnaryMinInt32,
             MathOperation.UnaryMaxUint32,
             MathOperation.UnaryMinUint32,
+            # clamp is not integer-only either: sfpu_operations.h picks calculate_clamp_int32
+            # on math_format == Int32 and calculate_clamp otherwise, mirroring production's
+            # clamp_tile_int32 / clamp_tile split, so the same MathOperation needs an exact
+            # integer golden as well as the float one. See _clamp.
+            MathOperation.Clamp,
             # relu_min is the one op here that is not integer-*only*: sfpu_operations.h
             # picks the vInt branch of _relu_min_ at runtime on math_format == Int32 and
             # the vFloat branch otherwise, so the same MathOperation needs an exact
@@ -2423,6 +2430,8 @@ class UnarySFPUGolden:
         # relu_min's integer threshold, matching the kernel's RELU_MIN_INT_THRESHOLD default.
         # Signed: the kernel carries it as a two's-complement uint32 and static_casts to int.
         self._relu_min_int_threshold = int(RELU_MIN_THRESHOLD)
+        # clamp / hardtanh bounds override (SFPU_CLAMP_BOUNDS); None means the dispatch defaults.
+        self._clamp_bounds = None
         self.data_format = None
         # Precision the SFPU actually evaluates at, which is Dest's and not the output
         # format's. The per-element ops below read this rather than data_format: no
@@ -2447,11 +2456,16 @@ class UnarySFPUGolden:
         unpack_to_srcs: bool = False,
         shift_amount: int = 3,
         relu_min_int_threshold: int = int(RELU_MIN_THRESHOLD),
+        clamp_bounds: Optional[tuple] = None,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
+        # Mirrors the SFPU_CLAMP_BOUNDS template parameter; only Clamp / Hardtanh read it.
+        # Values here (float, or Python int for the Int32 path), raw bit patterns on the
+        # kernel side. None keeps the dispatch defaults, chosen per path in _clamp.
+        self._clamp_bounds = clamp_bounds
         # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
         self._int_shift_amount = shift_amount
         # Mirrors the SFPU_RELU_MIN_INT_THRESHOLD template parameter; only relu_min on an
@@ -2952,15 +2966,34 @@ class UnarySFPUGolden:
         # rdiv(x) = value / x; value fixed to the dispatch constant (2.0).
         return self._torch_unary(x, lambda t: value / t)
 
-    def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # Metal calculate_clamp is the composition sfpu_clamp models -- see its docstring.
-        return sfpu_clamp(x, min_val, max_val)
+    def _clamp_bounds_for(self, min_val, max_val, defaults):
+        # Explicit arguments first, then the SFPU_CLAMP_BOUNDS override, then the dispatch
+        # defaults of the path (float or Int32) being modelled.
+        if min_val is not None and max_val is not None:
+            return min_val, max_val
+        return self._clamp_bounds or defaults
 
-    def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # Metal calculate_hardtanh is sfpi::clamp, the same composition sfpu_clamp models,
-        # so Hardtanh's golden IS Clamp's. The identity is pinned in test_sfpu_domains
+    def _clamp(self, x, min_val=None, max_val=None):
+        if isinstance(x, int):
+            # Integer dst (calculate_clamp_int32): an exact integer min/max, independent of
+            # dst_format and of how the kernel performs the compare (the sign-magnitude SFPSWAP
+            # behind a complement for a negative bound), since none of those can change the
+            # result. The bounds reach here through _clamp_bounds because the int32 sweep drives
+            # both signs and min > max, which the float defaults cannot express.
+            lo, hi = self._clamp_bounds_for(
+                min_val, max_val, (CLAMP_INT32_MIN, CLAMP_INT32_MAX)
+            )
+            return min(max(x, int(lo)), int(hi))
+        # Metal calculate_clamp is the composition sfpu_clamp models -- see its docstring.
+        lo, hi = self._clamp_bounds_for(min_val, max_val, (CLAMP_MIN, CLAMP_MAX))
+        return sfpu_clamp(x, float(lo), float(hi))
+
+    def _hardtanh(self, x, min_val=None, max_val=None):
+        # Metal calculate_hardtanh shares calculate_clamp's body, the composition sfpu_clamp
+        # models, so Hardtanh's golden IS Clamp's. The identity is pinned in test_sfpu_domains
         # (test_hardtanh_golden_matches_the_clamp_golden).
-        return sfpu_clamp(x, min_val, max_val)
+        lo, hi = self._clamp_bounds_for(min_val, max_val, (CLAMP_MIN, CLAMP_MAX))
+        return sfpu_clamp(x, float(lo), float(hi))
 
     def _elu(self, x):
         input_tensor = (

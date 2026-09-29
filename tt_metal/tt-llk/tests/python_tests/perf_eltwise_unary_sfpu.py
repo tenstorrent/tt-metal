@@ -272,6 +272,9 @@ _INT32_UNARY_OPS = [
     MathOperation.SubInt32,
     MathOperation.AbsInt32,
     MathOperation.ReluMin,
+    # Int32 selects calculate_clamp_int32 in sfpu_operations.h (as production's
+    # clamp_tile_int32 does); the float sweep above measures calculate_clamp.
+    MathOperation.Clamp,
     MathOperation.BitwiseNot,
     MathOperation.LogicalNot,
     MathOperation.Fill,
