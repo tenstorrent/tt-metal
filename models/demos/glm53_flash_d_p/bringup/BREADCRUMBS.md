@@ -1098,3 +1098,28 @@ like the device's RMS (rms eps 1.2e-5 gives 1.0028). The next step, implement, o
 `DEVICE_STEPS["dsa_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_hc.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.08 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through ffn_hc on the device. I rewrote it from
+swap 07's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new ffn_hc-share block (every device output up to h_mid fixed, CPU ffn_hc and tail) is the
+  base of the ffn_hc's share. The residual share is now that block vs the residual-share block, and it reproduces
+  swap 07 exactly (35 / 0.00091). Every other swap-07 check and limit is unchanged.
+- New ffn_hc checks:
+  - vs golden and vs the fp32 CPU ffn_hc of the same device h_mid, both at the component test's limits (part rel
+    0.01, max abs 0.02 / 5e-3 / 0.02, coefficient [0.995, 1.005], worst column 0.07, column sums, ranges). The CPU
+    ffn_hc of the device h_mid is within 0.0021 of the golden, so the upstream error needs no looser limit. The
+    same-input check also runs on chunk 0.
+  - ffn_hc share at block out: flips <= 40, same-routing rel <= 0.0035, ratio [0.99, 1.015], flipped-row ratio
+    [0.9, 1.1]. The flipped-row bound exists because a zeroed row changes its routing and would otherwise hide
+    (proposed known issue).
+- Sensitivity: CPU host script /tmp/dsas08/sens.py (not kept); the numbers are in the test docstring. Bugs caught by
+  the share: post / pre x1.01, rms eps 1.2e-5 (ratio 1.017), 0.5% noise. post x1.005 sits at the rel limit (0.0035).
+Results:
+- Device passes: PCC 0.999994 (c0 0.999993). ffn_hc vs CPU same input 0.00045 / 0.00301 / 0.00120, post
+  coefficient 1.00288 (limit 1.005; this is the same device post bias the component test flagged). ffn_hc share
+  19 / 0.00238 / [0.9970, 1.0081]. Block out vs the all-CPU block 53 flips (limit 64) / 0.00191. About 100 s.
+- Reference passes (exact). Stub fails.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_08_ffn_hc.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
