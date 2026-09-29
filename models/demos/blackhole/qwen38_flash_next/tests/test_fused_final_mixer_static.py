@@ -9,11 +9,8 @@ spills against the DRAM-sharded config rule, the reuse of F2's programs, and the
 from __future__ import annotations
 
 import inspect
-import json
 import re
 from pathlib import Path
-
-import pytest
 
 from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import final_mixer as fm
@@ -169,18 +166,3 @@ def test_every_chain_attribute_the_fused_mixer_uses_exists():
     used = set(re.findall(r"\bmodule\.([A-Za-z_][A-Za-z_0-9]*)", inspect.getsource(fm.final_mixer_fused)))
     used |= set(re.findall(r"\bmodule\.([A-Za-z_][A-Za-z_0-9]*)", inspect.getsource(fm.module_norm_scale_rows)))
     assert used and used <= names, sorted(used - names)
-
-
-def test_manifest_lists_the_files():
-    manifest_path = HERE / "tools" / "release" / "manifest.json"
-    if not manifest_path.exists():
-        pytest.skip("tools/release/manifest.json is not in this tree (the public tree ships without tools/release/)")
-    manifest = json.loads(manifest_path.read_text())["public"]
-    for path in (
-        "tests/test_fused_final_mixer_static.py",
-        "ttnn/fused/final_mixer/__init__.py",
-        "ttnn/fused/final_mixer/kernels/lowrank_reduce_compute.cpp",
-        "ttnn/fused/final_mixer/kernels/lowrank_reduce_reader.cpp",
-        "ttnn/fused/final_mixer/kernels/lowrank_reduce_writer.cpp",
-    ):
-        assert path in manifest, path

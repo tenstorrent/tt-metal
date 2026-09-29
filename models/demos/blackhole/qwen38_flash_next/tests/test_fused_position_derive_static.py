@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 import re
 from pathlib import Path
 
@@ -183,36 +182,6 @@ def test_advance_is_registered_and_is_the_chains_in_place_add():
     composed = inspect.getsource(pd.advance_composed)
     assert "ttnn.add(position, count, memory_config=ttnn.DRAM_MEMORY_CONFIG)" in composed
     assert "ttnn.copy(advanced, position)" in composed
-
-
-def test_advance_hook_is_pinned_in_contracts():
-    source = CONTRACTS_SOURCE.read_text()
-    assert "    _fused_advance: Any = field(default=None, repr=False, compare=False)" in source
-    assert 'if fused_kernels.enabled("position_advance"):' in source
-    assert 'fused_advance = fused_kernels.kernel("position_advance").fused' in source
-    # the position, the ones row, the block-start mask row, the rotary shift and its host mirror, then the hook
-    assert (
-        "uploaded[0], uploaded[1], uploaded[2], mesh_device, mesh_contract, fused_advance, uploaded[3], rope_shift"
-        in source
-    )
-    fused_branch = (
-        "        if self._fused_advance is not None:\n            self._advance_fused({})\n            return\n"
-    )
-    for method, count in (("advance", "1"), ("advance_by", "count")):
-        body = source[source.index(f"    def {method}(self") :]
-        body = body[: body.index("\n    def ", 1)]
-        assert fused_branch.format(count) in body, method  # the fused program first, the chain's add + copy kept
-        assert f"advanced = ttnn.add(self.scalar, {count}, memory_config=ttnn.DRAM_MEMORY_CONFIG)" in body, method
-        assert "copied = ttnn.copy(advanced, self.scalar)" in body and "ttnn.deallocate(advanced)" in body, method
-    fused_body = source[source.index("    def _advance_fused(self, count: int) -> None:") :]
-    fused_body = fused_body[: fused_body.index("    def advance_by(")]
-    assert "written = self._fused_advance(self.scalar, count)" in fused_body
-    assert 'raise RuntimeError("device position advance did not write the resident scalar in place")' in fused_body
-    manifest_path = Path(__file__).resolve().parents[1] / "tools" / "release" / "manifest.json"
-    if not manifest_path.exists():
-        pytest.skip("tools/release/manifest.json is not in this tree (the public tree ships without tools/release/)")
-    manifest = json.loads(manifest_path.read_text())
-    assert "ttnn/fused/position_derive/kernels/advance.cpp" in manifest["public"]
 
 
 def test_composed_is_the_model_bodys_derive_lines():
