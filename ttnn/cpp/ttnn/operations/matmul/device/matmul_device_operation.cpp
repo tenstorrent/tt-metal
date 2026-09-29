@@ -1454,6 +1454,10 @@ void validate_matmul_mcast2d_glu(
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& program_config) {
     if (!program_config.fuse_swiglu) {
+        TT_FATAL(
+            !program_config.glu_last_block && !program_config.glu_sfpu_on_pack,
+            "{}: glu_last_block / glu_sfpu_on_pack need fuse_swiglu",
+            ttsl::get_type_name(program_config));
         return;
     }
     const auto config_name = ttsl::get_type_name(program_config);

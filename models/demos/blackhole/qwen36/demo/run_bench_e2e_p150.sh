@@ -121,7 +121,7 @@
 #   P2_NORM measurement: -1.3 us/call of 92 calls). Runner default 1 since 2026-09-28 (differs from the
 #   code default 0); A/B e.g. QWEN36_N_GAMMA_L1=0 bash run_bench_e2e_p150.sh.
 # The R5 item flag QWEN36_R5_GLU also survives the reset (tt/tp_common.py R5_FLAG_DEFAULTS; unset = code default 0
-#   = the current path; values 0|1; single device, T == 2048 prefill chunks with bfloat8_b gate/up): 1 = the fused-SwiGLU
+#   = the current path; values 0|1|2; single device, T == 2048 prefill chunks with bfloat8_b gate/up; 2 = in0_block_w 16 + glu_last_block + glu_sfpu_on_pack variant, runner default since P10_INT1H; needle 47/50 vs 48, within noise): 1 = the fused-SwiGLU
 #   gate/up matmul runs as the 2D-mcast ttnn.matmul with the fused SwiGLU epilogue (needs the C++ fuse_swiglu config
 #   field) instead of minimal_matmul(fuse_swiglu=True); numerics change. Runner default 1 since 2026-09-28 (differs
 #   from the code default 0; gated: PCC 0.99905-0.99937 top-1 equal, needle 48/50, G0 coherence OK); A/B e.g.
@@ -337,14 +337,14 @@ for item in $N_ITEMS; do
   N_VALS[$item]="$val"
 done
 R5_ITEMS="GLU"
-declare -A R5_DEFAULTS=([GLU]=1)  # runner default 1 since 2026-09-28 (tp_common.R5_FLAG_DEFAULTS code default 0)
+declare -A R5_DEFAULTS=([GLU]=2)  # runner default 2 since P10_INT1H (accepted: needle 47/50 vs 48, within noise; 1 = previous config) (tp_common.R5_FLAG_DEFAULTS code default 0)
 declare -A R5_VALS
 for item in $R5_ITEMS; do
   var="QWEN36_R5_$item"
   val="${!var:-${R5_DEFAULTS[$item]}}"
   case "$val" in
-    0|1) ;;
-    *) echo "ERROR: $var must be 0 or 1 (got '$val')" >&2; exit 1 ;;
+    0|1|2) ;;
+    *) echo "ERROR: $var must be 0, 1 or 2 (got '$val')" >&2; exit 1 ;;
   esac
   R5_VALS[$item]="$val"
 done

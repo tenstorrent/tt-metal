@@ -27,6 +27,11 @@
 #endif
 #ifdef FUSE_GLU
 #include "bmm_fused_glu.hpp"
+// GLU_PASS: the SwiGLU runs as a pass over the finished partials (default fuse_swiglu). GLU_LAST_BLOCK: it runs
+// on DEST inside the last K block (plain reload path), right before the pack of each output subblock.
+#ifndef GLU_LAST_BLOCK
+#define GLU_PASS 1
+#endif
 #endif
 
 // Please update
@@ -238,7 +243,7 @@ void kernel_main() {
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = static_cast<bool>(get_compile_time_arg_val(18));
     DataflowBuffer bias_dfb(bias_dfb_id);
-#elif defined FUSE_GLU
+#elif defined GLU_PASS
     // Fused SwiGLU: the last K block packs into the partials CB (as with bias); the GLU pass below reads it.
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     DataflowBuffer out_dfb(out_dfb_id);
@@ -284,6 +289,11 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
+#if defined GLU_LAST_BLOCK and not defined GLU_SFPU_ON_PACK
+    // SiLU / multiply use ADDR_MOD_7 only; matmul, reload and datacopy inits leave it alone, so one init serves
+    // every last-block subblock.
+    glu_init_math();
+#endif
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -401,8 +411,17 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
+#ifdef GLU_LAST_BLOCK
+                                // DEST holds the finished [gate | up] subblock: DST[2j] = silu(DST[2j]) * DST[2j+1].
+#ifndef GLU_SFPU_ON_PACK
+                                glu_pairs_math<out_subblock_num_tiles>();
+#endif
+                                tile_regs_commit();
+                                mm_out_dfb.reserve_back(out_subblock_num_tiles / 2);
+#else
                                 tile_regs_commit();
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
+#endif
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
@@ -410,6 +429,8 @@ void kernel_main() {
                                     activation_param0,
                                     activation_param1,
                                     activation_param2>(out_subblock_num_tiles);
+#elif defined GLU_LAST_BLOCK and defined GLU_SFPU_ON_PACK
+                                glu_pairs_from_pack<out_subblock_num_tiles>();
 #else
                                 tile_regs_wait();
 #endif
@@ -419,7 +440,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACKER_L1_ACC
-#if defined FUSE_BIAS or defined FUSE_GLU
+#if defined FUSE_BIAS or defined GLU_PASS
                                 if (block == 0) {  // no accumulation for first iteration
                                     pack_reconfig_l1_acc(0);
                                 } else {
@@ -429,11 +450,20 @@ void kernel_main() {
                                 pack_reconfig_l1_acc(0);
 #endif
 #endif
+#ifdef GLU_LAST_BLOCK
+                                // Even tiles only: the (h, q) row-major order of the half-width output subblock.
+                                for (uint32_t j = 0; j < out_subblock_num_tiles / 2; j++) {
+                                    pack_tile(2 * j, mm_out_dfb_id);
+                                }
+                                tile_regs_release();
+                                mm_out_dfb.push_back(out_subblock_num_tiles / 2);
+#else
                                 const uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
+#endif
 
                             } else {
                                 tile_regs_commit();
@@ -463,7 +493,7 @@ void kernel_main() {
                     }
 
 #ifdef PACKER_L1_ACC
-#if defined FUSE_BIAS or defined FUSE_GLU
+#if defined FUSE_BIAS or defined GLU_PASS
                     if (block < num_blocks_inner_dim - 1) {
                         // Wait/pop in subblock-sized steps so the step size
                         // matches the bias section's wait_front(out_subblock_num_tiles),
@@ -587,7 +617,7 @@ void kernel_main() {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
-#ifdef FUSE_GLU
+#ifdef GLU_PASS
                 // Fused SwiGLU pass. The partials CB holds the finished [gate | up] block: in each subblock row,
                 // tile 2q is gate and tile 2q+1 is up (tile-pair interleaved weight; out_subblock_w is even).
                 // Per subblock: copy the partials to DEST, DST[2j] = silu(DST[2j]) * DST[2j+1], and pack the
@@ -626,7 +656,7 @@ void kernel_main() {
                         out_dfb.push_back(out_subblock_num_tiles / 2);
                     }
                 }
-#endif  // FUSE_GLU
+#endif  // GLU_PASS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
                     pack_relu_config(ReluConfig::none());

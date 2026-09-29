@@ -377,7 +377,7 @@ ALL_QWEN_FLAG_DEFAULTS = {
     "QWEN36_R5_GLU": (
         "0",
         "R5: single device, T == 2048 prefill chunks with bfloat8_b gate/up: fused-SwiGLU gate/up as the 2D-mcast "
-        "ttnn.matmul fuse_swiglu epilogue (needs the C++ config field; numerics change); 0=minimal_matmul fuse_swiglu",
+        "ttnn.matmul fuse_swiglu epilogue (needs the C++ config field; numerics change); 0=minimal_matmul fuse_swiglu; 1=in0_block_w 4 config; 2=in0_block_w 16 + glu_last_block + glu_sfpu_on_pack",
     ),
     # MM item flags (tt/tp_common.py MM_FLAG_DEFAULTS; read via tp_common.mm_value); 0 = current path.
     "QWEN36_MM_BW16": (

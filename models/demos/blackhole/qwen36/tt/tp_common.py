@@ -556,7 +556,8 @@ def r5_enabled(item):
 def r5_glu_progcfg(x, w_gate_up, grid, compute_kernel_config):
     """R5 GLU: the fused-SwiGLU 2D-mcast program config for this gate/up call, or None (flag off / shape, dtype,
     grid or compute config outside the swept case) to keep the minimal_matmul fused-SwiGLU path."""
-    if not r5_enabled("GLU") or grid is None or (int(grid.x), int(grid.y)) != (13, 10):
+    glu = r5_value("GLU")
+    if glu not in ("1", "2") or grid is None or (int(grid.x), int(grid.y)) != (13, 10):
         return None
     xs, ws = list(x.shape), list(w_gate_up.shape)
     if len(xs) < 2 or xs[-2:] != [R5_GLU_T, 2048] or any(d != 1 for d in xs[:-2]):
@@ -567,6 +568,25 @@ def r5_glu_progcfg(x, w_gate_up, grid, compute_kernel_config):
         return None
     if getattr(compute_kernel_config, "fp32_dest_acc_en", True):
         return None
+    if glu == "2":
+        # GLU=2 (plan_0928 P9_GLU2/P10_INT1H): in0_block_w 16, out block 7x6, SwiGLU applied in the last K block
+        # on DEST with the SFPU on the PACK thread (needs the C++ glu_last_block / glu_sfpu_on_pack fields).
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(13, 10),
+            in0_block_w=16,
+            out_subblock_h=1,
+            out_subblock_w=6,
+            out_block_h=7,
+            out_block_w=6,
+            per_core_M=7,
+            per_core_N=30,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+            fuse_swiglu=True,
+            glu_last_block=True,
+            glu_sfpu_on_pack=True,
+        )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(13, 10),
         in0_block_w=4,

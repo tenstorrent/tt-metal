@@ -81,7 +81,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
-    bool fuse_swiglu = false) {
+    bool fuse_swiglu = false,
+    bool glu_last_block = false,
+    bool glu_sfpu_on_pack = false,
+    bool in0_single_buffer = false) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -105,8 +108,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     // The fused SwiGLU epilogue reads the partials like the bias pass does, so it follows the same rule.
+    // glu_last_block applies the SwiGLU on DEST in the last K block, i.e. the plain (bias-free) reload path.
+    const bool glu_pass = fuse_swiglu && !glu_last_block;
     bool packer_l1_acc_en =
-        packer_l1_acc && (((bias_mesh.has_value() || fuse_swiglu) && num_blocks > 1) || (num_blocks > 2));
+        packer_l1_acc && (((bias_mesh.has_value() || glu_pass) && num_blocks > 1) || (num_blocks > 2));
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -156,7 +161,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (B * num_blocks > 1) {
+    if (B * num_blocks > 1 && !in0_single_buffer) {  // in0_single_buffer (opt-in): one K block of in0 in L1
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
@@ -624,10 +629,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     }
     if (fuse_swiglu) {
         mm_kernel_defines["FUSE_GLU"] = "1";
-        // Dev knob: run the SwiGLU SFPU work (silu + multiply) on the PACK thread instead of the MATH
-        // thread. Read at program build, so it is fixed for the life of a cached program.
-        const char* glu_sfpu_on_pack = std::getenv("TT_MATMUL_GLU_SFPU_ON_PACK");
-        if (glu_sfpu_on_pack != nullptr && std::string(glu_sfpu_on_pack) == "1") {
+        if (glu_last_block) {
+            mm_kernel_defines["GLU_LAST_BLOCK"] = "1";
+        }
+        // SwiGLU SFPU work (silu + multiply) on the PACK thread instead of the MATH thread: config field
+        // glu_sfpu_on_pack, or the dev env knob (read at program build, so fixed for a cached program).
+        const char* glu_sfpu_on_pack_env = std::getenv("TT_MATMUL_GLU_SFPU_ON_PACK");
+        if (glu_sfpu_on_pack || (glu_sfpu_on_pack_env != nullptr && std::string(glu_sfpu_on_pack_env) == "1")) {
             mm_kernel_defines["GLU_SFPU_ON_PACK"] = "1";
         }
     }
@@ -3204,9 +3212,10 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
         operation_attributes.program_config.value());
     TT_FATAL(
-        !program_config.fuse_swiglu,
-        "fuse_swiglu is implemented only in the descriptor path (MatmulMultiCoreReuseMcast2DProgramFactory::"
-        "create_descriptor), not in the legacy / CCL-fused 2D mcast builder");
+        !program_config.fuse_swiglu && !program_config.in0_single_buffer,
+        "fuse_swiglu / in0_single_buffer are implemented only in the descriptor path "
+        "(MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor), not in the legacy / CCL-fused 2D mcast "
+        "builder");
 
     if (!program_config.allowed_worker_cores.has_value()) {
         log_warning(
@@ -3571,7 +3580,10 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core,
-        program_config.fuse_swiglu);
+        program_config.fuse_swiglu,
+        program_config.glu_last_block,
+        program_config.glu_sfpu_on_pack,
+        program_config.in0_single_buffer);
 }
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>

@@ -39,6 +39,15 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     // tile p, tile 2p+1 = up tile p, as from prepare_for_fused_swiglu). The output is silu(gate) * up, so its
     // width is half the weight width. Last member so the struct stays a positional aggregate.
     bool fuse_swiglu = false;
+    // Fused SwiGLU variants (opt-in, need fuse_swiglu). glu_last_block: apply silu(gate) * up on DEST inside the
+    // last K block (the plain reload path) and pack half the tiles, instead of a separate pass over the partials.
+    // glu_sfpu_on_pack: issue the SwiGLU SFPU work from the PACK thread (with glu_last_block it then overlaps the
+    // MATH thread's next subblock). Env TT_MATMUL_GLU_SFPU_ON_PACK=1 also sets it.
+    bool glu_last_block = false;
+    bool glu_sfpu_on_pack = false;
+    // in0 CB holds one K block instead of two (saves out_block_h * in0_block_w in0 tiles of L1 per core; the in0
+    // multicast of block k+1 then waits for compute to release block k). Opt-in.
+    bool in0_single_buffer = false;
 };
 
 // 1D mcast matmul program config.
