@@ -16,7 +16,7 @@
     "trace_region_reserved": 1073741824,
     "state_budget_remaining": 7722665472,
     "kv_cache_per_page": 278528,
-    "gdn_recurrent_and_conv_per_request": 19398656
+    "gdn_recurrent_and_conv_per_request": 19243008
   },
   "measurement": {
     "method": "summed live device weight tensors deduplicated by buffer address; KV and GDN state from the decoder's own state_shapes() at TP=8; byte-per-element from ttnn.tile_size (bfloat4_b 0.5625, bfloat8_b 1.0625, float32 4.0)",
@@ -57,7 +57,9 @@
         "fits": false
       }
     ],
-    "shared_pool_tokens_that_fit": 525312
+    "shared_pool_tokens_max_that_fits": 885024,
+    "shared_pool_tokens_recommended": 525312,
+    "shared_pool_derivation": "max = (state_budget_remaining - gdn_recurrent_and_conv_per_request) // kv_cache_per_page * 32 = 27657 pages = 885024 tokens at batch 1. The recommended 525312 is two full contexts plus 1024 of slack, costing 4.258 GiB, chosen to leave headroom for activations and dispatch rather than because it is the ceiling."
   },
   "limiting_reason": "none for single-request context; the binding constraint is the shared paged pool across concurrent requests, not the per-request context",
   "outstanding_verification": "An end-to-end 262144-token run has not been executed on this mesh; the figure above is a capacity result, not a latency or quality result."

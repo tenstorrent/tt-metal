@@ -71,7 +71,17 @@ a top-1000 PCC of 0.822, because a wide top-1 gap makes the distribution a near-
 sides.
 
 `tests/test_layer_pcc.py` gates per-layer PCC against the floor rather than a fixed number, so
-it self-calibrates if the precision policy changes.
+it self-calibrates if the precision policy changes. Its `FLOOR_MARGIN` of 0.01 is a hand-set
+slack, not a derived bound: `full_attention` measures 0.978978 against a 0.980890 floor, so it
+passes on that margin rather than on merit.
+
+The floor itself does not model the head. The shipping `config/precision.json` is
+`head_bfp4_lofi`, putting the LM head at `bfloat4_b` and LoFi, while the floor control
+quantized the head to `bfloat8_b` and the only recorded head comparison holds precision
+constant between two TT programs. So head-precision error is unbounded by the evidence here,
+and the 0.822 top-1000 logit PCC cannot yet be attributed between the projections and the head.
+A control against `QWEN_PRECISION_CONFIG=baseline`, which differs only in the head group, is
+the missing measurement.
 
 ## Behaviour
 
@@ -96,12 +106,26 @@ that fault class remains unchecked. A failed watcher build also leaves the devic
 
 - No PCC against a single-chip TTNN baseline, which is what would separate sharding and
   collective error from HuggingFace-versus-TTNN numerics. The measurements above bundle both.
-- No `tt-perf-report` for this path. Profiling the KDA ops on Wormhole aborts outright:
-  `kda_performance_model.cpp` asserts Blackhole, and `qkv_causal_conv1d_silu` and
-  `sigmoid_gated_rms_norm` both reach it from `create_op_performance_model`.
+- No `tt-perf-report` for this path. The KDA blocker is real but narrow:
+  `kda_performance_model.cpp` asserts Blackhole and `qkv_causal_conv1d_silu` and
+  `sigmoid_gated_rms_norm` reach it from `create_op_performance_model`, so only the 48
+  `linear_attention` layers cannot be profiled. The 16 `full_attention` layers, the LM head,
+  the norms and every collective can be, and this tree already holds wormhole_b0 profiler
+  results for the MLP and CCL sweeps. The missing report is a scoped exclusion, not an
+  impossibility.
 - No runtime fallback audit.
 - Non-aligned sequence lengths are only covered where a bug forced it. `prefill_1d` selects on
   a 64..256 window and `chunk_size` is 4096, so the boundaries either side of both deserve
   explicit cases.
 - 262144 tokens is a capacity result, not a latency or quality result; no run at that length
   has been executed on this mesh.
+- No performance measurement for this mesh: no warmed TTFT, no decode tokens/s/user, no
+  single-chip-versus-multichip speedup, and no host-work counter dump from the traced decode
+  loop. The one timing figure quoted above is a stability observation, not a benchmark.
+- No qualitative suite. This is a chat checkpoint and the only generated evidence comes from a
+  raw continuation prompt, so prompt-format coverage is missing entirely.
+- Stage 5 optimization families were not measured on this mesh. `num_links` is 1 here against
+  QB2's 2, which halves collective bandwidth and makes the collective families the dominant
+  question, yet `ccl_dtype`, residual layout and the fused CCL paths are carried over from the
+  two-link measurement. `fused_grid` and `rs_core_offset` still hold Blackhole values that no
+  Wormhole worker grid can satisfy, so those families cannot run as written.

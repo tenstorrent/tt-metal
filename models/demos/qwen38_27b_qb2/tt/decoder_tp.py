@@ -226,7 +226,6 @@ class Qwen38TPDecoder(Qwen38Decoder):
         self.config = copy.deepcopy(hf_config)
         # Every attention head count below is the PER-DEVICE count downstream: the KV cache shape,
         # kv_width, and nlp_create_qkv_heads_decode all read them that way.
-        self.kv_replication = 1
         for name in (
             "num_attention_heads",
             "num_key_value_heads",
@@ -242,7 +241,6 @@ class Qwen38TPDecoder(Qwen38Decoder):
                 # count, so a device's Q heads never span two KV heads.
                 assert (hf_config.num_attention_heads // value) % (hf_config.num_attention_heads // self.TP) == 0
                 # Raises here rather than mid-conversion if the sharing is uneven.
-                self.kv_replication = self.TP // len(set(kv_head_owners(value, self.TP)))
                 setattr(self.config, name, 1)
                 continue
             assert value % self.TP == 0, name
