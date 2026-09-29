@@ -1206,6 +1206,13 @@ tasks:
     - indexer
     - attention
     layer: 1
+  frozen:
+    at: '2026-09-29T11:46:10'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py: 57719d87ee2a6c94745c119b8090f15fe24dc3833c64372c45e69d1d28746db7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.moe_full.attn_residual
   title: moe_full attn_residual (residual) on device, layer 1
   step: implement
