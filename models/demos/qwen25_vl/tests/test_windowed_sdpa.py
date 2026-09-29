@@ -284,6 +284,10 @@ def test_windowed_sdpa_basic(
     # rounding of 1.5-sized terms. Allow two bf16 ulps (one per schedule) of the largest reference
     # value, floored at the old 1e-2 gate. With the accurate exponential (#57180) the plain 1e-2
     # bound is below that noise for outputs above 1.
+    # A non-finite reference would make ref_scale and the tolerance infinite and let inf <= inf pass, so
+    # reject non-finite outputs first.
+    assert torch.isfinite(covered_standard).all(), "non-finite values in the masked reference output"
+    assert torch.isfinite(covered).all(), "non-finite values in the windowed output"
     ref_scale = covered_standard.abs().max().item()
     tolerance = max(1e-2, 2 * 2**-7 * ref_scale)
     assert (
