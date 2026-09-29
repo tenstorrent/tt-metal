@@ -616,3 +616,38 @@ Gotchas
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py
+
+## S.dense_full.06 test (attempt 1)
+
+What was done
+- Rewrote the rendered swap test (attn_hc, attn_hc_pre, attn_norm, q_a, indexer, attention on device), starting from
+  swap 05. Kept the gated pcc_swap_out (0.98), the trail and every asserted check of swap 05 (gates, attn_x,
+  attn_norm / q_resid vs golden / vs CPU / eps, topk overlap + structure + chunk 0, h_mid rel <= 0.01 / worst row
+  <= 0.05, block out rel <= 0.01). attn_out limits tightened to the component's (rel <= 0.01, row norm ratio
+  [0.99, 1.01], worst row <= 0.02; swap 05 had worst row 0.05, no ratio), checked five ways: vs golden; vs the CPU
+  attention on the device attn_norm / q_resid / topk; and the module again on golden chunk 0 (prefix_len 0, pads),
+  on a probe topk (64 random causal positions per row, unsorted, seed 0) and on the device attn_norm x 1e-3 (eps),
+  each vs the CPU step on the same inputs.
+- Mutation table (CPU, study script /tmp/hy4_s06/study.py reusing /tmp/hy4_c_attn/mut.py, outside the repo) in the
+  test docstring: 20 of 29 attention bugs pass the 0.98 out gate. Dense causal (rel 0.0064), prefix row halves
+  swapped (0.0076) and pads read as key 0 (invisible on chunk 1) also pass every swap-05 limit; the probe and
+  chunk 0 catch them.
+
+Decisions
+- kv_latent rows are not read back: module_under_test wraps the device fn in a lambda (no read_state), and the
+  reference / stub modes have no state API. The ladder's state gate compares the cache.
+- Probe and eps inputs are the device attn_norm / q_resid (the step's own error, as swap 05's eps checks).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out PCC 0.999999, attn_out vs golden 0.00166, every vs-CPU check exact).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device): PASS. pcc_swap_out 0.999987; attn_out vs golden rel 0.00452 / ratio [0.99733, 1.00186] / worst row
+  0.00648; vs CPU 0.00409 / 0.00593; chunk 0 0.00341 / 0.00605; probe 0.00375 / 0.00568; scaled 0.00451 / 0.00599;
+  h_mid 0.00417 / 0.00785; out rel 0.00514. topk as swap 05 (0.99704 / 0.99121).
+
+Gotchas
+- Five device attention calls + five CPU attention calls per run; the run takes ~70 s on the device.
+- The first result block printed by run_safe_pytest (collect pass) shows zeros; only the second is real.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_06_attention.py
