@@ -72,7 +72,10 @@ class TtV41Moe(LightweightModule):
             routed_expert_weights_dtype=routed_expert_weights_dtype,
             shared_expert_activations_dtype=ttnn.bfloat16,
             shared_expert_weights_dtype=ttnn.bfloat8_b,
-            dispatch_buffer_capacity_factor=2,
+            # every token can land all top-k experts on one chip: top-k is the only factor that never drops a
+            # token (factor 2 overflowed on repetitive real text, silently and non-deterministically); in-tree
+            # DeepSeek-V3 prefill uses its top-k (8) the same way
+            dispatch_buffer_capacity_factor=config.NUM_EXPERTS_PER_TOKEN,
             layer_idx=layer,
             weight_cache_path=weight_cache_path,
         )
