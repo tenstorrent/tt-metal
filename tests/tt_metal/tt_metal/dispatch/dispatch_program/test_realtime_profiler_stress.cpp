@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
@@ -289,6 +290,79 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
 // Three consumers read the same record stream at different throttled rates. Verifies the per-reader
 // drop accounting: for every consumer, received + dropped covers every record produced, and a
 // throttled consumer drops no more than its sustain rate forces (no over-dropping).
+// dispatch_s waits instead of dropping records when the RT-profiler reader falls behind, and reports each wait
+// to the host as a dispatch stall. The BRISC reader is slowed with the test-only delay knob, so dispatch_s
+// outruns it and has to wait; every record must still arrive, and the host's stall count must match the
+// device's own count of waits.
+TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
+    constexpr uint32_t kNumReplays = 2;
+    // Read by the RT-profiler manager when the mesh opens.
+    setenv("TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK", "0x3FFF", /*overwrite=*/1);
+    auto mesh_device = open_full_mesh();
+    unsetenv("TT_METAL_RT_PROFILER_TEST_BRISC_DELAY_MASK");
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+    const auto* rt = mesh_device->impl().get_realtime_profiler();
+    ASSERT_NE(rt, nullptr);
+    const uint64_t num_active_devices = rt->num_active_devices();
+
+    std::atomic<uint64_t> stress_records{0};
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+            for (const auto& rec : batch.records) {
+                if (rec.runtime_id == kStressRuntimeId) {
+                    stress_records.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+
+    distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
+    auto& cq = mesh_device->mesh_command_queue(0);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
+    for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+    mesh_device->end_mesh_trace(cq, trace_id);
+    for (uint32_t i = 0; i < kNumReplays; ++i) {
+        mesh_device->replay_mesh_trace(cq, trace_id, true);
+    }
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(kPostQuiesceDrain);
+
+    const uint64_t host_stalls = rt->dispatch_stall_events();
+    const uint64_t host_stall_cycles = rt->dispatch_stall_cycles();
+    const uint32_t device_waits = rt->record_ring_full_wait_count();
+    UnregisterProgramRealtimeProfilerCallback(handle);
+    mesh_device->release_mesh_trace(trace_id);
+
+    log_info(
+        tt::LogTest,
+        "[RT profiler stall] {} stress records, {} dispatch stalls reported ({} cycles), {} device waits",
+        stress_records.load(),
+        host_stalls,
+        host_stall_cycles,
+        device_waits);
+
+    const uint64_t expected_records = static_cast<uint64_t>(kNumProgramsInTrace) * kNumReplays * num_active_devices;
+    EXPECT_GE(stress_records.load(), expected_records) << "records were dropped while dispatch_s waited";
+    EXPECT_GT(device_waits, 0u) << "the delayed reader should have made dispatch_s wait for record slots";
+    EXPECT_GT(host_stalls, 0u) << "dispatch_s waits were not reported to the host";
+    EXPECT_GE(host_stall_cycles, host_stalls) << "every reported stall lasts at least one cycle";
+    if (num_active_devices == 1) {
+        // record_ring_full_wait_count() is a per-device peak, so it only compares exactly on one device. The latest
+        // wait is reported once the record after it (or terminate) reaches the reader, so it may still be pending.
+        EXPECT_LE(host_stalls, device_waits);
+        EXPECT_LE(device_waits - host_stalls, 1u) << "dispatch_s waits were not reported to the host";
+    }
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
 TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const std::chrono::seconds run_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_DROP_ACCOUNTING", kDefaultDropAccountingSeconds));

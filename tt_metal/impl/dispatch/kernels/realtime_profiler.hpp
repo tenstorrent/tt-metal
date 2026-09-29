@@ -16,6 +16,10 @@ constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
 // Sync marker ID - used to identify sync packets in real-time profiler stream
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
+// Dispatch-stall marker ID - the BRISC reports a dispatch_s wait for a free record slot with this ID in word 3
+// (words 0-1: stall end time, word 2: stall cycles). Must match the host-side copy.
+constexpr uint32_t REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID = 0xFFFFFFFE;
+
 // CQDispatchSetWriteOffsetCmd::program_host_id and RT timestamp correlation: this value means the
 // dispatch event is not tied to a profiled program (raw streams, preamble defaults). dispatch_d
 // must not push it into the program-id FIFO; dispatch_s passes it to write_buffer_id for non-GO
