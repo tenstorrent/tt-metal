@@ -796,6 +796,13 @@ tasks:
     - ffn_norm
     - mlp
     layer: 0
+  frozen:
+    at: '2026-09-29T09:23:42'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_11_mlp.py: 2c4584f434e48c9b384b34bc6f61c513256b344188c5f3a479f7c2aac3c7147a
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.dense_full.ffn_residual
   title: dense_full ffn_residual (residual) on device, layer 0
   step: implement
