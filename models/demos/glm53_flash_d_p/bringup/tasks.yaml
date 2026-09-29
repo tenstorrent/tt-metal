@@ -956,6 +956,13 @@ tasks:
     - attn_norm
     - q_a
     layer: 3
+  frozen:
+    at: '2026-09-29T07:16:25'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_04_q_a.py: 3013ae522e5fd70faef189895217f3954d43c059079a6f4227ef01b13a96430b
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.dsa_moe.indexer
   title: dsa_moe indexer (op) on device, layer 3
   step: implement
