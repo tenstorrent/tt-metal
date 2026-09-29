@@ -319,8 +319,10 @@ void kernel_main() {
             // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
             valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
         } else {
-            // Legacy: extend by offset so one program can serve all chunks (valid_Skt is chunk 0's).
-            valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+            // Scalar-offset factories already include the prefix in valid_Skt.
+            // Adding it again can resolve page-table entries beyond the valid KV
+            // extent instead of zero-filling the final partial K/V chunk.
+            valid_Skt_bound = valid_Skt;
         }
 
         // Global Q scheduling: iterate over a linear range of B*NQH*q_num_chunks chunks.

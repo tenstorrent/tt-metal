@@ -2949,6 +2949,12 @@ __attribute__((optimize("Os"))) void teardown(
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
+#ifdef ARCH_BLACKHOLE
+    // Tagged write completion does not reset command-buffer transaction IDs.
+    // Restore this ERISC's dedicated NoC before the kernel-return checks.
+    noc_clear_packet_tags(noc_index);
+#endif
+
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
