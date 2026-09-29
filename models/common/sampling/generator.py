@@ -283,6 +283,18 @@ class SamplingGenerator:
             and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
             and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
+        if self._penalties_active and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
+            # Rails that skip compiling the penalties program (precompile loop
+            # above) must also never EXECUTE it: requests with penalties would
+            # otherwise crash in apply_penalties. Ignore them, loudly once.
+            if not getattr(self, "_penalties_suppressed_logged", False):
+                self._penalties_suppressed_logged = True
+                logger.warning(
+                    "Sampling penalties requested but the penalties program is "
+                    "disabled on this mesh (_allow_penalties_sampling=False); "
+                    "ignoring penalty parameters."
+                )
+            self._penalties_active = False
         if (
             not self.tt_sampling.force_argmax_sampling
             or self._penalties_active

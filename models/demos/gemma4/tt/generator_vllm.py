@@ -465,6 +465,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             sizes = sorted({int(x) for x in override.split(",") if x.strip() and int(x) <= max_b})
         else:
             sizes = sorted({1, max_b} if max_b > 1 else {1})
+        if getattr(getattr(self.model[0], "mesh_config", None), "lane_sharded", False):
+            # Lane-sharded decode always runs the full lane-major frame (the
+            # model pads short batches up to it), so smaller buckets would
+            # capture traces identical in shape to B=max under a different
+            # key. Warm and declare only the full frame.
+            sizes = [max_b]
         # Restrict to declared supported buckets.
         supported = set(self.tt_supported_decode_batch_sizes)
         sizes = [b for b in sizes if b in supported or b == max_b]
@@ -1632,7 +1638,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         ring = bounded_ring_modulo(int(sliding_window))
         if ring is None or int(ring) % block_size != 0:
             return None
-        max_batch = int(self.model_args[0].max_batch_size)
+        # Under the lane fold model_args carries the GLOBAL slot space while
+        # every KV tensor (sliding rings included) is PER COLUMN: size the pool
+        # from the per-lane batch or the ring quadruples and DRAM OOMs at
+        # allocation (941 MB short at layer 53/60 on the first lanes boot).
+        max_batch = int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size)
         return (int(ring) // block_size) * max_batch
 
     def _release_decode_traces_for_fresh_wave(self) -> None:
@@ -1748,7 +1758,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 shrunk,
                 len(sliding_idxs),
                 new_blocks,
-                int(self.model_args[0].max_batch_size),
+                int(getattr(self.model[0], "lane_slots", 0) or self.model_args[0].max_batch_size),
             )
         return out
 

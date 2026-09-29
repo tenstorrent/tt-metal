@@ -803,6 +803,16 @@ class ChunkedPrefillPageTableGuardMixin:
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
+        # Lane-sharded per-layer page tables owner-stack on the request's lane
+        # (see _page_table_host_layout); bind it before any per-layer staging
+        # in this forward. The shared loop forwards the global slot as
+        # global_user_id whenever users_row_sharded is set.
+        _gid = kwargs.get("global_user_id", None)
+        for _m in self.model:
+            _mc = getattr(_m, "mesh_config", None)
+            if _mc is not None and getattr(_mc, "lane_sharded", False):
+                _slots = int(getattr(_m, "lane_slots", 0) or 32)
+                _m._g4_active_owner_lane = (int(_gid) // _slots) % _mc.lanes if _gid is not None else 0
         self._activate_sequential_per_layer_row(page_table)
         # Bind this request's stable identity (its first global block id — the
         # same keying _bounded_ring_slots uses) to every layer config so the
