@@ -46,6 +46,11 @@ enum class SparseKVFormat : uint8_t {
 //   block_cyclic_cache_tp_sharded : true = the cache is striped across ALL sp*tp devices (linear chip = sp_coord*tp
 //                             + tp_coord), so stripes = sp*tp and per-stripe chunk = chunk_local/tp.
 //
+// high_precision (bring-up fork option, default false = the source program): keep the flash running state that is
+// L1-accumulated across k_chunks (output and row-sum ping-pong CBs) in Float32 instead of bf16, and compute the
+// softmax exp exactly (the source always uses the fast approximate exp there; the scale then multiplies in as a
+// bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and a BF16 kv, and no attention_sink.
+//
 // attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
 // Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.
 // DeepSeek-V4 stores sinks in the already-scaled logit domain: pass model_sink / scale (scale != 0),
@@ -71,6 +76,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
     bool block_cyclic_cache_tp_sharded = false,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    bool high_precision = false);
 
 }  // namespace ttnn::transformer::bringup
