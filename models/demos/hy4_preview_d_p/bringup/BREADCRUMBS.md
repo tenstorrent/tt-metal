@@ -1990,3 +1990,41 @@ Gotchas
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
     HY4_EXPERTS_MODE=loop PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+
+## S.moe_full.12 test (attempt 1)
+
+What
+- Replaced the rendered 32-line swap-12 test (moe_full layer 1, steps 1-12 on device, last: experts) with swap 11's
+  reviewed test plus experts checks. Every swap-11 check is kept at its limits.
+- New experts checks on the swapped step:
+  - vs the CPU experts on the same device ffn_norm and device routing, at the component limits: rel 0.015, ratio
+    [0.98, 1.02], worst row 0.03, coef 0.004.
+  - The module again on the device ffn_norm x 2 with the device routing, vs the CPU experts, same limits.
+  - vs golden: rel 0.03 and coef 0.004. On the rows whose top-8 set equals the golden's: ratio [0.97, 1.03] and
+    worst row 0.04.
+- CPU mutation study in /tmp/hy4_sm12/study.py (outside the repo; log study.log). It uses the device run's
+  seen tensors, dumped once to /tmp/hy4_sm12/seen.pt by a temporary line that has since been removed. The table is in
+  the test docstring.
+
+Decisions
+- 19 of 26 experts mutations pass the 0.98 out gate. Swap 11's out and tail checks miss x 1.005, x 1.01, the three
+  clamp bugs, and dropping a small expert. The vs-CPU checks catch all of them.
+- The vs-golden per-token limits are wider than the component's, and apply only to rows routed as in the golden. The
+  exact CPU experts on the device inputs already score [0.986, 1.007] / 0.021 there, and the device scores
+  [0.9827, 1.0079] / 0.0247.
+
+Results
+- BRINGUP_IMPL=reference: PASS (experts vs CPU 0; pcc_swap_out 0.999997). BRINGUP_IMPL=stub: FAIL.
+- Gate (device, tt/experts.py unified mode): PASS. pcc_swap_out 0.999973. Experts vs CPU: rel 0.00785, ratio
+  [0.99351, 1.00580], worst row 0.0110, coef 1.00016. x 2: rel 0.00768, worst row 0.0101. vs golden: rel 0.0139,
+  1936 matched rows, ratio [0.98270, 1.00793], worst row 0.0247, coef 1.00043. Tail 0.0065, out rel 0.00757.
+
+Gotchas
+- Out rel vs golden is 0.00757 against a limit of 0.01, and the tail is 0.0065 against 0.01. Device experts add about
+  0.0016 to each. There is less margin left for later steps (shared_expert, moe_combine, ffn_residual).
+- The precompile collect pass prints experts vs CPU with coef nan and zeros. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
