@@ -2787,6 +2787,89 @@
   "started": "2026-09-29T15:15:57",
   "status": "PASS"
  },
+ "C.kda_moe.ffn_collapse": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a2464e30-900b-4085-b4c6-a481bbcf61c3"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/briefs/C.kda_moe.ffn_collapse.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/agents/C.kda_moe.ffn_collapse.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 229.4,
+    "session_id": "a2464e30-900b-4085-b4c6-a481bbcf61c3",
+    "t": "2026-09-29T16:31:24"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 19.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T16:32:22"
+   }
+  ],
+  "last_run": "2026-09-29T16:32:22",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/C.kda_moe.ffn_collapse.log",
+  "metrics": {
+   "coef_ffn_collapse_L04": 1.0001039505004883,
+   "coef_ffn_collapse_L04_c0": 1.0000377893447876,
+   "coef_ffn_collapse_L04_on_L03": 1.0002812147140503,
+   "norm_ratio_max_ffn_collapse_L04": 1.0024757385253906,
+   "norm_ratio_max_ffn_collapse_L04_c0": 1.0022810697555542,
+   "norm_ratio_max_ffn_collapse_L04_on_L03": 1.002138376235962,
+   "norm_ratio_min_ffn_collapse_L04": 0.9972732663154602,
+   "norm_ratio_min_ffn_collapse_L04_c0": 0.9974971413612366,
+   "norm_ratio_min_ffn_collapse_L04_on_L03": 0.9980114102363586,
+   "pcc_ffn_collapse_L04": 0.9999954798258497,
+   "pcc_ffn_collapse_L04_c0": 0.9999954719131647,
+   "pcc_ffn_collapse_L04_on_L03": 0.9999957546705509,
+   "rel_l2_ffn_collapse_L04": 0.0030091109219938517,
+   "rel_l2_ffn_collapse_L04_c0": 0.003009556792676449,
+   "rel_l2_ffn_collapse_L04_on_L03": 0.0029283284675329924,
+   "row_rel_l2_max_ffn_collapse_L04": 0.0039823525585234165,
+   "row_rel_l2_max_ffn_collapse_L04_c0": 0.003825359744951129,
+   "row_rel_l2_max_ffn_collapse_L04_on_L03": 0.003979794681072235
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T16:32:02",
+  "status": "PASS"
+ },
  "C.kda_moe.ffn_hc": {
   "agent": {
    "defs": {
