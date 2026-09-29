@@ -1049,3 +1049,55 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_11_mlp.py
+
+## C.dense_full.ffn_residual test (attempt 1)
+
+What was done
+- Reviewed the rendered test for out_j = h_mid_j + post_j * mlp_out (4 iHC streams, post = ffn_hc cols 4-7, the
+  same hc_post as attn_residual). Rewrote it from the frozen attn_residual test. It keeps the gated PCC (0.99) and
+  adds, vs golden: not a CPU bridge, size, finite, rel L2 <= 0.01, per-token per-stream norm ratio [0.99, 1.01];
+  per stream on the addend (delta_j = out_j - h_mid_j vs post_j * mlp_out): coefficient [0.97, 1.03], rel L2 <= 0.03,
+  worst row rel <= 0.05.
+- CPU mutation study (/tmp/hy4_c_ffnres/study.py, outside the repo). The table is in the test docstring. These pass
+  PCC and are caught by the extra checks: 1.02 x / 1.05 x / 1.1 x mlp_out, last row zeroed, last 32 columns zeroed,
+  mlp_out first or last tile row zeroed.
+
+Decisions
+- Tighter than attn_residual on the stream ratio ([0.99, 1.01] vs [0.98, 1.02]) and the worst row (0.05 vs 0.1).
+  On this golden the reference gives [0.9985, 1.0016] and a bf16 output gives a worst row of 0.006.
+
+Results
+- BRINGUP_IMPL=reference: PASS (PCC 0.999990, rel 0.00437 = golden bf16 rounding, ratio [0.9985, 1.0016], addend exact).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device): FAIL, NotImplementedError: no device module for ffn_residual yet. This is expected before implement.
+
+Gotchas
+- Unlike attn_residual, the h_mid streams differ at layer 0, so a stream swap is visible (streams 0 / 1 swapped:
+  PCC 0.984).
+- ||out|| (167) is smaller than ||h_mid|| (285) because the addend partly cancels h_mid. That is why the golden's
+  bf16 rounding costs rel 0.0044 here, against 0.0027 for attn_residual.
+- The first pcc line of run_safe_pytest comes from the collect pass and prints 0. Only the second line is real.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_residual.py
+
+## C.dense_full.ffn_residual implement (attempt 1)
+
+What was done
+- ffn_residual (out_j = h_mid_j + post_j * mlp_out) is the same iHC post as attn_residual, so it reuses
+  `tt/ihc.py:TtHcPost` unchanged: 4 x (ttnn.slice stream_j, ttnn.slice post gate column 4+j, ttnn.addcmul) in fp32 ->
+  ttnn.concat. No weights, no collective, no host work in the forward.
+- hooks.py: "ffn_residual" is added to `_HC_POST_STEPS` (so `device_component` / `_device_step_fn` route it through
+  `_hc_post_host_fn`) and to `DEVICE_STEPS["dense_full"]` (the hybrid device_model for the ladder). No new code in tt/.
+
+Results
+- Gate PASS: pcc_ffn_residual_L00 0.999990, rel L2 0.00437, stream norm ratio [0.9985, 1.0016], addend coef 1.0 and
+  rel 0.0 on all 4 streams, worst row 0.0. These match the CPU reference on the bf16 golden.
+
+Gotchas
+- The step signature (streams, gates, y) and the gate column layout (post = columns 4-7) are the same as
+  attn_residual. Only the inputs differ: h_mid / ffn_hc / mlp_out.
+- The first pcc line (0.000000) comes from the precompile collect pass. The second line is the real one.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_residual.py

@@ -75,6 +75,7 @@ DEVICE_STEPS = {
         "ffn_hc_pre",
         "ffn_norm",
         "mlp",
+        "ffn_residual",
     },
     "moe_full": set(),
     "moe_shared": set(),
@@ -85,7 +86,7 @@ _HC_STEPS = {"attn_hc": "hc_attn_layer", "ffn_hc": "hc_mlp_layer"}
 # iHC pre-mix steps (tt/ihc.py:TtHcPre): no weights; attn (streams "in") and ffn (streams "h_mid").
 _HC_PRE_STEPS = {"attn_hc_pre", "ffn_hc_pre"}
 # iHC post / residual steps (tt/ihc.py:TtHcPost): h_j = stream_j + post_j * y, no weights, no collective.
-_HC_POST_STEPS = {"attn_residual"}
+_HC_POST_STEPS = {"attn_residual", "ffn_residual"}
 # Column-split distributed RMSNorm steps (tt/norm.py:TtDistributedRmsNorm) -> weight under model.layers.<i>.
 _NORM_STEPS = {"attn_norm": "input_layernorm"}
 # Gathered RMSNorm steps (tt/norm.py:TtGatheredRmsNorm): all_gather over axis 1 -> ttnn.bringup.rms_norm on the full
