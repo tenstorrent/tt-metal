@@ -1404,7 +1404,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             1u,
             std::min({ksplit_requested, uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount}));
     }
-    log_debug(tt::LogOp, "ring_joint K split: requested={} splits={}", ksplit_requested, ksplit_count);
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1444,6 +1443,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute
             ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
             : out_out_subblock_h;
+    // The K-split merge walks whole row groups (static_assert in ring_joint_sdpa.cpp); odd Q chunks stay unsplit.
+    if (Sq_chunk_t % writer_out_row_group_h != 0) {
+        ksplit_count = 1;
+    }
+    log_debug(tt::LogOp, "ring_joint K split: requested={} splits={}", ksplit_requested, ksplit_count);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -3042,7 +3046,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         .math_approx_mode = math_approx_mode,
     };
     if (ksplit_count > 1) {
-        // At O3 the merge epilogue pushes q128 past the kernel config buffer.
+        // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
+        // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 

@@ -369,8 +369,7 @@ void kernel_main() {
                     kv_local_padded_Nt,
                     chunk_size_t,
                     q_local_padded_Nt,
-                    Sk_chunk_t,
-                    num_local_k_chunks>(ring_id, logical_nt, ksplit_causal_end_nt);
+                    Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
                 ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
             }
@@ -661,6 +660,9 @@ void kernel_main() {
     // instantiates are used, since the program is at the kernel config buffer limit.
     if constexpr (ksplit_enabled) {
         if (ksplit_active) {
+            // A single-chunk slice runs only a first K step, which leaves the packer at the QKT@V subblock width;
+            // copy_block and max_block_sfpi pack one tile per pack_tile.
+            configure_single_tile_pack(cb_max_A);
             constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
             // The reader pushes Q with this core's first K chunk.
             if (seen_active_iter) {

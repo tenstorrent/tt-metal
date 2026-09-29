@@ -35,9 +35,9 @@ template <
     uint32_t kv_local_padded_Nt,
     uint32_t chunk_size_t,
     uint32_t q_local_padded_Nt,
-    uint32_t Sk_chunk_t,
-    uint32_t num_local_k_chunks>
-inline uint32_t ksplit_valid_local_k_chunks(uint32_t ring_id, uint32_t logical_nt, uint32_t causal_end_nt) {
+    uint32_t Sk_chunk_t>
+inline uint32_t ksplit_valid_local_k_chunks(
+    uint32_t num_local_k_chunks, uint32_t ring_id, uint32_t logical_nt, uint32_t causal_end_nt) {
     uint32_t lo = 0;
     uint32_t hi = num_local_k_chunks;
     while (lo < hi) {

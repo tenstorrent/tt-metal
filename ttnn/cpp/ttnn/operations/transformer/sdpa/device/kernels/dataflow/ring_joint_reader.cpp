@@ -862,8 +862,7 @@ void kernel_main() {
                 kv_local_padded_Nt,
                 chunk_size_t,
                 q_local_padded_Nt,
-                Sk_chunk_t,
-                num_local_k_chunks>(ring_id, logical_nt, causal_end_nt);
+                Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
         }
 

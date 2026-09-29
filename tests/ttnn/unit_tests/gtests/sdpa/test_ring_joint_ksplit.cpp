@@ -57,9 +57,8 @@ TEST(RingJointKSplit, ValidChunkCountIsTheLogicalPrefix) {
     constexpr uint32_t num_k_chunks = kv_local / k_chunk;
     for (uint32_t prefill_chunks = 1; prefill_chunks <= 16; ++prefill_chunks) {
         for (uint32_t ring_id = 0; ring_id < ring; ++ring_id) {
-            const uint32_t count =
-                ksplit_valid_local_k_chunks<false, true, kv_local, chunk, q_local, k_chunk, num_k_chunks>(
-                    ring_id, prefill_chunks * chunk, prefill_chunks * chunk);
+            const uint32_t count = ksplit_valid_local_k_chunks<false, true, kv_local, chunk, q_local, k_chunk>(
+                num_k_chunks, ring_id, prefill_chunks * chunk, prefill_chunks * chunk);
             EXPECT_EQ(count, prefill_chunks) << "prefill_chunks=" << prefill_chunks << " ring_id=" << ring_id;
         }
     }
@@ -93,8 +92,8 @@ TEST(ChunkedCausalSkip, KeepsVisibleChunksAndChunkZero) {
                     ++live;
                 }
                 EXPECT_EQ(
-                    (ksplit_valid_local_k_chunks<false, true, kv_local, chunk, q_local, q_local, kv_local / q_local>(
-                        ring_id, logical_nt, q_end)),
+                    (ksplit_valid_local_k_chunks<false, true, kv_local, chunk, q_local, q_local>(
+                        kv_local / q_local, ring_id, logical_nt, q_end)),
                     live)
                     << "chunks=" << prefill_chunks << " ring_index=" << ring_index << " ring_id=" << ring_id;
             }
