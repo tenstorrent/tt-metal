@@ -894,6 +894,18 @@ class Hy4DeviceModel:
 
         ttnn.synchronize_device(self.mesh)
 
+    def perf_settings(self):
+        """Recorded in the profile: the attention matmul configs (P.1) and the other env-selectable modes."""
+        import os
+
+        from models.demos.hy4_preview_d_p.tt.attention import attn_mm_mode
+
+        return {
+            "attn_mm": attn_mm_mode(),  # HY4_ATTN_MM: tuned (P.1 default) | default (ttnn auto config, pre-P.1)
+            "experts_mode": os.environ.get("HY4_EXPERTS_MODE", "unified"),
+            "indexer_score": os.environ.get("HY4_INDEXER_SCORE", "bringup"),
+        }
+
 
 def device_model(mesh, spec, layers, lm_head=True):
     """The all-device model (default). BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on

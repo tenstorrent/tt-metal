@@ -26,3 +26,13 @@ findings:
     DEST (and the srcA reconfig its causal mask needs): rel 0.0036, overlap 0.99708 = fp32 scores rounded to bf16.
     The plan's host permutation of wq_b / wk / k_norm is not needed: rotary_embedding_indexed takes rotary_offset=64, so
     the index-key cache stays in checkpoint order. Perf of k_chunk 32 at 56k is unmeasured (perf step).
+- id: P1-attn-matmul-configs
+  task: P.1
+  kind: PERF
+  title: explicit 2D-mcast configs make attention's q_b / linear_gate / o_proj 2.8x faster, bit-identical
+  detail: >-
+    Per-op profile (rung last, 51200->56320) put attention at ~35.5 ms per layer: sparse_sdpa 13.9, linear_gate 6.57,
+    o_proj 6.49, q_b 2.20 ms; the full-mesh prefix gather was only 0.66 ms. ttnn's auto config for these HiFi4 + fp32 dest
+    matmuls (fp32 output for gate / o_proj) runs ~39 TFLOPS. tt/attention.py:mm_program_config (in0_block_w 16, output
+    block 8 x 8, per-core M / N over the 11x10 grid) gives 2.29 / 2.28 / 0.80 ms with output bit-identical to the default
+    config. HY4_ATTN_MM=default keeps the old configs. sparse_sdpa is now the largest attention cost.
