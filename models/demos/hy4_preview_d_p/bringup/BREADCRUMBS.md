@@ -2726,3 +2726,37 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
+
+## S.moe_shared.07.test.1 (test review)
+
+What
+- Replaced the rendered swap test (moe_shared layer 2, attn_hc .. attention + attn_residual on device). It is swap 06
+  (moe_shared) with every check and limit unchanged, including the layer-2 shared_topk setup, plus the attn_residual
+  checks of test_swap_moe_full_07_attn_residual.py. Those are: h_mid per-token per-stream norm ratio vs golden; h_mid
+  vs the CPU attn_residual on the same device inputs (rel 5e-4, worst (row, stream) 1e-3); the rounding-aware addend
+  checks; and the module again with per-row rotated post gates vs the CPU step. The addend limits are the layer-2
+  component's (coef 0.005, stream 0.005, row 0.05). The layer-1 limits were 0.01.
+- CPU mutation study at layer 2: /tmp/hy4_ssh7/study.py (adapted from /tmp/hy4_sm7/study.py, outside the repo,
+  ~10 s per variant). The table is in the test docstring.
+
+Decisions
+- Stream norm ratio limit is [0.99, 1.01] (moe_full 07 used [0.98, 1.02]). The device scores [0.99953, 1.00088].
+- At layer 2 stream 3 has the tiny post gate (~0.003), not streams 0 / 1 as at layer 1. With the rotated gates,
+  stream 3 meets a large gate on 3/4 of the rows, so attn_out dropped on stream 3 scores rot rel 0.10.
+
+Gotchas
+- 20 of 29 residual bugs pass the 0.98 out gate at layer 2, among them post columns 0 / 1 swapped (0.99940) and
+  attn_out dropped on stream 0 (0.99294). The vs-CPU check catches every one of them.
+- A bf16-output module has vs-CPU whole rel 0.00047, under the 5e-4 limit. It fails only on the worst row (0.0017).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc_swap_out 0.999995, h_mid vs CPU exact, stream ratio [0.9998, 1.0002]).
+- BRINGUP_IMPL=stub: FAIL (out PCC below 0.98 and every extra check).
+- Gate (device, TtHcPost + TtHy4Attention): PASS, identical over two runs. pcc_swap_out 0.999977; h_mid 0.00146 /
+  stream max 0.0067 / 0.0084, ratio [0.99953, 1.00088]; h_mid vs CPU 0 / 0, addend coef 1.0 / excess 0, rotated
+  0 / 0; attn_out vs golden 0.00628 / 0.0088; router 0.99353; out rel 0.00683.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
