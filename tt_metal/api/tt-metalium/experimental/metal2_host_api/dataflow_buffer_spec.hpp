@@ -81,10 +81,7 @@ struct DataflowBufferSpec {
     DFBSpecName unique_id;
 
     // Backing memory
-    // Entry size of the DFB in bytes.
-    // Invariant: Must be greater than 0.
-    uint32_t entry_size = 0;
-    // Invariant: Must be greater than 0.
+    uint32_t entry_size = 0;  // in bytes
     uint32_t num_entries = 0;
     // Note: It is possible to override these per-Program execution (via ProgramRunArgs).
 
@@ -97,9 +94,6 @@ struct DataflowBufferSpec {
     // (These only need to be considered for DFBs that are bound to a compute kernel.)
 
     // The data format is required for any DFB bound to a compute kernel
-    //
-    // Invariant:
-    // - When data_format_metadata is set, it must be supported on the target architecture.
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
     // Optional; if unspecified, the default tile format (32x32) is assumed.
@@ -108,9 +102,6 @@ struct DataflowBufferSpec {
     // engine derives the face layout from this field. If an entry holds shorter, more numerous faces
     // than the default layout for its tile shape, say so with the `Tile(tile_shape, face_shape)`
     // constructor -- the compute engine then reads exactly that much data.
-    //
-    // Invariant:
-    // - When tile_format_metadata is set, the data_format_metadata must also be set.
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     //////////////////////////////

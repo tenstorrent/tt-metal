@@ -79,11 +79,6 @@ inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;
 //------------------------------------------------
 
 struct KernelSpec {
-    // Note on the inline invariant comments:
-    // The invariant listed in the comments describes the local invariant of the field from the perspective of the
-    // KernelSpec and KernelSpec alone. More invariants about how the bindings and references interact with the rest of
-    // the ProgramSpec are listed in the ProgramSpec header.
-
     ///////////////////////////////////////////////////////////////////
     // Basic kernel info
     ///////////////////////////////////////////////////////////////////
@@ -94,23 +89,7 @@ struct KernelSpec {
     // Kernel source: either a path to a source file, or the source code itself.
     // To pass inline source code, wrap it in KernelSpec::SourceCode{...}.
     // (A string literal binds directly to the path variant alternative.)
-    //
-    // When source is a path, the lookup order is as follows:
-    //   - Must be non-empty.
-    //   - An absolute path is used as given.
-    //   - A relative path is resolved against the first location where the file exists:
-    //       1. The current working directory
-    //       2. TT_METAL_KERNEL_PATH, when that variable is set
-    //       3. The system kernel directory (/usr/share/tenstorrent/kernels/)
-    //       4. TT_METAL_HOME, or the directory set with SetRootDir
-    //
-    // Invariant for the path:
-    // - Must be non-empty.
-    // - Must point to a file that exists.
-    // - The file must be readable.
     struct SourceCode {
-        // Invariant:
-        // - Must be non-empty.
         std::string code;
     };
     std::variant<std::filesystem::path, SourceCode> source;
@@ -120,10 +99,10 @@ struct KernelSpec {
 
     // Kernel threading: the number of SPMD threads this kernel has.
     //
-    // Invariant on Gen1 architectures (Wormhole, Blackhole): must be 1.
-    // Invariant on Gen2 architecture (Quasar):
-    //   - If is_data_movement_kernel(), the valid range is [1, 6]
-    //   - If is_compute_kernel(), the valid values are [1, 2, 4]
+    // The legality rules for num_threads are architecture and kernel-type dependent:
+    //  - Gen1 architectures (Wormhole, Blackhole) support single-threaded kernels only.
+    //  - Gen2 architectures (Quasar) support num_threads > 1.
+    //    Different rules apply for compute vs data-movement kernels.
     uint32_t num_threads = 1;
 
     // Kernel type (methods)
@@ -164,48 +143,20 @@ struct KernelSpec {
         //            (NOT YET SUPPORTED — currently rejected at runtime)
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
-        // identify the DFB within the ProgramSpec
-        DFBSpecName dfb_spec_name;
-
-        // DFB accessor name (used in the kernel source code)
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
-
-        // producer or consumer
-        EndpointType endpoint_type;
-
-        // See above for more documentation.
-        //
-        // Invariant:
-        // - Cannot be blocked (not yet supported).
-        // - For a producer binding, must be STRIDED.
+        DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
+        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
+        EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
     };
-    // Local Invariant:
-    // - Each DFB has at most one PRODUCER binding and at most one CONSUMER binding.
-    //   (A kernel that binds a DFB in both roles "self-loops" it.)
-    // - Two bindings may share an accessor_name only if they are the PRODUCER and CONSUMER
-    //   bindings of the same DFB. (A self-loop may also use two different accessor_names.)
-    // - Gen2: a data-movement kernel must not self-loop a DFB.
-    // - A compute kernel that self-loops a DFB must use STRIDED on its CONSUMER binding.
-    // - A CONSUMER binding with access_pattern ALL requires num_threads <= 4.
     Group<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
     // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
-        // identify the semaphore within the ProgramSpec
-        SemaphoreSpecName semaphore_spec_name;
-
-        // semaphore accessor name (used in the kernel source code)
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
+        std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
-    // Local Invariant:
-    // - semaphore_spec_name must be unique across all semaphore_bindings.
-    // - accessor_name must be unique across all semaphore_bindings.
-    // - Gen 2 & wormhole: Must be empty if is_compute_kernel().
     Group<SemaphoreBinding> semaphore_bindings;
 
     // Scratchpad bindings
@@ -213,16 +164,9 @@ struct KernelSpec {
     // The kernel constructs a Scratchpad from the binding token, naming the element type:
     //   Scratchpad<uint32_t>(scratch::<accessor_name>)
     struct ScratchpadBinding {
-        // identify the scratchpad within the ProgramSpec
-        ScratchpadSpecName scratchpad_spec_name;
-
-        // scratchpad accessor name (used in the kernel source code)
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
+        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
     };
-    // Local Invariant:
-    // - scratchpad_spec_name must be unique across all scratchpad_bindings.
-    // - accessor_name must be unique across all scratchpad_bindings.
     Group<ScratchpadBinding> scratchpad_bindings;
 
     ///////////////////////////////////////////////////////////////////
@@ -234,15 +178,9 @@ struct KernelSpec {
     // The kernel constructs a TensorAccessor (or LocalTensorAccessor) from the binding token:
     //   TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
-        // identify the TensorParameter within the ProgramSpec
-        TensorParamName tensor_parameter_name;
-
-        // tensor accessor name (used in the kernel source code)
-        // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
+        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
     };
-    // Local Invariant:
-    // - accessor_name must be unique across all tensor_bindings.
     Group<TensorBinding> tensor_bindings;
 
     // Additional program parameter binding types (coming soon):
@@ -257,11 +195,6 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    //
-    // Table key represents the accessor name of the CTA.
-    // Invariant:
-    // - The key must be a valid C++ identifier.
-    // - Must not have repeated name with runtime_arg_schema.
     using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
@@ -274,23 +207,12 @@ struct KernelSpec {
     // Currently, only arguments of uint32_t are supported.
 
     struct RuntimeArgSchema {
-        // Runtime argument names
-        //
-        // Invariant:
-        // - Must not have repeated names.
-        // - All argument names must be valid C++ identifiers.
+        // Runtime argument names (must be unique, valid C++ identifiers.)
         Group<std::string> runtime_arg_names;
 
-        // Common runtime argument names
-        //
-        // Invariant:
-        // - Must not have repeated names.
-        // - All argument names must be valid C++ identifiers.
+        // Common runtime argument names (must be unique, valid C++ identifiers.)
         Group<std::string> common_runtime_arg_names;
     };
-    // Invariant:
-    // - No repeated names across runtime_arg_names and common_runtime_arg_names.
-    // - Must not have repeated names with compile_time_args.
     RuntimeArgSchema runtime_arg_schema{};
 
     // For vararg-style positional arguments, see KernelAdvancedOptions.
@@ -298,14 +220,6 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration
     //////////////////////////////////////////////////////////////////////////////
-
-    // Invariant for ComputeHardwareConfig:
-    // - Every unpack_modes key names a DFB in this kernel's dfb_bindings (either role).
-    // - Gen1: an UnpackToDest entry for a DFB this kernel consumes requires enable_32_bit_dest.
-    //
-    // Invariant for DataMovementHardwareConfig:
-    // - Every config_2xx->disable_dfb_implicit_sync_for entry names a DFB in this kernel's dfb_bindings.
-    //
     std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
 
     //////////////////////////////////////////////////////////////////////////////

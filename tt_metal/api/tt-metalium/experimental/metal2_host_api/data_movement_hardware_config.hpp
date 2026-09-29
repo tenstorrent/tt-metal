@@ -39,9 +39,6 @@ struct DataMovementHardwareConfig {
     struct DataMovement1XXConfig {
         // The RISC-V core that runs this DM kernel (RISCV_0 or RISCV_1)
         // Each DM kernel on a node must be assigned to a unique RISC-V core
-        //
-        // Invariant:
-        // - Either RISCV_0 or RISCV_1.
         tt::tt_metal::DataMovementProcessor processor;
 
         // The physical NOC that this DM kernel uses (NOC_0 or NOC_1)
@@ -53,8 +50,8 @@ struct DataMovementHardwareConfig {
         // overhead and must be set identically on both DM kernels on a node.
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
-    // Invariant:
-    // - If this kernel is built for TT-1.x.x, config_1xx must not be empty (Processor and NOC have no default).
+    // NOTE: If this kernel is built for TT-1.x.x, config_1xx must not be empty.
+    //       Processor and NOC have no default.
     std::optional<DataMovement1XXConfig> config_1xx = std::nullopt;
 
     // ---- TT-2.x.x specific (Quasar and derivatives) ----
@@ -64,8 +61,6 @@ struct DataMovementHardwareConfig {
         //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
         //  - Opting out is mainly for debug purposes, or for backwards-compatible code style.
         // Any bound DFB not listed here will use implicit sync by default.
-        //
-        // Invariant: All DFBSpecNames must be unique.
         Group<DFBSpecName> disable_dfb_implicit_sync_for;
 
         // Opt out of DFB implicit sync for ALL the DFBs this kernel binds.
