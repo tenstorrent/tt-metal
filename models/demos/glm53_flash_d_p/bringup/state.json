@@ -43,6 +43,28 @@
   "started": "2026-09-29T01:45:43",
   "status": "PASS"
  },
+ "G.s56320": {
+  "attempts": 0,
+  "duration_s": 1712.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-29T02:23:23"
+   }
+  ],
+  "last_run": "2026-09-29T02:23:23",
+  "log": "/localdev/dnijemcevic/bringup/glm53_flash_d_p/runs/run1/logs/G.s56320.log",
+  "metrics": {
+   "cpu_seconds": 1709.4,
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 5
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-29T01:54:50",
+  "status": "PASS"
+ },
  "R.1": {
   "attempt": 1,
   "attempts": 1,
