@@ -523,6 +523,7 @@ def gated_deltanet_forward_ttnn(
     prefill_gab_a_off=None,
     prefill_gab_b_off=None,
     m3_qkv_zero_bias=None,
+    sp_hooks=None,
 ):
     """Gated DeltaNet forward. mode: recurrent (decode T=1) or chunk (prefill T>1).
 
@@ -549,6 +550,13 @@ def gated_deltanet_forward_ttnn(
     m3_qkv_zero_bias: optional (QWEN36_M3_ZB, qwen36 tp_common M3 table) bf16 TILE [1, N] DRAM zero
     bias, allocated once at model load and shared across layers. When the M1 S3 program applies, the
     q|k|v in-proj runs as ttnn.linear with this bias (bit-identical to minimal_matmul). None = unchanged.
+
+    sp_hooks: optional dict (qwen36 sequence-parallel prefill, tt/sp_prefill_sc.py QWEN36_SP_EARLY_SEND /
+    QWEN36_SP_LATE_RECV; chunk prefill with native_conv1d_fn + chunk_delta_fn only) of callables fired at
+    the points the cross-die GDN state transfer needs: "pre_conv"() before the causal conv, "post_conv"(
+    new_conv_state) right after it, "pre_scan"() before the chunk delta-rule core, "post_scan"(new_state)
+    -> new_state | None right after it (None: the hook consumed the state, the caller skips its write).
+    None (default) = no call, identical behavior.
     """
     if num_v_heads is None:
         num_v_heads = num_heads
@@ -571,6 +579,10 @@ def gated_deltanet_forward_ttnn(
     ckc = compute_kernel_config
     # C2 SGRN: the L1 z|a|0|b|0 in-proj output kept alive for sigmoid_gated_rms_norm (None = flag off / n.a.).
     _c2_gab = None
+    # P300 D1 L1-gab path (11x10 grid, T in tpc.R3_T_SET; set below): C2 SGRN there runs with fp32 dest off, and the
+    # a/b slices go to L1 for the lean pre-scan (see _prescan_lean).
+    _sgrn_p300 = False
+    _p300_ab_l1 = False
 
     def _pc(x_in, w_in):
         if T == 1 and decode_progcfg_fn is not None:
@@ -738,8 +750,12 @@ def gated_deltanet_forward_ttnn(
             # T == 2048) on the fused FLA path with the fused SILU gate. gab (z = columns
             # 0..mega_g_dim-1) is then read in place by sigmoid_gated_rms_norm after ChunkGdnFused: no
             # z slice here and gab stays alive until that op (freed right after it).
+            # C2 SGRN is also taken on the P300 D1 L1-gab path (11x10 grid, unmasked chunk with T in tpc.R3_T_SET,
+            # e.g. the SP per-die span 1024). The op itself is grid-agnostic (it spreads B*Nv*Mt rows over the
+            # device grid). gab placement follows the same C4 / R3 SGRN_GAB_L1 rule as the M1 path (_c2_gab_dram).
+            _sgrn_p300 = _p300_gab_l1 and T in tpc.R3_T_SET
             _c2_sgrn = (
-                _m1_gab_pc is not None
+                (_m1_gab_pc is not None or _sgrn_p300)
                 and tpc.c2_enabled("SGRN")
                 and chunk_delta_fn is not None
                 and use_gate
@@ -765,7 +781,7 @@ def gated_deltanet_forward_ttnn(
                 gab = ttnn.linear(
                     hidden_states,
                     w_gab,
-                    memory_config=_p300_gab[1] if _p300_gab_l1 else mc,
+                    memory_config=((ttnn.DRAM_MEMORY_CONFIG if _c2_gab_dram else _p300_gab[1]) if _p300_gab_l1 else mc),
                     compute_kernel_config=ckc,
                     program_config=_p300_gab[0],
                     dtype=ttnn.bfloat16,
@@ -792,17 +808,20 @@ def gated_deltanet_forward_ttnn(
                     _c2_gab = gab
                 else:
                     gate_raw = ttnn.slice(gab, [0, 0, 0], [_gs[0], _gs[1], mega_g_dim], memory_config=_dram)
+                # P300 L1-gab path: the a/b slices go to L1 (read by the lean pre-scan below).
+                _p300_ab_l1 = _p300_gab_l1 and _m1_gab_pc is None
+                _ab_mc = ttnn.L1_MEMORY_CONFIG if _p300_ab_l1 else _dram
                 a_raw = ttnn.slice(
                     gab,
                     [0, 0, prefill_gab_a_off],
                     [_gs[0], _gs[1], prefill_gab_a_off + mega_a_dim],
-                    memory_config=_dram,
+                    memory_config=_ab_mc,
                 )
                 b_raw = ttnn.slice(
                     gab,
                     [0, 0, prefill_gab_b_off],
                     [_gs[0], _gs[1], prefill_gab_b_off + mega_b_dim],
-                    memory_config=_dram,
+                    memory_config=_ab_mc,
                 )
                 if not _c2_sgrn:
                     ttnn.deallocate(gab)
@@ -856,6 +875,8 @@ def gated_deltanet_forward_ttnn(
                 # this model: Qwen3.5 GDN has no conv1d bias — see gdn/weights.py). May return qkv
                 # as a (q, k, v) tuple directly (conv1d_native.py's n_cc=3 fast path, only taken
                 # when chunk width == q_dim == k_dim == v_dim) — see "Split QKV after conv" below.
+                if sp_hooks is not None and "pre_conv" in sp_hooks:
+                    sp_hooks["pre_conv"]()
                 if _m1_qkv_l1:
                     # M1 S3: free the L1 in-proj output right after the conv (the DRAM one is freed at
                     # the same point, when `qkv` is rebound). Skipped if a conv output shares its buffer.
@@ -867,6 +888,8 @@ def gated_deltanet_forward_ttnn(
                     del _m1_qkv_in
                 else:
                     qkv, new_fused_conv_state_raw = native_conv1d_fn(qkv, fused_conv_state)
+                if sp_hooks is not None and "post_conv" in sp_hooks:
+                    sp_hooks["post_conv"](new_fused_conv_state_raw)
             else:
                 # Prefill FIR conv
                 qkv, new_fused_conv_state_raw = _causal_conv1d_fir(
@@ -1153,7 +1176,29 @@ def gated_deltanet_forward_ttnn(
     # Beta and g. F10B item B: the small (num_v_heads-wide) beta/g/a elementwise chain below uses
     # mc_small (independent L1 policy), not mc -- the qkv/gab/ab/a/b PROJECTION matmuls just above
     # and below are untouched (still `mc`, i.e. DRAM at T=2048).
-    if _mega_extracted:
+    # Lean pre-scan (P300 L1-gab path: fused chunk prefill, unmasked, T in tpc.R3_T_SET): beta = sigmoid(b)
+    # written straight to an fp32 tensor (the fused op's dtype; its internal typecast is then skipped),
+    # softplus fused into the dt_bias add as a post-activation, and g cast to fp32 here (6 ops instead of 8).
+    _prescan_lean = (
+        _p300_ab_l1
+        and _mega_extracted
+        and chunk_delta_fn is not None
+        and mode == "chunk"
+        and valid_len is None
+        and T in tpc.R3_T_SET
+        and not allow_neg_eigval
+        and A_neg_precomputed is not None
+        and mc_small is not None
+        and os.environ.get("QWEN36_GDN_GB_LAYOUT", "0") == "0"
+    )
+    if _prescan_lean:
+        a = a_raw
+        beta = ttnn.allocate_tensor_on_device(
+            ttnn.TensorSpec(list(b_raw.shape), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=mc_small.buffer_type),
+            b_raw.device(),
+        )
+        ttnn.sigmoid(b_raw, memory_config=mc_small, output_tensor=beta)
+    elif _mega_extracted:
         a = a_raw
         beta = ttnn.sigmoid(b_raw, memory_config=mc_small)
     elif ab_proj_weight is not None:
@@ -1191,9 +1236,23 @@ def gated_deltanet_forward_ttnn(
         )
     if allow_neg_eigval:
         beta = ttnn.multiply(beta, 2.0, memory_config=mc_small)
-    a_biased = ttnn.add(a, dt_bias, memory_config=mc_small)
-    sp = ttnn.softplus(a_biased, memory_config=mc_small)
-    if A_neg_precomputed is not None:
+    if _prescan_lean:
+        sp = ttnn.add(
+            a,
+            dt_bias,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+            memory_config=mc_small,
+        )
+        _g16 = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc_small)
+        ttnn.deallocate(sp)
+        g = ttnn.typecast(_g16, ttnn.float32, memory_config=mc_small)
+        ttnn.deallocate(_g16)
+    else:
+        a_biased = ttnn.add(a, dt_bias, memory_config=mc_small)
+        sp = ttnn.softplus(a_biased, memory_config=mc_small)
+    if _prescan_lean:
+        pass
+    elif A_neg_precomputed is not None:
         g = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc_small)
     else:
         A = ttnn.exp(A_log, memory_config=mc_small)
@@ -1234,6 +1293,8 @@ def gated_deltanet_forward_ttnn(
                 q, k, v, beta, g = (_pad_rows(t, T_pad - T) for t in (q, k, v, beta, g))
             # Head-major output ([B*Nv, T, Dv] TILE) skips the untilize + [B,Nv,T,Dv]->[B,T,Nv,Dv]
             # permute + tilize the adapter otherwise does to hand back token-major o.
+            if sp_hooks is not None and "pre_scan" in sp_hooks:
+                sp_hooks["pre_scan"]()
             o, new_state = chunk_delta_fn(
                 q,
                 k,
@@ -1247,6 +1308,8 @@ def gated_deltanet_forward_ttnn(
                 qkv_head_dims=(num_heads, head_k_dim, num_v_heads, head_v_dim),
                 return_o_bh=True,
             )
+            if sp_hooks is not None and "post_scan" in sp_hooks:
+                new_state = sp_hooks["post_scan"](new_state)
             _o_head_major = True
             if T_pad != T:
                 # o is [B*Nv, T_pad, Dv]; T is dim 1 here too, same slice as the token-major shape.
@@ -1315,7 +1378,7 @@ def gated_deltanet_forward_ttnn(
                 f"{o.memory_config().buffer_type}, gab {list(_c2_gab.shape)} {_c2_gab.dtype} "
                 f"{_c2_gab.memory_config().buffer_type}, weight {list(o_norm_weight.shape)} {o_norm_weight.dtype} "
                 f"{o_norm_weight.layout}, H={num_v_heads}, epsilon={norm_eps}, silu, gate_col_offset_tiles=0, "
-                f"out bf16 {mc_scan}, HiFi4 approx=F fp32_dest=T packer_l1_acc=F) gab placement variant "
+                f"out bf16 {mc_scan}, HiFi4 approx=F fp32_dest={'F' if _sgrn_p300 else 'T'} packer_l1_acc=F) gab placement variant "
                 f"{'b (DRAM)' if _c2_gab.memory_config().buffer_type == ttnn.BufferType.DRAM else 'a (L1)'}",
                 flush=True,
             )
@@ -1326,7 +1389,8 @@ def gated_deltanet_forward_ttnn(
             num_v_heads,
             epsilon=norm_eps,
             memory_config=mc_scan,
-            compute_kernel_config=tpc.C2_SGRN_CKC,
+            # P300 L1-gab path: fp32 dest off (HiFi4), ~16% faster (48.8 -> 41.2 us per GDN layer at T=1024).
+            compute_kernel_config=tpc.C2_SGRN_CKC_FP32_OFF if _sgrn_p300 else tpc.C2_SGRN_CKC,
             output_dtype=ttnn.bfloat16,
             gate_activation="silu",
             gate_col_offset_tiles=0,
@@ -1355,7 +1419,7 @@ def gated_deltanet_forward_ttnn(
         else:
             o = ttnn.typecast(o, ttnn.bfloat16, memory_config=mc_scan)
             o = ttnn.rms_norm(o, weight=o_norm_weight, epsilon=norm_eps, memory_config=mc_scan)
-        o = ttnn.experimental.nlp_concat_heads(o, memory_config=mc_scan)  # [B, 1, T, Nv*Dv]
+        o = ttnn.experimental.nlp_concat_heads(o, memory_config=mc_scan, head_split=True)  # [B, 1, T, Nv*Dv]
         o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])  # metadata only (last dim kept)
         if use_gate and g_proj_weight is not None:
             if _mega_extracted:

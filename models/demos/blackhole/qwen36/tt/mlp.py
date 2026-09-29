@@ -367,9 +367,10 @@ class Qwen36MLP:
             program_config=pc,
         )
 
-    def forward(self, x, mode=None):
+    def forward(self, x, mode=None, last_row_only=False):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
+        # last_row_only (single device): x is the 1-row MLP input of an M2 LASTROW prefill layer (T == 1 path).
         if self.num_devices > 1 or self._sequence_parallel:
             return self._forward_tp(x)
         w = self.weights
@@ -401,6 +402,7 @@ class Qwen36MLP:
                 # explicit config on both branches. Legacy (MINIMAL_CFG=0) keeps the exact T>=4096
                 # MinimalMatmulConfig(8,8,8) at its binding-default (1,1) subblock, and config=None
                 # below 4096 -- both bit-identical to the pre-flag code.
+                p300 = None
                 if T >= 4096:
                     if tpc.PREFILL_MINIMAL_CFG:
                         cfg = (
@@ -458,6 +460,9 @@ class Qwen36MLP:
                     config=cfg,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.L1_MEMORY_CONFIG if l1_out_ab else ttnn.DRAM_MEMORY_CONFIG,
+                    # P300 A: SwiGLU on the pack thread (in the K-loop tail, not a separate epilogue pass) with the
+                    # approximate sigmoid. Not bit-exact. Other configs keep the epilogue SwiGLU.
+                    **({"swiglu_pack": True, "swiglu_approx": True} if p300 is not None else {}),
                 )
             else:
                 w1_out = self._prefill_matmul(x, w.w1, T, "QWEN9B_MLP_UP_AUTO", activation="silu")
@@ -477,11 +482,20 @@ class Qwen36MLP:
             if T == 1 and self._i3_mlp_pc_fn is not None and tpc.i3_one_tile_row(x):
                 # I-3 MLP_PROGCFG: swept decode gate/up progcfg (None for an unswept shape -> keep up_pc).
                 up_pc = self._i3_mlp_pc_fn(x.shape[-1], w.w1.shape[-1]) or up_pc
-            w1_out = ttnn.linear(
-                x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, program_config=up_pc
-            )
-            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, program_config=up_pc)
-            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+            if T == 1 and last_row_only:
+                # M2 LASTROW 1-row layer: the 1D decode progcfg drops the linear's SiLU into a separate unary op;
+                # apply it as the multiply's input activation instead (one op fewer).
+                w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, memory_config=mc, program_config=up_pc)
+                w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, program_config=up_pc)
+                hidden = ttnn.multiply(
+                    w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc
+                )
+            else:
+                w1_out = ttnn.linear(
+                    x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, program_config=up_pc
+                )
+                w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, program_config=up_pc)
+                hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
             ttnn.deallocate(w1_out)
             ttnn.deallocate(w3_out)
         down_pc = None

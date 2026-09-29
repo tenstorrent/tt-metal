@@ -11,6 +11,13 @@ import os as _os
 import ttnn
 
 
+def _rope_partial_ok(x, rotary_dim):
+    """True if rotary_embedding_hf can rotate x's first rotary_dim channels and pass the rest through in one op
+    (prefill, interleaved input, rotary_dim a multiple of 64 and narrower than x), in place of the
+    slice + rotary + slice + concat sequence. Bit-exact with that sequence."""
+    return rotary_dim < x.shape[-1] and rotary_dim % 64 == 0 and not x.is_sharded()
+
+
 def rotate_half_ttnn(x):
     """Rotates half the hidden dims of the input."""
     half_dim = x.shape[-1] // 2
@@ -69,7 +76,7 @@ def apply_rotary_pos_emb_fused(q, k, cos, sin, memory_config=None):
     rotary_dim = cos.shape[-1]
     head_dim = q.shape[-1]
 
-    if rotary_dim == head_dim:
+    if rotary_dim == head_dim or (_rope_partial_ok(q, rotary_dim) and _rope_partial_ok(k, rotary_dim)):
         q_embed = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False, memory_config=memory_config)
         k_embed = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False, memory_config=memory_config)
         return q_embed, k_embed
@@ -105,7 +112,7 @@ def apply_rotary_pos_emb_fused_one(x, cos, sin, memory_config=None):
         cos = ttnn.reshape(cos, [cos.shape[0], 1, cos.shape[1], cos.shape[2]])  # metadata only
         sin = ttnn.reshape(sin, [sin.shape[0], 1, sin.shape[1], sin.shape[2]])
     rotary_dim = cos.shape[-1]
-    if rotary_dim == x.shape[-1]:
+    if rotary_dim == x.shape[-1] or _rope_partial_ok(x, rotary_dim):
         return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, memory_config=memory_config)
     x_rot = x[..., :rotary_dim]
     x_pass = x[..., rotary_dim:]
@@ -274,14 +281,23 @@ def flexible_sdpa_q_chunk():
     return 64 if _os.environ.get("QWEN9B_SDPA_QK64") == "1" else 128
 
 
-def _get_flexible_sdpa_program_config(device):
+# bf8 K/V paged prefill (QWEN36_ATTN_KV_BF8=1 cache, the qwen36 sequence-parallel prefill dies): the Q64 flexible
+# SDPA runs k_chunk 256, keeps the op's causal K/V prefix chains for the uneven zigzag pairs this gives
+# (allow_uneven_chain_pairs, bit-exact; without it the chains are dropped and the SDPA gets ~2x slower) and runs
+# the softmax @ V matmul at LoFi (pv_lofi; QK, softmax rescale and normalisation stay at the compute config's
+# fidelity). One p300c die, 8 kv heads x 3 chunk starts: 379.5 -> 287.4 us per layer.
+I4_FLEX_K_CHUNK_BF8_KV = 256
+
+
+def _get_flexible_sdpa_program_config(device, bf8_kv=False):
     """Fixed SDPAProgramConfig for the FLEXIBLE chunked SDPA (chunk_start_idx supplied as a
     runtime device tensor). The chunk size must divide every chunk_start (all multiples of the
     2048-token GDN chunk) so ONE program serves all chunk positions — required so a single
     captured trace can be replayed per chunk in chunk-outer prefill.
 
     QWEN36_I4_SDPA_Q64=1 (default): q_chunk 64, k_chunk 128, exp_approx_mode=True (see the
-    I4_SDPA_Q64_DEFAULT note above). QWEN36_I4_SDPA_Q64=0: the pre-INT-4 config below.
+    I4_SDPA_Q64_DEFAULT note above); with bf8_kv (bfloat8_b paged K/V cache) k_chunk 256 + uneven chain
+    pairs + PV LoFi (see I4_FLEX_K_CHUNK_BF8_KV). QWEN36_I4_SDPA_Q64=0: the pre-INT-4 config below.
 
     Pre-INT-4 default 128 (not 64): 128 still divides 2048, and a microbench showed q/k=128 is ~2x
     faster than 64 on the prefill SDPA shape (16 q-heads / 4 kv-heads, d=256, KV~32k) — numerically
@@ -292,8 +308,10 @@ def _get_flexible_sdpa_program_config(device):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=_prefill_sdpa_grid(device),
             q_chunk_size=I4_FLEX_Q_CHUNK,
-            k_chunk_size=I4_FLEX_K_CHUNK,
+            k_chunk_size=I4_FLEX_K_CHUNK_BF8_KV if bf8_kv else I4_FLEX_K_CHUNK,
             exp_approx_mode=True,
+            allow_uneven_chain_pairs=bool(bf8_kv),
+            pv_lofi=bool(bf8_kv),
         )
     qk = flexible_sdpa_q_chunk()
     return ttnn.SDPAProgramConfig(
@@ -462,6 +480,10 @@ def gated_attention_forward_ttnn(
     #     unchanged and before it). Numerics change (decode SDPA kernel).
     prefill_last_row_tile_slices=False,
     prefill_last_row_pos_tensor=None,
+    # sp_post_fill_hook: optional no-arg callable (qwen36 SP prefill, tt/sp_prefill_sc.py
+    # QWEN36_SP_EARLY_SEND / QWEN36_SP_LATE_RECV), paged prefill only: run right after this chunk's own
+    # K/V paged_fill_cache, before the SDPA (cross-die K/V prefix recv + send). None (default) = no call.
+    sp_post_fill_hook=None,
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -551,6 +573,18 @@ def gated_attention_forward_ttnn(
     # qwen36 M4 (see the prefill_last_row_tile_slices / prefill_last_row_pos_tensor kwargs).
     _r4a = bool(prefill_last_row_tile_slices)
     _r4b = prefill_last_row_pos_tensor is not None
+    # Paged chunked prefill with the bf8 K/V cache (QWEN36_ATTN_KV_BF8=1): produce the bf8 tensors directly instead
+    # of typecasting them: the full-T gate matmul writes bf8 (the gate typecast before the fused multiply is then a
+    # no-op), the q-norm (not for M4 R4B, whose decode SDPA needs bf16 Q) and k-norm write bf8 (RoPE then runs on
+    # bf8 -> bf8, and the Q / K typecasts are skipped).
+    _fa_tiny = (
+        T > 1
+        and _os.environ.get("QWEN36_ATTN_KV_BF8", "0") == "1"
+        and paged_kv_cache_key is not None
+        and paged_kv_cache_key.dtype == ttnn.bfloat8_b
+        and page_table is not None
+        and chunk_page_table is not None
+    )
     if _r4a or _r4b:
         assert prefill_last_row_only and T >= 32, "M4 R4A / R4B need prefill_last_row_only (M2 LASTROW)"
     if _r4b:
@@ -618,6 +652,7 @@ def gated_attention_forward_ttnn(
                 compute_kernel_config=ckc,
                 memory_config=memory_config,
                 program_config=_pc(hidden_states, gate_deint_weight),
+                **({"dtype": ttnn.bfloat8_b} if _fa_tiny else {}),
             )  # [B, T, H*Dh] flat, used as-is later
         if _fused_qkv:
             qkv4 = ttnn.reshape(qkv, [B, 1, T, num_attention_heads * head_dim + 2 * num_key_value_heads * head_dim])
@@ -627,6 +662,7 @@ def gated_attention_forward_ttnn(
                 num_kv_heads=num_key_value_heads,
                 transpose_k_heads=False,
                 memory_config=memory_config,
+                head_split=True,  # (tile row, head) work units: short sequences use the whole grid; bit-exact
             )  # [B,H,T,Dh], [B,Hkv,T,Dh], [B,Hkv,T,Dh]
             ttnn.deallocate(qkv)
         else:
@@ -670,6 +706,7 @@ def gated_attention_forward_ttnn(
                 epsilon=norm_eps,
                 memory_config=_prefill_mc,
                 compute_kernel_config=_qknorm_ckc,
+                **({"dtype": ttnn.bfloat8_b} if (_fa_tiny and not _r4b) else {}),
             )
             key_states = ttnn.rms_norm(
                 key_states,
@@ -677,6 +714,7 @@ def gated_attention_forward_ttnn(
                 epsilon=norm_eps,
                 memory_config=_prefill_mc,
                 compute_kernel_config=_qknorm_ckc,
+                **({"dtype": ttnn.bfloat8_b} if _fa_tiny else {}),
             )
         else:
             query_states = rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
@@ -835,13 +873,17 @@ def gated_attention_forward_ttnn(
             # unless model.py's allocate_kv_caches (~2743) was run with QWEN_SDPA_BF8=1, so
             # this flag only yields an actual bfloat8_b cast when QWEN_SDPA_BF8=1 too --
             # otherwise it typecasts bfloat16 -> bfloat16 (a harmless no-op copy).
-            key_fill = ttnn.typecast(key_fill, dtype=paged_kv_cache_key.dtype)
-            value_fill = ttnn.typecast(value_fill, dtype=paged_kv_cache_value.dtype)
+            if not (_fa_tiny and key_fill.dtype == paged_kv_cache_key.dtype):
+                key_fill = ttnn.typecast(key_fill, dtype=paged_kv_cache_key.dtype)
+            if not (_fa_tiny and value_fill.dtype == paged_kv_cache_value.dtype):
+                value_fill = ttnn.typecast(value_fill, dtype=paged_kv_cache_value.dtype)
 
         ttnn.experimental.paged_fill_cache(paged_kv_cache_key, key_fill, chunk_page_table, batch_idx=0)
         ttnn.experimental.paged_fill_cache(paged_kv_cache_value, value_fill, chunk_page_table, batch_idx=0)
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
+        if sp_post_fill_hook is not None:
+            sp_post_fill_hook()
 
         # QWEN36_ATTN_KV_BF8 also typecasts Q to bfloat8_b right before SDPA (matches
         # tt_transformers/tt/attention.py ~1218: `ttnn.typecast(q_heads, dtype=... or
@@ -849,7 +891,11 @@ def gated_attention_forward_ttnn(
         # unconditionally further below -- so this is a separate tensor used only here.
         # M4 R4B: the decode SDPA below reads the bf16 query_states directly (GQA decode SDPA needs bf16 Q),
         # so the bf8 Q typecast is skipped there.
-        _q_for_sdpa = ttnn.typecast(query_states, dtype=ttnn.bfloat8_b) if (_kv_bf8 and not _r4b) else query_states
+        _q_for_sdpa = (
+            ttnn.typecast(query_states, dtype=ttnn.bfloat8_b)
+            if (_kv_bf8 and not _r4b and not (_fa_tiny and query_states.dtype == ttnn.bfloat8_b))
+            else query_states
+        )
 
         if _r4b:
             # M4 R4B: row 31 of the RoPE'd q block ([1, H, 32, Dh] -> head-transpose [1, 32, H, Dh] -> dim-1
@@ -888,7 +934,9 @@ def gated_attention_forward_ttnn(
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 scale=scaling,
                 memory_config=_prefill_mc,
-                program_config=_get_flexible_sdpa_program_config(device),
+                program_config=_get_flexible_sdpa_program_config(
+                    device, bf8_kv=paged_kv_cache_key.dtype == ttnn.bfloat8_b
+                ),
                 compute_kernel_config=_get_prefill_sdpa_compute_kernel_config(),
             )
         else:
@@ -1148,7 +1196,7 @@ def gated_attention_forward_ttnn(
         _sdpa_full = attn_output
         _sdpa_blk = _sdpa_full[:, :, T - 32 : T, :]
         ttnn.deallocate(_sdpa_full)
-        _cat_blk = ttnn.transformer.concatenate_heads(_sdpa_blk, memory_config=_prefill_mc)
+        _cat_blk = ttnn.transformer.concatenate_heads(_sdpa_blk, memory_config=_prefill_mc, head_split=True)
         ttnn.deallocate(_sdpa_blk)
         attn_output = ttnn.to_layout(_cat_blk[:, 31:32, :], ttnn.TILE_LAYOUT)
         ttnn.deallocate(_cat_blk)
@@ -1167,7 +1215,8 @@ def gated_attention_forward_ttnn(
         # (H, D) is the head concat, so one reshape replaces transpose + concatenate_heads.
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
     elif use_optimized_concat:
-        attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=_prefill_mc)
+        # head_split: (tile row, head) work units, so short sequences use the whole grid (bit-exact).
+        attn_output = ttnn.transformer.concatenate_heads(attn_output, memory_config=_prefill_mc, head_split=True)
     else:
         attn_output = ttnn.transpose(attn_output, 1, 2)
         attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])

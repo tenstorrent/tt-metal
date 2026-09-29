@@ -338,7 +338,8 @@ class TPAttention:
     def _concat_heads(self, gated):
         """Prefill concat-heads via nlp_concat_heads (post-gate). L1 output: short-lived post-SDPA temp,
         no kernel-CB clash."""
-        return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # head_split: (tile row, head) work units, so short sequences use the whole grid (bit-exact).
+        return ttnn.experimental.nlp_concat_heads(gated, memory_config=ttnn.L1_MEMORY_CONFIG, head_split=True)
 
     def _make_heads_decode(self, qg, kp, vp, B):
         """Decode head-split via nlp_create_qkv_heads_decode (the batched-decode idiom).

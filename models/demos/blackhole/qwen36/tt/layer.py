@@ -48,6 +48,29 @@ def make_decode_norm_sharded_config(dim, num_cores=8):
     return mem_cfg, prog_cfg
 
 
+_NORM_WIDE_PC = {}
+_NORM_WIDTH_SPLIT = 3
+
+
+def _norm_wide_pc(x):
+    """Width-split interleaved RMSNorm program config (LayerNormDefaultProgramConfig(width_split=3): every tile row on
+    3 cores that exchange their partial mean of squares, one tile row per core) for a full-T single-device prefill
+    norm at T in tp_common.R3_T_SET, or None (the default interleaved op) when it does not fit the grid. T=1024,
+    dim 2048 on 11x10 (96 cores): fused add+norm 31.3 -> 13.9 us (bf16 residual), 30.3 -> 13.3 us (bf8), plain
+    21.7 -> 12.6 us. Not bit-exact (the cross-core sum of squares changes the reduction order)."""
+    shape = list(x.shape)
+    if len(shape) != 3 or shape[0] != 1 or shape[1] not in tpc.R3_T_SET or x.memory_config().is_sharded():
+        return None
+    split = _NORM_WIDTH_SPLIT
+    mt, kt = shape[1] // _TILE, shape[2] // _TILE
+    grid = x.device().compute_with_storage_grid_size()
+    if shape[1] % _TILE or shape[2] % _TILE or kt < 2 * split or mt * split > grid.x * grid.y:
+        return None
+    if split not in _NORM_WIDE_PC:
+        _NORM_WIDE_PC[split] = ttnn.LayerNormDefaultProgramConfig(width_split=split)
+    return _NORM_WIDE_PC[split]
+
+
 def _m5_add_norm(norm, a, b, h_mc, n_mc):
     """M5 ADDNORM (tp_common M5 table): h = a + b and n = rmsnorm(h) * gamma in ONE op (the R6 stage-1
     ttnn.rms_norm residual_output_tensor path). h is allocated here (bf16 TILE, a's shape, memory config h_mc =
@@ -60,7 +83,7 @@ def _m5_add_norm(norm, a, b, h_mc, n_mc):
         epsilon=norm.eps,
         weight=norm.weight,
         residual_input_tensor=b,
-        program_config=None,
+        program_config=_norm_wide_pc(a),
         memory_config=n_mc,
         compute_kernel_config=norm.compute_kernel_config_hifi2,
         residual_output_tensor=h,
@@ -460,6 +483,23 @@ class Qwen36DecoderLayer:
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     compute_kernel_config=self.attention_norm.compute_kernel_config_hifi2,
                 )
+            elif (
+                mode == "prefill"
+                and not self.tp_enabled
+                and _attn_norm_config is None
+                and len(x.shape) == 3
+                and _norm_wide_pc(x) is not None
+            ):
+                # The RMSNorm.forward call (norm_config None: output in x's placement) with the width-split
+                # program config.
+                attn_input = ttnn.rms_norm(
+                    x,
+                    epsilon=self.attention_norm.eps,
+                    weight=self.attention_norm.weight,
+                    program_config=_norm_wide_pc(x),
+                    memory_config=x.memory_config(),
+                    compute_kernel_config=self.attention_norm.compute_kernel_config_hifi2,
+                )
             else:
                 attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
@@ -561,12 +601,17 @@ class Qwen36DecoderLayer:
             ttnn.deallocate(x)
 
         if ff_input is None:  # (M5 ADDNORM: the fused op above made it)
-            if _d3 and decode_norm_sharded_applies(h):
+            # M2 LASTROW: the 1-row ffn_norm also runs on the 8-core D3 decode layout.
+            _lastrow_d3 = last_row_only and self._decode_norm_cfg is not None
+            if (_d3 or _lastrow_d3) and decode_norm_sharded_applies(h):
                 ff_input = decode_norm_sharded(self.ffn_norm, h, self._decode_norm_cfg, ttnn.L1_MEMORY_CONFIG)
             else:
                 ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
-        ff_output = self.feed_forward.forward(ff_input, mode=mode)
+        if last_row_only and isinstance(self.feed_forward, Qwen36MLP):
+            ff_output = self.feed_forward.forward(ff_input, mode=mode, last_row_only=True)
+        else:
+            ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
 
         if defer_out:

@@ -76,6 +76,11 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             const_tiles=getattr(gdn, "_fused_const_tiles", None),
             program_config=getattr(gdn, "gdn_program_config", None),
             **_gdn_wy_inverse_kwargs(),
+            # Single-device path only (the TP path keeps the in-kernel norm and the default decay chain):
+            # qk_prenormed when the KDA conv produced normalized q/k (gated_deltanet.py _conv_qk_prenormed);
+            # decay_sfpu on the P300 SP dies with a pinned fused geometry (gated_deltanet.py _fused_sp_die).
+            **({"qk_prenormed": True} if getattr(gdn, "_conv_qk_prenormed", False) else {}),
+            **({"decay_sfpu": True} if getattr(gdn, "_fused_sp_die", False) else {}),
         )
 
     output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
@@ -154,6 +159,9 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             if mode == "chunk" and getattr(gdn, "_m3_qkv_zero_bias", None) is not None
             else {}
         ),
+        # SP prefill (tt/sp_prefill_sc.py QWEN36_SP_EARLY_SEND / QWEN36_SP_LATE_RECV): in-mixer cross-die
+        # state transfer hooks, set on the layer's GDN by the SP harness around its forward (None = off).
+        **(dict(sp_hooks=gdn._sp_hooks) if mode == "chunk" and getattr(gdn, "_sp_hooks", None) else {}),
     )
 
     if chunk_delta_fn is not None and new_state is not None:
@@ -174,10 +182,11 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         # Per-chunk traced-prefill replay: write state into the persistent external
         # buffers in place so it carries across execute_trace() calls. gdn.recurrent_state
         # and gdn.fused_conv_state keep pointing at the same (baked) buffer addresses.
-        if list(new_state.shape) != list(gdn.recurrent_state.shape):
-            new_state = ttnn.reshape(new_state, list(gdn.recurrent_state.shape))
-        ttnn.copy(new_state, gdn.recurrent_state)
-        ttnn.deallocate(new_state)
+        if new_state is not None:  # (None: an SP post_scan hook already wrote gdn.recurrent_state)
+            if list(new_state.shape) != list(gdn.recurrent_state.shape):
+                new_state = ttnn.reshape(new_state, list(gdn.recurrent_state.shape))
+            ttnn.copy(new_state, gdn.recurrent_state)
+            ttnn.deallocate(new_state)
         if new_fused_conv is not None and not isinstance(new_fused_conv, list):
             if new_fused_conv.layout != ttnn.TILE_LAYOUT:
                 new_fused_conv = ttnn.to_layout(new_fused_conv, ttnn.TILE_LAYOUT)

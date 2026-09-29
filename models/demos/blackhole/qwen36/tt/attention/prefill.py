@@ -32,6 +32,7 @@ def prefill_forward(
     decode_progcfg_fn=None,
     prefill_last_row_tile_slices=False,
     prefill_last_row_pos_tensor=None,
+    sp_post_fill_hook=None,
 ):
     """Dispatch prefill to paged (Branch A) or concat (Branch C) path.
 
@@ -44,6 +45,8 @@ def prefill_forward(
         _m4["prefill_last_row_tile_slices"] = True
     if prefill_last_row_pos_tensor is not None:
         _m4["prefill_last_row_pos_tensor"] = prefill_last_row_pos_tensor
+    if sp_post_fill_hook is not None:
+        _m4["sp_post_fill_hook"] = sp_post_fill_hook  # SP prefill: after the own K/V fill (Branch A only)
     if use_paged_attention and chunk_page_table is not None:
         # Branch A — paged prefill: fill K/V into paged cache + chunked SDPA.
         # memory_config=mc threads L1 placement (short prefill, F3) into the attention-layer glue

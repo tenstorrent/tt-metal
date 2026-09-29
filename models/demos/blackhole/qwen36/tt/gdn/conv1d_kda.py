@@ -121,6 +121,8 @@ def make_kda_conv1d_fn(
     native_fn,
     xin_l1_max_t=2048,
     channel_chunk_size=_DEFAULT_CCS,
+    head_k_dim=None,
+    fused_qk_l2_norm=False,
 ):
     """Build a chunk-prefill fused causal-conv1d+SiLU callable for one GDN layer.
 
@@ -186,6 +188,14 @@ def make_kda_conv1d_fn(
         regardless of T (see the flag's docstring at the top of this module).
       new_state: last K-1 rows of x (next chunk's carry) [1, K-1, C] TILE DRAM (unchanged
         contract — bit-identical production recipe to conv1d_native.py's own new_state).
+
+    fused_qk_l2_norm (default False): q and k come out already L2-normalized per 128-channel head (q also
+    * 128^-0.5, eps 1e-6 on the sum of squares) as FLOAT32 TILE tensors -- the ChunkGdnFused `qk_prenormed=True`
+    contract. The TILE path does it in the op's epilogue (QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128,
+    fused_qk_l2_norm=True), HiFi4 fp32 dest); the fallback / ROW_MAJOR paths normalize with ttnn ops. v and
+    new_state are unchanged (bf16). Only honored when head_k_dim is 128 (or None) and q_dim / k_dim are 128
+    multiples; fn.qk_prenormed tells the caller whether it is on. L2 normalization with the q scale folded in is
+    idempotent, so a consumer that re-normalizes stays correct.
     """
     K = kernel_size
     assert len(weight_taps) == K, f"got {len(weight_taps)} weight taps for kernel_size={K}"
@@ -229,6 +239,40 @@ def make_kda_conv1d_fn(
         else None
     )
 
+    _conv_qknorm = bool(fused_qk_l2_norm) and head_k_dim in (None, 128) and q_dim % 128 == 0 and k_dim % 128 == 0
+    _tiled_ckc = _kda_ckc
+    if _conv_qknorm:
+        assert (C // 32) % 4 == 0, f"channels={C}: fused_qk_l2_norm needs 4-tile blocks"
+        tiled_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128, fused_qk_l2_norm=True)
+        _tiled_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def _qk_prenorm(q, k):
+        # fused_qk_l2_norm contract on a fallback path: per-128-channel-head L2 norm (+ q * 128^-0.5), ttnn, fp32 out.
+        from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import l2_norm_ttnn
+
+        out = []
+        for t, scale in ((q, 128**-0.5), (k, None)):
+            Bq, Tq, W = t.shape[0], t.shape[1], t.shape[2]
+            mc = t.memory_config()
+            h = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            h = ttnn.to_layout(
+                ttnn.reshape(h, [Bq, Tq, W // 128, 128]), ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            h = l2_norm_ttnn(h, dim=-1)
+            if scale is not None:
+                h = ttnn.multiply(h, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            h = ttnn.to_layout(ttnn.reshape(h, [Bq, Tq, W]), ttnn.TILE_LAYOUT, memory_config=mc)
+            if h.dtype != ttnn.float32:
+                h = ttnn.typecast(h, ttnn.float32, memory_config=mc)
+            out.append(h)
+        return out[0], out[1]
+
     def fn(x, conv_state, valid_len=None):
         B, T, C_in = x.shape[0], x.shape[1], x.shape[2]
         assert B == 1, "kda_conv1d_fn is single-device (B=1) only"
@@ -258,7 +302,17 @@ def make_kda_conv1d_fn(
         # docstring for the full mechanism.
         if valid_len is not None or C_in != C or T < 32 or T % 32 != 0:
             _PATH_COUNTS["native_fallback"] += 1
-            return native_fn(x, conv_state, qkv_out_mc=qkv_out_mc)
+            if not _conv_qknorm:
+                return native_fn(x, conv_state, qkv_out_mc=qkv_out_mc)
+            r, ns = native_fn(x, conv_state, qkv_out_mc=qkv_out_mc)
+            if isinstance(r, (tuple, list)):
+                q, k, v = r
+            else:
+                q = ttnn.slice(r, [0, 0, 0], [r.shape[0], r.shape[1], q_dim])
+                k = ttnn.slice(r, [0, 0, q_dim], [r.shape[0], r.shape[1], q_dim + k_dim])
+                v = ttnn.slice(r, [0, 0, q_dim + k_dim], [r.shape[0], r.shape[1], C])
+            q, k = _qk_prenorm(q, k)
+            return (q, k, v), ns
 
         # INT-3 TILE path: x (TILE, the in-proj output as it is) and the conv state (TILE [1,3,C] or
         # None = zero history) go straight into the tiled kernel, which also returns new_state
@@ -288,7 +342,7 @@ def make_kda_conv1d_fn(
                 v_dim,
                 program_config=tiled_program_config,
                 memory_config=_tiled_out_mc,
-                compute_kernel_config=_kda_ckc,
+                compute_kernel_config=_tiled_ckc,
                 return_conv_state=True,
             )
             return (q, k, v), new_state
@@ -354,6 +408,9 @@ def make_kda_conv1d_fn(
         # e) Done with x_rm.
         ttnn.deallocate(x_rm)
 
+        if _conv_qknorm:
+            q, k = _qk_prenorm(q, k)
         return (q, k, v), new_state
 
+    fn.qk_prenormed = _conv_qknorm
     return fn

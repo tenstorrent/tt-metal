@@ -24,6 +24,9 @@ from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 #   "nv2np6"       -> NV=2, NP=6, row-major.
 #   "nv1np4"       -> NV=1, NP=4, row-local (11x10 grids, e.g. p300c dies in SP prefill).
 #   "nv2np3"       -> NV=2, NP=3, row-local (11x10 grids).
+#   "nv2np4d3"     -> NV=2, NP=4, row-local, handoff_depth=3, SPLIT core map (split_layout: 96 cores on 11x10,
+#                     falls back to row-local where it does not fit) and double-buffered fp32 q/k CBs (with the
+#                     conv's prenormed fp32 q/k). The SP prefill dies' geometry (demo/sp_sc_flags.env).
 _GDN_PCFG_GEOMETRIES = {
     "nv1np6": dict(num_producers=6, num_receivers=1, row_local=False),
     "nv1np5": dict(num_producers=5, num_receivers=1, row_local=True),
@@ -32,6 +35,15 @@ _GDN_PCFG_GEOMETRIES = {
     # 11x10 grids (p300c dies under sequence-parallel prefill, tt/sp_prefill_sc.py): fewer producer columns.
     "nv1np4": dict(num_producers=4, num_receivers=1, row_local=True),
     "nv2np3": dict(num_producers=3, num_receivers=2, row_local=True),
+    # NV=2 NP=4 with a 3-deep hand-off ring on the SPLIT core map (11x10: 96 cores).
+    "nv2np4d3": dict(
+        num_producers=4,
+        num_receivers=2,
+        row_local=True,
+        handoff_depth=3,
+        split_layout=True,
+        qk_fp32_double_buffer=True,
+    ),
 }
 
 
@@ -79,6 +91,15 @@ class Qwen36GatedDeltaNet:
         )
 
         self.weights = load_gdn_weights(mesh_device, config, state_dict, tensor_cache_path)
+
+        # program_config for the fused chunk-prefill op (QWEN36_GDN_PCFG, see the top of this file);
+        # gdn/decode.py passes it to chunk_gated_delta_rule_fused_adapter. None = the op's cost model.
+        self.gdn_program_config = gdn_program_config_from_env()
+        # P300 die (QWEN36_P300_MM=1 on an 11x10 grid, the SP prefill dies) with a pinned fused geometry (the op is
+        # guaranteed to take its fused path): the conv emits L2-normalized fp32 q/k (fused_qk_l2_norm; ChunkGdnFused
+        # then skips its own q/k norm, qk_prenormed) and ChunkGdnFused runs its SFPU decay chain (decay_sfpu).
+        self._fused_sp_die = self.gdn_program_config is not None and tpc.p300_die(mesh_device)
+        self._conv_qk_prenormed = False
 
         # Native ttnn.conv1d depthwise prefill (replaces the FIR MAC fallback for chunk prefill,
         # T>512, valid_len None — E2). Set QWEN36_GDN_NATIVE_CONV1D=0 to force the FIR fallback.
@@ -138,7 +159,11 @@ class Qwen36GatedDeltaNet:
                     k_dim=config.k_dim,
                     v_dim=config.v_dim,
                     native_fn=self._native_conv1d_fn,
+                    head_k_dim=config.head_k_dim,
+                    fused_qk_l2_norm=self._fused_sp_die,
                 )
+                # q/k reach ChunkGdnFused already normalized (per-call qk_prenormed in gdn/decode.py).
+                self._conv_qk_prenormed = self._native_conv1d_fn.qk_prenormed
 
         # Fused chunk-prefill constants (eye/tril/ones/quadrant masks); built once so traced prefill
         # never uploads from host. None when the fused path is disabled.
@@ -148,9 +173,6 @@ class Qwen36GatedDeltaNet:
 
             # HV: only used to build the gb_flat head selector when QWEN_GDN_FLAT_GB=1 (T7).
             self._fused_const_tiles = build_fused_const_tiles(mesh_device, HV=self.num_v_heads)
-        # program_config for the fused chunk-prefill op (QWEN36_GDN_PCFG, see the top of this file);
-        # gdn/decode.py passes it to chunk_gated_delta_rule_fused_adapter. None = the op's cost model.
-        self.gdn_program_config = gdn_program_config_from_env()
 
         self._prefill_progcfg_fn = tpc.make_prefill_progcfg_fn(mesh_device)
         # Decode (T==1) 1D matmul progcfg (see tp_common measured table): GDN out-proj and the

@@ -130,6 +130,8 @@ def chunk_gated_delta_rule_fused_adapter(
     # None: the op's own dispatch — fused or phased depending on the cost model.
     wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / SFPU / AUTO: the WY-inverse arithmetic. None = the
     # op's AUTO (the SFPU solve on Blackhole at chunk 32, Horner elsewhere).
+    qk_prenormed=False,  # q/k already L2-normalized per head (q * K^-0.5), e.g. by the KDA conv's fused_qk_l2_norm
+    decay_sfpu=False,  # the op's SFPU decay chain (chunk 32, fused path only; changes bits, not the math)
 ):
     global _logged_path
     if not _logged_path:
@@ -234,6 +236,8 @@ def chunk_gated_delta_rule_fused_adapter(
         sel=_sel,
         **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
         **_r3_o_kw,
+        **({"qk_prenormed": True} if qk_prenormed else {}),
+        **({"decay_sfpu": True} if decay_sfpu else {}),
     )
 
     if return_o_bh:

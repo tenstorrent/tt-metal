@@ -1890,6 +1890,29 @@ class Qwen36Model:
         x_last = self.norm(x_last, mode=Mode.PREFILL)
         return self._lm_head_token(x_last) if self._greedy_token_out else self._lm_head(x_last)
 
+    def _tail_norm_fast(self, x):
+        """Final norm of the last row on the 64 cores of the A3 LM-head in0 layout (L1 WIDTH_SHARDED 8x8, one
+        [32, 32] tile per core) instead of L1->DRAM copy + 1-core DRAM norm + I2S: I2S(x) -> sharded rms_norm (same
+        eps / gamma / HiFi2 fp32-dest ckc) written in that layout, so the A3 LM head skips its I2S (used by the SP
+        vocab-sharded LM head, tt/sp_lmhead_shard.py). 23.5 -> 6.3 us device kernel. Not bit-exact (the cross-core
+        sum of squares changes the reduction order)."""
+        gx, gy = tpc.I3_A3_LM_CFG["in0_grid"]
+        in0_mc = tpc.i3_l1_width_memcfg(int(x.shape[-1]), gx, gy)
+        pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[gx, gy], subblock_w=1, block_h=1, block_w=1, inplace=False
+        )
+        xs = ttnn.to_memory_config(x, in0_mc)
+        n = ttnn.rms_norm(
+            xs,
+            epsilon=self.norm.eps,
+            weight=self.norm.weight,
+            program_config=pc,
+            memory_config=in0_mc,
+            compute_kernel_config=self.norm.compute_kernel_config_hifi2,
+        )
+        ttnn.deallocate(xs)
+        return n
+
     def _warm_exact_multiple_tail(self, hidden_chunk, chunk_size):
         """Compile prefill_traced_chunked's exact-multiple return path (_exact_multiple_tail_device).
         pos_in_chunk is always chunk_size - 1 there, so this one program set covers every such prompt length.

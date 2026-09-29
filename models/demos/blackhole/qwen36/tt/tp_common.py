@@ -354,6 +354,12 @@ def p300_enabled(item="MM"):
     return p300_value(item) != "0"
 
 
+def p300_die(device):
+    """True on a P300 die: QWEN36_P300_MM=1 and an 11x10 worker grid (the p300c dies of the sequence-parallel
+    prefill, one single-device model per die). Scopes the single-device defaults tuned there."""
+    return p300_enabled("MM") and _grid_xy(device) == _P300_GRID
+
+
 def _grid_xy(device_or_grid):
     """(x, y) worker grid of a device (compute_with_storage_grid_size), a ttnn.CoreCoord or an (x, y) tuple."""
     if device_or_grid is None:
@@ -539,6 +545,11 @@ C2_SGRN_CKC = ttnn.WormholeComputeKernelConfig(
     math_approx_mode=False,
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
+)
+# C2 SGRN on the P300 D1 L1-gab path (11x10 grid, T in R3_T_SET; ttnn_gated_deltanet.py): HiFi4, approx off, fp32 dest
+# OFF (microbench at T=1024: 48.8 -> 41.2 us per GDN layer; multi-prompt HF PCC / KL not worse).
+C2_SGRN_CKC_FP32_OFF = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
 )
 
 

@@ -106,11 +106,23 @@ class Qwen36GatedAttention:
                 # configs (I-3 FA_PROGCFG table; None -> ttnn auto-config), never the M = T prefill config.
                 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-                _m2_row = dict(prefill_last_row_only=True, decode_progcfg_fn=tpc.i3_fa_decode_progcfg_fn(self.device))
+                # The 1-row gate / o_proj take the general decode picker (tpc.make_decode_progcfg_fn: 1D mcast over
+                # the device grid) wherever the I-3 table has no entry (it is 13x10-only); ttnn auto-config ran
+                # these at ~38 us vs ~14.5 us (2048x2048 bf8, 11x10).
+                _i3_fn = tpc.i3_fa_decode_progcfg_fn(self.device)
+                _dec_fn = tpc.make_decode_progcfg_fn(self.device)
+                _row_fn = lambda k, n, _a=_i3_fn, _b=_dec_fn: (_a(k, n) if _a is not None else None) or _b(
+                    k, n
+                )  # noqa: E731
+                _m2_row = dict(prefill_last_row_only=True, decode_progcfg_fn=_row_fn)
                 if last_row_tile_slices:
                     _m2_row["prefill_last_row_tile_slices"] = True  # M4 R4A
                 if last_row_pos_tensor is not None:
                     _m2_row["prefill_last_row_pos_tensor"] = last_row_pos_tensor  # M4 R4B
+            if getattr(self, "_sp_post_fill_hook", None) is not None:
+                # SP prefill (tt/sp_prefill_sc.py QWEN36_SP_EARLY_SEND / _LATE_RECV): run right after this
+                # layer's own K/V paged_fill_cache, before the SDPA (set by the SP harness; None = off).
+                _m2_row["sp_post_fill_hook"] = self._sp_post_fill_hook
             return prefill_forward(
                 x=x,
                 cos=cos,

@@ -50,6 +50,7 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.sp_lmhead_shard import SPLMHeadShard, lmhead_shard_enabled
 from models.demos.blackhole.qwen36.tt.sp_prefill import (
     BLOCK_SIZE,
     _build_hop_sockets,
@@ -95,6 +96,48 @@ class SPPrefillSC:
         ) = _resolve_socket_config(state_socket_mode, kv_socket_mode, state_fifo_bytes, kv_fifo_bytes)
         self.state_socket_mode = state_socket_mode
         self.kv_socket_mode = kv_socket_mode
+        # Pipeline placement (each default "1"; "0" = the original placement: every send from the post-mixer hook,
+        # every recv at the layer start, die 0 zeroing at the head of its trace):
+        #   QWEN36_SP_ZERO_LATE: die 0 zeroes its GDN carry state at the END of each pass (after its last use /
+        #     send) instead of at the head of its trace, so the next request finds it zeroed; the zeroing leaves
+        #     die 0's pipeline-fill critical path. Eager passes still zero at the head too, and capture() zeroes
+        #     eagerly before the first replay.
+        #   QWEN36_SP_EARLY_SEND: send each layer's payload as soon as it is final, from inside the mixer: GDN conv
+        #     state right after the causal conv (the conv's new-state tensor itself), GDN recurrent state right
+        #     after ChunkGdnFused (copied into the persistent state first); K/V prefix right after this die's own
+        #     paged_fill_cache (before the SDPA). The GDN send order becomes conv, rec (the order the data becomes
+        #     final) and the receiver's recv order follows.
+        #   QWEN36_SP_LATE_RECV (needs EARLY_SEND): each recv right before the first consumer: GDN conv state before
+        #     the conv, recurrent state before ChunkGdnFused; K/V (recv + the 2 prefix fills) after this die's own
+        #     K/V fill, before the SDPA (and before the early K/V send, whose payload includes the prefix).
+        self._zero_late = os.environ.get("QWEN36_SP_ZERO_LATE", "1") == "1"
+        self._early_send = os.environ.get("QWEN36_SP_EARLY_SEND", "1") == "1"
+        self._late_recv = os.environ.get("QWEN36_SP_LATE_RECV", "1") == "1"
+        assert self._early_send or not self._late_recv, "QWEN36_SP_LATE_RECV=1 needs QWEN36_SP_EARLY_SEND=1"
+        # QWEN36_SP_STATIC_SEND (default "1"; "0" = the address-handshake transfers): fire-and-forget transfers.
+        # send_direct_async(static_dst_address=<the receiving die's persistent buffer address>) skips the address
+        # handshake (it waits only for socket FIFO credit, streams, pushes the completion page);
+        # recv_direct_async(wait_only=True) only waits for that completion. The socket FIFOs hold _STATIC_FIFO_PAGES
+        # pages (see _static_fifo_bytes), so a die may run ahead of its downstream die by up to that many transfers.
+        # REQUIRED: prefill_traced's host sync of every die after each replay (and eager passes' sync). Without it,
+        # back-to-back replays could overwrite a receive buffer of request N+1 before die d+1 consumed it for
+        # request N (the sender only waits for FIFO credit, not for the consumer).
+        # With STATIC_SEND the K/V hop also sends the leading `blocks` blocks of the paged cache as-is
+        # (send_direct_async(num_pages=...), no slice / permute copy) straight into the receiving die's own paged
+        # cache at the same page indices (identity page tables; the first `blocks` blocks are a contiguous page
+        # prefix of the interleaved cache), so the receiver's rbuf + 2 paged_fill_cache also go away.
+        self._static_send = os.environ.get("QWEN36_SP_STATIC_SEND", "1") == "1"
+        self._kv_raw = self._static_send
+        # QWEN36_SP_PROF_ANCHORS=1 (profiling only): one default-mode (handshake / rendezvous) send/recv of a
+        # 1-tile tensor per hop at the very start and the very end of every die's program (see
+        # _prof_anchor_pass), so the profiler has 2 clock-alignment anchors per link per replay.
+        self._prof_anchors = os.environ.get("QWEN36_SP_PROF_ANCHORS", "0") == "1"
+        if self._static_send:
+            assert state_socket_mode == "direct" and kv_socket_mode == "direct", "STATIC_SEND needs direct mode"
+        logger.info(
+            f"[SPPrefillSC] ZERO_LATE={int(self._zero_late)} EARLY_SEND={int(self._early_send)} "
+            f"LATE_RECV={int(self._late_recv)} STATIC_SEND={int(self._static_send)}"
+        )
 
         assert tuple(mesh_device.shape) == (1, n_spans), (
             f"SPPrefillSC assumes a (1, {n_spans}) mesh for the forward die d -> d+1 adjacency, "
@@ -152,6 +195,8 @@ class SPPrefillSC:
         self._traced_hidden = None  # last die: persistent DRAM final hidden the trace writes (logits tail input)
         self._trace_pc_entries = None  # per-die program-cache entry counts at capture (no compile after park)
         self._trace_refs_snap = None  # tensors whose addresses the traces bake in (identity-checked on replay)
+        # QWEN36_SP_LMHEAD_SHARD=1: vocab-sharded LM head across the dies (tt/sp_lmhead_shard.py); None = off.
+        self.lm_shard = None
 
         try:
             # ---- build die 0 (warms the tensor cache), then dies 1..n_spans-1 (reuse the state_dict).
@@ -240,9 +285,13 @@ class SPPrefillSC:
                 _identity_page_table(self.subs[d], self.span_starts[d] // BLOCK_SIZE) for d in range(1, n_spans)
             ]
 
+            if self._static_send:
+                state_fifo_bytes, kv_fifo_bytes = self._static_fifo_bytes(state_fifo_bytes, kv_fifo_bytes)
             _build_hop_sockets(
                 self.subs, socket_storage, state_fifo_bytes, kv_fifo_bytes, self.state_sockets, self.kv_sockets
             )
+            if lmhead_shard_enabled() and self.models[0]._a3_lm_chunks is not None:
+                self.lm_shard = SPLMHeadShard(self.subs, self.models, self.vocab_size, static_send=self._static_send)
         except Exception:
             self.close()
             raise
@@ -315,11 +364,20 @@ class SPPrefillSC:
         QWEN36_ATTN_KV_BF8=1 -- s_d = die d's span start; the _kv_paged_to_seq layout the sender
         produces). The dtype must match the cache: _send_kv asserts it and paged_fill_cache requires it."""
         self.rbuf = {}
+        if self._prof_anchors:  # QWEN36_SP_PROF_ANCHORS: the 1-tile anchor tensor of every die
+            for d in range(self.n_spans):
+                self.rbuf[(d, -1, "anchor")] = ttnn.zeros(
+                    (1, 1, 32, 32),
+                    device=self.subs[d],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         for d in range(1, self.n_spans):
             sub = self.subs[d]
             kv_shape = (1, self.nkv, self.span_starts[d], self.hd)
             for li, layer in enumerate(self.models[d].layers):
-                if not layer.is_full_attention:
+                if not layer.is_full_attention or self._kv_raw:  # (KV raw: received straight into the paged cache)
                     continue
                 for name in ("k", "v"):
                     self.rbuf[(d, li, name)] = ttnn.zeros(
@@ -334,12 +392,52 @@ class SPPrefillSC:
     # cross-die transfers (each call touches ONLY one die's queue; see SPPrefill._recv_kv)
     # ------------------------------------------------------------------------------------------------
 
+    _STATIC_FIFO_PAGES = 2
+
+    def _static_fifo_bytes(self, state_fifo_bytes, kv_fifo_bytes):
+        """QWEN36_SP_STATIC_SEND: FIFO = 64 B x _STATIC_FIFO_PAGES pages on both sockets (2 = 128 B, the default-mode
+        size: a die may run up to 2 transfers ahead per socket; deeper FIFOs, up to one request's worth per socket,
+        measured no faster). prefill_traced's per-replay host sync of every die is REQUIRED: without it a die could
+        overwrite a receive buffer of the next request before its consumer has run."""
+        pages = self._STATIC_FIFO_PAGES
+        st, kv = max(state_fifo_bytes, 64 * pages), max(kv_fifo_bytes, 64 * pages)
+        logger.info(f"[SPPrefillSC] STATIC_SEND={int(self._static_send)}: state_fifo={st}B kv_fifo={kv}B (64 B pages)")
+        return st, kv
+
+    def _send_op(self, mode):
+        """send(tensor, sock, dst): dst = the receiving die's persistent buffer. Default: the plain op
+        (dst unused); QWEN36_SP_STATIC_SEND=1: fire-and-forget straight to dst.buffer_address()."""
+        op = _socket_send_op(mode)
+        if not self._static_send:
+            return lambda t, sock, dst: op(t, sock)
+        return lambda t, sock, dst: op(t, sock, static_dst_address=dst.buffer_address())
+
+    def _recv_op(self, mode):
+        op = _socket_recv_op(mode)
+        if not self._static_send:
+            return op
+        return lambda t, sock: op(t, sock, wait_only=True)
+
     def _send_kv(self, d, li):
         """Die d, right after layer li's mixer: forward the K/V prefix [0, s_d + L_d) of its paged cache
         (prefix received from die d-1 + its own span, just filled) to die d+1's rbuf."""
         attn = self.models[d].layers[li].attention
         S = self.span_starts[d] + self.spans[d]
         blocks = S // BLOCK_SIZE
+        if self._kv_raw:
+            dst = self.models[d + 1].layers[li].attention
+            send_sock, _ = self.kv_sockets[d]
+            op = _socket_send_op(self.kv_socket_mode)
+            for src_t, dst_t in (
+                (attn.paged_kv_cache_key, dst.paged_kv_cache_key),
+                (attn.paged_kv_cache_value, dst.paged_kv_cache_value),
+            ):
+                assert (
+                    src_t.spec == dst_t.spec and src_t.layout == ttnn.TILE_LAYOUT
+                ), f"KV_RAW: paged cache spec mismatch at layer {li}: {src_t.spec} vs {dst_t.spec}"
+                pages = blocks * self.nkv * (BLOCK_SIZE // 32) * (self.hd // 32)
+                op(src_t, send_sock, static_dst_address=dst_t.buffer_address(), num_pages=pages)
+            return
         k_t = _kv_paged_to_seq(attn.paged_kv_cache_key, blocks, S, self.nkv, self.hd)
         v_t = _kv_paged_to_seq(attn.paged_kv_cache_value, blocks, S, self.nkv, self.hd)
         rb_k = self.rbuf[(d + 1, li, "k")]
@@ -347,9 +445,9 @@ class SPPrefillSC:
             tuple(k_t.spec.shape) == tuple(rb_k.spec.shape) and k_t.spec.dtype == rb_k.spec.dtype
         ), f"KV send/recv spec mismatch at layer {li}: sent {k_t.spec} vs rbuf {rb_k.spec}"
         send_sock, _ = self.kv_sockets[d]
-        send_op = _socket_send_op(self.kv_socket_mode)
-        send_op(k_t, send_sock)
-        send_op(v_t, send_sock)
+        send_op = self._send_op(self.kv_socket_mode)
+        send_op(k_t, send_sock, rb_k)
+        send_op(v_t, send_sock, self.rbuf[(d + 1, li, "v")])
         ttnn.deallocate(k_t)
         ttnn.deallocate(v_t)
 
@@ -357,7 +455,12 @@ class SPPrefillSC:
         """Die d > 0, before layer li: receive the K/V prefix [0, s_d) from die d-1 into the rbuf, then
         write it into this die's paged cache (blocks [0, s_d / 64))."""
         _, recv_sock = self.kv_sockets[d - 1]
-        recv_op = _socket_recv_op(self.kv_socket_mode)
+        recv_op = self._recv_op(self.kv_socket_mode)
+        if self._kv_raw:  # the sender wrote the prefix blocks straight into this die's paged cache
+            attn = self.models[d].layers[li].attention
+            recv_op(attn.paged_kv_cache_key, recv_sock)
+            recv_op(attn.paged_kv_cache_value, recv_sock)
+            return
         rb_k, rb_v = self.rbuf[(d, li, "k")], self.rbuf[(d, li, "v")]
         recv_op(rb_k, recv_sock)
         recv_op(rb_v, recv_sock)
@@ -365,23 +468,120 @@ class SPPrefillSC:
         ttnn.experimental.paged_fill_cache(attn.paged_kv_cache_key, rb_k, self.prefix_page_tables[d], batch_idx=0)
         ttnn.experimental.paged_fill_cache(attn.paged_kv_cache_value, rb_v, self.prefix_page_tables[d], batch_idx=0)
 
+    def _prof_anchor_pass(self):
+        """QWEN36_SP_PROF_ANCHORS: on every die, recv the anchor from d-1 (d > 0), then send it to d+1
+        (d < last), default (handshake) mode on the STATE socket: a rendezvous, so send_end(d) ~= recv_end(d+1)."""
+        for d in range(self.n_spans):
+            a = self.rbuf[(d, -1, "anchor")]
+            if d > 0:
+                ttnn.experimental.recv_direct_async(a, self.state_sockets[d - 1][1])
+            if d < self.n_spans - 1:
+                ttnn.experimental.send_direct_async(a, self.state_sockets[d][0])
+
+    def _send_rec(self, d, li, rec, send_op, send_sock):
+        """Send die d's final GDN recurrent state rec (layer li, fp32) to die d+1's persistent state."""
+        send_op(rec, send_sock, self.models[d + 1].layers[li].attention.recurrent_state)
+
+    def _recv_rec(self, d, li, recv_op, recv_sock):
+        """Receive die d's GDN recurrent state (layer li) from die d-1 into its fp32 carry state."""
+        recv_op(self.models[d].layers[li].attention.recurrent_state, recv_sock)
+
     def _send_gdn(self, d, li):
         """Die d, right after layer li's mixer: forward its GDN recurrent + conv state (the persistent
         tensors the SC GDN just updated in place; NOT deallocated) to die d+1."""
         dn = self.models[d].layers[li].attention
         send_sock, _ = self.state_sockets[d]
-        send_op = _socket_send_op(self.state_socket_mode)
-        send_op(dn.recurrent_state, send_sock)
-        send_op(dn.fused_conv_state, send_sock)
+        send_op = self._send_op(self.state_socket_mode)
+        dst = self.models[d + 1].layers[li].attention
+        self._send_rec(d, li, dn.recurrent_state, send_op, send_sock)
+        send_op(dn.fused_conv_state, send_sock, dst.fused_conv_state)
 
     def _recv_gdn(self, d, li):
         """Die d > 0, before layer li: receive die d-1's GDN state straight into this die's persistent
         state (the SC GDN reads it as the initial state and overwrites it in place)."""
         dn = self.models[d].layers[li].attention
         _, recv_sock = self.state_sockets[d - 1]
-        recv_op = _socket_recv_op(self.state_socket_mode)
-        recv_op(dn.recurrent_state, recv_sock)
+        recv_op = self._recv_op(self.state_socket_mode)
+        if self._early_send:
+            # QWEN36_SP_EARLY_SEND: the sender sends conv (final after the conv) before rec (after the scan).
+            recv_op(dn.fused_conv_state, recv_sock)
+            self._recv_rec(d, li, recv_op, recv_sock)
+            return
+        self._recv_rec(d, li, recv_op, recv_sock)
         recv_op(dn.fused_conv_state, recv_sock)
+
+    def _stage_hooks(self, d, li, fired):
+        """QWEN36_SP_EARLY_SEND / QWEN36_SP_LATE_RECV: the in-mixer transfer hooks of die d, layer li.
+        GDN: dict for Qwen36GatedDeltaNet._sp_hooks (see gated_deltanet_forward_ttnn); full attention: a
+        no-arg callable for _sp_post_fill_hook (after the own K/V fill, before the SDPA). Each hook
+        appends its name to fired (checked by the caller). Returns None when die d has nothing to do."""
+        last = self.n_spans - 1
+        layer = self.models[d].layers[li]
+        send_ = self._early_send and d < last
+        recv_ = self._late_recv and d > 0
+        if layer.is_full_attention:
+            if not (send_ or recv_):
+                return None
+
+            def post_fill():
+                fired.append("post_fill")
+                if recv_:
+                    self._recv_kv(d, li)  # prefix [0, s_d) into blocks [0, s_d / 64) (own blocks just filled)
+                if send_:
+                    self._send_kv(d, li)  # cumulative prefix [0, s_d + L_d): needs the prefix fill above
+
+            return post_fill
+        dn = layer.attention
+        hooks = {}
+        if recv_:
+            _, recv_sock = self.state_sockets[d - 1]
+            recv_op = self._recv_op(self.state_socket_mode)
+
+            def pre_conv():
+                fired.append("pre_conv")
+                recv_op(dn.fused_conv_state, recv_sock)
+
+            def pre_scan():
+                fired.append("pre_scan")
+                self._recv_rec(d, li, recv_op, recv_sock)
+
+            hooks["pre_conv"] = pre_conv
+            hooks["pre_scan"] = pre_scan
+        if send_:
+            send_sock, _ = self.state_sockets[d]
+            send_op = self._send_op(self.state_socket_mode)
+            dst = self.models[d + 1].layers[li].attention
+
+            def post_conv(new_conv):
+                # The conv's new-state tensor is laid out exactly like the persistent fused_conv_state (the
+                # direct send writes the receiver's buffer with the sender's layout), so send it as is; the
+                # GDN still copies it into fused_conv_state after o_proj.
+                fired.append("post_conv")
+                ref = dn.fused_conv_state
+                assert (
+                    tuple(new_conv.spec.shape) == tuple(ref.spec.shape)
+                    and new_conv.dtype == ref.dtype
+                    and new_conv.layout == ref.layout
+                    and new_conv.memory_config() == ref.memory_config()
+                ), f"die {d} layer {li}: conv new-state {new_conv.spec} != fused_conv_state {ref.spec}"
+                send_op(new_conv, send_sock, dst.fused_conv_state)
+
+            def post_scan(new_state):
+                # Final recurrent state (fp32 L1) -> the persistent DRAM state now (instead of after o_proj,
+                # decode.py), then send it; None tells decode.py the write is done.
+                fired.append("post_scan")
+                rec = dn.recurrent_state
+                if new_state.dtype != rec.dtype:
+                    new_state = ttnn.typecast(new_state, rec.dtype)
+                if list(new_state.shape) != list(rec.shape):
+                    new_state = ttnn.reshape(new_state, list(rec.shape))
+                ttnn.copy(new_state, rec)
+                ttnn.deallocate(new_state)
+                self._send_rec(d, li, rec, send_op, send_sock)
+                return None
+
+            hooks["post_conv"], hooks["post_scan"] = post_conv, post_scan
+        return hooks or None
 
     # ------------------------------------------------------------------------------------------------
     # per-request program
@@ -471,6 +671,8 @@ class SPPrefillSC:
     def _tail_logits(self, model, hidden):
         """Last die: full last-token logits row (final norm + LM head, no argmax) -> host [vocab]."""
         L = self.spans[-1]
+        if self.lm_shard is not None:
+            return self.lm_shard.logits_host(model, hidden, L)  # every die's vocab slice (host bounce, eager)
         x_last = hidden if hidden.shape[1] == 1 else hidden[:, L - 1 : L, :]
         x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -482,6 +684,11 @@ class SPPrefillSC:
 
     def _tail_token(self, model, hidden):
         """Last die: greedy token on device (same ops as the SC exact-multiple tail) -> host int."""
+        if self.lm_shard is not None:
+            res = self.lm_shard.program(model, hidden, self.spans[-1])
+            first = self.lm_shard.token_from_results(res)
+            self._free_tail_res(res)
+            return first
         tok = model._exact_multiple_tail_device(hidden, self.spans[-1])
         tt = ttnn.to_torch(tok, mesh_composer=ttnn.ConcatMeshToTensor(model.device, dim=0))
         ttnn.deallocate(tok)
@@ -491,8 +698,12 @@ class SPPrefillSC:
         """Last die, device ops only (no readback; valid inside a trace): the greedy uint32 token
         (_exact_multiple_tail_device; set_greedy_token_output(True) is on for the last die) plus the final
         hidden kept for the logits tail, moved to DRAM if it is in L1 (so a trace output never pins L1).
-        Consumes ``hidden``. Returns (tok, keep)."""
-        tok = model._exact_multiple_tail_device(hidden, self.spans[-1])
+        Consumes ``hidden``. Returns (tok, keep). QWEN36_SP_LMHEAD_SHARD: tok is SPLMHeadShard.program's
+        results dict (the sharded tail runs on every die)."""
+        if self.lm_shard is not None:
+            tok = self.lm_shard.program(model, hidden, self.spans[-1])
+        else:
+            tok = model._exact_multiple_tail_device(hidden, self.spans[-1])
         keep = hidden
         if hidden.memory_config().buffer_type == ttnn.BufferType.L1:
             keep = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
@@ -516,8 +727,10 @@ class SPPrefillSC:
         if not traced:
             _sp("prefill start")
         st = {}
+        if self._prof_anchors:
+            self._prof_anchor_pass()  # start anchors: the first program of every die
         for d in range(n):
-            if d == 0:
+            if d == 0 and not (traced and self._zero_late):
                 self._zero_gdn_state(0)  # device copies (inside die 0's trace when traced)
             st[d] = self._embed(d, None if traced else tokens)
 
@@ -529,6 +742,23 @@ class SPPrefillSC:
             for d in range(n):
                 fired = []
                 hook = None
+                if self._early_send:
+                    # QWEN36_SP_EARLY_SEND (/ _LATE_RECV): sends (and late recvs) from inside the mixer.
+                    stage = self._stage_hooks(d, li, fired)
+                    if d > 0 and not self._late_recv:
+                        (self._recv_kv if is_fa else self._recv_gdn)(d, li)
+                    mixer = self.models[d].layers[li].attention
+                    attr = "_sp_post_fill_hook" if is_fa else "_sp_hooks"
+                    setattr(mixer, attr, stage)
+                    try:
+                        self._layer_step(d, li, st[d], None)
+                    finally:
+                        setattr(mixer, attr, None)
+                    want = [] if stage is None else (["post_fill"] if is_fa else list(stage))
+                    assert sorted(fired) == sorted(
+                        want
+                    ), f"die {d} layer {li}: SP stage hooks fired {fired}, want {want}"
+                    continue
                 if d < last:
                     send = self._send_kv if is_fa else self._send_gdn
 
@@ -541,18 +771,32 @@ class SPPrefillSC:
                 self._layer_step(d, li, st[d], hook)
                 assert hook is None or len(fired) == 1, f"die {d} layer {li}: post_mixer_hook fired {len(fired)}x"
 
+        if self._zero_late:
+            # QWEN36_SP_ZERO_LATE: die 0 zeroes its GDN state after its last layer (last send included), so
+            # the next request (replay or eager pass) starts from zero; off die 0's pipeline-fill path.
+            self._zero_gdn_state(0)
         for d in range(last):
             ttnn.deallocate(st[d]["x"])
         model = self.models[last]
         hidden = st[last]["x"]
         if traced:
+            if self._prof_anchors:
+                res = self._tail_traced(model, hidden)
+                self._prof_anchor_pass()  # end anchors: the last program of every die
+                return res
             return self._tail_traced(model, hidden)
         _sp("prefill tail")
         if warm:
             tok, keep = self._tail_traced(model, hidden)
             out = self._tail_logits(model, keep)
             self.last_first_token = int(torch.argmax(out.float()))
-            ttnn.deallocate(tok)
+            if self.lm_shard is not None:
+                shard_tok = self.lm_shard.token_from_results(tok)
+                assert float(out[shard_tok]) == float(out.max()), (
+                    f"[SPPrefillSC] LMHEAD_SHARD warm: sharded token {shard_tok} is not a max of the logits "
+                    f"(host argmax {self.last_first_token})"
+                )
+            self._free_tail_res(tok)
             ttnn.deallocate(keep)
         elif return_logits:
             out = self._tail_logits(model, hidden)
@@ -562,9 +806,21 @@ class SPPrefillSC:
             out = self._tail_token(model, hidden)
             self.last_first_token = out
             ttnn.deallocate(hidden)
+        if self._prof_anchors:
+            self._prof_anchor_pass()  # end anchors (eager: also compiles them for the capture)
         for sub in self.subs:
             ttnn.synchronize_device(sub)
         return out
+
+    @staticmethod
+    def _free_tail_res(res):
+        """Free a tail result: the token tensor, or SPLMHeadShard.program's results dict."""
+        if isinstance(res, dict):
+            for v in res.values():
+                for t in v if isinstance(v, list) else [v]:
+                    ttnn.deallocate(t)
+        elif res is not None:
+            ttnn.deallocate(res)
 
     def prefill(self, tokens: torch.Tensor, return_logits: bool = True):
         """tokens [1, sum(spans)] -> last-token logits [vocab] (host torch; return_logits=True, the
@@ -603,6 +859,8 @@ class SPPrefillSC:
                     refs.append(getattr(attn, name, None))
         refs.extend(self.rbuf[k] for k in sorted(self.rbuf))
         refs.extend(self.prefix_page_tables)
+        if self.lm_shard is not None:
+            refs.extend(self.lm_shard.refs())
         return tuple(refs)
 
     def capture(self, tokens: torch.Tensor, comm: bool = True, dies=None):
@@ -637,12 +895,21 @@ class SPPrefillSC:
                 self._trace_ids[d] = tid  # force-closed traces: released by _release_traces / close()
             raise
         # Trace outputs: stored first so _release_traces frees them on the failure path below.
+        if isinstance(tok, dict):  # QWEN36_SP_LMHEAD_SHARD
+            tok = tok["tok"]
         self._traced_tok, self._traced_hidden = tok, keep
         n2 = [sub.num_program_cache_entries() for sub in self.subs]
         if n2 != n0:
             self._release_traces()
             raise RuntimeError(f"SPPrefillSC.capture compiled: program cache entries {n0} -> {n2}")
         self._trace_pc_entries = n0
+        if self._zero_late:
+            # QWEN36_SP_ZERO_LATE: the trace zeroes die 0's GDN state only at its end, so make sure it is zero
+            # before the first replay (the warm pass already ended with a zeroing; this is the explicit one).
+            self._zero_gdn_state(0)
+            ttnn.synchronize_device(self.subs[0])
+            n3 = self.subs[0].num_program_cache_entries()
+            assert n3 == n0[0], f"die 0: post-capture zeroing compiled ({n0[0]} -> {n3} program cache entries)"
         logger.info(f"[SPPrefillSC] captured {self.n_spans} die traces in {(time.perf_counter() - t0) * 1000:.1f} ms")
 
     def _safe_end_traces(self, opened):
@@ -761,3 +1028,4 @@ class SPPrefillSC:
         self.state_sockets = []
         self.kv_sockets = []
         self.rbuf = {}
+        self.lm_shard = None
