@@ -2702,6 +2702,17 @@ CandidatePoolMap create_sat_placement_pools(
     return pools;
 }
 
+// Recover B's dedup equivalence classes: create_sat_placement_pools aliases identical meshes onto ONE shared
+// CandidatePool, so grouping mesh_ids by pool identity yields the interchangeable-instance classes for free (a
+// pointer read per mesh). Consumed by the lex/instance symmetry break in build_sat_placement_constraints.
+std::map<CandidatePool*, std::vector<GlobalMeshId>> sat_placement_pool_classes(const CandidatePoolMap& pools) {
+    std::map<CandidatePool*, std::vector<GlobalMeshId>> classes;
+    for (const auto& [mesh_id, pool] : pools) {
+        classes[pool.get()].push_back(mesh_id);
+    }
+    return classes;
+}
+
 std::size_t grow_sat_placement_pools(
     CandidatePoolMap& pools, std::size_t batch_per_variant, PlacementSolveStats* stats) {
     const auto start = std::chrono::steady_clock::now();
@@ -2917,6 +2928,7 @@ static std::map<uint64_t, std::vector<uint64_t>> load_sat_pin_solution() {
 bool build_sat_placement_constraints(
     const CandidatePoolMap& pools,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
     MappingConstraints<GlobalMeshId, const Candidate*>& constraints) {
     constraints = {};
     // DEBUG-CLEANUP(remove; normal default = empty pin_solution, block below no-ops): TT_METAL_SAT_PIN_SOLUTION call
@@ -2937,6 +2949,60 @@ bool build_sat_placement_constraints(
         std::getenv("TT_METAL_SAT_NO_DEDUP") == nullptr;  // ON by default; TT_METAL_SAT_NO_DEDUP=1 opts out
     std::map<std::string, const Candidate*> canon;
     std::map<const Candidate*, std::vector<uint32_t>> seat_to_asics;
+    // Lex/instance symmetry break. Interchangeable instances share a pool (B's dedup => same candidate set) AND are
+    // mesh-graph TWINS (mutually non-adjacent, identical neighbor set), so any permutation of the group is a graph
+    // automorphism (full S_k) and swapping cannot break the master solve. Ring/pipeline stages share a pool but have
+    // distinct neighbors -> singletons -> no break (windowing them is unsound). Independent identical meshes (no
+    // inter-mesh edges, e.g. disaggregated prefill) are all mutual twins -> one big group. For a twin group of k over
+    // its shared ordered n-seat domain, member i is restricted to the window seats[i..n-k+i]; under the bijection this
+    // keeps the sorted representative and prunes the k! permutations, soundly. Opt out: TT_METAL_SAT_NO_LEX_SYM=1.
+    const bool instance_sym = std::getenv("TT_METAL_SAT_NO_LEX_SYM") == nullptr && pin_solution.empty();
+    std::map<GlobalMeshId, std::size_t> sym_pos, sym_size;
+    if (instance_sym) {
+        const auto neighbor_sig = [&mesh_level_graph](const GlobalMeshId& m) {
+            std::vector<uint64_t> sig;
+            for (const GlobalMeshId& nb : mesh_level_graph.get_neighbors(m)) {
+                sig.push_back(*nb);
+            }
+            std::sort(sig.begin(), sig.end());
+            return sig;
+        };
+        for (const auto& [pool_ptr, members] : sat_placement_pool_classes(pools)) {
+            (void)pool_ptr;
+            // Sub-partition the pool-class into twin groups by neighbor-set signature.
+            std::map<std::vector<uint64_t>, std::vector<GlobalMeshId>> by_sig;
+            for (const GlobalMeshId& m : members) {
+                by_sig[neighbor_sig(m)].push_back(m);
+            }
+            for (const auto& [sig, group] : by_sig) {
+                (void)sig;
+                if (group.size() < 2) {
+                    continue;
+                }
+                // Equal signatures usually imply mutual non-adjacency, but self/parallel edges could slip a group
+                // member into a neighbor list; verify explicitly so the break stays sound.
+                bool independent = true;
+                for (const GlobalMeshId& m : group) {
+                    for (const GlobalMeshId& nb : mesh_level_graph.get_neighbors(m)) {
+                        if (std::find(group.begin(), group.end(), nb) != group.end()) {
+                            independent = false;
+                            break;
+                        }
+                    }
+                    if (!independent) {
+                        break;
+                    }
+                }
+                if (!independent) {
+                    continue;
+                }
+                for (std::size_t i = 0; i < group.size(); ++i) {
+                    sym_pos[group[i]] = i;
+                    sym_size[group[i]] = group.size();
+                }
+            }
+        }
+    }
     std::size_t mesh_index = 0;
     for (const auto& [mesh_id, pool] : pools) {
         std::set<const Candidate*> seats;
@@ -2968,6 +3034,21 @@ bool build_sat_placement_constraints(
         if (!pin_solution.empty() && std::getenv("TT_METAL_SAT_DIAG") != nullptr) {
             log_info(
                 tt::LogFabric, "DBGPIN mesh={} pinned_seats={} (pinned={})", *mesh_id, seats.size(), pinned != nullptr);
+        }
+        if (instance_sym) {
+            const std::size_t k = sym_size[mesh_id];
+            if (k > 1 && seats.size() >= k) {
+                // seats is a std::set<const Candidate*>, already in a stable order shared by every instance in
+                // this class (all alias the same pool, so the same seat pointers). Keep only [i .. n-k+i].
+                const std::vector<const Candidate*> ordered(seats.begin(), seats.end());
+                const std::size_t n = ordered.size();
+                const std::size_t i = sym_pos[mesh_id];
+                std::set<const Candidate*> windowed;
+                for (std::size_t j = i; j <= n - k + i; ++j) {
+                    windowed.insert(ordered[j]);
+                }
+                seats.swap(windowed);
+            }
         }
         if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
             return false;
@@ -3465,7 +3546,8 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     AdjacencyGraph<const Candidate*> seat_graph =
         build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
     const bool built =
-        build_sat_placement_constraints(*owner_->pools_, *owner_->physical_system_descriptor_, owner_->constraints_);
+        build_sat_placement_constraints(
+            *owner_->pools_, *owner_->physical_system_descriptor_, owner_->mesh_level_graph_, owner_->constraints_);
     const bool extra = built && owner_->apply_extra_constraints(owner_->constraints_);
     if (!(built && extra)) {
         return false;
@@ -3627,7 +3709,7 @@ bool SatPlacementEnumerationSession::add_forbidden_constraint(MeshId mesh_id, co
     const std::set<const Candidate*> seats = seats_matching(mesh_id, asics);
     if (!seats.empty()) {
         MappingConstraints<GlobalMeshId, const Candidate*> trial;
-        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, trial) &&
+        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, mesh_level_graph_, trial) &&
             !apply_extra_constraints(trial)) {
             extra_forbidden_.pop_back();
             return false;
@@ -3650,7 +3732,7 @@ bool SatPlacementEnumerationSession::add_required_constraint(MeshId mesh_id, con
     const std::set<const Candidate*> seats = seats_matching(mesh_id, asics);
     if (!seats.empty()) {
         MappingConstraints<GlobalMeshId, const Candidate*> trial;
-        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, trial) &&
+        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, mesh_level_graph_, trial) &&
             !apply_extra_constraints(trial)) {
             extra_required_.pop_back();
             return false;
