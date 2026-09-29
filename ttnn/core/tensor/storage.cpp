@@ -158,9 +158,10 @@ DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor rei
     DeviceStorage(
         std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
         owning_storage.coords_,
-        owning_storage.mesh_tensor_holder_->is_retained_view() ? nullptr : owning_storage.get_root_mesh_tensor()) {
+        owning_storage.get_root_mesh_tensor()) {
     // A reinterpretation of a retained view is itself a retained view of that view: it follows the view's source
-    // chain, and deallocating it releases only the reinterpretation instead of the view's owner.
+    // chain, and deallocating it releases only the reinterpretation instead of the view's owner. It still records the
+    // root, as every reinterpretation does, which marks it as a reinterpretation that cannot be a view's base.
     if (owning_storage.mesh_tensor_holder_->is_retained_view()) {
         mesh_tensor_holder_->retained_owner_ = owning_storage.mesh_tensor_holder_;
     }

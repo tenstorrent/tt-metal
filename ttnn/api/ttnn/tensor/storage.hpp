@@ -76,8 +76,8 @@ private:
 //   the view itself.
 // - release_mesh_tensor() transfers the MeshTensor out of an owner or a reinterpretation. It is rejected for a
 //   retained view, because the MeshTensor alone does not hold the view's reference to its base.
-// - A retained view can be created from an owner or from a retained view, but not from a reinterpretation of an
-//   owner: such a view would not be invalidated when the owner is deallocated.
+// - A retained view can be created from an owner or from a retained view created by create_sharded_tensor_view, but
+//   not from a reinterpretation of either, whose MeshBuffer aliases memory without owning or retaining it.
 //
 // Invariant:
 // - A default-constructed DeviceStorage acts like a deallocated DeviceStorage. However it is not associated with

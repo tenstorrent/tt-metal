@@ -127,8 +127,8 @@ Tensor create_device_tensor(
 
 class RetainedTensorViewFactory {
 public:
-    // A reinterpreted storage depends on a root holder that the retained-view chain does not track, so the root
-    // could be deallocated while a view of it still reports allocated.
+    // Every reinterpretation, of an owner or of a retained view, records a root holder. Its MeshBuffer aliases memory
+    // without owning or retaining it, so it cannot be the base of a retained view.
     static void validate_source(const DeviceStorage& source) {
         TT_FATAL(
             source.root_mesh_tensor_holder_ == nullptr,
