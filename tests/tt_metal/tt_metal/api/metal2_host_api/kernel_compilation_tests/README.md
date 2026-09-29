@@ -20,5 +20,5 @@ This means resource binding should be tested using `static_asserts`.
 
 | Directory | What it contains |
 |---|---|
-| [`bindings/`](bindings/) | Kernels that use resource binding tokens: tensor accessors, tensor binding sequences, scratchpads, `get_token_if_present` |
+| [`bindings/`](bindings/) | Kernels that use resource binding tokens: tensor accessors, tensor binding sequences, scratchpads, `get_token_if_present`, and the LLK operand metadata (`LLKOperandFrom`) of DFB, scratchpad and tensor bindings |
 | [`kernel_args/`](kernel_args/) | Kernels that read compile-time varargs, and the TT_KERNEL compute shim |

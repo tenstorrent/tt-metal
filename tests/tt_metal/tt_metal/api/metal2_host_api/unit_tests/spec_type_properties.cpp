@@ -50,6 +50,7 @@ static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashab
 static_assert(
     hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<ScratchpadSpec>, "ScratchpadSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
 // KernelSpec subcomponents
@@ -130,6 +131,8 @@ static_assert(
     "DataflowBufferSpec must remain an aggregate to support designated initializers");
 static_assert(
     std::is_aggregate_v<SemaphoreSpec>, "SemaphoreSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<ScratchpadSpec>, "ScratchpadSpec must remain an aggregate to support designated initializers");
 static_assert(std::is_aggregate_v<DataMovementHardwareConfig>, "DataMovementHardwareConfig must remain an aggregate");
 static_assert(
     std::is_aggregate_v<DataMovementHardwareConfig::DataMovement1XXConfig>,
@@ -215,6 +218,25 @@ TEST(AggregateSpecTypes, CPU_DataflowBufferSpecDesignatedInitializers) {
     };
 
     EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
+}
+
+TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
+    ScratchpadSpec pad{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    };
+    EXPECT_EQ(pad.unique_id.get(), "pad");
+    EXPECT_EQ(pad.size_per_node, 1024u);
+    EXPECT_FALSE(pad.data_format_metadata.has_value());
+    EXPECT_FALSE(pad.tile_format_metadata.has_value());
+
+    ScratchpadSpec with_format{
+        .unique_id = ScratchpadSpecName{"pad_fmt"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    EXPECT_EQ(with_format.data_format_metadata, tt::DataFormat::Float16_b);
+    EXPECT_FALSE(with_format.tile_format_metadata.has_value());
 }
 
 TEST(AggregateSpecTypes, CPU_WorkUnitSpecDesignatedInitializers) {

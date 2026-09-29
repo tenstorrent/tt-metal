@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Layout of a lowered kernel's CRTA buffer: named CRTAs, varargs and tensor binding runtime fields.
+// Layout of a lowered kernel's arguments: tensor binding compile-time args, and the CRTA buffer's named
+// CRTAs, varargs and tensor binding runtime fields.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -25,6 +26,7 @@ namespace {
 using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalTensorParameter;
+using test_helpers::MakeNdShardedTensorParameter;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ProgramSpecTestGen1;
 
@@ -194,6 +196,29 @@ TEST_F(ProgramSpecTestGen1, CPU_KernelCrtaLayout_AllThreeSectionsConsistent) {
     EXPECT_GT(kernel->tensor_binding_handles()[1].num_runtime_field_crta_words, 0u)
         << "Test precondition: the second binding should be variable-size; otherwise the layout "
            "calculation degenerates to the pre-refactor case.";
+}
+
+// ============================================================================
+// Tensor binding compile-time args
+// ============================================================================
+
+TEST_F(ProgramSpecTestGen1, CPU_ContiguousNdTensorBindingPacksDistributionFlag) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {
+        MakeNdShardedTensorParameter("input_tensor", Shape{64, 64}, Shape{32, 32}, /*num_cores=*/4)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+
+    // Static sharded payload: args_config, page size, rank, then packed num_banks.
+    const auto compile_args = kernel->compile_time_args();
+    const size_t num_banks_offset = handles[0].cta_offset + 3;
+    ASSERT_LT(num_banks_offset, compile_args.size());
+    EXPECT_EQ(tensor_accessor::unpack_num_banks(compile_args[num_banks_offset]), 4u);
+    EXPECT_TRUE(tensor_accessor::unpack_is_shard_contiguous(compile_args[num_banks_offset]));
 }
 
 }  // namespace

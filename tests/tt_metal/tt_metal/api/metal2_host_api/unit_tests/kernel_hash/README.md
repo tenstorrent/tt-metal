@@ -13,7 +13,8 @@ Fixtures: `ProgramSpecTestQuasar` (Q) and `ProgramSpecTestGen1` (WH).
 | File | Struct | Tests | What is pinned |
 |---|---|---|---|
 | `kernel_spec.cpp` | `KernelSpec` | 1 | Binding a scratchpad changes the hash |
-| `scratchpad_spec.cpp` | `ScratchpadSpec` | 1 | `size_per_node` changes the binding kernel's hash |
+| `dataflow_buffer_spec.cpp` | `DataflowBufferSpec` | 1 | `tile_format_metadata` changes the bound compute kernel's hash |
+| `scratchpad_spec.cpp` | `ScratchpadSpec` | 2 | `size_per_node` and `data_format_metadata` change the binding kernel's hash |
 | `kernel_advanced_options.cpp` | `KernelAdvancedOptions` | 4 | How tensor bindings are split into binding sequences changes the hash; compile-time vararg values and count change it; identical varargs hash equal |
 | `tensor_parameter.cpp` | `TensorParameter` | 2 | A different `TensorSpec` changes the hash; an identical one does not |
 | `tensor_spec_relaxations.cpp` | `TensorSpecRelaxations` | 3 | With `dynamic_tensor_shape`, the hash stays stable across shapes (interleaved tile, interleaved row-major, sharded) |

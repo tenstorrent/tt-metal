@@ -48,6 +48,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_capacity.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/scratchpad_spec/scratchpad_spec.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/dataflow_buffer_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/kernel_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/kernel_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/scratchpad_spec.cpp
@@ -73,6 +74,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/tensor_spec_relaxations/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/bindings/get_token_if_present.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/bindings/llk_operand.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/bindings/scratchpad_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/bindings/tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/compile_time_varargs.cpp
@@ -80,6 +82,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad_fast_dispatch.cpp

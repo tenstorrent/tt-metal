@@ -46,5 +46,36 @@ TEST_F(ProgramSpecTestQuasar, CPU_ZeroSizeScratchpadFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size_per_node == 0")));
 }
 
+TEST_F(ProgramSpecTestQuasar, ScratchpadFormatUnsupportedOnArchFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Bfp8,
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'scratch_0' has data format")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .tile_format_metadata = Tile{{32, 32}},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

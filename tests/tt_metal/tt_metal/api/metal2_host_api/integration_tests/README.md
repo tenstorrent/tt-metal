@@ -23,4 +23,5 @@ Tests should prefer [unit tests suite](../unit_tests/) or [kernel compilation te
 | `scratchpad.cpp` | 2 | `ProgramSpecHWTest` | Scratchpad write and readback under slow dispatch; the scratchpad base address is delivered again after a DFB resize |
 | `scratchpad_fast_dispatch.cpp` | 2 | `UnitMeshCQSingleCardFixture` | Scratchpad write and readback under fast dispatch; a scratchpad as either end of a NoC transfer |
 | `compute_semaphore.cpp` | 7 | `ProgramSpecHWTest` | Compute-kernel semaphores (`SemScope::COMPUTE_ATOMIC`). Blackhole only; they skip on Wormhole |
+| `llk_operand_mul.cpp` | 3 | `ProgramSpecHWTest` | `mul_tiles` with LLK operands taken from a DFB, a LocalTensorAccessor and a Scratchpad. Blackhole only; they skip on Wormhole |
 | `mesh_workload_factories.cpp` | 5 | `MeshWorkloadFactory*` | `MakeMeshWorkloadFromSpec(s)`: repeated enqueue, DFB resize between enqueues, the map overload, slow dispatch, distinct specs on a 1x2 mesh |

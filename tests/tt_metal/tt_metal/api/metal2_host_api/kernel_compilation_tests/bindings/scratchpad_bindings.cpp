@@ -11,6 +11,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers.hpp"
@@ -91,6 +92,27 @@ static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, ScratchpadComputeBindWithoutFormatSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::pad);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
