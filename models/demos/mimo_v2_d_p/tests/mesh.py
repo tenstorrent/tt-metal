@@ -14,6 +14,11 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 # MIMO_TRACE_REGION (bytes): a trace region for traced runs (test_layer_perf.py MIMO_PERF_TRACE)
 _TRACE = {"trace_region_size": int(os.environ["MIMO_TRACE_REGION"])} if os.environ.get("MIMO_TRACE_REGION") else {}
 QB_MESHES = [pytest.param((2, 2), fabric2d_device_params(**_TRACE), id="2x2")]
+# MIMO_MESH=RxC (e.g. 8x4): run the MESH_PARAMS tests on that mesh instead (FABRIC_2D), e.g. the BH Galaxy layout
+# under tt-emule (tests/emule/test_emule_galaxy.py has the environment)
+if os.environ.get("MIMO_MESH"):
+    _shape = tuple(int(v) for v in os.environ["MIMO_MESH"].split("x"))
+    QB_MESHES = [pytest.param(_shape, fabric2d_device_params(**_TRACE), id=os.environ["MIMO_MESH"])]
 
 MESH_PARAMS = pytest.mark.parametrize(
     "mesh_device, device_params", QB_MESHES, indirect=["mesh_device", "device_params"]
