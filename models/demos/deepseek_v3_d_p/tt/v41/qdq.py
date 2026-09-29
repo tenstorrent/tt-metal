@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device quantize-dequantize (QDQ) of DeepSeek-V4.1 activations (dev-spec D-H, D-I; bead F6.1a).
+"""Device quantize-dequantize (QDQ) of DeepSeek-V4.1 activations (dev-spec D-H, D-I; beads F6.1a, 8y7.9.4).
 
 The reference quantizes activations in groups along the last dimension and immediately dequantizes
 them back to bf16 (``kernel_cpu.act_quant`` / ``fp4_act_quant`` with ``inplace=True``). These functions
@@ -13,35 +13,44 @@ return the same bf16 values, bit for bit, given the same bf16 input:
 * :func:`fp4_ue8m0_qdq`  -- FP4 E2M1, group 32, power-of-two scale: index keys and indexer queries.
 * :func:`fp4_e4m3_qdq`   -- FP4 E2M1, group 16, e4m3 scale: compressed KV.
 
-Every op is local to a row (a token) and to its device: no collectives, so replicated or
-sequence-sharded mesh tensors work unchanged.
+Each is one fused device op (``kernels/qdq_reader.cpp`` + ``kernels/qdq_compute.cpp`` + the stock interleaved
+tile writer, launched through ``ttnn.generic_op``): a group of 32 is one tile row, a group of 16 one face row
+(tile columns 0-15 or 16-31). Per tile the compute kernel takes the row max of ``|x|`` on the FPU (for group 16
+twice, with reduce scaler tiles that mask the other half's columns), turns the group amax into the scale and
+quantize-dequantizes every element on the SFPU in fp32. Every op is local to a row (a token) and to its device:
+no collectives, so replicated or sequence-sharded mesh tensors work unchanged.
 
-Exactness argument (all intermediates fp32; the device's fp32 mul/sub/floor/compare are exact whenever
-the true result is representable, which is all this code relies on except where noted):
+Exactness argument (all SFPU intermediates fp32; SFPU fp32 mul/add/compare are exact whenever the true result is
+representable, which is all this relies on except where noted; every value leaving DST -- ``|x|``, the amax, the
+scale, the output -- is exact in bf16, so packing to bf16 never rounds):
 
-* Group amax is a max of bf16 magnitudes, hence exact.
+* Group amax is a max of bf16 magnitudes, hence exact (the scaler entries are 1.0 or 0.0).
 * Power-of-two scales are built from the amax bit pattern. ``2^ceil(log2(fl(amax * fp32(1/M))))``
   (``fast_round_scale``) equals ``2^(e - k + [mantissa(amax) > m*])`` for bf16 amax, where
   ``M = 448`` (``k = 8``, ``m* = 1.75``) or ``M = 6`` (``k = 2``, ``m* = 1.5``), clamped from below by the
   scale of the amax floor (monotone). Checked on CPU for every positive finite bf16.
   Dividing by a power of two is exact, so the reference's ``x / s`` equals ``x * (1/s)`` here.
-* e4m3 round-to-nearest-even (RNE) scales the magnitude by the inverse quantum
-  ``2^max(e - 3, -9)`` (exact), splits it with ``floor`` and resolves exact halves to the even integer.
+* e4m3 round-to-nearest-even (RNE) of a value ``v``: values below 2^-6 (the e4m3 subnormals, quantum 2^-9) are
+  offset by 2^-6 onto the binade [2^-6, 2^-5), which has the same quantum and code parity, so clearing the low 20
+  mantissa bits floors both ranges onto the grid. The decision compares the exact value against the half-way
+  point above that floor (a <= 5-bit number) and resolves exact ties to the even code; an inexact estimate of
+  ``v`` only selects the floor, and an estimate on the wrong side of a grid point still rounds to that point.
   Saturation (clamp to 448 before the cast) equals rounding then ``min(., 448)``.
-* The e4m3 scale ``e4m3(amax_f / 6)`` of the group-16 FP4 path starts from ``amax_f * fp32(1/6)``,
-  which may differ from the reference's correctly rounded ``amax_f / 6`` by an ulp. That only matters
-  at an exact e4m3 half-way point (all other values lie >= 2^-9 relative away from one), and a tie is
-  detected exactly as ``6 * midpoint == amax_f`` (7-bit product, exact).
-* E2M1 rounding of ``v = x / s`` compares ``|x|`` against ``midpoint * s`` (products of <= 3 and <= 4
-  significant bits, exact) instead of forming ``v``: for the non-power-of-two e4m3 scale ``x / s`` is
-  inexact, but it lands on a midpoint exactly when ``x == midpoint * s`` and otherwise stays far from
-  one, so the comparison reproduces the reference's rounding, ties included; ``> 5 s`` gives the
-  clamp to 6.
-* Dequantized values have <= 6 significant bits and a normal exponent, so the final bf16 cast is exact.
+* The e4m3 scale ``e4m3(amax_f / 6)`` of the group-16 FP4 path starts from the estimate ``amax_f * fp32(1/6)``
+  (within an ulp of ``amax_f / 6``) and decides by ``amax_f`` vs ``6 * midpoint`` (<= 7-bit product, exact).
+* E2M1 rounding of ``v = x / s`` compares ``v`` (power-of-two ``s``) or ``|x|`` against ``midpoint * s``
+  (e4m3 ``s``: products of <= 3 and <= 4 significant bits, exact) with each boundary's tie direction: for the
+  non-power-of-two scale ``x / s`` is inexact, but it lands on a midpoint exactly when ``x == midpoint * s`` and
+  otherwise stays far from one, so the comparison reproduces the reference's rounding, ties included; ``> 5``
+  gives the clamp to 6.
+* Dequantized values have <= 6 significant bits and a normal exponent, so they are exact in bf16.
 
-Not reproduced: bf16 subnormal inputs where the reference's result depends on them. The device flushes
-subnormals to zero; the reference keeps them. This affects only :func:`fp4_ue8m0_qdq` groups whose
-amax is below ~2^-121 (elsewhere a subnormal input quantizes to zero in the reference too).
+Checked on device against the reference for every finite normal bf16 value (tests/v41/test_qdq.py), with one
+exception: :func:`fp4_ue8m0_qdq` groups whose amax is below ``FP4_UE8M0_MIN_AMAX`` (2^-115, ~2.4e-35) are not
+reproduced -- their scale is within 2^-117 of the fp32 normal floor, where the device results differ (observed,
+cause not isolated; far below any activation). bf16 subnormal inputs are flushed to zero by the device (the reference
+keeps them); that changes a result only inside the same tiny-amax FP4 groups. Non-finite inputs are outside the
+contract. Zeros are compared by value (signed zeros are not distinguished).
 """
 
 import ttnn
@@ -49,128 +58,107 @@ import ttnn
 FP8_GROUP = 32
 FP4_UE8M0_GROUP = 32
 FP4_E4M3_GROUP = 16
+FP4_UE8M0_MIN_AMAX = 2.0**-115  # fp4_ue8m0_qdq is bit-exact for groups with amax >= this (module docstring)
 
-_E4M3_MAX = 448.0
-_FP4_MAX = 6.0
+_KERNEL_DIR = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
+_WRITER = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+_BLOCK = 4  # tiles per compute block (<= 4: one fp32 half-sync DST)
+_TILE_BYTES = 32 * 32 * 2  # bf16 tile
+_CB_IN, _CB_SCALER, _CB_ABS, _CB_SCALE, _CB_SCALE_BCAST, _CB_OUT = 0, 1, 2, 3, 4, 16
 
-_EXP_MASK = 0x7F800000
-_MANT_MASK = 0x007FFFFF
-_IMPLICIT_ONE = 0x00800000
-_ONE_EXP = 127 << 23  # 2^k has bits (k + 127) << 23; its inverse has bits (2 * 127 << 23) - bits.
-
-# Scales of the amax floors: fast_round_scale(fp32(1e-4) * fp32(1/448)) = 2^-22 (act_quant's
-# clamp_min(1e-4)); fast_round_scale(6 * 2^-126 * fp32(1/6)) = 2^-126 (fp4_act_quant, E8M0 scale).
-_FP8_SCALE_FLOOR_BITS = (-22 + 127) << 23
-_FP4_SCALE_FLOOR_BITS = (-126 + 127) << 23
-# fp4_act_quant with an e4m3 scale floors amax at 6 * 2^-9 so that the scale is at least 2^-9.
-_FP4_E4M3_AMAX_FLOOR = 6.0 * 2.0**-9
-
-# E2M1 rounding boundaries between consecutive magnitudes {0, .5, 1, 1.5, 2, 3, 4, 6}, whether an exact
-# tie rounds up (the upper code is even), and the magnitude step taken when crossing the boundary.
-_E2M1_STEPS = (
-    (0.25, False, 0.5),
-    (0.75, True, 0.5),
-    (1.25, False, 0.5),
-    (1.75, True, 0.5),
-    (2.5, False, 1.0),
-    (3.5, True, 1.0),
-    (5.0, False, 2.0),
-)
+# qdq_compute.cpp QDQ_FORMAT ids
+_FP8_E4M3_UE8M0 = 0
+_FP4_E2M1_UE8M0 = 1
+_FP4_E2M1_E4M3 = 2
 
 
 def fp8_qdq(x: ttnn.Tensor) -> ttnn.Tensor:
     """``act_quant(x, 32, "ue8m0", inplace=True)``: FP8 e4m3 QDQ, group 32, power-of-two scale."""
-    xg, xf = _groups(x, FP8_GROUP)
-    s_bits = _pow2_scale_bits(_group_amax(xg), mantissa_bias=8, mantissa_threshold=0x600000)
-    s_bits = ttnn.maximum(s_bits, _FP8_SCALE_FLOOR_BITS)
-    y = ttnn.abs(ttnn.multiply(xf, _inverse_pow2(s_bits)))
-    q = _round_e4m3(y, is_tie=lambda midpoint: ttnn.eq(midpoint, y))
-    return _dequant(q, ttnn.bitcast(s_bits, ttnn.float32), xf, x)
+    return _qdq(x, _FP8_E4M3_UE8M0, FP8_GROUP)
 
 
 def fp4_ue8m0_qdq(x: ttnn.Tensor) -> ttnn.Tensor:
     """``fp4_act_quant(x, 32, inplace=True)``: FP4 E2M1 QDQ, group 32, power-of-two (E8M0) scale."""
-    xg, xf = _groups(x, FP4_UE8M0_GROUP)
-    s_bits = _pow2_scale_bits(_group_amax(xg), mantissa_bias=2, mantissa_threshold=0x400000)
-    s_bits = ttnn.maximum(s_bits, _FP4_SCALE_FLOOR_BITS)
-    s = ttnn.bitcast(s_bits, ttnn.float32)
-    return _dequant(_round_e2m1(xf, s), s, xf, x)
+    return _qdq(x, _FP4_E2M1_UE8M0, FP4_UE8M0_GROUP)
 
 
 def fp4_e4m3_qdq(x: ttnn.Tensor) -> ttnn.Tensor:
     """``fp4_act_quant(x, 16, inplace=True, scale_dtype=float8_e4m3fn)``: FP4 E2M1 QDQ, group 16,
     scale ``e4m3_satfinite(max(amax, 6 * 2^-9) / 6)``."""
-    xg, xf = _groups(x, FP4_E4M3_GROUP)
-    amax = ttnn.maximum(_group_amax(xg), _FP4_E4M3_AMAX_FLOOR)
-    s_estimate = ttnn.multiply(amax, 1.0 / _FP4_MAX)
-    s = _round_e4m3(s_estimate, is_tie=lambda midpoint: ttnn.eq(ttnn.multiply(midpoint, _FP4_MAX), amax))
-    return _dequant(_round_e2m1(xf, s), s, xf, x)
+    return _qdq(x, _FP4_E2M1_E4M3, FP4_E4M3_GROUP)
 
 
-def _groups(x: ttnn.Tensor, group: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """[..., W] bf16 -> ([N, group] bf16, [N, group] fp32) with one quantization group per row."""
+def _qdq(x: ttnn.Tensor, fmt: int, group: int) -> ttnn.Tensor:
+    """bf16 TILE interleaved ``x`` [..., W] -> a new tensor of its shape and memory config (one fused op)."""
     assert x.dtype == ttnn.bfloat16, f"QDQ input must be bf16 (the reference kernels' input dtype), got {x.dtype}"
     assert x.layout == ttnn.TILE_LAYOUT, "QDQ input must be TILE layout"
     width = x.shape[-1]
     assert width % group == 0, f"last dim {width} is not a multiple of the group size {group}"
-    xg = ttnn.reshape(x, (1, 1, x.volume() // group, group))
-    return xg, ttnn.typecast(xg, ttnn.float32)
-
-
-def _group_amax(xg: ttnn.Tensor) -> ttnn.Tensor:
-    """[N, group] bf16 -> [N, 1] fp32 max magnitude (exact: a max of bf16 values)."""
-    return ttnn.typecast(ttnn.max(ttnn.abs(xg), dim=-1, keepdim=True), ttnn.float32)
-
-
-def _pow2_scale_bits(amax: ttnn.Tensor, mantissa_bias: int, mantissa_threshold: int) -> ttnn.Tensor:
-    """fp32 bits of 2^(exponent(amax) - bias + [mantissa(amax) > threshold]) as int32 (before flooring)."""
-    bits = ttnn.bitcast(amax, ttnn.int32)
-    exponent = ttnn.subtract(ttnn.bitwise_and(bits, _EXP_MASK), mantissa_bias << 23)
-    # mantissa > threshold  <=>  mantissa + (2^23 - 1 - threshold) carries into bit 23.
-    carry = ttnn.bitwise_and(
-        ttnn.add(ttnn.bitwise_and(bits, _MANT_MASK), _MANT_MASK - mantissa_threshold), _IMPLICIT_ONE
+    memory_config = x.memory_config()
+    assert not memory_config.is_sharded(), "QDQ input must be interleaved"
+    halves = 2 if group == 16 else 1
+    device = x.device()
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(x.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
     )
-    return ttnn.add(exponent, carry)
 
+    # contiguous runs of tiles, one per core (tile padding is quantized too: groups never straddle tiles)
+    num_tiles = x.buffer_num_pages()
+    grid = device.compute_with_storage_grid_size()
+    num_cores = min(grid.x * grid.y, num_tiles)
+    base, extra = divmod(num_tiles, num_cores)
+    last = ttnn.CoreCoord((num_cores - 1) % grid.x, (num_cores - 1) // grid.x)
+    ranges = []
+    if last.y > 0:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, last.y - 1)))
+    ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, last.y), last))
+    cores = ttnn.CoreRangeSet(ranges)
+    reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    src, dst = x.buffer_address(), out.buffer_address()
+    start = 0
+    for i in range(num_cores):
+        cx, cy = i % grid.x, i // grid.x
+        count = base + (i < extra)
+        reader_args[cx][cy] = [src, count, start]
+        writer_args[cx][cy] = [dst, count, start]
+        compute_args[cx][cy] = [count]
+        start += count
 
-def _inverse_pow2(pow2_bits: ttnn.Tensor) -> ttnn.Tensor:
-    """fp32 1/2^k from the int32 bits of 2^k (exact)."""
-    return ttnn.bitcast(ttnn.rsub(pow2_bits, 2 * _ONE_EXP), ttnn.float32)
+    def cb(index: int, tiles: int) -> ttnn.CBDescriptor:
+        page = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=_TILE_BYTES)
+        return ttnn.CBDescriptor(total_size=tiles * _TILE_BYTES, core_ranges=cores, format_descriptors=[page])
 
-
-def _round_e4m3(t: ttnn.Tensor, is_tie) -> ttnn.Tensor:
-    """Non-negative fp32 -> nearest e4m3 magnitude (RNE, saturating at 448), as fp32.
-
-    ``is_tie(midpoint)`` says whether the exact value being rounded equals ``midpoint``, the half-way
-    point above ``floor(t / quantum) * quantum``; it lets ``t`` be an estimate within a few ulp (see
-    the module docstring).
-    """
-    exponent = ttnn.bitwise_and(ttnn.bitcast(t, ttnn.int32), _EXP_MASK)
-    # quantum: 3 mantissa bits for normal values, 2^-9 (the smallest subnormal) below 2^-6
-    quantum_bits = ttnn.maximum(ttnn.subtract(exponent, 3 << 23), (-9 + 127) << 23)
-    quantum = ttnn.bitcast(quantum_bits, ttnn.float32)
-    z = ttnn.multiply(t, _inverse_pow2(quantum_bits))
-    lower = ttnn.floor(z)
-    fraction = ttnn.subtract(z, lower)
-    lower_is_odd = ttnn.subtract(lower, ttnn.multiply(ttnn.floor(ttnn.multiply(lower, 0.5)), 2.0))
-    midpoint = ttnn.multiply(ttnn.add(lower, 0.5), quantum)
-    round_up = ttnn.where(is_tie(midpoint), lower_is_odd, ttnn.gt(fraction, 0.5))
-    return ttnn.minimum(ttnn.multiply(ttnn.add(lower, round_up), quantum), _E4M3_MAX)
-
-
-def _round_e2m1(xf: ttnn.Tensor, s: ttnn.Tensor) -> ttnn.Tensor:
-    """Nearest E2M1 magnitude (RNE) of clamp(|x| / s, 0, 6), as fp32 [N, group]."""
-    magnitude = ttnn.abs(xf)
-    q = None
-    for boundary, tie_up, step in _E2M1_STEPS:
-        compare = ttnn.ge if tie_up else ttnn.gt
-        crossed = compare(magnitude, ttnn.multiply(s, boundary))
-        term = crossed if step == 1.0 else ttnn.multiply(crossed, step)
-        q = term if q is None else ttnn.add(q, term)
-    return q
-
-
-def _dequant(q: ttnn.Tensor, s: ttnn.Tensor, xf: ttnn.Tensor, x: ttnn.Tensor) -> ttnn.Tensor:
-    """sign(x) * q * s -> bf16 in the input's shape (exact: <= 6 significant bits)."""
-    y = ttnn.multiply(ttnn.multiply(q, s), ttnn.sign(xf))
-    return ttnn.reshape(ttnn.typecast(y, ttnn.bfloat16), x.shape)
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/qdq_reader.cpp",
+            core_ranges=cores,
+            compile_time_args=[_CB_IN, _CB_SCALER, halves, _BLOCK] + ttnn.TensorAccessorArgs(x).get_compile_time_args(),
+            runtime_args=reader_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=_WRITER,
+            core_ranges=cores,
+            compile_time_args=[_CB_OUT] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+            runtime_args=writer_args,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/qdq_compute.cpp",
+            core_ranges=cores,
+            compile_time_args=[fmt, _BLOCK],
+            runtime_args=compute_args,
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+            ),
+        ),
+    ]
+    cbs = [
+        cb(_CB_IN, 2 * _BLOCK),
+        cb(_CB_SCALER, halves),
+        cb(_CB_ABS, _BLOCK),
+        cb(_CB_SCALE, _BLOCK * halves),
+        cb(_CB_SCALE_BCAST, _BLOCK),
+        cb(_CB_OUT, 2 * _BLOCK),
+    ]
+    return ttnn.generic_op([x, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))

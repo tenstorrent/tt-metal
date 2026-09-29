@@ -10,7 +10,7 @@ Contract: given the same bf16 input, each device QDQ returns exactly the bf16 va
 Inputs are built to hit every rounding decision: random groups over ~40 binary decades, all-zero and
 tiny groups (amax floors), group amax exactly on / one bf16 ulp around power-of-two scale boundaries,
 values exactly on / one ulp around every e4m3 or E2M1 half-way point, e4m3-scale ties and scale
-saturation (group-16 FP4). A small hand-derived golden checks the formulas independently of the
+saturation (group-16 FP4), and every finite non-subnormal bf16 value (ordered and shuffled into groups). A small hand-derived golden checks the formulas independently of the
 reference. bf16 subnormal inputs are excluded (documented limitation, see qdq.py).
 """
 
@@ -120,6 +120,25 @@ def _scale_boundary_groups(gen: torch.Generator, op: str, n: int) -> torch.Tenso
     return _finish(gen, values, amax)
 
 
+def _exhaustive_groups(gen: torch.Generator, op: str, n: int, shuffle: bool) -> torch.Tensor:
+    """Every finite bf16 of both signs above the op's magnitude floor (and the zeros), repeated to fill n groups: in
+    bit-pattern order (neighbours share a group, so every element is rounded against a comparable amax over the whole
+    exponent range, bf16 max included; each repeat is rotated to change the group alignment) or shuffled (large
+    amax). The floor is the smallest normal bf16, or qdq.FP4_UE8M0_MIN_AMAX for the FP4 power-of-two path (see
+    qdq.py: not reproduced below it)."""
+    group = OPS[op][2]
+    floor = qdq.FP4_UE8M0_MIN_AMAX if op == "fp4_e2m1_g32_ue8m0" else 2.0**-126
+    values = torch.arange(-(2**15), 2**15, dtype=torch.int32).to(torch.int16).view(torch.bfloat16).float()
+    values = values[torch.isfinite(values) & ((values == 0) | (values.abs() >= floor))]
+    parts, filled, rep = [], 0, 0
+    while filled < n * group:
+        part = values[torch.randperm(len(values), generator=gen)] if shuffle else values.roll(7 * rep)
+        parts.append(part)
+        filled += len(part)
+        rep += 1
+    return torch.cat(parts)[: n * group].reshape(n, group)
+
+
 def _input(op: str, kind: str, width: int, seed: int = 0) -> torch.Tensor:
     group = OPS[op][2]
     n = SEQ * width // group
@@ -128,6 +147,8 @@ def _input(op: str, kind: str, width: int, seed: int = 0) -> torch.Tensor:
         groups = _random_groups(gen, n, group)
     elif kind == "ties":
         groups = _tie_groups(gen, op, n)
+    elif kind in ("exhaustive_ordered", "exhaustive_shuffled"):
+        groups = _exhaustive_groups(gen, op, n, shuffle=kind == "exhaustive_shuffled")
     else:
         groups = _scale_boundary_groups(gen, op, n)
     x = groups.reshape(1, 1, SEQ, width).to(torch.bfloat16)
@@ -153,7 +174,7 @@ def _assert_exact(actual: torch.Tensor, expected: torch.Tensor, x: torch.Tensor)
         raise AssertionError(f"{int(mismatch.sum())} mismatches; (index, input, device, reference): {examples}")
 
 
-@pytest.mark.parametrize("kind", ["random", "ties", "scale_boundaries"])
+@pytest.mark.parametrize("kind", ["random", "ties", "scale_boundaries", "exhaustive_ordered", "exhaustive_shuffled"])
 @pytest.mark.parametrize("width", [512, 128])
 @pytest.mark.parametrize("op", list(OPS))
 @pytest.mark.parametrize("mesh_device, device_params", [MESH_2X4], indirect=True)
