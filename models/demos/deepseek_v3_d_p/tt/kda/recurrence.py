@@ -112,11 +112,15 @@ def _prepare_chunk_terms(
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
 ) -> _PreparedChunks:
-    beta_by_head = ttnn.permute(beta, (0, 2, 1))
-    beta_by_chunk = ttnn.reshape(
-        beta_by_head,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
-    )
+    if geometry.batch == 1:
+        # Chunk preparation reads each head's column straight from row-major [1, rows, heads] beta.
+        beta_by_chunk = beta
+    else:
+        beta_by_head = ttnn.permute(beta, (0, 2, 1))
+        beta_by_chunk = ttnn.reshape(
+            beta_by_head,
+            (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
+        )
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
