@@ -1,0 +1,82 @@
+name: "IWYU (host)"
+
+# Report-only Include What You Use scan of the host C++ build. Device/kernel
+# code is JIT-compiled at runtime and is covered separately by
+# kernel-clang-tidy.yaml. Nothing gates on the findings yet: the
+# recommendations are summarised on the run and uploaded as an artifact.
+# Third-party umbrella-header exceptions live in .github/iwyu-host.imp.
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # 04:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      source-filter:
+        description: >-
+          Space-separated files or directories, relative to the repo root, whose
+          translation units to analyze instead of the whole host tree (e.g.
+          'tt_metal/fabric tools/scaleout'). Header-only directories such as
+          tt_metal/api select nothing: pick the directories whose .cpp files
+          include those headers instead.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  iwyu:
+    name: "🔍 IWYU (host)"
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 300
+    container:
+      # ci-test rather than ci-build: include-what-you-use is installed from the
+      # ci-test-light stage onward (dockerfile/Dockerfile).
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-test-amd64:latest') }}
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: 🔧 CMake configure
+        run: cmake --preset iwyu
+
+      - name: 🛠️ Generate files
+        run: cmake --build .build/iwyu --target all_generated_files
+
+      - name: 🔍 Analyze with include-what-you-use
+        timeout-minutes: 240
+        env:
+          SOURCE_FILTER: ${{ inputs.source-filter }}
+        # Unquoted on purpose: the input is a space-separated list of paths.
+        run: .github/scripts/utils/run_host_iwyu.sh .build/iwyu $SOURCE_FILTER
+
+      - name: Upload IWYU report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: iwyu-host-report
+          path: |
+            /work/.build/iwyu/report/iwyu.txt
+            /work/.build/iwyu/report/iwyu-version.txt
+            /work/.build/iwyu/report/iwyu-exit-code.txt
+          retention-days: 30

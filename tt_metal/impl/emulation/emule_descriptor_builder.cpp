@@ -9,6 +9,7 @@
 
 #include "emule_descriptor_builder.hpp"
 
+#include <optional>
 #include <set>
 #include <tuple>
 #include <type_traits>
@@ -252,17 +253,26 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             kd.bindings.is_metal2 = k.is_metal2_kernel();
             kd.bindings.rta_names = k.get_runtime_arg_names();
             kd.bindings.crta_names = k.get_common_runtime_arg_names();
-            k.process_dataflow_buffer_binding_handles(
-                [&kd](const std::string& name, uint16_t id, bool is_relay, uint8_t pipe) {
-                    kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
-                });
+            k.process_dataflow_buffer_binding_handles([&kd](
+                                                          const std::string& name,
+                                                          uint16_t id,
+                                                          bool is_relay,
+                                                          uint8_t pipe,
+                                                          const std::optional<LLKMetadata>&) {
+                kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
+            });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
                     kd.bindings.sem.push_back(
                         SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
                 });
             k.process_tensor_binding_handles(
-                [&kd](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt) {
+                [&kd](
+                    const std::string& name,
+                    uint32_t cta_off,
+                    uint32_t addr_crta_off,
+                    uint32_t num_rt,
+                    const LLKMetadata&) {
                     // Emule doesn't yet model per-binding runtime CRTA words; the downstream
                     // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
                     // dynamic-shape case here (the sole binding reader) rather than in a consumer.
@@ -278,7 +288,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
                 });
             k.process_scratchpad_binding_handles(
-                [&kd](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+                [&kd](
+                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
                     kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
                 });
             for (const auto& r : k.core_range_set().ranges()) {
@@ -400,9 +411,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 dd.cap = static_cast<AccessPattern>(static_cast<uint8_t>(c.cap));
                 dd.data_format = static_cast<uint32_t>(c.data_format);
                 // Only valid-format DFBs feed the geometry tables (build_kernel_defines skips Invalid).
+                // Face layout lives on Tile; DFB no longer carries a separate unpack FaceGeometry.
                 if (c.data_format != tt::DataFormat::Invalid) {
                     const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, c.unpack_face_geometry);
+                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, std::nullopt);
                     dd.geom = to_resolved_geom(g, c.data_format);
                 }
                 auto cl = dfb->core_lookup_.find(core);

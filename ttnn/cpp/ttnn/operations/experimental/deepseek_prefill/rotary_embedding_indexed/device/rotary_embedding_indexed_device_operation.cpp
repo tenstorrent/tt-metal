@@ -46,7 +46,7 @@ constexpr auto kReaderKernelPath =
 constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor); only 4B (element [0]) is read
 
 // Metadata-path-only names (everything else comes from rope_metal2).
-const DFBSpecName META_DFB{"meta"};
+const ScratchpadSpecName META_SCRATCH{"meta"};
 const TensorParamName METADATA_PARAM{"metadata"};
 
 uint32_t axis_extent(const distributed::MeshDeviceView& mesh_view, uint32_t axis) {
@@ -436,18 +436,15 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             .entry_size = output_single_tile_size,
             .num_entries = num_output_tiles,
             .data_format_metadata = output_cb_data_format},
-        DataflowBufferSpec{
-            .unique_id = ZERO_DFB,
-            .entry_size = output_single_tile_size,
-            .num_entries = std::max(1u, input_head_dim_t - head_dim_t),
-            .data_format_metadata = output_cb_data_format},
+    };
+
+    std::vector<ScratchpadSpec> scratchpads = {
+        ScratchpadSpec{
+            .unique_id = ZERO_SCRATCH,
+            .size_per_node = output_single_tile_size * std::max(1u, input_head_dim_t - head_dim_t)},
     };
     if (has_metadata) {
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = META_DFB,
-            .entry_size = kMetadataBytes,
-            .num_entries = 1,
-            .data_format_metadata = tt::DataFormat::UInt32});
+        scratchpads.push_back(ScratchpadSpec{.unique_id = META_SCRATCH, .size_per_node = kMetadataBytes});
     }
 
     // ------------------------------------------------------------------ tensor parameters
@@ -463,8 +460,16 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             TensorParameter{.unique_id = METADATA_PARAM, .spec = tensor_args.metadata->mesh_tensor().tensor_spec()});
     }
 
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config =
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
     KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
@@ -486,12 +491,10 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"},
         TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"},
     };
+    // meta is a reader-private staging region (fill + read back), so it is a Scratchpad, not a self-loop DFB.
+    std::vector<ScratchpadBinding> reader_scratchpads;
     if (has_metadata) {
-        // meta scratch CB is a single-toucher (reader fills + reads it) → self-loop.
-        reader_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::CONSUMER});
+        reader_scratchpads.push_back(ScratchpadBinding{.scratchpad_spec_name = META_SCRATCH, .accessor_name = "meta"});
         reader_tensors.push_back(TensorBinding{.tensor_parameter_name = METADATA_PARAM, .accessor_name = "metadata"});
     }
 
@@ -506,6 +509,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         .source = std::filesystem::path{kReaderKernelPath},
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings = reader_dfbs,
+        .scratchpad_bindings = reader_scratchpads,
         .tensor_bindings = reader_tensors,
         .compile_time_args =
             {{"n_heads", n_heads},
@@ -523,7 +527,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"chunk_local_t", full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)},
              {"query_offset_t", seq_len_t * subshard_coord}},
         .runtime_arg_schema = reader_schema,
-        .hw_config = create_reader_datamovement_config(mesh_device->arch())};
+        .hw_config = create_reader_datamovement_config()};
 
     // ------------------------------------------------------------------ indexed writer + reused llama compute
     TT_FATAL(
@@ -535,12 +539,10 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
             "writer_rotary_embedding_indexed.cpp",
         .compiler_options = {.defines = reload_define},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
-             // Borrow the shared zero-buffer slot for writer-only passthrough scratch.
-             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "copy", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = ZERO_DFB, .accessor_name = "copy", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        // Reuse the shared "zero" scratchpad slot for the writer-only passthrough-tile staging.
+        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "copy"}},
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"},
              TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"}},
@@ -552,7 +554,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"rotary_offset_t", rotary_offset_t}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
-        .hw_config = create_writer_datamovement_config(mesh_device->arch())};
+        .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -671,6 +673,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         .name = "rotary_embedding_indexed",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = dfbs,
+        .scratchpads = scratchpads,
         .tensor_parameters = tensor_params,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 

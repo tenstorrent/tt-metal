@@ -37,7 +37,7 @@ protected:
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {

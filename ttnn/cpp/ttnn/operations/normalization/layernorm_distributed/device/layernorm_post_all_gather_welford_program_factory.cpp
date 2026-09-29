@@ -107,7 +107,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     const auto& stats_mesh = stats.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -393,7 +393,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset", "Wt_full"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
     // its own scaling and never reads it. The reader is then the buffer's only toucher, so it takes
@@ -424,7 +424,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (use_2d_kernel) {
         // #56908: the 2D output is column-split, so rows are strided; use the strided writer.
@@ -464,7 +464,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
              {"dfb_length", cb_length}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
     // Every intermediate below is private to the compute kernel: it packs into the buffer and
     // unpacks it back, so it is that buffer's only endpoint on both sides.
@@ -490,7 +490,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                 .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
-    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    auto& compute_gen1 = gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // UnpackToDest only helps for buffers whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode). For those, setting
     // the mode preserves FP32 precision by bypassing SrcA. Setting it on a buffer consumed by any
