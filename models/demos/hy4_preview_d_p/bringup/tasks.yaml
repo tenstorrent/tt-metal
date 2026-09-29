@@ -304,6 +304,13 @@ tasks:
     - attn_hc_pre
     - attn_norm
     layer: 0
+  frozen:
+    at: '2026-09-29T05:41:20'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_03_attn_norm.py: 407d455ef4bf032fbc97cb9f73776b2749cebc790f472517fdbceed580bf84b6
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
 - id: C.dense_full.q_a
   title: dense_full q_a (op) on device, layer 0
   step: implement
