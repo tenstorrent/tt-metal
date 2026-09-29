@@ -1,0 +1,9 @@
+run_id,layer_set,W,capacity,h,n,wall_ms
+gate_merge_plain_sweep,L0_4,2048,18432,0,2048,25.774
+gate_merge_plain_sweep,L0_4,2048,18432,2048,2048,1390.631
+gate_merge_plain_sweep,L0_4,2048,18432,4096,2048,31.994
+gate_merge_plain_sweep,L0_4,2048,18432,6144,2048,27.746
+gate_merge_plain_sweep,L0_4,2048,18432,8192,2048,28.2
+gate_merge_plain_sweep,L0_4,2048,18432,10240,2048,28.446
+gate_merge_plain_sweep,L0_4,2048,18432,12288,2048,28.948
+gate_merge_plain_sweep,L0_4,2048,18432,14336,2048,29.644

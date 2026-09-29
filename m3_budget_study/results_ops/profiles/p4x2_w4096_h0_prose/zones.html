@@ -1,0 +1,50 @@
+<style>
+body{font:14px/1.5 system-ui,sans-serif;margin:2rem;max-width:1200px}
+h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem}
+table{border-collapse:collapse;width:100%;margin:.5rem 0;font-variant-numeric:tabular-nums}
+th,td{padding:.35rem .5rem;text-align:right;border-bottom:1px solid #8883}
+th:first-child,td:first-child{text-align:left;font-family:ui-monospace,monospace}
+th{font-weight:600;border-bottom:2px solid #8886}
+.bar{height:.65rem;background:#4a90d9;border-radius:2px;display:inline-block;min-width:1px}
+.meta{color:#8889;font-size:.9rem}
+@media(prefers-color-scheme:dark){body{background:#111;color:#ddd}.bar{background:#5aa}}
+</style>
+<h1>MiniMax-M3 prefill — zone profile</h1>
+<p class=meta>/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/p4x2_w4096_h0_prose/20260929_175320_stages4_stage0_layers0+1+2+3+4+5+6_cache0_1d_bf4/ops_perf_results_2026_09_29_17_56_52.csv — 6758 CSV rows, 3240 inside `profiled_chunk`, 111 zones</p>
+<p><b>Profiled chunk:</b> 67.97 ms device-kernel on the worst of 8 devices (dev 6), skew 0.28 ms, 405 ops.</p>
+<h2>dense layers <span class=meta>(3 layers)</span></h2>
+<table><tr><th>zone</th><th>ms/layer</th><th>ms total</th><th>% class</th><th>ops/layer</th><th>MiB/layer</th><th>GB/s</th><th></th></tr>
+<tr><td>(layer total)</td><td>4.036</td><td>12.11</td><td>100.0%</td><td>32.0</td><td>780.7</td><td>202.8</td><td><span class=bar style='width:240.0px'></span></td></tr>
+<tr><td>attn</td><td>1.939</td><td>5.82</td><td>48.0%</td><td>21.0</td><td>282.7</td><td>152.9</td><td><span class=bar style='width:115.3px'></span></td></tr>
+<tr><td>mlp</td><td>1.475</td><td>4.42</td><td>36.5%</td><td>5.0</td><td>366.0</td><td>260.3</td><td><span class=bar style='width:87.7px'></span></td></tr>
+<tr><td>attn/ring_joint_sdpa</td><td>0.787</td><td>2.36</td><td>19.5%</td><td>1.0</td><td>25.0</td><td>33.3</td><td><span class=bar style='width:46.8px'></span></td></tr>
+<tr><td>attn/o_proj</td><td>0.311</td><td>0.93</td><td>7.7%</td><td>2.0</td><td>54.0</td><td>181.9</td><td><span class=bar style='width:18.5px'></span></td></tr>
+<tr><td>attn/qkv_proj</td><td>0.277</td><td>0.83</td><td>6.9%</td><td>1.0</td><td>49.7</td><td>188.3</td><td><span class=bar style='width:16.5px'></span></td></tr>
+<tr><td>attn/ccl_out_reduce_scatter</td><td>0.197</td><td>0.59</td><td>4.9%</td><td>1.0</td><td>42.0</td><td>223.3</td><td><span class=bar style='width:11.7px'></span></td></tr>
+<tr><td>mlp/tp_reduce_scatter</td><td>0.186</td><td>0.56</td><td>4.6%</td><td>1.0</td><td>42.0</td><td>237.3</td><td><span class=bar style='width:11.0px'></span></td></tr>
+<tr><td>post_attn_norm_allgather</td><td>0.162</td><td>0.49</td><td>4.0%</td><td>1.0</td><td>18.0</td><td>116.5</td><td><span class=bar style='width:9.6px'></span></td></tr>
+<tr><td>input_norm_allgather</td><td>0.162</td><td>0.49</td><td>4.0%</td><td>1.0</td><td>18.0</td><td>116.6</td><td><span class=bar style='width:9.6px'></span></td></tr>
+</table>
+<h2>sparse layers <span class=meta>(4 layers)</span></h2>
+<table><tr><th>zone</th><th>ms/layer</th><th>ms total</th><th>% class</th><th>ops/layer</th><th>MiB/layer</th><th>GB/s</th><th></th></tr>
+<tr><td>(layer total)</td><td>13.894</td><td>55.58</td><td>100.0%</td><td>75.0</td><td>2964.8</td><td>224.0</td><td><span class=bar style='width:240.0px'></span></td></tr>
+<tr><td>mlp</td><td>9.643</td><td>38.57</td><td>69.4%</td><td>20.0</td><td>2467.8</td><td>268.8</td><td><span class=bar style='width:166.6px'></span></td></tr>
+<tr><td>attn</td><td>7.113</td><td>28.45</td><td>51.2%</td><td>49.0</td><td>365.0</td><td>53.8</td><td><span class=bar style='width:122.9px'></span></td></tr>
+<tr><td>attn/sparse_sdpa</td><td>5.367</td><td>21.47</td><td>38.6%</td><td>3.0</td><td>52.1</td><td>10.2</td><td><span class=bar style='width:92.7px'></span></td></tr>
+<tr><td>mlp/experts_mm</td><td>2.657</td><td>10.63</td><td>19.1%</td><td>2.0</td><td>1787.2</td><td>710.3</td><td><span class=bar style='width:45.9px'></span></td></tr>
+<tr><td>mlp/combine</td><td>2.339</td><td>9.35</td><td>16.8%</td><td>1.0</td><td>153.2</td><td>71.8</td><td><span class=bar style='width:40.4px'></span></td></tr>
+<tr><td>mlp/moe_reduce</td><td>1.541</td><td>6.17</td><td>11.1%</td><td>3.0</td><td>102.0</td><td>74.2</td><td><span class=bar style='width:26.6px'></span></td></tr>
+<tr><td>mlp/dispatch</td><td>1.059</td><td>4.24</td><td>7.6%</td><td>1.0</td><td>209.8</td><td>208.8</td><td><span class=bar style='width:18.3px'></span></td></tr>
+<tr><td>mlp/shared_expert</td><td>0.568</td><td>2.27</td><td>4.1%</td><td>5.0</td><td>177.0</td><td>326.7</td><td><span class=bar style='width:9.8px'></span></td></tr>
+<tr><td>attn/o_proj</td><td>0.312</td><td>1.25</td><td>2.2%</td><td>2.0</td><td>54.0</td><td>181.6</td><td><span class=bar style='width:5.4px'></span></td></tr>
+<tr><td>attn/ag_kv</td><td>0.289</td><td>1.16</td><td>2.1%</td><td>2.0</td><td>9.0</td><td>62.7</td><td><span class=bar style='width:5.0px'></span></td></tr>
+<tr><td>attn/qkv_proj</td><td>0.278</td><td>1.11</td><td>2.0%</td><td>1.0</td><td>49.7</td><td>187.7</td><td><span class=bar style='width:4.8px'></span></td></tr>
+<tr><td>attn/index_branch</td><td>0.246</td><td>0.98</td><td>1.8%</td><td>19.0</td><td>39.1</td><td>167.0</td><td><span class=bar style='width:4.2px'></span></td></tr>
+<tr><td>attn/ccl_out_reduce_scatter</td><td>0.199</td><td>0.80</td><td>1.4%</td><td>1.0</td><td>42.0</td><td>221.4</td><td><span class=bar style='width:3.4px'></span></td></tr>
+<tr><td>mlp/shared_expert/tp_reduce_scatter</td><td>0.172</td><td>0.69</td><td>1.2%</td><td>1.0</td><td>42.0</td><td>255.6</td><td><span class=bar style='width:3.0px'></span></td></tr>
+<tr><td>post_attn_norm_allgather</td><td>0.159</td><td>0.64</td><td>1.1%</td><td>1.0</td><td>18.0</td><td>118.7</td><td><span class=bar style='width:2.7px'></span></td></tr>
+<tr><td>input_norm_allgather</td><td>0.158</td><td>0.63</td><td>1.1%</td><td>1.0</td><td>18.0</td><td>119.2</td><td><span class=bar style='width:2.7px'></span></td></tr>
+<tr><td>attn/indexer</td><td>0.128</td><td>0.51</td><td>0.9%</td><td>2.0</td><td>2.4</td><td>19.5</td><td><span class=bar style='width:2.2px'></span></td></tr>
+<tr><td>mlp/router_topk</td><td>0.107</td><td>0.43</td><td>0.8%</td><td>2.0</td><td>14.4</td><td>140.7</td><td><span class=bar style='width:1.9px'></span></td></tr>
+<tr><td>attn/ag_index_k</td><td>0.037</td><td>0.15</td><td>0.3%</td><td>1.0</td><td>2.2</td><td>64.6</td><td><span class=bar style='width:0.6px'></span></td></tr>
+</table>

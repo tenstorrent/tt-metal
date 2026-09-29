@@ -1,0 +1,5 @@
+run_id,timestamp,git_sha,exp,layer_set,layers,n_dense,n_sparse,mesh,sp,tp,ep,W,B,segments_json,replicated_tokens,traced,synth_history,iters,wall_ms_median,wall_ms_min,wall_ms_max,device_ms,host_gap_pct,peak_dram_gb,status,notes
+p1e_bs_cap65536,2026-09-29T18:44:53+00:00,d78c35eaa1d0,,,0 1 2,3,0,"(2,4)",2,4,8,4096,1,"[{""slot"": 0, ""h"": 0, ""n"": 4096}]",0,0,0,8,16.741,16.559,16.777,,,,OK,capacity=65536 fill=real
+p1e_bs_cap65536,2026-09-29T18:44:53+00:00,d78c35eaa1d0,,,0 1 2,3,0,"(2,4)",2,4,8,4096,1,"[{""slot"": 0, ""h"": 16384, ""n"": 4096}]",0,0,0,8,26.228,24.402,26.402,,,,OK,capacity=65536 fill=real
+p1e_bs_cap1048576,2026-09-29T18:46:24+00:00,d78c35eaa1d0,,,0 1 2,3,0,"(2,4)",2,4,8,4096,1,"[{""slot"": 0, ""h"": 0, ""n"": 4096}]",0,0,0,8,16.972,16.815,17.255,,,,OK,capacity=1048576 fill=real
+p1e_bs_cap1048576,2026-09-29T18:46:24+00:00,d78c35eaa1d0,,,0 1 2,3,0,"(2,4)",2,4,8,4096,1,"[{""slot"": 0, ""h"": 16384, ""n"": 4096}]",0,0,0,8,26.021,25.075,26.187,,,,OK,capacity=1048576 fill=real

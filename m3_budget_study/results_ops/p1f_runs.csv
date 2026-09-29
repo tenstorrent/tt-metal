@@ -1,0 +1,3 @@
+run_id,status,elapsed_s,W,h,B,input,segments,wall_ms,capture_mb,csv
+p1f_w4096_1x2,OK,270,4096,139264+141312,2,prose,"prose@139264+141312",162.7,5344,/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/p1f_w4096_1x2/20260929_185637_stages4_stage0_layers0+1+2+3+4+5+6_packed_1d_bf4/ops_perf_results_2026_09_29_19_00_47.csv
+p1f_w8192_2x2,OK,345,8192,139264+141312+0+2048,4,prose+code,"prose@139264+141312,code@0+2048",223.6,6255,/home/vmelnykov/tt-metal/m3_budget_study/results_ops/profiles/p1f_w8192_2x2/20260929_190109_stages4_stage0_layers0+1+2+3+4+5+6_packed_1d_bf4/ops_perf_results_2026_09_29_19_06_36.csv

@@ -1,0 +1,3 @@
+path,tokens_per_expert,active_experts,worst_ms,mean_ms,min_ms,weight_bytes_read,flops,total_tokens,cores_used,timing_src,n_chips,n_programs,wall_ms,per_chip_ms,status
+nd,64,16,1.98871,1.98453,1.97596,509607936,115964116992,1024,88,device,8,1,2.46421,0:1.9851;1:1.9882;4:1.9883;5:1.9760;24:1.9841;25:1.9887;28:1.9838;29:1.9820,OK
+hybrid,64,16,1.59105,1.58812,1.5803,509607936,115964116992,1024,88,device,8,2,2.33807,0:1.5871;1:1.5898;4:1.5910;5:1.5803;24:1.5902;25:1.5889;28:1.5894;29:1.5883,OK
