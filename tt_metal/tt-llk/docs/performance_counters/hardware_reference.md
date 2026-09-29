@@ -132,6 +132,14 @@ Some counters are live wires that no tt-metal op has exercised so far. In a swee
 
 The same sweep over 22 Wormhole ops (20 with a compute kernel, n150) found the exposed set complete as well: all 126 `wormhole.h` counters sit on live RTL signals, none is tied to a constant, an out of range select or a duplicate of another exposed select, and no live select lacks a name. 26 of them read 0 on every op: `UNPACK0/1_BUSY_THREAD1`, `SRCA/SRCB_WRITE_TID_ODD`, the MOVE class, `THCON_INSTRN_AVAILABLE_1`, `UNPACK_INSTRN_AVAILABLE_1/2`, `PACK_INSTRN_AVAILABLE_0/1` and the per-thread waits a thread never performs (`WAITING_FOR_THCON_IDLE_0/1/2`, `WAITING_FOR_PACK_IDLE_0/1`, `WAITING_FOR_MATH_IDLE_0`, `WAITING_FOR_MOVE_IDLE_0/1/2`, `WAITING_FOR_SFPU_IDLE_0`, `WAITING_FOR_UNPACK_IDLE_1`, `WAITING_FOR_CFG_IDLE_1/2`, `WAITING_FOR_NONFULL_SEM_2`). Seven pairs returned the same values on every op while sitting on different signals (`SRCA_WRITE_NOT_BLOCKED_PORT`, `SRCA_WRITE_TID_EVEN` and `SRCB_WRITE_TID_EVEN` against the write requests, `DEST_READ_GRANTED_0` against `PACKER0_DEST_READ_REQ`, `L1_0_NOC_RING0_INCOMING_1_GRANT` against `_INCOMING_0_GRANT`, `WAITING_FOR_SRCB_CLEAR/VALID` against the srcA waits); they stay because a workload that blocks the write port or refuses a dest read separates them.
 
+### Waits the counters cannot see
+
+The counters measure Tensix engine signals. `cb_wait_front` and `cb_reserve_back` are RISC-V loops that poll the circular buffer's tiles-received and tiles-acked counts, and a NOC read barrier is a RISC-V poll on the NOC status registers. While a thread spins in one of these, no Tensix instruction is issued, so `THREAD_STALLS_N`, `WAITING_FOR_SRCA_VALID`, `WAITING_FOR_SRCB_VALID` and the semaphore waits all stay where they were. A kernel that waits on DRAM for most of its runtime can therefore report a stall rate near zero.
+
+Measured on a Blackhole causal SDPA prefill: the unpack thread spent 38 percent of the kernel in `cb_wait_front` on the K and V buffers, while `WAITING_FOR_SRCA_VALID` and `WAITING_FOR_SRCB_VALID` read 0 and `WAITING_FOR_NONZERO_SEM_0` read 1.4 percent of the window. The same holds for `L1_*_NOC_RING*_INCOMING`: it counts the NIU interface that serves requests other cores make to this L1, while the data of a DRAM read this core issued comes back through the interface that carries its own requests, the `OUTGOING` one, so it stays at 0 when every core reads its data from DRAM itself.
+
+When the question is whether a kernel is memory bound, put a `DeviceZoneScopedN` around the wait or read the RISC-V cycle counter; the stall metrics on their own cannot answer it.
+
 ## Derived Metrics Reference
 
 Every derived metric is computed by one shared module, [tt_metal/tt-llk/tools/python/tt_llk_perf/metrics.py](../../tools/python/tt_llk_perf/metrics.py). The Tracy tool computes it per operation and core and aggregates to Min/Median/Max/Avg across cores; the tt-llk test harness computes it per zone and run and aggregates to mean/std across runs. The tables below are the complete set. The module is the source of truth, and a unit test (`tests/ttnn/tracy/test_perf_metrics_common.py`) fails if this file stops listing a metric the module computes.
@@ -216,11 +224,11 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 
 | Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
 |---|---|---|---|
-| Thread 0 Stall Rate (%) | `unpack_thread_stall_pct` | `THREAD_STALLS_0 / instrn cycles` | Thread 0 (unpack) stall rate. |
+| Thread 0 Stall Rate (%) | `unpack_thread_stall_pct` | `THREAD_STALLS_0 / instrn cycles` | Thread 0 (unpack) stall rate. A low value does not rule out a data wait: the unpack thread may be spending its time in `cb_wait_front`, a RISC-V poll that is not counted here. |
 | Thread 1 Stall Rate (%) | `math_thread_stall_pct` | `THREAD_STALLS_1 / instrn cycles` | Thread 1 (math) stall rate. |
 | Thread 2 Stall Rate (%) | `pack_thread_stall_pct` | `THREAD_STALLS_2 / instrn cycles` | Thread 2 (pack) stall rate. |
 | SrcA Valid Wait (%) | `math_wait_srca_pct` | `WAITING_FOR_SRCA_VALID / instrn cycles` | Math waiting for srcA to become valid. |
-| SrcB Valid Wait (%) | `math_wait_srcb_pct` | `WAITING_FOR_SRCB_VALID / instrn cycles` | Math waiting for srcB to become valid. |
+| SrcB Valid Wait (%) | `math_wait_srcb_pct` | `WAITING_FOR_SRCB_VALID / instrn cycles` | Math waiting for srcB to become valid. Also near 0 when the unpack thread is still waiting in `cb_wait_front` and has not issued the unpack yet: a kernel starved by DRAM reads reports 0 here. |
 | SrcA Clear Wait (%) | `srca_clear_wait_pct` | `WAITING_FOR_SRCA_CLEAR / instrn cycles` | Unpack waiting for srcA to clear. |
 | SrcB Clear Wait (%) | `srcb_clear_wait_pct` | `WAITING_FOR_SRCB_CLEAR / instrn cycles` | Unpack waiting for srcB to clear. |
 | Math Idle Wait T1 (%) | `math_idle_wait_t1_pct` | `WAITING_FOR_MATH_IDLE_1 / instrn cycles` | Thread 1 waiting for its own math unit to go idle. |
@@ -235,7 +243,7 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | MOVE Idle Wait T0 (%) | `move_idle_wait_t0_pct` | `WAITING_FOR_MOVE_IDLE_0 / instrn cycles` | Thread 0 waiting for MOVE. |
 | Semaphore Zero Wait T1 (%) | `math_sem_wait_pct` | `WAITING_FOR_NONZERO_SEM_1 / instrn cycles` | Thread 1 waiting on a non-zero semaphore. |
 | Semaphore Zero Wait T2 (%) | `pack_sem_wait_pct` | `WAITING_FOR_NONZERO_SEM_2 / instrn cycles` | Thread 2 waiting on a non-zero semaphore. |
-| Semaphore Zero Wait T0 (%) | `sem_zero_wait_t0_pct` | `WAITING_FOR_NONZERO_SEM_0 / instrn cycles` | Thread 0 waiting on a non-zero semaphore. |
+| Semaphore Zero Wait T0 (%) | `sem_zero_wait_t0_pct` | `WAITING_FOR_NONZERO_SEM_0 / instrn cycles` | Thread 0 waiting on a non-zero semaphore. Only Tensix semaphore instructions count; the circular buffer wait in `cb_wait_front` is a RISC-V poll and does not appear here. |
 | Semaphore Full Wait T0 (%) | `sem_full_wait_t0_pct` | `WAITING_FOR_NONFULL_SEM_0 / instrn cycles` | Thread 0 waiting on a non-full semaphore. |
 | Semaphore Full Wait T1 (%) | `sem_full_wait_t1_pct` | `WAITING_FOR_NONFULL_SEM_1 / instrn cycles` | Thread 1 waiting on a non-full semaphore. |
 | Semaphore Full Wait T2 (%) | `sem_full_wait_t2_pct` | `WAITING_FOR_NONFULL_SEM_2 / instrn cycles` | Thread 2 waiting on a non-full semaphore. |
