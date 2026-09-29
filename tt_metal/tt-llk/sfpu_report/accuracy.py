@@ -22,7 +22,7 @@ sys.path.insert(0, str(runner.PYTHON_TESTS))
 
 DRIVER = "test_sfpu_report_accuracy.py"
 
-#: Special-value classes, in report order.
+#: Special-value classes of test_sfpu_report_accuracy.special_values().
 CLASSES = ("nan", "inf", "zero", "subnormal", "extreme")
 
 
@@ -32,15 +32,6 @@ def measure(side, arch, ops, out_dir, log, jobs=8):
     env = {"SFPU_REPORT_DUMP": str(out_dir), "SFPU_REPORT_OPS": ",".join(ops)}
     runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs)
     return out_dir
-
-
-def _same(result, golden):
-    """Lane-wise: identical value, NaN-ness and sign (so -0 != +0)."""
-    import torch
-
-    r, g = result.to(torch.float64), golden.to(torch.float64)
-    both_nan = torch.isnan(r) & torch.isnan(g)
-    return both_nan | ((r == g) & (torch.signbit(r) == torch.signbit(g)))
 
 
 def _sweep_stats(d):
@@ -84,27 +75,43 @@ def _sweep_stats(d):
 
 
 def _specials(d):
+    """{input bits: (class, input, result)} for each distinct special input.
+
+    Not judged against the golden: the harness golden models the unpacker and the
+    Dest, so for NaN, signed zeros and subnormals it is not an IEEE reference (it
+    maps a NaN input to inf, and -0 to +0). What a reviewer needs is what the
+    hardware returns, and whether the PR changed it.
+    """
     import torch
 
-    golden, result = torch.as_tensor(d["golden"]).reshape(-1), d["result"].reshape(-1)
-    src = d["src"].reshape(-1)
-    same = _same(result, golden)
+    src, result = d["src"].reshape(-1), d["result"].reshape(-1)
     out = {}
-    for cls in CLASSES:
-        idx = [i for i, c in enumerate(d["classes"]) if c == cls]
-        if not idx:
-            continue
-        # The special-values tile repeats its values; judge each distinct input once.
-        seen, bad = set(), []
-        for i in idx:
-            key = int(src[i].to(torch.float32).view(torch.int32))  # bits: NaN != NaN
-            if key in seen:
-                continue
-            seen.add(key)
-            if not bool(same[i]):
-                bad.append((float(src[i]), float(golden[i]), float(result[i])))
-        out[cls] = {"inputs": len(seen), "failures": bad}
+    for i, cls in enumerate(d["classes"]):
+        key = int(src[i].to(torch.float32).view(torch.int32))  # bits: NaN != NaN
+        if key not in out:
+            out[key] = (cls, float(src[i]), float(result[i]))
     return out
+
+
+def _bits(x):
+    import struct
+
+    return struct.pack(">d", x)
+
+
+def specials_diff(base, head):
+    """Special inputs whose result changed, and NaN propagation on each side."""
+    changed = []
+    for key, (cls, x, new) in head.items():
+        if key in base:
+            old = base[key][2]
+            if _bits(old) != _bits(new) and not (old != old and new != new):
+                changed.append({"class": cls, "input": x, "old": old, "new": new})
+    nan_ok = {
+        side: all(r != r for c, _, r in spec.values() if c == "nan")
+        for side, spec in (("base", base), ("head", head))
+    }
+    return {"changed": changed, "nan_propagates": nan_ok}
 
 
 def _load(path):
@@ -149,5 +156,5 @@ def compare(base_dir, head_dir):
                     s.pop("_measured")
                 rec["base"], rec["head"] = bs, hs
             else:
-                rec["specials"] = {"base": _specials(b), "head": _specials(h)}
+                rec["specials"] = specials_diff(_specials(b), _specials(h))
     return list(records.values())

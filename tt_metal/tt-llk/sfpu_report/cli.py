@@ -110,6 +110,24 @@ def _sfpu_type_to_op(sfpu_types):
     return mapped, unmapped
 
 
+def _prioritize(ops, changed_files):
+    """Ops whose own kernel file the PR edits first: ``ckernel_sfpu_recip.h`` puts
+    ``Reciprocal`` ahead of the ops that merely call it. Stable otherwise."""
+    stems = {
+        Path(p).stem.replace("ckernel_sfpu_", "").replace("_", "").lower()
+        for p in changed_files
+        if Path(p).name.startswith("ckernel_sfpu_")
+    }
+
+    def direct(op):
+        name = op.lower()
+        return any(
+            stem and (name.startswith(stem) or stem.startswith(name)) for stem in stems
+        )
+
+    return sorted(ops, key=lambda op: not direct(op))
+
+
 class _Incompatible(Exception):
     """The side's C++ harness does not build with the tool's Python harness."""
 
@@ -147,6 +165,7 @@ def cmd_run(args):
         ops, not_covered = _sfpu_type_to_op(
             [c for c in changed if not c.startswith("typecast")]
         )
+        ops = _prioritize(ops, plan.applied)
         if any(c.startswith("typecast") for c in changed):
             ops.append("Typecast")
         why = "auto-detected: their compiled SFPU code differs between the two sides"
@@ -235,6 +254,31 @@ def cmd_run(args):
     print(f"wrote {out} in {summary['seconds']} s")
 
 
+def cmd_rerender(args):
+    """Recompute the comparison from a finished run's raw data; measure nothing."""
+    work = Path(args.work).resolve()
+    path = work / f"summary-{args.arch}.json"
+    summary = json.loads(path.read_text())
+    for family in summary["perf"]:
+        runs = {
+            sched: {
+                side: sorted((work / "perf" / family / sched / side).glob("run_*.csv"))
+                for side in ("base", "head")
+            }
+            for sched in perf.SCHEDULES
+            if (work / "perf" / family / sched).is_dir()
+        }
+        verdicts = perf.compare(runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"])
+        summary["perf"][family] = perf.rows(runs, verdicts)
+    if (work / "accuracy" / "head").is_dir():
+        summary["accuracy"] = accuracy.compare(
+            work / "accuracy" / "base", work / "accuracy" / "head"
+        )
+    path.write_text(json.dumps(summary, indent=1, default=str))
+    (work / f"report-{args.arch}.md").write_text(report.render([summary]))
+    print(f"rewrote {path}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -260,8 +304,11 @@ def main(argv=None):
     run.add_argument(
         "--head-moved-to", help="the PR's current head, if it moved after the command"
     )
+    sub.add_parser(
+        "rerender", help="recompute summary + report from a finished run's data"
+    )
     args = ap.parse_args(argv)
-    {"detect": cmd_detect, "run": cmd_run}[args.cmd](args)
+    {"detect": cmd_detect, "run": cmd_run, "rerender": cmd_rerender}[args.cmd](args)
 
 
 if __name__ == "__main__":
