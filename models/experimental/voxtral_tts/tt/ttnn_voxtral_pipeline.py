@@ -40,7 +40,8 @@ TRACE_REGION_SIZE = 250 * 1024 * 1024
 
 
 def open_device(device_id=0, trace_region_size=TRACE_REGION_SIZE):
-    """Open a device with the L1 scratch and trace region every entry point here needs."""
+    """-> a one-chip MeshDevice (ttnn.open_device opens a 1x1 mesh) with the L1 scratch and trace
+    region the pipeline needs; the type TtVoxtralPipeline(mesh_device) takes."""
     return ttnn.open_device(device_id=device_id, l1_small_size=L1_SMALL_SIZE, trace_region_size=trace_region_size)
 
 
@@ -61,9 +62,7 @@ class TtVoxtralPipeline:
         ckpt = os.path.join(self.model_dir, CKPT_NAME)
         self._owns_device = mesh_device is None
         if self._owns_device:
-            mesh_device = ttnn.open_mesh_device(
-                ttnn.MeshShape(1, 1), l1_small_size=L1_SMALL_SIZE, trace_region_size=TRACE_REGION_SIZE
-            )
+            mesh_device = open_device()
         self.mesh_device = self.device = mesh_device
         try:
             # Loaded once and shared: the backbone takes it instead of loading its own copy, and
@@ -74,7 +73,7 @@ class TtVoxtralPipeline:
             self.codec = TtVoxtralCodecDecoder(mesh_device, ckpt_path=ckpt)
         except Exception:
             if self._owns_device:
-                ttnn.close_mesh_device(mesh_device)
+                ttnn.close_device(mesh_device)
             raise
         self._tr = None  # (trace_id, input buffers, output tensors), built per generate()
         # Per-stage wall times from the last request, including the codec.
@@ -243,7 +242,7 @@ class TtVoxtralPipeline:
         self.last_timings = {}
         self.warmed = {}
         if self._owns_device and self.mesh_device is not None:
-            ttnn.close_mesh_device(self.mesh_device)
+            ttnn.close_device(self.mesh_device)
             self.mesh_device = self.device = None
 
     @torch.no_grad()
