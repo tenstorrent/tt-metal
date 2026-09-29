@@ -30,7 +30,7 @@ enum RealtimeProfilerState : uint32_t {
 // never one the BRISC may still be reading. When it has to wait for a free slot, it stores the wait in cycles
 // in kernel_end.header of the record it publishes next (0 means no wait); the BRISC reports it to the host and
 // zeroes that word before handing the slot back.
-static constexpr uint32_t REALTIME_PROFILER_RECORD_SLOTS = 16;  // must be a power of 2
+static constexpr uint32_t REALTIME_PROFILER_RECORD_SLOTS = 4;  // must be a power of 2
 // Set in the BRISC's record_wr_idx together with the final count, so terminate cannot overtake it.
 static constexpr uint32_t REALTIME_PROFILER_RECORD_WR_IDX_TERMINATE = 0x80000000u;
 static constexpr uint32_t REALTIME_PROFILER_RECORD_WR_IDX_MASK = 0x7FFFFFFFu;
