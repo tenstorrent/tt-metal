@@ -131,7 +131,7 @@ void RealtimeProfilerTracyHandler::AddDevice(
     // The GUI labels a lane with the thread name registered for its id; register before the first zone.
     tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::BRISC), "Programs");
     tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NCRISC), "Sync check");
-    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::TRISC_0), "Dispatch stall");
+    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NONE), "Dispatch stall");
 
     tracy_contexts_[chip_id] = ctx;
 #endif
@@ -307,12 +307,14 @@ void RealtimeProfilerTracyHandler::PushDispatchStallMarker(
         return;
     }
 
-    // Own lane (TRISC_0), so stall zones never have to nest with program or sync-check zones.
+    // Own lane, so stall zones never have to nest with program or sync-check zones. RiscType::NONE because the
+    // lane is not a RISC; red because a stall is an error.
     tracy::TTDeviceMarker start_marker;
     start_marker.chip_id = chip_id;
     start_marker.core_x = kRealtimeProfilerCore_X;
     start_marker.core_y = kRealtimeProfilerCore_Y;
-    start_marker.risc = tracy::RiscType::TRISC_0;
+    start_marker.risc = tracy::RiscType::NONE;
+    start_marker.color = tracy::Color::Red;
     start_marker.timestamp = stall_end_timestamp - stall_cycles;
     start_marker.runtime_host_id = 0;
     start_marker.marker_name = "DISPATCH STALL: RT profiler record ring full";
