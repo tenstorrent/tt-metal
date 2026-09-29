@@ -4,6 +4,8 @@
 
 """Opt-in precision knobs for the MiniMax-H3 transformer blocks, read from the environment.
 
+MINIMAX_H3_FAST=1                               the measured 15 s recipe: adaLN schedule cache, bfloat8_b to_qkv/ff1
+                                                weights, LoFi PV in the ring SDPA (sets the knobs below unless given)
 MINIMAX_H3_MM_FIDELITY=LoFi|HiFi2|HiFi3|HiFi4  fidelity of the block matmuls (adaLN table, to_qkv, to_out, ff1, ff2)
 MINIMAX_H3_MM_FP32_ACC=0|1                      fp32 destination accumulation for the same matmuls (default 1)
 MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]        typecast the listed linears' weights to bfloat8_b after loading
@@ -19,6 +21,22 @@ import os
 from loguru import logger
 
 import ttnn
+
+FAST_RECIPE = {
+    "MINIMAX_H3_ADALN_CACHE": "1",
+    "MINIMAX_H3_BF8_WEIGHTS": "qkv,ff1",
+    "MINIMAX_H3_SDPA_PV_FIDELITY": "LoFi",
+}
+
+
+def apply_fast_recipe_env() -> None:
+    """MINIMAX_H3_FAST=1 fills in the recipe knobs (explicit settings win). Runs at import, before any module reads them."""
+    if os.environ.get("MINIMAX_H3_FAST") == "1":
+        for key, value in FAST_RECIPE.items():
+            os.environ.setdefault(key, value)
+
+
+apply_fast_recipe_env()
 
 
 def _typecast_parameter(param, dtype) -> None:
