@@ -2170,3 +2170,29 @@ Results:
 Next (implement): no module change is needed. Add moe_add to `DEVICE_STEPS["kda_moe"]` if it is not there yet.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_moe_add.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.12 test (attempt 1)
+Reviewed the rendered swap 12 test (kda_moe layer 4, moe_add added). The rendered file was the bare `run_swap_test`.
+I rebuilt it from the frozen kda_moe swap 11 test (every check and limit kept) plus dsa_moe swap 14's moe_add
+additions:
+- an add-share block (device outputs through shared_expert fixed, CPU moe_add and tail); the shared share is now it vs
+  the shared-share block;
+- moe_add vs the fp32 sum of the same device experts_out / shared_out (the layer-4 component limits, with each addend's
+  coefficient and rel), also on chunk 0;
+- moe_add vs golden on the same-routing rows (the experts' vs-golden limits), plus a loose ratio on the flipped rows.
+The gated metric pcc_swap_out (>= 0.98) is unchanged.
+- Sensitivity: /tmp/kmoe12/sens.py (CPU only, not kept; golden tail tensors with mlp_out perturbed). At layer 4 the add
+  reaches block out at about 0.148x. Add-share limits: rel <= 0.0005, ratio [0.998, 1.002]. dsa_moe's 0.0025 would be
+  5x too loose here (proposed as a known issue).
+Results:
+- Device passes on the first run: PCC 0.999990, rel 0.00457; every swap 11 number is unchanged.
+  - Add share: 0.00026 / [1.0000, 1.0006].
+  - moe_add vs the fp32 sum: 0.00174, experts coef 1.00054, shared coef 1.00092.
+  - moe_add vs golden: 0.01254 (limit 0.015). The CPU add of the same device inputs scores 0.01248, so this is
+    upstream error.
+- Reference passes (PCC 0.999997, every share exact). Stub fails (PCC 0).
+- About 105 s for the real pass (195 s in total).
+- The `collapse_share` line reads rel 0.00000, as it did in swap 11. This is inherited and not a new effect.
+Next: the device moe_add (`tt/moe_add.py`) already works in this swap.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_12_moe_add.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
