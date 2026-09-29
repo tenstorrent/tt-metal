@@ -1176,7 +1176,9 @@ def test_glm_prefill_transformer(
     ],
     ids=["5_layers", "78_layers"],
 )
-@pytest.mark.parametrize("n_routed_experts, gate_fallback_mode", [(256, GateComputeMode.DEVICE)], ids=["e256_device"])
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode", [(256, GateComputeMode.DEVICE_FP32)], ids=["e256_device"]
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
