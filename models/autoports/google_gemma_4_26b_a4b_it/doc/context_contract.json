@@ -475,6 +475,27 @@
     "long_context_path": "Eager prefill remains supported beyond1024. Default-enabled exact-signature B1 canonical-greedy reuse retains only a compatible live decode/sampler bundle; cache identities/addresses/specs, prompt/token/table metadata, logical length and mode changes invalidate it. Eager temporary tensors finish at the blocking first-token read and die before replay. No long-prefill graph is captured. Explicit GEMMA4_EAGER_PREFILL_DECODE_REUSE=0 restores release/recapture behavior.",
     "serving_profile": "Async scheduling selected for TSU; synchronous scheduling remains available with --no-async-scheduling. Report TTFT and E2EL alongside TPOT; high-concurrency setup phase shifts are not steady decode speedups.",
     "head_geometry": "BFP4/LoFi TP4 head on11x10 grid with in0_block_w1; dtype, fidelity, output shapes and persistent weights unchanged. Paired full-generator K4/K2/K1/K4 controls pass; final selected-default serving and qualitative controls pass.",
+    "batched_shared_decode": {
+      "status": "selected_local_clean_pass_default_reproduced_remote_matrix_pending",
+      "environment": "Default enabled; GEMMA4_BATCHED_SHARED_DECODE=0 restores the original serialized path",
+      "scope": "Dense active batches8..32, Linear TP4, replicated residuals, grouped MoE and fused tail; all other cases retain the serialized path. Attention/cache/router/indexed experts remain per slot; shared decode MLP, paired MoE reduction and tail are batched.",
+      "persistent_tensor_payload_delta_bytes": 0,
+      "allocation_notes": [
+        "No new weights, cache tensors, positions, page tables or persistent collective bundles are added. Existing attention-role CCL buffers remain caller-owned and shared across serial layers; same-role reuse is ordered by the next Linear RS before AG on one command queue.",
+        "This zero persistent-payload delta is not a zero temporary-memory claim. Per-slot residuals, expert outputs and shared inputs remain live through their respective concatenations. Tile padding amplifies the retained logical-one-row tensors; concatenations and batched shared/tail operations also need ordinary temporaries.",
+        "The batched paired-MoE tensor has sequence extent8..32, so it uses ordinary DRAM reduce-scatter/all-gather outputs, not the sequence-one persistent MoE bundle. Its buffers and workspaces follow normal operation/trace scratch ownership.",
+        "The reserved trace region remains1000000000 bytes. Captured command/scratch usage may change; no exact total transient peak or scratch-byte delta is claimed. Final-source B32 Watcher plus allocation tracking with program-cache exclusions disabled passes before candidate serving launch.",
+        "Full262144 aggregate serving capacity,8192-column page tables and32 scheduler slots are unchanged. This does not claim32 simultaneous262144-token requests fit the aggregate KV allocation."
+      ],
+      "evidence": [
+        "tsu_optimization/autodebug_batch_collectives.md",
+        "tsu_optimization/work_log.md",
+        "../readiness_vllm/tsu_optimization/batch32_final_contract.json",
+        "../readiness_vllm/tsu_optimization/batch_shared_async/launch.json",
+        "../readiness_vllm/tsu_optimization/batch_default_comparison.json",
+        "tsu_optimization/review_batched_shared_local.md"
+      ]
+    },
     "current_validation_scope": "Default CPU125 pass; final reduced Watcher31 and explicitly allocation-tracked Watcher11 pass with stable model/sampler trace identities, changed token/page values and context transitions. Full-capacity selected K1/default async server reproduces primary performance;20 primary/short/8K and38 long-output/32K/C32 guard texts+lengths exactly match controls. All18 official greedy and6 seeded sampled controls exactly match prior results. Independent selected-local review is clean-pass; new exact-image remote23-row matrix remains pending. Prior maximum-context correctness is inherited, not newly claimed from reduced probes.",
     "review": "tsu_optimization/review_selected_local.md",
     "evidence": [

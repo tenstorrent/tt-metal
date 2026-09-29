@@ -1,0 +1,256 @@
+{
+  "config": {
+    "output": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch32_norms.json",
+    "batch": 32,
+    "input_length": 128,
+    "profile": false,
+    "all_layers": false,
+    "candidate": "norms",
+    "mixed": false,
+    "repeats": 5
+  },
+  "scope": "Reduced real layers 0/5, full head/sampler; synthetic diverse prompts; not a full-model TSU claim",
+  "source_sha256": {
+    "tests/probe_tsu_batch.py": "87bab301e63882259b2e3f41c555b0fd8d343f0c12ce74ff8f3e4f8d74510bb4",
+    "tests/tsu_batch_candidate.py": "2662212278b6b987a1409c81847d35ce3fd6d45946677d77c2be102e1dea4b77",
+    "tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+    "tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "tt/generator.py": "92bc9a64bad64cf7f3b4dbda01293824c515030f9f861ee97091350521bb3091",
+    "tt/generator_vllm.py": "ab0aed5cae4ad38ae36fb8717f56eed2a67ec75681ebd1a56ce160ef71e353df",
+    "tt/model.py": "f52a55d7976779dec1f9e011d72c74bbef76d72bad19f44279a8bc4a8be63d8e",
+    "tt/multichip_decoder.py": "ef1716fb826e81ac7ecdf7d6c54ae18eb4c511d095f774a09fbcf87f795c0d75",
+    "tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+    "tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+    "tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+    "tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+    "tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672"
+  },
+  "rows": [],
+  "correctness": [
+    {
+      "step": 0,
+      "slot": 0,
+      "pcc": 0.4283198118209839,
+      "top1": false,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 1,
+      "pcc": 0.350178986787796,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 2,
+      "pcc": 0.25641846656799316,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 3,
+      "pcc": 0.4306451380252838,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 4,
+      "pcc": 0.3988228440284729,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 5,
+      "pcc": 0.36729976534843445,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 6,
+      "pcc": 0.43541863560676575,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 7,
+      "pcc": 0.37503865361213684,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 8,
+      "pcc": 0.39347895979881287,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 9,
+      "pcc": 0.6488155126571655,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 10,
+      "pcc": 0.6575191617012024,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 11,
+      "pcc": 0.7669544219970703,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 12,
+      "pcc": 0.6821802854537964,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 13,
+      "pcc": 0.6724900603294373,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 14,
+      "pcc": 0.7063355445861816,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 15,
+      "pcc": 0.7960288524627686,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 16,
+      "pcc": 0.7143574357032776,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 17,
+      "pcc": 0.7872101664543152,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 18,
+      "pcc": 0.7237763404846191,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 19,
+      "pcc": 0.7840275168418884,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 20,
+      "pcc": 0.7700240015983582,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 21,
+      "pcc": 0.6879324913024902,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 22,
+      "pcc": 0.8311824202537537,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 23,
+      "pcc": 0.7199597358703613,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 24,
+      "pcc": 0.7340632081031799,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 25,
+      "pcc": 0.7962943911552429,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 26,
+      "pcc": 0.6572662591934204,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 27,
+      "pcc": 0.7812371850013733,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 28,
+      "pcc": 0.7292055487632751,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 29,
+      "pcc": 0.7305176854133606,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 30,
+      "pcc": 0.7176454663276672,
+      "top1": true,
+      "max_abs": 60.0
+    },
+    {
+      "step": 0,
+      "slot": 31,
+      "pcc": 0.9999999403953552,
+      "top1": true,
+      "max_abs": 0.0
+    }
+  ]
+}

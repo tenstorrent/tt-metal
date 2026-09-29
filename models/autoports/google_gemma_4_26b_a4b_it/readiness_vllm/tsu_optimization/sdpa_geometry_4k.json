@@ -1,0 +1,1156 @@
+{
+  "scope": "Isolated traced native SDPA, actual recorded layer0/5 inputs; not full-model or serving TSU",
+  "length": 4096,
+  "rows": [
+    {
+      "layer": 0,
+      "label": "baseline",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        60.38093939423561,
+        43.1673601269722,
+        43.181609362363815,
+        43.20744425058365,
+        43.23307424783707
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999844431877136,
+      "max_abs": 0.125,
+      "queued_trace_us": [
+        62.18736991286278,
+        44.51112821698189,
+        44.24983635544777,
+        44.478848576545715,
+        44.68545317649841
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999754428863525,
+      "max_abs": 0.1875,
+      "queued_trace_us": [
+        64.23166021704674,
+        64.18919190764427,
+        64.05431777238846,
+        63.961148262023926,
+        63.93931806087494
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999698400497437,
+      "max_abs": 0.1875,
+      "queued_trace_us": [
+        64.28517401218414,
+        50.135813653469086,
+        50.00358447432518,
+        50.153639167547226,
+        50.016604363918304
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999844431877136,
+      "max_abs": 0.125,
+      "queued_trace_us": [
+        66.79913029074669,
+        44.43597048521042,
+        44.377464801073074,
+        44.34801638126373,
+        44.34380680322647
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999951720237732,
+      "max_abs": 0.0625,
+      "queued_trace_us": [
+        46.196505427360535,
+        45.948438346385956,
+        46.00677639245987,
+        46.079717576503754,
+        46.0105761885643
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999601244926453,
+      "max_abs": 0.25,
+      "queued_trace_us": [
+        62.146708369255066,
+        54.199155420064926,
+        54.244641214609146,
+        54.320190101861954,
+        54.27289754152298
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999695420265198,
+      "max_abs": 0.1875,
+      "queued_trace_us": [
+        56.24685436487198,
+        47.77854308485985,
+        47.74628207087517,
+        47.74227738380432,
+        47.783348709344864
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999951720237732,
+      "max_abs": 0.0625,
+      "queued_trace_us": [
+        46.08571529388428,
+        45.909583568573,
+        45.90917378664017,
+        45.904386788606644,
+        45.84547132253647
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        43.26255992054939,
+        43.18980500102043,
+        43.21206361055374,
+        43.20021718740463,
+        43.228305876255035
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999861717224121,
+      "max_abs": 0.125,
+      "queued_trace_us": [
+        57.48601630330086,
+        57.32152611017227,
+        57.35255777835846,
+        57.418085634708405,
+        57.436320930719376
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.999988317489624,
+      "max_abs": 0.125,
+      "queued_trace_us": [
+        54.764654487371445,
+        54.570864886045456,
+        54.548829793930054,
+        54.52858284115791,
+        54.58872765302658
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        43.322667479515076,
+        43.178386986255646,
+        43.1348942220211,
+        43.184198439121246,
+        43.157171458005905
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        44.36686635017395,
+        44.171884655952454,
+        44.13420334458351,
+        44.137388467788696,
+        44.161658734083176
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999635219573975,
+      "max_abs": 0.25,
+      "queued_trace_us": [
+        74.45812225341797,
+        74.44368675351143,
+        74.3112713098526,
+        74.16876032948494,
+        74.29981604218483
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999651312828064,
+      "max_abs": 0.1875,
+      "queued_trace_us": [
+        63.76296281814575,
+        54.318178445100784,
+        54.281335324048996,
+        54.22160029411316,
+        54.19416353106499
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        61.09289824962616,
+        44.14461553096771,
+        44.07988861203194,
+        44.062864035367966,
+        44.17005926370621
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 64,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        62.565878033638,
+        44.149234890937805,
+        44.158436357975006,
+        44.18088123202324,
+        44.144243001937866
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 64,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999635219573975,
+      "max_abs": 0.25,
+      "queued_trace_us": [
+        74.33148100972176,
+        74.21204820275307,
+        74.24592971801758,
+        74.16075095534325,
+        74.22607392072678
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 64,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": false,
+      "pcc": 0.9999651312828064,
+      "max_abs": 0.1875,
+      "queued_trace_us": [
+        64.61018696427345,
+        54.19114604592323,
+        54.26129326224327,
+        54.24283444881439,
+        54.20396104454994
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "candidate",
+      "max_cores_per_head_batch": 64,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        44.16445270180702,
+        44.096317142248154,
+        44.074077159166336,
+        44.05243322253227,
+        44.157858937978745
+      ]
+    },
+    {
+      "layer": 0,
+      "label": "baseline_repeat",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7ea1c0e6bf30>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "cache_shape": [
+        8192,
+        2,
+        32,
+        256
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        63.936710357666016,
+        43.19841042160988,
+        43.165143579244614,
+        43.18118095397949,
+        43.2056188583374
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "baseline",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        66.49134680628777,
+        66.56110286712646,
+        66.72380492091179,
+        66.4663128554821,
+        66.42121821641922
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9993303418159485,
+      "max_abs": 0.34375,
+      "queued_trace_us": [
+        85.46365424990654,
+        85.32481268048286,
+        85.39654314517975,
+        85.34707129001617,
+        85.33444255590439
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9982868432998657,
+      "max_abs": 0.75,
+      "queued_trace_us": [
+        189.60269168019295,
+        189.47945907711983,
+        189.49247896671295,
+        189.27086144685745,
+        189.5439811050892
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9991903901100159,
+      "max_abs": 0.34375,
+      "queued_trace_us": [
+        118.17473918199539,
+        118.12945827841759,
+        118.0344820022583,
+        117.91624128818512,
+        118.08475479483604
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 4,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9993303418159485,
+      "max_abs": 0.34375,
+      "queued_trace_us": [
+        84.593016654253,
+        84.35096591711044,
+        84.30086076259613,
+        84.37760174274445,
+        84.43210273981094
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9997084140777588,
+      "max_abs": 0.203125,
+      "queued_trace_us": [
+        66.35811179876328,
+        66.33143872022629,
+        66.34347140789032,
+        66.3246400654316,
+        66.31040945649147
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9990112781524658,
+      "max_abs": 0.4375,
+      "queued_trace_us": [
+        117.21491813659668,
+        117.03096330165863,
+        116.99289083480835,
+        116.9632188975811,
+        117.06341058015823
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9993064403533936,
+      "max_abs": 0.25,
+      "queued_trace_us": [
+        81.76863193511963,
+        81.65622130036354,
+        81.69952780008316,
+        81.66264742612839,
+        81.57888427376747
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 8,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9997084140777588,
+      "max_abs": 0.203125,
+      "queued_trace_us": [
+        65.96235558390617,
+        65.8315047621727,
+        65.6435638666153,
+        65.6237080693245,
+        65.8593699336052
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        66.48173555731773,
+        66.33425131440163,
+        66.26291200518608,
+        66.25931710004807,
+        66.28518924117088
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9992967247962952,
+      "max_abs": 0.265625,
+      "queued_trace_us": [
+        86.74850687384605,
+        86.60363033413887,
+        86.59703657031059,
+        86.57598868012428,
+        86.60444989800453
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9994641542434692,
+      "max_abs": 0.265625,
+      "queued_trace_us": [
+        69.62111219763756,
+        69.5391558110714,
+        69.50128823518753,
+        69.44417953491211,
+        69.45738568902016
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 16,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "queued_trace_us": [
+        65.85435941815376,
+        65.71486592292786,
+        65.69504737854004,
+        65.71108475327492,
+        65.73513150215149
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 0,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9996972680091858,
+      "max_abs": 0.25,
+      "queued_trace_us": [
+        80.61965927481651,
+        80.41085675358772,
+        80.38640022277832,
+        80.44151589274406,
+        80.44831454753876
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 32,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9994455575942993,
+      "max_abs": 0.375,
+      "queued_trace_us": [
+        81.60112425684929,
+        81.6672295331955,
+        81.3831016421318,
+        81.42421022057533,
+        81.44102990627289
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 64,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9994953870773315,
+      "max_abs": 0.265625,
+      "queued_trace_us": [
+        78.40361446142197,
+        78.28842848539352,
+        78.3599354326725,
+        78.16476747393608,
+        78.29522714018822
+      ]
+    },
+    {
+      "layer": 5,
+      "label": "candidate",
+      "max_cores_per_head_batch": 32,
+      "k_chunk_size": 128,
+      "compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7e805c134f00>",
+      "query_shape": [
+        1,
+        1,
+        4,
+        512
+      ],
+      "cache_shape": [
+        8192,
+        1,
+        32,
+        512
+      ],
+      "exact": false,
+      "pcc": 0.9996972680091858,
+      "max_abs": 0.25,
+      "queued_trace_us": [
+        80.1912322640419,
+        79.93975654244423,
+        79.85277101397514,
+        79.93414998054504,
+        79.98906075954437
+      ]
+    }
+  ],
+  "fixtures": {
+    "doc/optimized_decoder/actual_text_layer0_4096_128.pt": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+    "doc/optimized_decoder/actual_text_layer5_4096_128.pt": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+  },
+  "source_sha256": {
+    "tests/probe_tsu_sdpa.py": "0de9523db7da07ee7ccb630e2adc006760ef277e7188de6667adfb62e9977e6a",
+    "tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+    "tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "tt/generator.py": "92bc9a64bad64cf7f3b4dbda01293824c515030f9f861ee97091350521bb3091",
+    "tt/generator_vllm.py": "ab0aed5cae4ad38ae36fb8717f56eed2a67ec75681ebd1a56ce160ef71e353df",
+    "tt/model.py": "f52a55d7976779dec1f9e011d72c74bbef76d72bad19f44279a8bc4a8be63d8e",
+    "tt/multichip_decoder.py": "1635882a40eff01005d57de94725c5b068d05c5f1a8a289705e27079f736b7f9",
+    "tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+    "tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+    "tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+    "tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+    "tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "batch": 32,
+  "rows": [
+    {
+      "layer": 0,
+      "step": 0,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 0,
+      "step": 1,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 0,
+      "step": 2,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 5,
+      "step": 0,
+      "exact_output": true,
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 5,
+      "step": 1,
+      "exact_output": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    },
+    {
+      "layer": 5,
+      "step": 2,
+      "exact_output": true,
+      "pcc": 0.9999999403953552,
+      "max_abs": 0.0,
+      "all_rank_cache_exact": true
+    }
+  ],
+  "fixtures": {
+    "doc/optimized_decoder/actual_text_layer0_4096_128.pt": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+    "doc/optimized_decoder/actual_text_layer5_4096_128.pt": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa"
+  },
+  "candidate": "norms",
+  "passed": true,
+  "source_sha256": {
+    "tests/check_tsu_batch.py": "a333e3c0ac9822d97cc71ccb0c85b3f118b7359e9e48d13e3476b7683c3fb023",
+    "tests/tsu_batch_candidate.py": "ba2586f8c3c66028a7cf3606317a235c4074806991bf2ad295f628edd7786bc9"
+  }
+}

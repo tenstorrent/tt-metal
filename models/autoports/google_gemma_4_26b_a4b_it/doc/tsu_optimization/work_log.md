@@ -420,3 +420,280 @@ bit-identical whole-window summary objects; manifests include both hashes.
 Hooks add final newlines to benchmark JSON and normalize table whitespace.
 The new host test adopts the repo's `expect_error` fixture. No runtime source
 changes result from these checks; final launch implementation hashes remain valid.
+
+Publication checkpoint: TT-Metal `eb1d2af61c7630c7424e9593b646093ef7be45af`
+is committed/pushed on the original branch after all hooks pass. TTI focused
+qualification `916d52e7d20102faf5e83fd655b0f3c776ce7424` is committed/pushed
+with async scheduling, exact-runtime bundled-plugin selection, and only the
+4096/128/C1/N4 benchmark. Its112 focused CPU tests pass. QB2 main run
+https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/36564611976
+builds a new exact image (no reused-image input). Plugin transport remains
+c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42. Full-matrix restoration and high-C
+investigation continue while the run is monitored. SWE36530661132 untouched.
+
+High-C probe begins after the checkpoint. Reduced real layers0/5, full terminal
+and sampler, B32/ISL128/full-width8192-column page tables/full aggregate262144
+cache: five warmed steps47.380/47.392/47.397/47.386/47.404ms. A probe-only
+candidate batches selected decode shared-MLP weights, paired MoE collective and
+tail while leaving attention/router/indexed experts per slot. Its five steps
+45.238/45.240/45.215/45.220/45.198ms and all32 reduced-model logits exactly
+match baseline. This is preliminary, not production/default or serving evidence.
+Expanded heterogeneous-position/page/replay checks remain pending.
+
+Rejected diagnostic captures: B32/100k profiler buffer is killed during readout
+under global host memory pressure; no profile summary accepted, device FDs close
+and no reset. Reducing toB8/10k initially fails a harness allocation validation:
+full8192-column table requires at least8192physical cache pages, while allocating
+only8slots*8192context gave2048pages. Fixed the probe to allocate the same full
+aggregate cache independently of active batch; B8 retry is running. The first
+unprofiled B32 run also had a post-timing JSON list.tolist error; the clean
+`batch32_retry.json` supersedes it. Every failed log remains preserved.
+
+Reduced B8 profile succeeds (`batch8_profile_retry`, checked wrapper exit0):
+maximum-rank whole decode14.099676ms, model13.582442ms/1997ops and sampler
+~0.510ms/29ops. No recorder in this probe. Advice-backed stacked report records
+repeated matmuls/sparse matmuls, normalization/conversion and collectives rather
+than a single dominant SDPA; global sums are not substituted for whole-window
+time and profiler instrumentation is not mixed with unprofiled timings.
+
+Probe candidate progression (all real layers0/5, B32, synthetic generator
+prompts unless explicitly recorded-activation; no serving claim):
+
+| Probe | Command suffix to `tests.probe_tsu_batch` | Step ms, five repeats | Correctness/status |
+|---|---|---|---|
+| Serialized | `--output <batch32_retry.json>` |47.380,47.392,47.397,47.386,47.404|baseline|
+| Shared batching |`--candidate shared --output <batch32_shared.json>`|45.238,45.240,45.215,45.220,45.198|all32 logits exactly equal; provisional win|
+| Shared mixed |`--candidate shared --mixed --output <batch32_mixed.json>`|45.587,45.538,45.526,45.533,45.553|96 row/step logits exactly equal; shuffled full-width pages and lengths31..4095|
+| Batched attention |`--candidate attention --output <batch32_attention.json>`|not timed after correctness failure|min logitPCC0.9733, one top1 mismatch; rejected in present form|
+
+`tests.check_tsu_batch --batch32` (actual CLI `--batch 32`) compares recorded
+actual_text_layer{0,5}_4096_128.pt activations, heterogeneous31/63/127 positions,
+random physical pages, changed/reordered activations and three advancing trace
+steps. Shared candidate has exact layer outputs and exact complete K/V tensors
+on all ranks for all6 cases under Watcher+allocation tracking. Batched attention
+keeps all cache tensors exact; layer0 differs only after crossing127->128
+(PCC~0.99998), layer5 stays exact. This points toward batch-dependent SDPA
+reduction geometry, not stale cache/position data; a per-row-SDPA ablation is
+running before any acceptance. No relaxed full-model correctness threshold.
+
+Per-row-SDPA ablation restores exact logits (`batch32_rowsdpa.json`) but takes
+49.616/49.577/49.560/49.575/49.564ms, slower than47.39ms baseline: rejected.
+Normalization batching initially fails because attention returns a shared
+persistent collective buffer; retaining several return references aliases the
+last slot. The probe now clones each result before the next attention call.
+Owned-output normalization batching restores exact logits but takes
+51.108/51.094/51.105/51.091/51.148ms (`batch32_norms_owned.json`): rejected.
+Only shared-MLP/paired reduction/tail batching remains a provisional win, and
+will be evaluated at smaller batches and in the full generator/serving path.
+
+Paired full30-layer B32/ISL128 generator validates the shared candidate:
+baseline677.380/677.443/677.414/677.480/677.503ms versus
+640.905/641.010/641.051/641.059/641.036ms, all full logits exactly equal.
+B8 reduced paired13.18246->12.93262ms wins, butB2 4.09967->4.34366ms loses.
+The runtime implementation is therefore opt-in `GEMMA4_BATCHED_SHARED_DECODE=1`
+and guarded to batches8..32, selected shared decode weights, replicated
+residuals, grouped MoE and fused tail. C1/small/incompatible cases retain the
+original path. Default remains0 pending serving qualification.
+The runtime B32 recorded-activation Watcher/allocation test passes all6 cases
+with exact outputs and every-rank complete K/V equality. B8 is running.
+CPU guards plus prior retention tests pass47; initial2 failures were the new
+test calling the repo fixture with `match=` instead of its positional message,
+corrected without changing production behavior. Hooks formatted runtime/test
+source only; post-format runtime B8/source-hash verification follows.
+
+Runtime B8 Watcher/allocation tracking also passes all6 recorded-activation
+cases with exact outputs and cache tensors. A final MoE family is still
+probe-only: active-union projections use the original TP decode weights,
+activation casts, GELU mode and compute fidelity (never the EP/prefill policy).
+Per-user top8 order is preserved for the final mix. Row-wise gather/embedding
+is exact but49.435ms versus47.403ms baseline, rejected. Vectorized gather plus
+batched independent top8 matmuls initially needs UInt16->UInt32 for the legal
+reshape operation; corrected layout is exact and44.7867ms versus47.3971ms
+paired baseline, slightly faster than shared-only45.22ms. Real-activation,
+dynamic-routing, full-model and actual-serving qualification are still pending;
+this expert variant is not installed in production.
+
+The vector expert variant passes all6 recorded-activation cases with exact
+outputs and complete K/V equality under Watcher/allocation tracking. Full30-layer
+B32 synthetic generator logits are exact for all32 rows; baseline steps
+677.366/677.436/677.413/677.497/677.510ms versus
+636.172/636.996/637.646/637.670/637.224ms. This is only about4ms beyond
+shared-only batching, not yet a serving win, and remains probe-only.
+The expanded CPU regression selection passes176 tests plus3 subtests.
+
+Before enabling shared batching, AutoDebug is independently inspecting the
+persistent attention collective-buffer reuse contract: removing the per-slot
+MoE collective changes cross-rank ordering. Finite passing tests do not prove
+absence of a cross-rank overwrite race. The default sandbox preflight cannot
+create namespaces on this host; its log is retained, and the authorized
+inspection-only retry explicitly uses AUTODEBUG_SKIP_CHILD_SANDBOX=1.
+The control serving process uses GEMMA4_BATCHED_SHARED_DECODE=0, with matched
+4K/C1, short/C32 and short/C8 repeated cohorts. No device profiler or Watcher
+runs alongside this server. Exact-image CI36564611976 remains monitored.
+
+AutoDebug finishes successfully with no ordering/temporary-ownership defect
+on the exact Linear TP4, one-CQ, separate-RS/AG path. Main agent independently
+checks RS payload-ready waits/final reduction, dispatch prior-worker waits and
+trace program-semaphore initialization against current C++ sources. The next
+RS requires every rank's contribution, so the following AG cannot overwrite
+that rank's prior gathered output before its consumer finishes. Corrected the
+overly restrictive pool comment and explicitly restricted new batching to
+Linear topology; Ring retains the old path. Full inspection report is preserved
+as `autodebug_batch_collectives.md` (line references are pre-comment-edit source).
+The initial matched control C32 repeats are680.301/680.558ms TPOT, with median
+ITL677.365/677.322ms; first32 outputs and lengths exactly match the selected
+checkpoint. The corresponding4K/C1 repeats are19.4619/19.7059ms TPOT, likewise
+exact texts and lengths. Serving candidate qualification follows these controls.
+
+Control serving completes all6 matched cohorts: C8 TPOT180.5095/180.4025ms,
+medianITL177.7232/177.7049ms, TSU5.53987/5.54316. The concurrent18-request
+greedy suite then passes all18 exact pinned texts with changing active slots.
+After all requests finish, only the owned API process receives graceful SIGINT;
+all device FDs and port8000 are confirmed free. The final-source B32 runtime
+contract rerun now has Watcher and allocation tracking enabled, no server and
+no profiler. The explicit Linear guard plus reuse regressions pass48 CPU tests.
+
+Final guarded source `tt/multichip_decoder.py` SHA256
+`c6c55a8bb55be7253e32e6ab6a9d6d4515ccdd95842c4721e6c53f8c021e3e4f`
+passes all6 B32 Watcher/allocation cases with exact outputs and all-rank full
+K/V tensors. After clean teardown/device-FD checks, the candidate server starts
+with `GEMMA4_BATCHED_SHARED_DECODE=1`; no Watcher/profiler flags are supplied.
+
+Exact final B32 contract launch (exit0; Watcher Ethernet disabled only, worker
+checks retained; allocation tracking and traceback enabled, program-cache
+exclusion disabled):
+
+```bash
+sudo -n docker exec --workdir /tmp \
+  --env USER=mvasiljevic --env LOGNAME=mvasiljevic \
+  --env PYTHONPATH=/workspace/tt-metal:/home/container_app_user/tt-metal \
+  --env TT_METAL_WATCHER=10 --env TT_METAL_WATCHER_DISABLE_ETH=1 \
+  --env TT_METAL_TRACE_ALLOC_TRACKING=1 --env TT_METAL_TRACE_ALLOC_TRACEBACKS=1 \
+  --env TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0 \
+  --env TT_METAL_LOGS_PATH=/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch32_final_contract_runtime \
+  gemma4-tsu-experiment python -m models.autoports.google_gemma_4_26b_a4b_it.tests.check_tsu_batch \
+  --batch 32 --candidate runtime \
+  --output /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch32_final_contract.json \
+  > /home/mvasiljevic/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch32_final_contract.log 2>&1
+```
+
+Matched serving candidate completes all6 cohorts; `batch_shared_comparison.json`
+verifies identical normalized harness commands, completed requests and all104
+generated texts/input/output lengths. Pooled control->candidate:
+
+| Shape ISL/OSL/C/N | TPOT ms | TSU | TSU change | TTFT ms | E2EL ms |
+|---|---|---|---|---|---|
+|4096/128/1/4|19.58388->19.61442|51.0624->50.9829|-0.1557%|2131.47->2128.16|4618.63->4619.19|
+|128/128/32/32|680.42981->643.51371|1.46966->1.55397|+5.73665%|14535.14->13101.79|100949.72->94828.03|
+|128/128/8/16|180.45599->175.19558|5.54152->5.70791|+3.00260%|3481.58->3061.94|26399.49->25311.78|
+
+Each row has2 repeats. C1 is the unchanged fallback and varies within the
+observed noise. C32 medianITL677.3433->640.9362ms independently agrees with
+full-generator677.44->641.01ms; the gain is not only a capture/TTFT phase shift.
+Candidate concurrent qualitative also passes18/18 exact pinned texts, with
+identical finish reasons/token counts including the four256-token-capped
+controls. Main agent and independent reviewer read the actual outputs.
+
+Selected shared batching is now default-enabled, with explicit0 fallback.
+The only source delta after c6c55a8 is its constructor's default string0->1;
+a fresh unset-env default server reproduction remains required before commit.
+Independent stage review is in progress and exact-image/full-matrix remote
+qualification remains pending. An isolated SDPA geometry sweep using recorded
+target activations is prepared for the next server-free device window.
+
+Independent review catches a control-harness hazard introduced by selecting
+default1: future runtime comparison probes would inherit enabled batching in
+their reference half. Both `check_tsu_batch.py` and `probe_tsu_batch.py` now
+explicitly set every decoder's baseline flagFalse and record it in JSON before
+building the reference. Earlier default0 artifacts remain valid; no production
+failure occurred. A final default1 B8 contract rerun will validate the repaired
+reference selection before closing review.
+
+SDPA geometry probe uses recorded actual_text_layer0/5 activations, original
+selected HiFi4 sliding/LoFi global compute, full-width tables and original
+native wrapper. The initial4K sweep completes39 configurations then cleanly
+rejects global64-core SDPA at allocation validation: static CBs need1738880B,
+above1572864B per-core L1. No hang/reset. Smaller4/8/16/32-core candidates and
+32/64/128-token chunks were already measured under the same precision; no
+material correctness-preserving win emerged. The harness now records that
+specific resource blocker and continues to smaller-chunk64-core adaptations,
+with a paired baseline before each candidate and explicit runtime compute
+fields. Initial incomplete evidence is preserved, not presented as a full sweep.
+
+Completed4K SDPA retry has82 interleaved baseline/candidate rows (five queued
+timing repeats each). Global64-core configurations hit measured per-core CB
+limits for chunks0/64/128; chunk32 reduces CB usage to1523840B but overlaps
+an existing L1 tensor at1497088B. Smaller-core same-precision alternatives
+are measured: global32-core is~12–15us slower;4-core is~18–123us slower;
+8-core is effectively tied at dynamic/128 chunks but changes outputs.
+Sliding32/64-core dynamic candidates preserve outputs but do not establish
+a repeatable paired win over the16-core baseline. Explicit global chunk128
+saves only~0.6us in this isolated wrapper at4K (about3us across five layers),
+with no demonstrated full-generator gain and no short-context evidence for
+forcing that fixed chunk. Retain native adaptive chunking and16-core cap.
+This probe is traced wrapper host-wall timing, not device-profiler duration
+and not a serving TSU claim. Existing selected sampler remains canonical;
+the inherited full_model/AUTODEBUG_force_argmax.md and sampler_padded.json
+already reject full-logit force-argmax as both slower (~3302us vs509us) and
+incorrect on changed B3 inputs. No sampler capability is removed.
+
+Repaired-control final default-source B8 Watcher/allocation run passes all6
+exact outputs/all-rank KV cases and records baseline_batched_shared_decode=False.
+It uses the exact B32 environment above with `--batch 8`, output basename
+`batch8_default_contract`, and runtime logs `batch8_default_contract_runtime`.
+The corresponding default-source CPU guard/reuse suite passes48 tests.
+After device-free checks, `batch_default_async` starts without a
+GEMMA4_BATCHED_SHARED_DECODE override. Runtime hash is
+`1635882a40eff01005d57de94725c5b068d05c5f1a8a289705e27079f736b7f9`.
+
+### Exact-image C1 checkpoint CI: 2026-09-29 13:24 UTC
+
+Run36564611976 completes successfully: build job109393485980 and focused
+benchmark job109418662626. Downloaded original build/report/raw benchmark/runtime
+spec artifacts under `readiness_vllm/tsu_optimization/ci_36564611976/`.
+The exact image tag embeds TT-Metal `eb1d2af61c7630c7424e9593b646093ef7be45af`,
+transport vLLM `c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42`, bundled plugin
+`7f72b1c6e905`, and build job109393485980; TTI source is916d52e.
+The raw4096/128/C1/N4 benchmark completes4, fails0, with all exact4096 input
+and128 output lengths. TPOT19.732409558354284ms gives50.678048TSU;
+TTFT2089.9988564ms and E2EL4596.0148703ms. Relative to the documented stable
+remote23.232ms baseline, TSU improves17.74%; TTFT is effectively unchanged.
+This is one focused remote cohort, not the full matrix or an independent
+quality evaluation. Report acceptance categories are NA/experimental, so the
+workflow's success is not treated as an accuracy qualification. Runtime spec
+retains262144 context,32slots,1GB trace reservation, on-device sampling and
+async scheduling. Summary metadata commit fields are null; exact source identity
+is supplied by the immutable build result/tag and workflow SHA inputs instead.
+This run predates the uncommitted batched-shared runtime and does not qualify it.
+Build manifest-list digest is
+`sha256:461668dba77e062db3a1dae6743f63dcb8ba1c9b5f88b582c332a5661c680e6f`
+(platform manifest `sha256:df42e56ef2574f3675c15a071f788de83b5d6926b9aa8a33c82e19a8daa15815`).
+
+Default-enabled reproduction completes all6 matched cohorts with no env override.
+`batch_default_comparison.json` verifies identical normalized commands and all104
+texts/input/output lengths, with zero failures. Two-repeat pooled results:
+
+| ISL/OSL/C/N | Default TPOT ms | Default TSU | Gain vs matched control | TTFT ms | E2EL ms |
+|---|---:|---:|---:|---:|---:|
+|4096/128/1/4|19.585127|51.05915|-0.00638%|2123.783|4611.094|
+|128/128/32/32|643.759471|1.553375|+5.69628%|13444.336|95201.788|
+|128/128/8/16|175.440160|5.699949|+2.85900%|2992.366|25273.267|
+
+C32 medianITL640.9244ms and C8 medianITL172.7116ms reproduce the opt-in
+candidate's steady-decode gain; C1 remains the unchanged fallback. A further
+4096/128/C32/N32 guard is running on the same default server before teardown.
+
+Fresh independent xhigh stage review finishes `clean-pass` for this bounded
+local checkpoint (`review_batched_shared_local.md`), after independently
+checking the repaired reference, default reproduction, raw/profile provenance,
+104 exact benchmark completions and18 exact qualitative outputs. Main agent
+read the complete final report. New batch-enabled image/fullmatrix are explicitly
+not waived. All source pre-commit hooks pass; no hook bypass is used.
+
+The extra 4096/128/C32/N32 guard completes all32 requests with no failures:
+TPOT662.4530ms, TSU1.509541, TTFT74665.262ms, E2EL158796.796ms, and
+medianITL660.1018ms. This is a capability/performance guard, not a matched
+incremental speedup claim; its larger TTFT includes the unchanged serial prefill
+of32 long prompts. After completion, only owned API PID159311 receives SIGINT.
+Pre-commit normalizes trailing whitespace/end-of-file in packaged evidence;
+JSON values and compressed raw profile window bytes remain unchanged.

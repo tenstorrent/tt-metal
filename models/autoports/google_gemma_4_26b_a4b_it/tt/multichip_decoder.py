@@ -49,10 +49,13 @@ class _MeshCCLManager(CCLManager):
 class CollectiveBufferPool:
     """Caller-owned buffers for serial layers on one mesh/command queue.
 
-    Attention and paired-MoE buffers must stay distinct: the intervening
-    allreduce establishes that every rank consumed the previous role's output.
-    Persistent CCL kernels omit their startup barrier, so arbitrary concurrent
-    callers or cross-role aliases are not safe. Layer outputs own fresh storage.
+    Roles keep separate storage to prevent accidental cross-role aliases.
+    With Linear TP4 and separate RS/AG workloads on one CQ, the next RS needs
+    every rank's contribution before the following AG can overwrite a gathered
+    output. Per-rank dispatch orders its prior consumer before that RS; an
+    intervening opposite-role allreduce is not required. This contract excludes
+    concurrent callers, multiple CQs and fused/streaming collectives.
+    Layer outputs own fresh storage.
     """
 
     def __init__(self, mesh_device):
@@ -381,6 +384,15 @@ class _SharedMLP:
     def __call__(self, x, *, reduce_output=True):
         # Imported Gemma4 loader packs [up_i, gate_i] on each rank.
         decode = self.decode_weights is not None and x.shape[-2] == 1
+        return self._forward(x, decode=decode, reduce_output=reduce_output)
+
+    def decode_batch(self, x, *, reduce_output=True):
+        """Use the selected decode precision for up to one logical token tile."""
+        if self.decode_weights is None or not 1 <= x.shape[-2] <= 32:
+            raise ValueError("Batched shared decode requires selected weights and at most 32 rows")
+        return self._forward(x, decode=True, reduce_output=reduce_output)
+
+    def _forward(self, x, *, decode, reduce_output):
         if decode and getattr(self, "input_bfp8", False):
             x = ttnn.typecast(x, ttnn.bfloat8_b)
         gu = (
@@ -811,6 +823,7 @@ class MultichipDecoder(OptimizedDecoder):
         self.sharded_residual = sharded_residual
         self.fused_tail = fused_tail
         self.shared_geometry = shared_geometry
+        self.batched_shared_decode = os.environ.get("GEMMA4_BATCHED_SHARED_DECODE", "1") != "0"
         self.moe_ccl_bfp8 = sliding if moe_ccl_bfp8 is None else bool(moe_ccl_bfp8)
         if sharded_residual:
             self.allreduce = self.reduce_scatter
@@ -1483,6 +1496,77 @@ class MultichipDecoder(OptimizedDecoder):
         )
         combined = self.distributed_norm(combined, "post_feedforward_layernorm")
         return ttnn.typecast(ttnn.mul(ttnn.add(residual, combined), self.layer.layer_scalar), ttnn.bfloat16)
+
+    def decode_forward(self, hidden_states, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
+        shared = self.layer.shared_mlp
+        if (
+            getattr(self, "batched_shared_decode", False)
+            and 8 <= hidden_states.shape[-2] <= 32
+            and self.topology == ttnn.Topology.Linear
+            and not self.sharded_residual
+            and self.grouped_moe_reduce
+            and self.fused_tail
+            and type(shared) is _SharedMLP
+            and shared.decode_weights is not None
+        ):
+            return self._decode_shared_batch(
+                hidden_states,
+                rope_mats=rope_mats,
+                current_pos=current_pos,
+                cache_pos=cache_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+        return super().decode_forward(
+            hidden_states,
+            rope_mats=rope_mats,
+            current_pos=current_pos,
+            cache_pos=cache_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
+
+    def _decode_shared_batch(self, hidden_states, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
+        """Keep per-slot attention/routing; amortize shared MLP, MoE CCL and tail."""
+        self._validate_kv_cache(kv_cache)
+        eps = self.config.rms_norm_eps
+        residuals, routed_rows, shared_inputs = [], [], []
+        for slot in range(hidden_states.shape[-2]):
+            x = hidden_states[:, :, slot : slot + 1]
+            memory = getattr(self, "decode_residual_memory", None)
+            if memory is not None:
+                x = ttnn.to_memory_config(x, memory)
+            normed = self.normalize(x, eps, self.input_norm_weight)
+            attention = self.layer.self_attn(
+                normed,
+                rope_mats=rope_mats,
+                position_idx=current_pos[:, slot : slot + 1],
+                position_idx_cache=cache_pos[slot : slot + 1],
+                page_table=page_table[slot : slot + 1],
+                kv_cache=kv_cache,
+                is_decode=True,
+            )
+            # Consume the persistent attention collective result before the
+            # next slot reuses its storage; residuals own independent buffers.
+            residual = ttnn.add(
+                ttnn.typecast(x, ttnn.float32), self.normalize(attention, eps, self.post_attention_norm_weight)
+            )
+            normalized = self.normalize(residual, eps)
+            routes = self.layer.moe.router(residual, normalized=normalized)
+            expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+            if memory is not None:
+                expert_input = ttnn.to_memory_config(expert_input, ttnn.L1_MEMORY_CONFIG)
+            routed_rows.append(self.layer.moe.experts(expert_input, routes))
+            shared_inputs.append(ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16))
+            residuals.append(residual)
+        shared = self.layer.shared_mlp.decode_batch(
+            ttnn.concat(shared_inputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG), reduce_output=False
+        )
+        shared, routed = self._reduce_moe_pair(
+            shared, ttnn.concat(routed_rows, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        residual = ttnn.concat(residuals, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return self._fused_tail(residual, shared, routed, True)
 
     def _forward(self, x, **attention_kwargs):
         if self.sharded_residual:

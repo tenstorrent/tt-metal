@@ -16,6 +16,10 @@ def main():
     parser.add_argument("csv", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
+        "--scope",
+        default="Reduced real layers0/5 plus embedding, final norm, LM head, split sampler and recorder; NOT all-layer model",
+    )
+    parser.add_argument(
         "--phases", nargs="+", choices=("PERF_PREFILL", "PERF_DECODE"), default=["PERF_PREFILL", "PERF_DECODE"]
     )
     args = parser.parse_args()
@@ -36,7 +40,7 @@ def main():
             elif phase and row.get("DEVICE FW START CYCLE"):
                 windows[phase].append(row)
     report = {
-        "scope": "Reduced real layers0/5 plus embedding, final norm, LM head, split sampler and recorder; NOT all-layer model",
+        "scope": args.scope,
         "source": str(args.csv),
         "sha256": hashlib.sha256(args.csv.read_bytes()).hexdigest(),
         "basis": "Maximum per-device first firmware start to final firmware end, including all internal gaps; per-device cycles/ns inferred from firmware durations",
