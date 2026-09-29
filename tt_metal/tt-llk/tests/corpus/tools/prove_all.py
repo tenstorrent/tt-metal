@@ -238,7 +238,18 @@ def active_cc1plus():
     return cands[0] if cands else None
 
 
-def provenance_gate(strict=True):
+def provenance_gate(strict=True, engines=None):
+    """Verify the instruments the SELECTED engines actually use.
+
+    `engines` is the set of engine names this run will invoke; None means all
+    of them.  Each simulator is only required by the engine that loads it --
+    formal_equiv uses the JO instrument, bitexact uses the pinned craq-sim,
+    and silicon_stream uses neither because it runs on real hardware.
+    Demanding all of them on every run meant a silicon sweep was blocked by
+    two simulator hashes it never opens, and either simulator leg was blocked
+    by the other's binary.  The pin check on cc1plus is unchanged and still
+    refuses: the recorded overlays are labelled pin-59, so a different
+    compiler must not inherit that label."""
     prov = {"pin": PIN, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "shas": {}}
     problems = []
 
@@ -261,9 +272,10 @@ def provenance_gate(strict=True):
                 f"cc1plus sha {s[:12]} != expected {PIN} {EXPECT_CC1PLUS_PREFIX}"
             )
 
-    if not JO_INSTRUMENT.exists():
+    need = engines if engines is not None else {"formal_equiv", "bitexact"}
+    if "formal_equiv" in need and not JO_INSTRUMENT.exists():
         problems.append(f"JO instrumented sim missing: {JO_INSTRUMENT}")
-    else:
+    elif "formal_equiv" in need:
         s = sha256(JO_INSTRUMENT)
         prov["shas"]["jo_instrument_sim"] = s
         prov["jo_instrument_path"] = str(JO_INSTRUMENT)
@@ -284,9 +296,9 @@ def provenance_gate(strict=True):
                     f"{descriptor_sha[:12]} != expected {EXPECT_JO_DESCRIPTOR_SHA[:12]}"
                 )
 
-    if not BITEXACT_SIM.exists():
+    if "bitexact" in need and not BITEXACT_SIM.exists():
         problems.append(f"bitexact pinned sim missing: {BITEXACT_SIM}")
-    else:
+    elif "bitexact" in need:
         s = sha256(BITEXACT_SIM)
         prov["shas"]["bitexact_sim"] = s
         prov["bitexact_sim_path"] = str(BITEXACT_SIM)
@@ -1131,7 +1143,10 @@ def main():
     # Never let a current compiler or different simulator inherit the pin-59
     # label and overlays. Candidate experiments use formal_equiv_row.sh and a
     # CURRENT-CANDIDATE-NOT-PIN59 evidence directory instead.
-    prov = provenance_gate(strict=True)
+    engines_in_play = {
+        man[o]["engine"] for o in man if not args.only or o in set(args.only.split(","))
+    }
+    prov = provenance_gate(strict=True, engines=engines_in_play)
     flags = on_flags()
     cache_keys = {
         op: verdict_cache_key(prov, flags, op, man[op]) for op in man
