@@ -165,7 +165,10 @@ def _yuv_planar_d2h(
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
     read_event = None
-    if defer:
+    # Mesh events touch every device in the view, including other hosts' (record_event ->
+    # "Cannot get device for remote device"), so a multi-host caller synchronizes here and only
+    # the host half stays deferred.
+    if defer and view is None:
         read_event = ttnn.record_event(mesh_device, 0)
     else:
         ttnn.synchronize_device(mesh_device)
