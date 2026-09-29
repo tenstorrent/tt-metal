@@ -828,7 +828,8 @@
       timeout: 22
       tier: 1
     bh_galaxy:
-      timeout: 10
+      # The suite completed in 13 minutes; allow 4 minutes of margin.
+      timeout: 17
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
