@@ -608,13 +608,15 @@ def test_scatter_reduction(
 
 @pytest.mark.parametrize("index_dtype, max_index", [(ttnn.uint16, 2**16), (ttnn.uint8, 2**8)])
 def test_scatter_reduction_bf16_narrow_index_multi_chunk(index_dtype, max_index, device):
-    # Regression: the bf16 reduction reader typed the chunk offset as the index dtype, so on sticks
-    # longer than one chunk a narrow index truncated it and re-reduced indices from earlier chunks.
+    # Regression: the chunk offset was typed as the index dtype, so from the second chunk on it wrapped
+    # and in-range indices were reduced again. A chunk is at most L1/16 elements (~98k with 1.5 MB L1),
+    # so 400k elements always span several chunks.
     torch.manual_seed(0)
-    input_shape, index_shape = [1, 200000], [1, 50000]
+    input_shape, index_shape = [1, 400000], [1, 50000]
 
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-    torch_index = torch.randint(0, max_index, index_shape)
+    # Every representable index, so the values the wrapped offsets land on are always hit.
+    torch_index = torch.arange(index_shape[-1]).reshape(index_shape) % max_index
     torch_src = torch.randn(index_shape, dtype=torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
