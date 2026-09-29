@@ -1898,3 +1898,29 @@ Results:
 Next step: implement only needs to add ffn_collapse to `DEVICE_STEPS["kda_moe"]`.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_kda_moe_ffn_collapse.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.kda_moe.07 test (attempt 1)
+Reviewed the rendered swap test for kda_moe layer 4 with attn_hc..ffn_hc and ffn_collapse on the device. The rendered
+file was the bare `run_swap_test`. I rebuilt it from the frozen kda_moe swap 06 test (every check and limit kept) and
+added dsa_moe swap 09's collapse checks:
+- Collapse-share block: the device outputs through ffn_hc fixed, then the CPU ffn_collapse and tail. Block out vs it is
+  the collapse share: flips <= 64, same-routing rel <= 0.0008, ratio [0.996, 1.004], flipped-row ratio [0.95, 1.05].
+  The ffn_hc share is now that block vs the ffn_hc-share block, and it reproduces swap 06 exactly (2 / 0.00056).
+- ffn_collapse vs the CPU collapse of its own (h_mid, ffn_hc), at the component limits. It runs on chunk 1, on chunk 0,
+  and on layer 3's golden (pre col 3 is live there and dead at layer 4, as in the component test).
+- ffn_collapse vs golden ffn_in uses the h_mid-vs-golden limits (ratio [0.985, 1.01], worst row 0.03), not dsa_moe's
+  0.99 / 0.02. At layer 4 ffn_in is about stream 1 of h_mid, and it inherits that stream's upstream error. The CPU
+  collapse of the device inputs scores the same 0.00572 / 0.9930 / 0.0165. Known issues Proposed has the entry.
+Limits come from a CPU sensitivity study (/tmp/kmoe07/sens.py, device-free, about 2 s per block, not kept; the numbers
+are in the test docstring). At layer 4, block out carries ffn_in weakly: x1.01 adds only 0.00055 same-routing rel, so
+the per-row ratio does the work (x1.003 gives 1.0047). Not caught at block out: pre col 0 x1.01 (max ratio 1.0028,
+same-input worst row 0.0076 of 0.008). The component test catches it on chunk 0.
+Results:
+- Device passes: PCC 0.999991, rel 0.0043. Vs the all-CPU block 64 flips / 0.00237 (limit 0.003) / [0.9804, 1.0034].
+  Collapse vs CPU same input 0.00166 / [0.9998, 1.0001] / row 0.00174 / coef 1.00000 (chunk 0 and layer 3 the same).
+  Collapse share 29 / 0.00031 / [0.9996, 1.0005]. Every swap 06 number is unchanged. About 95 s for the real pass,
+  180 s total.
+- Reference passes (PCC 0.999997, collapse share exact). Stub fails (PCC 0 and every check).
+Watch: the all-CPU-block rel is 0.00237 of 0.003 (flips 64 of 96). The worst-head KDA state is still 0.047 of 0.05.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_moe_07_ffn_collapse.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
