@@ -43,7 +43,9 @@ inline void calculate_addcdiv(
 
 template <bool APPROXIMATION_MODE>
 void init_addcdiv() {
-    _init_reciprocal_<APPROXIMATION_MODE>();
+    // calculate_addcdiv always runs the Newton-refined _sfpu_reciprocal_<2>, so the Newton
+    // constant is needed in every mode, not just the non-approximate one.
+    _init_reciprocal_</*APPROXIMATION_MODE=*/false>();
 }
 
 }  // namespace ckernel::sfpu

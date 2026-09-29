@@ -2749,7 +2749,10 @@ class UnarySFPUGolden:
             float: Infinite number
             Depending on our format we either return NaN or +/- inf.
         """
-        if self.data_format.is_exponent_B() or get_chip_architecture() == ChipArchitecture.QUASAR:
+        if (
+            self.data_format.is_exponent_B()
+            or get_chip_architecture() == ChipArchitecture.QUASAR
+        ):
             # Quasar keeps a Float16 infinity (measured on the emulator: rdiv(0) is +inf).
             return expected
         else:  # self.data_format == DataFormat.Float16:

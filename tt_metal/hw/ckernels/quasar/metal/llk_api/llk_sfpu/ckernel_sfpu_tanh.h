@@ -56,34 +56,13 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void tanh_init() {
+// Loads the coefficients _sfpu_tanh_polynomial_ reads. calculate_tanh needs no init constants:
+// SFPNONLINEAR's TANH_MODE uses its internal LUT.
+inline void tanh_polynomial_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
-    if constexpr (APPROXIMATION_MODE) {
-        // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0 (see the
-        // Blackhole copy for how it was fitted). Reached only by callers passing fast_and_approx;
-        // gelu, softcap and situ_glu call tanh_init with APPROXIMATION_MODE=false.
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f);
-
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f, 0.0964355469f);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.48193359f, 0.76806641f);
-
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.0390625f, 0.0f);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.8828125f, 1.0f);
-    } else {
-        if constexpr (is_fp32_dest_acc_en) {
-            sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
-            sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // ln(2)
-            sfpi::vConstFloatPrgm2 = 1.666667163e-1f;       // c1
-        } else {
-            // Polynomial approximation
-            // Store some polynomial coefficients in programmable registers
-            sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
-            sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
-            sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
-        }
-    }
+    sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
+    sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
+    sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
 }
 
 template <int ITERATIONS = SFPU_ITERATIONS>

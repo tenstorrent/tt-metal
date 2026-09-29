@@ -84,7 +84,9 @@ inline void snake_beta_init() {
     math::_init_sfpu_config_reg_();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
-    _init_reciprocal_<APPROXIMATE>();
+    // calculate_snake_beta always runs RECIP_ITER >= 1 Newton steps, so the Newton constant is
+    // needed in every mode, not just the non-approximate one.
+    _init_reciprocal_</*APPROXIMATION_MODE=*/false>();
 }
 
 }  // namespace ckernel::sfpu
