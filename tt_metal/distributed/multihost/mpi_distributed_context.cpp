@@ -223,16 +223,30 @@ bool MPIRequest::active() const { return !done_; }
 
 inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
+    static int provided_thread_level = MPI_THREAD_SINGLE;
 
     std::call_once(mpi_once, [&] {
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        provided_thread_level = provided;
 
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
     });
+
+    // Validate AFTER the once-block completes: MPI is initialized exactly once and the finalizer is
+    // registered even when we reject the runtime. The Python bindings release the GIL around
+    // barrier / send_bytes / recv_bytes and the host-socket calls, so several Python threads may be
+    // inside MPI at once (DFlash relay + collective teardown). That is only legal at
+    // MPI_THREAD_MULTIPLE; MPI_Init_thread may succeed while granting a weaker level.
+    TT_FATAL(
+        provided_thread_level >= MPI_THREAD_MULTIPLE,
+        "MPI runtime provided thread level {} but MPI_THREAD_MULTIPLE ({}) is required for concurrent "
+        "host-socket / barrier calls from multiple Python threads",
+        provided_thread_level,
+        static_cast<int>(MPI_THREAD_MULTIPLE));
 }
 
 void MPIContext::create(int argc, char** argv) {
