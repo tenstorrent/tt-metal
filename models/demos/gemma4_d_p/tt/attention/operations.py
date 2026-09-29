@@ -34,6 +34,10 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
 _LOFI_PROJECTION_MIN_ROWS = 512
 
 
+def projection_math_fidelity(rows):
+    return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
+
+
 def projection_matmul_configs(hidden_states, weight):
     """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
     accumulation, or (None, None) for ttnn's defaults.
@@ -53,9 +57,7 @@ def projection_matmul_configs(hidden_states, weight):
         return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=(
-            ttnn.MathFidelity.LoFi if hidden_states.shape[-2] >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
-        ),
+        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
