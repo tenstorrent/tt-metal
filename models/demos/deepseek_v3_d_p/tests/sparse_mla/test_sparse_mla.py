@@ -938,7 +938,9 @@ def run_sparse_mla_rotated_case(
     SPARSE_ANCHOR_CASES,
     indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
+@pytest.mark.parametrize(
+    "iters_isl", [[2560, 2592, 5120], [2592, 1568, 5120, 800, 3360, 1920]], ids=["maxedge", "mid15k"]
+)
 # KV dedup under ROTATION is the interesting case (test_sparse_mla_cache.py only starts slab-aligned):
 # the writer rotates at sp*tp stripes while indexer_score's causal geometry rotates at sp, and the two
 # only coincide for an aligned start. maxedge gives starts 0 / 2560 / 5152 -- aligned, mid-slab, straddle.
