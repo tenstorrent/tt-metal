@@ -304,6 +304,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 0
+  frozen:
+    at: '2026-09-29T03:46:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/glm53_flash_d_p/tests/bringup/test_swap_kda_dense_03_attn_norm.py: 2c1f8a850eaa4df6a7500d4d9583d1183044e7d0a60d1451366526efb2dceb78
+      /localdev/dnijemcevic/bringup/glm53_flash_d_p/golden/s4096_c2048/manifest.json: b37e1860a87a1da1283cc3171687b7c416e34a81fe9f32962d5893f3af88d98a
 - id: C.kda_dense.attention
   title: kda_dense attention (attention) on device, layer 0
   step: implement
