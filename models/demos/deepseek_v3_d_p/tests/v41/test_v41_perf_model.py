@@ -10,28 +10,44 @@ import pytest
 
 from models.demos.deepseek_v3_d_p.utils import v41_perf_model as m
 
-HW = m.Hardware(cores=100, clock_mhz=1000.0, link_bytes_per_ns=25.0, hop_latency_ns=600.0)
+# hand values: all-gather 25 B/ns per link + 600 ns per op, reduce-scatter 10 B/ns + 1000 ns, all-to-all 15 B/ns + 500 ns
+CCL = {
+    "all_gather": m.CclRate(link_bytes_per_ns=25.0, latency_ns=600.0),
+    "reduce_scatter": m.CclRate(link_bytes_per_ns=10.0, latency_ns=1000.0),
+    "all_to_all": m.CclRate(link_bytes_per_ns=15.0, latency_ns=500.0),
+}
+HW = m.Hardware(cores=100, clock_mhz=1000.0, ccl=CCL)
 
 
 def test_linear_all_gather_bottleneck_edge():
-    # 4 chips in a line: the end edge forwards 3 shards of 1000 B at 25 B/ns, plus 3 hops of 600 ns.
+    # 4 chips in a line: the end edge forwards 3 shards of 1000 B at 25 B/ns, plus the 600 ns op latency.
     coll = m.Collective("all_gather", "tp", 1000)
-    assert m.collective_ns(coll, m.Layout(sp=1, tp=4), HW) == 3 * 1000 / 25 + 3 * 600
+    assert m.collective_ns(coll, m.Layout(sp=1, tp=4), HW) == 3 * 1000 / 25 + 600
 
 
 def test_ring_all_reduce_two_links():
-    # 8-chip ring, 2 links: each pass carries 3.5 shards over 50 B/ns and 4 hops; all-reduce = 2 passes.
+    # 8-chip ring, 2 links: reduce-scatter then all-gather, each 3.5 shards over the bidirectional ring:
+    # RS 3500 B / (10 x 2) + 1000 = 1175 ns, AG 3500 B / (25 x 2) + 600 = 670 ns.
     coll = m.Collective("all_reduce", "sp", 1000)
     layout = m.Layout(sp=8, tp=1, links=2, sp_ring=True)
-    assert math.isclose(m.collective_ns(coll, layout, HW), 2 * (3.5 * 1000 / 50 + 4 * 600))
+    assert math.isclose(m.collective_ns(coll, layout, HW), 1175 + 670)
 
 
-def test_axis_all_to_all_bisection():
-    # 4 chips in a line, 3000 B egress per chip (1000 B to each peer): 2 x 2 pairs cross the middle edge,
-    # 4000 B at 25 B/ns, plus 3 hops of 600 ns. A ring has 2 cut edges and 2 hops.
+def test_axis_all_to_all_injection():
+    # 3000 B egress per chip. 4 chips in a line (interior chips inject on 2 ports): 1500 B at 15 B/ns + 500 ns
+    # = 600 ns; a ring is the same. A 2-chip line has 1 port: 3000 / 15 + 500 = 700 ns.
     coll = m.Collective("all_to_all", "tp", 3000)
-    assert math.isclose(m.collective_ns(coll, m.Layout(sp=1, tp=4), HW), 4000 / 25 + 3 * 600)
-    assert math.isclose(m.collective_ns(coll, m.Layout(sp=1, tp=4, tp_ring=True), HW), 4000 / 50 + 2 * 600)
+    assert math.isclose(m.collective_ns(coll, m.Layout(sp=1, tp=4), HW), 600)
+    assert math.isclose(m.collective_ns(coll, m.Layout(sp=1, tp=4, tp_ring=True), HW), 600)
+    assert math.isclose(m.collective_ns(coll, m.Layout(sp=1, tp=2), HW), 700)
+
+
+def test_loudbox_calibrated_all_gather():
+    # LoudBox 2x4 at the fabric's 2 links: TP all-gather of a 1 MiB shard = 3 x 1,048,576 B / (22 B/ns x 2)
+    # + 14 us = 71,494 + 14,000 ns (calibrated: 90 us measured standalone, evidence/G2/ccl).
+    assert m.LOUDBOX_2X4.links == 2
+    t = m.collective_ns(m.Collective("all_gather", "tp", 2**20), m.LOUDBOX_2X4, m.BLACKHOLE_P150B)
+    assert math.isclose(t, 3 * 2**20 / 44 + 14_000)
 
 
 def test_single_chip_axis_has_no_collective_cost():

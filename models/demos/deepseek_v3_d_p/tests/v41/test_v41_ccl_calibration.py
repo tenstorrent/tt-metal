@@ -4,10 +4,11 @@
 
 """CCL link-rate calibration for the V4.1 perf model on the LoudBox 2x4 (bead 8y7.9.3).
 
-``utils/v41_perf_model.collective_ns`` charges ``bottleneck-edge bytes / (link rate x links) + hops x hop latency``
-with 25 GB/s per link. The G2 profile measured the TP all-to-alls at 1.65-2.5x that "ideal", so the rate is too low
-for at least that path. This test times the collectives V4.1 uses, on both mesh axes, at several per-chip sizes and
-1 / 2 links, so ``rate`` and ``latency`` can be fitted per (kind, axis, links) against the model's edge bytes.
+``utils/v41_perf_model.collective_ns`` charges ``latency + bottleneck-edge bytes / (rate x links)`` per collective
+kind; its ``BLACKHOLE_CCL`` rates and latencies are fitted from this test (the uncalibrated 25 GB/s per link and
+per-hop latency put the TP all-to-alls at 1.65-2.5x their "ideal"). This test times the collectives V4.1 uses, on
+both mesh axes, at several per-chip sizes and 1 / 2 links, so ``rate`` and ``latency`` can be fitted per (kind,
+axis, links) against the model's edge bytes.
 
 Collectives (bf16, DRAM, TILE, ``[1, 1, rows, 1024]`` per chip):
 

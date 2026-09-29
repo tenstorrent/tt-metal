@@ -32,8 +32,12 @@ Capability sources (Blackhole p150b; Galaxy chips assumed identical):
   * AICLK 1350 MHz: repository constant (``tests/didt/sweep_deepseek_v3_matmul_tune.py:55``); not a
     primary source — treat as an assumption.
   * DRAM 512 GB/s (``ttnn/core/operation.cpp:36-42``), 32 GB per chip (same comment).
-  * Ethernet 25 GB/s per link per direction as currently enabled, 50 GB/s raw; 619 ns per Fabric2D hop
-    (``ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:2003-2026``; the hop latency is an empirical estimate).
+  * Ethernet 25 GB/s per link per direction as currently enabled, 50 GB/s raw. Collectives are timed with the
+    rate and fixed per-op latency each CCL op kind achieves standalone, calibrated on the LoudBox 2x4 at 2 links
+    (``tests/v41/test_v41_ccl_calibration.py``, fit ``t = latency + edge_bytes / (rate x links)``, bead 8y7.9.3):
+    all_gather_async 22 GB/s per link (88 % of the link), reduce_scatter_minimal_async 13, all_to_all_async_generic
+    12 (TP) - 15 (SP) against the injection formula below; 12-20 us per op. Galaxy rings reuse the LoudBox rates
+    (assumption: not calibrated there).
 SFPU primitives (exp, rsqrt, sigmoid, softplus, sqrt, topk) have no documented throughput: they are
 counted, not timed, so compute time is FPU time only.
 """
@@ -72,10 +76,25 @@ class Hardware:
     eltwise_per_cycle_core: int = 128
     dram_bytes_per_ns: float = 512.0
     dram_capacity_bytes: float = 32e9
-    link_bytes_per_ns: float = 25.0  # per link, per direction
-    hop_latency_ns: float = 619.0
+    # calibrated collective rate per link per direction and fixed latency per op, by collective kind (all_reduce =
+    # reduce_scatter + all_gather, halo = all_gather); see the module docstring
+    ccl: dict = field(default_factory=lambda: dict(BLACKHOLE_CCL))
 
 
+@dataclass(frozen=True)
+class CclRate:
+    link_bytes_per_ns: float  # achieved per link, per direction (GB/s)
+    latency_ns: float  # fixed per-op cost (launch, semaphores, first packet)
+
+
+# LoudBox 2x4 fit at 2 links (``evidence/G2/ccl``): per-link rate = the 2-link fit / 2; latency = the fit's mean over
+# the axes. all_to_all: TP 24.0 GB/s at 2 links (12.0 per link), SP 29.2 (14.6); the model takes the TP value (the
+# attention a2a); the MoE dispatch / combine custom ops (modelled as SP all_to_all) were not calibrated standalone.
+BLACKHOLE_CCL = {
+    "all_gather": CclRate(link_bytes_per_ns=22.0, latency_ns=14_000.0),
+    "reduce_scatter": CclRate(link_bytes_per_ns=13.0, latency_ns=18_000.0),
+    "all_to_all": CclRate(link_bytes_per_ns=12.0, latency_ns=15_000.0),
+}
 BLACKHOLE_P150B = Hardware()
 
 
@@ -94,8 +113,9 @@ class Layout:
         return self.sp * self.tp
 
 
-LOUDBOX_2X4 = Layout(sp=2, tp=4, links=1)
-LOUDBOX_4X2 = Layout(sp=4, tp=2, links=1)
+# links = ``tt/v41/ccl.fabric_num_links()``: every V4.1 collective (attention, norms, MoE) runs on 2 links on Blackhole
+LOUDBOX_2X4 = Layout(sp=2, tp=4, links=2)
+LOUDBOX_4X2 = Layout(sp=4, tp=2, links=2)
 # The 32-chip Galaxy as a FABRIC_2D_TORUS_XY mesh (ring on both axes, ``tests/conftest.py`` torus-xy-8x4) viewed
 # as SP8 x TP4 or SP4 x TP8 (both accepted by ``layout.V41MeshLayout``); 2 links = ``ccl.V41Collectives`` on
 # Blackhole. The V4.1 collectives take each axis's topology from the opened fabric (``tt_ccl.per_axis_topology``),
@@ -149,14 +169,15 @@ class Workload:
 
 
 def collective_ns(coll: Collective, layout: Layout, hw: Hardware) -> float:
-    """Bottleneck-edge payload over per-direction link bandwidth plus hop latency.
+    """Fixed per-op latency plus the bottleneck-edge payload over the calibrated per-direction link rate x links.
 
     Linear all-gather over n chips: the edge next to an end forwards n-1 shards in one direction;
-    a bidirectional ring halves that. Reduce-scatter moves the same payload; all-reduce is both.
-    Halo sends one payload to a neighbor. All-to-all along one axis (egress E per chip, spread evenly over
-    the n-1 peers): (n/2)^2 * E/(n-1) crosses the axis bisection per direction over 1 (line) or 2 (ring)
-    edges. Mesh-wide all-to-all is bounded by the per-chip egress spread over the chip's mesh ports (a
-    lower bound that ignores multi-hop forwarding load).
+    a bidirectional ring halves that. Reduce-scatter moves the same payload; all-reduce is a reduce-scatter
+    then an all-gather (``V41Collectives.tp_all_reduce``). Halo sends one payload to a neighbor (all-gather rate).
+    All-to-all (egress E per chip): E over the chip's ports on the axis (1 on a 2-chip line, else 2; the mesh
+    variant counts both axes' ports). This injection bound ignores forwarding: the line-bisection payload
+    (n/2)^2 E/(n-1) at the link rate is contradicted on TP 4 (measured 1.3-1.7x faster at 1 and 2 links), so
+    the all-to-all rate is fitted against this formula instead.
     """
     if coll.axis == "mesh":
         n, ring = layout.chips, False
@@ -165,20 +186,26 @@ def collective_ns(coll: Collective, layout: Layout, hw: Hardware) -> float:
         ring = layout.sp_ring if coll.axis == "sp" else layout.tp_ring
     if n == 1 or coll.shard_bytes == 0:
         return 0.0
-    bw = hw.link_bytes_per_ns * layout.links
-    hops = n // 2 if ring else n - 1
-    if coll.kind in ("all_gather", "reduce_scatter", "all_reduce"):
-        edge_shards = (n - 1) / 2 if ring else (n - 1)
-        passes = 2 if coll.kind == "all_reduce" else 1
-        return passes * (edge_shards * coll.shard_bytes / bw + hops * hw.hop_latency_ns)
+
+    def timed(kind: str, edge_bytes: float) -> float:
+        rate = hw.ccl[kind]
+        return rate.latency_ns + edge_bytes / (rate.link_bytes_per_ns * layout.links)
+
+    edge_shards = (n - 1) / 2 if ring else (n - 1)
+    if coll.kind in ("all_gather", "reduce_scatter"):
+        return timed(coll.kind, edge_shards * coll.shard_bytes)
+    if coll.kind == "all_reduce":
+        return timed("reduce_scatter", edge_shards * coll.shard_bytes) + timed(
+            "all_gather", edge_shards * coll.shard_bytes
+        )
     if coll.kind == "halo":
-        return coll.shard_bytes / bw + hw.hop_latency_ns
+        return timed("all_gather", coll.shard_bytes)
     if coll.kind == "all_to_all":
         if coll.axis == "mesh":
             ports = (2 if layout.sp > 1 else 0) + (2 if layout.tp > 1 else 0)
-            return coll.shard_bytes / (bw * ports) + hw.hop_latency_ns
-        crossing = (n // 2) * (n - n // 2) * coll.shard_bytes / (n - 1)
-        return crossing / (bw * (2 if ring else 1)) + hops * hw.hop_latency_ns
+        else:
+            ports = 1 if n == 2 and not ring else 2
+        return timed("all_to_all", coll.shard_bytes / ports)
     raise ValueError(f"unknown collective kind {coll.kind}")
 
 
