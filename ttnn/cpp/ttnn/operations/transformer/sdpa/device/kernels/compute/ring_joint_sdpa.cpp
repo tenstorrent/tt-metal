@@ -22,14 +22,6 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-template <bool kv_pad_rotation_enabled>
-constexpr void assert_kv_pad_rotation_streaming_only() {
-    static_assert(
-        !kv_pad_rotation_enabled,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
-        "fp32_dest_acc_en=true is not supported.");
-}
-
 void kernel_main() {
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
@@ -68,6 +60,13 @@ void kernel_main() {
     constexpr bool chunked_enabled = get_compile_time_arg_val(33) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(34);
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(35) == 1;
+    // Checked here, not in the non-streaming branch below: a template instantiated from a discarded `if constexpr`
+    // branch of a non-template function is still instantiated by clang (GCC skips it), so a static_assert there
+    // fires on the streaming path too under a clang build (tt-emule's host JIT).
+    static_assert(
+        use_streaming_compute || !kv_pad_rotation_enabled,
+        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
+        "fp32_dest_acc_en=true is not supported.");
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(36) == 1;
     constexpr bool use_attention_sink = get_compile_time_arg_val(37) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(38);
@@ -543,7 +542,6 @@ void kernel_main() {
                 /*q_base_tiles=*/0,
                 rotated_slots);
         } else {
-            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
