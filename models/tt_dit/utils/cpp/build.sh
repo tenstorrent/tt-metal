@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SRC_DIR}/build"
+BUILD_DIR="${BUILD_DIR:-${SRC_DIR}/build}"   # planar_concat.py builds into its own cache dir
 PYTHON="${PYTHON:-python3}"
 
 if ! grep -q '\bavx2\b' /proc/cpuinfo; then
