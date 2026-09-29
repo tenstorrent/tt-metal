@@ -13,6 +13,10 @@ so each column owns 32 experts and ~1 of the 4 slots per token is local (the res
 
 bytes_moved = combine read (reader reads every slot) + output write + weights + indices.
 
+--with-rs also times the TP reduce-scatter M3 runs right after it inside the moe_reduce zone
+(MeshConfig.reduce_scatter: reduce_scatter_minimal_async on axis 1, Linear, default num_links) alone
+("rs" row) and the pair back to back ("fused+rs" row, = the zone's device work). The plain row is "fused".
+
   python3 bench_moe_reduce.py --dry-run
 """
 
@@ -24,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_common as bc  # noqa: E402
 
 COLUMNS = [
+    "part",
     "tokens_per_chip",
     "topk",
     "emb",
@@ -45,6 +50,7 @@ def bytes_moved(tokens, topk=bc.TOPK, emb=bc.EMB):
 def main():
     p = bc.add_common_args(argparse.ArgumentParser(description=__doc__), "moe_reduce.csv")
     p.add_argument("--tokens", type=bc.int_list, default=[1024, 2048, 4096])
+    p.add_argument("--with-rs", action="store_true", help="also time the TP reduce-scatter (rs, fused+rs rows)")
     args = p.parse_args()
 
     print(
@@ -73,6 +79,15 @@ def main():
         rep = ttnn.ReplicateTensorToMesh(mesh)
         table = ExpertMapping.create_dispatch_table(bc.N_EXPERTS, dgs, ndg)
         table_tt = TtDispatchModule.shard_expert_dispatch_table(mesh, table, dispatch_axis=0)
+        rs_fn = None
+        if args.with_rs:
+            from models.demos.minimax_m3.config import MeshConfig
+            from models.demos.minimax_m3.tt.ccl import CCLManager
+            from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+
+            mesh_config = MeshConfig(tuple(mesh.shape), tp=mesh.shape[1])
+            ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
+            rs_fn = lambda t: mesh_config.reduce_scatter(t, ccl, dim=len(t.shape) - 1, axis=1)  # noqa: E731
         timer = bc.OpTimer(mesh)
         torch.manual_seed(0)
         for t in args.tokens:
@@ -132,6 +147,7 @@ def main():
                 res = timer.measure(run, args.warmup, args.repeats)
                 gb = bytes_moved(t) / 1e9
                 out.row(
+                    part="fused",
                     **base,
                     **res,
                     gbps_worst=gb / (res["worst_ms"] / 1e3),
@@ -139,10 +155,29 @@ def main():
                     local_slot_frac=local,
                     status="OK",
                 )
+                if rs_fn is not None:
+                    summed = run()
+                    rs_bytes = t * bc.EMB * 2  # bf16 [t, emb] partial sum per chip into the scatter
+                    res = timer.measure(lambda: rs_fn(summed), args.warmup, args.repeats)
+                    out.row(part="rs", **dict(base, bytes_moved=rs_bytes), **res, local_slot_frac=local, status="OK")
+                    ttnn.deallocate(summed)
+
+                    def run_pair():
+                        x = run()
+                        y = rs_fn(x)
+                        ttnn.deallocate(x)
+                        return y
+
+                    res = timer.measure(run_pair, args.warmup, args.repeats)
+                    out.row(part="fused+rs", **base, **res, local_slot_frac=local, status="OK")
                 for x in (combine_tt, w_tt, idx_tt):
                     ttnn.deallocate(x)
             except Exception as e:
-                out.row(**base, status=f"ERROR:{type(e).__name__}:{str(e).splitlines()[0][:160] if str(e) else ''}")
+                out.row(
+                    part="fused",
+                    **base,
+                    status=f"ERROR:{type(e).__name__}:{str(e).splitlines()[0][:160] if str(e) else ''}",
+                )
     finally:
         out.close()
         bc.close_mesh(galaxy)

@@ -1,0 +1,61 @@
+routed-expert cost-model fit: /home/vmelnykov/tt-metal/m3_budget_study/results_ops/bench/experts.csv column worst_ms (W = weight MB read per chip, T = tokens per chip)
+
+=== path=hybrid: 18 points ===
+additive       a=0.0025238 ms/MB (-> 396 GB/s eff. weight BW)  b=0.27439 us/token
+               R2=0.9893 RMSE=136.1 us max|res|=367.4 us mean|res|=8.1%
+max            a=0.0035953 ms/MB (-> 278 GB/s eff. weight BW)  b=0.36986 us/token
+               R2=0.9847 RMSE=162.8 us max|res|=361.7 us mean|res|=10.6%
+additive+c     a=0.0023446 ms/MB (-> 427 GB/s eff. weight BW)  b=0.27439 us/token  c=68.49 us
+               R2=0.9899 RMSE=132.2 us max|res|=344.6 us mean|res|=6.9%
+max+c          a=0.0033537 ms/MB (-> 298 GB/s eff. weight BW)  b=0.36084 us/token  c=92.34 us
+               R2=0.9859 RMSE=156.1 us max|res|=392.4 us mean|res|=10.3%
+VERDICT (path=hybrid): additive fits better (R2 additive 0.9893 vs max 0.9847; RMSE 136.1 vs 162.8 us)
+tok/exp active     W MB      T      t ms  res_add us  res_max us
+     16      4    127.4     64    0.4219        82.8       -36.2
+     64      4    127.4    256    0.4488        57.0        -9.3
+    128      4    127.4    512    0.5394        77.4        81.3
+    256      4    127.4   1024    0.6029         0.4       144.9
+    512      4    127.4   2048    0.8412       -42.3        83.7
+   1024      4    127.4   4096    1.5433        97.9        28.4
+     16      8    254.8    128    0.7791       100.9      -137.0
+     64      8    254.8    512    0.8305        47.0       -85.6
+    128      8    254.8   1024    1.0113        87.3        95.2
+    256      8    254.8   2048    1.1354       -69.6       219.3
+    512      8    254.8   4096    1.6153      -151.7       100.3
+   1024      8    254.8   8192    3.0154       124.5       -14.5
+     16     16    509.6    256    1.4912       134.8      -341.0
+     64     16    509.6   1024    1.5977        30.5      -234.5
+    128     16    509.6   2048    1.9548       106.7       122.6
+    256     16    509.6   4096    2.1938      -216.2       361.7
+    512     16    509.6   8192    3.1665      -367.4       136.6
+   1024     16    509.6  16384    5.9561       174.3      -103.7
+
+=== path=nd: 18 points ===
+additive       a=0.0029635 ms/MB (-> 337 GB/s eff. weight BW)  b=0.24911 us/token
+               R2=0.9714 RMSE=218.8 us max|res|=449.3 us mean|res|=12.1%
+max            a=0.0039362 ms/MB (-> 254 GB/s eff. weight BW)  b=0.36407 us/token
+               R2=0.9982 RMSE=55.5 us max|res|=122.9 us mean|res|=2.9%
+additive+c     a=0.0029432 ms/MB (-> 340 GB/s eff. weight BW)  b=0.24911 us/token  c=7.757 us
+               R2=0.9714 RMSE=218.8 us max|res|=446.7 us mean|res|=12.1%
+max+c          a=0.0038545 ms/MB (-> 259 GB/s eff. weight BW)  b=0.36102 us/token  c=31.22 us
+               R2=0.9983 RMSE=53.3 us max|res|=133.3 us mean|res|=3.2%
+VERDICT (path=nd): max fits better (R2 additive 0.9714 vs max 0.9982; RMSE 218.8 vs 55.5 us)
+tok/exp active     W MB      T      t ms  res_add us  res_max us
+     16      4    127.4     64    0.4930        99.5        -8.5
+     64      4    127.4    256    0.4990        57.6        -2.5
+    128      4    127.4    512    0.4904       -14.7       -11.1
+    256      4    127.4   1024    0.5397       -93.0        38.2
+    512      4    127.4   2048    0.7804      -107.3        34.8
+   1024      4    127.4   4096    1.4820        84.1        -9.2
+     16      8    254.8    128    0.9811       194.1       -21.8
+     64      8    254.8    512    0.9970       114.4        -5.9
+    128      8    254.8   1024    0.9746       -35.6       -28.3
+    256      8    254.8   2048    1.0724      -192.9        69.4
+    512      8    254.8   4096    1.5607      -214.8        69.5
+   1024      8    254.8   8192    2.9534       157.5       -29.1
+     16     16    509.6    256    1.9561       382.1       -49.8
+     64     16    509.6   1024    1.9886       223.2       -17.3
+    128     16    509.6   2048    1.9393       -81.1       -66.5
+    256     16    509.6   4096    2.1288      -401.8       122.9
+    512     16    509.6   8192    3.1017      -449.3       119.2
+   1024     16    509.6  16384    5.9005       308.8       -64.5

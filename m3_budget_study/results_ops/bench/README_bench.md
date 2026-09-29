@@ -9,9 +9,9 @@ analytic FLOP/byte counts. It does not import ttnn.
 |---|---|---|
 | `bench_experts.py` | `experts.csv` | `TtRoutedExpert.forward`. `nd` = `unified_routed_expert_moe` only; `hybrid` = threshold 128 (`moe_fused_swiglu` for counts <= 128, the composite for the rest). Both use bf4 ND-sharded weights and SwiGluOai. |
 | `fit_experts.py` | `experts_fit.txt` | Fits `t = a*W + b*T` and `t = max(a*W, b*T)`, plus `+c` variants, per path. |
-| `bench_moe_reduce.py` | `moe_reduce.csv` | `post_combine_reduce`, the fused top-k weighted sum of `TtMiniMaxReduce`. The TP reduce-scatter is excluded. |
+| `bench_moe_reduce.py` | `moe_reduce.csv` | `post_combine_reduce`, the fused top-k weighted sum of `TtMiniMaxReduce` (`part=fused`). `--with-rs` adds the TP reduce-scatter M3 runs after it in the same `moe_reduce` zone (`MeshConfig.reduce_scatter`, axis 1, Linear): `part=rs` alone and `part=fused+rs` back to back. |
 | `bench_msa.py` | `msa.csv` | `indexer_score_msa`, `topk_large_indices`, `sparse_sdpa_msa`, the full `msa_indexer_sparse` chain and `index_branch_forward`, all at cache-read shapes. |
-| `run_bench.sh` | `../logs/` | Checks the lock, runs `tt-smi -glx_reset`, then runs the script under a 20-minute timeout. |
+| `run_bench.sh` | `../logs/`, `../runs.csv` | Checks the lock, runs `tt-smi -glx_reset`, then runs the script (`env -u TT_VISIBLE_DEVICES`) under a 20-minute timeout and a 5-minute no-log-output watchdog, and appends one `../runs.csv` row. |
 
 ## Timing
 
@@ -153,4 +153,5 @@ m3_budget_study/results_ops/bench/run_bench.sh all          # the three in seque
 ```
 
 Extra arguments after the name go to the script, for example `run_bench.sh msa --ops indexer,topk`. The launcher
-also honours `BENCH_TIMEOUT` (seconds, default 1200) and `BENCH_TIMING=wall`.
+also honours `BENCH_TIMEOUT` (seconds, default 1200), `BENCH_STALL` (seconds without log output, default 300),
+`BENCH_TAG` (run-id suffix), `BENCH_NOTE` (runs.csv notes) and `BENCH_TIMING=wall`.

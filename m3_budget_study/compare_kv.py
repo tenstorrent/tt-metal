@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """PCC of per-slot K / V / index_k between two budget_packed.py KV dumps, over real positions only.
 
-  compare_kv.py <dirA> <dirB> slot:real_len [slot:real_len ...]      (sp = 4, segment = 2048)
+  [COMPARE_SP=2] compare_kv.py <dirA> <dirB> slot:real_len [slot:real_len ...]  (sp = 4 default, segment = 2048)
 
 The dumps are in the raw on-device layout (block-cyclic, period one 2048-token segment): position p lives
-on SP chip (p % 2048) // 512, local row (p // 2048) * 512 + p % 512, i.e. composed row chip * cap/sp + local.
+on SP chip (p % 2048) // (2048/sp), local row (p // 2048) * 2048/sp + p % (2048/sp), i.e. composed row
+chip * cap/sp + local.
 """
+import os
 import sys
 
 import torch
 
-SP, SEG = 4, 2048
+SP, SEG = int(os.getenv("COMPARE_SP", "4")), 2048
 
 
 def rows_for(real_len, cap):
