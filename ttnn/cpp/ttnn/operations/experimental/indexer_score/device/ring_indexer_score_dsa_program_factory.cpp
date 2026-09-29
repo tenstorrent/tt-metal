@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <initializer_list>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -479,6 +481,13 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_kernel.core_ranges = core_ranges;
     writer_kernel.compile_time_args = writer_ct;
     writer_kernel.config = WriterConfigDescriptor{};
+    // Perf experiment: INDEXER_SCORE_COMPUTE_ONLY=1 skips the Q/W/K reads, the Q/K mcast handshakes, the fused
+    // all-gather gate and the logits writes (CB handshakes kept), leaving compute-only time. Results are garbage.
+    if (const char* compute_only = std::getenv("INDEXER_SCORE_COMPUTE_ONLY");
+        compute_only != nullptr && std::string_view(compute_only) == "1") {
+        reader_kernel.defines.emplace_back("INDEXER_SCORE_COMPUTE_ONLY", "1");
+        writer_kernel.defines.emplace_back("INDEXER_SCORE_COMPUTE_ONLY", "1");
+    }
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source = kdir + "compute_indexer_score.cpp";

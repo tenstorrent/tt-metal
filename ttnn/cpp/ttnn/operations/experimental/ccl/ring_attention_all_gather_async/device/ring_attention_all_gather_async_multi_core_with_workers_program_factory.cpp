@@ -1256,9 +1256,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // The descriptor framework allocates KernelHandles when materializing the
     // descriptor into a Program; runtime-arg auto-patching on cache hits removes
     // the need to expose those handles back to the caller.
-    // Perf experiment: RING_SDPA_COMPUTE_ONLY=1 stubs the gather out (kernels return at entry).
-    if (const char* compute_only = std::getenv("RING_SDPA_COMPUTE_ONLY");
-        compute_only != nullptr && std::string_view(compute_only) == "1") {
+    // Perf experiment: RING_SDPA_COMPUTE_ONLY=1 (ring SDPA / ring MLA) or INDEXER_SCORE_COMPUTE_ONLY=1 (fused ring
+    // indexer) stubs the gather out: its kernels return at entry.
+    const auto env_on = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && std::string_view(value) == "1";
+    };
+    if (env_on("RING_SDPA_COMPUTE_ONLY") || env_on("INDEXER_SCORE_COMPUTE_ONLY")) {
         for (auto* kernel :
              {&sender_reader_forward_kernel,
               &sender_writer_forward_kernel,
