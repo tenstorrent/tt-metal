@@ -255,11 +255,16 @@ template <bool _compiler_deprioritize_this = true>
     return tt::tt_metal::grid_to_cores_with_noop(used_cores, all_cores, row_wise);
 }
 
+// The deprecated ::CoreRange alias in the return type is parsed before the [[deprecated]] attribute applies to this
+// wrapper, so GCC warns on mere inclusion of this header. Silence it here; the wrapper itself is still deprecated.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 template <bool _compiler_deprioritize_this = true>
 [[deprecated("Use tt::tt_metal::select_contiguous_range_from_corerangeset")]] inline std::optional<CoreRange>
 select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y) {
     return tt::tt_metal::select_contiguous_range_from_corerangeset(crs, x, y);
 }
+#pragma GCC diagnostic pop
 
 template <bool _compiler_deprioritize_this = true>
 [[deprecated("Use tt::tt_metal::select_from_corerangeset")]] inline CoreRangeSet select_from_corerangeset(
