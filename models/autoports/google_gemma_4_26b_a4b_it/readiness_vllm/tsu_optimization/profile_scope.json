@@ -1,0 +1,13 @@
+{
+  "config": {
+    "output": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/profile_scope.json",
+    "input_length": 4096,
+    "output_length": 128,
+    "repeats": 3,
+    "cache_context": 262144,
+    "reduced": true,
+    "profile": true
+  },
+  "rows": [],
+  "profile_scope": "Real layers0/5 plus terminal, sampler and token recorder; context262144"
+}

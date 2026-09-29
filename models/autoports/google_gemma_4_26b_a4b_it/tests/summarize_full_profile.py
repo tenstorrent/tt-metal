@@ -15,6 +15,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--phases", nargs="+", choices=("PERF_PREFILL", "PERF_DECODE"), default=["PERF_PREFILL", "PERF_DECODE"]
+    )
     args = parser.parse_args()
     windows = defaultdict(list)
     phase = None
@@ -75,7 +78,7 @@ def main():
             "max_device_window_us": max(x["whole_window_us"] for x in result.values()),
             "host_signpost_window_ms": host_windows[phase],
         }
-    assert set(report["windows"]) == {"PERF_PREFILL", "PERF_DECODE"}
+    assert set(report["windows"]) == set(args.phases)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
 
 

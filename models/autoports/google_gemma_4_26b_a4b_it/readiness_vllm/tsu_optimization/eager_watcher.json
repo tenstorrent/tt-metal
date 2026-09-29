@@ -1,0 +1,2314 @@
+{
+  "layers": [
+    0,
+    5
+  ],
+  "scope": "token-equivalence correctness probe",
+  "rows": [
+    {
+      "length": 1025,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        47,
+        270,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 309.5475174486637,
+      "decode_ms": [
+        417.9598344489932,
+        355.975141748786,
+        362.07634303718805,
+        363.3187310770154,
+        357.0977132767439
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(6)",
+      "program_cache_delta": 6,
+      "repeat": 0,
+      "control": {
+        "length": 1025,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          47,
+          270,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 634.9556185305119,
+        "decode_ms": [
+          709.2372085899115,
+          363.7846717610955,
+          357.83587116748095,
+          366.00940953940153,
+          375.6666276603937
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": null,
+        "trace_after": "MeshTraceId(0)",
+        "program_cache_delta": 408
+      },
+      "matches_control": true
+    },
+    {
+      "length": 1025,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        47,
+        270,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 308.8939180597663,
+      "decode_ms": [
+        388.59329372644424,
+        376.8971795216203,
+        362.86686547100544,
+        361.6494843736291,
+        375.3617499023676
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(6)",
+      "trace_after": "MeshTraceId(6)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 1025,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          47,
+          270,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 634.9556185305119,
+        "decode_ms": [
+          709.2372085899115,
+          363.7846717610955,
+          357.83587116748095,
+          366.00940953940153,
+          375.6666276603937
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": null,
+        "trace_after": "MeshTraceId(0)",
+        "program_cache_delta": 408
+      },
+      "matches_control": true
+    },
+    {
+      "length": 1025,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        260,
+        38,
+        260,
+        47,
+        263
+      ],
+      "prefill_ms": 306.22267350554466,
+      "decode_ms": [
+        388.9844547957182,
+        368.85568872094154,
+        381.00338261574507,
+        382.34075997024775,
+        372.4880199879408
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(6)",
+      "trace_after": "MeshTraceId(6)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 1025,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          260,
+          38,
+          260,
+          47,
+          263
+        ],
+        "prefill_ms": 304.7410920262337,
+        "decode_ms": [
+          418.83505042642355,
+          370.42044661939144,
+          340.0522880256176,
+          374.73851535469294,
+          362.2285081073642
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(0)",
+        "trace_after": "MeshTraceId(2)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 1025,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        260,
+        38,
+        260,
+        47,
+        263
+      ],
+      "prefill_ms": 305.8063266798854,
+      "decode_ms": [
+        374.93754737079144,
+        368.6349932104349,
+        356.0421485453844,
+        369.08749397844076,
+        369.6553772315383
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(6)",
+      "trace_after": "MeshTraceId(6)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 1025,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          260,
+          38,
+          260,
+          47,
+          263
+        ],
+        "prefill_ms": 304.43941429257393,
+        "decode_ms": [
+          418.3662738651037,
+          370.35443633794785,
+          354.36931531876326,
+          359.32101402431726,
+          349.2760257795453
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(2)",
+        "trace_after": "MeshTraceId(4)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4095,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 773.4933765605092,
+      "decode_ms": [
+        417.6329970359802,
+        369.43928711116314,
+        365.4505154117942,
+        360.4432689025998,
+        361.64407804608345
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(14)",
+      "program_cache_delta": 3,
+      "repeat": 0,
+      "control": {
+        "length": 4095,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 797.0214309170842,
+        "decode_ms": [
+          408.5588566958904,
+          378.52802500128746,
+          382.6621249318123,
+          388.77667766064405,
+          357.97374602407217
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(6)",
+        "trace_after": "MeshTraceId(8)",
+        "program_cache_delta": 24
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4095,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 773.3795801177621,
+      "decode_ms": [
+        380.7643400505185,
+        368.0216697975993,
+        384.6258781850338,
+        366.417171433568,
+        354.30016554892063
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(14)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 4095,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 797.0214309170842,
+        "decode_ms": [
+          408.5588566958904,
+          378.52802500128746,
+          382.6621249318123,
+          388.77667766064405,
+          357.97374602407217
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(6)",
+        "trace_after": "MeshTraceId(8)",
+        "program_cache_delta": 24
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4095,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        38,
+        266,
+        5,
+        266
+      ],
+      "prefill_ms": 815.1158597320318,
+      "decode_ms": [
+        395.84206230938435,
+        362.2286655008793,
+        358.22985228151083,
+        358.9027440175414,
+        353.0775420367718
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(14)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 4095,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          38,
+          266,
+          5,
+          266
+        ],
+        "prefill_ms": 815.5629737302661,
+        "decode_ms": [
+          428.47703862935305,
+          368.86449065059423,
+          360.3072315454483,
+          376.5408303588629,
+          370.57981826364994
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(8)",
+        "trace_after": "MeshTraceId(10)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4095,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        38,
+        266,
+        5,
+        266
+      ],
+      "prefill_ms": 815.6260531395674,
+      "decode_ms": [
+        401.57230012118816,
+        367.7302962169051,
+        367.9967438802123,
+        346.00494615733624,
+        367.12475027889013
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(14)",
+      "trace_after": "MeshTraceId(14)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 4095,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          38,
+          266,
+          5,
+          266
+        ],
+        "prefill_ms": 815.5650673434138,
+        "decode_ms": [
+          421.64289578795433,
+          356.7130146548152,
+          361.748612485826,
+          349.74449034780264,
+          365.2924671769142
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(10)",
+        "trace_after": "MeshTraceId(12)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 784.5030939206481,
+      "decode_ms": [
+        403.94090581685305,
+        341.1254808306694,
+        343.70220080018044,
+        372.4434105679393,
+        358.20090491324663
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(22)",
+      "program_cache_delta": 0,
+      "repeat": 0,
+      "control": {
+        "length": 4096,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          159,
+          267,
+          4,
+          269,
+          269
+        ],
+        "prefill_ms": 786.9951520115137,
+        "decode_ms": [
+          410.2937886491418,
+          356.13480024039745,
+          372.466248460114,
+          353.74799091368914,
+          358.4209065884352
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(14)",
+        "trace_after": "MeshTraceId(16)",
+        "program_cache_delta": 8
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 772.0322869718075,
+      "decode_ms": [
+        370.021041482687,
+        370.7970194518566,
+        370.4508300870657,
+        361.0234595835209,
+        374.6265070512891
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(22)",
+      "trace_after": "MeshTraceId(22)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 4096,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          159,
+          267,
+          4,
+          269,
+          269
+        ],
+        "prefill_ms": 786.9951520115137,
+        "decode_ms": [
+          410.2937886491418,
+          356.13480024039745,
+          372.466248460114,
+          353.74799091368914,
+          358.4209065884352
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(14)",
+        "trace_after": "MeshTraceId(16)",
+        "program_cache_delta": 8
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        29,
+        266,
+        1,
+        263
+      ],
+      "prefill_ms": 814.2386013641953,
+      "decode_ms": [
+        385.32015681266785,
+        372.87563644349575,
+        350.7467908784747,
+        359.9454425275326,
+        370.52072677761316
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(22)",
+      "trace_after": "MeshTraceId(22)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 4096,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          29,
+          266,
+          1,
+          263
+        ],
+        "prefill_ms": 814.1934731975198,
+        "decode_ms": [
+          416.1585606634617,
+          355.2566943690181,
+          347.80025016516447,
+          365.67432805895805,
+          364.62313402444124
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(16)",
+        "trace_after": "MeshTraceId(18)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        29,
+        266,
+        1,
+        263
+      ],
+      "prefill_ms": 814.0005879104137,
+      "decode_ms": [
+        367.9150892421603,
+        352.7850219979882,
+        371.40287458896637,
+        409.308148548007,
+        433.1856472417712
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(22)",
+      "trace_after": "MeshTraceId(22)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 4096,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          29,
+          266,
+          1,
+          263
+        ],
+        "prefill_ms": 814.0944335609674,
+        "decode_ms": [
+          397.0915162935853,
+          366.7215406894684,
+          343.5398871079087,
+          355.3050998598337,
+          416.8580072000623
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(18)",
+        "trace_after": "MeshTraceId(20)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        15,
+        260,
+        45,
+        2,
+        370
+      ],
+      "prefill_ms": 878.5642776638269,
+      "decode_ms": [
+        438.7896489351988,
+        382.53327924758196,
+        360.28699204325676,
+        344.0795913338661,
+        366.34588800370693
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(30)",
+      "program_cache_delta": 1,
+      "repeat": 0,
+      "control": {
+        "length": 4097,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          15,
+          260,
+          45,
+          2,
+          370
+        ],
+        "prefill_ms": 900.0841341912746,
+        "decode_ms": [
+          459.5936145633459,
+          376.5486190095544,
+          349.86979980021715,
+          369.64265536516905,
+          367.2294756397605
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(22)",
+        "trace_after": "MeshTraceId(24)",
+        "program_cache_delta": 15
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        15,
+        260,
+        45,
+        2,
+        370
+      ],
+      "prefill_ms": 878.6773029714823,
+      "decode_ms": [
+        386.39011792838573,
+        378.44506464898586,
+        366.4441825821996,
+        371.65242433547974,
+        363.9449579641223
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(30)",
+      "trace_after": "MeshTraceId(30)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 4097,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          15,
+          260,
+          45,
+          2,
+          370
+        ],
+        "prefill_ms": 900.0841341912746,
+        "decode_ms": [
+          459.5936145633459,
+          376.5486190095544,
+          349.86979980021715,
+          369.64265536516905,
+          367.2294756397605
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(22)",
+        "trace_after": "MeshTraceId(24)",
+        "program_cache_delta": 15
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        38,
+        260,
+        29,
+        269
+      ],
+      "prefill_ms": 921.2642973288894,
+      "decode_ms": [
+        395.140971057117,
+        357.3408890515566,
+        361.6622043773532,
+        373.05593863129616,
+        372.80295602977276
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(30)",
+      "trace_after": "MeshTraceId(30)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 4097,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          38,
+          260,
+          29,
+          269
+        ],
+        "prefill_ms": 921.2958822026849,
+        "decode_ms": [
+          413.47848903387785,
+          378.732917830348,
+          354.5261211693287,
+          371.3980158790946,
+          350.4968201741576
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(24)",
+        "trace_after": "MeshTraceId(26)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        38,
+        260,
+        29,
+        269
+      ],
+      "prefill_ms": 920.9843827411532,
+      "decode_ms": [
+        382.183650508523,
+        358.41941088438034,
+        355.23291677236557,
+        347.085727378726,
+        354.09714095294476
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(30)",
+      "trace_after": "MeshTraceId(30)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 4097,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          38,
+          260,
+          29,
+          269
+        ],
+        "prefill_ms": 921.5133050456643,
+        "decode_ms": [
+          451.01730711758137,
+          371.9786899164319,
+          385.82234270870686,
+          368.73937398195267,
+          360.6443861499429
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(26)",
+        "trace_after": "MeshTraceId(28)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8192,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 1559.8237328231335,
+      "decode_ms": [
+        410.3377340361476,
+        362.45505046099424,
+        359.86734833568335,
+        360.13076920062304,
+        363.03970217704773
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(38)",
+      "program_cache_delta": 4,
+      "repeat": 0,
+      "control": {
+        "length": 8192,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 1582.6416183263063,
+        "decode_ms": [
+          413.62578980624676,
+          357.33726248145103,
+          376.334878616035,
+          364.55485690385103,
+          340.95110185444355
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(30)",
+        "trace_after": "MeshTraceId(32)",
+        "program_cache_delta": 28
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8192,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 1559.7314843907952,
+      "decode_ms": [
+        391.0465342923999,
+        358.82266238331795,
+        364.69541396945715,
+        388.49545177072287,
+        380.41694462299347
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(38)",
+      "trace_after": "MeshTraceId(38)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 8192,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 1582.6416183263063,
+        "decode_ms": [
+          413.62578980624676,
+          357.33726248145103,
+          376.334878616035,
+          364.55485690385103,
+          340.95110185444355
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(30)",
+        "trace_after": "MeshTraceId(32)",
+        "program_cache_delta": 28
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8192,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        260,
+        23,
+        266,
+        29,
+        269
+      ],
+      "prefill_ms": 1660.4844024404883,
+      "decode_ms": [
+        382.83436838537455,
+        387.51503732055426,
+        366.01671762764454,
+        374.1893209517002,
+        367.82830860465765
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(38)",
+      "trace_after": "MeshTraceId(38)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 8192,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          260,
+          23,
+          266,
+          29,
+          269
+        ],
+        "prefill_ms": 1663.3910574018955,
+        "decode_ms": [
+          421.6951606795192,
+          369.09762118011713,
+          342.5914226099849,
+          353.5596076399088,
+          385.1711619645357
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(32)",
+        "trace_after": "MeshTraceId(34)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8192,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        260,
+        23,
+        266,
+        29,
+        269
+      ],
+      "prefill_ms": 1660.3763727471232,
+      "decode_ms": [
+        381.4383605495095,
+        365.8170225098729,
+        348.83986692875624,
+        351.5175301581621,
+        356.2176460400224
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(38)",
+      "trace_after": "MeshTraceId(38)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 8192,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          260,
+          23,
+          266,
+          29,
+          269
+        ],
+        "prefill_ms": 1663.578199222684,
+        "decode_ms": [
+          415.070129558444,
+          354.1158838197589,
+          352.1418897435069,
+          357.0541124790907,
+          362.88436129689217
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(34)",
+        "trace_after": "MeshTraceId(36)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8193,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 1669.9237124994397,
+      "decode_ms": [
+        415.6928090378642,
+        372.6259656250477,
+        354.06305082142353,
+        352.2638622671366,
+        358.402949757874
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(46)",
+      "program_cache_delta": 1,
+      "repeat": 0,
+      "control": {
+        "length": 8193,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 1699.0479482337832,
+        "decode_ms": [
+          407.2773391380906,
+          361.5069929510355,
+          365.95808528363705,
+          360.39064545184374,
+          353.8950551301241
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(38)",
+        "trace_after": "MeshTraceId(40)",
+        "program_cache_delta": 19
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8193,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 1670.0377082452178,
+      "decode_ms": [
+        388.6921191588044,
+        352.99255698919296,
+        364.79552928358316,
+        357.0271637290716,
+        368.69265511631966
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(46)",
+      "trace_after": "MeshTraceId(46)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 8193,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 1699.0479482337832,
+        "decode_ms": [
+          407.2773391380906,
+          361.5069929510355,
+          365.95808528363705,
+          360.39064545184374,
+          353.8950551301241
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(38)",
+        "trace_after": "MeshTraceId(40)",
+        "program_cache_delta": 19
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8193,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        38,
+        260,
+        29,
+        269
+      ],
+      "prefill_ms": 1771.309593692422,
+      "decode_ms": [
+        375.1719491556287,
+        357.3981272056699,
+        359.1682994738221,
+        362.1593900024891,
+        393.3470817282796
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(46)",
+      "trace_after": "MeshTraceId(46)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 8193,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          38,
+          260,
+          29,
+          269
+        ],
+        "prefill_ms": 1771.574699319899,
+        "decode_ms": [
+          416.3611251860857,
+          360.7514575123787,
+          370.19665632396936,
+          353.81394624710083,
+          355.88615387678146
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(40)",
+        "trace_after": "MeshTraceId(42)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 8193,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        38,
+        260,
+        29,
+        269
+      ],
+      "prefill_ms": 1771.4666593819857,
+      "decode_ms": [
+        371.9263281673193,
+        367.82649625092745,
+        365.63320457935333,
+        350.24797543883324,
+        362.0825484395027
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(46)",
+      "trace_after": "MeshTraceId(46)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 8193,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          38,
+          260,
+          29,
+          269
+        ],
+        "prefill_ms": 1771.780926734209,
+        "decode_ms": [
+          402.81499363482,
+          351.37707740068436,
+          348.0113036930561,
+          364.325231872499,
+          362.0589738711715
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(42)",
+        "trace_after": "MeshTraceId(44)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 16384,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 3232.6441081240773,
+      "decode_ms": [
+        410.59337835758924,
+        359.0588178485632,
+        369.06489357352257,
+        358.40129293501377,
+        368.54520346969366
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": null,
+      "trace_after": "MeshTraceId(54)",
+      "program_cache_delta": 8,
+      "repeat": 0,
+      "control": {
+        "length": 16384,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 11989.354843273759,
+        "decode_ms": [
+          408.34923554211855,
+          367.96541046351194,
+          368.2409441098571,
+          367.0172030106187,
+          363.9858867973089
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(46)",
+        "trace_after": "MeshTraceId(48)",
+        "program_cache_delta": 52
+      },
+      "matches_control": true
+    },
+    {
+      "length": 16384,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        258,
+        269,
+        269,
+        269,
+        269
+      ],
+      "prefill_ms": 3228.839627467096,
+      "decode_ms": [
+        384.6842208877206,
+        375.5047991871834,
+        355.9522507712245,
+        354.722217656672,
+        350.41091218590736
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(54)",
+      "trace_after": "MeshTraceId(54)",
+      "program_cache_delta": 0,
+      "repeat": 1,
+      "control": {
+        "length": 16384,
+        "input_token": 100,
+        "reversed_pages": false,
+        "tokens": [
+          259,
+          258,
+          269,
+          269,
+          269,
+          269
+        ],
+        "prefill_ms": 11989.354843273759,
+        "decode_ms": [
+          408.34923554211855,
+          367.96541046351194,
+          368.2409441098571,
+          367.0172030106187,
+          363.9858867973089
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(46)",
+        "trace_after": "MeshTraceId(48)",
+        "program_cache_delta": 52
+      },
+      "matches_control": true
+    },
+    {
+      "length": 16384,
+      "input_token": 113,
+      "reversed_pages": false,
+      "tokens": [
+        29,
+        263,
+        29,
+        269,
+        260,
+        45
+      ],
+      "prefill_ms": 3448.3285136520863,
+      "decode_ms": [
+        441.09642691910267,
+        420.5060414969921,
+        417.53884591162205,
+        412.70928364247084,
+        412.32455987483263
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(54)",
+      "trace_after": "MeshTraceId(54)",
+      "program_cache_delta": 0,
+      "repeat": 2,
+      "control": {
+        "length": 16384,
+        "input_token": 113,
+        "reversed_pages": false,
+        "tokens": [
+          29,
+          263,
+          29,
+          269,
+          260,
+          45
+        ],
+        "prefill_ms": 3449.0960678085685,
+        "decode_ms": [
+          426.8620163202286,
+          362.4621257185936,
+          360.0766593590379,
+          379.4937105849385,
+          368.5218309983611
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(48)",
+        "trace_after": "MeshTraceId(50)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 16384,
+      "input_token": 113,
+      "reversed_pages": true,
+      "tokens": [
+        29,
+        263,
+        29,
+        269,
+        260,
+        45
+      ],
+      "prefill_ms": 3458.696632646024,
+      "decode_ms": [
+        407.2370696812868,
+        353.7145331501961,
+        354.6780487522483,
+        348.89525920152664,
+        362.17127554118633
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 1,
+        "cache_position_refreshes": 1,
+        "page_table_refreshes": 2,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 0
+      },
+      "trace_before": "MeshTraceId(54)",
+      "trace_after": "MeshTraceId(54)",
+      "program_cache_delta": 0,
+      "repeat": 3,
+      "control": {
+        "length": 16384,
+        "input_token": 113,
+        "reversed_pages": true,
+        "tokens": [
+          29,
+          263,
+          29,
+          269,
+          260,
+          45
+        ],
+        "prefill_ms": 3451.448262669146,
+        "decode_ms": [
+          412.0083237066865,
+          361.43859941512346,
+          382.0232329890132,
+          353.74093893915415,
+          353.48371881991625
+        ],
+        "counters": {
+          "model_replays": 5,
+          "sampling_replays": 5,
+          "token_refreshes": 1,
+          "position_refreshes": 0,
+          "cache_position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "synchronizations": 0,
+          "token_readbacks": 5,
+          "full_logits_readbacks": 0,
+          "teacher_forcing_token_refreshes": 0,
+          "request_seed_refreshes": 2,
+          "decode_captures": 1
+        },
+        "trace_before": "MeshTraceId(50)",
+        "trace_after": "MeshTraceId(52)",
+        "program_cache_delta": 0
+      },
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 772.0701042562723,
+      "decode_ms": [
+        414.22353871166706,
+        355.4521007463336,
+        372.27349262684584,
+        357.4613183736801,
+        369.3758314475417
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": "MeshTraceId(54)",
+      "trace_after": "MeshTraceId(56)",
+      "program_cache_delta": 0,
+      "transition": true,
+      "matches_control": true
+    },
+    {
+      "length": 4097,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        15,
+        260,
+        45,
+        2,
+        370
+      ],
+      "prefill_ms": 878.7983832880855,
+      "decode_ms": [
+        441.22323114424944,
+        347.7608533576131,
+        368.8687616959214,
+        359.1707842424512,
+        363.8151418417692
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": "MeshTraceId(56)",
+      "trace_after": "MeshTraceId(58)",
+      "program_cache_delta": 0,
+      "transition": true,
+      "matches_control": true
+    },
+    {
+      "length": 4096,
+      "input_token": 100,
+      "reversed_pages": false,
+      "tokens": [
+        259,
+        159,
+        267,
+        4,
+        269,
+        269
+      ],
+      "prefill_ms": 771.8360852450132,
+      "decode_ms": [
+        418.0719442665577,
+        355.8950684964657,
+        364.9224191904068,
+        351.0552756488323,
+        357.19696898013353
+      ],
+      "counters": {
+        "model_replays": 5,
+        "sampling_replays": 5,
+        "token_refreshes": 1,
+        "position_refreshes": 0,
+        "cache_position_refreshes": 0,
+        "page_table_refreshes": 0,
+        "synchronizations": 0,
+        "token_readbacks": 5,
+        "full_logits_readbacks": 0,
+        "teacher_forcing_token_refreshes": 0,
+        "request_seed_refreshes": 2,
+        "decode_captures": 1
+      },
+      "trace_before": "MeshTraceId(58)",
+      "trace_after": "MeshTraceId(60)",
+      "program_cache_delta": 0,
+      "transition": true,
+      "matches_control": true
+    }
+  ],
+  "passed": true
+}

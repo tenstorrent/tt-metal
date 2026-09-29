@@ -1,0 +1,687 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "fixture": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/terminal_input.pt",
+  "fixture_sha256": "f27d52cb4c47b14fe7877dd3410346b75c76748901635fa6032ccc7c089e92c7",
+  "scope": "Isolated complete TP4 LM head, actual reduced-model terminal input; no sampler or stack",
+  "dtype": "bfloat4_b",
+  "fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "mesh": [
+    1,
+    4
+  ],
+  "cases": [
+    {
+      "name": "baseline",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        389.44887928664684,
+        389.0436142683029,
+        389.50592279434204,
+        389.1753498464823,
+        389.8721653968096
+      ],
+      "median_host_replay_us": 389.44887928664684,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b1_n19_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=1,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        0.9999999999978388,
+        0.9999999999999537,
+        0.9999999993413261,
+        0.9999999999998375
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0625,
+        0.0078125,
+        1.0,
+        0.015625
+      ],
+      "host_replay_us": [
+        383.14233534038067,
+        383.04063491523266,
+        383.1879235804081,
+        382.27373734116554,
+        382.70847871899605
+      ],
+      "median_host_replay_us": 383.04063491523266,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b1_n20_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=1,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        0.9999999999978388,
+        0.9999999999999537,
+        0.9999999993413261,
+        0.9999999999998375
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0625,
+        0.0078125,
+        1.0,
+        0.015625
+      ],
+      "host_replay_us": [
+        383.251067250967,
+        383.16287100315094,
+        382.8848712146282,
+        383.2816146314144,
+        382.66642950475216
+      ],
+      "median_host_replay_us": 383.16287100315094,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b1_n22_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=1,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        0.9999999999978388,
+        0.9999999999999537,
+        0.9999999993413261,
+        0.9999999999998375
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0625,
+        0.0078125,
+        1.0,
+        0.015625
+      ],
+      "host_replay_us": [
+        382.9539753496647,
+        382.9730674624443,
+        383.7785217911005,
+        384.0300254523754,
+        383.72697308659554
+      ],
+      "median_host_replay_us": 383.72697308659554,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b1_n24_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=1,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        0.9999999999978388,
+        0.9999999999999537,
+        0.9999999993413261,
+        0.9999999999998375
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0625,
+        0.0078125,
+        1.0,
+        0.015625
+      ],
+      "host_replay_us": [
+        391.75874553620815,
+        391.36302657425404,
+        390.80996066331863,
+        391.30887016654015,
+        391.6085232049227
+      ],
+      "median_host_replay_us": 391.36302657425404,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b1_n32_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=1,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        0.9999999999978388,
+        0.9999999999999537,
+        0.9999999993413261,
+        0.9999999999998375
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0625,
+        0.0078125,
+        1.0,
+        0.015625
+      ],
+      "host_replay_us": [
+        393.7545698136091,
+        393.52867752313614,
+        392.98408664762974,
+        393.8397392630577,
+        394.38726380467415
+      ],
+      "median_host_replay_us": 393.7545698136091,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n19_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        390.41717536747456,
+        390.0820855051279,
+        390.41819982230663,
+        389.8776601999998,
+        391.08251221477985
+      ],
+      "median_host_replay_us": 390.41717536747456,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n20_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        387.86986842751503,
+        387.6774571835995,
+        387.56527937948704,
+        386.62045262753963,
+        387.20560260117054
+      ],
+      "median_host_replay_us": 387.56527937948704,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n22_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        389.583595097065,
+        389.4082736223936,
+        389.2209380865097,
+        389.00095969438553,
+        388.59518244862556
+      ],
+      "median_host_replay_us": 389.2209380865097,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n24_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        390.1501651853323,
+        389.8836672306061,
+        389.82112891972065,
+        389.82508704066277,
+        390.3775941580534
+      ],
+      "median_host_replay_us": 389.8836672306061,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n32_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        395.99635638296604,
+        395.3135572373867,
+        395.3580744564533,
+        396.24329656362534,
+        396.2438553571701
+      ],
+      "median_host_replay_us": 395.99635638296604,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n19_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        395.64664475619793,
+        395.44273167848587,
+        396.06294594705105,
+        394.87266913056374,
+        395.9767986088991
+      ],
+      "median_host_replay_us": 395.64664475619793,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n20_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        398.1795161962509,
+        398.08228611946106,
+        396.9952464103699,
+        397.10146375000477,
+        397.64600805938244
+      ],
+      "median_host_replay_us": 397.64600805938244,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n22_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        401.40561759471893,
+        401.2663383036852,
+        401.5945363789797,
+        402.26331911981106,
+        400.96333250403404
+      ],
+      "median_host_replay_us": 401.40561759471893,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n24_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        408.1971012055874,
+        406.69324807822704,
+        406.5489396452904,
+        406.7453555762768,
+        406.3625819981098
+      ],
+      "median_host_replay_us": 406.69324807822704,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n32_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        412.3965743929148,
+        410.8451306819916,
+        410.83008982241154,
+        411.3310482352972,
+        411.2399183213711
+      ],
+      "median_host_replay_us": 411.2399183213711,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n19_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        403.9314575493336,
+        404.08927015960217,
+        403.74561212956905,
+        403.7656355649233,
+        404.83917109668255
+      ],
+      "median_host_replay_us": 403.9314575493336,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n20_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        403.98710407316685,
+        401.8625244498253,
+        403.3723846077919,
+        402.8663970530033,
+        403.37140671908855
+      ],
+      "median_host_replay_us": 403.37140671908855,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n22_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        405.1883239299059,
+        405.7890269905329,
+        406.15671314299107,
+        406.09510615468025,
+        405.8751743286848
+      ],
+      "median_host_replay_us": 405.8751743286848,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n24_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        412.63503953814507,
+        412.793830037117,
+        412.3088903725147,
+        412.38758713006973,
+        412.2558515518904
+      ],
+      "median_host_replay_us": 412.38758713006973,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n32_l1",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "l1",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        419.91546750068665,
+        418.59541088342667,
+        417.7668131887913,
+        418.31983253359795,
+        418.877974152565
+      ],
+      "median_host_replay_us": 418.59541088342667,
+      "status": "passed"
+    }
+  ]
+}

@@ -462,6 +462,29 @@
       "../readiness_vllm/ttft_optimization/acceptance_suite/readiness_vllm/vllm_benchmark.json"
     ]
   },
+  "tsu_optimization": {
+    "status": "selected_default_local_clean_pass_remote_pending",
+    "supported_context": 262144,
+    "scheduler_slots": 32,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "prefill_trace_max_logical_length": 1024,
+    "trace_region_size": 1000000000,
+    "persistent_tensor_payload_delta_bytes": 0,
+    "long_context_path": "Eager prefill remains supported beyond1024. Default-enabled exact-signature B1 canonical-greedy reuse retains only a compatible live decode/sampler bundle; cache identities/addresses/specs, prompt/token/table metadata, logical length and mode changes invalidate it. Eager temporary tensors finish at the blocking first-token read and die before replay. No long-prefill graph is captured. Explicit GEMMA4_EAGER_PREFILL_DECODE_REUSE=0 restores release/recapture behavior.",
+    "serving_profile": "Async scheduling selected for TSU; synchronous scheduling remains available with --no-async-scheduling. Report TTFT and E2EL alongside TPOT; high-concurrency setup phase shifts are not steady decode speedups.",
+    "head_geometry": "BFP4/LoFi TP4 head on11x10 grid with in0_block_w1; dtype, fidelity, output shapes and persistent weights unchanged. Paired full-generator K4/K2/K1/K4 controls pass; final selected-default serving and qualitative controls pass.",
+    "current_validation_scope": "Default CPU125 pass; final reduced Watcher31 and explicitly allocation-tracked Watcher11 pass with stable model/sampler trace identities, changed token/page values and context transitions. Full-capacity selected K1/default async server reproduces primary performance;20 primary/short/8K and38 long-output/32K/C32 guard texts+lengths exactly match controls. All18 official greedy and6 seeded sampled controls exactly match prior results. Independent selected-local review is clean-pass; new exact-image remote23-row matrix remains pending. Prior maximum-context correctness is inherited, not newly claimed from reduced probes.",
+    "review": "tsu_optimization/review_selected_local.md",
+    "evidence": [
+      "tsu_optimization/work_log.md",
+      "../readiness_vllm/tsu_optimization/final_watcher.json",
+      "../readiness_vllm/tsu_optimization/final_tracking.json",
+      "../readiness_vllm/tsu_optimization/head_full_paths.json",
+      "../readiness_vllm/tsu_optimization/selected_async/launch.json"
+    ]
+  },
   "optimized_vllm": {
     "status": "clean-pass",
     "supported_context": 262144,

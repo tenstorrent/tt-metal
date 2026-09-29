@@ -49,6 +49,8 @@ def test_prefill_cache_rows_are_compact_despite_live_state_slots(monkeypatch, he
     generator.configure_sampling = lambda *args, **kwargs: None
     generator.sample_prefill = lambda logits: torch.zeros(32, dtype=torch.int32)
     generator.mesh = None
+    generator.host_sampling = False
+    generator.prefill_trace_enabled = False
     generator._release_trace = lambda: None
     adapter = AutoportGemma4ForCausalLM(generator, 8)
 
@@ -123,11 +125,13 @@ def test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns(
     cache = object()
     generator = SimpleNamespace(
         mesh=None,
+        host_sampling=False,
         model=SimpleNamespace(layer_indices=(0, 5)),
         prefill_trace_enabled=True,
         prefill_prepared={},
         _release_trace=Mock(),
         serving_prefill_eligible=Mock(return_value=True),
+        _serving_prefill_key=Mock(return_value=("short-prefill",)),
         can_reuse_serving_prefill=Mock(return_value=True),
         configure_sampling=Mock(),
         serving_prefill_tokens=Mock(return_value=torch.arange(32, dtype=torch.int32)),

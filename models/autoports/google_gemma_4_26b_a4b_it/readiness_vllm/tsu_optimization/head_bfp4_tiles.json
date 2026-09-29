@@ -1,0 +1,1067 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "fixture": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/terminal_input.pt",
+  "fixture_sha256": "f27d52cb4c47b14fe7877dd3410346b75c76748901635fa6032ccc7c089e92c7",
+  "scope": "Isolated complete TP4 LM head, actual reduced-model terminal input; no sampler or stack",
+  "dtype": "bfloat4_b",
+  "fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "mesh": [
+    1,
+    4
+  ],
+  "cases": [
+    {
+      "name": "baseline",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        390.55170491337776,
+        390.44395089149475,
+        389.85186256468296,
+        389.7661343216896,
+        389.6379377692938
+      ],
+      "median_host_replay_us": 389.85186256468296,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        380.91130554676056,
+        381.14218041300774,
+        380.7659726589918,
+        380.4238513112068,
+        380.78506477177143
+      ],
+      "median_host_replay_us": 380.78506477177143,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        381.3721239566803,
+        380.806066095829,
+        381.0555674135685,
+        380.9087909758091,
+        380.54753094911575
+      ],
+      "median_host_replay_us": 380.9087909758091,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        383.414002135396,
+        382.93064571917057,
+        383.81628692150116,
+        383.3458758890629,
+        383.61186161637306
+      ],
+      "median_host_replay_us": 383.414002135396,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        384.19454358518124,
+        383.62997584044933,
+        383.3523951470852,
+        384.04627703130245,
+        383.94457660615444
+      ],
+      "median_host_replay_us": 383.94457660615444,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b2_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999946,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        389.193557202816,
+        389.32887837290764,
+        388.9200743287802,
+        388.5883837938309,
+        389.59584198892117
+      ],
+      "median_host_replay_us": 389.193557202816,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        390.16949012875557,
+        390.22304117679596,
+        390.2080003172159,
+        390.15342481434345,
+        390.4349636286497
+      ],
+      "median_host_replay_us": 390.2080003172159,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        390.6533122062683,
+        390.8382263034582,
+        390.2225289493799,
+        389.87286388874054,
+        390.3718199580908
+      ],
+      "median_host_replay_us": 390.3718199580908,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        396.3582683354616,
+        395.8903718739748,
+        396.3592927902937,
+        395.4986110329628,
+        395.9930036216974
+      ],
+      "median_host_replay_us": 395.9930036216974,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        401.7404746264219,
+        401.86671540141106,
+        400.5061462521553,
+        400.876859202981,
+        400.52919648587704
+      ],
+      "median_host_replay_us": 400.876859202981,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        406.0732200741768,
+        405.4676275700331,
+        405.4475575685501,
+        405.59135377407074,
+        405.55931627750397
+      ],
+      "median_host_replay_us": 405.55931627750397,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        401.1619370430708,
+        399.53277446329594,
+        400.2931993454695,
+        400.5933180451393,
+        399.4997590780258
+      ],
+      "median_host_replay_us": 400.2931993454695,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        396.6708667576313,
+        396.1488138884306,
+        395.47658525407314,
+        396.03360928595066,
+        395.65288461744785
+      ],
+      "median_host_replay_us": 396.03360928595066,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        400.0372253358364,
+        398.99921976029873,
+        399.08397011458874,
+        398.9672288298607,
+        400.07131174206734
+      ],
+      "median_host_replay_us": 399.08397011458874,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        405.88537231087685,
+        404.6986345201731,
+        404.37099523842335,
+        405.0793591886759,
+        405.38739413022995
+      ],
+      "median_host_replay_us": 405.0793591886759,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        0.9999999999999906,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.00390625,
+        0.0
+      ],
+      "host_replay_us": [
+        418.60463097691536,
+        418.1267227977514,
+        417.99396276474,
+        416.56275279819965,
+        416.94948449730873
+      ],
+      "median_host_replay_us": 417.99396276474,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b11_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        1.0,
+        0.9999999999897224,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.0,
+        0.125,
+        0.0625
+      ],
+      "host_replay_us": [
+        402.38918736577034,
+        402.78350934386253,
+        401.99747309088707,
+        402.1011758595705,
+        403.2423719763756
+      ],
+      "median_host_replay_us": 402.38918736577034,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b11_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        1.0,
+        0.9999999999897224,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.0,
+        0.125,
+        0.0625
+      ],
+      "host_replay_us": [
+        401.8000327050686,
+        402.2819921374321,
+        403.04800495505333,
+        403.3866338431835,
+        403.1958058476448
+      ],
+      "median_host_replay_us": 403.04800495505333,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b11_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        1.0,
+        0.9999999999897224,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.0,
+        0.125,
+        0.0625
+      ],
+      "host_replay_us": [
+        404.04992178082466,
+        403.82295846939087,
+        404.74669076502323,
+        404.9766808748245,
+        404.88094091415405
+      ],
+      "median_host_replay_us": 404.74669076502323,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b11_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        1.0,
+        0.9999999999897224,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.0,
+        0.125,
+        0.0625
+      ],
+      "host_replay_us": [
+        408.0244805663824,
+        408.47337804734707,
+        407.6141398400068,
+        408.22578594088554,
+        408.84604677557945
+      ],
+      "median_host_replay_us": 408.22578594088554,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b11_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        1.0,
+        0.9999999999897224,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.0,
+        0.125,
+        0.0625
+      ],
+      "host_replay_us": [
+        414.9516113102436,
+        416.795676574111,
+        415.1295404881239,
+        416.73011146485806,
+        415.1620902121067
+      ],
+      "median_host_replay_us": 415.1620902121067,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b22_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=22,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        0.9999999999999867,
+        1.000000000000001,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.00048828125,
+        0.00390625,
+        0.0625
+      ],
+      "host_replay_us": [
+        413.5520663112402,
+        413.6011004447937,
+        413.5540220886469,
+        413.0419809371233,
+        412.79555298388004
+      ],
+      "median_host_replay_us": 413.5520663112402,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b22_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=22,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        0.9999999999999867,
+        1.000000000000001,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.00048828125,
+        0.00390625,
+        0.0625
+      ],
+      "host_replay_us": [
+        414.2769146710634,
+        413.0961373448372,
+        413.8666205108166,
+        411.9494464248419,
+        413.27099315822124
+      ],
+      "median_host_replay_us": 413.27099315822124,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b22_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=22,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        0.9999999999999867,
+        1.000000000000001,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.00048828125,
+        0.00390625,
+        0.0625
+      ],
+      "host_replay_us": [
+        412.53906674683094,
+        413.46484795212746,
+        412.7820488065481,
+        412.27503679692745,
+        413.369107991457
+      ],
+      "median_host_replay_us": 412.7820488065481,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b22_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=22,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        0.9999999999999867,
+        1.000000000000001,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.00048828125,
+        0.00390625,
+        0.0625
+      ],
+      "host_replay_us": [
+        425.7477819919586,
+        425.57036504149437,
+        426.72459967434406,
+        426.56734585762024,
+        426.24776251614094
+      ],
+      "median_host_replay_us": 426.24776251614094,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b22_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=22,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999998754,
+        0.9999999999999867,
+        1.000000000000001,
+        0.999999999997035
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.015625,
+        0.00048828125,
+        0.00390625,
+        0.0625
+      ],
+      "host_replay_us": [
+        433.985935524106,
+        433.4288649260998,
+        432.07486160099506,
+        432.7421076595783,
+        433.30565094947815
+      ],
+      "median_host_replay_us": 433.30565094947815,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b44_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999592046,
+        0.9999999999953234,
+        0.9999999999993464,
+        0.9999999999968736
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.25,
+        0.0625,
+        0.03125,
+        0.0625
+      ],
+      "host_replay_us": [
+        417.32671670615673,
+        416.845316067338,
+        417.8797360509634,
+        417.5916314125061,
+        416.7165607213974
+      ],
+      "median_host_replay_us": 417.32671670615673,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b44_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=44,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999592046,
+        0.9999999999953234,
+        0.9999999999993464,
+        0.9999999999968736
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.25,
+        0.0625,
+        0.03125,
+        0.0625
+      ],
+      "host_replay_us": [
+        413.7097857892513,
+        413.95025327801704,
+        413.3791197091341,
+        413.7758631259203,
+        413.6837553232908
+      ],
+      "median_host_replay_us": 413.7097857892513,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b44_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=44,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999592046,
+        0.9999999999953234,
+        0.9999999999993464,
+        0.9999999999968736
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.25,
+        0.0625,
+        0.03125,
+        0.0625
+      ],
+      "host_replay_us": [
+        417.80760511755943,
+        418.20136830210686,
+        417.8396426141262,
+        417.0526284724474,
+        417.66585782170296
+      ],
+      "median_host_replay_us": 417.80760511755943,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b44_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=44,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-6] grow to 1655808 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x24a316a) [0x74d18759b16a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x74d1862990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11ac168) [0x74d1862a4168]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x74d1862979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x74d186295245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x74d186279808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x74d186206b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x74d1862080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x74d1882128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x74d1882125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x74d187f30e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(PyObject_Call+0xbb) [0x58a19e02a83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x58a19e008ee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x58a19e012bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x58a19e00cfa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(+0x25b036) [0x58a19e0ec036]\n --- python(PyEval_EvalCode+0x86) [0x58a19e0ebf06]\n --- python(+0x26061d) [0x58a19e0f161d]\n --- python(+0x18bd49) [0x58a19e01cd49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(+0x275f5d) [0x58a19e106f5d]\n --- python(Py_RunMain+0x128) [0x58a19e105d18]\n --- python(Py_BytesMain+0x2d) [0x58a19e0dff4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x74d1b7ad2d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x74d1b7ad2e40]\n --- python(_start+0x25) [0x58a19e0dfe45]\n"
+    },
+    {
+      "name": "interleaved_g11x10_b44_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=44,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-4] grow to 2110464 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x24a316a) [0x74d18759b16a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x74d1862990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11ac168) [0x74d1862a4168]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x74d1862979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x74d186295245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x74d186279808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x74d186206b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x74d1862080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x74d1882128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x74d1882125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x74d187f30e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(PyObject_Call+0xbb) [0x58a19e02a83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x58a19e008ee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x58a19e012bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x58a19e00cfa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(+0x25b036) [0x58a19e0ec036]\n --- python(PyEval_EvalCode+0x86) [0x58a19e0ebf06]\n --- python(+0x26061d) [0x58a19e0f161d]\n --- python(+0x18bd49) [0x58a19e01cd49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(+0x275f5d) [0x58a19e106f5d]\n --- python(Py_RunMain+0x128) [0x58a19e105d18]\n --- python(Py_BytesMain+0x2d) [0x58a19e0dff4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x74d1b7ad2d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x74d1b7ad2e40]\n --- python(_start+0x25) [0x58a19e0dfe45]\n"
+    },
+    {
+      "name": "interleaved_g11x10_b88_n19_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=88,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999592046,
+        0.9999999999953234,
+        0.9999999999993464,
+        0.9999999999968736
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.25,
+        0.0625,
+        0.03125,
+        0.0625
+      ],
+      "host_replay_us": [
+        428.5110626369715,
+        429.2664583772421,
+        429.1872959583998,
+        427.8873559087515,
+        428.6212380975485
+      ],
+      "median_host_replay_us": 428.6212380975485,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b88_n20_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=88,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=20,per_core_M=1,per_core_N=20,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999592046,
+        0.9999999999953234,
+        0.9999999999993464,
+        0.9999999999968736
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.25,
+        0.0625,
+        0.03125,
+        0.0625
+      ],
+      "host_replay_us": [
+        419.7192844003439,
+        419.9617076665163,
+        419.71271857619286,
+        419.42019015550613,
+        419.9547227472067
+      ],
+      "median_host_replay_us": 419.7192844003439,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b88_n22_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=88,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=22,per_core_M=1,per_core_N=22,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "pcc_baseline_per_device": [
+        0.9999999999592046,
+        0.9999999999953234,
+        0.9999999999993464,
+        0.9999999999968736
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.25,
+        0.0625,
+        0.03125,
+        0.0625
+      ],
+      "host_replay_us": [
+        427.0763136446476,
+        426.96106247603893,
+        426.0563291609287,
+        426.9285127520561,
+        426.2962844222784
+      ],
+      "median_host_replay_us": 426.9285127520561,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b88_n24_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=88,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=24,per_core_M=1,per_core_N=24,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-6] grow to 1655808 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x24a316a) [0x74d18759b16a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x74d1862990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11ac168) [0x74d1862a4168]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x74d1862979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x74d186295245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x74d186279808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x74d186206b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x74d1862080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x74d1882128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x74d1882125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x74d187f30e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(PyObject_Call+0xbb) [0x58a19e02a83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x58a19e008ee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x58a19e012bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x58a19e00cfa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(+0x25b036) [0x58a19e0ec036]\n --- python(PyEval_EvalCode+0x86) [0x58a19e0ebf06]\n --- python(+0x26061d) [0x58a19e0f161d]\n --- python(+0x18bd49) [0x58a19e01cd49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(+0x275f5d) [0x58a19e106f5d]\n --- python(Py_RunMain+0x128) [0x58a19e105d18]\n --- python(Py_BytesMain+0x2d) [0x58a19e0dff4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x74d1b7ad2d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x74d1b7ad2e40]\n --- python(_start+0x25) [0x58a19e0dfe45]\n"
+    },
+    {
+      "name": "interleaved_g11x10_b88_n32_dram",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=88,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "input_memory": "dram",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-4] grow to 2110464 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x24a316a) [0x74d18759b16a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x74d1862990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11ac168) [0x74d1862a4168]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x74d1862979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x74d186295245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x74d186279808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x74d186206b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x74d1862080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x74d1882128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x74d1882125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x74d187f30e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(PyObject_Call+0xbb) [0x58a19e02a83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x58a19e008ee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x58a19e011e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x58a19e026d5c]\n --- python(+0x29dea4) [0x58a19e12eea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x58a19e012bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x58a19e00cfa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(+0x25b036) [0x58a19e0ec036]\n --- python(PyEval_EvalCode+0x86) [0x58a19e0ebf06]\n --- python(+0x26061d) [0x58a19e0f161d]\n --- python(+0x18bd49) [0x58a19e01cd49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x58a19e006cc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x58a19e01caec]\n --- python(+0x275f5d) [0x58a19e106f5d]\n --- python(Py_RunMain+0x128) [0x58a19e105d18]\n --- python(Py_BytesMain+0x2d) [0x58a19e0dff4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x74d1b7ad2d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x74d1b7ad2e40]\n --- python(_start+0x25) [0x58a19e0dfe45]\n"
+    }
+  ]
+}
