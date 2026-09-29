@@ -3167,3 +3167,33 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
+
+## S.moe_shared.14 test (attempt 1)
+
+What
+- Replaced the rendered 30-line swap test with test_swap_moe_shared_13_shared_expert.py plus "moe_combine" in SWAPPED
+  and the moe_combine block of test_swap_moe_full_14_moe_combine.py (layer 1): the MC_* limits, the empty-rows guard
+  in `_errors`, and the checks (mlp_out vs the exact sum of the block's own device addends, per-addend coefficient /
+  error, probes (experts, -shared) and (experts, 0), vs golden on rows routed as the golden). Every swap-13 check and
+  limit is unchanged.
+- CPU mutation study on the layer-2 golden addends: /tmp/hy4_ms14/study.py, log study.log (outside the repo). The
+  table is in the test docstring.
+
+Decisions
+- Kept the layer-1 MC limits (they match the layer-2 component test). Every mutation that passes the 0.98 out gate
+  (0.997 / 1.003 addend scales, swapped rows, a cached mlp_out, the golden shared_out) fails at least one extra check.
+  bf16 input or output rounding passes. Tightest margin: experts addend worst row for a bf16 output, 0.019 of 0.03.
+- "golden experts in place of the input" is the identity in the study, because the addends there are the golden's.
+  On the device addends (experts vs golden rel 0.021) the probes catch it.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999995, mlp_out vs golden 0.00727, out rel 0.00304).
+- BRINGUP_IMPL=stub: FAIL (every check).
+- Gate (device, TtMoeCombine): PASS, pcc_swap_out 0.999974. mlp_out vs CPU 0, coefs 1, probes 0. vs golden
+  0.01418, coef 0.99941, on 1939 matched rows [0.99408, 1.00491], row 0.0126. out rel 0.00717.
+- The first "FAIL pcc_swap_out: pcc=0.000000" line in the log is the precompile collect pass. Ignore it.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
