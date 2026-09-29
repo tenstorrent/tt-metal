@@ -1700,7 +1700,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
