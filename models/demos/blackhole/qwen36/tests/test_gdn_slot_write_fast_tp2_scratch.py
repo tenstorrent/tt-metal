@@ -13,12 +13,16 @@ each; the traced prefill is deterministic) and compare the per-admission digests
     python models/demos/blackhole/qwen36/tests/test_gdn_slot_write_fast_tp2_scratch.py a.json b.json   # compare
 
 Env: SLOT_FAST_LAYERS (default 16 = 12 GDN + 4 attention layers), SLOT_FAST_B (default 32 = the tp2 max_num_seqs),
-SLOT_FAST_DECODE (default 0): > 0 = the served interleaving -- decode traces are captured at widths 8 and B BEFORE the
-chunk-prefill trace (the plugin's warmup order), and after every admission step SLOT_FAST_DECODE traced decode steps
+SLOT_FAST_DECODE (default 0): > 0 = the served interleaving -- the plugin's warmup order (model_runner phase 1 compiles
+the decode widths 8 and B; phase 2 captures the chunk-prefill trace + warms the slot write, THEN captures the decode
+traces, so every persistent prefill buffer exists before a decode trace is parked), and after every admission step
+SLOT_FAST_DECODE traced decode steps
 run over every admitted slot (inactive rows at position -1, width = 8 while all live slots are < 8, else B, like the
 plugin's decode bucketing), so each later admission lands next to live, advanced decode rows (fused-conv decode:
 stale taps, advanced packed history). Every decode step's logits rows and the full GDN state after the decode steps
-are digested too.
+are digested too. The gate compares the LIVE rows (admitted slots, per device) of every buffer: inactive decode rows
+(position -1) attend over never-written KV blocks, so from the first attention layer on their GDN rows hold
+run-dependent garbage (knob 0 vs knob 0 differs there); whole-buffer digests are still recorded and reported.
 """
 
 import hashlib
@@ -52,18 +56,29 @@ def _digest(t):
     return hashlib.sha1(t.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()[:16]
 
 
-def _state_digests(model, comp):
+def _state_digests(model, comp, rows=None):
+    """Whole-buffer digests; with rows, per-device digests of those slot rows only (key "<buf>[d<dev>s<slot>]")."""
     out = {}
     li = 0
+
+    def put(key, t, row_dim):
+        if rows is None:
+            out[key] = _digest(ttnn.to_torch(t, mesh_composer=comp))
+            return
+        for d, dt in enumerate(ttnn.get_device_tensors(t)):
+            x = ttnn.to_torch(dt)
+            for s in rows:
+                out[f"{key}[d{d}s{s}]"] = _digest(x.select(row_dim, s))
+
     for layer in model.layers:
         if layer.is_full_attention:
             continue
         dn = layer.attention
-        out[f"L{li}.rec"] = _digest(ttnn.to_torch(dn.rec_state, mesh_composer=comp))
+        put(f"L{li}.rec", dn.rec_state, 0)  # [B, Nv, Dk, Dv] per device
         for m, c in enumerate(dn.conv_states):
-            out[f"L{li}.conv{m}"] = _digest(ttnn.to_torch(c, mesh_composer=comp))
+            put(f"L{li}.conv{m}", c, 1)  # [1, B, C] per device
         if getattr(dn, "conv_hist_packed", None) is not None:
-            out[f"L{li}.hist"] = _digest(ttnn.to_torch(dn.conv_hist_packed, mesh_composer=comp))
+            put(f"L{li}.hist", dn.conv_hist_packed, 0)  # [B, Nv, 4, 32, 32] per device
             out[f"L{li}.hist_valid"] = str(bool(dn._hist_packed_valid))
         li += 1
     return out
@@ -107,6 +122,18 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
             dev0 = model.prepare_inputs_decode(tokens, pos, page_table=pt_full[:w])
             model.ttnn_decode_forward(dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3])  # compile
         ttnn.synchronize_device(mesh_device)
+    live_pos = {}  # slot -> next decode position
+    # model_runner phase 2 order: chunk-prefill trace + slot-write warmup first, decode traces after (a buffer allocated
+    # after a parked trace may alias that trace's intermediates and be clobbered by its replays).
+    prev = model._bind_gdn_prefill_scratch()
+    try:
+        model.capture_prefill_trace_chunked(mesh_device, warm_pt, chunk_size=2048)
+    finally:
+        model._unbind_gdn_prefill_scratch(prev)
+    model.warmup_gdn_slot_write()
+    ttnn.synchronize_device(mesh_device)
+    if n_decode:
+        model.sync_gdn_decode_state()  # the prefill capture invalidated the packed history; rebuilding it reads the host
         for w in widths:
             tokens = torch.full((w, 1), 100, dtype=torch.int32)
             pos = torch.full((w,), -1, dtype=torch.int32)
@@ -118,14 +145,6 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
             ttnn.synchronize_device(mesh_device)
             dec_traces[w] = (tid, dev, out)
         logger.info(f"[slot_fast] decode traces captured at widths {sorted(dec_traces)}")
-    live_pos = {}  # slot -> next decode position
-    prev = model._bind_gdn_prefill_scratch()
-    try:
-        model.capture_prefill_trace_chunked(mesh_device, warm_pt, chunk_size=2048)
-    finally:
-        model._unbind_gdn_prefill_scratch(prev)
-    model.warmup_gdn_slot_write()
-    ttnn.synchronize_device(mesh_device)
     comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     g = torch.Generator().manual_seed(1234)
     repeat = int(os.environ.get("SLOT_FAST_REPEAT", "1"))  # >1: re-run each admission (warm timing; same final state)
@@ -181,6 +200,7 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
         }
         for s, T in zip(slots, lens):
             live_pos[s] = T
+        rec["state_live"] = _state_digests(model, comp, rows=sorted(live_pos))
         if n_decode:
             w = min(8, B) if max(live_pos) < min(8, B) else B
             tid, dev, out = dec_traces[w]
@@ -202,6 +222,7 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
             rec["decode_width"] = w
             rec["decode_logits"] = dec_logits
             rec["state_after_decode"] = _state_digests(model, comp)
+            rec["state_after_decode_live"] = _state_digests(model, comp, rows=sorted(live_pos))
         logger.info(f"[slot_fast knob={knob}] slots={slots} lens={lens} prefill_paged_slots {dt * 1e3:.1f} ms")
         steps.append(rec)
     for tid, _, _ in dec_traces.values():
@@ -212,15 +233,28 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
 
 
 def _compare(a_path, b_path):
+    """Gate = logits + LIVE-row state (state_live / state_after_decode_live) when both files have them, else whole
+    buffers (the pre-decode-mode files). Whole-buffer differences are always printed (inactive rows: information)."""
     a, b = json.load(open(a_path)), json.load(open(b_path))
     bad = 0
+    live = all("state_live" in st for st in a["steps"] + b["steps"])
+    sk, dk = ("state_live", "state_after_decode_live") if live else ("state", "state_after_decode")
     for i, (sa, sb) in enumerate(zip(a["steps"], b["steps"])):
-        diff = [k for k in sa["state"] if sa["state"][k] != sb["state"].get(k)]
+        diff = [k for k in sa[sk] if sa[sk][k] != sb[sk].get(k)]
         ld = sa["logits"] != sb["logits"]
         bad += len(diff) + int(ld)
+        if live:
+            whole = sum(sa["state"][k] != sb["state"].get(k) for k in sa["state"])
+            whole += sum(
+                sa["state_after_decode"][k] != sb["state_after_decode"].get(k) for k in sa.get("state_after_decode", {})
+            )
+            print(
+                f"step {i}: live rows {sorted({int(k.split('s')[-1][:-1]) for k in sa[sk] if '[' in k})}, "
+                f"{len(sa[sk])} live-row digests; whole-buffer digests differing (incl. inactive rows): {whole}"
+            )
         dec = ""
         if "decode_logits" in sa or "decode_logits" in sb:
-            sd_a, sd_b = sa.get("state_after_decode", {}), sb.get("state_after_decode", {})
+            sd_a, sd_b = sa.get(dk, {}), sb.get(dk, {})
             ddiff = [k for k in sd_a if sd_a[k] != sd_b.get(k)] + (["<missing>"] if not sd_a or not sd_b else [])
             dl = [j for j, (x, y) in enumerate(zip(sa.get("decode_logits", []), sb.get("decode_logits", []))) if x != y]
             dl += ["<len>"] if len(sa.get("decode_logits", [])) != len(sb.get("decode_logits", [])) else []
@@ -232,7 +266,8 @@ def _compare(a_path, b_path):
                 f"{' ' + str(ddiff[:6]) if ddiff else ''}"
             )
         print(
-            f"step {i} slots={sa['slots']} lens={sa['lens']}: {len(sa['state'])} buffers, {len(diff)} differ"
+            f"step {i} slots={sa['slots']} lens={sa['lens']}: {len(sa[sk])} {'live-row digests' if live else 'buffers'}, "
+            f"{len(diff)} differ"
             f"{' ' + str(diff[:6]) if diff else ''}; logits {'DIFFER' if ld else 'equal'}{dec}; "
             f"wall {sa['wall_ms']} ms (knob {a['knob']}) vs {sb['wall_ms']} ms (knob {b['knob']})"
         )
