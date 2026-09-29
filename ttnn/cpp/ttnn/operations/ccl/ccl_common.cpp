@@ -1938,8 +1938,6 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
-// Preserve the Program& helper's 17-word client ABI while recording semaphore
-// allocation in the descriptor for later program construction.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,

@@ -820,8 +820,9 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
-// Preserves the Program& helper's 17-word client ABI while recording new
-// semaphores in the descriptor. A supplied termination semaphore is reused.
+// ProgramDescriptor variant of the Program& helper above; produces the same 17-word client ABI. New semaphores are
+// appended to desc.semaphores with IDs from find_available_semaphore_id, so they do not collide with IDs already
+// allocated on worker_logical_core. A supplied termination_master_semaphore_id is reused, not allocated.
 void fabric_mux_connection_rt_args(
     bool mux_connection_valid,
     bool is_termination_master,
