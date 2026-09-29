@@ -51,7 +51,8 @@ class McastImpl;
 //     McastFixedSenderConfig{},
 //     McastCoreOrder::RowMajor);
 // const std::array kernels{std::ref(kernel)};
-// mcast.attach(descriptor, "input_mcast", kernels);
+// mcast.attach(descriptor, "input_mcast", kernels, 0);
+// const uint32_t next_semaphore_id = mcast.next_semaphore_id();
 // descriptor.kernels.push_back(std::move(kernel));
 //
 // Create one multicast over the receiver set from an explicit sender.
@@ -63,7 +64,7 @@ class McastImpl;
 //     receivers.num_cores(),
 //     McastExplicitSenderConfig{{{sender}}});
 // const std::array kernels{std::ref(kernel)};
-// mcast.attach(descriptor, "input_mcast", kernels);
+// mcast.attach(descriptor, "input_mcast", kernels, 0);
 // descriptor.kernels.push_back(std::move(kernel));
 //
 // These examples use ProgramDescriptor. Mcast also supports ProgramSpec attachment and direct Program
@@ -114,8 +115,6 @@ struct McastConfig {
     // all receivers and therefore accepts only nullopt or the full receiver set.
     std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
-    std::optional<uint32_t> base_sem_id;
-    std::optional<std::vector<uint32_t>> sem_ids;
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
 };
 
@@ -160,13 +159,15 @@ public:
     void attach(
         tt::tt_metal::ProgramDescriptor& descriptor,
         std::string_view prefix,
-        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
+        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels,
+        uint32_t first_semaphore_id) const;
+    // Valid only after a successful ProgramDescriptor attachment.
+    uint32_t next_semaphore_id() const;
     void attach(
         tt::tt_metal::experimental::ProgramSpec& spec,
         tt::tt_metal::experimental::ProgramRunArgs& args,
         std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
-        std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
+        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels) const;
     void append_semaphores(tt::tt_metal::Program& program);
     template <typename Args>
     void append_compile_time_args_to(Args& destination) const {

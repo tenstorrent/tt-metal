@@ -498,21 +498,6 @@ void McastImpl::prepare_arguments_() const {
     // A concrete CT mode is a per-rectangle specialization, never a whole-group inference.
     layout_.sender_mcast_mode =
         uniform_sender_mcast_mode && first_sender_mcast_mode ? *first_sender_mcast_mode : SenderMcastMode::Unknown;
-    if (cfg_.sem_ids.has_value()) {
-        const auto& ids = *cfg_.sem_ids;
-        TT_FATAL(!ids.empty(), "McastImpl::prepare_arguments: adopted sem_ids must contain the data_ready id");
-        TT_FATAL(
-            !cfg_.handshake || (ids.size() > 1 && ids[1] != UNUSED_SEM_ID),
-            "McastImpl::prepare_arguments: handshake requires an adopted consumer_ready id");
-        if (transfer_mode == TransferMode::ChainUnicast) {
-            TT_FATAL(
-                ids.size() > 2 && ids[2] != UNUSED_SEM_ID,
-                "McastImpl::prepare_arguments: chain forwarding requires an adopted signal_source id");
-            TT_FATAL(
-                ids[0] != UNUSED_SEM_ID && ids[0] != ids[1] && ids[2] != ids[0] && ids[2] != ids[1],
-                "McastImpl::prepare_arguments: chain semaphore ids must be valid and distinct");
-        }
-    }
     prepared_arch_ = device_.get().arch();
     prepared_device_grid_ = device_.get().compute_with_storage_grid_size();
     generic_metadata_ = {.mcast = layout_};

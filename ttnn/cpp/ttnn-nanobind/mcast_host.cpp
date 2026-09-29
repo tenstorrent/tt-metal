@@ -52,22 +52,26 @@ void py_module_types(nb::module_& mod) {
 
 void py_module(nb::module_& mod) {
     auto mcast = static_cast<nb::class_<kh::Mcast>>(mod.attr("Mcast"));
-    mcast.def(
-        "attach",
-        [](const kh::Mcast& mcast,
-           tt::tt_metal::ProgramDescriptor& descriptor,
-           const std::string& prefix,
-           const nb::list& kernels) {
-            std::vector<std::reference_wrapper<tt::tt_metal::KernelDescriptor>> targets;
-            targets.reserve(kernels.size());
-            for (auto kernel : kernels) {
-                targets.emplace_back(nb::cast<tt::tt_metal::KernelDescriptor&>(kernel));
-            }
-            mcast.attach(descriptor, prefix, targets);
-        },
-        nb::arg("descriptor"),
-        nb::arg("prefix"),
-        nb::arg("kernels"));
+    mcast
+        .def(
+            "attach",
+            [](const kh::Mcast& mcast,
+               tt::tt_metal::ProgramDescriptor& descriptor,
+               const std::string& prefix,
+               const nb::list& kernels,
+               uint32_t first_semaphore_id) {
+                std::vector<std::reference_wrapper<tt::tt_metal::KernelDescriptor>> targets;
+                targets.reserve(kernels.size());
+                for (auto kernel : kernels) {
+                    targets.emplace_back(nb::cast<tt::tt_metal::KernelDescriptor&>(kernel));
+                }
+                mcast.attach(descriptor, prefix, targets, first_semaphore_id);
+            },
+            nb::arg("descriptor"),
+            nb::arg("prefix"),
+            nb::arg("kernels"),
+            nb::arg("first_semaphore_id"))
+        .def("next_semaphore_id", &kh::Mcast::next_semaphore_id);
 
     mod.def(
         "attach_absent",
@@ -83,16 +87,12 @@ void py_module(nb::module_& mod) {
                bool handshake,
                std::optional<CoreRangeSet> handshake_cores,
                dataflow_kernel_lib::DataReadySignal data_ready,
-               std::optional<uint32_t> base_sem_id,
-               std::optional<std::vector<uint32_t>> sem_ids,
                dataflow_kernel_lib::TransferMode irregular_receiver_set_mode) {
                 new (self) kh::McastConfig{
                     .noc = noc,
                     .handshake = handshake,
                     .handshake_cores = std::move(handshake_cores),
                     .data_ready = data_ready,
-                    .base_sem_id = base_sem_id,
-                    .sem_ids = std::move(sem_ids),
                     .irregular_receiver_set_mode = irregular_receiver_set_mode};
             },
             nb::kw_only(),
@@ -100,15 +100,11 @@ void py_module(nb::module_& mod) {
             nb::arg("handshake") = true,
             nb::arg("handshake_cores") = std::optional<CoreRangeSet>{},
             nb::arg("data_ready") = dataflow_kernel_lib::DataReadySignal::Flag,
-            nb::arg("base_sem_id") = std::optional<uint32_t>{},
-            nb::arg("sem_ids") = std::optional<std::vector<uint32_t>>{},
             nb::arg("irregular_receiver_set_mode") = dataflow_kernel_lib::TransferMode::Multicast)
         .def_rw("noc", &kh::McastConfig::noc)
         .def_rw("handshake", &kh::McastConfig::handshake)
         .def_rw("handshake_cores", &kh::McastConfig::handshake_cores)
         .def_rw("data_ready", &kh::McastConfig::data_ready)
-        .def_rw("base_sem_id", &kh::McastConfig::base_sem_id)
-        .def_rw("sem_ids", &kh::McastConfig::sem_ids)
         .def_rw("irregular_receiver_set_mode", &kh::McastConfig::irregular_receiver_set_mode);
 
     static_cast<nb::class_<kh::McastFixedSenderConfig>>(mod.attr("McastFixedSenderConfig"))

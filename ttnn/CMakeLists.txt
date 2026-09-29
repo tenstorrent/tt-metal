@@ -262,15 +262,6 @@ target_include_directories(
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
 )
 
-# Program multicast bindings inspect live semaphore occupancy before descriptor append.
-target_include_directories(
-    ttnncpp
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
-)
-
 target_link_libraries(
     ttnncpp
     PUBLIC
