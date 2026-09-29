@@ -1,0 +1,33 @@
+{
+ "metrics": {
+  "matched_rel_l2_cpu_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 6.193584704305977e-05
+  },
+  "matched_rel_l2_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 0.0017311559058725834
+  },
+  "pcc_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 0.9993733414829965
+  },
+  "row_sum_max_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 1.000000238418579
+  },
+  "row_sum_min_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 0.9999998211860657
+  },
+  "selection_overlap_cpu_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 0.99981689453125
+  },
+  "selection_overlap_router_L01": {
+   "t": "2026-09-29T13:43:20",
+   "value": 0.9981689453125
+  }
+ },
+ "task": "C.moe_full.router"
+}

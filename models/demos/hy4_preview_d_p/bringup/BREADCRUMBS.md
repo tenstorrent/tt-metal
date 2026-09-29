@@ -1816,3 +1816,61 @@ Re-run
     BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
     BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
+
+## C.moe_full.router test (attempt 1)
+
+What
+- Replaced the rendered 22-line router test (moe_full layer 1) with a reviewed test based on
+  mimo_v2_6_d_p/tests/bringup/test_c_full_moe_router.py. It keeps the gated pcc_router_L01 (0.99) and asserts that
+  the module is not a CPU bridge. It also checks: finite output, element count, exactly 8 nonzeros per row,
+  non-negative weights, selection overlap >= 0.995 vs golden and >= 0.996 vs the CPU step on the same input,
+  matched-row weight rel L2 <= 0.005 vs golden and <= 0.004 vs the CPU step, and row sum / 2.827 within 0.004 of 1.
+- CPU mutation study in /tmp/hy4_router1/{study,mut,mut2}.py (outside the repo; log mut.log). The table is in the test
+  docstring.
+
+Decisions
+- The route scale is 2.827 (HF routed_scaling_factor, norm_topk_prob), so the row-sum check divides by it. MiMo's
+  "sum within 0.01 of 1" check would fail the correct router. Dropping the scale passes PCC (0.99934).
+- The layer-1 bias is small (-0.097..0.032), so a bf16 bias is harmless (overlap 0.99799), unlike MiMo. The overlap
+  limit of 0.995 is set to catch bf16 logits (0.99384), bf16 sigmoid (0.99341), bf16 choice keys (0.99030) and all-bf16
+  (0.98773). The reference scores 0.99811. The input is bf16 and the gate weight is stored bf16, so an fp32 HiFi4
+  device matmul is exact on its operands (a TF32 cut of x or W changes nothing), and the device should land near 0.998.
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999352, overlap 0.99811 / vs CPU 1.0, matched rel 0.00173 / 0, row sums 1.0).
+- BRINGUP_IMPL=stub: FAIL (PCC below threshold).
+- Gate (device): FAIL, as expected: hooks.device_component raises NotImplementedError (no device router yet). The
+  implement step must add it (components.yaml: mimo_v2_6_d_p_2x2 TtRouter fp32 path, route_scale 2.827).
+
+Gotchas
+- The golden router comes from fp32 ffn_norm. The test feeds the bf16-dumped ffn_norm, so even the CPU reference loses
+  0.0019 of overlap vs the golden. The vs-CPU checks see the device's own error without that loss.
+
+Re-run
+    BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
+    BRINGUP_IMPL=stub scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
+
+## C.moe_full.router implement (attempt 1)
+
+What
+- New `tt/router.py:TtHy4Router`, the fp32 path of mimo_v2_6_d_p_2x2 TtRouter. The gate weight [6144, 256] and the
+  correction bias [1, 256] are fp32 and replicated. The steps: fp32 x -> ttnn.linear (HiFi4, fp32 acc, fp32 out) ->
+  sigmoid -> add bias (SFPU) -> ttnn.topk 8 on fp32 keys -> gather the unbiased sigmoids -> sum ->
+  div by (sum / 2.827). It runs on each row's S/2 tokens (the ffn_norm layout: row-split over axis 0, replicated over
+  axis 1). No collective, no host work, no per-call constants.
+- hooks.py: added `_ROUTER_STEPS`, `_router_module` and `_router_host_fn`, and routed them in `_device_step_fn` and
+  `device_component`. "router" added to `DEVICE_STEPS["moe_full"]` (hybrid device_model).
+
+Decisions
+- There is no dense scatter on the device, unlike MiMo. The module returns (idx, wts) [1, 1, S/2, 8] for the future
+  device experts. The host fn builds the dense [S, 256] fp32 matrix at the harness boundary (components.yaml notes).
+  This also avoids the bf16-only ttnn.scatter.
+- `norm_topk_prob` is asserted True, since the module always renormalizes. route_scale = cfg.routed_scaling_factor.
+
+Results
+- Gate: PASS. pcc_router_L01 0.999373. nnz 8 per row. vs golden: overlap 0.99817, matched rel 0.00173. vs the CPU step:
+  overlap 0.99982 (2045/2048 rows), rel 0.00006. Row sums / 2.827 in [1.00000, 1.00000].
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
