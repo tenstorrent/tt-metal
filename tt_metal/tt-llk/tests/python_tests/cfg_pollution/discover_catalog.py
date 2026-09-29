@@ -208,10 +208,12 @@ def build_addrmod_restore_entries(addrmod_path):
     return [[addr32, *by_addr[addr32]] for addr32 in sorted(by_addr)]
 
 
-# Embedded verbatim (not imported) so this script is the only new file a reviewer needs to read:
-# both plugins are single-purpose to this script's discovery/gate rounds and small enough that a
-# standalone sibling file bought nothing but extra diff surface. Written out to a generated plugin
-# dir at runtime so `-p xdist_capture_plugin` / `-p xdist_plan_plugin` still resolve by bare name.
+# Embedded verbatim (not imported): single-purpose to this script's discovery round and small
+# enough that a standalone sibling file would buy nothing but extra diff surface. Written out to a
+# generated plugin dir at runtime so `-p xdist_capture_plugin` resolves by bare name. The GATE
+# round's `-p xdist_plan_plugin` (below) resolves the real sibling file instead -- pair_sweep.py
+# already needs that one as a standalone file, so discovery just reuses it via PYTHONPATH
+# (pytest_env puts the real cfg_pollution/ dir on the path) rather than embedding a second copy.
 _XDIST_CAPTURE_PLUGIN_SRC = '''\
 """pytest plugin: one-shot restore-to-pristine + direct post-exec residue capture, per test item.
 
@@ -307,71 +309,11 @@ def pytest_runtest_teardown(item, nextitem):
         json.dump(ch1x_snap, f)
 '''
 
-# Also used standalone by xdist_sequential_fuzz.py, so the sibling file stays on disk too; this is
-# a deliberate small duplication rather than a shared-import refactor of an out-of-scope script.
-_XDIST_PLAN_PLUGIN_SRC = '''\
-"""pytest plugin: per-test-item LLK_POLLUTE_INKERNEL_RESTORE injection for xdist runs.
-
-cfg_pollution.maybe_pollute_cfg_from_env reads its env vars fresh on every call (no caching), so
-no shared infra needs to change to make it per-item: this plugin just sets the env var, in this
-worker process, immediately before each test item it knows about runs, then clears it after. Since
-each xdist worker runs its assigned items strictly one at a time, this is race-free even though
-os.environ is process-global.
-
---llk-plan-map=PATH points at a JSON {nodeid: restore_plan_path}. A round's map only needs one
-entry per victim (see xdist_sequential_fuzz.py): every victim gets ONE fresh poison plan for that
-round, and R separate pytest invocations (one per trial round) is how repeated trials against the
-same victim happen, since pytest only collects a given nodeid once per invocation.
-
-A map entry may be a plain restore_plan_path (legacy) or a {"restore": path, "addrmod_restore":
-path} dict, to also carry the per-thread addr-mod restore plan alongside the main one.
-"""
-
-import json
-import os
-
-_ENV_VAR = "LLK_POLLUTE_INKERNEL_RESTORE"
-_ADDRMOD_ENV_VAR = "LLK_POLLUTE_INKERNEL_ADDRMOD_RESTORE"
-
-
-def pytest_addoption(parser):
-    parser.addoption("--llk-plan-map", action="store", default=None,
-                      help="JSON file: {nodeid: restore_plan_path | {restore, addrmod_restore}}")
-
-
-def pytest_configure(config):
-    path = config.getoption("--llk-plan-map")
-    config._llk_plan_map = {}
-    if path:
-        with open(path) as f:
-            config._llk_plan_map = json.load(f)
-
-
-def pytest_runtest_setup(item):
-    entry = item.config._llk_plan_map.get(item.nodeid)
-    restore_path, addrmod_path = (entry.get("restore"), entry.get("addrmod_restore")) if isinstance(entry, dict) else (entry, None)
-    if restore_path:
-        os.environ[_ENV_VAR] = restore_path
-    else:
-        os.environ.pop(_ENV_VAR, None)
-    if addrmod_path:
-        os.environ[_ADDRMOD_ENV_VAR] = addrmod_path
-    else:
-        os.environ.pop(_ADDRMOD_ENV_VAR, None)
-
-
-def pytest_runtest_teardown(item, nextitem):
-    os.environ.pop(_ENV_VAR, None)
-    os.environ.pop(_ADDRMOD_ENV_VAR, None)
-'''
-
 
 def _write_plugins(plugin_dir):
     os.makedirs(plugin_dir, exist_ok=True)
     with open(os.path.join(plugin_dir, "xdist_capture_plugin.py"), "w") as f:
         f.write(_XDIST_CAPTURE_PLUGIN_SRC)
-    with open(os.path.join(plugin_dir, "xdist_plan_plugin.py"), "w") as f:
-        f.write(_XDIST_PLAN_PLUGIN_SRC)
 
 
 def _reset_card():
