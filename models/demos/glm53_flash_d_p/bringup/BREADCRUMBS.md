@@ -816,3 +816,30 @@ component and swap tests on the device.
 Result: PCC 0.999996, rel L2 0.0027, per-token ratio [0.9989, 1.0005], worst row 0.0032 (limits 0.01 /
 [0.995, 1.005] / 0.015).
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_q_a.py`
+
+## S.dsa_moe.04 test (attempt 1)
+
+Reviewed the rendered swap test (dsa_moe layer 3, with attn_hc, attn_collapse, attn_norm and q_a on device). I rewrote
+it from swap dsa_moe 03 and kept every check and metric name. Changes and additions:
+- The earlier share tails now end in the device q_a (`muts["q_a"]`). The collapse share also runs the device
+  attn_norm. So each share still isolates one step. Limits are unchanged. Device: collapse 0 flips / 0.00001; norm 3 /
+  0.00018.
+- q_a vs golden q_resid (its input is the device attn_norm): the component test's limits (rel 0.01, ratio
+  [0.995, 1.005], worst row 0.015). Device: 0.0053 / [0.9988, 1.0005] / 0.0081.
+- q_a vs the fp32 CPU q_a of the same device attn_norm: rel 0.0045, ratio [0.997, 1.003], worst row 0.008. Device:
+  0.0021 / [0.9989, 1.0004] / 0.0024.
+- q_a share: a fifth CPU block run, with attn_hc, attn_collapse and attn_norm fixed to the device outputs and the CPU
+  q_a. Limits: indexer topk overlap >= 0.9995 (the new `_topk_overlap`, a per-row set overlap that ignores -1
+  padding), flips <= 12, same-routing rel 0.0006, ratio [0.998, 1.002]. Device: 0.99986 / 4 / 0.00018 /
+  [0.9996, 1.0006].
+Sensitivity (CPU host script /tmp/dsas04/sens.py, not kept; the numbers are in the test docstring). A q_resid scale
+error does reach block out (x1.005: 24 flips / 0.0014), unlike attn_norm. The indexer topk is scale-blind. Only
+direction bugs (mean subtraction, a TP-shard norm, W errors) lower the overlap. Noise (bf16 rounding, 0.3% element
+noise) passes every limit with a margin of 2x or more.
+Results: device passes (PCC 0.999994; block out vs CPU 25 flips / 0.0020 / [0.9924, 1.0075]; 35 s call). Reference
+passes (every same-input and share check 0, overlap 1.0). Stub fails (PCC 0 and every check).
+Watch: the indexer swap next outputs integer topk. Compare it by set overlap (`_topk_overlap`) against the CPU
+indexer on the same device attn_norm and q_resid, not by exact match: pcc_swap_topk "match" is 0.41 even here,
+because of order and near-ties.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_04_q_a.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
