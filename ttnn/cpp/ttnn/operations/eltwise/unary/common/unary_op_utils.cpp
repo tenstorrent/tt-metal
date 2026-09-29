@@ -272,6 +272,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("gelu_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("gelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        case UnaryOpType::GELU_TANH:
+            // param0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            return {
+                fmt::format("gelu_tanh_tile_init<{}u>();", (uint32_t)(param0 != 0)),
+                fmt::format("gelu_tanh_tile<{1}u>({0});", idst, (uint32_t)(param0 != 0))};
         case UnaryOpType::LOG:
             return {
                 fmt::format("log_tile_init<{}u>();", (uint32_t)param0),
