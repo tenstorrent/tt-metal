@@ -777,3 +777,42 @@ Watch: the attention-side swaps next (q_a, indexer, attention) have the same bli
 same-input check and a share check.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_03_attn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.q_a test (attempt 1)
+
+Reviewed the rendered component test for q_a at layer 3 (q_resid = q_a_layernorm(q_a_proj(attn_norm)), [2048, 4096] ->
+[2048, 1536] bf16). I rewrote it from the dsa_moe attn_norm test (STEP = "q_a"). Checks: the gated PCC; finite;
+rel L2 <= 0.01; per-token norm ratio [0.995, 1.005]; worst per-token rel L2 <= 0.015. Limits are written
+`not x <= lim`, so NaN fails.
+Sensitivity (CPU host script /tmp/dsaqa/sens.py, not kept; numbers in the test docstring):
+- The norm after the projection removes row scale, so fp8 dequant bugs pass PCC: weight_scale_inv ignored 0.9980
+  (rel 0.067), scale per row block 0.9982, scale columns reversed 0.9962, bfp4 W 0.9970. rel L2 catches all of them.
+- The projection's row mean square is 1.2e-4..8.1e-4, close to eps 1e-5. eps 0 / 1e-6 score PCC 1.0000 but ratio up to
+  1.04. x1.005 fails the ratio (1.0053). Mean subtraction (worst row 0.086) and a norm over 2 or 4 TP column shards
+  (0.069 / 0.095) fail the worst-row limit.
+- Noise passes: fp32 CPU 0.0021 / [0.9997, 1.0003]; bf16 path 0.0026..0.0031; bfp8 W 0.0055, bfp8 x 0.0061 (worst row
+  0.0071); 0.3% element noise 0.0040 / [0.9993, 1.0006]. HiFi2-like 7-bit truncation gives 0.0025, which is not
+  visible after the norm.
+Results: reference passes (PCC 0.999998, rel 0.0021, ratio [0.9997, 1.0003], worst row 0.0022). Stub fails (PCC 0).
+The gate (device) fails with `NotImplementedError: no device module for q_a yet` in hooks.device_component, as
+expected before the implement step.
+Next (implement): ttnn.linear (HiFi4, fp32 acc) then the rms_norm module with eps exactly 1e-5 over all 1536 columns
+(do not normalize per TP shard). bfp8 weights would fit the limits (rel 0.0055), but the components entry says bf16
+from fp8.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_q_a.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## C.dsa_moe.q_a implement (attempt 1)
+
+Added `tt/q_a.py:TtQA` (`build_q_a`): q_a_proj is dequantized from fp8 by the reference loader and stored bf16,
+replicated as [1, 1, 4096, 1536]. The forward runs `ttnn.linear` (HiFi4, fp32 acc) into fp32. Then `TtRMSNorm`
+(tt/rms_norm.py, `ttnn.bringup.rms_norm`, bf16 gamma, eps 1e-5) runs on the fp32 projection over all 1536 columns, and
+the result is typecast to bf16. There is no CCL and no host work in the forward.
+Why: the norm input stays fp32, which avoids the bf16 rounding before the norm (the test measures 0.0031 for that), and
+the weights stay bf16 as the components entry says (bfp8 W would give 0.0055).
+hooks.py: `_device_step` handles `q_a` (wrapped by `_norm_host_fn`). `DEVICE_STEPS["dsa_moe"]` now lists `attn_hc`,
+`attn_collapse`, `attn_norm` and `q_a`. It was empty before, and the three earlier steps had already passed their
+component and swap tests on the device.
+Result: PCC 0.999996, rel L2 0.0027, per-token ratio [0.9989, 1.0005], worst row 0.0032 (limits 0.01 /
+[0.995, 1.005] / 0.015).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_q_a.py`

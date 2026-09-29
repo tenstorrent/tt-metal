@@ -43,7 +43,7 @@ DEVICE_STEPS = {
         "ffn_norm",
         "mlp",
     },
-    "dsa_moe": set(),
+    "dsa_moe": {"attn_hc", "attn_collapse", "attn_norm", "q_a"},
     "kda_moe": set(),
 }
 
@@ -193,6 +193,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.rms_norm import build_norm
 
         return _norm_host_fn(mesh, build_norm(mesh, loader, cfg, layer, _NORM_STEPS[step]))
+    if step == "q_a":
+        from models.demos.glm53_flash_d_p.tt.q_a import build_q_a
+
+        return _norm_host_fn(mesh, build_q_a(mesh, loader, cfg, layer))
     if step == "mlp" and not cfg.is_moe(layer):
         from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
 
