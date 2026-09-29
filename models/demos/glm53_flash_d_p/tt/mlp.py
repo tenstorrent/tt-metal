@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""GLM-5.3 dense clamped SwiGLU MLP (layers 0-2, intermediate 12288) on a 2x2 mesh, TP=4 over the intermediate dim.
+"""GLM-5.3 clamped SwiGLU MLP on a 2x2 mesh, TP=4 over the intermediate dim: the dense MLP (layers 0-2, intermediate
+12288, 3072 per chip) and the MoE layers' shared expert (``name="mlp.shared_experts"``, intermediate 2048, 512 per chip).
 
-    g_c   = x @ Wg_c, u_c = x @ Wu_c                 column-parallel [H, 3072] per chip, fp32 out
+    g_c   = x @ Wg_c, u_c = x @ Wu_c                 column-parallel [H, I/4] per chip, fp32 out
     h_c   = silu(min(g_c, L)) * clamp(u_c, -L, L)    L = swiglu_limit (10)
-    out   = all_reduce(h_c @ Wd_c)                   row-parallel [3072, H] per chip, cluster_axis=None (axis 1, then 0)
+    out   = all_reduce(h_c @ Wd_c)                   row-parallel [I/4, H] per chip, cluster_axis=None (axis 1, then 0)
 
 Intermediates and the down partials stay fp32 through the all_reduce; the output is cast to bf16.
 
-Chip d (row-major device order) holds intermediate columns [3072d, 3072d + 3072). Weights: fp8 e4m3 + 128x128 block
+Chip d (row-major device order) holds intermediate columns [d I/4, (d + 1) I/4). Weights: fp8 e4m3 + 128x128 block
 scale dequantized by the reference loader, stored bf16. Every matmul HiFi4 + fp32 acc.
 From models/demos/mimo_v2_6_d_p_2x2/tt/mlp.py:TtDenseMLP (fused silu -> explicit clamps).
 """

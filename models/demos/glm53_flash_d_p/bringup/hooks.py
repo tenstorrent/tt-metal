@@ -56,6 +56,7 @@ DEVICE_STEPS = {
         "ffn_norm",
         "router",
         "experts",
+        "shared_expert",
     },
     "kda_moe": set(),
 }
@@ -337,6 +338,10 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
         from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
 
         return _norm_host_fn(mesh, build_mlp(mesh, loader, cfg, layer))
+    if step == "shared_expert":
+        from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
+
+        return _norm_host_fn(mesh, build_mlp(mesh, loader, cfg, layer, name="mlp.shared_experts"))
     if step == "router":
         from models.demos.glm53_flash_d_p.tt.router import build_router
 
