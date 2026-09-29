@@ -16,7 +16,6 @@
 #include "metal_context.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
 #include "profiler_state_manager.hpp"
@@ -776,11 +775,6 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         context_guard.release();
     }
     return result;
-}
-
-SubDevice MetalEnv::create_sub_device(ttsl::Span<const CoreRangeSet> cores) {
-    // Use SubDevice constructor marked as internal
-    return SubDevice(SubDeviceImpl(&MetalEnvAccessor(*this).impl(), cores));
 }
 
 }  // namespace tt::tt_metal

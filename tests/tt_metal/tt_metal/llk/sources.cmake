@@ -19,6 +19,7 @@ set(UNIT_TESTS_LLK_SRC
     test_mxfp6_typecast.cpp
     test_mxfp8_typecast.cpp
     test_mxint_typecast.cpp
+    test_norm_fidelity.cpp
     test_pack_rows.cpp
     test_quasar_mailboxes.cpp
     test_quasar_bfd_datacopy.cpp
@@ -38,5 +39,6 @@ set(UNIT_TESTS_LLK_SRC
     test_top32_rm_dev.cpp
     test_transpose.cpp
     test_unary_broadcast.cpp
+    test_unpack_to_dest_bcast_dst_offset.cpp
     test_untilize_tilize.cpp
 )

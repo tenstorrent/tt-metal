@@ -78,11 +78,10 @@ class EltwiseFpu(Fpu):
 
         tensor_shape = operation.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        clear_fp32_dst_acc = compute_unit.clear_fp32_dst_acc.cpp_enum_value
 
         return (
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {reuse_dest}>"
-            f"({block.tile_id_dest}, {tensor_shape}, {clear_fp32_dst_acc});\n"
+            f"({block.tile_id_dest}, {tensor_shape});\n"
         )
 
     def uninit(
