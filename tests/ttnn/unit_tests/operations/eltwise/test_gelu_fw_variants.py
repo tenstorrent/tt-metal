@@ -290,3 +290,20 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     # want to flag if the kernel silently produced a usable finite-nonzero value.
     for name, val in [("gelu(-inf)", neg_inf), ("gelu(NaN)", nan_out)]:
         assert val == 0.0 or not math.isfinite(val), f"{variant_name}: {name} -> {val!r}, expected 0 or any non-finite"
+
+
+def test_gelu_tanh_fast_param_matches_tanh(device):
+    """GELU_TANH with param 1 (x / (1 + exp(-2u))) through the generic unary path, over every finite BF16 input,
+    against variant=Tanh: <= 1 BF16 ULP where |GELU| >= 1e-3. In the negative tail the accurate path cancels
+    (1 + tanh(u) with tanh(u) ~ -1) and the fast one does not, so there require a small absolute difference."""
+    input_bf16, finite = _all_inputs(torch.bfloat16)
+    tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tanh = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Tanh))
+    fast = ttnn.to_torch(ttnn.unary_chain(tt_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)]))
+    assert not torch.equal(tanh, fast), "param 1 produced the accurate kernel's bits: the param was not forwarded"
+
+    core = finite & (tanh.float().abs() >= 1e-3)
+    assert ulp_distance(fast[core], tanh[core]).max() <= 1
+    tail = finite & ~core
+    assert (fast[tail].float() - tanh[tail].float()).abs().max() <= 1e-5
