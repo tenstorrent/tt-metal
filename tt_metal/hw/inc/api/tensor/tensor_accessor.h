@@ -587,9 +587,11 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
         /* IsShardContiguous */
         TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous,
-        /* BindingId (op-to-op R/W inference): the token's CTA offset identifies this binding, threaded
-           into the type so it survives to the NoC call site (see api/dataflow/buf_rw_note.h). */
-        CTA_OFFSET>>;
+        /* BindingId (op-to-op R/W inference): the token's ADDR_CRTA_OFFSET -- the byte offset of this
+           binding's base-address word in the CRTA -- identifies the binding, threaded into the type so it
+           survives to the NoC call site (see api/dataflow/buf_rw_note.h). The host resolves it straight to
+           the bound buffer: the runtime wrote that buffer's address into this very CRTA word at enqueue. */
+        ADDR_CRTA_OFFSET>>;
 
 TensorAccessor(const tensor_accessor::NullTensorBindingToken&) -> TensorAccessor<tensor_accessor::NullDSpec>;
 
