@@ -197,6 +197,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
     // Packed WY-inverse quadrant masks the prep reader always loads into the cb_u/cb_mask slot.
     constexpr uint32_t kPrepMaskTiles = 3;
+    constexpr uint32_t kPrepOutBuf =
+        2;  // two items of output capacity: the writer's DRAM drain of item i does not gate item i+1
     // Scratch, sized to what prep_chunk holds (qwen36-gdn-cb-inventory.md): scr1 carries decay_row (Ct), the
     // WY inverse's tmpN (1) and k_dec (ck); scr2 the inverse's tmpT (1); scr3 negN (cc) and the qk-norm's
     // diagonal tile (Ct <= cc). supd/stmp hold the normalized q/k (ck) or, at Ct == 2, one diagonal inverse
@@ -243,17 +245,17 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::decay_exp, Ct);
     add_cb(pcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
     add_cb(pcb::lmask, cc);
-    add_cb(pcb::Tinv, cc);
-    add_cb(pcb::vbeta, cv);
+    add_cb(pcb::Tinv, cc, kPrepOutBuf);
+    add_cb(pcb::vbeta, cv, kPrepOutBuf);
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::u, kPrepMaskTiles);  // the three WY quadrant masks (cb_mask in the kernel)
-    add_cb(pcb::w, ck);
-    add_cb(pcb::qdecay, ck);
-    add_cb(pcb::intra, cc);
-    add_cb(pcb::s2, one_tile);      // invert_block scratch C
-    add_cb(pcb::vnew, one_tile);    // cb_dl in the prep kernel: the dl*I tile
-    add_cb(pcb::ointer, one_tile);  // Ct == 2: the off-diagonal inverse block
-    add_cb(pcb::kdec_t, kc);
+    add_cb(pcb::w, ck, kPrepOutBuf);
+    add_cb(pcb::qdecay, ck, kPrepOutBuf);
+    add_cb(pcb::intra, cc, kPrepOutBuf);
+    add_cb(pcb::s2, one_tile);                 // invert_block scratch C
+    add_cb(pcb::vnew, one_tile, kPrepOutBuf);  // cb_dl in the prep kernel: the dl*I tile
+    add_cb(pcb::ointer, one_tile);             // Ct == 2: the off-diagonal inverse block
+    add_cb(pcb::kdec_t, kc, kPrepOutBuf);
     add_cb(pcb::supd, qk_tiles);
     add_cb(pcb::stmp, qk_tiles);
     add_cb(pcb::final_s, one_tile);  // invert_block scratch B
