@@ -1203,3 +1203,33 @@ through attention but not yet attn_residual, ffn_hc or ffn_collapse. Keep eps ex
 the squares.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_c_dsa_moe_ffn_norm.py`
 (prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
+
+## S.dsa_moe.10 test (attempt 1)
+
+Reviewed the rendered swap test for dsa_moe layer 3 with attn_hc through ffn_norm on the device. I rewrote it from
+swap 09's test. The gated metric is unchanged: pcc_swap_out (PCC >= 0.98).
+- Shares telescope. A new norm-share block (every device output up to ffn_in fixed, CPU ffn_norm and tail) is the
+  base of the norm's share. The collapse share is now that block vs the collapse-share block, and it reproduces
+  swap 09 exactly (30 / 0.00044 / [0.9994, 1.0011]). Every other swap-09 check and limit is unchanged, including
+  the 96-flip limit vs the all-CPU block (device 70).
+- New ffn_norm checks:
+  - vs the fp32 CPU norm of the device ffn_in, at the component test's limits (rel 0.01, ratio [0.99, 1.01], worst
+    row 0.015, coefficient [0.996, 1.004]); also on chunk 0.
+  - vs golden: rel 0.01, ratio [0.99, 1.01], worst row 0.02, coefficient [0.995, 1.005].
+  - Norm share at block out: flips <= 64, same-routing rel <= 0.0015, ratio [0.996, 1.004], flipped-row ratio
+    [0.92, 1.08]. Swap 09's [0.95, 1.05] is too tight here: bf16 rounding of the correct norm alone gives
+    [0.960, 1.009] (proposed known issue).
+- Sensitivity: CPU host script /tmp/dsas10/sens.py (not kept); the numbers are in the test docstring.
+  - The MoE amplifies a norm scale error about 1.8x into block out.
+  - Caught by the share: x0.999, x1.0015, truncation, per-row rsqrt noise 1e-3, bf16 square accumulation, eps
+    variants, mean subtraction, a norm over 4 shards, w reversed, one row x1.02, a copied row, zeroed rows.
+  - 0.5% element noise is caught only by the flip count (122 flips; rel 0.0014 is under the 0.0015 limit).
+Results:
+- Device passes: PCC 0.999992 (c0 0.999993). Norm share 34 / 0.00065 / [0.9982, 1.0014], flipped rows
+  [0.9593, 1.0073]. ffn_norm vs CPU same input 0.00168 / [0.9990, 1.0005] / row 0.00197 / coefficient 0.99989.
+  vs golden 0.00493 / 0.00981. Block out vs golden 76 flips / rel 0.0041. About 110 s.
+- Reference passes (exact). Stub fails.
+Next (implement): only add ffn_norm to `DEVICE_STEPS["dsa_moe"]`. `_device_step` already builds `tt/rms_norm.py` for
+this layer, which is the module that passed here.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/glm53_flash_d_p/tests/bringup/test_swap_dsa_moe_10_ffn_norm.py`
+(prefix `BRINGUP_IMPL=reference` / `BRINGUP_IMPL=stub` for the other modes).
