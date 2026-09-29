@@ -37,6 +37,7 @@ class TtV41Attention(LightweightModule):
         tp_axis: int = 1,
         topology=ttnn.Topology.Linear,
         weights_dtype=ttnn.bfloat8_b,
+        compute_kernel_config=None,
     ):
         """``weights`` holds bf16/fp32 torch tensors in the checkpoint's [out, in] orientation: wq_a, q_norm,
         wq_b, wkv, kv_norm, wo_a, wo_b, attn_sink. ``seq_len`` is the single chunk length (prefill from 0)."""
@@ -54,6 +55,7 @@ class TtV41Attention(LightweightModule):
         self.sp_axis, self.tp_axis, self.topology = sp_axis, tp_axis, topology
         self.seq_len = seq_len
         self.weights_dtype = weights_dtype
+        self.compute_kernel_config = compute_kernel_config
         assert seq_len % (32 * self.sp) == 0, f"chunk {seq_len} must split into whole tiles over sp={self.sp}"
         self.tt_ccl = get_tt_ccl(mesh_device) if (self.sp > 1 or self.tp > 1) else None
         self.num_links = 2 if is_blackhole() else 1
@@ -179,14 +181,22 @@ class TtV41Attention(LightweightModule):
         seq_local = x.shape[2]
         heads_local = self.heads // self.tp
 
-        qr = ttnn.rms_norm(self._tp_all_reduce(ttnn.linear(x, self.wq_a)), weight=self.q_norm, epsilon=self.eps)
-        q = ttnn.linear(qr, self.wq_b)
+        qr = ttnn.rms_norm(
+            self._tp_all_reduce(ttnn.linear(x, self.wq_a, compute_kernel_config=self.compute_kernel_config)),
+            weight=self.q_norm,
+            epsilon=self.eps,
+        )
+        q = ttnn.linear(qr, self.wq_b, compute_kernel_config=self.compute_kernel_config)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False
         )
         q = self._rope(q)
 
-        kv = ttnn.rms_norm(self._tp_all_reduce(ttnn.linear(x, self.wkv)), weight=self.kv_norm, epsilon=self.eps)
+        kv = ttnn.rms_norm(
+            self._tp_all_reduce(ttnn.linear(x, self.wkv, compute_kernel_config=self.compute_kernel_config)),
+            weight=self.kv_norm,
+            epsilon=self.eps,
+        )
         kv = self._rope(kv)
 
         # Host fallback: window-KV QDQ, compressed KV and top-k, index rows.
@@ -258,12 +268,12 @@ class TtV41Attention(LightweightModule):
         x = ttnn.reshape(attn, [groups_local, attn.shape[1] // groups_local, seq_local, self.head_dim])
         x = ttnn.experimental.nlp_concat_heads(x)
         x = ttnn.reshape(x, [1, groups_local, seq_local, in_per_group])
-        grouped = ttnn.linear(x, self.wo_a)
+        grouped = ttnn.linear(x, self.wo_a, compute_kernel_config=self.compute_kernel_config)
         rank = grouped.shape[-1]
         grouped = ttnn.concat(
             [ttnn.slice(grouped, [0, g, 0, 0], [1, g + 1, seq_local, rank]) for g in range(groups_local)], dim=-1
         )
-        out = ttnn.linear(grouped, self.wo_b)
+        out = ttnn.linear(grouped, self.wo_b, compute_kernel_config=self.compute_kernel_config)
         if self.tp == 1:
             return out
         return ttnn.experimental.reduce_scatter_minimal_async(
