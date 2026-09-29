@@ -1021,3 +1021,31 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py
+
+## S.dense_full.11 test (attempt 1)
+
+What was done
+- Rewrote the rendered swap test (steps 1-11 on device, the last one mlp) starting from swap 10. It keeps the gated
+  pcc_swap_out (0.98) and every swap-10 check. The out-vs-CPU-tail check now also sees the device mlp. It adds these
+  checks:
+  - mlp_out vs golden: rel <= 0.01, row norm ratio [0.99, 1.01], worst row <= 0.03 (upstream error included).
+  - mlp_out vs the CPU mlp on the same device ffn_norm: rel <= 0.008, ratio [0.993, 1.007], row <= 0.015.
+  - the module again on device ffn_norm x 30 (bf16) vs the CPU step: rel <= 0.006, ratio [0.993, 1.007],
+    row <= 0.012.
+- CPU mutation study in /tmp/hy4_s11/study.py (outside the repo); the table is in the test docstring. 11 of 25
+  mutations pass the out gate. The existing out checks catch all of them except a SwiGLU clamp at 10, which the
+  golden cannot see. The x 30 check catches the clamp (worst row 0.021).
+
+Decisions
+- The limits vs the CPU step and on x 30 are the component test's. The limits vs golden are the same swap-style
+  ones used for ffn_norm, because the upstream device ffn_norm error (rel 0.0044) is included.
+
+Results
+- BRINGUP_IMPL=reference: PASS. BRINGUP_IMPL=stub: FAIL.
+- Gate (device): PASS. pcc_swap_out 0.999984, out rel 0.00561. mlp_out vs golden 0.0043 / [0.9949, 1.0029] /
+  0.0083; vs CPU 0.00065 / [0.9993, 0.9996] / 0.0008; x 30 0.00069 / [0.9994, 0.9995] / 0.00075. out vs CPU tail
+  0.0024 / row 0.0041.
+- The first block of printed metrics in each log (all zeros) comes from the stubbed precompile collect pass.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_11_mlp.py
