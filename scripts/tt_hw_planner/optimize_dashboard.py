@@ -249,6 +249,12 @@ def _parse_batch(run_dir: Path, requested: int | None = None) -> int | None:
     label throughput as per-user. Reads the newest profile log; returns None if not found."""
     from models.experimental.perf_automation.agent.perf_adapter import parse_batch_report
 
+    _pb = run_dir / ".requested_batch"
+    if _pb.is_file():
+        try:
+            return int(_pb.read_text().strip())
+        except Exception:
+            pass
     prof = run_dir / "profiles"
     if not prof.is_dir():
         return int(requested) if requested else None
