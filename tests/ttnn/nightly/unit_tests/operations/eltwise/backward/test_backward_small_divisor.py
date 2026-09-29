@@ -22,9 +22,11 @@ import ttnn
 # entry of each end sits just inside the working band, as a control that the change
 # leaves it alone.
 #
-# The registered goldens are torch's own backward passes, which evaluate the same
-# derivative as -grad * ((a / b) / b) -- dividing twice rather than squaring -- so
-# they return the finite value and the comparison is meaningful.
+# The goldens registered for rdiv_bw and div_bw are torch's own backward passes, which
+# evaluate the same derivative as -grad * ((a / b) / b) -- dividing twice rather than
+# squaring -- so they return the finite value and the comparison is meaningful.
+# addcdiv_bw is the exception: torch's backward for addcdiv forms tensor2 * tensor2 itself,
+# so its golden is evaluated in float64 instead; see test_bw_addcdiv_extreme_divisor.
 #
 # float32 and bfloat16 share an exponent field and therefore share all three
 # thresholds; both are covered so a later change cannot regress one of them quietly.
@@ -33,8 +35,14 @@ SMALL_END = ((1e-18, 1e-30), (1e-19, 1e-30), (1e-20, 1e-30), (1e-22, 1e-30))
 LARGE_END = ((1e18, 1e20), (1e19, 1e20), (1e20, 1e20), (1e25, 1e20))
 CASES = SMALL_END + LARGE_END
 CASE_IDS = [
-    "1e-18_control", "1e-19", "1e-20", "1e-22",
-    "1e18_control", "1e19", "1e20", "1e25",
+    "1e-18_control",
+    "1e-19",
+    "1e-20",
+    "1e-22",
+    "1e18_control",
+    "1e19",
+    "1e20",
+    "1e25",
 ]
 
 DTYPES = ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16))
@@ -45,6 +53,11 @@ SHAPE = torch.Size([1, 1, 32, 32])
 
 def _to_device(pt, ttnn_dtype, device):
     return ttnn.from_torch(pt.detach(), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def _as_float64_leaf(pt):
+    # The same values, widened exactly, as a fresh leaf the golden can take gradients of.
+    return pt.detach().double().requires_grad_(True)
 
 
 def _check(name, tt_out, golden, divisor):
@@ -75,9 +88,7 @@ def test_bw_rdiv_extreme_divisor(divisor, numerator, torch_dtype, ttnn_dtype, de
     in_data = torch.full(SHAPE, divisor, dtype=torch_dtype).requires_grad_(True)
     grad_data = torch.ones(SHAPE, dtype=torch_dtype)
 
-    tt_out = ttnn.rdiv_bw(
-        _to_device(grad_data, ttnn_dtype, device), _to_device(in_data, ttnn_dtype, device), numerator
-    )
+    tt_out = ttnn.rdiv_bw(_to_device(grad_data, ttnn_dtype, device), _to_device(in_data, ttnn_dtype, device), numerator)
     golden = ttnn.get_golden_function(ttnn.rdiv_bw)(grad_data, in_data, numerator)
     _check("rdiv_bw", tt_out[0], golden[0], divisor)
 
@@ -117,6 +128,18 @@ def test_bw_addcdiv_extreme_divisor(divisor, numerator, torch_dtype, ttnn_dtype,
         _to_device(tensor2_data, ttnn_dtype, device),
         value,
     )
-    golden = ttnn.get_golden_function(ttnn.addcdiv_bw)(grad_data, in_data, tensor1_data, tensor2_data, value)
+    # torch's addcdiv backward computes -grad * value * tensor1 / (tensor2 * tensor2): the same
+    # square this change removes from the device. In float32 and bfloat16 that square overflows
+    # above 2**64, so the golden comes back as 0 at 1e20 and 1e25, and below 1.0842e-19 it is 0
+    # or subnormal, so the golden is -inf at 1e-22 and 9% off at 1e-20 in bfloat16, while the
+    # exact gradient is an ordinary number in every case. Evaluating the same golden in float64,
+    # on the same already-rounded inputs, keeps the square in range for every case here.
+    golden = ttnn.get_golden_function(ttnn.addcdiv_bw)(
+        grad_data.double(),
+        _as_float64_leaf(in_data),
+        _as_float64_leaf(tensor1_data),
+        _as_float64_leaf(tensor2_data),
+        value,
+    )
     # tensor2 is the divisor; its gradient is the one that formed the square.
     _check("addcdiv_bw[tensor2_grad]", tt_out[2], golden[2], divisor)
