@@ -121,3 +121,21 @@ def _private_measurement_ledger(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(box))
     monkeypatch.setenv("PERF_MCP_LEDGER", str(box / "measurements.jsonl"))
     yield
+
+
+# --- the machine a pricing test prices ------------------------------------------------------------
+# The report has no default machine: it prices the hardware the run DETECTED (summary._run_env reads
+# the run's manifest, perf_mcp prices with its manifest's env). A test whose numbers were written for
+# one part says so here, through the same manifest path a real run uses, instead of relying on a
+# fallback that silently chose a machine for every run.
+@_pytest.fixture
+def priced_on_blackhole(tmp_path, monkeypatch):
+    import json as _json
+
+    from agent.environment import ARCH_FACTS
+
+    facts = dict(ARCH_FACTS["blackhole"])
+    manifest = tmp_path / "_machine_manifest.json"
+    manifest.write_text(_json.dumps({"env": facts}))
+    monkeypatch.setenv("PERF_MCP_MANIFEST", str(manifest))
+    return facts

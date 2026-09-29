@@ -38,6 +38,9 @@ from pathlib import Path
 
 import pytest
 
+# these numbers were written for this part; the report no longer assumes one
+pytestmark = pytest.mark.usefixtures("priced_on_blackhole")
+
 _PA = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PA))
 
@@ -169,6 +172,9 @@ def test_the_producer_derives_the_dominant_mode_by_flop_share(tmp_path, monkeypa
     monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
     import cc_optimize.perf_mcp as pm
 
+    from agent.environment import ARCH_FACTS
+
+    monkeypatch.setattr(pm, "_ENV", dict(ARCH_FACTS["blackhole"]))  # the part these peaks are for
     rep = {"open_ops": [{"fidelity": "hifi4", "flops": 1}, {"fidelity": "lofi", "flops": 1_000_000}]}
     assert abs(pm._dominant_peak_flops(rep) / 1e12 - 702.0) < 0.1
     rep2 = {"open_ops": [{"fidelity": "hifi4", "flops": 1_000_000}, {"fidelity": "lofi", "flops": 1}]}

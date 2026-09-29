@@ -34,6 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "cc_optimize"))
 
 import summary as S  # noqa: E402
 
+# these numbers were written for this part; the report no longer assumes one
+pytestmark = pytest.mark.usefixtures("priced_on_blackhole")
+
 BH_DRAM = 32 * 1024**3
 
 

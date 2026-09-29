@@ -15,6 +15,10 @@ from __future__ import annotations
 import importlib.util as _ilu
 import sys
 from pathlib import Path
+import pytest
+
+# these numbers were written for this part; the report no longer assumes one
+pytestmark = pytest.mark.usefixtures("priced_on_blackhole")
 
 PERF = Path(__file__).resolve().parents[1]
 for _p in (PERF, PERF / "cc_optimize"):

@@ -78,6 +78,45 @@ def _structural_kinds() -> set:
 
 _REPORT_NAME = "RUN_REPORT.md"
 
+# THE HARDWARE THIS REPORT DESCRIBES: the run's own detected env -- its manifest's "env", which the
+# run filled from the flags (--box, --mesh, --devices) and the boards it found. Every peak and
+# capacity below is read from it through roofline._facts, the helper the optimize path already
+# prices ops with. There is NO default machine: a report with no run env prices no compute roof
+# rather than another machine's. (Six sites here and in perf_mcp used to fall back to one typed arch
+# name, so a Wormhole Galaxy run was reported against Blackhole's 175.5 TFLOPS instead of its own
+# 64 -- 2.7x optimistic -- while its own ops were ranked with the right numbers.)
+_RUN_ENV: dict = {}
+
+
+def set_run_env(env) -> None:
+    """Name the hardware for renderers that hold the run's env but not its manifest path."""
+    global _RUN_ENV
+    _RUN_ENV = dict(env or {})
+
+
+def _run_env() -> dict:
+    """The run's detected env: what set_run_env was given, else PERF_MCP_MANIFEST's, else {}."""
+    if _RUN_ENV:
+        return dict(_RUN_ENV)
+    p = os.environ.get("PERF_MCP_MANIFEST", "")
+    try:
+        return dict(json.loads(Path(p).read_text()).get("env") or {}) if p else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _hw_facts(profile=None) -> dict:
+    """Hardware facts for pricing: the run env through roofline._facts, with the profile's own arch
+    filling a gap. {} when neither says what the machine is."""
+    env = _run_env()
+    if not env.get("arch") and (profile or {}).get("arch"):
+        env["arch"] = (profile or {}).get("arch")
+    if not env:
+        return {}
+    from agent import roofline as _rf
+
+    return _rf._facts(env)
+
 
 def _runs_root() -> Path:
     return Path(__file__).resolve().parent.parent / "runs"
@@ -1011,12 +1050,11 @@ def _rung_of_peak(peak_flops) -> str:
     silicon resolves against that silicon and no rung name is written here.
     """
     try:
-        from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 
         if not peak_flops or float(peak_flops) <= 0:
             return ""
-        _facts = ARCH_FACTS.get(str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()) or {}
+        _facts = _hw_facts()
         for _r in _RUNGS:
             _p = _cpf(_facts, _r)
             if _p and abs(float(_p) - float(peak_flops)) < 1e9:
@@ -1110,11 +1148,9 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
         _whole = _pinned_peak_flops(_unit_key(""), model=model, task=task)
         if _whole and float(_whole) > 0:
             return float(_whole), _dom
-        from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 
-        _arch = str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
-        return float(_cpf(ARCH_FACTS.get(_arch) or {}, str(_top[0])) or 0.0), str(_top[0])
+        return float(_cpf(_hw_facts(profile), str(_top[0])) or 0.0), str(_top[0])
     except Exception:  # noqa: BLE001
         return 0.0, ""
 
@@ -1269,14 +1305,9 @@ def _ops_per_unit(profile):
 
 
 def _capacity_bytes():
-    """Per-chip DRAM from the detected arch, or None. Never a hardcoded number."""
+    """Per-chip DRAM from the detected hardware, or None. Never a hardcoded number."""
     try:
-        from agent.environment import ARCH_FACTS
-
-        import os as _os
-
-        arch = (_os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
-        return int((ARCH_FACTS.get(arch) or {}).get("dram_capacity_bytes") or 0) or None
+        return int(_hw_facts().get("dram_capacity_bytes") or 0) or None
     except Exception:  # noqa: BLE001
         return None
 
@@ -1989,11 +2020,9 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     except Exception:  # noqa: BLE001
         _dom = ""
     try:
-        from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 
-        _arch = str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
-        peak_flops = float(_cpf(ARCH_FACTS.get(_arch) or {}, _dom) or 0.0)
+        peak_flops = float(_cpf(_hw_facts(profile), _dom) or 0.0)
     except Exception:  # noqa: BLE001
         peak_flops = 0.0
     # THE PINNED PEAK OUTRANKS THE ONE JUST DERIVED, for the same reason the byte anchor outranks the
@@ -2239,19 +2268,19 @@ def _fidelity_breakdown(profile):
     """
     try:
         from agent import roofline as _rf
-        from agent.environment import ARCH_FACTS
 
         # PASS THE ARCH. _facts() keys off env["arch"]; an empty env leaves peak_tflops_per_core
         # unset, ideal_ms_compute returns None, and no op ever carries a compute floor -- the
         # breakdown then silently renders "not modelled" on a profile that has everything it needs.
-        _arch = str((profile or {}).get("arch") or os.environ.get("PERF_MCP_ARCH") or "blackhole").lower()
-        rep = _rf.residual_report(profile or {}, {"arch": _arch})
+        _env = _hw_facts(profile)
+        if not _env:
+            return None, None  # no machine named: no compute floor rather than another machine's
+        rep = _rf.residual_report(profile or {}, _env)
         ops = [o for o in (rep.get("open_ops") or []) if o.get("compute_ms") and o.get("flops")]
         if not ops:
             return None, None
-        bh = ARCH_FACTS.get(_arch) or ARCH_FACTS.get("blackhole") or {}
-        cores = int(bh.get("grid_x") or 0) * int(bh.get("grid_y") or 0)
-        peaks = bh.get("peak_tflops_per_core") or {}
+        cores = int(_env.get("grid_x") or 0) * int(_env.get("grid_y") or 0)
+        peaks = _env.get("peak_tflops_per_core") or {}
         agg = {}
         for o in ops:
             f = str(o.get("fidelity") or "hifi4").lower()

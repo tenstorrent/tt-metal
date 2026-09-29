@@ -5048,10 +5048,19 @@ def _emit_summary(
 ) -> None:
     import importlib.util
 
+    # THE HARDWARE THIS RUN DETECTED, from its own manifest. This function has no `manifest` in scope
+    # (it is a local of run_cc_optimize), and the residual line below read one anyway -- a NameError
+    # its except swallowed, so the final summary never carried a residual.
+    try:
+        _mani = _latest_manifest(repo_root / PERF_DIR)
+        _run_env = (json.loads(_mani.read_text()).get("env") or {}) if _mani else {}
+    except (OSError, ValueError, AttributeError):
+        _run_env = {}
     try:
         spec = importlib.util.spec_from_file_location("cc_summary", str(Path(__file__).parent / "summary.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        mod.set_run_env(_run_env)  # the report prices the machine the run detected -- no default
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] summary unavailable: {exc}")
         return
@@ -5076,7 +5085,7 @@ def _emit_summary(
 
             _prof = _read_baseline_profile_for_report(repo_root)
             if _prof:
-                residual = _rl.residual_report(_prof, (manifest or {}).get("env", {}) or {})
+                residual = _rl.residual_report(_prof, _run_env)
         except Exception:  # noqa: BLE001
             residual = None
     except Exception:  # noqa: BLE001

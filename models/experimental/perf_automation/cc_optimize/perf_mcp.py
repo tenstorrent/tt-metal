@@ -1228,6 +1228,7 @@ def _summary_mod():
     spec = importlib.util.spec_from_file_location("cc_summary", str(Path(__file__).parent / "summary.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    mod.set_run_env(_ENV)  # the hardware this run's manifest detected -- the report never assumes one
     return mod
 
 
@@ -7259,11 +7260,11 @@ def _dominant_peak_flops(rep: dict) -> float:
         if not agg:
             return 0.0
         dom = max(agg.items(), key=lambda kv: kv[1])[0]
-        from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 
-        _arch = str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
-        return float(_cpf(ARCH_FACTS.get(_arch) or {}, dom) or 0.0)
+        # The run's detected hardware (its manifest env), the same _ENV every op is priced with --
+        # never a typed arch name.
+        return float(_cpf(roofline._facts(_ENV), dom) or 0.0) if _ENV else 0.0
     except Exception:  # noqa: BLE001 -- a peak that cannot be derived is simply not pinned
         return 0.0
 
