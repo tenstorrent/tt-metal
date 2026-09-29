@@ -40,7 +40,9 @@ template <
     uint32_t packer_l1_acc,
     uint32_t partials_format_differs>            // C_partials and C_slice hold different formats
 TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C slices, per batch
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
+    // The packer starts on the first K chunk's target (C_slice when there is a single K chunk).
+    constexpr uint32_t first_pack_target_id = num_K_chunks == 1 ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, first_pack_target_id);
     constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
@@ -71,9 +73,14 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
-                // The packer bakes the output DFB's L1 base into its descriptor at init, so point it at this K
-                // chunk's target here; a format reconfig alone would leave the data in the other DFB.
-                pack_init(pack_target_id);
+                // With K spill the target flips between C_partials and C_slice on every C slice. The packer bakes
+                // the output DFB's L1 base into its descriptor at init, so re-init it at each flip; a format
+                // reconfig alone would leave the data in the other DFB.
+                if constexpr (num_K_chunks > 1) {
+                    if (K_chunk == 0 || last_K_chunk) {
+                        pack_init(pack_target_id);
+                    }
+                }
                 // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
                 // onto them, and the finished sum is packed without accumulation.
                 if constexpr (partials_format_differs) {
@@ -90,10 +97,10 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_init(pack_target_id);
 #endif
 
-                // The previous K chunk left this thread's partials in its C_partials share. A K chunk that packs
-                // partials again frees the share first so the reserve below gets it back (this NEO is its only
-                // writer, and each subblock is reloaded before it is overwritten); the last K chunk keeps it until
-                // the reloads are done.
+                // K chunks after the first reload the partials the previous K chunk left in this thread's
+                // C_partials share. One that packs partials again frees the share first so the reserve below gets
+                // it back (this NEO is its only writer, and each subblock is reloaded before it is overwritten);
+                // the last K chunk keeps it until the reloads are done.
                 if (K_chunk > 0) {
                     C_partials.wait_front(C_entries_per_thread);
                     if (!last_K_chunk) {
